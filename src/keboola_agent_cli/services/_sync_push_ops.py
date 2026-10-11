@@ -23,7 +23,13 @@ from ..errors import ErrorCode, KeboolaApiError
 from ..sync.code_extraction import merge_code_files, normalize_blocks_codes_script
 from ..sync.config_format import local_config_to_api, local_row_to_api
 from ..sync.manifest import Manifest, ManifestConfiguration
-from ._encryption import encrypt_secrets_in_config
+from ..sync.naming import sanitize_name
+from ._encryption import (
+    SecretCache,
+    collect_secrets,
+    encrypt_secrets_in_config,
+    is_already_encrypted,
+)
 from ._sync_baseline import apply_stamp, row_baseline
 from ._sync_data_app import create_synced_data_app
 from ._sync_workspace import SANDBOXES_COMPONENT_ID, warn_on_backend_size_change
@@ -87,6 +93,60 @@ class PushPlan:
                 report["skipped_deletions_reason"] += SKIPPED_WORKSPACE_DELETIONS_NOTE
         return report
 
+    def encrypt_secrets(
+        self,
+        service: SyncService,
+        client: Any,
+        source_dir: Path,
+        manifest: Manifest,
+        allow_plaintext_fallback: bool,
+    ) -> SecretCache:
+        """Encrypt every ``#`` secret push sends, before the first write.
+
+        Reads the local file of each ``added`` / ``modified`` config and row
+        in *source_dir* and encrypts its plaintext secrets, one Encryption API
+        call per component. The writes then take the ciphertext from the
+        returned cache. So an ``ENCRYPTION_FAILED`` stops the push before
+        anything reaches the remote: it used to stop in the middle, and the
+        retry created again the configs created before the failure, which the
+        manifest did not record (issue #792 F). With
+        *allow_plaintext_fallback* an encryption failure never stops the
+        push, so nothing is encrypted in advance.
+        """
+        project_id = manifest.project.id if manifest.project else None
+        if not project_id or allow_plaintext_fallback:
+            return {}
+        parent_paths = {(c.component_id, c.id): c.path for c in manifest.configurations}
+        plaintexts: dict[str, set[str]] = {}
+        for change in self.changes:
+            if change["change_type"] not in ("added", "modified"):
+                continue
+            path = change.get("path", "")
+            if change.get("is_row"):
+                parent_path = parent_paths.get((change["component_id"], change["parent_config_id"]))
+                if parent_path is None:
+                    continue  # push reports PARENT_CONFIG_NOT_TRACKED for it
+                path = f"{parent_path}/{path}"
+            found: dict[str, str] = {}
+            collect_secrets(service._read_config_file(source_dir / path) or {}, "", found)
+            plaintexts.setdefault(change["component_id"], set()).update(found.values())
+        cache: SecretCache = {}
+        for component_id, values in plaintexts.items():
+            ordered = sorted(values)
+            payload = {f"#secret{index}": value for index, value in enumerate(ordered)}
+            try:
+                encrypt_secrets_in_config(client, project_id, component_id, payload)
+            except KeboolaApiError as exc:
+                raise KeboolaApiError(
+                    message=f"{exc.message} Nothing was pushed.", error_code=exc.error_code
+                ) from exc
+            for index, value in enumerate(ordered):
+                # A value the API did not return encrypted is not cached: the
+                # write then asks for it again rather than send plaintext.
+                if is_already_encrypted(payload[f"#secret{index}"]):
+                    cache[(component_id, value)] = payload[f"#secret{index}"]
+        return cache
+
 
 def plan_push(all_changes: list[dict[str, Any]], *, force: bool) -> PushPlan:
     """Split a diff changeset into what push applies and what it holds back.
@@ -104,6 +164,47 @@ def plan_push(all_changes: list[dict[str, Any]], *, force: bool) -> PushPlan:
         else:
             plan.changes.append(change)
     return plan
+
+
+def detect_name_drift(
+    service: SyncService, manifest: Manifest, project_root: Path
+) -> list[dict[str, str]]:
+    """Detect configs where local dir name doesn't match the config name.
+
+    Reads each tracked config's _config.yml to get the current name,
+    then compares sanitize_name(name) against the directory basename.
+
+    Returns a list of warning dicts with component_id, config_id,
+    local_dirname, and expected_dirname.
+    """
+    warnings: list[dict[str, str]] = []
+    for cfg in manifest.configurations:
+        path = cfg.path
+        dirname = path.rsplit("/", 1)[-1] if "/" in path else path
+
+        # Find branch dir and read _config.yml
+        branch_path = service._find_branch_path(manifest, cfg.branch_id)
+        config_dir = project_root / branch_path / path
+        local_data = service._read_config_file(config_dir)
+        if local_data is None:
+            continue
+
+        config_name = local_data.get("name", "")
+        if not config_name:
+            continue
+
+        expected_dirname = sanitize_name(config_name)
+        if dirname != expected_dirname:
+            warnings.append(
+                {
+                    "component_id": cfg.component_id,
+                    "config_id": cfg.id,
+                    "local_dirname": dirname,
+                    "expected_dirname": expected_dirname,
+                    "config_name": config_name,
+                }
+            )
+    return warnings
 
 
 def guard_script_shape(
@@ -214,6 +315,7 @@ def push_row_change(
     branch_id: int | None,
     allow_plaintext_fallback: bool = False,
     warnings: list[dict[str, Any]] | None = None,
+    known_secrets: SecretCache | None = None,
 ) -> str | None:
     """Dispatch a single row-level change (added/modified/deleted) to the API.
 
@@ -284,6 +386,7 @@ def push_row_change(
             project_id=project_id,
             allow_plaintext_fallback=allow_plaintext_fallback,
             warnings=warnings,
+            known_secrets=known_secrets,
         )
 
     if change_type == "modified":
@@ -299,6 +402,7 @@ def push_row_change(
             project_id=project_id,
             allow_plaintext_fallback=allow_plaintext_fallback,
             warnings=warnings,
+            known_secrets=known_secrets,
         )
         return None
 
@@ -318,6 +422,7 @@ def _push_create_row(
     project_id: int | None,
     allow_plaintext_fallback: bool,
     warnings: list[dict[str, Any]] | None = None,
+    known_secrets: SecretCache | None = None,
 ) -> str:
     """POST a new row; record API-assigned id + hashes in the parent's row list.
 
@@ -335,6 +440,7 @@ def _push_create_row(
         component_id,
         configuration,
         allow_plaintext_fallback=allow_plaintext_fallback,
+        known=known_secrets,
     )
 
     result = client.create_config_row(
@@ -390,6 +496,7 @@ def push_update_row(
     project_id: int | None,
     allow_plaintext_fallback: bool,
     warnings: list[dict[str, Any]] | None = None,
+    known_secrets: SecretCache | None = None,
 ) -> None:
     """PUT an existing row; refresh its hashes in the parent's row list.
 
@@ -409,6 +516,7 @@ def push_update_row(
         component_id,
         configuration,
         allow_plaintext_fallback=allow_plaintext_fallback,
+        known=known_secrets,
     )
 
     result = client.update_config_row(
@@ -479,6 +587,7 @@ def push_create(
     *,
     allow_plaintext_fallback: bool = False,
     warnings: list[dict[str, Any]] | None = None,
+    known_secrets: SecretCache | None = None,
     ds_client: Any = None,
     ds_branch_id: int | None = None,
 ) -> dict[str, Any] | None:
@@ -523,6 +632,7 @@ def push_create(
         component_id,
         configuration,
         allow_plaintext_fallback=allow_plaintext_fallback,
+        known=known_secrets,
     )
 
     if component_id == DATA_APP_COMPONENT_ID and ds_client is not None:
@@ -591,6 +701,7 @@ def push_update(
     *,
     allow_plaintext_fallback: bool = False,
     warnings: list[dict[str, Any]] | None = None,
+    known_secrets: SecretCache | None = None,
 ) -> dict[str, Any]:
     """Update an existing config from a local _config.yml file.
 
@@ -628,6 +739,7 @@ def push_update(
         component_id,
         configuration,
         allow_plaintext_fallback=allow_plaintext_fallback,
+        known=known_secrets,
     )
 
     if component_id == SANDBOXES_COMPONENT_ID and warnings is not None:

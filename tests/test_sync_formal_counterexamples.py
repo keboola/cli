@@ -566,26 +566,14 @@ def test_d_promote_push_diff_is_clean_and_edits_update_the_dev_copy(tmp_path: Pa
 
 # ===========================================================================
 # E -- an untracked file carrying `_keboola.config_id` (a `config new --push
-#      --output-dir` scaffold, or an adopted orphan) is diffed 2-way, so
-#      push silently overwrites a remote edit made after the scaffold was
-#      written -- and two copies of it both "adopt" the same remote id.
+#      --output-dir` scaffold, or an adopted orphan) was diffed 2-way, so
+#      push silently overwrote a remote edit made after the scaffold was
+#      written -- and two copies of it both "adopted" the same remote id.
+#      FIXED: without a baseline a difference is a conflict, which push does
+#      not apply (more cases in tests/test_sync_adopted_files.py).
 # ===========================================================================
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "#792 E: classify_untracked ADOPTs a file carrying "
-        "`_keboola.config_id` (branch_scope.py:275-276), but base_hashes is "
-        "built from in-tree manifest entries only (sync_service.py:"
-        "1441-1452). With no base, compute_changeset's 2-way fallback turns "
-        "ANY difference into 'modified' (diff_engine.py:388-391) -- so a "
-        "remote edit made after the scaffold was written (e.g. in the web "
-        "UI) is silently reverted by the next `sync push`, no conflict "
-        "shown. Found via TLA I11 and replayed "
-        "(scratchpad/replay/r_adopt_lost_update.py)."
-    ),
-)
 def test_e_adopted_scaffold_push_does_not_overwrite_remote_edit(tmp_path: Path) -> None:
     """Invariant: a `sync push` must never silently revert a remote edit made
     to a config in between that config's on-disk scaffold being written and
@@ -608,41 +596,32 @@ def test_e_adopted_scaffold_push_does_not_overwrite_remote_edit(tmp_path: Path) 
     # was written, before the next push.
     w.api.put(PROD, "cfg-1", "Orders", "EDITED-IN-UI")
 
-    w.push()
+    result = w.push()
 
     assert w.api.remote[PROD]["cfg-1"]["configuration"]["parameters"]["value"] == "EDITED-IN-UI", (
         "push silently reverted a remote edit made to an adopted-by-id scaffold config"
     )
+    assert (result.get("updated", 0), result["skipped"]) == (0, 1)
+    assert changes(w.diff()) == [("conflict", "cfg-1")]
 
 
 # ===========================================================================
-# F -- a push aborted by ENCRYPTION_FAILED leaves the manifest unsaved, so a
-#      change it already applied (a promote CREATE) is re-applied by the
-#      retry, duplicating it.
+# F -- a push aborted by ENCRYPTION_FAILED left the manifest unsaved, so a
+#      change it already applied (a promote CREATE) was re-applied by the
+#      retry, duplicating it. FIXED: push encrypts every secret before its
+#      first write, so the abort happens before anything reaches the remote.
 # ===========================================================================
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "#792 F: push() re-raises ENCRYPTION_FAILED instead of continuing "
-        "(sync_service.py:1842-1852), but save_manifest only runs after the "
-        "whole Phase A/B/C/D loop completes (:1946) -- so a CREATE applied "
-        "to the remote before the failing change is never recorded in the "
-        "manifest. Re-running push after the encryption problem is fixed "
-        "creates that same config again, duplicating it. This is a model "
-        "trace only in the original TLA pilot (I1(b), not previously "
-        "replayed against real SyncService); replayed here directly by "
-        "making the second config's secret fail Encryption API mock."
-    ),
-)
 def test_f_aborted_push_does_not_duplicate_already_created_config(tmp_path: Path) -> None:
     """Invariant: retrying a push after an ENCRYPTION_FAILED abort must not
     re-apply a change (here: a promote CREATE of ``main/`` into a dev branch)
     that the aborted push had already sent to the remote before it failed.
-    The promote path keeps both creates in manifest order, so "Orders" is
-    created before "Contacts" fails. (The first version of this test used a
-    remote-deleted config, which push no longer re-creates since the H fix.)
+    The promote path keeps both creates in manifest order, so "Orders" was
+    created before "Contacts" failed. Push now encrypts both secrets before
+    the first write, so the abort creates nothing and the retry creates each
+    config once. (The first version of this test used a remote-deleted
+    config, which push no longer re-creates since the H fix.)
 
     Issue #792 finding F.
     """
@@ -684,13 +663,13 @@ def test_f_aborted_push_does_not_duplicate_already_created_config(tmp_path: Path
     w.push(branch=DEV)
 
     creates_after_retry = [line for line in w.api.log if line.startswith("CREATE")]
-    # Safe expectation: the promote CREATE for "Orders" happened exactly
-    # once across both push attempts, not once per attempt.
-    assert len(creates_before_retry) == 1, "expected exactly one CREATE before the encryption abort"
-    assert len(creates_after_retry) == len(creates_before_retry), (
-        "retrying the push after the encryption fix duplicated the already-applied promote CREATE: "
-        f"log={w.api.log}"
+    # Safe expectation: the aborted push wrote nothing, and each config was
+    # created exactly once across both push attempts, not once per attempt.
+    assert creates_before_retry == [], "the aborted push created a config before it failed"
+    assert len(creates_after_retry) == 2, (
+        f"retrying the push after the encryption fix duplicated a promote CREATE: log={w.api.log}"
     )
+    assert sorted(c["name"] for c in w.api.remote[DEV].values()) == ["Contacts", "Orders"]
 
 
 # ===========================================================================

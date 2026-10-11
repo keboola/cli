@@ -9,9 +9,11 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+from collections import Counter
 from typing import Any
 
 from ..constants import DIFF_MAX_DEPTH, DIFF_MAX_LINES, ENCRYPTED_PLACEHOLDER
+from .config_format import BASE_CONFIG_HASH_KEY
 from .secrets import is_encrypted_value
 
 # Keys that are internal bookkeeping and should be excluded from comparison.
@@ -320,6 +322,13 @@ def compute_changeset(
     Args:
         local_configs: List of dicts with keys:
             ``component_id``, ``config_id``, ``config_name``, ``path``, ``data``.
+            An untracked file adopted by its ``_keboola.config_id`` also has
+            ``adopted: True``. It has no manifest base: its base is the
+            ``_keboola.base_config_hash`` a ``config new --push`` scaffold
+            records. Without one a local edit and a remote edit look the
+            same, so a difference is a ``"conflict"``, never ``"modified"``;
+            the same applies to two files that adopt one id (issue #792 E:
+            push overwrote an edit made in the UI).
         remote_configs: Dict keyed by ``"{component_id}/{config_id}"`` with
             API config data (already converted to local format).
         tracked_keys: Optional set of ``"{component_id}/{config_id}"`` keys
@@ -349,6 +358,9 @@ def compute_changeset(
     changes: list[ConfigChange] = []
     seen_remote_keys: set[str] = set()
     on_target = target_tracked_keys or set()
+    adoptions = Counter(
+        f"{e['component_id']}/{e.get('config_id', '')}" for e in local_configs if e.get("adopted")
+    )
 
     for entry in local_configs:
         component_id: str = entry["component_id"]
@@ -390,7 +402,12 @@ def compute_changeset(
 
         # Determine change direction using base hash (pull-time snapshot)
         base_h = (base_hashes or {}).get(remote_key)
-        if base_h is not None:
+        if entry.get("adopted"):
+            base_h = (local_data.get("_keboola") or {}).get(BASE_CONFIG_HASH_KEY)
+        if entry.get("adopted") and (not base_h or adoptions[remote_key] > 1):
+            # No base, or two files claim the id: the direction is unknown.
+            local_changed = remote_changed = True
+        elif base_h is not None:
             local_changed = local_h != base_h
             remote_changed = remote_h != base_h
         else:

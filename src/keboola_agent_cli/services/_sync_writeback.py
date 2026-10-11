@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..errors import KeboolaApiError
+from ..sync.config_format import BASE_CONFIG_HASH_KEY
 from ..sync.manifest import ManifestConfigRow, ManifestConfiguration
 from ._encryption import apply_encrypted_to_local
 from ._sync_baseline import apply_stamp, config_baseline
@@ -243,9 +244,12 @@ def writeback_after_push(
     """Update local ``_config.yml`` after a successful push.
 
     Writes back the API-assigned ``_keboola.config_id`` (on first create) and
-    the encrypted secret values (so local matches remote state).
+    the encrypted secret values (so local matches remote state). A scaffold's
+    ``_keboola.base_config_hash`` is dropped: after the push the manifest
+    holds the baseline (issue #792 E).
     """
     keboola_meta = local_data.setdefault("_keboola", {})
+    keboola_meta.pop(BASE_CONFIG_HASH_KEY, None)
     if config_id:
         keboola_meta["config_id"] = config_id
 

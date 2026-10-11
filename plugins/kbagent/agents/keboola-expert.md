@@ -326,7 +326,12 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   branch's tree -- `sync pull` to re-target, never push. Since 0.96.1 (#792)
   `sync push` deletes only with `--force` (else `skipped_deletions`), and a
   `- REMOTE DELETED` diff line = deleted on the remote, push never re-creates
-  it: `sync pull`, or `config restore` to keep it. `sync status`
+  it: `sync pull`, or `config restore` to keep it. Since vNEXT (#792) a
+  `CONFLICT` on a file that carries a config id but has no manifest entry (a
+  lost manifest, a `config new --push --output-dir` scaffold of an older
+  version) means "no baseline": keep the edit aside, `sync pull --theirs`,
+  apply the edit again, push. An `ENCRYPTION_FAILED` push wrote nothing: fix
+  the cause and run the same push again. `sync status`
   is local-only -- audit real drift with `sync diff`. On <= 0.90.1 a
   `~ REMOTE MODIFIED ... codes changed` on a config nobody touched is usually
   PHANTOM (issue #686: push stamped the baseline from disk); fixed in 0.91.0 --
