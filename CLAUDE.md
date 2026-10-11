@@ -625,7 +625,7 @@ kbagent storage table-detail --project NAME --table-id ID [--branch ID]
 #   and `sql_path` (quoted, directly queryable path; null when Storage reports no location) --
 #   see the semantic-layer dataset fqn note (#761); version gate in gotchas.md.
 kbagent storage create-bucket --project NAME --stage STAGE --name NAME [--description D] [--backend B] [--branch ID]
-kbagent storage create-table --project NAME --bucket-id ID --name NAME [--column COL:TYPE[(length)] ...] [--primary-key COL] [--not-null COL ...] [--default NAME=VALUE ...] [--source-table-id ID] [--source-branch-id N] [--time-partitioning-type DAY|HOUR|MONTH|YEAR] [--time-partitioning-field COL] [--time-partitioning-expiration-ms MS] [--range-partitioning-field COL --range-partitioning-start S --range-partitioning-end E --range-partitioning-interval I] [--clustering-field COL ...] [--branch ID] [--if-not-exists]
+kbagent storage create-table --project NAME --bucket-id ID --name NAME [--column COL:TYPE[(length)] ...] [--primary-key COL] [--not-null COL ...] [--default NAME=VALUE ...] [--source-table-id ID] [--source-branch-id N] [--time-partitioning-type DAY|HOUR|MONTH|YEAR] [--time-partitioning-field COL] [--time-partitioning-expiration-ms MS] [--range-partitioning-field COL --range-partitioning-start S --range-partitioning-end E --range-partitioning-interval I] [--clustering-field COL ...] [--branch ID] [--if-not-exists] [--timeout SECONDS]
 # --column XOR --source-table-id (0.66.0+, BigQuery only): --source-table-id copies an existing table's data into the requested partition/clustering layout (schema derived from source) -> swap into place with swap-tables. Partition/clustering flags work in both modes (BigQuery only); time vs range partitioning are mutually exclusive. A non-BigQuery project fails fast (pre-flight backend check).
 kbagent storage upload-table --project NAME --table-id ID --file PATH [--incremental] [--delimiter D] [--enclosure E] [--no-auto-create] [--wait/--no-wait] [--timeout SECONDS] [--branch ID] [--progress]
 # upload-table / file-upload cloud upload (#834): on AWS stacks a file above 64 MiB goes up as an S3
@@ -663,7 +663,16 @@ kbagent storage delete-table --project NAME --table-id ID [--table-id ...] [--fo
 kbagent storage truncate-table --project NAME --table-id ID [--table-id ...] [--dry-run] [--yes] [--branch ID]
 kbagent storage delete-column --project NAME --table-id ID --column COL [--column ...] [--force] [--dry-run] [--yes] [--branch ID]
 kbagent storage delete-bucket --project NAME --bucket-id ID [--bucket-id ...] [--force] [--dry-run] [--yes] [--branch ID]
-kbagent storage swap-tables --project NAME --table-id ID --target-table-id ID --branch ID [--dry-run] [--yes]
+kbagent storage swap-tables --project NAME --table-id ID --target-table-id ID --branch ID [--dry-run] [--yes] [--timeout SECONDS]
+    # --timeout SECONDS on create-table and swap-tables (since vNEXT, #713): both halves
+    #   of the repartition path move real data yet used to inherit the 60s metadata-job
+    #   budget, so a large BigQuery table reported STORAGE_JOB_TIMEOUT for a job that was
+    #   still running and would succeed. Default is now 300s on both. A local timeout
+    #   NEVER cancels the job -- it keeps running server-side. The error is
+    #   STORAGE_JOB_TIMEOUT, exit 4, retryable=false, details.job_id, and the message
+    #   names `storage job-detail --job-id ID --wait` (create-table also names
+    #   `storage table-detail`). Never re-run: a repeated swap swaps the tables back,
+    #   a repeated --source-table-id create starts a second copy.
 kbagent storage clone-table --project NAME --table-id ID --branch ID [--dry-run]
 kbagent storage snapshot-create --project NAME --table-id ID [--description D] [--branch ID]
 kbagent storage snapshots --project NAME --table-id ID [--limit N] [--branch ID]

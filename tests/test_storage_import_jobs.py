@@ -33,7 +33,7 @@ from keboola_agent_cli.client import KeboolaClient, TableUploadOutcome
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 from keboola_agent_cli.models import AppConfig, ProjectConfig
-from keboola_agent_cli.services._storage_jobs import read_csv_header
+from keboola_agent_cli.services._storage_jobs import read_csv_header, resolve_wait_timeout
 from keboola_agent_cli.services.storage_service import StorageService
 
 runner = CliRunner()
@@ -368,6 +368,26 @@ class TestServiceJobDetail:
         assert result["error"] == {"message": "Invalid CSV", "code": "storage.csvImport"}
         assert result["table_id"] == "in.c-b.users" and result["file_id"] is None
         client.follow_storage_job.assert_called_once_with(55, max_wait=10)
+
+
+class TestResolveWaitTimeout:
+    """The one wait-budget guard behind every storage and workspace job wait."""
+
+    def test_none_uses_the_default(self) -> None:
+        assert resolve_wait_timeout(None, 300.0) == 300.0
+
+    def test_positive_override_wins(self) -> None:
+        assert resolve_wait_timeout(900.0, 300.0) == 900.0
+
+    @pytest.mark.parametrize("bad", [0.0, -1.0, float("nan"), float("inf")])
+    def test_bad_budget_is_rejected(self, bad: float) -> None:
+        """0.0 must raise, not fall back to the default.
+
+        ``timeout or default`` would accept the falsy 0.0 as "unset". NaN and
+        infinity would make the poller's deadline never expire.
+        """
+        with pytest.raises(ValueError, match="--timeout must be a positive number"):
+            resolve_wait_timeout(bad, 300.0)
 
 
 class TestReadCsvHeader:

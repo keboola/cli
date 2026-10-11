@@ -10,6 +10,7 @@ from typer.testing import CliRunner
 from keboola_agent_cli.cli import app
 from keboola_agent_cli.client import TableUploadOutcome
 from keboola_agent_cli.config_store import ConfigStore
+from keboola_agent_cli.constants import TABLE_DATA_JOB_MAX_WAIT
 from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 from keboola_agent_cli.models import AppConfig, ProjectConfig
 from keboola_agent_cli.services.storage_service import StorageService
@@ -230,6 +231,7 @@ class TestCreateTableService:
             time_partitioning=None,
             range_partitioning=None,
             clustering=None,
+            max_wait=TABLE_DATA_JOB_MAX_WAIT,
         )
         mock_client.close.assert_called_once()
 
@@ -276,6 +278,7 @@ class TestCreateTableService:
             time_partitioning=None,
             range_partitioning=None,
             clustering=None,
+            max_wait=TABLE_DATA_JOB_MAX_WAIT,
         )
 
     def test_unknown_type_is_passed_through_to_api(self, tmp_path: Path) -> None:
@@ -1461,6 +1464,7 @@ class TestCreateTableCLI:
             range_partitioning_end=None,
             range_partitioning_interval=None,
             clustering_fields=None,
+            timeout=TABLE_DATA_JOB_MAX_WAIT,
         )
 
     def test_create_table_native_types_and_attributes(self, tmp_path: Path) -> None:
@@ -1927,6 +1931,7 @@ class TestCreateTableBranch:
             time_partitioning=None,
             range_partitioning=None,
             clustering=None,
+            max_wait=TABLE_DATA_JOB_MAX_WAIT,
         )
         # In a branch we check bucket existence first (auto-materialize).
         mock_client.get_bucket_detail.assert_called_once_with("in.c-b", branch_id=77)
@@ -2494,3 +2499,198 @@ class TestDownloadTableCLI:
         assert result.exit_code == 0
         call_kwargs = svc.download_table.call_args.kwargs
         assert call_kwargs["branch_id"] == 33
+
+
+class TestCreateTableJobTimeout:
+    """The create job budget is caller-controllable (issue #713).
+
+    A ``--source-table-id`` create copies a populated table into a new
+    BigQuery layout -- the first half of the only available repartition
+    path. It used to inherit the 60s ``STORAGE_JOB_MAX_WAIT`` meant for
+    metadata jobs, so a large table reported ``STORAGE_JOB_TIMEOUT`` for a
+    copy that was still running and would succeed. Giving up locally never
+    cancels the job, so a short budget buys nothing.
+    """
+
+    def test_default_is_table_data_budget(self, tmp_path: Path) -> None:
+        from keboola_agent_cli.constants import STORAGE_JOB_MAX_WAIT
+
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.create_table.return_value = {"id": "in.c-b.t"}
+        service = _make_service(store, mock_client)
+
+        service.create_table(alias="test", bucket_id="in.c-b", name="t", columns=["id:INTEGER"])
+
+        max_wait = mock_client.create_table.call_args.kwargs["max_wait"]
+        assert max_wait == TABLE_DATA_JOB_MAX_WAIT
+        assert max_wait > STORAGE_JOB_MAX_WAIT
+
+    def test_forwards_explicit_timeout(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.create_table.return_value = {"id": "in.c-b.t"}
+        service = _make_service(store, mock_client)
+
+        service.create_table(
+            alias="test",
+            bucket_id="in.c-b",
+            name="t",
+            columns=["id:INTEGER"],
+            timeout=1800.0,
+        )
+
+        assert mock_client.create_table.call_args.kwargs["max_wait"] == 1800.0
+
+    @pytest.mark.parametrize("bad", [0.0, -5.0, float("nan"), float("inf")])
+    def test_rejects_bad_timeout(self, tmp_path: Path, bad: float) -> None:
+        """0.0 is rejected rather than silently promoted to the default.
+
+        The ValueError is the same one upload-table and load-file raise, so
+        every storage command reports a bad --timeout the same way.
+        """
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        service = _make_service(store, mock_client)
+
+        with pytest.raises(ValueError, match="--timeout must be a positive number"):
+            service.create_table(
+                alias="test",
+                bucket_id="in.c-b",
+                name="t",
+                columns=["id:INTEGER"],
+                timeout=bad,
+            )
+
+        mock_client.create_table.assert_not_called()
+
+    @pytest.mark.parametrize("bad", ["0", "nan"])
+    def test_cli_bad_timeout_is_usage_error(self, tmp_path: Path, bad: str) -> None:
+        """A bad --timeout exits 2 with INVALID_ARGUMENT, like upload-table.
+
+        Runs the real service: the exit code depends on which exception type
+        the service raises, and a mocked service would hide a mismatch.
+        """
+        store = _make_store(tmp_path)
+
+        with patch("keboola_agent_cli.cli.ConfigStore", return_value=store):
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "storage",
+                    "create-table",
+                    "--project",
+                    "test",
+                    "--bucket-id",
+                    "in.c-b",
+                    "--name",
+                    "t",
+                    "--column",
+                    "id:INTEGER",
+                    "--timeout",
+                    bad,
+                ],
+            )
+
+        assert result.exit_code == 2, result.output
+        assert json.loads(result.output)["error"]["code"] == ErrorCode.INVALID_ARGUMENT
+
+    def test_cli_forwards_timeout(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.StorageService") as MockSvc,
+        ):
+            MockStore.return_value = store
+            svc = MockSvc.return_value
+            svc.create_table.return_value = {
+                "table_id": "in.c-b.t",
+                "action": "created",
+                "name": "t",
+                "columns": ["id"],
+                "primary_key": [],
+                "auto_created_bucket": False,
+            }
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "storage",
+                    "create-table",
+                    "--project",
+                    "test",
+                    "--bucket-id",
+                    "in.c-b",
+                    "--name",
+                    "t",
+                    "--column",
+                    "id:INTEGER",
+                    "--timeout",
+                    "1800",
+                ],
+            )
+
+        assert result.exit_code == 0
+        assert svc.create_table.call_args.kwargs["timeout"] == 1800.0
+
+    def test_timeout_names_job_detail_and_table_detail(self, tmp_path: Path) -> None:
+        """The service appends the follow-up commands; the client knows no alias."""
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.create_table.side_effect = _create_timeout()
+        service = _make_service(store, mock_client)
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            service.create_table(alias="test", bucket_id="in.c-b", name="t", columns=["id:INTEGER"])
+
+        exc = exc_info.value
+        assert exc.error_code == ErrorCode.STORAGE_JOB_TIMEOUT
+        assert exc.retryable is False
+        assert exc.details["job_id"] == 555
+        assert "kbagent storage job-detail --project test --job-id 555 --wait" in exc.message
+        assert "kbagent storage table-detail --project test --table-id in.c-b.t" in exc.message
+
+    def test_cli_timeout_is_exit_4_not_retryable(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.StorageService") as MockSvc,
+        ):
+            MockStore.return_value = store
+            MockSvc.return_value.create_table.side_effect = _create_timeout()
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "storage",
+                    "create-table",
+                    "--project",
+                    "test",
+                    "--bucket-id",
+                    "in.c-b",
+                    "--name",
+                    "t",
+                    "--column",
+                    "id:INTEGER",
+                ],
+            )
+
+        assert result.exit_code == 4
+        error = json.loads(result.output)["error"]
+        assert error["code"] == ErrorCode.STORAGE_JOB_TIMEOUT
+        assert error["retryable"] is False
+        assert error["details"]["job_id"] == 555
+
+
+def _create_timeout() -> KeboolaApiError:
+    """The client's create-table timeout: not retryable, ``job_id`` in the details."""
+    return KeboolaApiError(
+        message="Storage create-table job 555 did not finish within 300s.",
+        status_code=0,
+        error_code=ErrorCode.STORAGE_JOB_TIMEOUT,
+        retryable=False,
+        details={"job_id": 555},
+    )
