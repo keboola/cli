@@ -183,14 +183,10 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   Service-Account component (`keboola.ex-linkedin-ads`, ...) fails with an
   opaque empty-body 400 -- check the version before blaming the action or the
   credentials.
-- `component detail` on **0.90.0+** falls back to the project's Storage catalog
-  when the AI Service does not index the component (private/deprecated:
-  `keboola.mcp-server-tool`, `keboola.data-apps`) -- it used to NOT_FOUND there
-  while `component list` showed the component. Read `documentation_source`
-  before concluding anything from counts: on `storage_catalog` the
-  `examples_count` is always 0 because that source carries no examples, NOT
-  because the component ships none. Reach for `config examples` or an existing
-  config in the project instead.
+- `component detail` (0.90.0+) with `documentation_source: storage_catalog`
+  (a private component the AI Service does not index) always shows
+  `examples_count` 0 -- not "no examples". Use `config examples` or an
+  existing config instead.
 
 **A command without `--project` refused with CONFIG_ERROR (or picked a project)**
 - On **0.93.0+** the `kai` group, `docs query`, `component detail`, `component
@@ -202,18 +198,12 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   registered project and ignored the pin (issue #684). gotchas.md.
 
 **`--project` given a numeric project ID (0.96.1+)**
-- `--project`, `KBAGENT_PROJECT`, `project use`, the other alias options
-  (`config clone --target-project`, `sync clone --target`, `semantic-layer
-  promote` / `diff` project options, `auth * --stack`) and serve `{project}`
-  / `?project=` (path and query only, never a request body) take a
-  registered project's ID and use its alias. A registered
-  alias wins over an ID. An ID registered under several aliases is exit 5
-  (`CONFIG_ERROR`) listing them -- pick one; only a lone session alias on one
-  stack wins by itself. Output names the alias. A digits-only alias that is
-  also another project's ID wins, with a stderr warning naming that project
-  (also under `--json`). Below 0.96.1 an ID is "not found". `project add` /
-  `project create` treat the value as a NEW alias; `lineage show --project`
-  is an offline filter, not translated. gotchas.md (CLI-22).
+- `--project`, `KBAGENT_PROJECT`, `project use`, the other alias options and
+  serve `{project}` / `?project=` (never a request body) take a registered
+  project's ID and use its alias. An alias wins over an ID (stderr warning).
+  An ID under several aliases is exit 5 (`CONFIG_ERROR`) listing them -- pick
+  one. Below 0.96.1 an ID is "not found". `project add` / `project create`
+  treat the value as a NEW alias. gotchas.md (CLI-22).
 
 **Which branch did a command use? (0.96.1+)**
 - Every command that picks a branch names it: `Target: project 'P', branch ID
@@ -225,14 +215,10 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   column) first. gotchas.md (#766).
 
 **Recurring `ext.keboola.cli.` events in a project's own event log (0.93.0+)**
-- kbagent posts one best-effort usage event per command to the acting project's
-  Storage events. An event audit then shows one `ext.keboola.cli.` (CLI/REPL) or
-  `ext.keboola.cli.serve` (serve) row per kbagent command. That is expected
-  background noise, not a stray write. Over `serve` only mutating requests are
-  logged, so a GET (read) posts nothing. Opt out with `KBAGENT_DISABLE_TELEMETRY=1`
-  or `DO_NOT_TRACK=1`. Session (`auth login`) projects are covered too; telemetry
-  uses the session's current token and never triggers a refresh. `auth status`
-  exit 3 (signed out) is recorded as an expected outcome, not a failure. gotchas.md.
+- One best-effort usage event per kbagent command (`ext.keboola.cli.` /
+  `ext.keboola.cli.serve`; over `serve` only mutating requests) -- expected
+  noise, not a stray write. Opt out with `KBAGENT_DISABLE_TELEMETRY=1` or
+  `DO_NOT_TRACK=1`. gotchas.md.
 
 **Reading job logs / table usage / narrow config search (0.88.0+)**
 - `job detail --log-tail-lines N` -- the ONLY route to an already-finished job's
@@ -249,15 +235,11 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   carries the `exceptionId` -- quote it when escalating. gotchas.md.
 
 **A 401 is not always `INVALID_TOKEN` (0.92.0+)**
-- A 401 whose body names something other than a bad credential now raises
-  `AUTH_REJECTED`; the semantic-layer family's opaque metastore 401
-  reclassified to `MISSING_MASTER_TOKEN` on a write against a non-admin
-  token (see its matrix row) -- since PSGO-282 (0.97.0) a plain read never
-  hits this at all, any valid token passes. Exit code is unchanged (3) for
-  all three -- code checking `error.code == "INVALID_TOKEN"` alone still
-  misses two real cases; accept all three before concluding the credential
-  itself is bad. 401/403/404 now also carry `[exceptionId: ...]` -- quote it
-  when escalating. gotchas.md.
+- Exit 3 covers `INVALID_TOKEN`, `AUTH_REJECTED` (the 401 body blames
+  something other than the credential) and `MISSING_MASTER_TOKEN` (a
+  semantic-layer write on a non-admin token). Accept all three before
+  concluding the credential is bad. Quote the `[exceptionId: ...]` when
+  escalating. gotchas.md.
 
 **Finding an existing Storage token**
 - `kbagent token list -p P` (0.86.0+) -- the only source of the `--token-id`
@@ -281,9 +263,7 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   and a **cross-project trigger** is a config in ANOTHER project -- neither is a
   schedule. Use `kbagent flow triggers` and read
   `cross_project_triggers_checked` (always `false`) before reporting that a flow
-  is unscheduled. A flow that was already live via a table trigger was reported
-  as needing manual scheduling because of exactly this gap (#714). For the same
-  reason `job detail` on a flow job carries `trigger_hint`: a run with no
+  is unscheduled. `job detail` on a flow job carries `trigger_hint`: a run with no
   matching cron schedule is NOT proof of a manual run.
 - **`flow schedule` activates on the Scheduler Service**: older
   versions only wrote the `keboola.scheduler` config -- it showed `enabled` but
@@ -326,17 +306,13 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   branch's tree -- `sync pull` to re-target, never push. Since 0.96.1 (#792)
   `sync push` deletes only with `--force` (else `skipped_deletions`), and a
   `- REMOTE DELETED` diff line = deleted on the remote, push never re-creates
-  it: `sync pull`, or `config restore` to keep it. Since vNEXT (#792) a
-  `CONFLICT` on a file that carries a config id but has no manifest entry (a
-  lost manifest, a `config new --push --output-dir` scaffold of an older
-  version) means "no baseline": keep the edit aside, `sync pull --theirs`,
-  apply the edit again, push. An `ENCRYPTION_FAILED` push wrote nothing: fix
-  the cause and run the same push again. `sync status`
-  is local-only -- audit real drift with `sync diff`. On <= 0.90.1 a
-  `~ REMOTE MODIFIED ... codes changed` on a config nobody touched is usually
-  PHANTOM (issue #686: push stamped the baseline from disk); fixed in 0.91.0 --
-  one `sync pull` per project migrates a tree pulled by an older version, and
-  a `SYNC_LEGACY_BOUNDARY` push error means exactly that: pull first.
+  it: `sync pull`, or `config restore` to keep it. vNEXT+: a `CONFLICT` on a
+  file with a config id and no manifest entry = no baseline: keep the edit
+  aside, `sync pull --theirs`, re-apply, push (sync-workflow.md). An
+  `ENCRYPTION_FAILED` push wrote nothing: fix the cause, push again. `sync
+  status` is local-only -- audit real drift with `sync diff`. A
+  `SYNC_LEGACY_BOUNDARY` push error = tree pulled by <= 0.90.1 (phantom
+  `REMOTE MODIFIED`, #686): `sync pull` first.
 - **Ignored components** (0.91.0, #689): `keboola.sandboxes` +
   `keboola.mcp-server-tool` are always excluded from `pull`/`diff`/`push`,
   unioned with the manifest's `ignoredComponents` list. A component newly
@@ -394,13 +370,10 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   `config detail` -> `configuration.runtime` FIRST (an empty `data-app logs`
   grep rules nothing out). `create` defaults it ON at **0.87.0+**; <= 0.86.0
   patch + redeploy.
-- **Managed-repo app `running` with no `WORKSPACE_ID`**: before vNEXT (CLI-15),
-  `deploy` on a pure `--use-managed-git-repo` app wrote no
-  `parameters.dataApp.git`, and the workspace grant is gated on that block --
-  `data-app detail` shows `Git: {}`. vNEXT+ backfills it on deploy (managed repo
-  must be pushed to the `deploy --git-branch` branch; without the flag `main`
-  for an app with no runs, and an error before any write for an app with runs --
-  pass `--git-branch` with the branch the code is on); older: merge the block by hand, then redeploy.
+- **Managed-repo app `running` with no `WORKSPACE_ID`** (`data-app detail`
+  shows `Git: {}`): vNEXT+ `deploy` backfills `parameters.dataApp.git`; pass
+  `--git-branch` with the branch the code is on (an app with runs refuses
+  without it). Older: merge the block by hand, redeploy. data-app-workflow.md.
 - **`data-app password` keeps the password out of the chat (0.96.1+)**: it
   never prints it without `--reveal`; the user copies it with `c` in their own
   terminal, or you run `--copy`. Project token only -- no Manage token. Below
