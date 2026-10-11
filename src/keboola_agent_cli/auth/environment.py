@@ -28,6 +28,10 @@ from dataclasses import dataclass
 # wslview from stalling the login flow.
 _WSLVIEW_PROBE_TIMEOUT_SECONDS = 2.0
 
+# Timeout for handing a URL to `wslview`: it returns as soon as the Windows side
+# has accepted the request, so anything longer means the shim is wedged.
+_WSLVIEW_OPEN_TIMEOUT_SECONDS = 10.0
+
 
 @dataclass(frozen=True)
 class BrowserEnvironment:
@@ -168,6 +172,24 @@ def detect_browser_environment() -> BrowserEnvironment:
     return BrowserEnvironment(loopback_browser_usable=True, reason="", opener=opener)
 
 
+def _open_via_wslview(url: str) -> None:
+    """Thread target for `open_browser` under WSL: hand ``url`` to `wslview`.
+
+    `wslview` passes the URL to the Windows-side default browser. Output is
+    captured, never logged, and every error is swallowed -- the URL must not
+    reach stderr (see `_open_silently`).
+    """
+    try:
+        subprocess.run(
+            ["wslview", url],
+            capture_output=True,
+            timeout=_WSLVIEW_OPEN_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except Exception:
+        return
+
+
 def open_browser(url: str, *, wait_seconds: float = 0.0) -> bool:
     """Best-effort `webbrowser.open` on a daemon thread.
 
@@ -182,13 +204,24 @@ def open_browser(url: str, *, wait_seconds: float = 0.0) -> bool:
     right after the call (``data-app password --open``) passes it, because a
     daemon thread dies with the process -- possibly before the opener starts.
     The login flow keeps polling afterwards, so it leaves the default 0.
-    """
-    try:
-        webbrowser.get()
-    except webbrowser.Error:
-        return False
 
-    thread = threading.Thread(target=_open_silently, args=(url,), daemon=True)
+    Under WSL the URL goes to `wslview` first: `webbrowser` keys its Windows
+    handling off ``sys.platform == "win32"``, which is ``linux`` inside WSL, so
+    it would either find no handler at all or open a browser in the Linux
+    session -- a separate profile that shares none of the logins the URL needs.
+    It runs on the same daemon thread and honors ``wait_seconds`` the same way;
+    a working `wslview` (probed synchronously) counts as the available handler.
+    """
+    if _env_flag_set("WSL_INTEROP") and _wslview_is_working():
+        target = _open_via_wslview
+    else:
+        try:
+            webbrowser.get()
+        except webbrowser.Error:
+            return False
+        target = _open_silently
+
+    thread = threading.Thread(target=target, args=(url,), daemon=True)
     thread.start()
     if wait_seconds > 0:
         thread.join(timeout=wait_seconds)
