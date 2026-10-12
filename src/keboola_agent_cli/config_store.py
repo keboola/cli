@@ -708,7 +708,7 @@ class ConfigStore:
                 remedy=(
                     "A browser-login session keeps its credential in auth.json and "
                     f"rotates it automatically. Run `kbagent project edit --project {alias} "
-                    "--token <token>` to convert the project to a static Storage token "
+                    "--token-stdin` to convert the project to a static Storage token "
                     "deliberately, or `kbagent auth logout --remove-projects` to drop the "
                     "session projects first."
                 ),

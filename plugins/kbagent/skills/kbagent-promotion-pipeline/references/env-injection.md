@@ -1,7 +1,7 @@
 # Why every step uses `KBAGENT_PROJECT_FROM_ENV` / `__env__`
 
 kbagent's normal mode of operation is a **registered project**: `kbagent
-project add --project ALIAS --url URL --token TOKEN` writes the token into
+project add --project ALIAS --url URL --token-stdin` writes the token into
 `~/.config/keboola-agent-cli/config.json`, and every later command references
 that alias. That's the right model for a developer's own machine, but wrong
 for CI: it means a token would have to be written to disk (or the config

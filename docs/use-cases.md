@@ -352,7 +352,7 @@ uv pip install keboola-cli
 # Add your first project
 kbagent project add --project analytics \
   --url https://connection.keboola.com \
-  --token YOUR_STORAGE_TOKEN
+  --token-stdin
 
 # The name you give here is used in all other commands: --project analytics
 # If you omit --project, read commands query ALL connected projects.

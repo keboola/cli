@@ -211,7 +211,7 @@ class MetastoreClient(BaseHttpClient):
                 remedy = (
                     f"The token ({self._masked_token}) is not a project admin. Check "
                     f"`kbagent project info` -> is_master_token, and register a "
-                    f"project-admin token (`kbagent project edit --token ...`) to "
+                    f"project-admin token (`kbagent project edit --token-stdin`) to "
                     f"use semantic-layer write commands."
                 )
             raise KeboolaApiError(

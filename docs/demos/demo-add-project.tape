@@ -41,7 +41,7 @@ Enter
 Sleep 200ms
 Type "#   kbagent project add --project prod \\"
 Enter
-Type "#     --url https://connection.keboola.com --token <YOUR_TOKEN>"
+Type "#     --url https://connection.keboola.com --token-stdin"
 Enter
 Sleep 200ms
 Type "# After it completes, the project appears in the list:"

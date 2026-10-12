@@ -263,7 +263,7 @@ printf '    %s(needs the plugin:%s %skbagent doctor%s %sprints the exact /plugin
 info ""
 printf '  %sOr do it by hand%s\n' "$BOLD" "$RESET" >&2
 printf '    %skbagent project add%s --project myproject \\\n' "$BOLD" "$RESET" >&2
-printf '        --url https://connection.keboola.com --token YOUR_TOKEN   %s# connect a project%s\n' "$DIM" "$RESET" >&2
+printf '        --url https://connection.keboola.com --token-stdin   %s# connect a project%s\n' "$DIM" "$RESET" >&2
 printf '    %skbagent --help%s     %s# see everything you can do%s\n' "$BOLD" "$RESET" "$DIM" "$RESET" >&2
 printf '    %skbagent doctor%s     %s# verify your setup%s\n' "$BOLD" "$RESET" "$DIM" "$RESET" >&2
 info ""
