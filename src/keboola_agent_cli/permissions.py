@@ -372,7 +372,7 @@ OPERATION_REGISTRY: dict[str, str] = {
     "semantic-layer.scope.set": "write",
     "semantic-layer.scope.request-create": "write",
     "semantic-layer.scope.request-delete": "write",
-    # Serve-only AI helpers (since vNEXT). Neither touches Keboola, but both
+    # Serve-only AI helpers (since 0.99.0). Neither touches Keboola, but both
     # spawn a local `claude` / `codex` / `gemini` process on the host, exactly
     # like `agent prompt-improve` -- classified `write` for the same reason, so
     # one --deny-writes keeps an agent from spawning subprocesses through any
@@ -385,7 +385,7 @@ OPERATION_REGISTRY: dict[str, str] = {
     # DELETE = destructive (it deletes). DELETE is deliberately a rung above
     # the other mutating verbs -- lumping it in as `write` would let a
     # `--deny-destructive` session delete through the REST boundary.
-    # Since vNEXT (issue #655) the serve's own routes DO enforce the served
+    # Since 0.99.0 (issue #655) the serve's own routes DO enforce the served
     # config dir's policy on top, so a denied operation is refused at both
     # ends; before that, only `/auth/*` (since 0.90.1) and `/merge-requests/*`
     # re-checked the policy and every other router was unguarded, so these

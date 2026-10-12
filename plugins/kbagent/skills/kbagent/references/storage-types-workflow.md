@@ -363,9 +363,9 @@ Rules:
 
 ### Budget both steps on a large table
 
-*(since vNEXT, #713)*
+*(since 0.99.0, #713)*
 
-Steps 1 and 2 both move real data. Until vNEXT they inherited the 60s
+Steps 1 and 2 both move real data. Until 0.99.0 they inherited the 60s
 `STORAGE_JOB_MAX_WAIT` meant for metadata jobs -- measured on an 800 MB table,
 create takes ~15s and the swap ~31s, so a table a few times larger reported
 `STORAGE_JOB_TIMEOUT` on a job that was still running and would succeed. Both

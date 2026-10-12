@@ -381,7 +381,7 @@ def _backfill_branch(ds_client: Any, app_id: str, git_branch: str | None) -> str
 
     An explicit ``--git-branch`` always wins. No API returns the managed
     repo's default branch (``get_git_repo`` has no branch field). Before
-    vNEXT a pure managed repo deployed from ``managedGitRepoId`` on the
+    0.99.0 a pure managed repo deployed from ``managedGitRepoId`` on the
     repo's own default branch, so an app with any run history may serve code
     from a branch other than ``main``. Writing ``main`` for it would repoint
     it for good. So ``main`` is used only for an app with no runs; otherwise

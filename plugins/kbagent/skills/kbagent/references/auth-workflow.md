@@ -138,7 +138,7 @@ has an account and should create the project in the Keboola UI instead.
      redirect actually arrives, there is no fallback -- an error past that
      point is terminal (e.g. a `state` mismatch, or the exchange itself
      failing) and login simply fails; re-run the command.
-   - Before the browser wait starts, the CLI prints a notice (since vNEXT;
+   - Before the browser wait starts, the CLI prints a notice (since 0.99.0;
      to stderr with `--json`): it waits up to 115 s for the browser to
      return. If the browser shows the project list and not "Login
      complete", the sign-in cannot return: press Ctrl+C and run the

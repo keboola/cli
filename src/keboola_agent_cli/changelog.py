@@ -26,6 +26,56 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.99.0": [
+        "New (#728): `project add` and `project edit` can take a Storage token without putting "
+        "it on the command line. Use `--token-stdin` (a hidden prompt in a terminal, or a pipe), "
+        "`--token-file` (kbagent deletes the file after a successful command, "
+        "`--keep-token-file` keeps it) or `--token-env NAME`. `--token VALUE` still works, but in "
+        "a terminal it warns that the token is now in your shell history.",
+        "Change (#682): `kbagent serve` now applies the permission policy to every REST route, "
+        "not only to the `/auth` and `/merge-requests` routes. This covers `permissions set`, `--deny-writes` and "
+        "`--deny-destructive`. Without a policy, nothing changes. The new route "
+        "`GET /permissions/show` reports the policy that the server uses. Restart "
+        "`kbagent serve` after `permissions set` or `permissions reset`.",
+        "Fix (#839): `sync push` no longer overwrites a UI edit of a config that sync adopted by "
+        "its ID, for example a file from `config new --push --output-dir`. Such a file is now a "
+        "conflict, and push skips it. `sync push` also encrypts all secrets before its first "
+        "write. When the encryption fails, push writes nothing, so the next push does not create "
+        "configs twice.",
+        "Fix (#720): `storage create-table` and `storage swap-tables` now wait up to 300 seconds "
+        "for their job and take `--timeout`. Before, a large copy or swap reported a timeout "
+        "after 60 seconds while the job was still running. After a timeout, kbagent says that "
+        "the job keeps running and how to check it with `storage job-detail`. Do not run the "
+        "command again: a second swap swaps the tables back.",
+        "Fix (#756): `workspace create --ui` now runs its job in the active dev branch. After a "
+        "failed create, `workspace create` moves the sandbox config to the trash, unless the "
+        "result is unknown (for example after a timeout). On current stacks the command "
+        "still cannot create a SQL workspace, because the `keboola.sandboxes` component no "
+        "longer creates them. The help and the error message now say so.",
+        "Fix (#765): `data-app deploy` now gives a data app with a Keboola-managed Git repository "
+        "its workspace on the first deploy. Before, such an app ran without `WORKSPACE_ID` until "
+        "someone added the Git block to its configuration. kbagent now adds the block itself, "
+        "for the `main` branch or for the branch that you give with the new `--git-branch` "
+        "option. An app that already ran needs `--git-branch`.",
+        "Fix (#726): `config oauth-url` opens the authorization link in your default browser, "
+        "also on WSL, and prints the link without line breaks. Before, terminals cut the long "
+        'link, and the authorization page then failed with "Failed to load config data". Use '
+        "`--no-open` to only print the link. The `--json` output has a new key, "
+        "`browser_opened`.",
+        "Fix (#841): `auth login` now says what it waits for in the browser. Before, the command "
+        "looked stuck during the wait. It also says how to switch to the device-code login: "
+        "Ctrl+C, then `kbagent auth login --device-code`.",
+        "Fix (#840): when the update at startup fails, kbagent now prints the cause from the "
+        "installer and the command that recovers the install.",
+        "Security (#842): hardening from the security audit in #271. The lineage HTML pages load "
+        "one pinned Mermaid release with an integrity check. The update check writes its version "
+        "cache in one step, readable only by your user. `sync` warns when it stores a dev branch "
+        "under a directory with another name. The docs say that the permission policy guards "
+        "against agent mistakes and is not a sandbox.",
+        "Note (#843, #844, #832, #831, #829): housekeeping with no user-facing change. A shorter "
+        "`keboola-expert` agent prompt, and dependency updates in the web UI and its backend "
+        "(postcss-selector-parser, fast-copy, source-map-js).",
+    ],
     "0.98.0": [
         "New (#837): `storage upload-table` and `file-upload` now upload large files to AWS "
         "stacks in parts, so files over 5 GB work and memory stays flat. Files above 64 MiB are "

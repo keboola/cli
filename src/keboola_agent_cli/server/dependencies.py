@@ -255,7 +255,7 @@ def require_permission(operation: str) -> Callable[[PermissionEngine], None]:
     the registry, so overriding ``get_registry`` in a test cannot disable the
     check.
 
-    Since vNEXT (issue #655) this is the per-route OVERRIDE form, not the
+    Since 0.99.0 (issue #655) this is the per-route OVERRIDE form, not the
     default one: every route is classified centrally in
     ``server/route_permissions.py`` and checked by one app-level dependency.
     Use this when a route needs an operation the table cannot express -- and

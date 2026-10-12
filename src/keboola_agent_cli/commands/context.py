@@ -547,7 +547,7 @@ Use `kbagent <command> --help` for full flag details and examples.
     directory mirrors the pushed (already encrypted) body exactly like sync pull would
     materialize it (real transform.sql/.py extracted from the body) instead of
     placeholder scaffolding. The scaffold also records _keboola.base_config_hash (the
-    created config as the API returned it; since vNEXT, #792 E), so sync diff compares
+    created config as the API returned it; since 0.99.0, #792 E), so sync diff compares
     it 3-way and push never overwrites an edit made in the UI.
 
   kbagent config clone --project P --component-id ID --config-id ID --name NAME
@@ -616,7 +616,7 @@ Use `kbagent <command> --help` for full flag details and examples.
   kbagent config oauth-url --project NAME --component-id ID --config-id ID [--redirect-url URL] [--no-open]
     Return the OAuth authorization URL for a component that uses OAuth authentication.
     Open the URL in a browser to complete the OAuth flow.
-    Opens it in the default browser in interactive human mode (never with --json); --no-open only prints it (since vNEXT).
+    Opens it in the default browser in interactive human mode (never with --json); --no-open only prints it (since 0.99.0).
 
   kbagent config state-get --project NAME --component-id ID --config-id ID [--row-id ID] [--branch ID]
     Read a configuration's runtime state (the same dict --with-state attaches
@@ -761,7 +761,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
 
   kbagent storage create-table --project NAME --bucket-id BUCKET_ID --name TABLE_NAME [--column col:TYPE[(length)] ...] [--primary-key COL] [--not-null COL ...] [--default NAME=VALUE ...] [--source-table-id ID] [--source-branch-id N] [--time-partitioning-type DAY|HOUR|MONTH|YEAR] [--time-partitioning-field COL] [--time-partitioning-expiration-ms MS] [--range-partitioning-field COL --range-partitioning-start S --range-partitioning-end E --range-partitioning-interval I] [--clustering-field COL ...] [--branch ID] [--if-not-exists] [--timeout SECONDS]
     Create a typed table. --column repeatable.
-    - --timeout SECONDS (since vNEXT, default 300): budget for the async create job. A
+    - --timeout SECONDS (since 0.99.0, default 300): budget for the async create job. A
       --source-table-id copy moves real data and used to inherit the 60s metadata-job
       default, so a large BigQuery table reported STORAGE_JOB_TIMEOUT for a copy that was
       still running and would succeed. A local timeout NEVER cancels the job -- it keeps
@@ -865,7 +865,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
     branch use'); service guards before any HTTP call when none is set. Any branch works, INCLUDING the
     default/production branch -- a default-branch swap is how a typed rebuild reaches prod (dev-branch merge
     does not carry storage schema).
-    --timeout SECONDS (since vNEXT, default 300): budget for the async swap job. A swap on a large
+    --timeout SECONDS (since 0.99.0, default 300): budget for the async swap job. A swap on a large
     BigQuery table outlasts the old 60s metadata-job default. A local timeout NEVER cancels the swap --
     it keeps running server-side and usually lands. The error is STORAGE_JOB_TIMEOUT, exit 4,
     retryable: false, details.job_id; follow it with `storage job-detail --job-id ID --wait` and never
@@ -1500,7 +1500,7 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     git-credentials-create --type http_token --permissions readWrite + push
     code to the `main` branch of the managed repo URL -> deploy. The platform
     injects the clone credentials at deploy time, so no credential wiring is
-    needed. Deploy writes the git block itself (vNEXT+, CLI-15): for a managed
+    needed. Deploy writes the git block itself (0.99.0+, CLI-15): for a managed
     app with no parameters.dataApp.git it backfills repository URL + branch
     into the Storage config, then pins the new version. The branch is
     deploy --git-branch; without it, `main` for an app with no runs, and a
@@ -1756,7 +1756,7 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     never re-created; a same-tree id claim keeps the #482 fork-by-copy CREATE. An adopted
     file has no baseline unless it records _keboola.base_config_hash (a config new --push
     scaffold): without one a difference is a CONFLICT, never modified, and two files with
-    one id are both conflicts (since vNEXT, #792 E). sync pull keeps such a file with
+    one id are both conflicts (since 0.99.0, #792 E). sync pull keeps such a file with
     local changes (skipped, "locally modified, not tracked in the manifest"); --theirs
     overwrites it. Fix a non-zero summary.orphaned with `sync pull`; promote dev-only
     configs with `branch merge`, never by pushing them to production.
@@ -1768,7 +1768,7 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
   kbagent sync push --project ALIAS [--all-projects] [--dry-run] [--force] [--allow-plaintext-on-encrypt-failure] [--branch ID] [--no-name-drift-warnings]
     Push local changes. Auto-encrypts secrets. Skips conflicts (pull first).
     Fails if encryption fails (plaintext secrets never pushed). Use escape hatch flag only if you know what you are doing.
-    Every secret is encrypted BEFORE the first write (since vNEXT, #792 F): an
+    Every secret is encrypted BEFORE the first write (since 0.99.0, #792 F): an
     ENCRYPTION_FAILED stops the push before anything reaches the remote (message ends
     "Nothing was pushed."), so run the same push again after the fix -- it creates
     nothing twice.
@@ -2346,7 +2346,7 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
     normal chain (KBAGENT_CONFIG_DIR, .kbagent walk-up, global). Passing both
     is not an error; the serve-level flag wins. That directory decides which
     projects the REST surface exposes AND which persisted `permissions`
-    policy its routes enforce (every route since vNEXT; only /auth/* and
+    policy its routes enforce (every route since 0.99.0; only /auth/* and
     /merge-requests/* on 0.98.0 and older). NOTE for older installs: up to 0.90.1
     `serve` ignored the root-level flag entirely, silently serving a
     different directory -- there, always pass --config-dir to `serve` itself.
