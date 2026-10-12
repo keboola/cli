@@ -322,7 +322,7 @@ Versioning convention:
   heuristic. `--device-code` forces the device flow unconditionally. Once the
   browser callback succeeds (the authorization code was received), there is
   **no** fallback -- an exchange failure past that point is terminal.
-  Before the browser wait starts, the CLI prints a notice (since vNEXT; to
+  Before the browser wait starts, the CLI prints a notice (since 0.99.0; to
   stderr with `--json`): it waits up to 115 s, and a browser that shows the
   project list instead of "Login complete" cannot return. The way out is
   Ctrl+C and the command the notice names: `kbagent auth login --stack <URL>
@@ -429,7 +429,7 @@ Versioning convention:
   `--dry-run`; in `--json` it arrives in an additive top-level `warnings`
   array, so a consumer must not assume the key is absent.
 - **`--token VALUE` puts a Storage token in the user's shell history; use
-  `--token-stdin` instead** (since vNEXT). `project add` and `project edit`
+  `--token-stdin` instead** (since 0.99.0). `project add` and `project edit`
   both take four mutually exclusive sources (a second one is exit 2):
   `--token-stdin` (hidden prompt on a TTY, reads a pipe otherwise),
   `--token-file PATH`, `--token-env NAME`, and `--token VALUE`. Never hand a
@@ -437,13 +437,13 @@ Versioning convention:
   `--token-stdin`. If you must run it, ask them to write the token to a file
   and pass `--token-file`. In CI use `--token-env`. `--token VALUE` warns on a
   terminal that the token is now in the history.
-- **`--token-file` deletes the file it read** (since vNEXT). Only after the
+- **`--token-file` deletes the file it read** (since 0.99.0). Only after the
   command succeeds -- never on `--dry-run`, never after a failure, so a bad
   token does not cost the user the file. `--keep-token-file` turns the delete
   off for a read-only mount. A delete that fails is a warning, not an error.
   Note that this unlinks the file; it does not scrub the bytes off the disk.
 - **`project edit` ignores `KBC_TOKEN`; `project add` reads it** (since
-  vNEXT). Not an oversight. A new token rewrites the alias's `project_id` and
+  0.99.0). Not an oversight. A new token rewrites the alias's `project_id` and
   `project_name` from whatever it verifies as, and nothing checks that the
   token belongs to the same project, so an exported `KBC_TOKEN` could silently
   repoint an alias at a different project during a plain `--new-alias`. Name
@@ -1377,7 +1377,7 @@ under an active branch. `--branch` requires exactly one `--project`.
 
 ## `workspace create --ui` cannot produce a UI-visible SQL workspace; a failed create no longer leaves a sandbox config behind
 
-Applies since vNEXT (issue #755). The `--ui` path queues a `keboola.sandboxes`
+Applies since 0.99.0 (issue #755). The `--ui` path queues a `keboola.sandboxes`
 job with `task: create`. That component **dropped Snowflake/BigQuery workspace
 provisioning in March 2026**: the `create` task now only registers a
 sandbox-service record and writes `parameters.id` back into the config -- no
@@ -2223,7 +2223,7 @@ config, the retry fires, and the retry destroys it for good.
 
 ## A `STORAGE_JOB_TIMEOUT` is not a failure -- the job is still running
 
-*(since vNEXT, #713)*
+*(since 0.99.0, #713)*
 
 - `storage create-table` and `storage swap-tables` -- the two halves of the
   BigQuery repartition path -- both move real data, yet both used to inherit
@@ -2231,7 +2231,7 @@ config, the retry fires, and the retry destroys it for good.
   on an 800 MB BigQuery table: create ~15s, swap ~31s. A table a few times
   larger blew the budget, so a healthy operation was reported as
   `STORAGE_JOB_TIMEOUT`.
-- **Since vNEXT both default to 300s and accept `--timeout SECONDS`.** The
+- **Since 0.99.0 both default to 300s and accept `--timeout SECONDS`.** The
   REST routes (`POST /storage/tables/{p}`, `POST /storage/tables/{p}/{tid}/swap`)
   take an optional `timeout` field; a zero, negative, NaN or infinite value
   is a 422. On the CLI the same value is a usage error: exit 2,
@@ -3090,7 +3090,7 @@ type inventory and examples.
 ## Token handling
 
 - Tokens are always masked in output (e.g. `901-...pt0k`) -- this is normal
-- Token can be passed via `--token-stdin` (preferred), `--token-file`, `--token-env` (all three since vNEXT), `--token`, `KBC_TOKEN` env var (`project add` only), or interactive prompt (`project add` only)
+- Token can be passed via `--token-stdin` (preferred), `--token-file`, `--token-env` (all three since 0.99.0), `--token`, `KBC_TOKEN` env var (`project add` only), or interactive prompt (`project add` only)
 - Manage API token (since v0.29.0): default-deny on env -- via interactive hidden prompt; pass top-level `--allow-env-manage-token` to opt in to `KBC_MANAGE_API_TOKEN`. Never as CLI argument. See the `(since v0.29.0)` entry at the top of this file.
 - Master token for sharing: `KBC_MASTER_TOKEN_{ALIAS}` (e.g. `KBC_MASTER_TOKEN_PROD`) or `KBC_MASTER_TOKEN` as global fallback. Alias is uppercased, hyphens become underscores. Required for `sharing share` and `sharing unshare`; `sharing list/link/unlink` use regular project tokens.
 
@@ -4249,7 +4249,7 @@ Other behaviors of this family:
 
 ## `data-app` managed-repo deploy: the platform injects clone creds; deploy backfills the git block (since v0.65.0; guidance corrected v0.65.1 -- no credential wiring needed)
 
-*(since vNEXT)* `data-app deploy` no longer omits configVersion for a pure
+*(since 0.99.0)* `data-app deploy` no longer omits configVersion for a pure
 managed repo (CLI-15). It backfills `parameters.dataApp.git` and pins the
 resulting version. Read the bullets below with that in mind; the last bullet
 has the details.
@@ -4281,13 +4281,13 @@ The end-to-end flow that is **verified to deploy and serve** (tic-tac-toe on
 The actual bug fixed in 0.65.0 was **kbagent always-pinning `configVersion`**:
 
 - **configVersion at deploy depends on the source location.** In 0.65.0 through
-  the release before vNEXT, `data-app deploy` **omitted** configVersion for a
+  the release before 0.99.0, `data-app deploy` **omitted** configVersion for a
   *pure* managed repo (no git block) and pinned the **latest** Storage
   configVersion only when a git block was present (external repos). Pinning a
   managed app's no-git-block Storage config made the runtime demand
   `dataApp.git.repository` and the deploy reverted to `stopped` -- that was the
   misdiagnosed "could not read Username" symptom, NOT a missing credential.
-  Omitting configVersion fixed that crash. Since vNEXT, deploy backfills the git
+  Omitting configVersion fixed that crash. Since 0.99.0, deploy backfills the git
   block instead (last bullet). There is **no** cross-stack "platform doesn't inject
   credentials" gap (issue #454 closed as not-a-bug).
 - **Diagnose a stopped-reverting deploy with `data-app runs`**, not `data-app
@@ -4298,7 +4298,7 @@ The actual bug fixed in 0.65.0 was **kbagent always-pinning `configVersion`**:
   command on the misdiagnosis that a credential had to be wired into the config.
   It was removed in 0.65.1 -- it is unnecessary because no platform-injection gap
   exists.
-- **Correction (since vNEXT, CLI-15): omitting configVersion alone does NOT
+- **Correction (since 0.99.0, CLI-15): omitting configVersion alone does NOT
   provision a workspace.** The 0.65.0 fix above solves the "could not read Username" crash,
   but a *pure* managed repo (no git block yet) still deployed with no
   `WORKSPACE_ID`/`KBC_WORKSPACE_MANIFEST_PATH`, even with
@@ -4306,7 +4306,7 @@ The actual bug fixed in 0.65.0 was **kbagent always-pinning `configVersion`**:
   no-platform-diagnostic failure mode as the `--workspace` gotcha above. Root
   cause: workspace grant provisioning is gated on `parameters.dataApp.git` being
   present in Storage config, independent of `managedGitRepoId`/
-  `hasManagedGitRepo`/`configVersion`. Fixed since vNEXT: `data-app deploy` now
+  `hasManagedGitRepo`/`configVersion`. Fixed since 0.99.0: `data-app deploy` now
   resolves the managed repo's URL and backfills that git block (repository URL,
   branch from `--git-branch`) *before* pinning a version, for any pure managed
   repo -- no manual `config update --merge` step needed. No API returns the
@@ -5443,7 +5443,7 @@ since 0.91.0 -- an explicit root-level `kbagent --config-dir`, then
 `KBAGENT_CONFIG_DIR`, then the local/global chain), and `kbagent serve`
 forwards only the session FLAGS of the invocation on top. The three `/auth/*`
 routes (`server/routers/auth.py`) and the `/merge-requests/*` routes declare
-`Depends(require_permission(...))` themselves; since vNEXT every other route is
+`Depends(require_permission(...))` themselves; since 0.99.0 every other route is
 checked through one central table (below) -- see `docs/web-server.md` for the
 endpoint shapes.
 
@@ -5452,7 +5452,7 @@ endpoint shapes.
   `--deny-writes` appends `cli:write`, which spans write+destructive+admin, so
   the CLI callback blocks the `serve` command itself: `Error: Operation
   'serve' is blocked by the active permission policy.`, exit code 6, no
-  uvicorn. `--deny-destructive` does start the server, and since vNEXT it
+  uvicorn. `--deny-destructive` does start the server, and since 0.99.0 it
   blocks every destructive route (no `/auth/*` operation is destructive).
 - **The reachable recipe is a persisted policy in the SERVED config dir.**
   Verified live:
@@ -5469,7 +5469,7 @@ endpoint shapes.
 
   A `--mode deny` policy works too, but then `serve` (and the reads you want to
   keep) must be in its allow list, or the server will not start either.
-- **A deny policy firewalls the WHOLE REST surface (since vNEXT, #655).**
+- **A deny policy firewalls the WHOLE REST surface (since 0.99.0, #655).**
   Every route is classified in `server/route_permissions.py` and checked by
   one app-level dependency against the served config dir's policy, so
   `permissions set --mode deny --deny cli:write` now blocks `POST
@@ -5486,7 +5486,7 @@ endpoint shapes.
   and `models` / `items/{kind}` / `import` / `promote` asking for (or
   inheriting from the target model) `organization` scope, plus `build` into an
   organization-scope model, answer 403 under `--deny-destructive`.
-- **`GET /permissions/show` (since vNEXT)** reports the EFFECTIVE policy --
+- **`GET /permissions/show` (since 0.99.0)** reports the EFFECTIVE policy --
   the persisted block already merged with the `--deny-*` flags the daemon was
   launched with. Read-only: there is no REST way to change the policy, so an
   agent cannot widen the firewall that constrains it. Reachable under any
@@ -5501,7 +5501,7 @@ endpoint shapes.
 - Four registry keys back a serve-only surface with no CLI leaf command:
   `auth.projects` (the terminal equivalent is `auth register-projects`'s
   interactive picker), `merge-request.by-branch` (the CLI resolves it behind an
-  omitted `--merge-request-id`) plus `ai.chat` and `workspace.sql-improve` (since vNEXT --
+  omitted `--merge-request-id`) plus `ai.chat` and `workspace.sql-improve` (since 0.99.0 --
   the dashboard's Local AI tile and the SQL editor's "improve this query"
   helper; both are `write`, because both spawn a local CLI process on the host
   exactly like `agent prompt-improve`). All four are exempted from
@@ -5874,7 +5874,7 @@ drops manifest entries whose config is gone from the remote) are closed:
 
 ## `sync` and a file that carries a config id but has no manifest entry (#792)
 
-*(since vNEXT, #792)* A `_config.yml` whose `_keboola.config_id` exists on the
+*(since 0.99.0, #792)* A `_config.yml` whose `_keboola.config_id` exists on the
 target branch, but that has no manifest entry, is *adopted*: `sync diff`
 compares it with that remote config, and `sync push` never creates a
 duplicate of it. Examples: a `config new --push --output-dir` scaffold, a tree
@@ -5909,7 +5909,7 @@ whose manifest was lost or written again, a `main/` file that
 
 ## `sync push` encrypts every secret before its first write (#792)
 
-*(since vNEXT, #792)* Before, push encrypted the `#` secrets of each config
+*(since 0.99.0, #792)* Before, push encrypted the `#` secrets of each config
 just before its own write. An `ENCRYPTION_FAILED` on a later config stopped
 the push after earlier configs were created or updated, and the manifest did
 not record them. The retry then created those configs again.
@@ -6287,7 +6287,7 @@ not, so the wizard authenticates and then 404s on the configuration:
   first row only. Nothing kbagent prints can prevent that in a renderer it does
   not control (e.g. an assistant transcript).
 
-Since vNEXT the command therefore opens the URL itself (interactive human mode
+Since 0.99.0 the command therefore opens the URL itself (interactive human mode
 only; `--no-open` opts out) and prints it unwrapped as a copy fallback. It
 skips the open where `auth login` skips it too: an SSH session (`webbrowser`
 would start a console browser such as lynx or w3m on the terminal), a
@@ -6299,7 +6299,7 @@ of the logins the flow needs.
 
 ## An install under the old package name `keboola-agent-cli` does not update to `keboola-cli`
 
-*(since vNEXT, #771)*
+*(since 0.99.0, #771)*
 
 The package was named `keboola-agent-cli` up to 0.62.0 and is named `keboola-cli` from 0.63.0. Both install the `kbagent` executable, so uv treats an update to `keboola-cli` as a new tool. If a user reports a kbagent that never updates, run `uv tool list` and look for a `keboola-agent-cli` entry.
 

@@ -667,7 +667,7 @@ kbagent storage truncate-table --project NAME --table-id ID [--table-id ...] [--
 kbagent storage delete-column --project NAME --table-id ID --column COL [--column ...] [--force] [--dry-run] [--yes] [--branch ID]
 kbagent storage delete-bucket --project NAME --bucket-id ID [--bucket-id ...] [--force] [--dry-run] [--yes] [--branch ID]
 kbagent storage swap-tables --project NAME --table-id ID --target-table-id ID --branch ID [--dry-run] [--yes] [--timeout SECONDS]
-    # --timeout SECONDS on create-table and swap-tables (since vNEXT, #713): both halves
+    # --timeout SECONDS on create-table and swap-tables (since 0.99.0, #713): both halves
     #   of the repartition path move real data yet used to inherit the 60s metadata-job
     #   budget, so a large BigQuery table reported STORAGE_JOB_TIMEOUT for a job that was
     #   still running and would succeed. Default is now 300s on both. A local timeout
@@ -825,7 +825,7 @@ kbagent token refresh --project NAME --token-id ID [--yes]
 #   is persisted. `permissions show` / `kbagent doctor` also generalized: they now flag ANY
 #   persisted pattern matching zero known operations, not only the retired tool:* namespace.
 #   PermissionEngine itself stays lenient at evaluation time -- only `permissions set` is strict.
-# (since vNEXT, #655) The policy also firewalls the WHOLE `kbagent serve` REST surface: every
+# (since 0.99.0, #655) The policy also firewalls the WHOLE `kbagent serve` REST surface: every
 #   route is classified in server/route_permissions.py and checked by one app-level dependency
 #   against the SERVED config dir's policy -> HTTP 403 error_code PERMISSION_DENIED, the same
 #   code the CLI exits on. On 0.98.0 and older only /auth/* (0.90.1+) and /merge-requests/*
@@ -841,7 +841,7 @@ kbagent token refresh --project NAME --token-id ID [--yes]
 #   the handlers of scope PUT, models, items/{kind} (per-kind leaf key), import, promote
 #   and build check `<key> --scope organization` (FLAG_ESCALATIONS) for a typed OR an
 #   inherited organization scope, like the CLI.
-#   `GET /permissions/show` (serve, since vNEXT) reports the EFFECTIVE policy (persisted block
+#   `GET /permissions/show` (serve, since 0.99.0) reports the EFFECTIVE policy (persisted block
 #   merged with the daemon's --deny-* flags); read-only by design -- no REST route can widen
 #   the policy that constrains it, so `permissions set|reset` stay terminal actions on the host.
 kbagent permissions list [--category read|write|destructive|admin]

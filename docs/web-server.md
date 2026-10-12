@@ -105,7 +105,7 @@ read/audit half of `kbagent auth` *(since v0.90.1)* — `login` /
 Going the other way, several CLI surfaces are deliberately CLI-only: `sync`
 (filesystem-local by design), `init`, and the *write* half of `permissions`
 (`set` / `reset`). The mirrors still considered missing are tracked in #657.
-`GET /permissions/show` *(since vNEXT)* is the read half — see "The session
+`GET /permissions/show` *(since 0.99.0)* is the read half — see "The session
 firewall applies to every route" below.
 
 Auto-generated OpenAPI spec at `/openapi.json`, Swagger UI at `/docs`.
@@ -486,7 +486,7 @@ including the `kbc-session://` sentinel.
 
 `/auth/*` was the **first router to enforce the permission policy** (0.90.1):
 every route above declares `Depends(require_permission(...))` at its own call
-site. Since vNEXT that is no longer special — *every* route on the server is
+site. Since 0.99.0 that is no longer special — *every* route on the server is
 enforced (see "The session firewall applies to every route" below) — and the
 three inline declarations survive only as the per-route override form.
 
@@ -501,7 +501,7 @@ you reach for a flag:
   classified `admin`, and `--deny-writes` appends `cli:write`, which spans
   write + destructive + admin — so the CLI callback blocks the `serve` command
   itself (exit code 6, `Operation 'serve' is blocked by the active permission
-  policy`). `--deny-destructive` does start the server, and since vNEXT it
+  policy`). `--deny-destructive` does start the server, and since 0.99.0 it
   blocks every destructive route (no `/auth/*` operation is destructive).
 - **Use a persisted policy instead.** Run, on the host, in a real terminal
   (`permissions set` requires a typed confirmation code — there is no `--yes`):
@@ -576,14 +576,14 @@ for `serve` to use.
 
 ### The session firewall applies to every route
 
-*(since vNEXT — issue #655)*
+*(since 0.99.0 — issue #655)*
 
 `PermissionEngine` used to be built only in the Typer callback, so a persisted
 `permissions set --mode deny` policy — and both `--deny-writes` and
 `--deny-destructive` — protected the CLI process and nothing else. `kbagent
 serve` exposed every route, `DELETE /storage/buckets` included, behind a single
 all-or-nothing bearer token. 0.90.1 closed that for `/auth/*` and 0.94.0 for
-`/merge-requests/*`; vNEXT closes it for the whole surface.
+`/merge-requests/*`; 0.99.0 closes it for the whole surface.
 
 **How it works.** One app-level dependency (`server/route_permissions.py`) runs
 on every request, looks the matched route up by `(method, path template)` in
