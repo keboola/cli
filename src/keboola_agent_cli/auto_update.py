@@ -15,6 +15,7 @@ import os
 import shutil
 import sys
 import time
+from dataclasses import dataclass
 from importlib.metadata import distribution
 from pathlib import Path
 
@@ -39,6 +40,7 @@ from .services.version_service import (
     get_update_timeout,
     prepare_kbagent_update_plan,
     resolve_kbagent_wheel_url,
+    summarize_install_failure,
 )
 from .update_runner import (
     DeferredUpdateReport,
@@ -66,6 +68,14 @@ class UpdateOutcome(enum.Enum):
     SUCCESS = "success"
     TIMEOUT = "timeout"
     FAILED = "failed"
+
+
+@dataclass(frozen=True)
+class UpdateResult:
+    """An :class:`UpdateOutcome` plus what the installer printed when it failed (issue #771)."""
+
+    outcome: UpdateOutcome
+    output: str = ""
 
 
 # Process-level sentinel for the auto-update flow.
@@ -273,9 +283,7 @@ def _should_skip() -> bool:
     return _should_skip_kbagent_stage() or _should_skip_all()
 
 
-def _perform_update(
-    latest_version: str, *, command: tuple[str, ...] | None = None
-) -> UpdateOutcome:
+def _perform_update(latest_version: str, *, command: tuple[str, ...] | None = None) -> UpdateResult:
     """Download and install the latest version.
 
     Delegates to :func:`build_kbagent_upgrade_command` so this path stays
@@ -290,10 +298,10 @@ def _perform_update(
         latest_version: The version being updated to (for logging).
 
     Returns:
-        :class:`UpdateOutcome`: ``SUCCESS`` on a clean install, ``TIMEOUT`` when
-        the install outran :func:`get_update_timeout` -- it is still running and
-        will finish on its own, so the next launch picks it up -- and ``FAILED``
-        otherwise.
+        :class:`UpdateResult` whose ``outcome`` is ``SUCCESS`` on a clean install,
+        ``TIMEOUT`` when the install outran :func:`get_update_timeout` -- it is
+        still running and will finish on its own, so the next launch picks it up --
+        and ``FAILED`` otherwise, with the installer's output in ``output``.
     """
     # ``command`` is supplied by the startup planner. Keep the fallback only
     # for direct legacy callers; it must never be used after another stage has
@@ -304,17 +312,32 @@ def _perform_update(
     else:
         cmd = list(command)
     if cmd is None:
-        return UpdateOutcome.FAILED
+        return UpdateResult(UpdateOutcome.FAILED)
 
     # Deliberately does NOT kill the installer when the deadline passes -- see
     # ``update_runner.run_install``. A terminated uv leaves the same
     # half-removed venv a Windows file lock does (issue #528).
     run = run_install(tuple(cmd), timeout=get_update_timeout())
     if run.status is InstallStatus.SUCCEEDED:
-        return UpdateOutcome.SUCCESS
+        return UpdateResult(UpdateOutcome.SUCCESS)
     if run.status is InstallStatus.STILL_RUNNING:
-        return UpdateOutcome.TIMEOUT
-    return UpdateOutcome.FAILED
+        return UpdateResult(UpdateOutcome.TIMEOUT)
+    return UpdateResult(UpdateOutcome.FAILED, run.output)
+
+
+def _format_update_failure(output: str, recovery_command: str | None) -> str:
+    """Render the startup banner for a failed install (issue #771).
+
+    Names the line the installer ended with, so the user can tell a network
+    error from a permanent one.
+    """
+    lines = ["Auto-update failed; continuing with current version."]
+    cause = summarize_install_failure(output)
+    if cause:
+        lines.append(f"Cause: {cause}")
+    if recovery_command:
+        lines.append(f"Recover with: {recovery_command}")
+    return "\n".join(lines) + "\n"
 
 
 def _re_exec() -> None:
@@ -594,9 +617,10 @@ def maybe_auto_update() -> None:
             return
 
         sys.stderr.write(f"Updating kbagent v{__version__} -> v{kbagent_plan.latest_version}...\n")
-        outcome = _perform_update(
+        result = _perform_update(
             kbagent_plan.latest_version or __version__, command=kbagent_plan.command
         )
+        outcome = result.outcome
         if outcome is UpdateOutcome.SUCCESS:
             sys.stderr.write(f"Updated to v{kbagent_plan.latest_version}. Re-launching...\n")
             os.environ[ENV_UPDATED_FROM] = __version__
@@ -611,10 +635,7 @@ def maybe_auto_update() -> None:
                 "background and applies on the next launch.\n"
             )
         else:
-            sys.stderr.write(
-                "Auto-update failed; continuing with current version. Recover with: "
-                f"{kbagent_plan.recovery_command}\n"
-            )
+            sys.stderr.write(_format_update_failure(result.output, kbagent_plan.recovery_command))
     except Exception:
         # Blanket catch: auto-update must NEVER crash the CLI.
         logger.debug("Auto-update check failed", exc_info=True)

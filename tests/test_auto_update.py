@@ -11,6 +11,7 @@ import pytest
 import keboola_agent_cli.auto_update as auto_update_module
 from keboola_agent_cli.auto_update import (
     UpdateOutcome,
+    UpdateResult,
     _get_cache_path,
     _is_cache_fresh,
     _is_dev_install,
@@ -285,6 +286,20 @@ class TestVersionCache:
 # ---------------------------------------------------------------------------
 # _perform_update
 # ---------------------------------------------------------------------------
+# What uv 0.12 prints when the startup command
+# (`uv tool install --force --reinstall "keboola-cli @ <wheel URL>"`) cannot
+# download the wheel (issue #771). A fake install run returns it, so no test
+# ever starts a real uv.
+UV_DOWNLOAD_FAILURE = (
+    "error: Failed to download `keboola-cli @ https://example.test/k.whl`\n"
+    "  cause: Failed to fetch: `https://example.test/k.whl`\n"
+    "  cause: HTTP status client error (404 Not Found) for url (https://example.test/k.whl)\n"
+)
+UV_DOWNLOAD_FAILURE_CAUSE = (
+    "cause: HTTP status client error (404 Not Found) for url (https://example.test/k.whl)"
+)
+
+
 def _finished_install(status: InstallStatus, exit_code: int | None = 0) -> InstallRun:
     """An :class:`InstallRun` stand-in for a mocked installer execution."""
     return InstallRun(status=status, exit_code=exit_code, output="", log_path=Path("update.log"))
@@ -304,7 +319,7 @@ class TestPerformUpdate:
     def test_update_with_uv_success(self, mock_install, mock_which):
         mock_which.return_value = "/usr/local/bin/uv"
         mock_install.return_value = _finished_install(InstallStatus.SUCCEEDED)
-        assert _perform_update("2.0.0") is UpdateOutcome.SUCCESS
+        assert _perform_update("2.0.0").outcome is UpdateOutcome.SUCCESS
         assert "uv" in mock_install.call_args.args[0][0]
 
     @patch("shutil.which")
@@ -312,7 +327,22 @@ class TestPerformUpdate:
     def test_update_with_uv_failure(self, mock_install, mock_which):
         mock_which.return_value = "/usr/local/bin/uv"
         mock_install.return_value = _finished_install(InstallStatus.FAILED, exit_code=1)
-        assert _perform_update("2.0.0") is UpdateOutcome.FAILED
+        assert _perform_update("2.0.0").outcome is UpdateOutcome.FAILED
+
+    @patch("shutil.which")
+    @patch("keboola_agent_cli.auto_update.run_install")
+    def test_failure_carries_the_installer_output(self, mock_install, mock_which):
+        """The output is what the startup banner names as the cause (issue #771)."""
+        mock_which.return_value = "/usr/local/bin/uv"
+        mock_install.return_value = InstallRun(
+            status=InstallStatus.FAILED,
+            exit_code=2,
+            output=UV_DOWNLOAD_FAILURE,
+            log_path=Path("update.log"),
+        )
+        result = _perform_update("2.0.0")
+        assert result.outcome is UpdateOutcome.FAILED
+        assert result.output == UV_DOWNLOAD_FAILURE
 
     @patch("shutil.which")
     @patch("keboola_agent_cli.auto_update.run_install")
@@ -322,13 +352,13 @@ class TestPerformUpdate:
             None if cmd == "uv" else "/usr/bin/pip" if cmd == "pip" else None
         )
         mock_install.return_value = _finished_install(InstallStatus.SUCCEEDED)
-        assert _perform_update("2.0.0") is UpdateOutcome.SUCCESS
+        assert _perform_update("2.0.0").outcome is UpdateOutcome.SUCCESS
         assert "pip" in mock_install.call_args.args[0][0]
 
     @patch("shutil.which")
     def test_update_no_tools(self, mock_which):
         mock_which.return_value = None
-        assert _perform_update("2.0.0") is UpdateOutcome.FAILED
+        assert _perform_update("2.0.0").outcome is UpdateOutcome.FAILED
 
     @patch("shutil.which")
     @patch("keboola_agent_cli.auto_update.run_install")
@@ -340,7 +370,7 @@ class TestPerformUpdate:
         """
         mock_which.return_value = "/usr/local/bin/uv"
         mock_install.return_value = _finished_install(InstallStatus.STILL_RUNNING, exit_code=None)
-        assert _perform_update("2.0.0") is UpdateOutcome.TIMEOUT
+        assert _perform_update("2.0.0").outcome is UpdateOutcome.TIMEOUT
 
     @patch(
         "keboola_agent_cli.services.version_service.has_server_extras",
@@ -361,7 +391,7 @@ class TestPerformUpdate:
         ``--force`` when ``fastapi`` is importable.
         """
         mock_install.return_value = _finished_install(InstallStatus.SUCCEEDED)
-        assert _perform_update("2.0.0") is UpdateOutcome.SUCCESS
+        assert _perform_update("2.0.0").outcome is UpdateOutcome.SUCCESS
         argv = mock_install.call_args.args[0]
         # The extras live in the primary PEP 508 requirement so the complete
         # environment is resolved in one forced reinstall.
@@ -381,7 +411,7 @@ class TestPerformUpdate:
     ):
         """No-extras installs are also a full forced reinstall."""
         mock_install.return_value = _finished_install(InstallStatus.SUCCEEDED)
-        assert _perform_update("2.0.0") is UpdateOutcome.SUCCESS
+        assert _perform_update("2.0.0").outcome is UpdateOutcome.SUCCESS
         argv = mock_install.call_args.args[0]
         assert "--force" in argv
         assert "--reinstall" in argv
@@ -405,7 +435,7 @@ class TestPerformUpdateWheel:
         mock_head.return_value = MagicMock(status_code=200)
         mock_install.return_value = _finished_install(InstallStatus.SUCCEEDED)
 
-        assert _perform_update("2.0.0") is UpdateOutcome.SUCCESS
+        assert _perform_update("2.0.0").outcome is UpdateOutcome.SUCCESS
 
         argv = mock_install.call_args.args[0]
         # PEP 508 direct ref to the versioned wheel, --force, and no git+ source.
@@ -421,7 +451,7 @@ class TestPerformUpdateWheel:
         mock_head.return_value = MagicMock(status_code=404)
         mock_install.return_value = _finished_install(InstallStatus.SUCCEEDED)
 
-        assert _perform_update("2.0.0") is UpdateOutcome.SUCCESS
+        assert _perform_update("2.0.0").outcome is UpdateOutcome.SUCCESS
 
         argv = mock_install.call_args.args[0]
         assert any("git+" in part for part in argv)
@@ -550,7 +580,10 @@ class TestMaybeAutoUpdate:
     @patch("keboola_agent_cli.auto_update._fetch_kbagent_latest_version", return_value="2.0.0")
     @patch("keboola_agent_cli.auto_update._write_cache")
     @patch("keboola_agent_cli.auto_update._is_up_to_date", return_value=False)
-    @patch("keboola_agent_cli.auto_update._perform_update", return_value=UpdateOutcome.SUCCESS)
+    @patch(
+        "keboola_agent_cli.auto_update._perform_update",
+        return_value=UpdateResult(UpdateOutcome.SUCCESS),
+    )
     @patch("keboola_agent_cli.auto_update._re_exec")
     @patch("keboola_agent_cli.auto_update.__version__", "1.0.0")
     def test_newer_available_updates_and_reexec(
@@ -572,7 +605,10 @@ class TestMaybeAutoUpdate:
     @patch("keboola_agent_cli.auto_update._fetch_kbagent_latest_version", return_value="2.0.0")
     @patch("keboola_agent_cli.auto_update._write_cache")
     @patch("keboola_agent_cli.auto_update._is_up_to_date", return_value=False)
-    @patch("keboola_agent_cli.auto_update._perform_update", return_value=UpdateOutcome.FAILED)
+    @patch(
+        "keboola_agent_cli.auto_update._perform_update",
+        return_value=UpdateResult(UpdateOutcome.FAILED),
+    )
     @patch("keboola_agent_cli.auto_update._re_exec")
     @patch("keboola_agent_cli.auto_update.__version__", "1.0.0")
     def test_update_failure_continues(
@@ -594,7 +630,7 @@ class TestMaybeAutoUpdate:
     @patch("keboola_agent_cli.auto_update._is_up_to_date", return_value=False)
     @patch(
         "keboola_agent_cli.auto_update._perform_update",
-        return_value=UpdateOutcome.TIMEOUT,
+        return_value=UpdateResult(UpdateOutcome.TIMEOUT),
     )
     @patch("keboola_agent_cli.auto_update._re_exec")
     @patch("keboola_agent_cli.auto_update._write_cache")
@@ -917,12 +953,12 @@ class TestSafeStartupUpdateOrder:
             assert not mutated
             events.append("cache")
 
-        def perform(version: str, *, command: tuple[str, ...]) -> UpdateOutcome:
+        def perform(version: str, *, command: tuple[str, ...]) -> UpdateResult:
             nonlocal mutated
             assert events[-1] == "cache"
             mutated = True
             events.append("kbagent")
-            return UpdateOutcome.SUCCESS
+            return UpdateResult(UpdateOutcome.SUCCESS)
 
         def reexec() -> None:
             assert mutated
@@ -950,6 +986,61 @@ class TestSafeStartupUpdateOrder:
         ]
         # Sentinel was flipped before the crash.
         assert auto_update_module._AUTO_UPDATE_RAN is True
+
+
+class TestStartupFailureBanner:
+    """A failed startup install names the cause the installer reported (issue #771).
+
+    The installer is faked at `run_install`, so the whole path from the fake uv
+    transcript to stderr runs without starting uv.
+    """
+
+    RECOVERY = "uv tool install --force --reinstall 'keboola-cli @ https://example.test/k.whl'"
+
+    @pytest.fixture
+    def run_failed_update(self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture):
+        def run(*, install_output: str) -> str:
+            plan = KbagentUpdatePlan("1.0.0", "2.0.0", False, ("uv", "tool"), self.RECOVERY)
+            monkeypatch.setattr(auto_update_module, "_AUTO_UPDATE_RAN", False)
+            monkeypatch.setattr(auto_update_module, "_should_skip_all", lambda: False)
+            monkeypatch.setattr(auto_update_module, "_should_skip_kbagent_stage", lambda: False)
+            monkeypatch.setattr(auto_update_module, "_read_cache", lambda: None)
+            monkeypatch.setattr(auto_update_module, "_write_cache", lambda **_: None)
+            monkeypatch.setattr(
+                auto_update_module, "_fetch_kbagent_latest_version", lambda **_: "2.0.0"
+            )
+            monkeypatch.setattr(auto_update_module, "_prepare_auto_kbagent_plan", lambda _: plan)
+            monkeypatch.setattr(auto_update_module, "__version__", "1.0.0")
+            monkeypatch.setattr(
+                auto_update_module,
+                "run_install",
+                lambda *_, **__: InstallRun(
+                    InstallStatus.FAILED, 2, install_output, Path("update.log")
+                ),
+            )
+            re_exec = MagicMock()
+            monkeypatch.setattr(auto_update_module, "_re_exec", re_exec)
+            capsys.readouterr()
+            maybe_auto_update()
+            re_exec.assert_not_called()
+            return capsys.readouterr().err
+
+        return run
+
+    def test_banner_names_the_line_uv_ended_with(self, run_failed_update):
+        err = run_failed_update(install_output=UV_DOWNLOAD_FAILURE)
+
+        assert err.splitlines()[1:] == [
+            "Auto-update failed; continuing with current version.",
+            f"Cause: {UV_DOWNLOAD_FAILURE_CAUSE}",
+            f"Recover with: {self.RECOVERY}",
+        ]
+
+    def test_no_installer_output_prints_no_cause_line(self, run_failed_update):
+        err = run_failed_update(install_output="")
+
+        assert "Cause:" not in err
+        assert f"Recover with: {self.RECOVERY}" in err
 
 
 # ---------------------------------------------------------------------------
@@ -1020,7 +1111,10 @@ class TestStartupDefersTheReinstall:
 
     @patch("keboola_agent_cli.auto_update.should_defer", return_value=False)
     @patch("keboola_agent_cli.auto_update.request_deferred_update")
-    @patch("keboola_agent_cli.auto_update._perform_update", return_value=UpdateOutcome.SUCCESS)
+    @patch(
+        "keboola_agent_cli.auto_update._perform_update",
+        return_value=UpdateResult(UpdateOutcome.SUCCESS),
+    )
     @patch("keboola_agent_cli.auto_update._re_exec")
     def test_posix_keeps_the_inline_install_and_re_exec(
         self, mock_reexec, mock_perform, mock_request, mock_defer
@@ -1246,7 +1340,7 @@ class TestFrozenBuildGuard:
             patch("keboola_agent_cli.auto_update._prepare_auto_kbagent_plan", return_value=plan),
             patch(
                 "keboola_agent_cli.auto_update._perform_update",
-                return_value=UpdateOutcome.SUCCESS,
+                return_value=UpdateResult(UpdateOutcome.SUCCESS),
             ) as mock_perform,
             patch("keboola_agent_cli.auto_update._re_exec") as mock_reexec,
         ):
