@@ -1,6 +1,7 @@
 """Tests for DeepLineageService - column-level lineage from sync'd data."""
 
 import json
+import re
 from pathlib import Path
 from unittest.mock import patch
 
@@ -8,6 +9,12 @@ import pytest
 import yaml
 
 from keboola_agent_cli.config_store import ConfigStore
+from keboola_agent_cli.constants import (
+    MERMAID_CDN_URL,
+    MERMAID_SCRIPT_ATTRS,
+    MERMAID_SRI_HASH,
+    MERMAID_VERSION,
+)
 from keboola_agent_cli.services.deep_lineage_service import (
     Configuration,
     DeepLineageService,
@@ -1304,3 +1311,33 @@ class TestSourceReadsAreUtf8:
 
         # The table reference -- the only thing lineage actually needs -- survives.
         assert "in.c_bucket.tbl" in code
+
+
+def _mermaid_script_tags(page: str) -> list[str]:
+    """Every opening ``<script>`` tag in *page* whose ``src`` loads Mermaid."""
+    return re.findall(r'<script\b[^>]*\bsrc="[^"]*mermaid[^"]*"[^>]*>', page)
+
+
+class TestMermaidScriptIsPinned:
+    """Issue #271 sec-16: every lineage HTML page loads one exact Mermaid release
+    from the CDN with an SRI hash, so the browser refuses a changed file."""
+
+    def test_pinned_constants_have_the_required_form(self) -> None:
+        assert re.fullmatch(r"\d+\.\d+\.\d+", MERMAID_VERSION)
+        assert re.fullmatch(r"sha384-[A-Za-z0-9+/]{64}", MERMAID_SRI_HASH)
+        assert f"/mermaid@{MERMAID_VERSION}/" in MERMAID_CDN_URL
+
+    def test_show_html_page_loads_the_pinned_script(self) -> None:
+        page = DeepLineageService.render_html("graph LR\n  a --> b", "Lineage")
+
+        assert _mermaid_script_tags(page) == [f"<script {MERMAID_SCRIPT_ATTRS}>"]
+
+    def test_browser_page_and_its_download_html_load_the_pinned_script(self) -> None:
+        """The browser page itself, plus the page its "Download HTML" button builds."""
+        from keboola_agent_cli.commands.lineage import _LINEAGE_HTML_TEMPLATE
+
+        assert _mermaid_script_tags(_LINEAGE_HTML_TEMPLATE) == [
+            f"<script {MERMAID_SCRIPT_ATTRS}>",
+            f"<script {MERMAID_SCRIPT_ATTRS}>",
+        ]
+        assert "__MERMAID_SCRIPT_ATTRS__" not in _LINEAGE_HTML_TEMPLATE

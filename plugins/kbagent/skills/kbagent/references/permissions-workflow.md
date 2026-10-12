@@ -204,5 +204,6 @@ kbagent permissions reset               # type confirmation code
 - **Exit code 6** = operation blocked by permission policy
 - **`permissions` commands always work** -- you can never lock yourself out of checking/listing
 - **Changing or removing the policy requires interactive confirmation** (random code typed by human)
+- **Guard rails, not a sandbox.** The policy and the confirmation code stop agent mistakes. They are not a hard lockout: a process that runs as the same OS user can get around them, for example by editing `config.json` directly. A hard lockout needs the agent to run as a different OS user than the owner of `config.json` (see [ADR 0002](https://github.com/keboola/cli/blob/main/docs/adr/0002-sec-09-config-privilege-separation.md)).
 - **New commands not in the registry** are treated as write operations (fail-closed)
 - Policy is stored in `config.json` alongside project configs
