@@ -565,6 +565,15 @@ def data_app_deploy(
         "--branch",
         help="Storage branch for reading the latest version (defaults to production).",
     ),
+    git_branch: str | None = typer.Option(
+        None,
+        "--git-branch",
+        help=(
+            "Git branch to clone. Used only when deploy writes the git block of a "
+            "pure managed repo; otherwise it has no effect. Without it, deploy writes "
+            "main for a never-deployed app and stops with an error for a deployed one."
+        ),
+    ),
     copy: CopyOption = False,
     reveal: RevealOption = False,
 ) -> None:
@@ -584,7 +593,7 @@ def data_app_deploy(
         app_id=app_id,
         wait=wait,
         timeout=timeout,
-        extra={"config_version": config_version, "branch_id": branch},
+        extra={"config_version": config_version, "branch_id": branch, "git_branch": git_branch},
         delivery=flags,
     )
 

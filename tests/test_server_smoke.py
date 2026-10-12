@@ -205,13 +205,14 @@ def test_semantic_layer_add_dataset_forwards_fqn(fqn: str | None) -> None:
     """POST /items/dataset forwards the optional ``fqn`` override to the service."""
     from unittest.mock import MagicMock
 
+    from keboola_agent_cli.permissions import PermissionEngine
     from keboola_agent_cli.server.routers.semantic_layer import add_item
 
     registry = MagicMock()
     body = {"project": "prod", "name": "fact_x", "table_id": "out.c-gold.FACT_X"}
     if fqn is not None:
         body["fqn"] = fqn
-    add_item("dataset", body, registry=registry)
+    add_item("dataset", body, registry=registry, engine=PermissionEngine(None))
     assert registry.semantic_layer.add_dataset.call_args.kwargs["fqn"] == fqn
 
 

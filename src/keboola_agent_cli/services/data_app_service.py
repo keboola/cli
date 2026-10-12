@@ -35,15 +35,20 @@ from ..models import ProjectConfig
 # Re-exported so existing `from ...data_app_service import _x` call sites
 # (tests included) keep resolving after the split into _data_app_bodies.py.
 from ._data_app_bodies import (
+    DATA_APP_COMPONENT_ID,
     ENCRYPTED_PASSWORD_PREFIXES,
     RESERVED_RUNTIME_ENV_VARS,
     _auth_block_for,
     _build_runtime_block,
+    _check_text_field,
     _coerce_config_dict,
     _derive_runtime_env_var_name,
+    _has_control_chars,
     _redact_git_block,
     _redact_storage_config,
     _secret_fingerprint,
+    git_backfill_warning,
+    resolve_effective_version,
 )
 from ._data_app_password import (
     DataAppPassword,
@@ -70,8 +75,6 @@ def make_default_ds_client_factory(config_store: Any) -> DataScienceClientFactor
 # ---------------------------------------------------------------------------
 # Constants encoded from the writeup
 # ---------------------------------------------------------------------------
-
-DATA_APP_COMPONENT_ID = "keboola.data-apps"
 
 VALID_TYPES: tuple[str, ...] = (
     "python-js",
@@ -106,22 +109,6 @@ POLL_INTERVAL_SECONDS = 5.0
 TERMINAL_ERROR_STATE = "error"
 RUNNING_STATE = "running"
 STOPPED_STATE = "stopped"
-
-
-def _has_control_chars(value: str, *, allow_whitespace: bool = False) -> bool:
-    """Return True if ``value`` contains any ASCII control byte (0x00-0x1f / 0x7f).
-
-    Set ``allow_whitespace=True`` to permit ``\\t \\n \\r`` (description markdown);
-    everything else under 0x20 + 0x7f is still rejected.
-    """
-    allowed = {0x09, 0x0A, 0x0D} if allow_whitespace else set()
-    for ch in value:
-        code = ord(ch)
-        if code in allowed:
-            continue
-        if code < 0x20 or code == 0x7F:
-            return True
-    return False
 
 
 # URL schemes accepted for ``--git-repo``. Anything else (file://, gopher://,
@@ -584,6 +571,7 @@ class DataAppService(BaseService):
         wait: bool = False,
         timeout_seconds: float = DEFAULT_JOB_RUN_TIMEOUT,
         branch_id: int | None = None,
+        git_branch: str | None = None,
     ) -> dict[str, Any]:
         """Encapsulate the §9 redeploy contract.
 
@@ -591,7 +579,14 @@ class DataAppService(BaseService):
         ``config_version`` to deploy an older version. ALWAYS sends
         ``restartIfRunning=true`` together with ``configVersion`` -- the
         server returns HTTP 422 for any other shape.
+
+        ``git_branch`` is the branch written into ``parameters.dataApp.git``
+        when deploy backfills a pure managed repo; it has no effect otherwise.
+        ``None`` (not given) means ``main`` for a never-deployed app and a
+        VALIDATION_ERROR before any write for an app with run history.
         """
+        # None (not given) is skipped: _check_text_field ignores non-strings.
+        _check_text_field("--git-branch", git_branch, MAX_GIT_BRANCH_LENGTH, False, required=True)
         projects = self.resolve_projects([alias])
         project = projects[alias]
 
@@ -608,52 +603,22 @@ class DataAppService(BaseService):
                     retryable=False,
                 )
 
-            # configVersion resolution depends on where the app's *source*
-            # lives, which we infer from the latest Storage config:
-            #
-            #  * Streamlit / external-git (parameters.dataApp.git present) -> the
-            #    source pointer lives IN the Storage config, so we PIN the latest
-            #    version so the operator reads the current git block.
-            #  * A managed repo (useManagedGitRepo, NO git block) -> the source
-            #    resolves via app.managedGitRepoId and the platform injects the
-            #    clone credentials at deploy time, so we OMIT configVersion
-            #    (matches keboola-mcp-server / Kai and the sandboxes-service
-            #    `testManagedGitRepo.sh` contract). Pinning a managed app's
-            #    no-git-block config instead makes the runtime demand
-            #    `dataApp.git.repository` and the deploy fails -- that was the
-            #    pre-0.65.0 bug this branch fixes.
-            #
-            # An explicit --config-version always wins as an escape hatch.
+            # An explicit --config-version always wins as an escape hatch; see
+            # resolve_effective_version's docstring for the resolution rules.
             effective_version: str | None = config_version
+            backfilled_branch: str | None = None
             if config_version is None:
                 storage_client = self._client_factory(project.stack_url, project.token)
-                storage_config = storage_client.get_config_detail(
-                    DATA_APP_COMPONENT_ID, config_id, branch_id=branch_id
+                resolved = resolve_effective_version(
+                    ds_client, storage_client, app, app_id, config_id, branch_id, git_branch
                 )
-                latest_version = str(storage_config.get("version", "") or "")
-                configuration = _coerce_config_dict(storage_config.get("configuration"))
-                data_app_cfg = (configuration.get("parameters") or {}).get("dataApp") or {}
-                is_managed = bool(app.get("hasManagedGitRepo"))
-                has_git_block = bool(data_app_cfg.get("git"))
-                if is_managed and not has_git_block:
-                    effective_version = None  # deploy from managedGitRepoId, no pin
-                else:
-                    if not latest_version:
-                        raise KeboolaApiError(
-                            message=(
-                                f"Cannot resolve a Storage configVersion for app {app_id}; "
-                                "Storage config returned no version."
-                            ),
-                            status_code=500,
-                            error_code=ErrorCode.API_ERROR,
-                            retryable=False,
-                        )
-                    effective_version = latest_version
+                # git_branch is None unless the backfill wrote the git block.
+                effective_version, backfilled_branch = resolved.version, resolved.git_branch
 
             deployed = ds_client.patch_app(
                 app_id,
                 desired_state=RUNNING_STATE,
-                config_version=effective_version,  # None only for pure managed repos
+                config_version=effective_version,
                 restart_if_running=True,
             )
             poll_result: dict[str, Any] | None = None
@@ -664,7 +629,7 @@ class DataAppService(BaseService):
                     target_desired_state=RUNNING_STATE,
                     timeout_seconds=timeout_seconds,
                 )
-            return self._format_lifecycle_result(
+            result = self._format_lifecycle_result(
                 alias=alias,
                 app_id=app_id,
                 action="deploy",
@@ -672,6 +637,11 @@ class DataAppService(BaseService):
                 poll_result=poll_result,
                 config_version=effective_version or "",
             )
+            if backfilled_branch is not None:
+                result["git_backfilled"] = True
+                result["git_branch"] = backfilled_branch
+                result["warnings"] = [git_backfill_warning(backfilled_branch)]
+            return result
         finally:
             ds_client.close()
             if storage_client is not None:
@@ -1596,28 +1566,7 @@ class DataAppService(BaseService):
             ("--git-branch", git_branch, MAX_GIT_BRANCH_LENGTH, False),
             ("--git-username", git_username or "", MAX_GIT_USERNAME_LENGTH, False),
         ):
-            if not isinstance(field_value, str):
-                continue
-            if len(field_value) > max_len:
-                raise KeboolaApiError(
-                    message=(
-                        f"{field_name} exceeds the {max_len}-character limit "
-                        "enforced at the service boundary."
-                    ),
-                    status_code=0,
-                    error_code=ErrorCode.VALIDATION_ERROR,
-                    retryable=False,
-                )
-            # Description allows tab/LF/CR (markdown); other fields reject any
-            # control char including CR/LF (would break URL host derivation,
-            # JSON serialization, or audit-log change descriptions).
-            if _has_control_chars(field_value, allow_whitespace=allow_ws):
-                raise KeboolaApiError(
-                    message=(f"{field_name} contains disallowed control characters."),
-                    status_code=0,
-                    error_code=ErrorCode.VALIDATION_ERROR,
-                    retryable=False,
-                )
+            _check_text_field(field_name, field_value, max_len, allow_ws)
 
         # Reject git_repo URLs that don't use a known clone scheme. The
         # data-app runner only handles https / http / git / ssh; anything

@@ -467,7 +467,7 @@ kbagent auth register-projects [--stack URL|alias] [--all] [--project-id ID ...]
 #   bearer token, and revoking the session is a host-operator action, not a remote one. `/auth/*`
 #   is also the FIRST router to enforce the `permissions` policy: every route declares
 #   `Depends(require_permission(...))`, so a denial answers HTTP 403 `PERMISSION_DENIED` over REST
-#   exactly as on the CLI. The other ~30 routers do not check the engine yet.
+#   exactly as on the CLI. Every other route is checked too since #655 (see `permissions` below).
 #   The policy comes from the config dir `serve` RESOLVES (its own `--config-dir`, then -- since
 #   0.91.0, #679 -- an explicit root `kbagent --config-dir`, then KBAGENT_CONFIG_DIR, then the
 #   local/global chain) plus the session flags of the invocation. On 0.90.1 the root-level
@@ -479,7 +479,7 @@ kbagent auth register-projects [--stack URL|alias] [--all] [--project-id ID ...]
 #   the allow list. `kbagent --deny-writes serve` does NOT work: `serve` is admin-class and
 #   `--deny-writes` appends `cli:write`, which spans write+destructive+admin, so the CLI callback
 #   blocks the `serve` command itself (exit 6) and no server ever starts. `--deny-destructive`
-#   starts the server but no `/auth/*` operation is destructive, so it affects nothing here.
+#   starts the server and blocks every destructive route (none of them under `/auth/*`).
 #   See docs/web-server.md.
 
 kbagent project create --url URL [--project ALIAS] [--name NAME] [--backend snowflake|bigquery] [--sync-backend-init]
@@ -555,7 +555,10 @@ kbagent config set-folder --project NAME --component-id ID --config-id ID --name
 kbagent config row-create --project NAME --component-id ID --config-id ID --name ROW_NAME [--description D] [--configuration JSON|@file|-] [--is-disabled] [--branch ID] [--allow-plaintext-on-encrypt-failure]
 kbagent config row-update --project NAME --component-id ID --config-id ID --row-id ID [--name N] [--description D] [--configuration JSON|@file|-] [--change-description TEXT] [--is-disabled | --is-enabled] [--branch ID] [--allow-plaintext-on-encrypt-failure]
 kbagent config row-delete --project NAME --component-id ID --config-id ID --row-id ID [--branch ID] [--yes]
-kbagent config oauth-url --project NAME --component-id ID --config-id ID [--redirect-url URL]
+kbagent config oauth-url --project NAME --component-id ID --config-id ID [--redirect-url URL] [--no-open]
+# oauth-url: opens the link in the default browser (interactive human mode only; never with
+#   --json, over SSH, in a container or in WSL without wslview); --no-open only prints it.
+#   Version gate in gotchas.md.
 kbagent config state-get --project NAME --component-id ID --config-id ID [--row-id ID] [--branch ID]
 kbagent config state-set --project NAME --component-id ID --config-id ID [--row-id ID] --state JSON|@file|- [--branch ID] [--dry-run] [--yes]
 # state-get/state-set (0.84.2+, #593): read/write a config's runtime state via the dedicated
@@ -625,7 +628,7 @@ kbagent storage table-detail --project NAME --table-id ID [--branch ID]
 #   and `sql_path` (quoted, directly queryable path; null when Storage reports no location) --
 #   see the semantic-layer dataset fqn note (#761); version gate in gotchas.md.
 kbagent storage create-bucket --project NAME --stage STAGE --name NAME [--description D] [--backend B] [--branch ID]
-kbagent storage create-table --project NAME --bucket-id ID --name NAME [--column COL:TYPE[(length)] ...] [--primary-key COL] [--not-null COL ...] [--default NAME=VALUE ...] [--source-table-id ID] [--source-branch-id N] [--time-partitioning-type DAY|HOUR|MONTH|YEAR] [--time-partitioning-field COL] [--time-partitioning-expiration-ms MS] [--range-partitioning-field COL --range-partitioning-start S --range-partitioning-end E --range-partitioning-interval I] [--clustering-field COL ...] [--branch ID] [--if-not-exists]
+kbagent storage create-table --project NAME --bucket-id ID --name NAME [--column COL:TYPE[(length)] ...] [--primary-key COL] [--not-null COL ...] [--default NAME=VALUE ...] [--source-table-id ID] [--source-branch-id N] [--time-partitioning-type DAY|HOUR|MONTH|YEAR] [--time-partitioning-field COL] [--time-partitioning-expiration-ms MS] [--range-partitioning-field COL --range-partitioning-start S --range-partitioning-end E --range-partitioning-interval I] [--clustering-field COL ...] [--branch ID] [--if-not-exists] [--timeout SECONDS]
 # --column XOR --source-table-id (0.66.0+, BigQuery only): --source-table-id copies an existing table's data into the requested partition/clustering layout (schema derived from source) -> swap into place with swap-tables. Partition/clustering flags work in both modes (BigQuery only); time vs range partitioning are mutually exclusive. A non-BigQuery project fails fast (pre-flight backend check).
 kbagent storage upload-table --project NAME --table-id ID --file PATH [--incremental] [--delimiter D] [--enclosure E] [--no-auto-create] [--wait/--no-wait] [--timeout SECONDS] [--branch ID] [--progress]
 # upload-table / file-upload cloud upload (#834): on AWS stacks a file above 64 MiB goes up as an S3
@@ -663,7 +666,16 @@ kbagent storage delete-table --project NAME --table-id ID [--table-id ...] [--fo
 kbagent storage truncate-table --project NAME --table-id ID [--table-id ...] [--dry-run] [--yes] [--branch ID]
 kbagent storage delete-column --project NAME --table-id ID --column COL [--column ...] [--force] [--dry-run] [--yes] [--branch ID]
 kbagent storage delete-bucket --project NAME --bucket-id ID [--bucket-id ...] [--force] [--dry-run] [--yes] [--branch ID]
-kbagent storage swap-tables --project NAME --table-id ID --target-table-id ID --branch ID [--dry-run] [--yes]
+kbagent storage swap-tables --project NAME --table-id ID --target-table-id ID --branch ID [--dry-run] [--yes] [--timeout SECONDS]
+    # --timeout SECONDS on create-table and swap-tables (since vNEXT, #713): both halves
+    #   of the repartition path move real data yet used to inherit the 60s metadata-job
+    #   budget, so a large BigQuery table reported STORAGE_JOB_TIMEOUT for a job that was
+    #   still running and would succeed. Default is now 300s on both. A local timeout
+    #   NEVER cancels the job -- it keeps running server-side. The error is
+    #   STORAGE_JOB_TIMEOUT, exit 4, retryable=false, details.job_id, and the message
+    #   names `storage job-detail --job-id ID --wait` (create-table also names
+    #   `storage table-detail`). Never re-run: a repeated swap swaps the tables back,
+    #   a repeated --source-table-id create starts a second copy.
 kbagent storage clone-table --project NAME --table-id ID --branch ID [--dry-run]
 kbagent storage snapshot-create --project NAME --table-id ID [--description D] [--branch ID]
 kbagent storage snapshots --project NAME --table-id ID [--limit N] [--branch ID]
@@ -813,6 +825,25 @@ kbagent token refresh --project NAME --token-id ID [--yes]
 #   is persisted. `permissions show` / `kbagent doctor` also generalized: they now flag ANY
 #   persisted pattern matching zero known operations, not only the retired tool:* namespace.
 #   PermissionEngine itself stays lenient at evaluation time -- only `permissions set` is strict.
+# (since vNEXT, #655) The policy also firewalls the WHOLE `kbagent serve` REST surface: every
+#   route is classified in server/route_permissions.py and checked by one app-level dependency
+#   against the SERVED config dir's policy -> HTTP 403 error_code PERMISSION_DENIED, the same
+#   code the CLI exits on. On 0.98.0 and older only /auth/* (0.90.1+) and /merge-requests/*
+#   (0.94.0+) were checked and every other route executed unchecked. Routes that declare their
+#   own `require_permission(...)` (those two routers) are skipped by the table. An unclassified
+#   route is REFUSED, not exempted (a test keeps the table
+#   and the live app in sync both ways); bootstrap paths (/health/ping, /health/auth-info,
+#   /ui-config, /docs, /redoc, /openapi.json, SPA shell) are never checked. A path param
+#   that collapses CLI leaves is checked like the CLI: POST/PUT/DELETE
+#   /semantic-layer/items/{kind}[/{name}] check the parent key (`semantic-layer.add`) AND
+#   the leaf `semantic-layer.add.<kind>` (route_permissions.LEAF_PATH_PARAMS).
+#   A `--scope organization` semantic-layer write is destructive-class over REST too:
+#   the handlers of scope PUT, models, items/{kind} (per-kind leaf key), import, promote
+#   and build check `<key> --scope organization` (FLAG_ESCALATIONS) for a typed OR an
+#   inherited organization scope, like the CLI.
+#   `GET /permissions/show` (serve, since vNEXT) reports the EFFECTIVE policy (persisted block
+#   merged with the daemon's --deny-* flags); read-only by design -- no REST route can widen
+#   the policy that constrains it, so `permissions set|reset` stay terminal actions on the host.
 kbagent permissions list [--category read|write|destructive|admin]
 kbagent permissions show
 kbagent permissions set --mode allow|deny [--allow PATTERN ...] [--deny PATTERN ...]
@@ -900,6 +931,17 @@ kbagent merge-request resolve --component-id C --config-id I (--take ours|theirs
 #   its hint-next respects it.
 
 kbagent workspace create --project ALIAS [--name NAME] [--backend TYPE] [--ui] [--read-only/--no-read-only]
+# workspace create (#755): a failed create -- headless or --ui -- moves the keboola.sandboxes
+#   config it created to the trash and says so (--json error.details: sandbox_config_id,
+#   sandbox_config_rolled_back, branch_id, job_id for --ui) -- except when the outcome is
+#   unknown, where the config is kept (sandbox_config_kept_reason: outcome_unknown): a 5xx, a
+#   read/write TIMEOUT or RETRY_EXHAUSTED on the create POST, or any error after the --ui job was
+#   queued other than QUEUE_JOB_FAILED / WORKSPACE_NOT_FOUND; the --ui job is queued on the branch
+#   the config lives in (was: default branch -> Queue 400 on a pinned dev branch). --ui itself
+#   still ends in WORKSPACE_NOT_FOUND on current SaaS stacks: the keboola.sandboxes `create` task
+#   dropped Snowflake/BigQuery provisioning in 2026-03 (the UI uses SQL Editor sessions), so the
+#   green job attaches no Storage workspace. Not a race -- do not retry; use headless. Version
+#   gate for this entry lives in gotchas.md (these `# ` lines parse as ATX headings).
 kbagent workspace list [--project NAME ...] [--orphaned] [--branch ID] [--qs-compatible]
 kbagent workspace detail --project ALIAS --workspace-id ID [--branch ID]
 kbagent workspace delete --project ALIAS --workspace-id ID
@@ -958,10 +1000,17 @@ kbagent data-app create --project ALIAS --name NAME --slug SLUG (--git-repo URL 
 #   (1) create --use-managed-git-repo -> (2) `git-credentials-create --type http_token --permissions
 #   readWrite` + `git push` code to the managed repo URL (from `git-repo`) -> (3) `data-app deploy`.
 #   The platform injects the clone credentials at deploy time, so no credential wiring is needed.
-#   deploy pins the LATEST configVersion when a git block is present and omits it for a PURE managed
-#   repo (deploys from managedGitRepoId). Use `data-app runs` to debug a deploy that reverts to
-#   stopped (setup-phase failures produce no container logs).
-kbagent data-app deploy --project NAME --app-id ID [--config-version N] [--wait] [--timeout SECONDS] [--branch ID] [--copy] [--reveal]
+#   deploy pins the LATEST configVersion. For a PURE managed repo (no git block yet), it first
+#   backfills parameters.dataApp.git from the managed repo's URL, then pins the resulting version
+#   (CLI-15) -- omitting configVersion alone does NOT provision the app's workspace;
+#   grant provisioning is gated on that block's presence, not on configVersion. The deploy result
+#   reports it (`git_backfilled`, `git_branch`, `warnings[]`). The branch written is `--git-branch`;
+#   without it, `main` for an app with no runs, and a VALIDATION_ERROR before any write for an app
+#   with runs (branch unknown: pass `--git-branch` with the branch the code is on). It has no effect
+#   on a deploy that does not backfill. Push the managed repo's code to that branch.
+#   Version gate lives in gotchas.md (no `(since vNEXT)` on `# ` lines). Use `data-app runs`
+#   to debug a deploy that reverts to stopped (setup-phase failures produce no container logs).
+kbagent data-app deploy --project NAME --app-id ID [--config-version N] [--wait] [--timeout SECONDS] [--branch ID] [--git-branch BRANCH] [--copy] [--reveal]
 kbagent data-app start --project NAME --app-id ID [--wait] [--timeout SECONDS]
 kbagent data-app stop --project NAME --app-id ID [--wait] [--timeout SECONDS]
 kbagent data-app delete --project NAME --app-id ID [--yes]
@@ -1026,6 +1075,9 @@ kbagent config new --component-id ID [--name NAME] [--project NAME] [--output-di
 #   the scaffold had no ID and always landed in the default branch tree, so the next
 #   `sync push` created a DUPLICATE (34-config incident). With --configuration, the local file
 #   mirrors the pushed encrypted body -- placeholders would overwrite the remote on next push.
+#   The scaffold also records _keboola.base_config_hash (#792 E), the created config as the API
+#   returned it, so `sync diff` compares it 3-way and push never overwrites an edit made in the UI.
+#   Version gate in gotchas.md.
 
 # sync: GitOps -- configs as local files. init/pull/push/diff are filesystem-local (no serve REST surface).
 kbagent sync init --project ALIAS [--directory DIR] [--git-branching] [--adopt-existing] [--with-workspaces]
@@ -1041,6 +1093,13 @@ kbagent sync push --project ALIAS [--all-projects] [--dry-run] [--force] [--allo
 #   under skipped_deletions (+ skipped_deletions_reason), also in --dry-run, whose summary.deleted counts only
 #   what push would delete. A config/row deleted on the remote since the last pull diffs as remote_deleted and
 #   is never re-created (it lands in skipped). Version gate in gotchas.md.
+# sync diff/push/pull and adopted files (#792 E): an untracked _config.yml whose _keboola.config_id
+#   exists on the target has no baseline unless it records _keboola.base_config_hash; without one a
+#   difference is a conflict (push skips it), two files with one id are both conflicts, and pull keeps
+#   such a file with local changes (skipped) -- only --theirs overwrites it. Version gate in gotchas.md.
+# sync push encryption (#792 F): every #-secret is encrypted before the first write, so an
+#   ENCRYPTION_FAILED stops push before anything reaches the remote (the message ends with "Nothing
+#   was pushed.") and a retry creates nothing twice. Version gate in gotchas.md.
 # sync push workspace delete (CLI-25): in a `syncWorkspaces` tree, a `push --force` that deletes a shared SQL workspace also deletes its SQL editor sessions (every user's, push branch) and their backend workspaces, which `config restore` does not bring back; `push --dry-run --force` lists them (warnings[] workspace_sessions), a plain push lists the workspace under skipped_deletions and touches no session. `--force` is destructive-class (FLAG_ESCALATIONS `sync.push --force`), so `--deny-destructive` / a cli:destructive deny blocks it while a plain push stays write-class. Version gate for this entry lives in gotchas.md.
 # Partial failures change the exit code (#745): commands that collect per-item failures
 #   and keep going exit 1 (was 0) when at least one item failed:

@@ -19,7 +19,8 @@ from ..constants import CONFIG_FILENAME, SECRET_PLACEHOLDER
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..models import ComponentDetail, ComponentSuggestion, ProjectConfig
 from ..sync.code_extraction import DESCRIPTION_FILENAME, extract_code_files
-from ..sync.config_format import api_config_to_local, dump_config_yaml
+from ..sync.config_format import BASE_CONFIG_HASH_KEY, api_config_to_local, dump_config_yaml
+from ..sync.diff_engine import config_hash
 from .base import BaseService, ClientFactory, make_session_aware_client_factory
 from .org_service import slugify
 
@@ -308,7 +309,21 @@ _SCAFFOLD_ID_STAMPED_NOTE = (
 )
 
 
-def stamp_scaffold_config_id(scaffold: dict[str, Any], config_id: str) -> dict[str, Any]:
+def pushed_config_base_hash(component_id: str, config_id: str, pushed: dict[str, Any]) -> str:
+    """Return the sync baseline of a config ``config new --push`` has just created.
+
+    It is the ``config_hash`` of the API response in the local format, the
+    value ``sync pull`` stores as ``pull_config_hash``. The scaffold records it
+    as ``_keboola.base_config_hash``, because the file has no manifest entry:
+    without it, ``sync diff`` cannot tell an edit of the file from an edit made
+    in the UI (issue #792 E).
+    """
+    return config_hash(api_config_to_local(component_id, pushed, str(config_id)))
+
+
+def stamp_scaffold_config_id(
+    scaffold: dict[str, Any], config_id: str, base_config_hash: str = ""
+) -> dict[str, Any]:
     """Return a copy of *scaffold* whose ``_config.yml`` records *config_id*.
 
     On the ``config new --push --output-dir`` path the configuration already
@@ -321,9 +336,13 @@ def stamp_scaffold_config_id(scaffold: dict[str, Any], config_id: str) -> dict[s
     The ID is emitted double-quoted so legacy numeric IDs stay YAML strings
     (an unquoted ``12345`` would parse as ``int`` and never match the
     string-keyed remote lookup). A ``_config.yml`` without a ``_keboola``
-    block (flow scaffolds, issue #650) gets one appended wholesale. Pure
-    function: the input scaffold is not mutated.
+    block (flow scaffolds, issue #650) gets one appended wholesale. A given
+    *base_config_hash* (:func:`pushed_config_base_hash`) is recorded next to
+    the ID. Pure function: the input scaffold is not mutated.
     """
+    stamped_lines = [f'  config_id: "{config_id}"']
+    if base_config_hash:
+        stamped_lines.append(f'  {BASE_CONFIG_HASH_KEY}: "{base_config_hash}"')
     files: list[dict[str, Any]] = []
     for entry in scaffold["files"]:
         if entry["path"] != CONFIG_FILENAME:
@@ -343,7 +362,7 @@ def stamp_scaffold_config_id(scaffold: dict[str, Any], config_id: str) -> dict[s
             if line == "_keboola:":
                 in_keboola = True
             elif in_keboola and line.startswith("  component_id:"):
-                out.append(f'  config_id: "{config_id}"')
+                out.extend(stamped_lines)
                 stamped = True
                 in_keboola = False
         if not stamped:
@@ -353,7 +372,7 @@ def stamp_scaffold_config_id(scaffold: dict[str, Any], config_id: str) -> dict[s
                 [
                     "_keboola:",
                     f"  component_id: {scaffold['component_id']}",
-                    f'  config_id: "{config_id}"',
+                    *stamped_lines,
                 ]
             )
         new_content = "\n".join(out)
@@ -399,6 +418,8 @@ def materialize_pushed_config(
         {"name": name, "description": description, "configuration": configuration},
         str(config_id),
     )
+    # The file mirrors the remote, so the remote is its baseline (#792 E).
+    local["_keboola"][BASE_CONFIG_HASH_KEY] = config_hash(local)
     config_dir.mkdir(parents=True, exist_ok=True)
     # The slugified directory can pre-exist (same-name re-run, stray files):
     # report only what THIS call wrote, and clear a stale _description.md a

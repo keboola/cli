@@ -33,7 +33,8 @@ class WorkspaceLoad(BaseModel):
     # WORKSPACE_LOAD_COPY_TOO_LARGE) rather than started unannounced.
     force: bool = False
     # gt=0: a zero/negative budget would make every load "time out" instantly.
-    timeout: float | None = Field(default=None, gt=0)
+    # allow_inf_nan=False: NaN or infinity would make the wait never end.
+    timeout: float | None = Field(default=None, gt=0, allow_inf_nan=False)
 
 
 class WorkspaceQuery(BaseModel):

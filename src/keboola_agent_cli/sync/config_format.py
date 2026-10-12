@@ -15,6 +15,13 @@ import yaml
 from ..constants import CONFIG_YML_VERSION
 from .code_extraction import canonical_sql_script, is_sql_transformation_component
 
+# ``_keboola`` footer key of a file that ``config new --push --output-dir``
+# writes for a config it has just created: the ``config_hash`` of that config
+# as the API returned it. The file has no manifest entry, so this is the only
+# baseline ``sync diff`` and ``sync pull`` have for it (issue #792 E). The
+# footer is stripped before hashing, so the key never shows as a change.
+BASE_CONFIG_HASH_KEY = "base_config_hash"
+
 
 def _iter_codes(parameters: dict[str, Any]) -> Any:
     """Yield every ``blocks[].codes[]`` dict in a transformation's parameters."""

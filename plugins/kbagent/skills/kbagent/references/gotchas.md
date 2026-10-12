@@ -38,8 +38,6 @@ Versioning convention:
     `merge-request merge` and an armed `merge-request auto-merge` also print
     `Target: project 'prod', production`.
   - A command that uses two branches prints a line for each:
-    - `workspace create --ui` creates the config in the active branch but
-      runs its job on production.
     - `workspace from-transformation` reads the transformation from
       production.
     - `sync clone` creates the buckets in production.
@@ -1352,6 +1350,58 @@ print `Target:` with the branch they use (see the #766 entry at the top).
 `storage buckets` / `storage tables` are the reads that use production
 under an active branch. `--branch` requires exactly one `--project`.
 
+## `workspace create --ui` cannot produce a UI-visible SQL workspace; a failed create no longer leaves a sandbox config behind
+
+Applies since vNEXT (issue #755). The `--ui` path queues a `keboola.sandboxes`
+job with `task: create`. That component **dropped Snowflake/BigQuery workspace
+provisioning in March 2026**: the `create` task now only registers a
+sandbox-service record and writes `parameters.id` back into the config -- no
+Storage workspace is created, and the job still reports `success`. The Keboola
+UI creates SQL workspaces through **SQL Editor sessions** (`editor` service,
+`POST /sql/sessions`), which kbagent does not drive. So on a current SaaS
+stack `--ui` ends in `WORKSPACE_NOT_FOUND` after ~15s, on every branch.
+
+What changed in kbagent:
+
+- The job is now queued **on the branch the config was created in** (`branchId`
+  forwarded). Before, an alias pinned to a dev branch got a Queue 400
+  `Cannot resolve job parameters: Configuration "..." not found` -- the config
+  existed, in the dev branch; the job looked on the default one.
+- **Rollback**: whenever step 2 (Storage workspace / Queue job) fails, the
+  `keboola.sandboxes` config from step 1 is moved to the trash (restorable via
+  `config restore`) -- headless and `--ui` alike. The error message says so;
+  `--json` carries `error.details.sandbox_config_id`,
+  `sandbox_config_rolled_back` (bool), `branch_id`, and for `--ui` `job_id`.
+  A failed cleanup is reported (`sandbox_config_rolled_back: false`,
+  `sandbox_config_cleanup_error`) with the exact `config delete` to run --
+  it never masks the original failure. Exception: when the **outcome is
+  unknown**, a workspace may exist or still appear, so the config is **kept**
+  (`sandbox_config_rolled_back: false`,
+  `sandbox_config_kept_reason: outcome_unknown`). Unknown means: a 5xx, a
+  read/write `TIMEOUT` or `RETRY_EXHAUSTED` on the create POST (headless
+  workspace or `--ui` job), or any error after the `--ui` job was queued
+  except `QUEUE_JOB_FAILED` and the empty-lookup `WORKSPACE_NOT_FOUND`
+  (`QUEUE_JOB_TIMEOUT`, a failed job poll, a failed workspace lookup after a
+  green job). A 4xx refusal, a `CONNECTION_ERROR` or a connect timeout on
+  the create POST is definite (the request was refused or never sent), so
+  the config is trashed. The message names
+  the config and job; run `workspace list --project ALIAS`, and if no
+  workspace for that config appears, `config delete --component-id
+  keboola.sandboxes --config-id ID`. Before, three failed `--ui` attempts
+  left three orphaned configs that `workspace gc` cannot see (gc detects the
+  inverse: a workspace whose config is gone).
+- The `WORKSPACE_NOT_FOUND` message now names the job and explains WHY nothing
+  is attached, instead of the bare "no workspace found for config".
+
+**Do not retry `--ui`** on a `WORKSPACE_NOT_FOUND`; it is not a provisioning
+race. Create the workspace headless (default mode, `private_key` for
+Snowflake) and, if the team needs it in the UI Workspaces tab, create that one
+in the Keboola UI. The job is still queued (not refused up front) because a
+BYOC/private stack running an older `keboola.sandboxes` image may still
+provision SQL workspaces through it. The sandbox-service record the green job
+registered is not removed by the rollback (the UI lists only `python`/`r`
+sandboxes, so it is invisible there).
+
 ## `config detail --component-id keboola.sandboxes` now annotates the misleading `parameters.id` (since v0.42.0, closes #304)
 
 The sandbox config's `parameters.id` field (e.g. `1296392806`) looks like
@@ -2145,6 +2195,34 @@ config, the retry fires, and the retry destroys it for good.
   against it to prove the typed schema is consumer-safe. Then discard the
   branch and run the real build + swap in the production (default) branch.
   Full procedure: `typify-table-workflow.md`.
+
+## A `STORAGE_JOB_TIMEOUT` is not a failure -- the job is still running
+
+*(since vNEXT, #713)*
+
+- `storage create-table` and `storage swap-tables` -- the two halves of the
+  BigQuery repartition path -- both move real data, yet both used to inherit
+  the **60s** `STORAGE_JOB_MAX_WAIT` budget meant for metadata jobs. Measured
+  on an 800 MB BigQuery table: create ~15s, swap ~31s. A table a few times
+  larger blew the budget, so a healthy operation was reported as
+  `STORAGE_JOB_TIMEOUT`.
+- **Since vNEXT both default to 300s and accept `--timeout SECONDS`.** The
+  REST routes (`POST /storage/tables/{p}`, `POST /storage/tables/{p}/{tid}/swap`)
+  take an optional `timeout` field; a zero, negative, NaN or infinite value
+  is a 422. On the CLI the same value is a usage error: exit 2,
+  `INVALID_ARGUMENT`, before `swap-tables` asks for confirmation -- the
+  same as `upload-table`, `load-file` and `workspace load`.
+- **Never read the timeout as "nothing happened".** kbagent only stops
+  *watching*; the Storage job keeps running server-side (and keeps consuming
+  backend resources). It usually lands. The error is **exit 4** with
+  `retryable: false` and `details.job_id`, the same contract as an
+  `upload-table` import timeout (0.98.0).
+- **Do not re-issue the command on a timeout.** Follow the job with
+  `kbagent storage job-detail --project P --job-id ID --wait` (the error
+  message gives the full command), then check the physical result with
+  `storage table-detail --json` -> `.definition`. Re-running a swap that
+  succeeded swaps the tables *back*; re-running a `--source-table-id` create
+  starts a second copy.
 
 ## `storage clone-table` materializes a prod table into a dev branch
 
@@ -4144,7 +4222,12 @@ Other behaviors of this family:
   `git-credentials` list never returns it. `--type
   ssh_key` requires a `--public-key` / `--public-key-file` and returns no secret.
 
-## `data-app` managed-repo deploy: omit configVersion (the platform injects clone creds) (since v0.65.0; guidance corrected v0.65.1 -- no credential wiring needed)
+## `data-app` managed-repo deploy: the platform injects clone creds; deploy backfills the git block (since v0.65.0; guidance corrected v0.65.1 -- no credential wiring needed)
+
+*(since vNEXT)* `data-app deploy` no longer omits configVersion for a pure
+managed repo (CLI-15). It backfills `parameters.dataApp.git` and pins the
+resulting version. Read the bullets below with that in mind; the last bullet
+has the details.
 
 `--use-managed-git-repo` provisions an **empty** Keboola-hosted git repo
 (POST `useManagedGitRepo:true`) linked to the app via `app.managedGitRepoId`. It
@@ -4172,14 +4255,15 @@ The end-to-end flow that is **verified to deploy and serve** (tic-tac-toe on
 
 The actual bug fixed in 0.65.0 was **kbagent always-pinning `configVersion`**:
 
-- **configVersion at deploy depends on the source location.** `data-app deploy`
-  **omits** configVersion for a *pure* managed repo (no git block), which deploys
-  from `managedGitRepoId`; it pins the **latest** Storage configVersion only when
-  a git block is present (external repos). Pinning a managed app's no-git-block
-  Storage config made the runtime demand `dataApp.git.repository` and the deploy
-  reverted to `stopped` -- that was the misdiagnosed "could not read Username"
-  symptom, NOT a missing credential. Fixed in 0.65.0 by omitting configVersion for
-  pure managed repos. There is **no** cross-stack "platform doesn't inject
+- **configVersion at deploy depends on the source location.** In 0.65.0 through
+  the release before vNEXT, `data-app deploy` **omitted** configVersion for a
+  *pure* managed repo (no git block) and pinned the **latest** Storage
+  configVersion only when a git block was present (external repos). Pinning a
+  managed app's no-git-block Storage config made the runtime demand
+  `dataApp.git.repository` and the deploy reverted to `stopped` -- that was the
+  misdiagnosed "could not read Username" symptom, NOT a missing credential.
+  Omitting configVersion fixed that crash. Since vNEXT, deploy backfills the git
+  block instead (last bullet). There is **no** cross-stack "platform doesn't inject
   credentials" gap (issue #454 closed as not-a-bug).
 - **Diagnose a stopped-reverting deploy with `data-app runs`**, not `data-app
   logs`. `runs` returns each attempt's `failure_reason` + `startup_logs` --
@@ -4189,6 +4273,28 @@ The actual bug fixed in 0.65.0 was **kbagent always-pinning `configVersion`**:
   command on the misdiagnosis that a credential had to be wired into the config.
   It was removed in 0.65.1 -- it is unnecessary because no platform-injection gap
   exists.
+- **Correction (since vNEXT, CLI-15): omitting configVersion alone does NOT
+  provision a workspace.** The 0.65.0 fix above solves the "could not read Username" crash,
+  but a *pure* managed repo (no git block yet) still deployed with no
+  `WORKSPACE_ID`/`KBC_WORKSPACE_MANIFEST_PATH`, even with
+  `runtime.workspace.enabled: true` and `state: running` -- the same
+  no-platform-diagnostic failure mode as the `--workspace` gotcha above. Root
+  cause: workspace grant provisioning is gated on `parameters.dataApp.git` being
+  present in Storage config, independent of `managedGitRepoId`/
+  `hasManagedGitRepo`/`configVersion`. Fixed since vNEXT: `data-app deploy` now
+  resolves the managed repo's URL and backfills that git block (repository URL,
+  branch from `--git-branch`) *before* pinning a version, for any pure managed
+  repo -- no manual `config update --merge` step needed. No API returns the
+  managed repo's default branch. So without `--git-branch`, deploy writes
+  `main` only for an app with no runs (`data-app runs` empty). An app with
+  runs deployed before from the repo's own default branch, which may not be
+  `main`: deploy fails with `VALIDATION_ERROR` before any write and asks for
+  `--git-branch` with the branch the code is on.
+  `--git-branch` has no effect on a deploy that does not backfill. The deploy
+  result reports it with `git_backfilled: true`, `git_branch` and a `warnings[]`
+  entry. Push your code to that branch of the managed repo. `data-app detail`'s `Git: {}` (empty) on a `running` app is the tell
+  for this on an older kbagent version; the workaround there is to merge the
+  block manually, then redeploy.
 
 ## Core platform gotchas (version-independent)
 
@@ -5304,24 +5410,25 @@ though single-project `job list` looked correctly time-ordered.
   already server-sorted); the fix only changes behavior once 2+ projects are
   queried together.
 
-## `kbagent serve` permission enforcement is `/auth/*`-only so far (since v0.90.1)
+## `kbagent serve` permission enforcement (since v0.90.1)
 
 `create_app` builds a `PermissionEngine` from the persisted `permissions`
 policy of **the config dir `serve` resolves** (its own `--config-dir`, then --
 since 0.91.0 -- an explicit root-level `kbagent --config-dir`, then
 `KBAGENT_CONFIG_DIR`, then the local/global chain), and `kbagent serve`
-forwards only the session FLAGS of the invocation on top. But of the ~30
-routers, only the three `/auth/*` routes (`server/routers/auth.py`) declare
-`Depends(require_permission(...))` -- see `docs/web-server.md` for the endpoint
-shapes.
+forwards only the session FLAGS of the invocation on top. The three `/auth/*`
+routes (`server/routers/auth.py`) and the `/merge-requests/*` routes declare
+`Depends(require_permission(...))` themselves; since vNEXT every other route is
+checked through one central table (below) -- see `docs/web-server.md` for the
+endpoint shapes.
 
 - **`kbagent --deny-writes serve` cannot start the server** -- do not
   recommend it. `serve` is classified `admin` in `permissions.py`, and
   `--deny-writes` appends `cli:write`, which spans write+destructive+admin, so
   the CLI callback blocks the `serve` command itself: `Error: Operation
   'serve' is blocked by the active permission policy.`, exit code 6, no
-  uvicorn. `--deny-destructive` does start the server, but no `/auth/*`
-  operation is destructive, so it changes nothing on this router.
+  uvicorn. `--deny-destructive` does start the server, and since vNEXT it
+  blocks every destructive route (no `/auth/*` operation is destructive).
 - **The reachable recipe is a persisted policy in the SERVED config dir.**
   Verified live:
 
@@ -5337,20 +5444,49 @@ shapes.
 
   A `--mode deny` policy works too, but then `serve` (and the reads you want to
   keep) must be in its allow list, or the server will not start either.
-- **A deny policy does NOT firewall the whole REST surface.**
-  `permissions set --mode deny --deny cli:write` blocks `POST
-  /auth/register-projects` (HTTP 403, `error_code: PERMISSION_DENIED`) but
-  does nothing to `POST /storage/tables/{project}` (create a table) or any
-  other write route on any other router -- those still execute unchecked.
-- `GET /auth/projects` backs a registry key (`auth.projects`) with no CLI leaf
-  command -- `auth register-projects`'s interactive picker is its terminal
-  equivalent. It is exempted from `scripts/check_command_sync.py`'s dead-key
-  check via `SERVE_ONLY_OPERATIONS` in `permissions.py`; see CONTRIBUTING.md's
-  command-sync gate section for the general rule when adding another
-  serve-only operation.
-- Treat this as a gap being closed incrementally, not the design end state:
-  today a deny policy gates only `/auth/*`, not the ~30 other routers a
-  session token can otherwise reach.
+- **A deny policy firewalls the WHOLE REST surface (since vNEXT, #655).**
+  Every route is classified in `server/route_permissions.py` and checked by
+  one app-level dependency against the served config dir's policy, so
+  `permissions set --mode deny --deny cli:write` now blocks `POST
+  /storage/tables/{project}` exactly like it blocks `POST
+  /auth/register-projects` -- HTTP 403, `error_code: PERMISSION_DENIED`, same
+  code the CLI exits on. **On 0.98.0 and older only `/auth/*` (0.90.1+) and
+  `/merge-requests/*` (0.94.0+) were checked**;
+  on those versions every other write/destructive route executed unchecked, so
+  do not rely on a deny policy to contain a `serve` you did not upgrade.
+  Bootstrap paths (`/health/ping`, `/health/auth-info`, `/ui-config`, `/docs`,
+  `/redoc`, `/openapi.json`, SPA shell) are never checked, by design.
+  A `--scope organization` write is destructive-class over REST too, as on the
+  CLI: `PUT /semantic-layer/scope/{context_id}` with `"scope": "organization"`,
+  and `models` / `items/{kind}` / `import` / `promote` asking for (or
+  inheriting from the target model) `organization` scope, plus `build` into an
+  organization-scope model, answer 403 under `--deny-destructive`.
+- **`GET /permissions/show` (since vNEXT)** reports the EFFECTIVE policy --
+  the persisted block already merged with the `--deny-*` flags the daemon was
+  launched with. Read-only: there is no REST way to change the policy, so an
+  agent cannot widen the firewall that constrains it. Reachable under any
+  policy (`permissions.*` is always allowed), but still needs the bearer token.
+- **`semantic-layer` item routes check the per-kind leaf key, like the CLI.**
+  `POST /semantic-layer/items/{kind}` and `PUT` / `DELETE
+  /semantic-layer/items/{kind}/{name}` check the parent key
+  (`semantic-layer.add`) and the leaf key built from `{kind}`
+  (`semantic-layer.add.metric`). A deny of a leaf key or of a leaf glob like
+  `semantic-layer.add.*` applies over REST too. A `mode: deny` policy must
+  allow both keys.
+- Four registry keys back a serve-only surface with no CLI leaf command:
+  `auth.projects` (the terminal equivalent is `auth register-projects`'s
+  interactive picker), `merge-request.by-branch` (the CLI resolves it behind an
+  omitted `--merge-request-id`) plus `ai.chat` and `workspace.sql-improve` (since vNEXT --
+  the dashboard's Local AI tile and the SQL editor's "improve this query"
+  helper; both are `write`, because both spawn a local CLI process on the host
+  exactly like `agent prompt-improve`). All four are exempted from
+  `scripts/check_command_sync.py`'s dead-key check via `SERVE_ONLY_OPERATIONS`
+  in `permissions.py`; see CONTRIBUTING.md's command-sync gate section before
+  adding another.
+- A route with no entry in `ROUTE_OPERATIONS` is **refused** (403), not
+  exempted. A released build cannot reach that path -- a test asserts the
+  table matches the live app in both directions -- so seeing it means a route
+  was added without classifying it.
 
 ## `serve` honors the root-level `--config-dir`
 
@@ -5711,6 +5847,58 @@ drops manifest entries whose config is gone from the remote) are closed:
   created as `remote_deleted`. Delete that target directory and run the clone
   again.
 
+## `sync` and a file that carries a config id but has no manifest entry (#792)
+
+*(since vNEXT, #792)* A `_config.yml` whose `_keboola.config_id` exists on the
+target branch, but that has no manifest entry, is *adopted*: `sync diff`
+compares it with that remote config, and `sync push` never creates a
+duplicate of it. Examples: a `config new --push --output-dir` scaffold, a tree
+whose manifest was lost or written again, a `main/` file that
+`sync pull --branch` left behind. Such a file has no sync baseline.
+
+- **No baseline: a difference is a `conflict`.** Before, diff read every
+  difference as a local edit (`modified`), so `sync push` overwrote an edit
+  made in the UI after the file was written. Now diff reports `conflict`, and
+  push skips it (`skipped`, `skipped_reason`). Two files that carry the same id
+  are both a `conflict`. Before, push sent both and the last one won.
+- **A `config new --push --output-dir` scaffold records its baseline** in
+  `_keboola.base_config_hash`: the created config as the API returned it. Its
+  diff is 3-way: an edit of the scaffold is `modified` and push applies it, an
+  edit in the UI is `remote_modified`, an edit on both sides is a `conflict`.
+  After the first push the manifest holds the baseline, and push removes the
+  key from the file. A scaffold written by an older kbagent has no key, so a
+  difference from the remote is a `conflict`.
+- **Pull keeps an adopted file with local changes.** Before, pull treated the
+  file as a new config and overwrote it with no message. Now plain pull and
+  `pull --force` keep the file, and report it as `skipped` with reason
+  `locally modified, not tracked in the manifest`. The file stays untracked.
+  "Local changes" means a difference from `_keboola.base_config_hash`, or,
+  when the file has no such key, any difference from the remote. A scaffold
+  with no local changes gets the remote version, as before.
+- **To resolve such a `conflict`:** keep a copy of the local edit if you need
+  it, run `kbagent sync pull --theirs` (the remote wins and the file becomes
+  tracked), apply the edit again, and push.
+- Pull protects only a file in the directory where pull writes that config. A
+  file with the same config id in another directory stays a separate copy
+  after the pull, and push creates it as a new config (fork by copy, #482).
+
+## `sync push` encrypts every secret before its first write (#792)
+
+*(since vNEXT, #792)* Before, push encrypted the `#` secrets of each config
+just before its own write. An `ENCRYPTION_FAILED` on a later config stopped
+the push after earlier configs were created or updated, and the manifest did
+not record them. The retry then created those configs again.
+
+- Now push encrypts the secrets of every config and row that it writes before
+  the first write, one Encryption API call per component. An
+  `ENCRYPTION_FAILED` stops the push before anything reaches the remote, and
+  the error message ends with `Nothing was pushed.` The remote, the manifest
+  and the local files do not change. Fix the cause and run the same push
+  again.
+- With `--allow-plaintext-on-encrypt-failure` nothing changes: push does not
+  encrypt in advance, and a failed encryption writes plaintext with a warning.
+- `--dry-run` calls no Encryption API, as before.
+
 ## `sync` can sync shared SQL workspaces, opt-in per tree (CLI-25)
 
 *(since 0.96.1)* `keboola.sandboxes` is no longer skipped when the manifest sets
@@ -6056,6 +6244,33 @@ appeared in human mode on a terminal.
 
 On older versions `--progress` does not exist and the command fails with a
 usage error (exit 2) -- check `kbagent version` before passing it.
+
+## An OAuth authorization URL survives only as long as one visual row (SUPPORT-17391)
+
+The `config oauth-url` link is ~200 chars (`token` + encoded `sapiUrl` +
+`#/<component>/<config>`), so it fits no terminal row, and two layers then
+truncate it. Both end in the same misleading browser message,
+`Failed to load config data. Please contact us on support@keboola.com` --
+`token`/`sapiUrl` come first and survive, the config id in the fragment does
+not, so the wizard authenticates and then 404s on the configuration:
+
+- **Rich layout.** `console.print(url)` inserts REAL newlines at the console
+  width; a copy of one visual row, or a line-based parse of stdout, loses the
+  tail. `soft_wrap=True` is mandatory for anything printing a URL.
+- **Per-row link detection.** Terminals and chat renderers that autodetect URLs
+  scope detection to one visual row, so a wrapped URL becomes a link to its
+  first row only. Nothing kbagent prints can prevent that in a renderer it does
+  not control (e.g. an assistant transcript).
+
+Since vNEXT the command therefore opens the URL itself (interactive human mode
+only; `--no-open` opts out) and prints it unwrapped as a copy fallback. It
+skips the open where `auth login` skips it too: an SSH session (`webbrowser`
+would start a console browser such as lynx or w3m on the terminal), a
+container, and WSL without a working `wslview`. Under
+WSL `open_browser` routes through `wslview`, because `webbrowser` keys its
+Windows handling off `sys.platform == "win32"` -- `linux` inside WSL -- and
+would otherwise find no handler or open a Linux-side browser that shares none
+of the logins the flow needs.
 
 ## An install under the old package name `keboola-agent-cli` does not update to `keboola-cli`
 

@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import math
 import secrets
 import time
 from contextlib import asynccontextmanager
@@ -23,6 +24,8 @@ from typing import Any
 from urllib.parse import parse_qs
 
 from fastapi import Depends, FastAPI
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
@@ -42,6 +45,7 @@ from .dependencies import (
     install_registry,
     translate_project_refs,
 )
+from .route_permissions import enforce_route_permission
 from .routers import (
     agents,
     ai_chat,
@@ -74,6 +78,9 @@ from .routers import (
     token,
     transformation,
     workspaces,
+)
+from .routers import (
+    permissions as permissions_router,
 )
 
 logger = logging.getLogger(__name__)
@@ -381,6 +388,17 @@ OPENAPI_TAGS: list[dict[str, str]] = [
     },
     # ---- System ----
     {
+        "name": "permissions",
+        "description": (
+            "**System.** "
+            "Read the session firewall policy this server enforces on every "
+            "route (issue #655). Read-only: `permissions set|reset` stay "
+            "terminal actions on the host, so a bearer token can never widen "
+            "the policy that constrains it. "
+            "Mirrors `kbagent permissions show`."
+        ),
+    },
+    {
         "name": "health",
         "description": (
             "**System.** "
@@ -548,6 +566,12 @@ _CALLER_REFUSAL_CODES = frozenset(
 _MERGE_REQUEST_CONFLICT_CODES = frozenset(
     {ErrorCode.MR_MERGE_CONFLICT, ErrorCode.MR_NOT_READY_TO_MERGE}
 )
+
+
+def _finite_or_text(value: float) -> float | str:
+    """``value`` unchanged when finite, else its text (``"inf"``, ``"nan"``)."""
+    return value if math.isfinite(value) else str(value)
+
 
 _SESSION_REMEDY_ON_HOST = (
     "Complete `kbagent auth login` on the host running `kbagent serve` -- this server "
@@ -849,8 +873,17 @@ def create_app(
 
     app = FastAPI(
         lifespan=_lifespan,  # type: ignore[arg-type]
+        # The session firewall, applied to EVERY route the app declares
+        # (issue #655). App-level rather than per-router so a new router
+        # cannot be added outside it; the route -> operation classification
+        # lives in `route_permissions.ROUTE_OPERATIONS`, and an unclassified
+        # route is refused rather than silently exempted. Listed first, so a
+        # denied request is refused before any other dependency runs.
         # A project ID in `{project}` / `?project=` becomes its alias (CLI-22).
-        dependencies=[Depends(translate_project_refs("project"))],
+        dependencies=[
+            Depends(enforce_route_permission),
+            Depends(translate_project_refs("project")),
+        ],
         title="kbagent serve",
         description=APP_DESCRIPTION,
         version=__version__,
@@ -953,6 +986,15 @@ def create_app(
         # a caller can branch on one value across both surfaces.
         return _format_error(exc.message, ErrorCode.PERMISSION_DENIED, http_status=403)
 
+    @app.exception_handler(RequestValidationError)
+    async def _validation_error_handler(_request, exc: RequestValidationError):
+        # FastAPI's own handler, except for one case: a JSON body may carry
+        # Infinity or NaN (Python's json accepts both), the error echoes it as
+        # `input`, and JSONResponse cannot encode a non-finite float -- so the
+        # 422 crashed into a 500. Same body shape, the bad float as text.
+        detail = jsonable_encoder(exc.errors(), custom_encoder={float: _finite_or_text})
+        return JSONResponse(status_code=422, content={"detail": detail})
+
     @app.exception_handler(StarletteHTTPException)
     async def _starlette_handler(_request, exc: StarletteHTTPException):
         return _format_error(
@@ -965,6 +1007,7 @@ def create_app(
         return _format_error(str(exc) or repr(exc), ErrorCode.INTERNAL_ERROR, http_status=500)
 
     app.include_router(health.router)
+    app.include_router(permissions_router.router)
     app.include_router(auth.router)
     app.include_router(projects.router)
     app.include_router(members.router)

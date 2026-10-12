@@ -509,7 +509,9 @@ Use `kbagent <command> --help` for full flag details and examples.
     instead of creating a duplicate. With an explicit --configuration body the local
     directory mirrors the pushed (already encrypted) body exactly like sync pull would
     materialize it (real transform.sql/.py extracted from the body) instead of
-    placeholder scaffolding.
+    placeholder scaffolding. The scaffold also records _keboola.base_config_hash (the
+    created config as the API returned it; since vNEXT, #792 E), so sync diff compares
+    it 3-way and push never overwrites an edit made in the UI.
 
   kbagent config clone --project P --component-id ID --config-id ID --name NAME
                        [--target-project P2] [--description D] [--set PATH=VALUE ...]
@@ -574,9 +576,10 @@ Use `kbagent <command> --help` for full flag details and examples.
   kbagent config row-delete --project NAME --component-id ID --config-id ID --row-id ID [--branch ID] [--yes]
     Delete a configuration row. Destructive; --yes to skip confirmation prompt.
 
-  kbagent config oauth-url --project NAME --component-id ID --config-id ID [--redirect-url URL]
+  kbagent config oauth-url --project NAME --component-id ID --config-id ID [--redirect-url URL] [--no-open]
     Return the OAuth authorization URL for a component that uses OAuth authentication.
     Open the URL in a browser to complete the OAuth flow.
+    Opens it in the default browser in interactive human mode (never with --json); --no-open only prints it (since vNEXT).
 
   kbagent config state-get --project NAME --component-id ID --config-id ID [--row-id ID] [--branch ID]
     Read a configuration's runtime state (the same dict --with-state attaches
@@ -719,8 +722,15 @@ remain branch-aware because modifying a dev branch is the expected intent.
     time. Response includes `legacy_branch_storage: true` and human mode prints a
     warning when this applies. See storage-types-workflow.md.
 
-  kbagent storage create-table --project NAME --bucket-id BUCKET_ID --name TABLE_NAME [--column col:TYPE[(length)] ...] [--primary-key COL] [--not-null COL ...] [--default NAME=VALUE ...] [--source-table-id ID] [--source-branch-id N] [--time-partitioning-type DAY|HOUR|MONTH|YEAR] [--time-partitioning-field COL] [--time-partitioning-expiration-ms MS] [--range-partitioning-field COL --range-partitioning-start S --range-partitioning-end E --range-partitioning-interval I] [--clustering-field COL ...] [--branch ID] [--if-not-exists]
+  kbagent storage create-table --project NAME --bucket-id BUCKET_ID --name TABLE_NAME [--column col:TYPE[(length)] ...] [--primary-key COL] [--not-null COL ...] [--default NAME=VALUE ...] [--source-table-id ID] [--source-branch-id N] [--time-partitioning-type DAY|HOUR|MONTH|YEAR] [--time-partitioning-field COL] [--time-partitioning-expiration-ms MS] [--range-partitioning-field COL --range-partitioning-start S --range-partitioning-end E --range-partitioning-interval I] [--clustering-field COL ...] [--branch ID] [--if-not-exists] [--timeout SECONDS]
     Create a typed table. --column repeatable.
+    - --timeout SECONDS (since vNEXT, default 300): budget for the async create job. A
+      --source-table-id copy moves real data and used to inherit the 60s metadata-job
+      default, so a large BigQuery table reported STORAGE_JOB_TIMEOUT for a copy that was
+      still running and would succeed. A local timeout NEVER cancels the job -- it keeps
+      running server-side. The error is STORAGE_JOB_TIMEOUT, exit 4, retryable: false,
+      details.job_id; follow it with `storage job-detail --job-id ID --wait`, verify with
+      table-detail, and never re-run the create (a second copy).
     - --if-not-exists: opt-in idempotency. On a duplicate-display-name failure,
       probe get-table-detail at the expected id and, if the table really exists, return
       `action: "skipped", skip_reason: "table already exists"` instead of raising. A different
@@ -810,7 +820,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
   kbagent storage delete-bucket --project NAME --bucket-id ID [--bucket-id ...] [--force] [--dry-run] [--yes] [--branch ID]
     Delete one or more buckets. --force cascade-deletes tables. Linked/shared buckets protected. Branch-aware.
 
-  kbagent storage swap-tables --project NAME --table-id ID --target-table-id ID --branch ID [--dry-run] [--yes]
+  kbagent storage swap-tables --project NAME --table-id ID --target-table-id ID --branch ID [--dry-run] [--yes] [--timeout SECONDS]
     Swap two storage tables in any branch, including the default/production branch (POST /tables/{{id}}/swap). Both tables exchange physical positions;
     aliases are NOT transferred (they keep pointing at the same physical position and therefore expose the
     OTHER table's data after the swap). Use to promote a typed rebuild back into the original name without
@@ -818,6 +828,11 @@ remain branch-aware because modifying a dev branch is the expected intent.
     branch use'); service guards before any HTTP call when none is set. Any branch works, INCLUDING the
     default/production branch -- a default-branch swap is how a typed rebuild reaches prod (dev-branch merge
     does not carry storage schema).
+    --timeout SECONDS (since vNEXT, default 300): budget for the async swap job. A swap on a large
+    BigQuery table outlasts the old 60s metadata-job default. A local timeout NEVER cancels the swap --
+    it keeps running server-side and usually lands. The error is STORAGE_JOB_TIMEOUT, exit 4,
+    retryable: false, details.job_id; follow it with `storage job-detail --job-id ID --wait` and never
+    re-issue the swap (a repeat after it lands swaps the tables back).
 
   kbagent storage clone-table --project NAME --table-id ID --branch ID [--dry-run]
     Clone (pull) a production table into a dev branch (POST /tables/{{id}}/pull). On storage-branches projects a
@@ -1367,6 +1382,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
 
   kbagent workspace create --project ALIAS [--name NAME] [--backend TYPE] [--ui] [--read-only/--no-read-only]
     Create workspace. Backend auto-detected from project (or override with --backend). Default: headless (~1s). --ui: visible in KBC UI (~15s).
+    --ui is BROKEN on current SaaS stacks (#755): the keboola.sandboxes create job no longer provisions SQL workspaces, so it ends in WORKSPACE_NOT_FOUND -- do not retry, use headless. A failed create (either mode) trashes the sandbox config it created; when the outcome is unknown (5xx / read-write TIMEOUT / RETRY_EXHAUSTED on the create POST, or any error after the --ui job was queued except QUEUE_JOB_FAILED / WORKSPACE_NOT_FOUND) it keeps the config (a workspace may exist -- check 'workspace list', then 'config delete' if nothing appears); --json error.details carries sandbox_config_id / sandbox_config_rolled_back / sandbox_config_kept_reason / job_id.
     Since 0.47.1, Snowflake headless creates return private_key and an empty password field; use key-pair auth.
 
   kbagent workspace list [--project NAME] [--orphaned] [--branch ID] [--qs-compatible]
@@ -1440,12 +1456,21 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     Cleanup-in-finally if PUT or initial deploy fails (orphan shell deleted
     by default; --keep-on-failure preserves it for forensics).
     --use-managed-git-repo (0.65.0+) provisions an EMPTY Keboola-hosted repo
-    instead of cloning an external one; writes no git block, forces --no-deploy,
-    mutually exclusive with --git-repo and all --git-*/PAT flags. Managed deploy
-    works via: create --use-managed-git-repo -> git-credentials-create
-    --type http_token --permissions readWrite + push code to the managed repo
-    URL -> deploy. The platform injects the clone credentials at deploy time,
-    so no credential wiring is needed.
+    instead of cloning an external one; create writes no git block, forces
+    --no-deploy, mutually exclusive with --git-repo and all --git-*/PAT flags.
+    Managed deploy works via: create --use-managed-git-repo ->
+    git-credentials-create --type http_token --permissions readWrite + push
+    code to the `main` branch of the managed repo URL -> deploy. The platform
+    injects the clone credentials at deploy time, so no credential wiring is
+    needed. Deploy writes the git block itself (vNEXT+, CLI-15): for a managed
+    app with no parameters.dataApp.git it backfills repository URL + branch
+    into the Storage config, then pins the new version. The branch is
+    deploy --git-branch; without it, `main` for an app with no runs, and a
+    VALIDATION_ERROR before any write for an app that has runs (its branch
+    is unknown -- pass --git-branch with the branch the code is on). The
+    platform provisions the workspace only when that block exists. The result
+    has git_backfilled: true, git_branch and a warnings[] entry; code on any
+    other branch is not deployed.
     --workspace (0.87.0+, DEFAULT ON) writes runtime.workspace.enabled=true --
     the single switch that makes the platform provision the ephemeral workspace
     and inject WORKSPACE_ID / QUERY_SERVICE_URL / KBC_WORKSPACE_MANIFEST_PATH.
@@ -1461,7 +1486,8 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     then redeploy (deploy pins the LATEST version, so the change takes effect).
 
   kbagent data-app deploy --project NAME --app-id ID [--config-version N]
-    [--wait] [--timeout SECONDS] [--branch ID] [--copy] [--reveal]
+    [--wait] [--timeout SECONDS] [--branch ID] [--git-branch BRANCH]
+    [--copy] [--reveal]
     With --wait on a password app (0.96.1+): the password is delivered like
     `data-app password` (the c prompt in a terminal, which then waits for
     Enter or 120 s; --copy / --reveal need --wait). Without a flag and
@@ -1470,7 +1496,9 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     (+ password with --reveal); a failed password read or a non-password
     app with --copy is a `warnings[]` entry, exit 0.
     The §9 redeploy contract. Default reads the latest Storage config version
-    and pins to it; --config-version pins an older version (rollback).
+    and pins to it; --config-version pins an older version (rollback) and
+    skips the git-block backfill. --git-branch only sets the branch of
+    that backfill; it has no effect otherwise.
     Always sends {{desiredState=running, configVersion, restartIfRunning=true}}
     together -- HTTP 422 otherwise.
 
@@ -1687,9 +1715,13 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     (summary.orphaned + details: component_id, config_id, path, branch_id, branch_path,
     exists_on_target, reason, hint); human mode previews the first 10. An orphaned FILE
     whose _keboola.config_id still resolves on the target is ADOPTED (unchanged/modified),
-    never re-created; a same-tree id claim keeps the #482 fork-by-copy CREATE. Fix a
-    non-zero summary.orphaned with `sync pull`; promote dev-only configs with
-    `branch merge`, never by pushing them to production.
+    never re-created; a same-tree id claim keeps the #482 fork-by-copy CREATE. An adopted
+    file has no baseline unless it records _keboola.base_config_hash (a config new --push
+    scaffold): without one a difference is a CONFLICT, never modified, and two files with
+    one id are both conflicts (since vNEXT, #792 E). sync pull keeps such a file with
+    local changes (skipped, "locally modified, not tracked in the manifest"); --theirs
+    overwrites it. Fix a non-zero summary.orphaned with `sync pull`; promote dev-only
+    configs with `branch merge`, never by pushing them to production.
     Ignored components (since 0.91.0, #689) are excluded from BOTH sides of the comparison,
     so a stale manifest entry or leftover dir for one of them contributes nothing --
     not added, not deleted, not orphaned. Push builds on this diff, so it plans nothing
@@ -1698,6 +1730,10 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
   kbagent sync push --project ALIAS [--all-projects] [--dry-run] [--force] [--allow-plaintext-on-encrypt-failure] [--branch ID] [--no-name-drift-warnings]
     Push local changes. Auto-encrypts secrets. Skips conflicts (pull first).
     Fails if encryption fails (plaintext secrets never pushed). Use escape hatch flag only if you know what you are doing.
+    Every secret is encrypted BEFORE the first write (since vNEXT, #792 F): an
+    ENCRYPTION_FAILED stops the push before anything reaches the remote (message ends
+    "Nothing was pushed."), so run the same push again after the fix -- it creates
+    nothing twice.
     Workspace delete (since 0.96.1, syncWorkspaces trees): a --force push that deletes a shared
     SQL workspace also deletes its SQL editor sessions (every user's, push branch) and their
     backend workspaces, which config restore does not bring back; check
@@ -2272,7 +2308,8 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
     normal chain (KBAGENT_CONFIG_DIR, .kbagent walk-up, global). Passing both
     is not an error; the serve-level flag wins. That directory decides which
     projects the REST surface exposes AND which persisted `permissions`
-    policy the /auth/* routes enforce. NOTE for older installs: up to 0.90.1
+    policy its routes enforce (every route since vNEXT; only /auth/* and
+    /merge-requests/* on 0.98.0 and older). NOTE for older installs: up to 0.90.1
     `serve` ignored the root-level flag entirely, silently serving a
     different directory -- there, always pass --config-dir to `serve` itself.
 
@@ -2328,7 +2365,10 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
     List all operations with risk categories and current allowed/denied status.
 
   kbagent permissions show
-    Show current active permission policy.
+    Show current active permission policy. The persisted policy also applies
+    to every route of `kbagent serve` (denial = HTTP 403 PERMISSION_DENIED),
+    against the config dir the SERVER resolved; `GET /permissions/show` over
+    serve reports that effective policy. No REST route can change it.
 
   kbagent permissions set --mode allow|deny [--allow PATTERN ...] [--deny PATTERN ...]
     Set firewall-style permission policy. Patterns: exact (branch.delete),

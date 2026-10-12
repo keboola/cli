@@ -10,11 +10,13 @@ import time
 from pathlib import Path
 
 import pytest
+from fastapi import Depends
 from fastapi.testclient import TestClient
 
 from keboola_agent_cli import telemetry
 from keboola_agent_cli.server._serve_command_map import SERVE_COMMAND_MAP
 from keboola_agent_cli.server.app import create_app
+from keboola_agent_cli.server.dependencies import require_permission
 
 
 def test_command_map_matches_every_route_exactly(tmp_config_dir: Path) -> None:
@@ -98,7 +100,15 @@ def test_unhandled_route_error_is_logged_as_a_failure(
     def _boom(project: str) -> None:
         raise RuntimeError("boom")
 
-    app.add_api_route("/telemetry-test-boom/{project}", _boom, methods=["POST"], name="boom_route")
+    # A route without a permission classification is refused with 403 before it
+    # runs (issue #655), so the test route declares its own guard.
+    app.add_api_route(
+        "/telemetry-test-boom/{project}",
+        _boom,
+        methods=["POST"],
+        name="boom_route",
+        dependencies=[Depends(require_permission("job.run"))],
+    )
 
     with TestClient(app, raise_server_exceptions=False) as client:
         response = client.post("/telemetry-test-boom/prod", headers={"Authorization": "Bearer tok"})

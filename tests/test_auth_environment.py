@@ -10,6 +10,8 @@ container, or WSL install.
 from __future__ import annotations
 
 import subprocess
+import threading
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -380,3 +382,134 @@ class TestOpenBrowser:
         for thread in list(environment.threading.enumerate()):
             if thread is not environment.threading.current_thread():
                 thread.join(timeout=1.0)
+
+
+class TestOpenBrowserUnderWsl:
+    """WSL is `sys.platform == "linux"`, so `webbrowser` never reaches Windows itself."""
+
+    @staticmethod
+    def _join_other_threads() -> None:
+        for thread in list(environment.threading.enumerate()):
+            if thread is not environment.threading.current_thread():
+                thread.join(timeout=1.0)
+
+    def test_hands_the_url_to_wslview(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls: list[list[str]] = []
+
+        def _run(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+            calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, b"", b"")
+
+        monkeypatch.setenv("WSL_INTEROP", "/run/WSL/1_interop")
+        monkeypatch.setattr(environment.shutil, "which", lambda _name: "/usr/bin/wslview")
+        monkeypatch.setattr(environment.subprocess, "run", _run)
+
+        url = "https://external.keboola.com/oauth/index.html?token=t&sapiUrl=u#/comp/cfg"
+
+        assert open_browser(url) is True
+        self._join_other_threads()
+        assert calls == [["wslview", "--version"], ["wslview", url]]
+
+    def test_slow_wslview_does_not_block_a_caller_that_does_not_wait(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`auth login` passes no ``wait_seconds``: the open must stay fire-and-forget."""
+        release = threading.Event()
+        opened = threading.Event()
+
+        def _run(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+            if cmd[1:] != ["--version"]:
+                release.wait(timeout=5.0)
+                opened.set()
+            return subprocess.CompletedProcess(cmd, 0, b"", b"")
+
+        monkeypatch.setenv("WSL_INTEROP", "/run/WSL/1_interop")
+        monkeypatch.setattr(environment.shutil, "which", lambda _name: "/usr/bin/wslview")
+        monkeypatch.setattr(environment.subprocess, "run", _run)
+
+        started = time.monotonic()
+        assert open_browser("https://external.keboola.com/oauth/index.html?token=t") is True
+        assert time.monotonic() - started < 1.0
+        assert not opened.is_set()
+
+        release.set()
+        self._join_other_threads()
+        assert opened.is_set()
+
+    def test_waits_for_wslview_up_to_wait_seconds(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """`config oauth-url` exits right after the open, so it waits for `wslview`."""
+        opened = threading.Event()
+
+        def _run(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+            if cmd[1:] != ["--version"]:
+                time.sleep(0.2)
+                opened.set()
+            return subprocess.CompletedProcess(cmd, 0, b"", b"")
+
+        monkeypatch.setenv("WSL_INTEROP", "/run/WSL/1_interop")
+        monkeypatch.setattr(environment.shutil, "which", lambda _name: "/usr/bin/wslview")
+        monkeypatch.setattr(environment.subprocess, "run", _run)
+
+        assert (
+            open_browser("https://external.keboola.com/oauth/index.html?token=t", wait_seconds=2.0)
+            is True
+        )
+        assert opened.is_set()
+
+    def test_wait_seconds_bounds_a_wedged_wslview(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        release = threading.Event()
+
+        def _run(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+            if cmd[1:] != ["--version"]:
+                release.wait(timeout=5.0)
+            return subprocess.CompletedProcess(cmd, 0, b"", b"")
+
+        monkeypatch.setenv("WSL_INTEROP", "/run/WSL/1_interop")
+        monkeypatch.setattr(environment.shutil, "which", lambda _name: "/usr/bin/wslview")
+        monkeypatch.setattr(environment.subprocess, "run", _run)
+
+        started = time.monotonic()
+        assert (
+            open_browser("https://external.keboola.com/oauth/index.html?token=t", wait_seconds=0.2)
+            is True
+        )
+        assert time.monotonic() - started < 1.0
+
+        release.set()
+        self._join_other_threads()
+
+    def test_wslview_error_is_swallowed(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        def _run(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+            if cmd[1:] != ["--version"]:
+                raise subprocess.TimeoutExpired(cmd, 10.0)
+            return subprocess.CompletedProcess(cmd, 0, b"", b"")
+
+        monkeypatch.setenv("WSL_INTEROP", "/run/WSL/1_interop")
+        monkeypatch.setattr(environment.shutil, "which", lambda _name: "/usr/bin/wslview")
+        monkeypatch.setattr(environment.subprocess, "run", _run)
+
+        assert (
+            open_browser("https://external.keboola.com/oauth/index.html?token=t", wait_seconds=1.0)
+            is True
+        )
+        assert "token=t" not in capsys.readouterr().err
+
+    def test_falls_back_to_webbrowser_without_a_working_wslview(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        opened: list[str] = []
+
+        monkeypatch.setenv("WSL_INTEROP", "/run/WSL/1_interop")
+        monkeypatch.setattr(environment.shutil, "which", lambda _name: None)
+        monkeypatch.setattr(environment.webbrowser, "get", lambda: object())
+        monkeypatch.setattr(environment.webbrowser, "open", opened.append)
+
+        assert open_browser("https://external.keboola.com/oauth/index.html?token=t") is True
+
+        for thread in list(environment.threading.enumerate()):
+            if thread is not environment.threading.current_thread():
+                thread.join(timeout=1.0)
+
+        assert opened == ["https://external.keboola.com/oauth/index.html?token=t"]

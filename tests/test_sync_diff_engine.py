@@ -507,6 +507,57 @@ class TestRemoteDeleted:
         ]
 
 
+def _adopted(value: str, base: str | None = None, path: str = "orders") -> dict[str, Any]:
+    """An untracked local file adopted by its config id (issue #792 E)."""
+    keboola: dict[str, Any] = {"component_id": "keboola.ex-http", "config_id": "cfg-001"}
+    if base is not None:
+        keboola["base_config_hash"] = base
+    return {
+        "component_id": "keboola.ex-http",
+        "config_id": "cfg-001",
+        "config_name": "Orders",
+        "path": path,
+        "data": {"name": "Orders", "parameters": {"value": value}, "_keboola": keboola},
+        "adopted": True,
+    }
+
+
+def _remote(value: str) -> dict[str, dict[str, Any]]:
+    return {"keboola.ex-http/cfg-001": {"name": "Orders", "parameters": {"value": value}}}
+
+
+def _base(value: str) -> str:
+    return config_hash({"name": "Orders", "parameters": {"value": value}})
+
+
+class TestAdoptedFiles:
+    """An adopted file is diffed 3-way against the base it records, else it
+    is a conflict on any difference (issue #792 E)."""
+
+    def _types(self, locals_: list[dict[str, Any]], remote_value: str) -> list[str]:
+        changes = compute_changeset(locals_, _remote(remote_value), tracked_keys=set())
+        return [c.change_type for c in changes]
+
+    def test_without_base_a_difference_is_a_conflict(self) -> None:
+        assert self._types([_adopted("local")], "remote") == ["conflict"]
+
+    def test_without_base_an_equal_file_is_unchanged(self) -> None:
+        assert self._types([_adopted("same")], "same") == []
+
+    def test_with_base_the_diff_is_three_way(self) -> None:
+        assert self._types([_adopted("local", _base("v1"))], "v1") == ["modified"]
+        assert self._types([_adopted("v1", _base("v1"))], "remote") == ["remote_modified"]
+        assert self._types([_adopted("local", _base("v1"))], "remote") == ["conflict"]
+
+    def test_two_files_adopting_one_id_are_conflicts(self) -> None:
+        both = [_adopted("one", _base("v1")), _adopted("two", _base("v1"), path="orders-copy")]
+        assert self._types(both, "v1") == ["conflict", "conflict"]
+
+    def test_a_tracked_entry_without_base_keeps_the_two_way_fallback(self) -> None:
+        tracked = {**_adopted("local"), "adopted": False}
+        assert self._types([tracked], "remote") == ["modified"]
+
+
 class TestConfigChange:
     """Tests for ConfigChange.to_dict() serialization."""
 
