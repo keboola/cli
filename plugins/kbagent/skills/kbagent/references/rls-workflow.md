@@ -265,6 +265,36 @@ row; anyone else sees no rows (the `default`), instead of an error.
 - MCP OAuth users have an email but no IdP groups, so `groups` rules only
   match readers whose identity carries a groups claim.
 
+## Workflow 4c -- Default deny and the wildcard (governed workspaces)
+
+*(since vNEXT)*
+
+In a **governed workspace** (the platform creates every workspace governed once
+RLS/CLS is switched on for the organization or project) nothing is readable
+until a policy says so: a table with **no** `rls-policy` is refused, and so is a
+table whose policies match the reader in no rule. Admins and organization admins
+are not exempt. An admin who sees no data has not authored the policies yet --
+author them before switching RLS/CLS on.
+
+To open a table to every identified reader, use the wildcard selector `"*"`
+(`principal`, `principals` or `groups`, schema 1.1.0) with an explicit condition:
+
+```bash
+kbagent --json rls create --project prod --table-id in.c-ref.countries \
+  --rules '[{"principal": "*", "condition": {"true": true}}]' --dry-run
+```
+
+- `"*"` must be the **only** entry of a `principals` / `groups` list
+  (`["*", "a@example.com"]` is refused locally); it never matches a reader with
+  no identity; it cannot widen a stricter policy on the same table (policies
+  AND together).
+- It needs a metastore whose `rls-policy` schema is 1.1.0 or later: on a 1.0.0
+  schema `"*"` is a literal that matches nobody, so kbagent refuses it.
+- A debug or "see everything" user is a normal rule (for example
+  `{"groups": ["debug"], "condition": {"true": true}}`), not a bypass flag.
+- A `cls-policy` alone never grants rows: a table needs an `rls-policy` (the
+  wildcard one if everyone may read all rows) before its columns matter.
+
 ## Workflow 5 -- Share a policy with sibling projects (targeted grants)
 
 `--target-project` (on `create`/`setup`/`update`) takes a registered alias or a

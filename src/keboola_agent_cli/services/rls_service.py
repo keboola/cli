@@ -242,7 +242,15 @@ class RlsService(BaseService):
         fetch = self._fetch_schema(client)
         if not fetch.schema:
             return PolicyValidation([], [f"Live schema validation was skipped: {fetch.reason}"])
-        return PolicyValidation(draft7_errors(policy, fetch.schema), [])
+        errors = draft7_errors(policy, fetch.schema)
+        if _rls_condition.rules_use_wildcard(policy["rules"]) and (
+            old := _rls_condition.schema_lacks_wildcard(fetch.schema)
+        ):
+            errors.append(
+                f"the wildcard {_rls_condition.WILDCARD!r} needs {self.item_type} schema 1.1.0 or later; "
+                f"this metastore serves {old}, where it is a literal that matches nobody"
+            )
+        return PolicyValidation(errors, [])
 
     def _local_rule_errors(self, rules: Any) -> list[str]:
         """Schema-independent checks on ``rules`` (hook for :class:`ClsService`)."""

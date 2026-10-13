@@ -59,6 +59,12 @@ _GROUP_RE = re.compile(r"^[^\x00-\x1f\x7f]+$")
 # The rule selectors of schema 1.1.0 -- each rule names exactly one.
 SELECTORS: tuple[str, ...] = ("principal", "principals", "groups")
 
+# Schema 1.1.0 wildcard selector: matches every IDENTIFIED reader (never an anonymous one). It must be the
+# only entry of a `principals` / `groups` list, and exists only from schema 1.1.0: in a 1.0.0 object it is a
+# literal that no email equals, so it matches nobody.
+WILDCARD = "*"
+WILDCARD_MIN_SCHEMA_VERSION = (1, 1, 0)
+
 # The `$identity` placeholders: `value` may be the reader's email, `values` the reader's groups.
 IDENTITY_EMAIL = {"$identity": "email"}
 IDENTITY_GROUPS = {"$identity": "groups"}
@@ -179,6 +185,10 @@ def validate_principal_fields(rule: dict[Any, Any], index: int) -> list[str]:
             "a non-empty string" if key == "principal" else "a non-empty list of non-empty strings"
         )
         return [f"rules[{index}].{key} must be {shape}"]
+    if key != "principal" and WILDCARD in names and len(names) > 1:
+        return [
+            f"rules[{index}].{key}: {WILDCARD!r} (every identified reader) must be the only entry"
+        ]
     pattern, problem = (
         (_GROUP_RE, "control characters")
         if key == "groups"
@@ -189,6 +199,35 @@ def validate_principal_fields(rule: dict[Any, Any], index: int) -> list[str]:
         for name in names
         if not pattern.fullmatch(name)
     ]
+
+
+def rules_use_wildcard(rules: Any) -> bool:
+    """Whether any rule selects by the ``"*"`` wildcard (``principal``, ``principals`` or ``groups``)."""
+    if not isinstance(rules, list):
+        return False
+    return any(
+        isinstance(rule, dict)
+        and any(
+            (rule[key] == WILDCARD) if key == "principal" else (WILDCARD in (rule[key] or []))
+            for key in SELECTORS
+            if key in rule and isinstance(rule[key], str | list)
+        )
+        for rule in rules
+    )
+
+
+def schema_lacks_wildcard(schema: dict[str, Any]) -> str | None:
+    """The schema's ``version`` when it is older than the one that defines ``"*"``, else ``None``.
+
+    An unreadable or absent ``version`` is not proof of anything, so it returns ``None`` (the caller's
+    structural validation against the live schema still runs).
+    """
+    version = schema.get("version")
+    try:
+        parsed = tuple(int(part) for part in str(version).split(".")[:3])
+    except ValueError:
+        return None
+    return str(version) if parsed < WILDCARD_MIN_SCHEMA_VERSION else None
 
 
 def rule_selector(rule: dict[str, Any]) -> dict[str, Any]:
