@@ -147,7 +147,8 @@ def _principal_text(item: dict[str, Any]) -> str:
     if "groups" in item:
         return "groups: " + ", ".join(item["groups"])
     principal = item.get("principal") or item.get("principals") or []
-    return principal if isinstance(principal, str) else ", ".join(principal)
+    text = principal if isinstance(principal, str) else ", ".join(principal)
+    return f"{text} (every identified reader)" if text == "*" else text
 
 
 def _format_policy_table(formatter: Any, policies: list[dict[str, Any]]) -> None:
@@ -623,7 +624,9 @@ def _prompt_condition() -> dict[str, Any]:
 def _build_rules_interactively() -> list[dict[str, Any]]:
     rules: list[dict[str, Any]] = []
     while True:
-        principal = typer.prompt("Principal (user email, or comma-separated list for a group)")
+        principal = typer.prompt(
+            "Principal (user email, comma-separated list for a group, or * for every identified reader)"
+        )
         principals = [p.strip() for p in principal.split(",") if p.strip()]
         condition = _prompt_condition()
         rule: dict[str, Any] = {"condition": condition}

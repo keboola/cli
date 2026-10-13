@@ -74,6 +74,11 @@ class TestLocalRuleValidation:
                 "not a valid column name",
             ),
             ([{"principal": "a@x.com", "visible_columns": [1]}], "not a valid column name"),
+            (
+                [{"principals": ["*", "a@x.com"], "visible_columns": ["id"]}],
+                "must be the only entry",
+            ),
+            ([{"groups": ["*", "sales"], "visible_columns": ["id"]}], "must be the only entry"),
         ],
     )
     def test_rejects(self, tmp_path: Path, rules: Any, fragment: str) -> None:
@@ -86,6 +91,22 @@ class TestLocalRuleValidation:
         assert fragment in exc.value.message
         assert exc.value.message.startswith("CLS policy is invalid")
         mock.post_item.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "selector", [{"principal": "*"}, {"principals": ["*"]}, {"groups": ["*"]}]
+    )
+    def test_accepts_the_wildcard_selector_alone(self, tmp_path: Path, selector: dict) -> None:
+        service, _ = _make_service(tmp_path)
+
+        result = service.create_policy(
+            "prod",
+            table="in.c-crm.t",
+            dialect="snowflake",
+            rules=[{**selector, "visible_columns": ["id"]}],
+            dry_run=True,
+        )
+
+        assert result["preview"] == [{**selector, "visible_columns": ["id"]}]
 
     def test_accepts_principals_list(self, tmp_path: Path) -> None:
         service, _ = _make_service(tmp_path)

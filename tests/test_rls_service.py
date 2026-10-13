@@ -1029,6 +1029,12 @@ class TestPrincipalFieldsAreValidatedByValueNotTruthiness:
             ({"principals": ["a", ""], "condition": _COND}, "principals must be a non-empty list"),
             ({"principals": ["a", 2], "condition": _COND}, "principals must be a non-empty list"),
             ({"condition": _COND}, "exactly one of"),
+            # The wildcard must be the sole entry of its list (schema 1.1.0).
+            ({"principals": ["*", "a@x.com"], "condition": _COND}, "must be the only entry"),
+            ({"principals": ["a@x.com", "*"], "condition": _COND}, "must be the only entry"),
+            ({"principals": ["*", "*"], "condition": _COND}, "must be the only entry"),
+            ({"groups": ["*", "sales"], "condition": _COND}, "must be the only entry"),
+            ({"groups": [], "condition": _COND}, "groups must be a non-empty list"),
         ],
     )
     def test_malformed_principal_fields_are_rejected_locally(
@@ -1042,10 +1048,51 @@ class TestPrincipalFieldsAreValidatedByValueNotTruthiness:
         [
             {"principal": "a@x.com", "condition": _COND},
             {"principals": ["a@x.com", "b@x.com"], "condition": _COND},
+            {"principal": "*", "condition": _COND},
+            {"principals": ["*"], "condition": _COND},
+            {"groups": ["*"], "condition": _COND},
         ],
     )
     def test_well_formed_principal_fields_pass(self, rule: dict) -> None:
         assert validate_rules_local([rule]) == []
+
+    @pytest.mark.parametrize(
+        ("schema_version", "blocked"),
+        [("1.0.0", True), ("1.1.0", False), ("1.2.0", False), (None, False), ("v1", False)],
+    )
+    def test_wildcard_is_refused_on_a_schema_older_than_1_1_0(
+        self, tmp_path: Path, schema_version: str | None, blocked: bool
+    ) -> None:
+        """In a 1.0.0 object `*` is a literal no email equals: it would silently match nobody."""
+        service, mock = _make_service(_make_store(tmp_path))
+        schema: dict[str, Any] = {"type": "object"}
+        if schema_version:
+            schema["version"] = schema_version
+        mock.get_schema.return_value = schema
+        mock.post_item.return_value = _policy_item()
+        rules = [{"principal": "*", "condition": self._COND}]
+
+        if blocked:
+            with pytest.raises(KeboolaApiError) as excinfo:
+                service.create_policy("prod", table="t.x", rules=rules)
+            assert "needs rls-policy schema 1.1.0" in excinfo.value.message
+            mock.post_item.assert_not_called()
+        else:
+            service.create_policy("prod", table="t.x", rules=rules)
+            mock.post_item.assert_called_once()
+
+    def test_a_policy_without_a_wildcard_is_not_blocked_by_an_old_schema(
+        self, tmp_path: Path
+    ) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.get_schema.return_value = {"type": "object", "version": "1.0.0"}
+        mock.post_item.return_value = _policy_item()
+
+        service.create_policy(
+            "prod", table="t.x", rules=[{"principal": "a@x.com", "condition": self._COND}]
+        )
+
+        mock.post_item.assert_called_once()
 
     def test_a_malformed_principal_never_reaches_a_write_when_the_schema_is_unavailable(
         self, tmp_path: Path

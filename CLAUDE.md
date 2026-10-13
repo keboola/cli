@@ -1282,6 +1282,8 @@ kbagent rls setup --project P [--dialect snowflake|bigquery] [--rules JSON|@file
 #   identities by principal, principals or IdP `groups`; within a policy every rule matching one
 #   identity applies and the conditions combine with OR; several policies on one table combine
 #   with AND (an added policy only narrows); a reader with no identity is always refused;
+#   the wildcard `"*"` (sole entry of `principal`/`principals`/`groups`) matches every identified reader and is how a table is opened to everyone under default deny; in a governed workspace
+#   (the platform denies by default, admins never exempt) a table with no rls-policy is refused;
 #   `--default` is the condition for an identified reader no rule matches (absent = refused;
 #   {"false": true} = no rows; to remove a default, recreate the policy). Needs an MCP engine
 #   that reads 1.1.0 (keboola/mcp-server#709). Writes refuse a --dialect other than the project backend (it defaults to the

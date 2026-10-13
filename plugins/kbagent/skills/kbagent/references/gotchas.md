@@ -6370,6 +6370,13 @@ tool, a separate repo/runtime. See [rls-workflow.md](rls-workflow.md) for full r
   project backend and refuses another one (`INVALID_RLS_POLICY` / `INVALID_CLS_POLICY`), because the
   enforcement refuses every read of a table whose policy names another dialect. An `organization`
   policy also reaches projects on the OTHER backend -- prefer `targeted` in a mixed-backend organization.
+- **Wildcard `"*"` and default deny (since vNEXT).** `principal: "*"`, `principals: ["*"]` or `groups: ["*"]`
+  (schema 1.1.0) matches every identified reader (never a reader with no identity); it must be the only entry
+  of its list (`INVALID_RLS_POLICY` / `INVALID_CLS_POLICY` otherwise) and is refused against a metastore
+  whose schema is older than 1.1.0, where `"*"` is a literal that matches nobody. In a governed workspace
+  the platform denies by default: a table with no `rls-policy` is refused (a `cls-policy` alone grants no
+  rows), admins included, so a table is opened to everyone only by an explicit wildcard policy with
+  `{"true": true}`. Workflow: `rls-workflow.md` > "Default deny and the wildcard".
 - **One `rls-policy` object per protected table**, never one blob per project, named by its table: a
   second policy on the same table in the same project answers `ALREADY_EXISTS` (update or delete the
   first). `rls setup` creates one policy per selected table, all sharing the same rules.

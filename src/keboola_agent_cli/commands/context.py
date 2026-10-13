@@ -2092,7 +2092,9 @@ declarative condition primitive per rule (never free-text SQL). Policy schema
 1.1.0: a rule selects identities by principal, principals or IdP `groups`;
 within a policy every rule matching one identity applies and the conditions
 combine with OR; several policies on one table combine with AND (an added
-policy only narrows); a reader with no identity is always refused; an
+policy only narrows); a reader with no identity is always refused;
+the wildcard `"*"` (sole entry of `principal`/`principals`/`groups`) matches every identified reader and is how a table is opened to everyone under default deny; in a governed workspace
+(the platform denies by default, admins never exempt) a table with no rls-policy is refused; an
 optional policy `default` covers an identified reader no rule matches
 (absent = refused). Needs an MCP engine that reads 1.1.0. Same
 metastore/master-token requirements as Semantic Layer above.
