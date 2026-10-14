@@ -35,7 +35,8 @@ Scope / limits:
   (no new side effect); a prior job that *failed* is re-run (a replay after a
   fix should make progress), unless the caller pins the prior job explicitly.
 - A *pending* entry is recorded BEFORE the create. A definite create failure
-  (a 4xx, or a refusal raised before the request left) removes it. An unknown
+  (a 4xx, or a refusal raised before the request left) puts back the entry it
+  replaced, or removes it when there was none. An unknown
   outcome (a timeout, a 5xx, a connection error) keeps it: the job may exist
   even though no response arrived, so a replay that finds the pending entry
   refuses instead of creating a second job.
@@ -240,7 +241,8 @@ def run_idempotent_job(
     ``create()`` (which is then recorded under ``key``).
 
     A pending entry is recorded before ``create()``. A definite create failure
-    removes it. An unknown outcome keeps it, and a later call with the same
+    puts back the entry it replaced (or removes it when there was none). An
+    unknown outcome keeps it, and a later call with the same
     key refuses until the caller checks ``kbagent job list`` and decides with
     ``force_rerun``.
 
@@ -316,7 +318,19 @@ def run_idempotent_job(
         job = create()
     except KeboolaApiError as exc:
         if not _create_outcome_unknown(exc):
-            store.forget(key)
+            # Put back what the pending record replaced, so a failed
+            # --force-rerun keeps the reference to the prior job.
+            if existing is None:
+                store.forget(key)
+            else:
+                store.record(
+                    key,
+                    job_id=existing.job_id,
+                    component_id=existing.component_id,
+                    config_id=existing.config_id,
+                    branch_id=existing.branch_id,
+                    pending=existing.pending,
+                )
         raise
     store.record(
         key,

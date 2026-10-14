@@ -825,6 +825,17 @@ class MergeRequestService(BaseService):
                 "project's active branch pointed at the merged branch, run "
                 "`kbagent branch reset` and `kbagent sync branch-unlink` yourself."
             )
+        if merged_earlier is not None and branch_from_id is None:
+            # A replay after a lost response reads the MR when it is already
+            # published, so branchFromId is null and the cleanup has no branch.
+            cleanup_skipped = True
+            warnings.append(
+                "An earlier call merged this merge request and its source branch id is no "
+                "longer available, so the local cleanup (active-branch reset, sync-mapping "
+                "unlink) was skipped. If the active branch pointed at the merged branch, run "
+                f"`kbagent branch reset --project {alias}` and `kbagent sync branch-unlink` "
+                "yourself."
+            )
         # The merge already happened: a failed local cleanup must not turn it
         # into a failed command -- and the two cleanups are independent, so a
         # failed config write must not skip the mapping unlink (or vice versa).

@@ -2140,7 +2140,8 @@ response. Now:
   keboola.flow`. On older kbagent, a repeated `flow delete` purges the flow.
 - **`job run --idempotency-key` records a pending entry before it creates the
   job.** A definite create failure (a 4xx, or a refusal before the request
-  left) removes the entry. An unknown outcome (a timeout, a 5xx, a connection
+  left) removes the entry, or puts back the prior job's entry after a failed
+  `--force-rerun`. An unknown outcome (a timeout, a 5xx, a connection
   error) keeps it, because the job may exist. A replay with the same key that
   finds the pending entry exits 1 with `INVALID_ARGUMENT` (HTTP 400 over
   `kbagent serve`) and creates nothing. Check with `kbagent job list
@@ -2154,8 +2155,12 @@ response. Now:
 - **`merge-request merge` after a merge that already happened answers
   `status: "already_merged"` with exit 0.** On `MR_NOT_READY_TO_MERGE` kbagent
   reads the merge request. State `published` means an earlier call merged it,
-  so the result says so and the local cleanup (active branch, sync mapping)
-  still runs. Any other state keeps the `MR_NOT_READY_TO_MERGE` error.
+  so the result says so. The local cleanup (active branch, sync mapping) runs
+  only when the source branch id was read before the merge. A later replay
+  reads an already published merge request, which has no source branch id,
+  so the result has `cleanup_skipped: true` and a warning that names
+  `kbagent branch reset` and `kbagent sync branch-unlink`. Any other state
+  keeps the `MR_NOT_READY_TO_MERGE` error.
 
 ## `data-app` JSON output: key for the app's own id is `app_id`
 

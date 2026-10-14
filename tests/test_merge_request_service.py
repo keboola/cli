@@ -591,6 +591,30 @@ class TestMerge:
         # The merge happened, so the local cleanup still runs.
         assert store.get_project(ALIAS).active_branch_id is None
 
+    def test_replay_of_a_published_mr_reports_the_skipped_cleanup(
+        self, store, client_factory, monkeypatch
+    ) -> None:
+        """A later call reads the MR when it is already published, so branchFromId
+        is null: the cleanup cannot run, and the result says so."""
+        factory, mock = client_factory
+        mock.merge_requests.get.side_effect = [
+            _wire_mr(7, "published", branch_from=None),
+            _wire_mr(7, "published", branch_from=None),
+        ]
+        mock.merge_requests.merge.side_effect = self._not_ready()
+        unlinked: list[int] = []
+        monkeypatch.setattr(
+            "keboola_agent_cli.sync.branch_mapping.cleanup_branch_id_from_mapping",
+            unlinked.append,
+        )
+        store.set_project_branch(ALIAS, 123)
+        result = _svc(store, factory).merge(ALIAS, 7)
+        assert result["status"] == "already_merged"
+        assert result["cleanup_skipped"] is True
+        assert any("kbagent branch reset --project" in w for w in result["warnings"])
+        assert store.get_project(ALIAS).active_branch_id == 123
+        assert unlinked == []
+
     def test_not_ready_on_an_open_mr_still_raises(self, store, client_factory) -> None:
         factory, mock = client_factory
         mock.merge_requests.get.side_effect = [

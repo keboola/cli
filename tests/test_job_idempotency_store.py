@@ -374,6 +374,21 @@ class TestPendingEntry:
         job, replayed = _run(store, retry)
         assert job["id"] == "fresh" and replayed is False
 
+    @pytest.mark.parametrize("exc", _DEFINITE_FAILURES, ids=lambda e: str(e.status_code))
+    def test_failed_force_rerun_keeps_the_prior_job(
+        self, store: JobIdempotencyStore, exc: KeboolaApiError
+    ) -> None:
+        _run(store, _Create({"id": "prior", "status": "processing"}))
+        with pytest.raises(KeboolaApiError):
+            _run(store, _FailingCreate(exc), force_rerun=True)
+        assert _entry(store, "K").job_id == "prior"
+        assert _entry(store, "K").pending is False
+
+        replay = _Create({"id": "second", "status": "processing"})
+        job, replayed = _run(store, replay)
+        assert job["id"] == "prior" and replayed is True
+        assert replay.calls == []  # the prior job is still the answer
+
     def test_force_rerun_passes_a_pending_entry(self, store: JobIdempotencyStore) -> None:
         with pytest.raises(KeboolaApiError):
             _run(store, _FailingCreate(_UNKNOWN_OUTCOMES[0]))
