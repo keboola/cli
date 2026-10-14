@@ -6308,3 +6308,25 @@ The package was named `keboola-agent-cli` up to 0.62.0 and is named `keboola-cli
 - **Move the user with two commands, in this order:** `uv tool uninstall keboola-agent-cli`, then the install one-liner from the README. The configuration folder keeps the name `keboola-agent-cli` and is not touched.
 - **The order is load-bearing.** kbagent 0.63.1 and newer updates by installing a second tool, `keboola-cli`, that takes over the `kbagent` executable. `uv tool uninstall keboola-agent-cli` after that also deletes the executable, and the shell reports `command not found`. Reinstall with `uv tool install --force --reinstall "keboola-cli[server] @ <release wheel URL>"`.
 - **Failure banner.** A failed startup update now prints a `Cause:` line with the last line of the uv output, then `Recover with: <command>`, on stderr. Before, it printed only `Auto-update failed; continuing with current version.` and the recovery command. `kbagent update` is unchanged: its `update FAILED:` summary already ends with the last uv line.
+
+## `lineage show` text tree, `--column` and diagrams were misleading
+
+*(since vNEXT, #848)*
+
+- **The text tree nested nodes under the wrong parent.** It sorted edges by depth and indented each by depth, so a node appeared under whatever was printed last on the previous level -- e.g. two producers of two different input tables both shown under a third table with no producer. It is now a real tree; a node reached again is a leaf with `(see above)`.
+- **The walk lost descendants.** A node first reached by a longer path was marked visited, and a shorter path could no longer expand it within `--depth`. Traversal is now breadth-first; `depth` on a JSON edge is the shortest distance.
+- **`[table]` / `[transformation]` prefixes were swallowed by Rich markup** and edges showed the detection method (`(output_mapping)`, `(ai)`). Edges now read `reads` / `writes` / `shares` with an `[AI]` badge; JSON `detection` is unchanged.
+- **`-c COL` was a filter, not a trace** -- it kept every edge without column info and dropped real hops. It now follows `column_mapping` hop by hop from a TABLE and stops where the mapping is unknown (`terminals[]` in JSON, `column mapping unknown beyond this point` in text). Do not read a short trace as "the column has no further lineage": check `terminals[].reason`. A config focus, or `-c` with `-f mermaid|html|er`, now exits 2 (it was silently ignored for diagrams).
+- **Diagrams**: always `graph LR` (upstream used to be drawn right-to-left), focus node highlighted, AI edges dashed, table label = name + bucket, project alias only when the diagram spans several projects. `-f html` defaults to `--depth 3`; `--json`, text, mermaid and er keep 10.
+- **`lineage server` "Both"** used to merge two rendered diagrams in the browser, which broke the ER view; it is now one server-side union (`direction=both`, also on `kbagent serve` `GET /lineage/walk` / `/lineage/mermaid`).
+
+## `lineage build`: branch trees, AI `outputs[]`, and exact `col_map` matching
+
+*(since vNEXT, #846, #847)*
+
+- **Configs were always read from `main/`.** The scan now uses each manifest entry's branch tree (`branchId` missing / 0 / unknown -> `branches[0].path`). A manifest spanning several branch trees is scanned on the default tree only, with a build warning naming how many configs were skipped. Config rows are read relative to their configuration directory.
+- **AI task `code_file` pointed at a non-existent path** for the flat layout and for aliases differing from the directory name. It is now the scanned file; a config whose code file is missing gets no task and is listed in `ai_status.ai_tasks_missing_code_file`.
+- **AI `outputs[]` were silently ignored.** They are now `writes` edges. Use full table ids; a local name resolves through the output mapping, and an ambiguous / project-qualified / unmapped name lands in `ai_status.ai_outputs_unresolved` instead of being guessed. AI columns merge into an existing output-mapping edge rather than duplicating it.
+- **AI `external[]`** (`{system, op: read|write}`) is stored on the configuration and shown in `lineage show` and the diagrams.
+- **`col_map.in_table` matched by substring**, so a mapping could land on the wrong input edge. It must now be the full input table id, its `alias:`-qualified form, or a unique input-mapping destination; anything else is skipped and counted in `ai_col_map_skipped`.
+- `ai_status` keys: `ai_edges_added` (reads + writes), `ai_reads_added`, `ai_writes_added`, `ai_columns_merged`, `ai_external_added`, `ai_col_map_skipped`, `ai_outputs_unresolved`, `ai_tasks_missing_code_file`.

@@ -28,6 +28,15 @@ Pass the directory that *contains* the manifest (flat) or the parent of all
 project subdirs (nested). When the build finds zero projects it emits a
 warning with a hint rather than silently returning an empty graph.
 
+Branch trees *(since vNEXT)*: each configuration is read from the branch tree
+its manifest entry belongs to (`branchId` missing / 0 / unknown -> the
+default tree, `branches[0].path`), not from a hardcoded `main/`. When one
+manifest spans several branch trees only the default tree is scanned and the
+build `warnings` say how many configurations from other trees were skipped
+(lineage node ids are not branch-qualified, so mixing snapshots would silently
+connect the wrong configs). Config rows are read relative to their
+configuration directory, the way `sync pull` writes them.
+
 ## Build lineage
 
 ```bash
@@ -50,6 +59,19 @@ kbagent lineage show -l lineage.json --downstream "my-project:in.c-main.users"
 kbagent lineage show -l lineage.json --upstream "my-project:out.c-analytics.report"
 ```
 
+The text output is a real tree *(since vNEXT)*: every node sits under the node
+it is actually connected to. A node reached a second time is printed as a leaf
+with `(see above)`. Lines start with the node type (`[table]`,
+`[transformation]`, ...) and the edge meaning: `reads`, `writes` or `shares`
+(bucket sharing); `[AI]` marks an edge detected by AI code analysis (the JSON
+keeps `detection` unchanged). A configuration with AI-recorded external systems
+prints them as `external: Slack (write)`, even when it has no table edges.
+
+Traversal is breadth-first: an edge's `depth` is its shortest distance from the
+queried node, and nothing within `--depth` is lost because a longer path
+reached a node first (before vNEXT a shorter second path to an already visited
+node dropped that node's descendants).
+
 ## Column-level detail
 
 ```bash
@@ -59,6 +81,30 @@ kbagent lineage show -l lineage.json --downstream "my-project:in.c-main.users" -
 # Trace a single column through the lineage
 kbagent lineage show -l lineage.json --downstream "my-project:in.c-main.users" -c user_id
 ```
+
+`--column` / `-c` *(since vNEXT)* is a hop-by-hop trace, not a filter:
+
+- The focus must be a **table**; a configuration focus is a usage error (exit 2).
+  `--column` works with text and `--json` only; with `-f mermaid|html|er` it is
+  a usage error (exit 2) instead of being silently ignored.
+- **Upstream** from `T.C`: the producer config of `T`, then its input edges whose
+  `column_mapping` has key `C` (case-insensitive), continuing at that input
+  table with the mapped (possibly renamed) input column.
+- **Downstream** from `T.C`: each consumer whose mapping takes `T.C`, continuing
+  with the output column it produces into the one output table carrying it.
+- Bucket-sharing edges keep the column name. Depth counts graph edges
+  (table -> config -> table = 2).
+- Mappings come from `lineage build --ai` (`col_map`). Where no mapping is known
+  the trace **stops and says so** instead of guessing: text prints `column
+  mapping unknown beyond this point`; JSON lists `terminals[]` entries
+  `{node, column, reason}` with `reason` one of `column_mapping_unknown`,
+  `ambiguous_output_table` (the config writes several tables with that column
+  name; `candidates` lists them) or `output_table_unknown`.
+- JSON edges carry `source_column` / `target_column` and only the relevant
+  mapping entry; the result has `column` (and the legacy `column_filter`).
+
+Before vNEXT `-c` kept every edge without column info and dropped edges whose
+column list lacked the name, so unrelated branches stayed and real hops vanished.
 
 ## Refresh in one step
 
@@ -90,6 +136,50 @@ source code, context, and a code hash for cache invalidation.
 An AI agent reads `.lineage_ai_tasks.json`, analyzes each code block, and
 writes results back to `.lineage_ai_results.json`.
 
+Each task's `code_file` is the configuration's real file on disk
+(`transform.sql` / `code.py` in the scanned branch tree; since vNEXT also right
+for the flat layout and for aliases that differ from the directory name). A
+configuration whose code file does not exist gets no task; it is listed in
+`ai_status.ai_tasks_missing_code_file` (`{config_fqn, code_file}`).
+
+Result entry format (one per `config_fqn`, keep the task's `_code_hash`):
+
+```json
+{
+  "config_fqn": "project:component/config_id",
+  "_code_hash": "hash from task",
+  "inputs": [{"pid": 123, "bucket": "in.c-x", "table": "y", "columns": ["a"]}],
+  "extra_inputs": [{"table_id": "in.c-x.z", "evidence": "code line"}],
+  "outputs": [{"table": "out.c-x.result", "columns": ["b"]}],
+  "col_map": [{"out": "b", "in_table": "in.c-x.y", "in_col": "a", "transform": "direct"}],
+  "external": [{"system": "Slack", "op": "write"}]
+}
+```
+
+Rules *(since vNEXT)*:
+
+- `outputs[]` become `writes` edges (detection `ai`); before vNEXT they were
+  silently ignored. `table` should be the full table id (`out.c-bucket.table`).
+  A local name is resolved through the config's output mapping (its `source`,
+  else a unique destination table name). An ambiguous name, a
+  project-qualified one, or one not in the output mapping is NOT guessed: it is
+  reported in `ai_status.ai_outputs_unresolved` (`{config_fqn, table, reason,
+  candidates}`, reason `ambiguous` | `cross_project_not_supported` |
+  `not_in_output_mapping`). When the edge already exists from the output
+  mapping, the AI columns are merged into it (`ai_columns_merged`) instead of
+  adding a duplicate.
+- `external[]` records systems outside Keboola Storage (`system` non-empty,
+  `op` `read` | `write`); they show in the text tree and as dashed nodes in
+  diagrams.
+- `col_map[].in_table` must be the full input table id (or its
+  `alias:`-qualified form, or an input-mapping destination of that config that
+  maps to exactly one source). Empty or ambiguous values are skipped and
+  counted in `ai_col_map_skipped` -- before vNEXT a substring match could
+  attach a mapping to the wrong input table.
+- `ai_status` reports `ai_edges_added` (reads + writes), `ai_reads_added`,
+  `ai_writes_added`, `ai_columns_merged`, `ai_external_added`,
+  `ai_col_map_skipped`, `ai_outputs_unresolved`, `ai_tasks_missing_code_file`.
+
 **Step 3: Re-build to apply AI results**
 
 ```bash
@@ -118,10 +208,13 @@ projects contain tables with the same name.
 |--------|--------|------|
 | `input_mapping` | Config input mapping definitions | Deterministic |
 | `output_mapping` | Config output mapping definitions | Deterministic |
-| `sql_tokenizer` | SQL parsing for Snowflake table references | Deterministic |
-| `bucket_sharing` | Cross-project sharing from `kbagent lineage show` | Deterministic |
-| `sql_ai` | AI analysis of SQL code | Requires `--ai` |
-| `python_ai` | AI analysis of Python code | Requires `--ai` |
+| `sql_tokenizer` / `sql_tokenizer_cross_project` | SQL parsing for Snowflake table references | Deterministic |
+| `bucket_sharing` | Cross-project bucket sharing (`kbagent sharing edges`) | Deterministic |
+| `ai` / `ai_cross_project` | AI analysis of SQL / Python code | Requires `--ai` |
+
+Detection says *how* an edge was found; `edge_type` (`reads`, `writes`,
+`cross_project_share`) says what it means, and that is what the text tree and
+the diagrams label edges with.
 
 ## Inspect graph contents
 
@@ -154,6 +247,23 @@ kbagent lineage show -l lineage.json --downstream "my-project:in.c-main.users" -
 
 Formats: `text` (default), `mermaid`, `html`, `er`.
 
+Diagrams *(since vNEXT)*:
+
+- Flowcharts are always `graph LR` -- data flows left to right in every view
+  (before vNEXT upstream views were drawn right-to-left). The queried node has
+  a thick border (`focus` class).
+- Edges are labelled `reads` / `writes` / `shares`; AI-detected edges are dashed
+  with an `AI` badge (`-.->|writes · AI|`).
+- Table nodes show the table name, then its bucket; configs show their name and
+  component id. The project alias is prefixed only when the diagram spans more
+  than one project. ER labels are unchanged.
+- AI-recorded external systems render as dashed stadium nodes
+  (`system -> config` for read, `config -> system` for write).
+- `--columns` now also reaches the diagrams (column lists in table nodes).
+- `-f html` defaults to `--depth 3` (a depth-10 diagram of a real project
+  renders unreadably small); an explicit `--depth` wins, and `--json` as well
+  as every other format keep the default of 10.
+
 ## Interactive lineage browser
 
 Start a local web server for interactive lineage exploration:
@@ -165,6 +275,13 @@ kbagent lineage server -l lineage.json --port 8080 --host 0.0.0.0
 
 Opens a sidebar-based node picker with mermaid/ER diagram rendering and
 export capabilities. Useful for exploring large graphs visually.
+
+"Both" directions *(since vNEXT)* are computed server-side as one deduplicated
+union and rendered once (`direction=both` on `/api/query` + `/api/mermaid`, and
+on `kbagent serve`'s `GET /lineage/walk` + `GET /lineage/mermaid`). The browser
+used to merge two rendered diagrams, which corrupted the ER view. A
+configuration with only external-system annotations now renders instead of
+showing "no dependencies".
 
 ## Key details
 

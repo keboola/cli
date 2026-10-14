@@ -175,7 +175,7 @@ def walk(
     depth: int = Query(3, ge=1, le=20),
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
-    """Walk the lineage graph upstream / downstream from a node FQN.
+    """Walk the lineage graph upstream / downstream / both from a node FQN.
 
     Used by the in-browser query bar (``/api/query`` in the standalone
     server). Mirrors the CLI ``lineage show`` semantics but is GET-only
@@ -185,9 +185,7 @@ def walk(
     if not load_path.exists():
         raise HTTPException(status_code=400, detail=f"Lineage cache '{load}' not found.")
     graph = registry.deep_lineage.load_from_cache(load_path)
-    if direction == "upstream":
-        return registry.deep_lineage.query_upstream(graph, node, "", depth)
-    return registry.deep_lineage.query_downstream(graph, node, "", depth)
+    return registry.deep_lineage.query(graph, node, "", depth, direction=_direction(direction))
 
 
 @router.get("/mermaid", response_class=PlainTextResponse, summary="Render lineage as Mermaid")
@@ -200,29 +198,21 @@ def mermaid(
     columns: str = Query("false"),
     registry: ServiceRegistry = Depends(get_registry),
 ) -> PlainTextResponse:
-    """Return a Mermaid diagram for the requested upstream/downstream walk."""
-    from ...services.deep_lineage_service import DeepLineageService
+    """Return a Mermaid diagram for the requested walk.
 
+    ``direction=both`` is rendered ONCE from the union of both walks (#848);
+    the browser used to merge two rendered diagrams, which broke ER output.
+    """
     load_path = Path(load)
     if not load_path.exists():
         raise HTTPException(status_code=400, detail=f"Lineage cache '{load}' not found.")
     graph = registry.deep_lineage.load_from_cache(load_path)
-
-    if direction == "upstream":
-        result = registry.deep_lineage.query_upstream(graph, node, "", depth)
-    else:
-        result = registry.deep_lineage.query_downstream(graph, node, "", depth)
-
-    if "error" in result:
-        return PlainTextResponse("graph LR\n  error[" + result["error"].replace('"', "'") + "]")
-    edges = result.get("edges", [])
-    show_cols = columns == "true"
-    if view == "er":
-        code = DeepLineageService.render_er_diagram(
-            edges, graph, node, show_columns=show_cols, warnings=result.get("warnings")
-        )
-    else:
-        code = DeepLineageService.render_mermaid(
-            edges, graph, direction, node, show_columns=show_cols, warnings=result.get("warnings")
-        )
+    code = registry.deep_lineage.diagram(
+        graph, node, _direction(direction), depth, view=view, show_columns=columns == "true"
+    )
     return PlainTextResponse(code)
+
+
+def _direction(direction: str) -> str:
+    """``upstream`` / ``both`` as given; anything else walks downstream (historical default)."""
+    return direction if direction in ("upstream", "both") else "downstream"
