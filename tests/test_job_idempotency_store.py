@@ -316,19 +316,31 @@ def _run(store: JobIdempotencyStore, create: Any, *, force_rerun: bool = False) 
     )
 
 
+# Classified by errors.request_outcome_unknown, the one shared classifier.
 _UNKNOWN_OUTCOMES = [
+    # A read timeout: the request was sent, the answer was lost.
     KeboolaApiError("read timeout", status_code=0, error_code=ErrorCode.TIMEOUT),
     KeboolaApiError("bad gateway", status_code=502, error_code=ErrorCode.API_ERROR),
-    KeboolaApiError("no route", status_code=0, error_code=ErrorCode.CONNECTION_ERROR),
     KeboolaApiError("gave up", status_code=0, error_code=ErrorCode.RETRY_EXHAUSTED),
+    # A session error has no HTTP status, so the shared classifier cannot
+    # prove the request never left. Kept pending on purpose.
+    KeboolaApiError("login expired", status_code=0, error_code=ErrorCode.SESSION_EXPIRED),
 ]
 
 _DEFINITE_FAILURES = [
     KeboolaApiError("bad body", status_code=400, error_code=ErrorCode.API_ERROR),
     KeboolaApiError("denied", status_code=403, error_code=ErrorCode.ACCESS_DENIED),
     KeboolaApiError("no config", status_code=404, error_code=ErrorCode.NOT_FOUND),
-    KeboolaApiError("bad mode", status_code=0, error_code=ErrorCode.INVALID_ARGUMENT),
+    # A refused connection or a connect timeout: the request never left.
+    KeboolaApiError(
+        "no route", status_code=0, error_code=ErrorCode.CONNECTION_ERROR, retryable=True
+    ),
+    KeboolaApiError("connect timeout", status_code=0, error_code=ErrorCode.TIMEOUT, retryable=True),
 ]
+
+
+def _exc_id(exc: KeboolaApiError) -> str:
+    return f"{exc.status_code}-{exc.error_code}-{exc.retryable}"
 
 
 class TestPendingEntry:
@@ -346,7 +358,7 @@ class TestPendingEntry:
         assert _entry(store, "K").pending is False
         assert _entry(store, "K").job_id == "j1"
 
-    @pytest.mark.parametrize("exc", _UNKNOWN_OUTCOMES, ids=lambda e: str(e.error_code))
+    @pytest.mark.parametrize("exc", _UNKNOWN_OUTCOMES, ids=_exc_id)
     def test_unknown_outcome_keeps_pending_and_replay_refuses(
         self, store: JobIdempotencyStore, exc: KeboolaApiError
     ) -> None:
@@ -362,7 +374,7 @@ class TestPendingEntry:
         assert "--force-rerun" in refused.value.message
         assert replay.calls == []  # no second job
 
-    @pytest.mark.parametrize("exc", _DEFINITE_FAILURES, ids=lambda e: str(e.status_code))
+    @pytest.mark.parametrize("exc", _DEFINITE_FAILURES, ids=_exc_id)
     def test_definite_failure_removes_entry(
         self, store: JobIdempotencyStore, exc: KeboolaApiError
     ) -> None:
@@ -374,7 +386,7 @@ class TestPendingEntry:
         job, replayed = _run(store, retry)
         assert job["id"] == "fresh" and replayed is False
 
-    @pytest.mark.parametrize("exc", _DEFINITE_FAILURES, ids=lambda e: str(e.status_code))
+    @pytest.mark.parametrize("exc", _DEFINITE_FAILURES, ids=_exc_id)
     def test_failed_force_rerun_keeps_the_prior_job(
         self, store: JobIdempotencyStore, exc: KeboolaApiError
     ) -> None:

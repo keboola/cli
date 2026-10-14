@@ -680,8 +680,8 @@ Use `kbagent <command> --help` for full flag details and examples.
     redirects the output to a Storage File tagged `debug-<jobId>` instead of into destination
     buckets -- safe for dry-runs and for reproducing a failing run on a production configuration
     without touching production data. Invalid values exit 2 via Click choice gate.
-    --idempotency-key records a pending entry before the create. An unknown outcome (timeout,
-    5xx, connection error) keeps it, and a replay with the same key then exits 1
+    --idempotency-key records a pending entry before the create. An unknown outcome (read
+    timeout, 5xx, exhausted retries) keeps it, and a replay with the same key then exits 1
     (INVALID_ARGUMENT) without creating a job: check `job list`, then pass --force-rerun.
     --json response shapes by exit code:
       - exit 0 (success): {{status:"ok", data:{{..., logTail?:[...]}}}}

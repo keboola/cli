@@ -2139,10 +2139,11 @@ response. Now:
   `kbagent serve` does the same. Undo with `config restore --component-id
   keboola.flow`. On older kbagent, a repeated `flow delete` purges the flow.
 - **`job run --idempotency-key` records a pending entry before it creates the
-  job.** A definite create failure (a 4xx, or a refusal before the request
-  left) removes the entry, or puts back the prior job's entry after a failed
-  `--force-rerun`. An unknown outcome (a timeout, a 5xx, a connection
-  error) keeps it, because the job may exist. A replay with the same key that
+  job.** A definite create failure (a 4xx, a refused connection, a connect
+  timeout) removes the entry, or puts back the prior job's entry after a
+  failed `--force-rerun`. An unknown outcome (a read timeout, a 5xx,
+  exhausted retries, an expired login) keeps it, because the job may exist.
+  A replay with the same key that
   finds the pending entry exits 1 with `INVALID_ARGUMENT` (HTTP 400 over
   `kbagent serve`) and creates nothing. Check with `kbagent job list
   --component-id C --config-id ID`. If no job started, run again with

@@ -603,9 +603,9 @@ kbagent job list [--project NAME] [--component-id ID] [--config-id ID] [--status
 kbagent job detail --project NAME --job-id ID [--log-tail-lines N]
 kbagent job run --project NAME --component-id ID --config-id ID [--row-id ID ...] [--wait] [--timeout N] [--branch ID] [--mode run|debug] [--variable-values-id ID] [--no-variables] [--poll-strategy exponential|fixed] [--log-tail-lines N] [--idempotency-key KEY] [--force-rerun]
 kbagent job terminate --project NAME (--job-id ID [--job-id ID ...] | --status any|created|waiting|processing [--component-id ID] [--config-id ID] [--branch ID] [--limit N]) [--dry-run] [--yes]
-# job run --idempotency-key: a pending entry is recorded BEFORE the create. A definite failure (4xx)
-#   removes it; an unknown outcome (timeout, 5xx, connection error) keeps it, because the job may
-#   exist. A replay that finds the pending entry exits 1 (INVALID_ARGUMENT, HTTP 400 over serve) and
+# job run --idempotency-key: a pending entry is recorded BEFORE the create. A definite failure (4xx,
+#   refused connection, connect timeout) removes it; an unknown outcome (read timeout, 5xx, exhausted
+#   retries) keeps it, because the job may exist. A replay that finds the pending entry exits 1 (INVALID_ARGUMENT, HTTP 400 over serve) and
 #   creates nothing; check `job list`, then `--force-rerun`. Version gate lives in gotchas.md.
 
 kbagent storage buckets [--project NAME] [--branch ID]

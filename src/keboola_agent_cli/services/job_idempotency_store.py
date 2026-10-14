@@ -34,12 +34,13 @@ Scope / limits:
 - Policy: a prior job that is still running or finished non-failed is returned
   (no new side effect); a prior job that *failed* is re-run (a replay after a
   fix should make progress), unless the caller pins the prior job explicitly.
-- A *pending* entry is recorded BEFORE the create. A definite create failure
-  (a 4xx, or a refusal raised before the request left) puts back the entry it
-  replaced, or removes it when there was none. An unknown
-  outcome (a timeout, a 5xx, a connection error) keeps it: the job may exist
-  even though no response arrived, so a replay that finds the pending entry
-  refuses instead of creating a second job.
+- A *pending* entry is recorded BEFORE the create. The outcome of a failed
+  create is classified by :func:`~keboola_agent_cli.errors.request_outcome_unknown`.
+  A definite failure (a 4xx, a refused connection, a connect timeout) puts
+  back the entry it replaced, or removes it when there was none. An unknown
+  outcome (a read timeout, a 5xx, exhausted retries) keeps it: the job may
+  exist even though no response arrived, so a replay that finds the pending
+  entry refuses instead of creating a second job.
 """
 
 from __future__ import annotations
@@ -57,7 +58,7 @@ from typing import Any
 import filelock
 
 from ..constants import JOB_IDEMPOTENCY_LOCK_TIMEOUT
-from ..errors import ConfigError, ErrorCode, KeboolaApiError
+from ..errors import ConfigError, ErrorCode, KeboolaApiError, request_outcome_unknown
 
 logger = logging.getLogger(__name__)
 
@@ -317,7 +318,7 @@ def run_idempotent_job(
     try:
         job = create()
     except KeboolaApiError as exc:
-        if not _create_outcome_unknown(exc):
+        if not request_outcome_unknown(exc):
             # Put back what the pending record replaced, so a failed
             # --force-rerun keeps the reference to the prior job.
             if existing is None:
@@ -340,22 +341,6 @@ def run_idempotent_job(
         branch_id=branch_id,
     )
     return job, False
-
-
-def _create_outcome_unknown(exc: KeboolaApiError) -> bool:
-    """Could the failed create still have started a job?
-
-    A 5xx, a timeout, a connection error or exhausted retries leave the
-    outcome unknown. Every other error is definite: a 4xx is a refusal, and a
-    status-0 error with another code was raised before the request left.
-    """
-    if exc.status_code >= 500:
-        return True
-    return exc.error_code in (
-        ErrorCode.TIMEOUT,
-        ErrorCode.CONNECTION_ERROR,
-        ErrorCode.RETRY_EXHAUSTED,
-    )
 
 
 def _safe_fetch(fetch: Callable[[str], dict[str, Any]], job_id: str) -> dict[str, Any] | None:
