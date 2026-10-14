@@ -3206,6 +3206,10 @@ API token already stored globally.
   exist yet, so it is skipped and the result's `warnings` names it.
   `GET /auth/projects` (the picker's data source) skips it too; its result
   has no `warnings` key. Pass `--stack` to choose the stack explicitly.
+  A project ID in `KBAGENT_PROJECT` that is registered under several aliases
+  follows the same rule: `CONFIG_ERROR` listing the aliases in `auth status`
+  and `auth logout`, a `warnings` entry in the other three. After a skipped
+  value, the stack comes from the active project, then the sole project.
 
 ## `KBAGENT_PROJECT` environment variable
 

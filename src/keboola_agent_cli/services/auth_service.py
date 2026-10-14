@@ -38,7 +38,6 @@ from ..config_store import ConfigStore, validate_alias_format
 from ..constants import AUTH_CALLBACK_TIMEOUT, ENV_KBAGENT_PROJECT
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..models import normalize_stack_url
-from ..project_ref import resolve_project_ref
 from ._auth_registration import (
     SESSION_UNSUPPORTED_FEATURES,
     ProjectCandidate,
@@ -52,6 +51,7 @@ from ._auth_registration import (
     require_single_selection_mode,
     resolve_selections,
 )
+from .base import NoImplicitProjectError, resolve_implicit_alias
 
 # Error codes from `provider.introspect()` (via `AuthClient.refresh`) that mean
 # "could not reach the auth service", as opposed to a definitive answer about
@@ -1098,14 +1098,16 @@ class AuthService:
         explicit ``--stack`` is normalized as a URL; otherwise the stack of
         the project that a single-project command would use without
         ``--project`` -- ``KBAGENT_PROJECT``, then the default project, then
-        the sole registered project (the ``resolve_pinned_alias`` order);
+        the sole registered project, through the shared
+        :func:`~keboola_agent_cli.services.base.resolve_implicit_alias`;
         otherwise a `ConfigError` naming the fix. With ``--stack`` given,
         ``KBAGENT_PROJECT`` is not read.
 
-        A ``KBAGENT_PROJECT`` that names no registered project is a
-        `ConfigError` (``status``, ``logout``), except when the caller passes
-        ``warnings``: the login and registration commands may run before
-        that alias exists, so they skip it with a warning and go on.
+        A ``KBAGENT_PROJECT`` that names no registered project, or an ID
+        registered under several aliases, is a `ConfigError` (``status``,
+        ``logout``), except when the caller passes ``warnings``: the login and
+        registration commands may run before that alias exists, so they skip
+        it with a warning and go on down the cascade.
         """
         if stack:
             project = self._config_store.get_project(stack)
@@ -1118,44 +1120,27 @@ class AuthService:
                     f"'{stack}' is not a valid stack URL or a registered project alias: {exc}"
                 ) from exc
 
+        skipped = warnings if warnings is not None else []
+
+        def _skip_env(message: str) -> None:
+            skipped.append(f"{message} It was ignored when choosing the stack.")
+
         config = self._config_store.load()
-        env_value = os.environ.get(ENV_KBAGENT_PROJECT)
-        if env_value:
-            env_project = config.projects.get(resolve_project_ref(config.projects, env_value))
-            if env_project is not None:
-                return normalize_stack_url(env_project.stack_url)
-            message = (
-                f"{ENV_KBAGENT_PROJECT}='{env_value}' points to a project that is not "
-                "registered (no alias or project ID matches it)."
+        try:
+            alias, _source = resolve_implicit_alias(
+                config,
+                os.environ.get(ENV_KBAGENT_PROJECT),
+                env_fix="Pass --stack <url-or-alias>, register the project, or unset the env var.",
+                on_env_error=_skip_env if warnings is not None else None,
             )
-            if warnings is None:
-                raise ConfigError(
-                    f"{message} Pass --stack <url-or-alias>, register the project, "
-                    "or unset the env var."
-                )
-            warnings.append(f"{message} It was ignored when choosing the stack.")
-
-        if config.default_project:
-            project = config.projects.get(config.default_project)
-            if project is None:
-                # Same refusal as `resolve_pinned_alias`: never fall through
-                # to the sole project's stack behind a stale active project.
-                raise ConfigError(
-                    f"Pinned default project '{config.default_project}' is not registered. "
-                    "Run 'kbagent project use <alias>' to repair."
-                )
-            return normalize_stack_url(project.stack_url)
-
-        if len(config.projects) == 1:
-            (sole,) = config.projects.values()
-            return normalize_stack_url(sole.stack_url)
-
-        raise ConfigError(
-            "No stack to log into -- login is not stack discovery. Pass "
-            "--stack <url-or-alias>, set KBAGENT_PROJECT to a registered alias, "
-            "or select a default project first (`kbagent project add` / "
-            "`kbagent project use <alias>`)."
-        )
+        except NoImplicitProjectError:
+            raise ConfigError(
+                "No stack to log into -- login is not stack discovery. Pass "
+                "--stack <url-or-alias>, set KBAGENT_PROJECT to a registered alias, "
+                "or select a default project first (`kbagent project add` / "
+                "`kbagent project use <alias>`)."
+            ) from None
+        return normalize_stack_url(config.projects[alias].stack_url)
 
 
 __all__ = [

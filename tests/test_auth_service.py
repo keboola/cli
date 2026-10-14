@@ -375,6 +375,54 @@ class TestResolveStackUrlChain:
             service._resolve_stack_url(None)
         assert "'gone' is not registered" in str(exc_info.value)
 
+    def test_status_with_stale_active_project_is_config_error(self, store, state_store) -> None:
+        store.add_project(
+            "b", ProjectConfig(stack_url=OTHER_STACK_URL, token=STATIC_TOKEN, project_id=2)
+        )
+        config = store.load()
+        config.default_project = "gone"
+        store.save(config)
+        service = _make_service(store, state_store, _FakeAuthClient())
+        with pytest.raises(ConfigError, match="'gone' is not registered"):
+            service.status()
+
+    def _ambiguous_id(self, store: ConfigStore) -> None:
+        """Project ID 7 under two static aliases on two stacks; ``a`` stays active."""
+        self._two_stacks(store)
+        store.add_project("x", ProjectConfig(stack_url=STACK_URL, token=STATIC_TOKEN, project_id=7))
+        store.add_project(
+            "y", ProjectConfig(stack_url=OTHER_STACK_URL, token=STATIC_TOKEN, project_id=7)
+        )
+
+    def test_status_with_ambiguous_env_id_is_config_error(
+        self, store, state_store, monkeypatch
+    ) -> None:
+        self._ambiguous_id(store)
+        monkeypatch.setenv("KBAGENT_PROJECT", "7")
+        service = _make_service(store, state_store, _FakeAuthClient())
+        with pytest.raises(ConfigError) as exc_info:
+            service.status()
+        assert "'x'" in exc_info.value.message
+        assert "'y'" in exc_info.value.message
+
+    def test_login_with_ambiguous_env_id_warns_and_uses_active_project(
+        self, store, state_store, monkeypatch
+    ) -> None:
+        self._ambiguous_id(store)
+        monkeypatch.setenv("KBAGENT_PROJECT", "7")
+        client = _FakeAuthClient()
+        client.exchange_response = _tokens()
+        client.introspect_response = _introspect()
+        service = _make_service(store, state_store, client)
+
+        result = service.login()
+
+        assert result.stack_url == STACK_URL
+        assert any(
+            "KBAGENT_PROJECT='7'" in w and "ignored when choosing the stack" in w
+            for w in result.warnings
+        )
+
     def test_several_projects_without_active_project_raise(self, store, state_store) -> None:
         self._two_stacks(store)
         store.add_project("c", ProjectConfig(stack_url=STACK_URL, token=STATIC_TOKEN, project_id=3))
