@@ -18,6 +18,7 @@ from keboola_agent_cli.errors import ConfigError, KeboolaApiError
 from keboola_agent_cli.models import ProjectConfig, TokenVerifyResponse
 from keboola_agent_cli.services.project_service import ProjectService
 from keboola_agent_cli.services.sync_service import SyncService
+from keboola_agent_cli.sync.manifest import load_manifest
 
 STACK_URL = "https://connection.keboola.com"
 TOKEN = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
@@ -285,3 +286,49 @@ class TestCliExitCode:
         assert "project 999" in data["error"]["message"]
         assert "project 258" in data["error"]["message"]
         client.list_components_with_configs.assert_not_called()
+
+
+class TestCloneTargetWithoutStoredId:
+    """sync clone writes the verified target ID, so its own diff and push pass the check."""
+
+    @pytest.mark.parametrize("dry_run", [True, False])
+    def test_clone_writes_verified_target_id(self, tmp_path: Path, dry_run: bool) -> None:
+        source = tmp_path / "golden"
+        _write_manifest(source, project_id=999)
+        target_dir = tmp_path / "clone"
+        client = _client(verified_project_id=258)
+        svc = SyncService(
+            config_store=_store(tmp_path, project_id=None), client_factory=lambda u, t: client
+        )
+
+        result = svc.clone_project(
+            source=source,
+            target_alias="prod",
+            target_dir=target_dir,
+            overrides={"create_buckets": False},
+            dry_run=dry_run,
+        )
+
+        assert result["status"] == ("dry_run" if dry_run else "no_changes")
+        assert load_manifest(target_dir).project.id == 258
+
+    def test_rerun_repairs_target_manifest_with_id_zero(self, tmp_path: Path) -> None:
+        """A clone made before the check wrote id 0; a re-run sets the verified ID."""
+        source = tmp_path / "golden"
+        _write_manifest(source, project_id=999)
+        target_dir = tmp_path / "clone"
+        _write_manifest(target_dir, project_id=0)
+        client = _client(verified_project_id=258)
+        svc = SyncService(
+            config_store=_store(tmp_path, project_id=None), client_factory=lambda u, t: client
+        )
+
+        result = svc.clone_project(
+            source=source,
+            target_alias="prod",
+            target_dir=target_dir,
+            overrides={"create_buckets": False},
+        )
+
+        assert result["status"] == "no_changes"
+        assert load_manifest(target_dir).project.id == 258

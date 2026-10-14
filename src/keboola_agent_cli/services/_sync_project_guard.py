@@ -28,6 +28,32 @@ def _host(value: str) -> str:
     return urlparse(value).netloc.lower()
 
 
+def verified_project_id(
+    service: SyncService, alias: str, project: ProjectConfig, project_root: Path
+) -> int:
+    """Return the project ID of *project* from one token verification call.
+
+    Raises:
+        ConfigError: the call fails or returns no project ID.
+    """
+    client = service._client_factory(project.stack_url, project.token)
+    try:
+        with client:
+            project_id = client.verify_token().project_id
+    except KeboolaApiError as exc:
+        raise ConfigError(
+            f"Cannot check that {project_root} belongs to project '{alias}': "
+            f"token verification failed ({exc.message}). Set a valid token with "
+            f"'kbagent project edit --project {alias} --token-stdin'."
+        ) from None
+    if project_id is None:
+        raise ConfigError(
+            f"Cannot check that {project_root} belongs to project '{alias}': "
+            "token verification returned no project ID."
+        )
+    return project_id
+
+
 def load_project_manifest(
     service: SyncService,
     alias: str,
@@ -49,21 +75,7 @@ def load_project_manifest(
     project_host = _host(project.stack_url)
     project_id = project.project_id
     if project_id is None and tree_host == project_host:
-        client = service._client_factory(project.stack_url, project.token)
-        try:
-            with client:
-                project_id = client.verify_token().project_id
-        except KeboolaApiError as exc:
-            raise ConfigError(
-                f"Cannot check that {project_root} belongs to project '{alias}': "
-                f"token verification failed ({exc.message}). Set a valid token with "
-                f"'kbagent project edit --project {alias} --token-stdin'."
-            ) from None
-        if project_id is None:
-            raise ConfigError(
-                f"Cannot check that {project_root} belongs to project '{alias}': "
-                "token verification returned no project ID."
-            )
+        project_id = verified_project_id(service, alias, project, project_root)
     if tree_host == project_host and manifest.project.id == project_id:
         return manifest
     tree = f"project {manifest.project.id}"

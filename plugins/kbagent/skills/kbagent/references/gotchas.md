@@ -883,6 +883,10 @@ Before this, only `sync init --adopt-existing` and `config new --push
 - To copy configs from one project to another, use `sync clone`. The
   promotion pipeline is not affected: its directory manifest belongs to the
   destination project.
+- `sync clone` writes the target project ID into the copied manifest. For a
+  target without a stored `project_id`, it reads the ID from token
+  verification. An older clone of such a target wrote ID `0`; a re-run of
+  `sync clone` sets the real ID.
 
 ## `sync pull` protects edits in `transform.sql` / `code.py` / `_description.md`, not only `_config.yml`
 
