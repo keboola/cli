@@ -42,6 +42,11 @@ def print_ai_status(formatter: OutputFormatter, ai_status: dict[str, Any]) -> No
                 for u in ai_status.get("ai_outputs_unresolved") or []
             ],
         )
+        _print_bounded(
+            formatter,
+            "AI results stale (code changed, not applied)",
+            list(ai_status.get("ai_results_stale") or []),
+        )
     if ai_status.get("ai_tasks_generated"):
         console.print(
             f"\n  [bold]AI tasks generated: {ai_status['ai_tasks_generated']}[/bold]"

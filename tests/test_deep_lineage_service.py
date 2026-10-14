@@ -1253,7 +1253,6 @@ class TestRenderErDiagramXssRegression:
             edges=edges,
             graph=graph,
             node_fqn=next(iter(graph.tables)),
-            show_columns=False,
         )
         assert "<script>" not in rendered
         assert "</div>" not in rendered
@@ -1269,7 +1268,6 @@ class TestRenderErDiagramXssRegression:
             edges=edges,
             graph=graph,
             node_fqn=next(iter(graph.tables)),
-            show_columns=False,
         )
         assert "<img" not in rendered
         assert "&lt;img" in rendered

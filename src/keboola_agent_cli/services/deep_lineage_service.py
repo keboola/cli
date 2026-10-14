@@ -7,7 +7,6 @@ and optionally uses AI to parse SQL/Python code for hidden dependencies.
 Architecture: reads from disk only, no API calls. Requires sync'd data.
 """
 
-import html
 import json
 import logging
 import re
@@ -19,6 +18,7 @@ from typing import Any
 import yaml
 
 from ..config_store import ConfigStore
+from ._lineage_er import render_er_diagram
 from ._lineage_mermaid import (
     escape_mermaid_label,
     render_html,
@@ -603,9 +603,7 @@ class DeepLineageService:
             return "graph LR\n  error[" + result["error"].replace('"', "'") + "]"
         warnings = result.get("warnings")
         if view == "er":
-            return self.render_er_diagram(
-                result["edges"], graph, result["node"], show_columns=show_columns, warnings=warnings
-            )
+            return self.render_er_diagram(result["edges"], graph, result["node"], warnings=warnings)
         return self.render_mermaid(
             result["edges"], graph, direction, result["node"], show_columns, warnings
         )
@@ -996,147 +994,7 @@ class DeepLineageService:
     _escape_mermaid_label = staticmethod(escape_mermaid_label)
     render_mermaid = staticmethod(render_mermaid)
 
-    @staticmethod
-    def render_er_diagram(
-        edges: list[dict],
-        graph: LineageGraph,
-        node_fqn: str,
-        show_columns: bool = False,
-        warnings: list[str] | None = None,
-    ) -> str:
-        """Render lineage as a mermaid ER diagram.
-
-        Without show_columns: entities with name/row count + relationships.
-        With show_columns: full column list with PK markers and AI mappings.
-
-        ``warnings`` carries non-fatal notes -- the ambiguity warning of #568,
-        typically. ``erDiagram`` has no free-standing annotation the way a
-        flowchart does, and the HTTP surfaces return this as plain text with
-        no metadata channel, so the notes ride as one relationship-less entity.
-        Dropping them would leave an ER viewer with one project's answer
-        looking like the whole picture, which is the bug itself (#584).
-        """
-        lines: list[str] = ["erDiagram"]
-
-        if warnings:
-            lines.append('    "⚠ note" {')
-            for index, warning in enumerate(warnings, start=1):
-                # html.escape(quote=True) also neutralises the double quotes
-                # that would otherwise terminate the attribute comment.
-                attribute = "warning" if len(warnings) == 1 else f"warning_{index}"
-                lines.append(f'        string {attribute} "{html.escape(warning, quote=True)}"')
-            lines.append("    }")
-
-        # Collect all table FQNs and their column mappings
-        table_fqns: set[str] = set()
-        config_fqns: set[str] = set()
-        # edge source/target -> column_mapping
-        col_maps: dict[str, dict[str, str]] = {}
-
-        if node_fqn in graph.tables:
-            table_fqns.add(node_fqn)
-
-        for edge in edges:
-            src, tgt = edge["source"], edge["target"]
-            if src in graph.tables:
-                table_fqns.add(src)
-            if tgt in graph.tables:
-                table_fqns.add(tgt)
-            if src in graph.configurations:
-                config_fqns.add(src)
-            if tgt in graph.configurations:
-                config_fqns.add(tgt)
-            cm = edge.get("column_mapping", {})
-            if cm:
-                # Key by config FQN (the node that transforms data)
-                cfg = tgt if tgt in graph.configurations else src
-                col_maps[cfg] = {**col_maps.get(cfg, {}), **cm}
-
-        # Emit entity definitions for tables
-        for fqn in sorted(table_fqns):
-            t = graph.tables.get(fqn)
-            if not t:
-                continue
-            entity_name = f"{t.project_alias}:{t.name}"
-            # html.escape covers <>&" so an API-supplied table or config
-            # name like </div><script>...</script> cannot inject HTML into
-            # the generated lineage page (issue #269 sec-05). Mermaid
-            # renders HTML entities back to their characters in SVG text.
-            safe_name = html.escape(entity_name, quote=True)
-
-            if not show_columns:
-                # Compact: just entity name with row count as single attribute
-                lines.append(f'    "{safe_name}" {{')
-                lines.append(f'        int rows "{t.rows_count:,} rows, {len(t.columns)} cols"')
-                lines.append("    }")
-                continue
-
-            # Full column list
-            lines.append(f'    "{safe_name}" {{')
-            pk_cols = set(t.primary_key) if t.primary_key else set()
-            for col in t.columns[:30]:
-                safe_col = re.sub(r"[^a-zA-Z0-9_]", "_", col)
-                pk_marker = " PK" if col in pk_cols else ""
-                comment = ""
-                for cfg_fqn, cm in col_maps.items():
-                    for out_col, src_expr in cm.items():
-                        if src_expr.endswith(f".{col}") and fqn in src_expr.replace(f".{col}", ""):
-                            cfg = graph.configurations.get(cfg_fqn)
-                            cfg_label = cfg.config_name if cfg else cfg_fqn.split("/")[-1]
-                            safe_label = html.escape(cfg_label, quote=True)
-                            comment = f' "to {out_col} via {safe_label}"'
-                            break
-                        if out_col == col:
-                            src_short = src_expr.split(".")[-1]
-                            comment = f' "from {src_short}"'
-                            break
-                lines.append(f"        string {safe_col}{pk_marker}{comment}")
-            if len(t.columns) > 30:
-                lines.append(f'        string _more_ "+{len(t.columns) - 30} more columns"')
-            lines.append("    }")
-
-        # Emit relationships: table --via config--> table
-        # Find pairs: input table -> config -> output table
-        input_of: dict[str, list[str]] = {}  # config -> [input table fqns]
-        output_of: dict[str, list[str]] = {}  # config -> [output table fqns]
-        for edge in edges:
-            src, tgt = edge["source"], edge["target"]
-            if src in graph.tables and tgt in config_fqns:
-                input_of.setdefault(tgt, []).append(src)
-            if src in config_fqns and tgt in graph.tables:
-                output_of.setdefault(src, []).append(tgt)
-
-        seen_rels: set[tuple[str, str]] = set()
-        for cfg_fqn in config_fqns:
-            cfg = graph.configurations.get(cfg_fqn)
-            cfg_label = cfg.config_name if cfg else cfg_fqn.split("/")[-1]
-            safe_label = html.escape(cfg_label, quote=True)
-            inputs = input_of.get(cfg_fqn, [])
-            outputs = output_of.get(cfg_fqn, [])
-            for inp_fqn in inputs:
-                for out_fqn in outputs:
-                    inp_t = graph.tables.get(inp_fqn)
-                    out_t = graph.tables.get(out_fqn)
-                    if not inp_t or not out_t:
-                        continue
-                    key = (inp_fqn, out_fqn)
-                    if key in seen_rels:
-                        continue
-                    seen_rels.add(key)
-                    inp_name = html.escape(f"{inp_t.project_alias}:{inp_t.name}", quote=True)
-                    out_name = html.escape(f"{out_t.project_alias}:{out_t.name}", quote=True)
-                    lines.append(f'    "{inp_name}" ||--o{{ "{out_name}" : "{safe_label}"')
-
-            # If config has only inputs and no outputs (writer), show as relationship to config
-            if inputs and not outputs:
-                for inp_fqn in inputs:
-                    inp_t = graph.tables.get(inp_fqn)
-                    if not inp_t:
-                        continue
-                    inp_name = html.escape(f"{inp_t.project_alias}:{inp_t.name}", quote=True)
-                    lines.append(f'    "{inp_name}" }}o--|| "{safe_label}" : "writes"')
-
-        return "\n".join(lines)
+    render_er_diagram = staticmethod(render_er_diagram)
 
     render_html = staticmethod(render_html)
 

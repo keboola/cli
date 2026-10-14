@@ -77,7 +77,16 @@ node dropped that node's descendants).
 ```bash
 # Show column-level mappings for all tables in the result
 kbagent lineage show -l lineage.json --downstream "my-project:in.c-main.users" --columns
+```
 
+In the text tree `--columns` prints the mapping (or column list) of each EDGE
+under that edge's line, including a `(see above)` repeat -- two configs reading
+the same table each show their own mapping (since vNEXT). Columns of a
+configuration reading one table through several input mappings are merged into
+one edge. AI-recorded `external:` systems print under every configuration in
+the tree (at its first occurrence), not only under the queried node.
+
+```bash
 # Trace a single column through the lineage
 kbagent lineage show -l lineage.json --downstream "my-project:in.c-main.users" -c user_id
 ```
@@ -175,10 +184,19 @@ Rules *(since vNEXT)*:
   `alias:`-qualified form, or an input-mapping destination of that config that
   maps to exactly one source). Empty or ambiguous values are skipped and
   counted in `ai_col_map_skipped` -- before vNEXT a substring match could
-  attach a mapping to the wrong input table.
+  attach a mapping to the wrong input table. A config that reads the same
+  table under two input-mapping aliases is NOT ambiguous: the mapping goes
+  onto every reads edge of that one source.
+- A result whose `_code_hash` differs from the configuration's current code
+  hash is **stale** (the code changed after the agent answered) and is NOT
+  applied -- no inputs, outputs, external systems or column mappings. It is
+  listed in `ai_status.ai_results_stale` (config FQNs; human build output
+  prints the count) and the same build re-emits a task for it. A result with
+  no `_code_hash` is applied as before, so always echo the task's hash.
 - `ai_status` reports `ai_edges_added` (reads + writes), `ai_reads_added`,
   `ai_writes_added`, `ai_columns_merged`, `ai_external_added`,
-  `ai_col_map_skipped`, `ai_outputs_unresolved`, `ai_tasks_missing_code_file`.
+  `ai_col_map_skipped`, `ai_outputs_unresolved`, `ai_results_stale`,
+  `ai_tasks_missing_code_file`.
 
 **Step 3: Re-build to apply AI results**
 
@@ -238,8 +256,8 @@ kbagent lineage show -l lineage.json --downstream "my-project:in.c-main.users"
 # Mermaid diagram (paste into mermaid.live or GitHub markdown)
 kbagent lineage show -l lineage.json --downstream "my-project:in.c-main.users" --format mermaid
 
-# ER diagram (entity-relationship style with column details)
-kbagent lineage show -l lineage.json --downstream "my-project:in.c-main.users" --format er --columns
+# ER diagram (entity-relationship style; always lists table columns)
+kbagent lineage show -l lineage.json --downstream "my-project:in.c-main.users" --format er
 
 # Self-contained HTML page with interactive diagram
 kbagent lineage show -l lineage.json --downstream "my-project:in.c-main.users" --format html
@@ -259,7 +277,14 @@ Diagrams *(since vNEXT)*:
   than one project. ER labels are unchanged.
 - AI-recorded external systems render as dashed stadium nodes
   (`system -> config` for read, `config -> system` for write).
-- `--columns` now also reaches the diagrams (column lists in table nodes).
+- `--columns` now also reaches the flowcharts (column lists in table nodes);
+  `-f html --columns` saves to `lineage_<dir>_<node>_columns.html`, so it does
+  not overwrite the plain diagram.
+- The ER view (`-f er`, and the `lineage server` ER tab) always lists each
+  table's columns as attributes -- before vNEXT it showed only a rows/cols
+  count unless `--columns` was given; `--columns` no longer changes it.
+  External systems render as `ext:<system>` entities related to the tables
+  their config touches (or to the config itself when it touches none).
 - `-f html` defaults to `--depth 3` (a depth-10 diagram of a real project
   renders unreadably small); an explicit `--depth` wins, and `--json` as well
   as every other format keep the default of 10.

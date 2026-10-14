@@ -71,16 +71,31 @@ def walk_edges(graph: LineageGraph, fqn: str, depth: int, direction: str) -> lis
 
 
 def union_edges(*edge_lists: list[dict]) -> list[dict]:
-    """Concatenate edge lists, dropping repeats of the same edge."""
-    seen: set[tuple[str, str, str, str]] = set()
-    merged: list[dict] = []
+    """Concatenate edge lists, merging repeats of the same edge.
+
+    Two edges with the same endpoints, type and detection are one edge for the
+    reader -- but a configuration that loads one source table through several
+    input mappings (different column selections) has one graph edge per
+    mapping. Keeping only the first dropped the other mappings' columns, so
+    the repeats are folded in: ``columns`` unioned in order, ``column_mapping``
+    merged. The merged dict is a copy; the graph's own lists are not touched.
+    """
+    merged: dict[tuple[str, str, str, str], dict] = {}
     for edges in edge_lists:
         for edge in edges:
             key = (edge["source"], edge["target"], edge["edge_type"], edge["detection"])
-            if key not in seen:
-                seen.add(key)
-                merged.append(edge)
-    return merged
+            first = merged.get(key)
+            if first is None:
+                merged[key] = {
+                    **edge,
+                    "columns": list(edge.get("columns") or []),
+                    "column_mapping": dict(edge.get("column_mapping") or {}),
+                }
+                continue
+            first["columns"] += [c for c in edge.get("columns") or [] if c not in first["columns"]]
+            for out_col, src in (edge.get("column_mapping") or {}).items():
+                first["column_mapping"].setdefault(out_col, src)
+    return list(merged.values())
 
 
 # ---------------------------------------------------------------------------

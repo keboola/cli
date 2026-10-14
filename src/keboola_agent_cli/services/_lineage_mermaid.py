@@ -13,6 +13,7 @@ system annotations use exactly that).
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from ..constants import MERMAID_SCRIPT_ATTRS
@@ -50,10 +51,18 @@ def _project(fqn: str) -> str:
     return fqn.partition(":")[0] if ":" in fqn else ""
 
 
-def _split_table_id(table_id: str) -> tuple[str, str]:
-    """``out.c-b.t`` -> (``out.c-b``, ``t``); an id without a dot has no bucket."""
+@dataclass(frozen=True)
+class TableIdParts:
+    """A Storage table id split into its bucket and table name."""
+
+    bucket: str
+    name: str
+
+
+def _split_table_id(table_id: str) -> TableIdParts:
+    """``out.c-b.t`` -> bucket ``out.c-b``, name ``t``; an id without a dot has no bucket."""
     bucket, _, name = table_id.rpartition(".")
-    return bucket, name or table_id
+    return TableIdParts(bucket=bucket, name=name or table_id)
 
 
 def _node_line(
@@ -65,8 +74,8 @@ def _node_line(
         return f"{prefix}{cfg.config_name}<br/>{cfg.component_id}", "config"
     table = graph.tables.get(fqn)
     if table is None:
-        bucket, name = _split_table_id(fqn.partition(":")[2] if ":" in fqn else fqn)
-        parts = [f"{prefix}{name}"] + ([bucket] if bucket else [])
+        split = _split_table_id(fqn.partition(":")[2] if ":" in fqn else fqn)
+        parts = [f"{prefix}{split.name}"] + ([split.bucket] if split.bucket else [])
         return "<br/>".join(parts), "table"
     parts = [f"{prefix}{table.name}", table.bucket_id]
     parts.append(f"{len(table.columns)} cols, {table.rows_count:,} rows")

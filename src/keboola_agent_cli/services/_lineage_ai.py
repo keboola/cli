@@ -72,6 +72,7 @@ class AiApplyStats:
     external_added: int = 0
     col_map_skipped: int = 0
     unresolved: list[UnresolvedOutput] = field(default_factory=list)
+    stale: list[str] = field(default_factory=list)
 
     def to_status(self) -> dict[str, Any]:
         return {
@@ -83,6 +84,7 @@ class AiApplyStats:
             "ai_external_added": self.external_added,
             "ai_col_map_skipped": self.col_map_skipped,
             "ai_outputs_unresolved": [asdict(u) for u in self.unresolved],
+            "ai_results_stale": list(self.stale),
         }
 
 
@@ -110,6 +112,14 @@ def apply_ai_results_file(
             continue
         config = graph.configurations.get(entry.get("config_fqn", ""))
         if config is None:
+            continue
+        # A result answered for code that has changed since describes code
+        # that no longer exists: applying it would draw edges the current
+        # code may not have. generate_ai_tasks re-emits a task for it. A
+        # result without a hash (hand-written) is trusted as before.
+        result_hash = entry.get("_code_hash")
+        if result_hash and result_hash != code_hash(config):
+            stats.stale.append(config.fqn)
             continue
         _apply_inputs(graph, config, entry, project_id_to_alias, stats)
         _apply_outputs(graph, config, entry.get("outputs") or [], stats)
@@ -268,11 +278,15 @@ def _table_id(edge: Edge) -> str:
     return edge.source_fqn.split(":", 1)[-1]
 
 
-def _resolve_col_map_edge(graph: LineageGraph, config: Configuration, in_table: str) -> Edge | None:
-    """Find the single ``reads`` edge of ``config`` that ``in_table`` names exactly.
+def _resolve_col_map_edges(graph: LineageGraph, config: Configuration, in_table: str) -> list[Edge]:
+    """Find the ``reads`` edges of ``config`` from the ONE source ``in_table`` names.
 
     ``in_table`` may be the input table id (or its ``alias:table`` FQN), or an
     input-mapping destination alias of this config that maps to one source.
+    A config reading one table under two aliases has two edges from the same
+    source: that is not ambiguous, so ambiguity is decided on DISTINCT source
+    FQNs and the mapping goes onto every edge of the single source. Empty when
+    nothing, or more than one source, matches.
     """
     reads = [e for e in graph.edges if e.target_fqn == config.fqn and e.edge_type == "reads"]
     matches = [e for e in reads if in_table in (e.source_fqn, _table_id(e))]
@@ -285,13 +299,13 @@ def _resolve_col_map_edge(graph: LineageGraph, config: Configuration, in_table: 
         if len(sources) == 1:
             source = sources.pop()
             matches = [e for e in reads if _table_id(e) == source]
-    return matches[0] if len(matches) == 1 else None
+    return matches if len({e.source_fqn for e in matches}) == 1 else []
 
 
 def _apply_col_map(
     graph: LineageGraph, config: Configuration, col_map: list, stats: AiApplyStats
 ) -> None:
-    """Attach ``out_col -> "<input table id>.<in_col>"`` to the matching reads edge."""
+    """Attach ``out_col -> "<input table id>.<in_col>"`` to the matching reads edges."""
     for cm in col_map:
         if not isinstance(cm, dict):
             stats.col_map_skipped += 1
@@ -299,15 +313,16 @@ def _apply_col_map(
         out_col = cm.get("out", "")
         in_table = cm.get("in_table", "")
         in_col = cm.get("in_col", "")
-        edge = (
-            _resolve_col_map_edge(graph, config, in_table)
+        edges = (
+            _resolve_col_map_edges(graph, config, in_table)
             if out_col and in_col and isinstance(in_table, str) and in_table
-            else None
+            else []
         )
-        if edge is None:
+        if not edges:
             stats.col_map_skipped += 1
             continue
-        edge.column_mapping[out_col] = f"{_table_id(edge)}.{in_col}"
+        for edge in edges:
+            edge.column_mapping[out_col] = f"{_table_id(edge)}.{in_col}"
 
 
 # ---------------------------------------------------------------------------
@@ -327,6 +342,11 @@ _INSTRUCTIONS = (
     "of this config); in_col is the column in that table. "
     "Then re-run `kbagent lineage build` to incorporate the results."
 )
+
+
+def code_hash(config: Configuration) -> str:
+    """The hash a task carries and a result must echo: ``sha256(code)[:16]``."""
+    return hashlib.sha256(config.code.encode()).hexdigest()[:16]
 
 
 def _code_file(config: Configuration) -> Path | None:
@@ -358,8 +378,8 @@ def generate_ai_tasks(graph: LineageGraph, root: Path) -> dict[str, Any]:
     missing: list[dict[str, str]] = []
     already_done = 0
     for config in configs_needing_ai:
-        code_hash = hashlib.sha256(config.code.encode()).hexdigest()[:16]
-        if existing_hashes.get(config.fqn) == code_hash:
+        current_hash = code_hash(config)
+        if existing_hashes.get(config.fqn) == current_hash:
             already_done += 1
             continue
 
@@ -376,7 +396,7 @@ def generate_ai_tasks(graph: LineageGraph, root: Path) -> dict[str, Any]:
             "config_name": config.config_name,
             "code_type": config.code_type,
             "code_file": str(code_file),
-            "_code_hash": code_hash,
+            "_code_hash": current_hash,
         }
         if config.code_type == "python":
             task["known_inputs"] = [t.get("source", "") for t in config.input_tables[:10]]

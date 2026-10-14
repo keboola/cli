@@ -549,3 +549,111 @@ class TestLineageBuildHumanOutput:
         assert "[bold]missing_9" in result.output  # escaped, printed literally
         assert "missing_10" not in result.output
         assert "... and 2 more" in result.output
+
+
+class TestAiColMapSameSourceTwice:
+    """A config reading one table under two aliases has two reads edges (review)."""
+
+    def _graph(self) -> LineageGraph:
+        graph = _graph(
+            inputs=[
+                {"source": "in.c-a.orders", "destination": "o1"},
+                {"source": "in.c-a.orders", "destination": "o2"},
+            ]
+        )
+        _reads(graph, "p:in.c-a.orders")
+        _reads(graph, "p:in.c-a.orders")
+        return graph
+
+    def test_exact_table_id_maps_onto_every_edge_of_that_source(self, tmp_path: Path) -> None:
+        graph = self._graph()
+        status = _apply(
+            tmp_path,
+            graph,
+            {"col_map": [{"out": "x", "in_table": "in.c-a.orders", "in_col": "id"}]},
+        )
+        assert [e.column_mapping for e in graph.edges] == [{"x": "in.c-a.orders.id"}] * 2
+        assert status["ai_col_map_skipped"] == 0
+
+    def test_alias_maps_onto_every_edge_of_that_source(self, tmp_path: Path) -> None:
+        graph = self._graph()
+        status = _apply(
+            tmp_path, graph, {"col_map": [{"out": "x", "in_table": "o2", "in_col": "id"}]}
+        )
+        assert [e.column_mapping for e in graph.edges] == [{"x": "in.c-a.orders.id"}] * 2
+        assert status["ai_col_map_skipped"] == 0
+
+    def test_two_distinct_sources_stay_ambiguous(self, tmp_path: Path) -> None:
+        graph = _graph()
+        _reads(graph, "p:in.c-a.orders")
+        _reads(graph, "q:in.c-a.orders")
+        status = _apply(
+            tmp_path,
+            graph,
+            {"col_map": [{"out": "x", "in_table": "in.c-a.orders", "in_col": "id"}]},
+        )
+        assert all(not e.column_mapping for e in graph.edges)
+        assert status["ai_col_map_skipped"] == 1
+
+
+class TestAiStaleResults:
+    """A result whose `_code_hash` no longer matches the code is not applied (review)."""
+
+    CODE = "SELECT * FROM src"
+
+    def _graph(self) -> LineageGraph:
+        graph = _graph()
+        graph.configurations[CFG_FQN].code = self.CODE
+        graph.configurations[CFG_FQN].code_type = "sql"
+        return graph
+
+    def _entry(self, code_hash: str | None) -> dict:
+        entry: dict = {
+            "inputs": [{"pid": 1, "bucket": "in.c-a", "table": "src"}],
+            "outputs": [{"table": "out.c-a.dst"}],
+            "external": [{"system": "Slack", "op": "write"}],
+        }
+        if code_hash is not None:
+            entry["_code_hash"] = code_hash
+        return entry
+
+    def test_mismatched_hash_is_not_applied(self, tmp_path: Path) -> None:
+        graph = self._graph()
+        status = _apply(tmp_path, graph, self._entry("0000000000000000"))
+        assert graph.edges == []
+        assert graph.configurations[CFG_FQN].external == []
+        assert status["ai_results_stale"] == [CFG_FQN]
+        assert status["ai_edges_added"] == 0
+
+    def test_matching_hash_is_applied(self, tmp_path: Path) -> None:
+        import hashlib
+
+        graph = self._graph()
+        current = hashlib.sha256(self.CODE.encode()).hexdigest()[:16]
+        status = _apply(tmp_path, graph, self._entry(current))
+        assert status["ai_edges_added"] == 2
+        assert status["ai_results_stale"] == []
+
+    def test_missing_hash_is_applied(self, tmp_path: Path) -> None:
+        graph = self._graph()
+        status = _apply(tmp_path, graph, self._entry(None))
+        assert status["ai_edges_added"] == 2
+        assert status["ai_results_stale"] == []
+
+    def test_human_build_output_shows_stale_count(self) -> None:
+        import io
+
+        from rich.console import Console
+
+        from keboola_agent_cli.commands._lineage_build_output import print_ai_status
+        from keboola_agent_cli.output import OutputFormatter
+
+        formatter = OutputFormatter(no_color=True)
+        buffer = io.StringIO()
+        formatter.console = Console(file=buffer, width=200, no_color=True)
+        print_ai_status(
+            formatter, {"ai_results_applied": True, "ai_results_stale": [CFG_FQN, "p:x/y"]}
+        )
+        output = buffer.getvalue()
+        assert "AI results stale (code changed, not applied): 2" in output
+        assert CFG_FQN in output

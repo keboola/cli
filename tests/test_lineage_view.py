@@ -633,3 +633,139 @@ class TestHtmlCharset:
         source = Path(lineage_cmd.__file__).read_text(encoding="utf-8")
         builder = source.split("function buildStandaloneHtml", 1)[1].split("<title>", 1)[0]
         assert '<meta charset="utf-8">' in builder
+
+
+# ---------------------------------------------------------------------------
+# PR #849 review fixes
+# ---------------------------------------------------------------------------
+
+T_SRC = "p:in.c-t.t"
+A_TBL = "p:out.c-a.a"
+B_TBL = "p:out.c-b.b"
+FINAL = "p:out.c-f.final"
+C1 = "p:keboola.snowflake-transformation/c1"
+C2 = "p:keboola.snowflake-transformation/c2"
+C3 = "p:keboola.snowflake-transformation/c3"
+
+
+def _diamond(external: list[dict] | None = None) -> LineageGraph:
+    """FINAL <- C3 <- {A <- C1 <- T, B <- C2 <- T}; C1 and C2 map T differently."""
+    graph = LineageGraph()
+    for fqn in (T_SRC, A_TBL, B_TBL, FINAL):
+        _table(graph, fqn, ["x", "y"])
+    _config(graph, C1, "One", external=external)
+    _config(graph, C2, "Two")
+    _config(graph, C3, "Three")
+    _reads(graph, T_SRC, C1, mapping={"XX": "in.c-t.t.x"})
+    _reads(graph, T_SRC, C2, mapping={"YY": "in.c-t.t.y"})
+    _writes(graph, C1, A_TBL)
+    _writes(graph, C2, B_TBL)
+    _reads(graph, A_TBL, C3)
+    _reads(graph, B_TBL, C3)
+    _writes(graph, C3, FINAL)
+    return graph
+
+
+class TestReviewFixes:
+    def test_union_merges_columns_of_parallel_input_mappings(self, tmp_path: Path) -> None:
+        graph = LineageGraph()
+        _table(graph, SRC, ["id", "a", "b"])
+        _config(graph, MID_CFG, "Clean")
+        _reads(graph, SRC, MID_CFG, columns=["id", "a"], mapping={"A": "in.c-src.customers.a"})
+        _reads(graph, SRC, MID_CFG, columns=["id", "b"], mapping={"B": "in.c-src.customers.b"})
+
+        result = _service(tmp_path).query(graph, MID_CFG, "", 3, direction="upstream")
+
+        assert len(result["edges"]) == 1
+        edge = result["edges"][0]
+        assert edge["columns"] == ["id", "a", "b"]
+        assert edge["column_mapping"] == {
+            "A": "in.c-src.customers.a",
+            "B": "in.c-src.customers.b",
+        }
+        # The graph itself is not mutated by the merge.
+        assert graph.edges[0].columns == ["id", "a"]
+        assert graph.edges[0].column_mapping == {"A": "in.c-src.customers.a"}
+
+    def test_columns_printed_per_edge_in_diamond(self, tmp_path: Path) -> None:
+        result = _show(tmp_path, _diamond(), "--upstream", FINAL, "--depth", "6", "--columns")
+
+        output = _plain(result.output)
+        assert result.exit_code == 0, output
+        lines = output.splitlines()
+        t_lines = [i for i, ln in enumerate(lines) if "in.c-t.t " in ln]
+        assert len(t_lines) == 2
+        found = []
+        for index in t_lines:
+            detail = lines[index + 1]
+            assert ("XX <- " in detail) != ("YY <- " in detail), detail
+            found.append("XX" if "XX <- " in detail else "YY")
+        assert sorted(found) == ["XX", "YY"]
+
+    def test_external_printed_under_non_focus_config(self, tmp_path: Path) -> None:
+        from keboola_agent_cli.commands._lineage_tree import print_lineage_tree
+        from keboola_agent_cli.output import OutputFormatter
+
+        graph = _diamond(external=[{"system": "Slack", "op": "write"}])
+        result = _service(tmp_path).query_upstream(graph, FINAL)
+        formatter = OutputFormatter(no_color=True)
+        buffer = io.StringIO()
+        formatter.console = Console(file=buffer, width=200, no_color=True)
+
+        print_lineage_tree(formatter, graph, result, "upstream", depth=6)
+
+        lines = buffer.getvalue().splitlines()
+        cfg_line = _line_of(lines, "One")
+        ext_line = _line_of(lines, "external: Slack (write)")
+        assert ext_line == cfg_line + 1
+        assert _indent(lines[ext_line]) > _indent(lines[cfg_line])
+        assert sum("external: Slack" in ln for ln in lines) == 1
+
+    def test_er_always_lists_columns(self, tmp_path: Path) -> None:
+        code = _service(tmp_path).diagram(_column_chain(), MID, "both", 10, view="er")
+
+        assert "string cust_name" in code
+        assert "rows," not in code
+        cli = _show(tmp_path, _column_chain(), "--downstream", SRC, "-f", "er")
+        assert cli.exit_code == 0, cli.output
+        assert "string cust_name" in cli.output
+
+    def test_er_renders_external_systems(self, tmp_path: Path) -> None:
+        graph = _diamond(external=[{"system": "Slack", "op": "write"}])
+        code = _service(tmp_path).diagram(graph, C1, "both", 3, view="er")
+
+        assert '"ext:Slack"' in code
+        rels = [ln for ln in code.splitlines() if '"ext:Slack"' in ln and " : " in ln]
+        assert any("p:t" in ln for ln in rels), code
+        assert any("p:a" in ln for ln in rels), code
+
+    def test_er_external_only_config_is_not_empty(self, tmp_path: Path) -> None:
+        graph = LineageGraph()
+        cfg = "p:kds-team.app-custom-python/slack"
+        _config(graph, cfg, "Slack notifier", external=[{"system": "Slack", "op": "write"}])
+
+        code = _service(tmp_path).diagram(graph, cfg, "both", 3, view="er")
+
+        assert code.strip() != "erDiagram"
+        assert '"Slack notifier"' in code and '"ext:Slack"' in code
+
+    def test_split_table_id_returns_named_parts(self) -> None:
+        from keboola_agent_cli.services._lineage_mermaid import _split_table_id
+
+        parts = _split_table_id("out.c-b.t")
+        assert (parts.bucket, parts.name) == ("out.c-b", "t")
+        assert _split_table_id("t").bucket == ""
+
+    def test_html_with_columns_gets_its_own_filename(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        graph = _column_chain()
+        plain = _show(tmp_path, graph, "--downstream", SRC, "-f", "html")
+        with_cols = _show(tmp_path, graph, "--downstream", SRC, "-f", "html", "--columns")
+
+        assert plain.exit_code == 0 and with_cols.exit_code == 0
+        names = sorted(p.name for p in tmp_path.glob("lineage_*.html"))
+        assert len(names) == 2
+        assert names[0].endswith("_columns.html") or names[1].endswith("_columns.html")
+        assert sum(n.endswith("_columns.html") for n in names) == 1
