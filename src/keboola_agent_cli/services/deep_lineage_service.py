@@ -7,8 +7,6 @@ and optionally uses AI to parse SQL/Python code for hidden dependencies.
 Architecture: reads from disk only, no API calls. Requires sync'd data.
 """
 
-import hashlib
-import html
 import json
 import logging
 import re
@@ -20,7 +18,15 @@ from typing import Any
 import yaml
 
 from ..config_store import ConfigStore
-from ..constants import MERMAID_SCRIPT_ATTRS
+from ._lineage_er import render_er_diagram
+from ._lineage_mermaid import (
+    escape_mermaid_label,
+    render_html,
+    render_mermaid,
+    sanitize_mermaid_id,
+)
+from ._lineage_paths import select_scan_entries, skipped_trees_warning
+from ._lineage_trace import is_config_node, trace_column, union_edges, walk_edges
 
 logger = logging.getLogger(__name__)
 
@@ -252,6 +258,8 @@ class Configuration:
     output_tables: list[dict] = field(default_factory=list)
     code: str = ""
     code_type: str = ""
+    external: list[dict] = field(default_factory=list)
+    source_dir: str = ""
 
     @property
     def fqn(self) -> str:
@@ -290,45 +298,10 @@ class LineageGraph:
         self._upstream.setdefault(edge.target_fqn, []).append(idx)
 
     def get_upstream(self, fqn: str, depth: int = 10) -> list[dict]:
-        visited: set[str] = set()
-        result: list[dict] = []
-        self._walk(fqn, depth, 0, visited, result, direction="upstream")
-        return result
+        return walk_edges(self, fqn, depth, "upstream")
 
     def get_downstream(self, fqn: str, depth: int = 10) -> list[dict]:
-        visited: set[str] = set()
-        result: list[dict] = []
-        self._walk(fqn, depth, 0, visited, result, direction="downstream")
-        return result
-
-    def _walk(
-        self,
-        fqn: str,
-        max_depth: int,
-        current_depth: int,
-        visited: set[str],
-        result: list[dict],
-        direction: str,
-    ) -> None:
-        if current_depth >= max_depth or fqn in visited:
-            return
-        visited.add(fqn)
-        index = self._upstream if direction == "upstream" else self._downstream
-        for edge_idx in index.get(fqn, []):
-            edge = self.edges[edge_idx]
-            next_fqn = edge.source_fqn if direction == "upstream" else edge.target_fqn
-            result.append(
-                {
-                    "depth": current_depth + 1,
-                    "source": edge.source_fqn,
-                    "target": edge.target_fqn,
-                    "edge_type": edge.edge_type,
-                    "detection": edge.detection,
-                    "columns": edge.columns,
-                    "column_mapping": edge.column_mapping,
-                }
-            )
-            self._walk(next_fqn, max_depth, current_depth + 1, visited, result, direction)
+        return walk_edges(self, fqn, depth, "downstream")
 
     def summary(self) -> dict:
         edge_types: dict[str, int] = {}
@@ -360,6 +333,7 @@ class LineageGraph:
                     "code_type": c.code_type,
                     "input_table_count": len(c.input_tables),
                     "output_table_count": len(c.output_tables),
+                    "external": c.external,
                 }
                 for fqn, c in self.configurations.items()
             },
@@ -462,7 +436,7 @@ class DeepLineageService:
         warnings: list[str] = []
 
         # Phase 1: Scan
-        graph = self._scan_projects(root, project_id_to_alias)
+        graph = self._scan_projects(root, project_id_to_alias, warnings)
 
         # Empty-scan warning -- most often caused by a layout mismatch between
         # ``sync pull --project X`` (flat) and ``sync pull --all-projects`` (nested).
@@ -560,20 +534,79 @@ class DeepLineageService:
             }
 
         fqn = candidates[0]
+        up = graph.get_upstream(fqn, depth) if direction in ("upstream", "both") else []
+        down = graph.get_downstream(fqn, depth) if direction in ("downstream", "both") else []
         result: dict[str, Any] = {
             "node": fqn,
             "direction": direction,
             "node_info": self._node_info(graph, fqn),
-            "edges": (
-                graph.get_upstream(fqn, depth)
-                if direction == "upstream"
-                else graph.get_downstream(fqn, depth)
-            ),
+            "edges": union_edges(up, down),
         }
         if len(candidates) > 1:
             result["ambiguous_matches"] = candidates
             result["warnings"] = [_ambiguity_warning(identifier, candidates)]
         return result
+
+    def query(
+        self, graph: LineageGraph, identifier: str, project: str, depth: int, *, direction: str
+    ) -> dict[str, Any]:
+        """Query ``upstream``, ``downstream`` or ``both`` (one deduplicated union)."""
+        return self._query(graph, identifier, project, depth, direction=direction)
+
+    def query_column(
+        self,
+        graph: LineageGraph,
+        identifier: str,
+        column: str,
+        project: str = "",
+        depth: int = 10,
+        *,
+        direction: str,
+    ) -> dict[str, Any]:
+        """Trace ``column`` of a table hop by hop (see ``_lineage_trace.trace_column``).
+
+        A configuration focus has no columns of its own to trace, so it comes
+        back as an error flagged ``usage_error`` (the CLI maps it to exit 2).
+        """
+        result = self._query(graph, identifier, project, 0, direction=direction)
+        if "error" in result:
+            return result
+        fqn = result["node"]
+        if is_config_node(graph, fqn):
+            return {
+                "error": f"--column needs a table to trace from; '{fqn}' is a configuration.",
+                "usage_error": True,
+            }
+        result.update(trace_column(graph, fqn, column, direction, depth))
+        result["column"] = column
+        result["column_filter"] = column
+        return result
+
+    def diagram(
+        self,
+        graph: LineageGraph,
+        node: str,
+        direction: str,
+        depth: int,
+        *,
+        view: str = "flow",
+        show_columns: bool = False,
+    ) -> str:
+        """Mermaid source for one query -- shared by both lineage HTTP servers.
+
+        ``direction="both"`` renders the union of both walks ONCE; merging two
+        rendered diagrams textually broke the ER view (its ``}`` lines were
+        deduplicated away).
+        """
+        result = self.query(graph, node, "", depth, direction=direction)
+        if "error" in result:
+            return "graph LR\n  error[" + result["error"].replace('"', "'") + "]"
+        warnings = result.get("warnings")
+        if view == "er":
+            return self.render_er_diagram(result["edges"], graph, result["node"], warnings=warnings)
+        return self.render_mermaid(
+            result["edges"], graph, direction, result["node"], show_columns, warnings
+        )
 
     # --- Internal methods ---
 
@@ -589,7 +622,9 @@ class DeepLineageService:
             logger.debug("building project-id to alias mapping failed", exc_info=True)
         return mapping
 
-    def _scan_projects(self, root: Path, project_id_to_alias: dict[int, str]) -> LineageGraph:
+    def _scan_projects(
+        self, root: Path, project_id_to_alias: dict[int, str], warnings: list[str]
+    ) -> LineageGraph:
         """Scan all sync'd projects and build initial graph.
 
         Supports two directory layouts (written by ``kbagent sync pull``):
@@ -607,7 +642,7 @@ class DeepLineageService:
         flat_manifest = root / ".keboola" / "manifest.json"
         if flat_manifest.exists():
             project_alias = self._resolve_alias_from_manifest(flat_manifest, fallback=root.name)
-            self._scan_one_project(root, project_alias, project_id_to_alias, graph)
+            self._scan_one_project(root, project_alias, project_id_to_alias, graph, warnings)
         else:
             for project_dir in sorted(root.iterdir()):
                 if not project_dir.is_dir() or project_dir.name.startswith("."):
@@ -615,7 +650,9 @@ class DeepLineageService:
                 manifest_path = project_dir / ".keboola" / "manifest.json"
                 if not manifest_path.exists():
                     continue
-                self._scan_one_project(project_dir, project_dir.name, project_id_to_alias, graph)
+                self._scan_one_project(
+                    project_dir, project_dir.name, project_id_to_alias, graph, warnings
+                )
 
         # Store mapping for cross-project resolution
         graph._project_id_to_alias = project_id_to_alias
@@ -650,6 +687,7 @@ class DeepLineageService:
         project_alias: str,
         project_id_to_alias: dict[int, str],
         graph: LineageGraph,
+        warnings: list[str],
     ) -> None:
         """Populate ``graph`` with tables and configs from a single project dir."""
         manifest_path = project_dir / ".keboola" / "manifest.json"
@@ -680,13 +718,18 @@ class DeepLineageService:
                     )
                     graph.tables[table.fqn] = table
 
-        # Scan configurations
-        for config_entry in manifest.get("configurations", []):
-            self._scan_configuration(project_dir, config_entry, project_alias, project_id, graph)
+        # Scan configurations from their branch tree (never a hardcoded ``main``).
+        selection = select_scan_entries(manifest)
+        if selection.skipped:
+            warnings.append(skipped_trees_warning(project_alias, selection))
+        for item in selection.entries:
+            self._scan_configuration(
+                project_dir / item.tree, item.entry, project_alias, project_id, graph
+            )
 
     def _scan_configuration(
         self,
-        project_dir: Path,
+        tree_dir: Path,
         config_entry: dict,
         project_alias: str,
         project_id: int,
@@ -695,7 +738,7 @@ class DeepLineageService:
         config_path = config_entry["path"]
         component_id = config_entry["componentId"]
         config_id = config_entry["id"]
-        full_path = project_dir / "main" / config_path
+        full_path = tree_dir / config_path
 
         component_type = config_path.split("/")[0] if "/" in config_path else "unknown"
 
@@ -723,9 +766,9 @@ class DeepLineageService:
             code = _read_source(code_py)
             code_type = "python"
 
-        # Include config row mappings
+        # Include config row mappings. Row paths are relative to the config dir.
         for row_entry in config_entry.get("rows", []):
-            row_path = project_dir / "main" / row_entry.get("path", "")
+            row_path = full_path / row_entry.get("path", "")
             row_config = row_path / "_config.yml"
             if row_config.exists():
                 with open(row_config) as f:
@@ -745,6 +788,7 @@ class DeepLineageService:
             output_tables=output_tables,
             code=code,
             code_type=code_type,
+            source_dir=str(full_path),
         )
         graph.configurations[config.fqn] = config
 
@@ -870,176 +914,16 @@ class DeepLineageService:
         project_id_to_alias: dict[int, str],
     ) -> dict[str, Any]:
         """Apply AI results from .lineage_ai_results.json if present."""
-        results_path = root / AI_RESULTS_FILE
-        if not results_path.exists():
-            return {"ai_results_applied": False}
+        # Imported here: _lineage_ai builds Edge objects from this module.
+        from ._lineage_ai import apply_ai_results_file
 
-        with open(results_path) as f:
-            ai_results = json.load(f)
-
-        applied = 0
-        for entry in ai_results.get("results", []):
-            config_fqn = entry.get("config_fqn", "")
-            config = graph.configurations.get(config_fqn)
-            if not config:
-                continue
-
-            # SQL-style results: inputs with pid/bucket/table
-            for inp in entry.get("inputs", []):
-                ref_pid = inp.get("pid", config.project_id)
-                bucket = inp.get("bucket", "")
-                table = inp.get("table", "")
-                if not bucket or not table:
-                    continue
-                table_id = f"{bucket}.{table}"
-                ref_alias = project_id_to_alias.get(ref_pid, config.project_alias)
-                table_fqn = f"{ref_alias}:{table_id}"
-                if any(
-                    e.source_fqn == table_fqn and e.target_fqn == config_fqn for e in graph.edges
-                ):
-                    continue
-                detection = "ai_cross_project" if ref_pid != config.project_id else "ai"
-                graph.add_edge(
-                    Edge(
-                        source_fqn=table_fqn,
-                        target_fqn=config_fqn,
-                        source_type="table",
-                        target_type="config",
-                        edge_type="reads",
-                        detection=detection,
-                        columns=inp.get("columns", []),
-                    )
-                )
-                applied += 1
-
-            # Python-style results: extra_inputs with table_id
-            for inp in entry.get("extra_inputs", []):
-                table_id = inp.get("table_id", "")
-                if not table_id:
-                    continue
-                table_fqn = f"{config.project_alias}:{table_id}"
-                if any(
-                    e.source_fqn == table_fqn and e.target_fqn == config_fqn for e in graph.edges
-                ):
-                    continue
-                graph.add_edge(
-                    Edge(
-                        source_fqn=table_fqn,
-                        target_fqn=config_fqn,
-                        source_type="table",
-                        target_type="config",
-                        edge_type="reads",
-                        detection="ai",
-                    )
-                )
-                applied += 1
-
-            # Column mappings
-            for cm in entry.get("col_map", []):
-                out_col = cm.get("out", "")
-                in_table = cm.get("in_table", "")
-                in_col = cm.get("in_col", "")
-                if out_col and in_col:
-                    for edge in graph.edges:
-                        if edge.target_fqn == config_fqn and in_table in edge.source_fqn:
-                            edge.column_mapping[out_col] = f"{in_table}.{in_col}"
-
-        return {"ai_results_applied": True, "ai_edges_added": applied}
+        return apply_ai_results_file(graph, root, project_id_to_alias)
 
     def _generate_ai_tasks(self, graph: LineageGraph, root: Path) -> dict[str, Any]:
         """Generate .lineage_ai_tasks.json for AI agent to process."""
-        configs_needing_ai = [
-            c
-            for c in graph.configurations.values()
-            if c.code and ((c.code_type == "sql" and not c.input_tables) or c.code_type == "python")
-        ]
+        from ._lineage_ai import generate_ai_tasks
 
-        # Check which already have results
-        results_path = root / AI_RESULTS_FILE
-        existing_hashes: dict[str, str] = {}
-        if results_path.exists():
-            with open(results_path) as f:
-                for entry in json.load(f).get("results", []):
-                    fqn = entry.get("config_fqn", "")
-                    h = entry.get("_code_hash", "")
-                    if fqn and h:
-                        existing_hashes[fqn] = h
-
-        tasks = []
-        for config in configs_needing_ai:
-            code_hash = hashlib.sha256(config.code.encode()).hexdigest()[:16]
-            if existing_hashes.get(config.fqn) == code_hash:
-                continue  # already analyzed, code unchanged
-
-            # Resolve the code file path on disk
-            project_dir = root / config.project_alias
-            full_path = project_dir / "main" / config.path
-            code_file = full_path / ("transform.sql" if config.code_type == "sql" else "code.py")
-
-            task: dict[str, Any] = {
-                "config_fqn": config.fqn,
-                "project_alias": config.project_alias,
-                "project_id": config.project_id,
-                "component_id": config.component_id,
-                "config_name": config.config_name,
-                "code_type": config.code_type,
-                "code_file": str(code_file),
-                "_code_hash": code_hash,
-            }
-            if config.code_type == "python":
-                task["known_inputs"] = [t.get("source", "") for t in config.input_tables[:10]]
-                task["known_outputs"] = [
-                    t.get("destination", "") for t in config.output_tables[:10]
-                ]
-            tasks.append(task)
-
-        tasks_data = {
-            "description": "AI analysis tasks for column-level lineage.",
-            "instructions": (
-                "For each task, read the code_file from disk and extract table dependencies. "
-                "Write results to .lineage_ai_results.json (see output_format). "
-                "Then re-run `kbagent lineage build` to incorporate the results."
-            ),
-            "output_file": str(root / AI_RESULTS_FILE),
-            "output_format": {
-                "results": [
-                    {
-                        "config_fqn": "project:component/config_id",
-                        "_code_hash": "hash from task",
-                        "inputs": [
-                            {"pid": 123, "bucket": "in.c-x", "table": "y", "columns": ["a"]}
-                        ],
-                        "outputs": [{"table": "local_name", "columns": ["b"]}],
-                        "col_map": [
-                            {
-                                "out": "b",
-                                "in_table": "in.c-x.y",
-                                "in_col": "a",
-                                "transform": "direct",
-                            }
-                        ],
-                        "extra_inputs": [{"table_id": "bucket.table", "evidence": "code line"}],
-                        "external": [{"system": "Slack", "op": "write"}],
-                    }
-                ]
-            },
-            "sql_context": (
-                'Snowflake SQL uses \'KBC_USE4_{project_id}\'."bucket_id"."table_name" '
-                "for cross-project references. Same-project tables may use just "
-                '"bucket_id"."table_name" or aliased names from input mapping.'
-            ),
-            "tasks": tasks,
-        }
-
-        tasks_path = root / AI_TASKS_FILE
-        with open(tasks_path, "w") as f:
-            json.dump(tasks_data, f, indent=2)
-
-        return {
-            "ai_tasks_generated": len(tasks),
-            "ai_tasks_file": str(tasks_path),
-            "ai_already_done": len(configs_needing_ai) - len(tasks),
-        }
+        return generate_ai_tasks(graph, root)
 
     @staticmethod
     def _graph_from_dict(data: dict) -> LineageGraph:
@@ -1056,6 +940,7 @@ class DeepLineageService:
                 project_id=c_data["project_id"],
                 path=c_data["path"],
                 code_type=c_data.get("code_type", ""),
+                external=c_data.get("external", []),
             )
         for e_data in data.get("edges", []):
             graph.add_edge(
@@ -1105,319 +990,13 @@ class DeepLineageService:
 
     # --- Mermaid / HTML rendering ---
 
-    @staticmethod
-    def _sanitize_mermaid_id(fqn: str) -> str:
-        """Sanitize FQN into a valid mermaid node ID (alphanumeric + underscore)."""
-        return re.sub(r"[^a-zA-Z0-9_]", "_", fqn)
+    _sanitize_mermaid_id = staticmethod(sanitize_mermaid_id)
+    _escape_mermaid_label = staticmethod(escape_mermaid_label)
+    render_mermaid = staticmethod(render_mermaid)
 
-    @staticmethod
-    def _escape_mermaid_label(text: str) -> str:
-        """Escape characters that break mermaid label syntax, preserving <br/>."""
-        # Temporarily protect <br/>, escape everything, restore
-        text = text.replace("<br/>", "\x00BR\x00")
-        text = text.replace('"', "&quot;").replace("<", "&lt;").replace(">", "&gt;")
-        return text.replace("\x00BR\x00", "<br/>")
+    render_er_diagram = staticmethod(render_er_diagram)
 
-    @staticmethod
-    def render_mermaid(
-        edges: list[dict],
-        graph: LineageGraph,
-        direction: str,
-        node_fqn: str,
-        show_columns: bool = False,
-        warnings: list[str] | None = None,
-    ) -> str:
-        """Render lineage edges as a mermaid flowchart.
-
-        Args:
-            edges: List of edge dicts from query_upstream/query_downstream.
-            graph: The lineage graph (for node metadata).
-            direction: "upstream" or "downstream".
-            node_fqn: The FQN of the queried node.
-            show_columns: If True, include column names in table labels.
-            warnings: Non-fatal notes to render into the diagram itself,
-                typically the ambiguity warning from an unqualified id (#568).
-                A diagram carries no metadata channel the way the JSON shapes
-                do, so a caller that has warnings and drops them leaves the
-                viewer with one project's answer looking like the whole
-                picture -- which is the bug, not a cosmetic omission.
-
-        Returns:
-            Mermaid flowchart source code.
-        """
-        sanitize = DeepLineageService._sanitize_mermaid_id
-        escape = DeepLineageService._escape_mermaid_label
-
-        graph_dir = "RL" if direction == "upstream" else "LR"
-        lines: list[str] = [f"graph {graph_dir}"]
-
-        # Standalone nodes -- deliberately unconnected, so they read as a note
-        # on the diagram rather than as part of the dependency graph.
-        for index, warning in enumerate(warnings or []):
-            warning_id = f"kbagentNote{index}"
-            lines.append(f'  {warning_id}["⚠ {escape(warning)}"]')
-            lines.append(f"  style {warning_id} fill:#fff3cd,stroke:#856404,color:#856404")
-
-        # Determine the root node's project for cross-project detection
-        root_project = node_fqn.split(":")[0] if ":" in node_fqn else ""
-
-        # Collect all unique node FQNs (including the root node)
-        node_fqns: set[str] = {node_fqn}
-        for edge in edges:
-            node_fqns.add(edge["source"])
-            node_fqns.add(edge["target"])
-
-        # Emit node definitions with labels and classes
-        for fqn in sorted(node_fqns):
-            node_id = sanitize(fqn)
-            node_project = fqn.split(":")[0] if ":" in fqn else ""
-            is_cross = node_project and root_project and node_project != root_project
-
-            if fqn in graph.tables:
-                t = graph.tables[fqn]
-                label_parts = [f"{t.project_alias}:{t.table_id}"]
-                label_parts.append(f"{len(t.columns)} cols, {t.rows_count:,} rows")
-                if show_columns and t.columns:
-                    col_display = t.columns[:8]
-                    col_text = ", ".join(col_display)
-                    if len(t.columns) > 8:
-                        col_text += f", +{len(t.columns) - 8} more"
-                    label_parts.append(col_text)
-                label = escape("<br/>".join(label_parts))
-                css_class = "cross_table" if is_cross else "table"
-                lines.append(f'  {node_id}["{label}"]:::{css_class}')
-            elif fqn in graph.configurations:
-                c = graph.configurations[fqn]
-                label = escape(f"{c.project_alias}:{c.config_name}<br/>{c.component_id}")
-                lines.append(f'  {node_id}["{label}"]:::config')
-            else:
-                label = escape(fqn)
-                css_class = "cross_table" if is_cross else "table"
-                lines.append(f'  {node_id}["{label}"]:::{css_class}')
-
-        # Emit edges
-        seen_edges: set[tuple[str, str]] = set()
-        for edge in edges:
-            src_id = sanitize(edge["source"])
-            tgt_id = sanitize(edge["target"])
-            edge_key = (src_id, tgt_id)
-            if edge_key in seen_edges:
-                continue
-            seen_edges.add(edge_key)
-            detection = escape(edge["detection"])
-            lines.append(f"  {src_id} -->|{detection}| {tgt_id}")
-
-        # Style definitions
-        lines.append("")
-        lines.append("  classDef table fill:#e1f5fe,stroke:#0288d1")
-        lines.append("  classDef config fill:#e8f5e9,stroke:#388e3c")
-        lines.append("  classDef cross_table fill:#f3e5f5,stroke:#7b1fa2")
-
-        return "\n".join(lines)
-
-    @staticmethod
-    def render_er_diagram(
-        edges: list[dict],
-        graph: LineageGraph,
-        node_fqn: str,
-        show_columns: bool = False,
-        warnings: list[str] | None = None,
-    ) -> str:
-        """Render lineage as a mermaid ER diagram.
-
-        Without show_columns: entities with name/row count + relationships.
-        With show_columns: full column list with PK markers and AI mappings.
-
-        ``warnings`` carries non-fatal notes -- the ambiguity warning of #568,
-        typically. ``erDiagram`` has no free-standing annotation the way a
-        flowchart does, and the HTTP surfaces return this as plain text with
-        no metadata channel, so the notes ride as one relationship-less entity.
-        Dropping them would leave an ER viewer with one project's answer
-        looking like the whole picture, which is the bug itself (#584).
-        """
-        lines: list[str] = ["erDiagram"]
-
-        if warnings:
-            lines.append('    "⚠ note" {')
-            for index, warning in enumerate(warnings, start=1):
-                # html.escape(quote=True) also neutralises the double quotes
-                # that would otherwise terminate the attribute comment.
-                attribute = "warning" if len(warnings) == 1 else f"warning_{index}"
-                lines.append(f'        string {attribute} "{html.escape(warning, quote=True)}"')
-            lines.append("    }")
-
-        # Collect all table FQNs and their column mappings
-        table_fqns: set[str] = set()
-        config_fqns: set[str] = set()
-        # edge source/target -> column_mapping
-        col_maps: dict[str, dict[str, str]] = {}
-
-        if node_fqn in graph.tables:
-            table_fqns.add(node_fqn)
-
-        for edge in edges:
-            src, tgt = edge["source"], edge["target"]
-            if src in graph.tables:
-                table_fqns.add(src)
-            if tgt in graph.tables:
-                table_fqns.add(tgt)
-            if src in graph.configurations:
-                config_fqns.add(src)
-            if tgt in graph.configurations:
-                config_fqns.add(tgt)
-            cm = edge.get("column_mapping", {})
-            if cm:
-                # Key by config FQN (the node that transforms data)
-                cfg = tgt if tgt in graph.configurations else src
-                col_maps[cfg] = {**col_maps.get(cfg, {}), **cm}
-
-        # Emit entity definitions for tables
-        for fqn in sorted(table_fqns):
-            t = graph.tables.get(fqn)
-            if not t:
-                continue
-            entity_name = f"{t.project_alias}:{t.name}"
-            # html.escape covers <>&" so an API-supplied table or config
-            # name like </div><script>...</script> cannot inject HTML into
-            # the generated lineage page (issue #269 sec-05). Mermaid
-            # renders HTML entities back to their characters in SVG text.
-            safe_name = html.escape(entity_name, quote=True)
-
-            if not show_columns:
-                # Compact: just entity name with row count as single attribute
-                lines.append(f'    "{safe_name}" {{')
-                lines.append(f'        int rows "{t.rows_count:,} rows, {len(t.columns)} cols"')
-                lines.append("    }")
-                continue
-
-            # Full column list
-            lines.append(f'    "{safe_name}" {{')
-            pk_cols = set(t.primary_key) if t.primary_key else set()
-            for col in t.columns[:30]:
-                safe_col = re.sub(r"[^a-zA-Z0-9_]", "_", col)
-                pk_marker = " PK" if col in pk_cols else ""
-                comment = ""
-                for cfg_fqn, cm in col_maps.items():
-                    for out_col, src_expr in cm.items():
-                        if src_expr.endswith(f".{col}") and fqn in src_expr.replace(f".{col}", ""):
-                            cfg = graph.configurations.get(cfg_fqn)
-                            cfg_label = cfg.config_name if cfg else cfg_fqn.split("/")[-1]
-                            safe_label = html.escape(cfg_label, quote=True)
-                            comment = f' "to {out_col} via {safe_label}"'
-                            break
-                        if out_col == col:
-                            src_short = src_expr.split(".")[-1]
-                            comment = f' "from {src_short}"'
-                            break
-                lines.append(f"        string {safe_col}{pk_marker}{comment}")
-            if len(t.columns) > 30:
-                lines.append(f'        string _more_ "+{len(t.columns) - 30} more columns"')
-            lines.append("    }")
-
-        # Emit relationships: table --via config--> table
-        # Find pairs: input table -> config -> output table
-        input_of: dict[str, list[str]] = {}  # config -> [input table fqns]
-        output_of: dict[str, list[str]] = {}  # config -> [output table fqns]
-        for edge in edges:
-            src, tgt = edge["source"], edge["target"]
-            if src in graph.tables and tgt in config_fqns:
-                input_of.setdefault(tgt, []).append(src)
-            if src in config_fqns and tgt in graph.tables:
-                output_of.setdefault(src, []).append(tgt)
-
-        seen_rels: set[tuple[str, str]] = set()
-        for cfg_fqn in config_fqns:
-            cfg = graph.configurations.get(cfg_fqn)
-            cfg_label = cfg.config_name if cfg else cfg_fqn.split("/")[-1]
-            safe_label = html.escape(cfg_label, quote=True)
-            inputs = input_of.get(cfg_fqn, [])
-            outputs = output_of.get(cfg_fqn, [])
-            for inp_fqn in inputs:
-                for out_fqn in outputs:
-                    inp_t = graph.tables.get(inp_fqn)
-                    out_t = graph.tables.get(out_fqn)
-                    if not inp_t or not out_t:
-                        continue
-                    key = (inp_fqn, out_fqn)
-                    if key in seen_rels:
-                        continue
-                    seen_rels.add(key)
-                    inp_name = html.escape(f"{inp_t.project_alias}:{inp_t.name}", quote=True)
-                    out_name = html.escape(f"{out_t.project_alias}:{out_t.name}", quote=True)
-                    lines.append(f'    "{inp_name}" ||--o{{ "{out_name}" : "{safe_label}"')
-
-            # If config has only inputs and no outputs (writer), show as relationship to config
-            if inputs and not outputs:
-                for inp_fqn in inputs:
-                    inp_t = graph.tables.get(inp_fqn)
-                    if not inp_t:
-                        continue
-                    inp_name = html.escape(f"{inp_t.project_alias}:{inp_t.name}", quote=True)
-                    lines.append(f'    "{inp_name}" }}o--|| "{safe_label}" : "writes"')
-
-        return "\n".join(lines)
-
-    @staticmethod
-    def render_html(mermaid_code: str, title: str) -> str:
-        """Wrap mermaid code in a self-contained HTML page.
-
-        Args:
-            mermaid_code: Mermaid flowchart source.
-            title: Page title / heading.
-
-        Returns:
-            Complete HTML document string.
-        """
-        escaped_title = title.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        legend = (
-            '<div style="margin:20px 0;padding:12px 16px;background:#f5f5f5;'
-            'border-radius:8px;font-size:13px;display:inline-block">'
-            "<strong>Legend</strong><br/>"
-            '<span style="display:inline-block;width:14px;height:14px;'
-            "background:#e1f5fe;border:2px solid #0288d1;border-radius:3px;"
-            'vertical-align:middle;margin-right:4px"></span> Table '
-            '<span style="color:#888">(project:bucket.table &mdash; columns, rows)</span>'
-            "&nbsp;&nbsp;&nbsp;"
-            '<span style="display:inline-block;width:14px;height:14px;'
-            "background:#e8f5e9;border:2px solid #388e3c;border-radius:3px;"
-            'vertical-align:middle;margin-right:4px"></span> Configuration '
-            '<span style="color:#888">(transformation, extractor, writer, app)</span>'
-            "<br/>"
-            "<br/>"
-            '<span style="display:inline-block;width:20px;height:3px;'
-            "background:#7c4dff;vertical-align:middle;margin-right:4px;"
-            'border-radius:2px"></span> Cross-project edge '
-            '<span style="color:#888">'
-            "(sql_tokenizer_cross_project, bucket_sharing, ai_cross_project)</span>"
-            "<br/>"
-            '<span style="color:#888;font-size:12px;margin-top:4px;display:block">'
-            "Edge labels: input_mapping / output_mapping (deterministic from config) "
-            "| sql_tokenizer (parsed from SQL code) | bucket_sharing (shared buckets) "
-            "| ai (AI-detected from code analysis)</span>"
-            "</div>"
-        )
-        return (
-            "<!DOCTYPE html>\n"
-            "<html>\n"
-            "<head>\n"
-            f"  <title>{escaped_title}</title>\n"
-            f"  <script {MERMAID_SCRIPT_ATTRS}></script>\n"
-            "  <style>\n"
-            "    body { font-family: system-ui, -apple-system, sans-serif;\n"
-            "           max-width: 100%; padding: 20px; color: #333; }\n"
-            "    h2 { margin-bottom: 4px; }\n"
-            "    .mermaid { text-align: center; margin-top: 16px; }\n"
-            "  </style>\n"
-            "</head>\n"
-            "<body>\n"
-            f"  <h2>{escaped_title}</h2>\n"
-            f"  {legend}\n"
-            f'  <div class="mermaid">\n{mermaid_code}\n  </div>\n'
-            "  <script>mermaid.initialize({startOnLoad: true, theme: 'default', "
-            "flowchart: {curve: 'basis'}});</script>\n"
-            "</body>\n"
-            "</html>"
-        )
+    render_html = staticmethod(render_html)
 
     @staticmethod
     def _suggest(graph: LineageGraph, identifier: str) -> list[str]:
@@ -1440,5 +1019,6 @@ class DeepLineageService:
                 "fqn": fqn,
                 "name": c.config_name,
                 "component": c.component_id,
+                "external": list(c.external),
             }
         return {"type": "unknown", "fqn": fqn}

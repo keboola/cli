@@ -507,6 +507,11 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   `STORAGE_JOB_TIMEOUT` here = import still running: NEVER re-run the upload
   (duplicate rows); recover with `load-file --file-id`.
 
+**`lineage show -c COL` is a trace, not a filter (since vNEXT)**
+- Follows one column of a TABLE through `lineage build --ai` mappings; read
+  `terminals[]` for where the mapping is unknown. Config focus or `-f
+  mermaid|html|er` with `-c` = exit 2. `-f html` defaults to `--depth 3`.
+
 ---
 
 ## 4. WORKFLOWS (reference playbooks)

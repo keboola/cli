@@ -1086,14 +1086,22 @@ remain branch-aware because modifying a dev branch is the expected intent.
       [--format text|mermaid|html|er]
     Query upstream/downstream from cached lineage graph (from lineage build).
     Node identifiers: full FQN project-alias:bucket_id.table_name or just table_id.
-    --columns shows column-level mapping. -c COL traces one column.
+    Text output is a real tree (repeats shown as "(see above)"); edges are
+    labelled reads / writes / shares, "[AI]" = AI-detected. --columns shows
+    column-level mapping. -c COL traces one column of a TABLE hop by hop
+    through mappings recorded by `lineage build --ai` and stops where no
+    mapping is known (JSON: terminals[] with node, column, reason); a config
+    focus, or -c with mermaid/html/er, is a usage error (exit 2). Diagrams are
+    always left-to-right with the queried node highlighted. --depth defaults
+    to 3 for -f html, 10 otherwise.
 
   kbagent lineage info --load PATH
     Show what's in a cached lineage graph: projects, tables, most connected nodes.
 
   kbagent lineage server --load PATH [--port N] [--host HOST]
     Start interactive lineage browser in the web browser. Sidebar-based node
-    picker with mermaid/ER diagram rendering and export.
+    picker with mermaid/ER diagram rendering and export. "Both" directions is
+    one server-side union rendered once (direction=both).
 
 ### Organization Management
 

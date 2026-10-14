@@ -361,7 +361,8 @@ def _create_sync_tree(tmp_path: Path) -> Path:
                 "rows": [
                     {
                         "id": "row-1",
-                        "path": "extractor/keboola.ex-db-snowflake/my-extractor/rows/row-1",
+                        # Relative to the config dir, as ``sync pull`` writes it.
+                        "path": "rows/row-1",
                     }
                 ],
             },
@@ -476,6 +477,12 @@ class TestDeepLineageServiceScan:
         detections = [e["detection"] for e in edges]
         assert "output_mapping" in detections
         assert "sql_tokenizer" in detections
+        # The extractor's row output mapping is read from the config-relative row dir.
+        pairs = [(e["source_fqn"], e["target_fqn"]) for e in edges]
+        assert (
+            "test-project:keboola.ex-db-snowflake/cfg-2",
+            "test-project:in.c-source.accounts",
+        ) in pairs
 
     def test_query_upstream(self, tmp_path: Path) -> None:
         root = _create_sync_tree(tmp_path)
@@ -1246,7 +1253,6 @@ class TestRenderErDiagramXssRegression:
             edges=edges,
             graph=graph,
             node_fqn=next(iter(graph.tables)),
-            show_columns=False,
         )
         assert "<script>" not in rendered
         assert "</div>" not in rendered
@@ -1262,7 +1268,6 @@ class TestRenderErDiagramXssRegression:
             edges=edges,
             graph=graph,
             node_fqn=next(iter(graph.tables)),
-            show_columns=False,
         )
         assert "<img" not in rendered
         assert "&lt;img" in rendered
