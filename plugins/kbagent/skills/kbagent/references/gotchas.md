@@ -11,6 +11,32 @@ Versioning convention:
   behavior; the inline `(updated vX.Y.Z)` records when the refinement landed.
 -->
 
+## `http`, `search` and three destructive effects now get the permission check
+
+*(since vNEXT)*
+
+- **`kbagent http get/post/patch/delete` checks `http.<verb>` against the
+  caller's own policy and `--deny-*` flags before it sends a request.**
+  `--deny-writes` blocks `post`, `patch` and `delete`; `--deny-destructive`
+  blocks `delete`. A denial exits 6 (`PERMISSION_DENIED`) and no request is
+  sent. Before, only the policy of the `kbagent serve` that got the request
+  applied, so `kbagent --deny-destructive http delete ...` still deleted.
+- **`kbagent search` checks the `search` key (read class).** A policy that
+  denies `search` now blocks it; before, the command ran with no check.
+- **`token refresh` and `workspace password` are destructive-class** (they
+  were `write` and `read`). Both make the old secret stop working.
+  `--deny-destructive` now blocks both, and `--deny-writes` now also blocks
+  `workspace password`. The `kbagent serve` routes `POST /token/{project}/refresh`
+  and `POST /workspaces/{project}/{workspace_id}/password` use the same keys.
+- **`config variables-set --replace` is destructive-class**
+  (`config.variables-set --replace` in `FLAG_ESCALATIONS`): it drops every value
+  that is not in `--var`. A merge without `--replace` stays write-class. The
+  `kbagent serve` route `PUT /configs/{project}/{component_id}/{config_id}/variables`
+  checks the same key when the body has `"replace": true`.
+- **A session or policy that ran these commands before can now get exit 6
+  (HTTP 403 over REST).** Run them without `--deny-destructive`, or allow the
+  key in the policy.
+
 ## Every command that picks a branch names it: `Target:` line and `targets` key
 
 *(since 0.96.1, #766)*

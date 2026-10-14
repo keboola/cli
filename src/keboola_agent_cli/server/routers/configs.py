@@ -8,7 +8,8 @@ from typing import Any
 from fastapi import APIRouter, Body, Depends, Query
 from pydantic import BaseModel
 
-from ..dependencies import ServiceRegistry, get_registry
+from ...permissions import PermissionEngine
+from ..dependencies import ServiceRegistry, get_permission_engine, get_registry
 
 router = APIRouter(prefix="/configs", tags=["configs"])
 
@@ -632,8 +633,11 @@ def variables_set(
     config_id: str,
     body: VariablesSet,
     registry: ServiceRegistry = Depends(get_registry),
+    engine: PermissionEngine = Depends(get_permission_engine),
 ) -> dict[str, Any]:
     """Set or merge configuration variables. Mirrors `kbagent config variables-set`."""
+    if body.replace:
+        engine.check_or_raise("config.variables-set --replace")
     return registry.variables.set_variables(
         alias=project,
         component_id=component_id,

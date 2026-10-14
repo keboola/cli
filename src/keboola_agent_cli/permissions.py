@@ -69,11 +69,11 @@ OPERATION_REGISTRY: dict[str, str] = {
     "stream.detail": "read",
     "stream.create-source": "write",
     "stream.delete": "destructive",
-    # Storage API scoped tokens: minting/rotating is a write (creates a
-    # credential), revoking is destructive (a live token stops working).
+    # Storage API scoped tokens: creating one is a write (a new credential);
+    # rotating and revoking are destructive (a live token value stops working).
     "token.list": "read",
     "token.create": "write",
-    "token.refresh": "write",
+    "token.refresh": "destructive",
     "token.delete": "destructive",
     # Config browsing & management
     "config.list": "read",
@@ -170,7 +170,8 @@ OPERATION_REGISTRY: dict[str, str] = {
     "workspace.list": "read",
     "workspace.detail": "read",
     "workspace.delete": "destructive",
-    "workspace.password": "read",
+    # Resets the password: the old one stops working for every client that uses it.
+    "workspace.password": "destructive",
     "workspace.load": "write",
     "workspace.query": "write",
     "workspace.from-transformation": "write",
@@ -385,11 +386,11 @@ OPERATION_REGISTRY: dict[str, str] = {
     # DELETE = destructive (it deletes). DELETE is deliberately a rung above
     # the other mutating verbs -- lumping it in as `write` would let a
     # `--deny-destructive` session delete through the REST boundary.
-    # Since 0.99.0 (issue #655) the serve's own routes DO enforce the served
-    # config dir's policy on top, so a denied operation is refused at both
-    # ends; before that, only `/auth/*` (since 0.90.1) and `/merge-requests/*`
-    # re-checked the policy and every other router was unguarded, so these
-    # keys were the only firewall an `http.*` call met there.
+    # The `http` group callback checks these keys against the caller's own
+    # policy and session flags (`--deny-writes`, `--deny-destructive`) before
+    # any request is sent. Since 0.99.0 (issue #655) the serve's own routes
+    # also enforce the served config dir's policy, so a denied operation is
+    # refused at both ends.
     "http.get": "read",
     "http.post": "write",
     "http.patch": "write",
@@ -463,6 +464,8 @@ OPERATION_REGISTRY: dict[str, str] = {
 FLAG_ESCALATIONS: dict[str, str] = {
     "auth.logout --remove-projects": "admin",
     "sync.push --force": "destructive",
+    # `--replace` drops every variable value that is not in `--var`.
+    "config.variables-set --replace": "destructive",
     # `--scope organization` makes an item (and its revision history) visible to
     # every project in the org with no downgrade endpoint -- irreversible.
     "semantic-layer.scope.set --scope organization": "destructive",

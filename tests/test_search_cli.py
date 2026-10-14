@@ -10,7 +10,8 @@ from typer.testing import CliRunner
 
 from keboola_agent_cli.cli import app
 from keboola_agent_cli.config_store import ConfigStore
-from keboola_agent_cli.models import ProjectConfig
+from keboola_agent_cli.constants import EXIT_PERMISSION_DENIED
+from keboola_agent_cli.models import PermissionPolicy, ProjectConfig
 from keboola_agent_cli.services.project_service import ProjectService
 
 TEST_TOKEN = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
@@ -557,3 +558,26 @@ class TestSearchScopeFlag:
         assert result.exit_code == 2, result.output
         assert json.loads(result.output)["error"]["code"] == "INVALID_ARGUMENT"
         mock_svc.search.assert_not_called()
+
+
+class TestSearchPermissionCheck:
+    def test_policy_denying_search_blocks_it(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _make_store(config_dir, {"prod": {"token": TEST_TOKEN}})
+        config = store.load()
+        config.permissions = PermissionPolicy(mode="allow", deny=["search"])
+        store.save(config)
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.SearchService") as MockSearchService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+
+            result = runner.invoke(app, ["--json", "search", "orders"])
+
+        assert result.exit_code == EXIT_PERMISSION_DENIED, result.output
+        MockSearchService.return_value.search.assert_not_called()

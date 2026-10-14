@@ -47,7 +47,8 @@ Flag escalations
 The table sees the route, not the body, so it never checks a flag key. The
 semantic-layer writes that can land at ``organization`` scope (``FLAG_ESCALATIONS``
 makes that destructive-class) add the escalated check in their handlers, with
-the per-kind leaf key for ``POST /semantic-layer/items/{kind}``.
+the per-kind leaf key for ``POST /semantic-layer/items/{kind}``. The variables
+``PUT`` does the same for ``replace: true`` (``config.variables-set --replace``).
 """
 
 from __future__ import annotations
@@ -161,6 +162,8 @@ ROUTE_OPERATIONS: dict[tuple[str, str], str] = {
     ("GET", "/configs/{project}/{component_id}/{config_id}/state"): "config.state-get",
     ("PUT", "/configs/{project}/{component_id}/{config_id}/state"): "config.state-set",
     ("GET", "/configs/{project}/{component_id}/{config_id}/variables"): "config.variables-get",
+    # Base key only. `replace: true` in the body escalates to the destructive-class
+    # `config.variables-set --replace` inside the handler (server/routers/configs.py).
     ("PUT", "/configs/{project}/{component_id}/{config_id}/variables"): "config.variables-set",
     (
         "DELETE",

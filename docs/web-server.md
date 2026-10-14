@@ -634,7 +634,9 @@ escalated key when the body asks for `organization`. As on the CLI, an omitted
 `import`, `promote`, and `build` with a `model`) gets the same check; the model
 lookup runs only when a policy is active. Under `--deny-destructive` these calls
 answer 403 `PERMISSION_DENIED`; the same calls at `project` or `targeted` scope
-are allowed.
+are allowed. *(since vNEXT)* `PUT /configs/{project}/{component_id}/{config_id}/variables`
+with `"replace": true` checks `config.variables-set --replace` (destructive) in the
+same way; a merge without `replace` is a write.
 
 **Discovering the policy.** `GET /permissions/show` returns the *effective*
 policy the server enforces — the persisted block already merged with the
@@ -674,6 +676,11 @@ Plus a short instruction prefix is prepended to the user's prompt
 telling the AI: "you can call this serve via `kbagent http get /…` —
 that is the preferred path because it shares state with this very
 process, instead of forking a CLI tree against possibly stale config."
+
+*(since vNEXT)* `kbagent http` also checks `http.<verb>` against the
+caller's own policy and `--deny-*` flags before it sends the request, so
+`kbagent --deny-destructive http delete …` exits 6 and the serve gets no
+request.
 
 This is what lets a midnight agent task do meaningful work: it has
 the same view of Keboola the operator does, it can call any endpoint in

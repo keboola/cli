@@ -1,10 +1,11 @@
 """Tests for the ``kbagent http`` CLI subcommand (thin HTTP client).
 
-Two surfaces under test:
+Three areas under test:
 
 - Env-var enforcement: without KBAGENT_SERVE_URL + KBAGENT_SERVE_TOKEN, the
   command must refuse to run (exit 2) -- the command has no meaningful
   target outside a ``kbagent serve`` subprocess context.
+- Permission check: a denied ``http.<verb>`` exits 6 before any request.
 - Happy-path forwarding: GET/POST round-trips via pytest-httpx, including
   Bearer header injection, --body parsing (inline / @file / -), and 4xx
   error mapping.
@@ -21,6 +22,7 @@ from keboola_agent_cli.cli import app
 from keboola_agent_cli.constants import (
     ENV_KBAGENT_SERVE_TOKEN,
     ENV_KBAGENT_SERVE_URL,
+    EXIT_PERMISSION_DENIED,
 )
 
 runner = CliRunner()
@@ -105,3 +107,31 @@ class TestHttpPostBody:
         result = runner.invoke(app, ["http", "post", "/x", "--body", "not json{"])
         assert result.exit_code == 2
         assert "valid JSON" in result.output
+
+
+class TestPermissionCheck:
+    """`http` checks `http.<verb>` against the caller's policy before any request."""
+
+    @staticmethod
+    def _invoke(monkeypatch, tmp_path: Path, *args: str):
+        monkeypatch.setenv(ENV_KBAGENT_SERVE_URL, SERVE_URL)
+        monkeypatch.setenv(ENV_KBAGENT_SERVE_TOKEN, SERVE_TOKEN)
+        return runner.invoke(app, ["--config-dir", str(tmp_path), "--json", *args])
+
+    def test_deny_destructive_blocks_delete(self, monkeypatch, tmp_path: Path, httpx_mock) -> None:
+        result = self._invoke(monkeypatch, tmp_path, "--deny-destructive", "http", "delete", "/x")
+        assert result.exit_code == EXIT_PERMISSION_DENIED
+        assert "http.delete" in result.output
+        assert httpx_mock.get_requests() == []
+
+    def test_deny_writes_blocks_post(self, monkeypatch, tmp_path: Path, httpx_mock) -> None:
+        result = self._invoke(
+            monkeypatch, tmp_path, "--deny-writes", "http", "post", "/x", "--body", "{}"
+        )
+        assert result.exit_code == EXIT_PERMISSION_DENIED
+        assert httpx_mock.get_requests() == []
+
+    def test_deny_writes_allows_get(self, monkeypatch, tmp_path: Path, httpx_mock) -> None:
+        httpx_mock.add_response(url=f"{SERVE_URL}/projects", json={"projects": []})
+        result = self._invoke(monkeypatch, tmp_path, "--deny-writes", "http", "get", "/projects")
+        assert result.exit_code == 0, result.output

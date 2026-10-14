@@ -27,7 +27,7 @@ from ..services.http_forwarder_service import (
     ForwarderError,
     HttpForwarderService,
 )
-from ._helpers import get_formatter
+from ._helpers import check_cli_permission, get_formatter
 
 http_app = typer.Typer(
     help=(
@@ -36,6 +36,11 @@ http_app = typer.Typer(
     ),
     no_args_is_help=True,
 )
+
+
+@http_app.callback(invoke_without_command=True)
+def _http_permission_check(ctx: typer.Context) -> None:
+    check_cli_permission(ctx, "http")
 
 
 def _print_json(_console: Any, data: Any) -> None:
