@@ -19,8 +19,14 @@ from typing import Any
 import yaml
 
 from ..config_store import ConfigStore
-from ..constants import MERMAID_SCRIPT_ATTRS
+from ._lineage_mermaid import (
+    escape_mermaid_label,
+    render_html,
+    render_mermaid,
+    sanitize_mermaid_id,
+)
 from ._lineage_paths import select_scan_entries, skipped_trees_warning
+from ._lineage_trace import is_config_node, trace_column, union_edges, walk_edges
 
 logger = logging.getLogger(__name__)
 
@@ -292,45 +298,10 @@ class LineageGraph:
         self._upstream.setdefault(edge.target_fqn, []).append(idx)
 
     def get_upstream(self, fqn: str, depth: int = 10) -> list[dict]:
-        visited: set[str] = set()
-        result: list[dict] = []
-        self._walk(fqn, depth, 0, visited, result, direction="upstream")
-        return result
+        return walk_edges(self, fqn, depth, "upstream")
 
     def get_downstream(self, fqn: str, depth: int = 10) -> list[dict]:
-        visited: set[str] = set()
-        result: list[dict] = []
-        self._walk(fqn, depth, 0, visited, result, direction="downstream")
-        return result
-
-    def _walk(
-        self,
-        fqn: str,
-        max_depth: int,
-        current_depth: int,
-        visited: set[str],
-        result: list[dict],
-        direction: str,
-    ) -> None:
-        if current_depth >= max_depth or fqn in visited:
-            return
-        visited.add(fqn)
-        index = self._upstream if direction == "upstream" else self._downstream
-        for edge_idx in index.get(fqn, []):
-            edge = self.edges[edge_idx]
-            next_fqn = edge.source_fqn if direction == "upstream" else edge.target_fqn
-            result.append(
-                {
-                    "depth": current_depth + 1,
-                    "source": edge.source_fqn,
-                    "target": edge.target_fqn,
-                    "edge_type": edge.edge_type,
-                    "detection": edge.detection,
-                    "columns": edge.columns,
-                    "column_mapping": edge.column_mapping,
-                }
-            )
-            self._walk(next_fqn, max_depth, current_depth + 1, visited, result, direction)
+        return walk_edges(self, fqn, depth, "downstream")
 
     def summary(self) -> dict:
         edge_types: dict[str, int] = {}
@@ -563,20 +534,81 @@ class DeepLineageService:
             }
 
         fqn = candidates[0]
+        up = graph.get_upstream(fqn, depth) if direction in ("upstream", "both") else []
+        down = graph.get_downstream(fqn, depth) if direction in ("downstream", "both") else []
         result: dict[str, Any] = {
             "node": fqn,
             "direction": direction,
             "node_info": self._node_info(graph, fqn),
-            "edges": (
-                graph.get_upstream(fqn, depth)
-                if direction == "upstream"
-                else graph.get_downstream(fqn, depth)
-            ),
+            "edges": union_edges(up, down),
         }
         if len(candidates) > 1:
             result["ambiguous_matches"] = candidates
             result["warnings"] = [_ambiguity_warning(identifier, candidates)]
         return result
+
+    def query(
+        self, graph: LineageGraph, identifier: str, project: str, depth: int, *, direction: str
+    ) -> dict[str, Any]:
+        """Query ``upstream``, ``downstream`` or ``both`` (one deduplicated union)."""
+        return self._query(graph, identifier, project, depth, direction=direction)
+
+    def query_column(
+        self,
+        graph: LineageGraph,
+        identifier: str,
+        column: str,
+        project: str = "",
+        depth: int = 10,
+        *,
+        direction: str,
+    ) -> dict[str, Any]:
+        """Trace ``column`` of a table hop by hop (see ``_lineage_trace.trace_column``).
+
+        A configuration focus has no columns of its own to trace, so it comes
+        back as an error flagged ``usage_error`` (the CLI maps it to exit 2).
+        """
+        result = self._query(graph, identifier, project, 0, direction=direction)
+        if "error" in result:
+            return result
+        fqn = result["node"]
+        if is_config_node(graph, fqn):
+            return {
+                "error": f"--column needs a table to trace from; '{fqn}' is a configuration.",
+                "usage_error": True,
+            }
+        result.update(trace_column(graph, fqn, column, direction, depth))
+        result["column"] = column
+        result["column_filter"] = column
+        return result
+
+    def diagram(
+        self,
+        graph: LineageGraph,
+        node: str,
+        direction: str,
+        depth: int,
+        *,
+        view: str = "flow",
+        show_columns: bool = False,
+    ) -> str:
+        """Mermaid source for one query -- shared by both lineage HTTP servers.
+
+        ``direction="both"`` renders the union of both walks ONCE; merging two
+        rendered diagrams textually broke the ER view (its ``}`` lines were
+        deduplicated away).
+        """
+        result = self.query(graph, node, "", depth, direction=direction)
+        if "error" in result:
+            return "graph LR\n  error[" + result["error"].replace('"', "'") + "]"
+        warnings = result.get("warnings")
+        if view == "er":
+            return self.render_er_diagram(
+                result["edges"], graph, result["node"], show_columns=show_columns, warnings=warnings
+            )
+        return self.render_mermaid(
+            result["edges"], graph, direction, result["node"], show_columns, warnings
+        )
 
     # --- Internal methods ---
 
@@ -960,115 +992,9 @@ class DeepLineageService:
 
     # --- Mermaid / HTML rendering ---
 
-    @staticmethod
-    def _sanitize_mermaid_id(fqn: str) -> str:
-        """Sanitize FQN into a valid mermaid node ID (alphanumeric + underscore)."""
-        return re.sub(r"[^a-zA-Z0-9_]", "_", fqn)
-
-    @staticmethod
-    def _escape_mermaid_label(text: str) -> str:
-        """Escape characters that break mermaid label syntax, preserving <br/>."""
-        # Temporarily protect <br/>, escape everything, restore
-        text = text.replace("<br/>", "\x00BR\x00")
-        text = text.replace('"', "&quot;").replace("<", "&lt;").replace(">", "&gt;")
-        return text.replace("\x00BR\x00", "<br/>")
-
-    @staticmethod
-    def render_mermaid(
-        edges: list[dict],
-        graph: LineageGraph,
-        direction: str,
-        node_fqn: str,
-        show_columns: bool = False,
-        warnings: list[str] | None = None,
-    ) -> str:
-        """Render lineage edges as a mermaid flowchart.
-
-        Args:
-            edges: List of edge dicts from query_upstream/query_downstream.
-            graph: The lineage graph (for node metadata).
-            direction: "upstream" or "downstream".
-            node_fqn: The FQN of the queried node.
-            show_columns: If True, include column names in table labels.
-            warnings: Non-fatal notes to render into the diagram itself,
-                typically the ambiguity warning from an unqualified id (#568).
-                A diagram carries no metadata channel the way the JSON shapes
-                do, so a caller that has warnings and drops them leaves the
-                viewer with one project's answer looking like the whole
-                picture -- which is the bug, not a cosmetic omission.
-
-        Returns:
-            Mermaid flowchart source code.
-        """
-        sanitize = DeepLineageService._sanitize_mermaid_id
-        escape = DeepLineageService._escape_mermaid_label
-
-        graph_dir = "RL" if direction == "upstream" else "LR"
-        lines: list[str] = [f"graph {graph_dir}"]
-
-        # Standalone nodes -- deliberately unconnected, so they read as a note
-        # on the diagram rather than as part of the dependency graph.
-        for index, warning in enumerate(warnings or []):
-            warning_id = f"kbagentNote{index}"
-            lines.append(f'  {warning_id}["⚠ {escape(warning)}"]')
-            lines.append(f"  style {warning_id} fill:#fff3cd,stroke:#856404,color:#856404")
-
-        # Determine the root node's project for cross-project detection
-        root_project = node_fqn.split(":")[0] if ":" in node_fqn else ""
-
-        # Collect all unique node FQNs (including the root node)
-        node_fqns: set[str] = {node_fqn}
-        for edge in edges:
-            node_fqns.add(edge["source"])
-            node_fqns.add(edge["target"])
-
-        # Emit node definitions with labels and classes
-        for fqn in sorted(node_fqns):
-            node_id = sanitize(fqn)
-            node_project = fqn.split(":")[0] if ":" in fqn else ""
-            is_cross = node_project and root_project and node_project != root_project
-
-            if fqn in graph.tables:
-                t = graph.tables[fqn]
-                label_parts = [f"{t.project_alias}:{t.table_id}"]
-                label_parts.append(f"{len(t.columns)} cols, {t.rows_count:,} rows")
-                if show_columns and t.columns:
-                    col_display = t.columns[:8]
-                    col_text = ", ".join(col_display)
-                    if len(t.columns) > 8:
-                        col_text += f", +{len(t.columns) - 8} more"
-                    label_parts.append(col_text)
-                label = escape("<br/>".join(label_parts))
-                css_class = "cross_table" if is_cross else "table"
-                lines.append(f'  {node_id}["{label}"]:::{css_class}')
-            elif fqn in graph.configurations:
-                c = graph.configurations[fqn]
-                label = escape(f"{c.project_alias}:{c.config_name}<br/>{c.component_id}")
-                lines.append(f'  {node_id}["{label}"]:::config')
-            else:
-                label = escape(fqn)
-                css_class = "cross_table" if is_cross else "table"
-                lines.append(f'  {node_id}["{label}"]:::{css_class}')
-
-        # Emit edges
-        seen_edges: set[tuple[str, str]] = set()
-        for edge in edges:
-            src_id = sanitize(edge["source"])
-            tgt_id = sanitize(edge["target"])
-            edge_key = (src_id, tgt_id)
-            if edge_key in seen_edges:
-                continue
-            seen_edges.add(edge_key)
-            detection = escape(edge["detection"])
-            lines.append(f"  {src_id} -->|{detection}| {tgt_id}")
-
-        # Style definitions
-        lines.append("")
-        lines.append("  classDef table fill:#e1f5fe,stroke:#0288d1")
-        lines.append("  classDef config fill:#e8f5e9,stroke:#388e3c")
-        lines.append("  classDef cross_table fill:#f3e5f5,stroke:#7b1fa2")
-
-        return "\n".join(lines)
+    _sanitize_mermaid_id = staticmethod(sanitize_mermaid_id)
+    _escape_mermaid_label = staticmethod(escape_mermaid_label)
+    render_mermaid = staticmethod(render_mermaid)
 
     @staticmethod
     def render_er_diagram(
@@ -1212,67 +1138,7 @@ class DeepLineageService:
 
         return "\n".join(lines)
 
-    @staticmethod
-    def render_html(mermaid_code: str, title: str) -> str:
-        """Wrap mermaid code in a self-contained HTML page.
-
-        Args:
-            mermaid_code: Mermaid flowchart source.
-            title: Page title / heading.
-
-        Returns:
-            Complete HTML document string.
-        """
-        escaped_title = title.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        legend = (
-            '<div style="margin:20px 0;padding:12px 16px;background:#f5f5f5;'
-            'border-radius:8px;font-size:13px;display:inline-block">'
-            "<strong>Legend</strong><br/>"
-            '<span style="display:inline-block;width:14px;height:14px;'
-            "background:#e1f5fe;border:2px solid #0288d1;border-radius:3px;"
-            'vertical-align:middle;margin-right:4px"></span> Table '
-            '<span style="color:#888">(project:bucket.table &mdash; columns, rows)</span>'
-            "&nbsp;&nbsp;&nbsp;"
-            '<span style="display:inline-block;width:14px;height:14px;'
-            "background:#e8f5e9;border:2px solid #388e3c;border-radius:3px;"
-            'vertical-align:middle;margin-right:4px"></span> Configuration '
-            '<span style="color:#888">(transformation, extractor, writer, app)</span>'
-            "<br/>"
-            "<br/>"
-            '<span style="display:inline-block;width:20px;height:3px;'
-            "background:#7c4dff;vertical-align:middle;margin-right:4px;"
-            'border-radius:2px"></span> Cross-project edge '
-            '<span style="color:#888">'
-            "(sql_tokenizer_cross_project, bucket_sharing, ai_cross_project)</span>"
-            "<br/>"
-            '<span style="color:#888;font-size:12px;margin-top:4px;display:block">'
-            "Edge labels: input_mapping / output_mapping (deterministic from config) "
-            "| sql_tokenizer (parsed from SQL code) | bucket_sharing (shared buckets) "
-            "| ai (AI-detected from code analysis)</span>"
-            "</div>"
-        )
-        return (
-            "<!DOCTYPE html>\n"
-            "<html>\n"
-            "<head>\n"
-            f"  <title>{escaped_title}</title>\n"
-            f"  <script {MERMAID_SCRIPT_ATTRS}></script>\n"
-            "  <style>\n"
-            "    body { font-family: system-ui, -apple-system, sans-serif;\n"
-            "           max-width: 100%; padding: 20px; color: #333; }\n"
-            "    h2 { margin-bottom: 4px; }\n"
-            "    .mermaid { text-align: center; margin-top: 16px; }\n"
-            "  </style>\n"
-            "</head>\n"
-            "<body>\n"
-            f"  <h2>{escaped_title}</h2>\n"
-            f"  {legend}\n"
-            f'  <div class="mermaid">\n{mermaid_code}\n  </div>\n'
-            "  <script>mermaid.initialize({startOnLoad: true, theme: 'default', "
-            "flowchart: {curve: 'basis'}});</script>\n"
-            "</body>\n"
-            "</html>"
-        )
+    render_html = staticmethod(render_html)
 
     @staticmethod
     def _suggest(graph: LineageGraph, identifier: str) -> list[str]:
@@ -1295,5 +1161,6 @@ class DeepLineageService:
                 "fqn": fqn,
                 "name": c.config_name,
                 "component": c.component_id,
+                "external": list(c.external),
             }
         return {"type": "unknown", "fqn": fqn}

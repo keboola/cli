@@ -11,7 +11,6 @@ Four subcommands:
 
 import http.server
 import json
-import re
 import threading
 import webbrowser
 from pathlib import Path
@@ -21,7 +20,6 @@ import typer
 
 from ..constants import MERMAID_SCRIPT_ATTRS
 from ..errors import ErrorCode
-from ..output import OutputFormatter
 from ..services.deep_lineage_service import DeepLineageService, LineageGraph
 from ._helpers import (
     check_cli_permission,
@@ -29,6 +27,13 @@ from ._helpers import (
     get_service,
 )
 from ._lineage_build_output import print_ai_status
+from ._lineage_tree import (
+    DIAGRAM_FORMATS,
+    output_diagram,
+    print_column_trace,
+    print_lineage_tree,
+    resolve_depth,
+)
 
 lineage_app = typer.Typer(
     help="Column-level data lineage across projects.\n\n"
@@ -249,7 +254,9 @@ def lineage_show(
         None,
         "--column",
         "-c",
-        help="Trace a specific column (use with --upstream/--downstream).",
+        help="Trace one column of a TABLE hop by hop (text or --json only). Follows "
+        "column mappings recorded by `lineage build --ai`; stops, and says so, where no "
+        "mapping is known.",
     ),
     columns: bool = typer.Option(
         False,
@@ -262,7 +269,9 @@ def lineage_show(
         "-p",
         help="Project alias filter for queries.",
     ),
-    depth: int = typer.Option(10, "--depth", help="Max traversal depth (default: 10)."),
+    depth: int | None = typer.Option(
+        None, "--depth", help="Max traversal depth (default: 3 for -f html, else 10)."
+    ),
     format: str = typer.Option(
         "text",
         "--format",
@@ -327,225 +336,47 @@ def lineage_show(
         )
         raise typer.Exit(code=2)
 
-    display_opts = {"show_columns": columns, "filter_column": column}
+    if column and format != "text":
+        formatter.error(
+            message=f"--column traces text or --json output only, not -f {format}.",
+            error_code=ErrorCode.INVALID_ARGUMENT,
+        )
+        raise typer.Exit(code=2)
+    depth = resolve_depth(depth, format, formatter.json_mode)
 
-    # Both directions render identically; only the service call and the label
-    # differ. Passing both --upstream and --downstream emits both, in order.
+    # Passing both --upstream and --downstream emits both, in order.
     for direction, identifier in (("upstream", upstream), ("downstream", downstream)):
         if not identifier:
             continue
-        query = service.query_upstream if direction == "upstream" else service.query_downstream
-        query_result = query(graph, identifier, project or "", depth)
+        if column:
+            query_result = service.query_column(
+                graph, identifier, column, project or "", depth, direction=direction
+            )
+        else:
+            query_result = service.query(
+                graph, identifier, project or "", depth, direction=direction
+            )
         if "error" in query_result:
-            suggestions = query_result.get("suggestions", [])
             msg = query_result["error"]
-            if suggestions:
-                msg += "\nDid you mean: " + ", ".join(suggestions[:5])
+            if query_result.get("usage_error"):
+                formatter.error(message=msg, error_code=ErrorCode.INVALID_ARGUMENT)
+                raise typer.Exit(code=2)
+            if query_result.get("suggestions"):
+                msg += "\nDid you mean: " + ", ".join(query_result["suggestions"][:5])
             formatter.error(message=msg, error_code=ErrorCode.NODE_NOT_FOUND)
             raise typer.Exit(code=1)
 
-        _emit_query_warnings(formatter, query_result)
+        for warning in query_result.get("warnings", []):
+            formatter.warning(warning)  # no-op in JSON mode: it rides in the payload
 
         if formatter.json_mode:
-            if column:
-                query_result = _filter_column_json(query_result, column)
             formatter.output(query_result)
-        elif format in ("mermaid", "html", "er"):
-            _output_mermaid_or_html(formatter, service, graph, query_result, direction, format)
+        elif format in DIAGRAM_FORMATS:
+            output_diagram(formatter, graph, query_result, direction, format, columns)
+        elif column:
+            print_column_trace(formatter, graph, query_result, direction)
         else:
-            _format_lineage_tree(formatter, graph, query_result, direction, **display_opts)
-
-
-# -- Output formatting helpers ----------------------------------------------
-
-
-def _emit_query_warnings(formatter: OutputFormatter, query_result: dict) -> None:
-    """Print non-fatal warnings carried by a lineage query result.
-
-    Currently only the ambiguous-identifier warning (the same table id exists
-    in several projects). ``formatter.warning`` is a no-op in JSON mode --
-    there the warnings ride along in the emitted payload instead.
-    """
-    for warning in query_result.get("warnings", []):
-        formatter.warning(warning)
-
-
-def _output_mermaid_or_html(
-    formatter,
-    service,
-    graph,
-    query_result: dict,
-    direction: str,
-    output_format: str,
-) -> None:
-    """Render query result as mermaid, html, or er diagram and output it."""
-    from ..services.deep_lineage_service import DeepLineageService
-
-    node_fqn = query_result["node"]
-    edges = query_result.get("edges", [])
-
-    if output_format == "er":
-        er_code = DeepLineageService.render_er_diagram(
-            edges, graph, node_fqn, warnings=query_result.get("warnings")
-        )
-        typer.echo(er_code)
-        return
-
-    mermaid_code = DeepLineageService.render_mermaid(
-        edges, graph, direction, node_fqn, warnings=query_result.get("warnings")
-    )
-
-    if output_format == "mermaid":
-        typer.echo(mermaid_code)
-    elif output_format == "html":
-        title = f"Lineage {direction} of {node_fqn}"
-        html_content = DeepLineageService.render_html(mermaid_code, title)
-        sanitized_node = re.sub(r"[^a-zA-Z0-9_]", "_", node_fqn)
-        filename = f"lineage_{direction}_{sanitized_node}.html"
-        try:
-            with open(filename, "w") as f:
-                f.write(html_content)
-            if not formatter.json_mode:
-                formatter.console.print(f"HTML lineage diagram saved to: {filename}")
-        except OSError as exc:
-            formatter.error(
-                message=f"Cannot write HTML file '{filename}': {exc}",
-                error_code=ErrorCode.WRITE_ERROR,
-            )
-            raise typer.Exit(code=1) from None
-
-
-def _filter_column_json(result: dict, column_name: str) -> dict:
-    """Filter JSON query result to only edges relevant to a specific column."""
-    filtered_edges = []
-    col_lower = column_name.lower()
-    for edge in result.get("edges", []):
-        col_map = edge.get("column_mapping", {})
-        edge_columns = edge.get("columns", [])
-        mapped_keys = [k for k in col_map if k.lower() == col_lower]
-        mapped_vals = [k for k, v in col_map.items() if v.lower().endswith(f".{col_lower}")]
-        col_match = any(c.lower() == col_lower for c in edge_columns)
-        if mapped_keys or mapped_vals or col_match:
-            relevant_map = {
-                k: v for k, v in col_map.items() if k in mapped_keys or k in mapped_vals
-            }
-            edge_copy = dict(edge)
-            if relevant_map:
-                edge_copy["column_mapping"] = relevant_map
-            filtered_edges.append(edge_copy)
-        elif not col_map and not edge_columns:
-            filtered_edges.append(edge)
-    result_copy = dict(result)
-    result_copy["edges"] = filtered_edges
-    result_copy["column_filter"] = column_name
-    return result_copy
-
-
-def _format_lineage_tree(
-    formatter,
-    graph,
-    result: dict,
-    direction: str,
-    show_columns: bool = False,
-    filter_column: str | None = None,
-) -> None:
-    """Format lineage query result as a human-readable tree."""
-    from ..services.deep_lineage_service import LineageGraph
-
-    node_fqn = result["node"]
-    node_info = result.get("node_info", {})
-    edges = result.get("edges", [])
-
-    arrow = "<-" if direction == "upstream" else "->"
-    label = "Upstream dependencies" if direction == "upstream" else "Downstream dependents"
-
-    node_type = node_info.get("type", "unknown")
-    if node_type == "table":
-        n_cols = node_info.get("columns", 0)
-        rows = node_info.get("rows", 0)
-        desc = f"[table] {node_fqn} ({n_cols} cols, {rows:,} rows)"
-    elif node_info.get("name"):
-        desc = f"[{node_type}] {node_info['name']} ({node_info.get('component', '')})"
-    else:
-        desc = f"[{node_type}] {node_fqn}"
-
-    header = f"\n[bold]{label} of {desc}[/bold]"
-    if filter_column:
-        header += f"  [dim](column: {filter_column})[/dim]"
-    formatter.console.print(header + "\n")
-
-    if not edges:
-        formatter.console.print("  (none found)")
-        return
-
-    col_lower = filter_column.lower() if filter_column else None
-
-    for edge in sorted(edges, key=lambda e: e["depth"]):
-        col_map = edge.get("column_mapping", {})
-        edge_columns = edge.get("columns", [])
-
-        if col_lower:
-            has_in_map = any(
-                k.lower() == col_lower or v.lower().endswith(f".{col_lower}")
-                for k, v in col_map.items()
-            )
-            has_in_cols = any(c.lower() == col_lower for c in edge_columns)
-            is_structural = not col_map and not edge_columns
-            if not has_in_map and not has_in_cols and not is_structural:
-                continue
-
-        indent = "  " * edge["depth"]
-        target_fqn = edge["source"] if direction == "upstream" else edge["target"]
-
-        if isinstance(graph, LineageGraph):
-            if target_fqn in graph.tables:
-                t = graph.tables[target_fqn]
-                node_desc = f"[table] {target_fqn} ({len(t.columns)} cols, {t.rows_count:,} rows)"
-            elif target_fqn in graph.configurations:
-                c = graph.configurations[target_fqn]
-                node_desc = (
-                    f"[{c.component_type}] {c.project_alias}:{c.config_name} ({c.component_id})"
-                )
-            else:
-                node_desc = target_fqn
-        else:
-            node_desc = target_fqn
-
-        col_hint = ""
-        if not show_columns and edge_columns:
-            col_list = edge_columns[:5]
-            suffix = f"... +{len(edge_columns) - 5}" if len(edge_columns) > 5 else ""
-            col_hint = f" [{', '.join(col_list)}{suffix}]"
-
-        formatter.console.print(f"{indent}{arrow} ({edge['detection']}) {node_desc}{col_hint}")
-
-        if show_columns and col_map:
-            map_indent = "  " * (edge["depth"] + 1)
-            items = list(col_map.items())
-            if col_lower:
-                items = [
-                    (k, v)
-                    for k, v in items
-                    if k.lower() == col_lower or v.lower().endswith(f".{col_lower}")
-                ]
-            for out_col, src_expr in items:
-                src_short = src_expr.split(".")[-1] if "." in src_expr else src_expr
-                src_table = ".".join(src_expr.split(".")[:-1]) if "." in src_expr else ""
-                if src_table:
-                    formatter.console.print(
-                        f"{map_indent}[dim]{out_col}[/dim] <- {src_table}.[bold]{src_short}[/bold]"
-                    )
-                else:
-                    formatter.console.print(f"{map_indent}[dim]{out_col}[/dim] <- {src_expr}")
-        elif show_columns and edge_columns:
-            map_indent = "  " * (edge["depth"] + 1)
-            show_cols = edge_columns
-            if col_lower:
-                show_cols = [c for c in edge_columns if c.lower() == col_lower]
-            for c in show_cols[:10]:
-                formatter.console.print(f"{map_indent}[dim]{c}[/dim]")
-            if len(show_cols) > 10:
-                formatter.console.print(f"{map_indent}[dim]... +{len(show_cols) - 10} more[/dim]")
+            print_lineage_tree(formatter, graph, query_result, direction, columns, depth)
 
 
 # -- lineage serve ---------------------------------------------------------
@@ -739,7 +570,7 @@ body {
     <span><span style="display:inline-block;width:12px;height:12px;background:#e1f5fe;border:2px solid #0288d1;border-radius:2px;vertical-align:middle"></span> Table</span>
     <span><span style="display:inline-block;width:12px;height:12px;background:#e8f5e9;border:2px solid #388e3c;border-radius:2px;vertical-align:middle"></span> Configuration</span>
     <span><span style="display:inline-block;width:12px;height:12px;background:#f3e5f5;border:2px solid #7b1fa2;border-radius:2px;vertical-align:middle"></span> Table from another project</span>
-    <span style="color:#888">Edges: input_mapping | output_mapping | sql_tokenizer | bucket_sharing | ai</span>
+    <span style="color:#888">Edges: reads / writes / shares; dashed + AI = AI-detected; thick border = focus</span>
   </div>
   <div id="diagram-area">
     <div id="placeholder">
@@ -1028,54 +859,9 @@ body {
     exportBtns.style.display = "none";
     mainStats.textContent = "";
 
-    if (direction === "both") {
-      // Fetch both directions and merge
-      diagramTitle.textContent = "Both directions of " + fqn + ", depth " + depth;
-      var enc = encodeURIComponent(fqn);
-      Promise.all([
-        fetch("/api/query?node=" + enc + "&direction=upstream&depth=" + depth).then(function(r){return r.json();}),
-        fetch("/api/query?node=" + enc + "&direction=downstream&depth=" + depth).then(function(r){return r.json();}),
-        fetch("/api/mermaid?node=" + enc + "&direction=upstream&depth=" + depth + cp).then(function(r){return r.text();}),
-        fetch("/api/mermaid?node=" + enc + "&direction=downstream&depth=" + depth + cp).then(function(r){return r.text();})
-      ]).then(function(res) {
-        loading.style.display = "none";
-        var upQ = res[0], downQ = res[1], upM = res[2], downM = res[3];
-        var allEdges = (upQ.edges || []).concat(downQ.edges || []);
-        var merged = {node: fqn, edges: allEdges};
-        // Merge mermaid from both directions
-        var mermaidCode;
-        if (viewMode === "er") {
-          // ER: merge entity/relationship lines, deduplicate
-          var allL = (upM + "\n" + downM).split("\n");
-          var seenER = {}; var erL = ["erDiagram"];
-          allL.forEach(function(l) {
-            var t = l.trim();
-            if (!t || t === "erDiagram") return;
-            if (!seenER[t]) { seenER[t] = true; erL.push(l); }
-          });
-          mermaidCode = erL.join("\n");
-        } else {
-          // Flowchart: merge node/edge lines, deduplicate
-          var upLines = upM.split("\n"); var downLines = downM.split("\n");
-          var seen = {}; upLines.forEach(function(l){seen[l.trim()]=true;});
-          var extra = downLines.filter(function(l){return l.trim() && !seen[l.trim()] && !l.trim().startsWith("graph ") && !l.trim().startsWith("classDef ");});
-          var combined = upLines.slice(0,-2).concat(extra).concat(upLines.slice(-2));
-          combined[0] = "graph LR";
-          mermaidCode = combined.join("\n");
-        }
-        lastQueryResult = merged; lastMermaidCode = mermaidCode;
-        var nodeSet = {}; if(merged.node) nodeSet[merged.node]=true;
-        allEdges.forEach(function(e){nodeSet[e.source]=true;nodeSet[e.target]=true;});
-        mainStats.textContent = Object.keys(nodeSet).length+" nodes, "+allEdges.length+" edges";
-        exportBtns.style.display = "flex";
-        if(allEdges.length===0){mermaidOutput.innerHTML='<p style="color:#888;padding:20px">No dependencies found in either direction.</p>';return;}
-        buildIdMap(merged); renderMermaid(mermaidCode);
-      });
-      return;
-    }
-
-    diagramTitle.textContent = direction.charAt(0).toUpperCase() + direction.slice(1) +
-      " of " + fqn + ", depth " + depth;
+    // "both" is answered server-side as ONE union, rendered once (#848).
+    diagramTitle.textContent = (direction === "both" ? "Both directions" :
+      direction.charAt(0).toUpperCase() + direction.slice(1)) + " of " + fqn + ", depth " + depth;
 
     var queryUrl = "/api/query?node=" + encodeURIComponent(fqn) +
       "&direction=" + direction + "&depth=" + depth;
@@ -1110,7 +896,12 @@ body {
       mainStats.textContent = nodeCount + " nodes, " + edges.length + " edges";
       exportBtns.style.display = "flex";
 
-      if (edges.length === 0) {
+      var ext = (queryResult.node_info || {}).external || [];
+      if (edges.length === 0 && ext.length === 0) {
+        if (direction === "both") {
+          mermaidOutput.innerHTML = '<p style="color:#888;padding:20px">No dependencies found in either direction.</p>';
+          return;
+        }
         var opposite = direction === "upstream" ? "downstream" : "upstream";
         mermaidOutput.innerHTML = '<p style="color:#888;padding:20px">No ' +
           direction + ' dependencies found.</p>' +
@@ -1264,7 +1055,7 @@ body {
       '    &nbsp;&nbsp;\n' +
       '    <span class="legend-swatch" style="background:#e8f5e9;border:2px solid #388e3c"></span> Configuration\n' +
       '    <br/><span style="color:#888;font-size:12px">' +
-      '    Edge labels: input_mapping / output_mapping | sql_tokenizer | bucket_sharing | ai</span>\n' +
+      '    Edge labels: reads / writes / shares; dashed + AI = AI-detected</span>\n' +
       '  </div>\n' +
       '  <div class="mermaid">\n' + mermaidCode + '\n  </div>\n' +
       '  <script>mermaid.initialize({startOnLoad:true, theme:"default", ' +
@@ -1301,71 +1092,37 @@ class _LineageHandler(http.server.BaseHTTPRequestHandler):
             self.send_error(404)
 
     def _handle_query(self, parsed) -> None:
-        """Handle /api/query?node=FQN&direction=upstream&depth=3."""
+        """Handle /api/query?node=FQN&direction=upstream|downstream|both&depth=3."""
         params = parse_qs(parsed.query)
         node = params.get("node", [""])[0]
-        direction = params.get("direction", ["downstream"])[0]
-        depth = int(params.get("depth", ["3"])[0])
-
         if not node:
             self._serve(json.dumps({"error": "Missing 'node' parameter"}), "application/json")
             return
-
         assert self.service is not None and self.graph is not None
-        if direction == "upstream":
-            result = self.service.query_upstream(self.graph, node, depth=depth)
-        else:
-            result = self.service.query_downstream(self.graph, node, depth=depth)
-
+        direction = params.get("direction", ["downstream"])[0]
+        if direction not in ("upstream", "both"):
+            direction = "downstream"
+        depth = int(params.get("depth", ["3"])[0])
+        result = self.service.query(self.graph, node, "", depth, direction=direction)
         self._serve(json.dumps(result), "application/json")
 
     def _handle_mermaid(self, parsed) -> None:
-        """Handle /api/mermaid?node=FQN&direction=upstream&depth=3."""
-        from ..services.deep_lineage_service import DeepLineageService
-
+        """Handle /api/mermaid?node=FQN&direction=...&depth=3[&view=er][&columns=true]."""
         params = parse_qs(parsed.query)
         node = params.get("node", [""])[0]
-        direction = params.get("direction", ["downstream"])[0]
-        depth = int(params.get("depth", ["3"])[0])
-
         if not node:
             self._serve("graph LR\n  empty[No node specified]", "text/plain")
             return
-
         assert self.service is not None and self.graph is not None
-        if direction == "upstream":
-            result = self.service.query_upstream(self.graph, node, depth=depth)
-        else:
-            result = self.service.query_downstream(self.graph, node, depth=depth)
-
-        if "error" in result:
-            self._serve(
-                "graph LR\n  error[" + result["error"].replace('"', "'") + "]", "text/plain"
-            )
-            return
-
-        edges = result.get("edges", [])
-        view = params.get("view", ["flow"])[0]
-        show_cols = params.get("columns", [""])[0] == "true"
-
-        if view == "er":
-            mermaid_code = DeepLineageService.render_er_diagram(
-                edges,
-                self.graph,
-                node,
-                show_columns=show_cols,
-                warnings=result.get("warnings"),
-            )
-        else:
-            mermaid_code = DeepLineageService.render_mermaid(
-                edges,
-                self.graph,
-                direction,
-                node,
-                show_columns=show_cols,
-                warnings=result.get("warnings"),
-            )
-        self._serve(mermaid_code, "text/plain")
+        code = self.service.diagram(
+            self.graph,
+            node,
+            params.get("direction", ["downstream"])[0],
+            int(params.get("depth", ["3"])[0]),
+            view=params.get("view", ["flow"])[0],
+            show_columns=params.get("columns", [""])[0] == "true",
+        )
+        self._serve(code, "text/plain")
 
     def _serve(self, content: str, content_type: str) -> None:
         encoded = content.encode("utf-8")
