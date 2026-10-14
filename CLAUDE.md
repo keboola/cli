@@ -978,7 +978,8 @@ kbagent workspace query --project ALIAS --workspace-id ID --file query.sql
 kbagent workspace gc (--project NAME ... | --all-projects) [--dry-run] [--yes]
 # gc (CLI-28): needs --project or --all-projects (neither or both = USAGE_ERROR, exit 2), also over
 #   REST (`project=` or `all_projects=true`, else HTTP 400 INVALID_ARGUMENT). A project whose sandbox
-#   configs cannot be listed goes to errors[] and nothing is deleted there. Version gate lives in gotchas.md.
+#   configs cannot be listed goes to errors[] and nothing is deleted there. A NOT_FOUND listing means no
+#   sandbox configs, so every sandbox workspace there is an orphan. Version gate lives in gotchas.md.
 kbagent workspace from-transformation --project ALIAS --component-id ID --config-id ID [--row-id ID]
 
 kbagent data-app list [--project NAME ...] [--branch ID]

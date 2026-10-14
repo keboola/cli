@@ -299,7 +299,8 @@ class WorkspaceService(BaseService):
         Args:
             required: If True, a failed listing raises instead of returning {}.
                 Orphan detection needs this: an empty mapping makes every
-                sandbox workspace an orphan.
+                sandbox workspace an orphan. NOT_FOUND is not a failure: the
+                component has no configs, so the mapping is empty.
 
         Returns:
             Dict mapping config_id (str) to config name.
@@ -307,7 +308,9 @@ class WorkspaceService(BaseService):
         try:
             configs = client.list_component_configs("keboola.sandboxes", branch_id=branch_id)
             return {str(cfg.get("id", "")): cfg.get("name", "") for cfg in configs}
-        except Exception:
+        except Exception as exc:
+            if isinstance(exc, KeboolaApiError) and exc.error_code == ErrorCode.NOT_FOUND:
+                return {}
             if required:
                 raise
             # Non-critical: fall back to internal workspace names

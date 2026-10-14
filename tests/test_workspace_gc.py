@@ -463,6 +463,52 @@ class TestWorkspaceServiceGc:
         mock_client.delete_workspace.assert_not_called()
         mock_client.delete_config.assert_not_called()
 
+    def test_gc_not_found_config_listing_means_no_configs(self, tmp_path: Path) -> None:
+        """NOT_FOUND from the listing means the component has no configs left.
+
+        Every sandbox workspace is then an orphan and gc deletes it, as
+        flow_service treats a NOT_FOUND from list_component_configs.
+        """
+        svc, mock_client = self._make_service(tmp_path)
+        orphan_ws = {
+            "id": 77,
+            "name": "WORKSPACE_77",
+            "component": "keboola.sandboxes",
+            "configurationId": "orphan-cfg",
+            "connection": {"backend": "snowflake"},
+            "created": "2025-01-01",
+        }
+        self._setup_client_for_list(mock_client, raw_workspaces=[orphan_ws], sandbox_configs=[])
+        mock_client.list_component_configs.side_effect = KeboolaApiError(
+            message="Component not found", status_code=404, error_code="NOT_FOUND", retryable=False
+        )
+        mock_client.get_workspace.return_value = {
+            "id": 77,
+            "component": "keboola.sandboxes",
+            "configurationId": "orphan-cfg",
+            "connection": {},
+        }
+        result = svc.gc_workspaces(aliases=["prod"], dry_run=False)
+        assert result["errors"] == []
+        assert result["count_deleted"] == 1
+        mock_client.delete_workspace.assert_called_once_with(77, branch_id=100)
+
+    def test_list_orphaned_not_found_config_listing_lists_orphans(self, tmp_path: Path) -> None:
+        svc, mock_client = self._make_service(tmp_path)
+        orphan_ws = {
+            "id": 77,
+            "component": "keboola.sandboxes",
+            "configurationId": "orphan-cfg",
+            "connection": {},
+        }
+        self._setup_client_for_list(mock_client, raw_workspaces=[orphan_ws], sandbox_configs=[])
+        mock_client.list_component_configs.side_effect = KeboolaApiError(
+            message="Component not found", status_code=404, error_code="NOT_FOUND", retryable=False
+        )
+        result = svc.list_workspaces(aliases=["prod"], orphaned_only=True)
+        assert result["errors"] == []
+        assert [ws["id"] for ws in result["workspaces"]] == [77]
+
     def test_list_orphaned_failed_config_listing_reports_error(self, tmp_path: Path) -> None:
         """`workspace list --orphaned` shares the rule: no false orphans."""
         svc, mock_client = self._make_service(tmp_path)

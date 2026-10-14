@@ -1468,6 +1468,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Garbage-collect orphaned workspaces (keboola.sandboxes config missing). Use --dry-run to preview.
     Needs --project or --all-projects (neither or both = USAGE_ERROR, exit 2). A project whose
     sandbox configs cannot be listed goes to errors[]; nothing is deleted there.
+    A NOT_FOUND listing means no sandbox configs, so every sandbox workspace there is an orphan.
 
 ### Data Apps (Python/JS by default; Streamlit via --type)
 
