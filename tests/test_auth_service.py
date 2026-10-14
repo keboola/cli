@@ -360,6 +360,21 @@ class TestResolveStackUrlChain:
         service = _make_service(store, state_store, _FakeAuthClient())
         assert service._resolve_stack_url(None) == OTHER_STACK_URL
 
+    def test_stale_active_project_raises_instead_of_using_the_sole_project(
+        self, store, state_store
+    ) -> None:
+        """Same refusal as resolve_pinned_alias: never fall through to another stack."""
+        store.add_project(
+            "b", ProjectConfig(stack_url=OTHER_STACK_URL, token=STATIC_TOKEN, project_id=2)
+        )
+        config = store.load()
+        config.default_project = "gone"
+        store.save(config)
+        service = _make_service(store, state_store, _FakeAuthClient())
+        with pytest.raises(ConfigError) as exc_info:
+            service._resolve_stack_url(None)
+        assert "'gone' is not registered" in str(exc_info.value)
+
     def test_several_projects_without_active_project_raise(self, store, state_store) -> None:
         self._two_stacks(store)
         store.add_project("c", ProjectConfig(stack_url=STACK_URL, token=STATIC_TOKEN, project_id=3))

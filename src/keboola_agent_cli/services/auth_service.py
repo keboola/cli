@@ -1137,8 +1137,14 @@ class AuthService:
 
         if config.default_project:
             project = config.projects.get(config.default_project)
-            if project is not None:
-                return normalize_stack_url(project.stack_url)
+            if project is None:
+                # Same refusal as `resolve_pinned_alias`: never fall through
+                # to the sole project's stack behind a stale active project.
+                raise ConfigError(
+                    f"Pinned default project '{config.default_project}' is not registered. "
+                    "Run 'kbagent project use <alias>' to repair."
+                )
+            return normalize_stack_url(project.stack_url)
 
         if len(config.projects) == 1:
             (sole,) = config.projects.values()
