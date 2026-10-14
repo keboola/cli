@@ -115,7 +115,7 @@ been retired, so its absence is NOT a promise (see §1 Rule 6).
 | Fetch a specific config | `kbagent config detail --project P --component-id C --config-id K --json` | -- | re-using an earlier JSON dump |
 | Duplicate a configuration | `kbagent config clone --project P --component-id C --config-id K --name N [--target-project P2] [--secret PATH=VALUE]` (0.84.2+) -- same-project is a server-side copy (rows + `KBC::` values survive); cross-project needs a `--secret` per encrypted path, listed by `--dry-run` | -- | rebuilding the body from `config detail` (drops `runtime` / `storage` / `authorization` siblings SILENTLY -- a lost `runtime.parallelism` means the job runs single-threaded) |
 | Override the auto-derived output bucket | `kbagent config set-default-bucket --bucket in.c-name` (read-modify-write, preserves siblings; `--clear` removes it) | `kbagent config update --set 'storage.output.default_bucket=in.c-name'` | full-config replace with `--configuration` (wipes other storage keys) |
-| Cross-project migration | `kbagent sync pull` + edit files locally + `kbagent sync push --dry-run` | -- | per-resource REST loops |
+| Cross-project migration | `kbagent sync pull --project SRC --directory ./src` + edit files locally + `kbagent sync clone --source ./src --target DEST --target-dir ./dest --dry-run` (fresh target) | -- | `sync push --project DEST` on the source tree (refused since vNEXT, CLI-31: a tree belongs to one project); per-resource REST loops |
 | Provision a new project from a golden reference | `kbagent sync clone --source ./golden --target ALIAS --target-dir ./clone [--bucket-map F --variable-values F --instance-rename F]` -- copy + parameterize + push fresh; remaps flow/orchestrator task configIds, schedule targets, variable and shared-code links; read `warnings[]` of the first run, a re-run does not repeat them (0.96.1+: tasks running a config outside the tree, copied `KBC::` values, undeployed data apps, inactive schedules); recreates the reference's storage buckets in the target by default (`--no-create-buckets` to skip; buckets only, not table data; a linked bucket is linked to the same source as in the reference and listed in `linked_buckets`); needs a FRESH target. `--branch` defaults to the target's production branch | -- | manual copy + id-surgery + `sync push` per resource |
 | Retype table columns | fetch types via `workspace query`, write a transformation that produces a typed output table, then `kbagent storage swap-tables` to flip it into the original name. See [typify-table-workflow.md](../skills/kbagent/references/typify-table-workflow.md) | -- | `POST /v2/storage/buckets/.../tables-definition` (REST) plus manual config rewrites |
 | Create typed table with native types | `kbagent storage create-table --column pk:VARCHAR(40) --column amount:NUMBER(18,2) --not-null pk --default amount=0` | -- | re-creating via raw REST to `tables-definition` |
@@ -612,18 +612,20 @@ Preconditions (REFUSE if not met):
   tables need strip-restore
 
 ```
-# 1. Sync pull from source
-kbagent sync init --project source
-kbagent sync pull
+# 1. Sync pull from source into its own directory
+kbagent sync pull --project source --directory ./source
 
 # 2. Edit files LOCALLY (source/destination rewrites, PK strips, etc.)
 
-# 3. Sync push to destination -- ALWAYS dry-run first
-kbagent sync push --dry-run --project dest
+# 3. Clone into the destination -- ALWAYS dry-run first
+kbagent sync clone --source ./source --target dest --target-dir ./dest --dry-run
 
 # 4. After confirmation
-kbagent sync push --project dest
+kbagent sync clone --source ./source --target dest --target-dir ./dest
 ```
+
+Since vNEXT `sync pull/diff/push` refuse a tree of another project (exit 5).
+Repeated promotion between live projects: the kbagent-promotion-pipeline skill.
 
 ---
 

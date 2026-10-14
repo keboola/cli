@@ -107,6 +107,7 @@ from ._sync_data_app import (
     type_needs_rewrite,
 )
 from ._sync_models import CreatedConfig, LocalConfigHashes
+from ._sync_project_guard import adopt_existing_manifest, load_project_manifest
 from ._sync_push_ops import detect_name_drift, plan_push, push_create, push_row_change, push_update
 from ._sync_stale import (
     apply_stale_sweep,
@@ -327,7 +328,7 @@ class SyncService(BaseService):
         manifest_path = keboola_dir / "manifest.json"
         if manifest_path.exists():
             if adopt_existing:
-                return self._adopt_existing_manifest(alias, project_root, project, sync_workspaces)
+                return adopt_existing_manifest(self, alias, project_root, project, sync_workspaces)
             raise FileExistsError(
                 f"Manifest already exists at {manifest_path}. "
                 "Use 'sync pull' to update, 'sync init --adopt-existing' to adopt a "
@@ -411,51 +412,6 @@ class SyncService(BaseService):
             "files_created": created_files,
         }
 
-    def _adopt_existing_manifest(
-        self,
-        alias: str,
-        project_root: Path,
-        project: Any,
-        sync_workspaces: bool = False,
-    ) -> dict[str, Any]:
-        """Validate and normalise an existing manifest written by kbc or kbagent.
-
-        Idempotent: loads the manifest, confirms project_id matches the alias,
-        then saves it back through kbagent's serialiser (fills missing optional
-        fields with defaults, normalises camelCase keys, preserves all
-        existing content).
-
-        Raises:
-            ConfigError: If the manifest's project_id doesn't match the alias.
-        """
-        existing = load_manifest(project_root)
-
-        client = self._client_factory(project.stack_url, project.token)
-        with client:
-            token_info = client.verify_token()
-
-        if existing.project.id != token_info.project_id:
-            raise ConfigError(
-                f"Manifest project_id={existing.project.id} does not match alias "
-                f"'{alias}' project_id={token_info.project_id}; refusing to overwrite. "
-                "Check that --project points to the correct alias."
-            )
-
-        api_host = project.stack_url.replace("https://", "").rstrip("/")
-        existing.sync_workspaces = existing.sync_workspaces or sync_workspaces
-        save_manifest(project_root, existing)
-
-        return {
-            "status": "adopted",
-            "project_id": token_info.project_id,
-            "project_alias": alias,
-            "api_host": api_host,
-            "git_branching": existing.git_branching.enabled,
-            "default_branch": existing.git_branching.default_branch,
-            "sync_workspaces": existing.sync_workspaces,
-            "files_created": [],
-        }
-
     # ------------------------------------------------------------------
     # pull
     # ------------------------------------------------------------------
@@ -528,7 +484,7 @@ class SyncService(BaseService):
         project = projects[alias]
 
         # Load or verify manifest exists
-        manifest = load_manifest(project_root)
+        manifest = load_project_manifest(self, alias, project, project_root)
 
         # Determine branch to pull from (git-branching aware)
         branch_id = self._resolve_branch_id(
@@ -1246,7 +1202,7 @@ class SyncService(BaseService):
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
-        manifest = load_manifest(project_root)
+        manifest = load_project_manifest(self, alias, project, project_root)
 
         branch_id = self._resolve_branch_id(
             alias, manifest, project_root, branch_override=branch_override

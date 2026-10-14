@@ -1738,6 +1738,11 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     component newly ignored has its manifest entry dropped and local dir removed on the next
     pull, reported with details[].action "ignored" -- distinct from "removed", which means
     the config was genuinely deleted on the remote.
+    One project per directory (since vNEXT, CLI-31): sync pull, diff and push (also
+    --all-projects) refuse a directory whose manifest project.id or apiHost differs from
+    the --project project -- CONFIG_ERROR (exit 5) naming both project IDs, before any API
+    call. A project registered without project_id costs one token verification call. To
+    copy configs between projects, use sync clone.
 
   kbagent sync status [--directory DIR]
     Show local changes since last pull (SHA256-based). LOCAL check only --

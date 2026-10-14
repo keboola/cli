@@ -860,6 +860,30 @@ Versioning convention:
   `--allow-plaintext-on-encrypt-failure`, which would write the PAT in
   plaintext into Storage.
 
+## `sync pull` / `diff` / `push` refuse a sync directory of another project
+
+*(since vNEXT, CLI-31)*
+
+A sync directory belongs to one project. Its `.keboola/manifest.json` records
+`project.id` and `apiHost`. `sync pull`, `sync diff` and `sync push` (also with
+`--all-projects`) now compare both with the project that `--project` names. On
+a difference they stop before any API call with `CONFIG_ERROR` (exit 5). The
+message names both project IDs, and both hosts when the hosts differ.
+
+Before this, only `sync init --adopt-existing` and `config new --push
+--output-dir` compared the manifest project. A tree of project A used with
+`--project B` was diffed against B. `push` then created A's configs in B, and
+`pull` filled the tree with B's configs while the manifest still named A.
+
+- A registered project without a stored `project_id` gets the ID from one
+  token verification call. If that call fails, the command stops with
+  `CONFIG_ERROR` and names `kbagent project edit --token-stdin`.
+- A directory without a manifest behaves as before: `pull` initializes it,
+  `diff` and `push` report `NOT_INITIALIZED`.
+- To copy configs from one project to another, use `sync clone`. The
+  promotion pipeline is not affected: its directory manifest belongs to the
+  destination project.
+
 ## `sync pull` protects edits in `transform.sql` / `code.py` / `_description.md`, not only `_config.yml`
 
 *(since 0.96.1, #792)*
