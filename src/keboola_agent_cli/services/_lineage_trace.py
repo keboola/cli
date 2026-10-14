@@ -150,10 +150,18 @@ def _table_id(fqn: str) -> str:
     return fqn.partition(":")[2] if ":" in fqn else fqn
 
 
-def _split_mapping_value(value: str) -> tuple[str, str]:
-    """``"in.c-b.t.col"`` -> ``("in.c-b.t", "col")``; a bare column has no table."""
+@dataclass(frozen=True)
+class MappingRef:
+    """A column-mapping value split into its table id and column."""
+
+    table: str
+    column: str
+
+
+def _split_mapping_value(value: str) -> MappingRef:
+    """``"in.c-b.t.col"`` -> table ``in.c-b.t``, column ``col``; a bare column has no table."""
     table, _, column = value.rpartition(".")
-    return table, column
+    return MappingRef(table=table, column=column)
 
 
 def _value_points_at(value: str, table_fqn: str) -> bool:
@@ -163,7 +171,7 @@ def _value_points_at(value: str, table_fqn: str) -> bool:
     on every input edge whose id merely CONTAINED the AI's ``in_table``; a
     value that names a different full table id is one of those strays.
     """
-    table, _ = _split_mapping_value(value)
+    table = _split_mapping_value(value).table
     if not table or table.lower() == _table_id(table_fqn).lower():
         return True
     return not table.startswith(("in.c-", "out.c-"))
@@ -200,7 +208,7 @@ def _step_upstream(
                 ):
                     continue
                 matched = True
-                in_col = _split_mapping_value(value)[1]
+                in_col = _split_mapping_value(value).column
                 trace.add_edge(edge, depth, in_col, column)
                 next_states.append((edge.source_fqn, in_col))
         if not matched:
@@ -257,7 +265,7 @@ def _step_downstream(
         outs = [
             out_col
             for out_col, value in edge.column_mapping.items()
-            if _split_mapping_value(value)[1].lower() == column.lower()
+            if _split_mapping_value(value).column.lower() == column.lower()
             and _value_points_at(value, node)
         ]
         if not outs and edge.column_mapping:

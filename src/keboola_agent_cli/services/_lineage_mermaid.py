@@ -65,18 +65,24 @@ def _split_table_id(table_id: str) -> TableIdParts:
     return TableIdParts(bucket=bucket, name=name or table_id)
 
 
-def _node_line(
-    fqn: str, graph: LineageGraph, *, prefix: str, show_columns: bool
-) -> tuple[str, str]:
-    """Return (label, css class) for one flowchart node."""
+@dataclass(frozen=True)
+class NodeLine:
+    """Label text and CSS class of one flowchart node."""
+
+    label: str
+    css_class: str
+
+
+def _node_line(fqn: str, graph: LineageGraph, *, prefix: str, show_columns: bool) -> NodeLine:
+    """Return the label and CSS class for one flowchart node."""
     if fqn in graph.configurations:
         cfg = graph.configurations[fqn]
-        return f"{prefix}{cfg.config_name}<br/>{cfg.component_id}", "config"
+        return NodeLine(f"{prefix}{cfg.config_name}<br/>{cfg.component_id}", "config")
     table = graph.tables.get(fqn)
     if table is None:
         split = _split_table_id(fqn.partition(":")[2] if ":" in fqn else fqn)
         parts = [f"{prefix}{split.name}"] + ([split.bucket] if split.bucket else [])
-        return "<br/>".join(parts), "table"
+        return NodeLine("<br/>".join(parts), "table")
     parts = [f"{prefix}{table.name}", table.bucket_id]
     parts.append(f"{len(table.columns)} cols, {table.rows_count:,} rows")
     if show_columns and table.columns:
@@ -84,7 +90,7 @@ def _node_line(
         if len(table.columns) > 8:
             col_text += f", +{len(table.columns) - 8} more"
         parts.append(col_text)
-    return "<br/>".join(parts), "table"
+    return NodeLine("<br/>".join(parts), "table")
 
 
 def _external_lines(node_fqns: list[str], graph: LineageGraph) -> list[str]:
@@ -155,7 +161,8 @@ def render_mermaid(
 
     for fqn in ordered:
         prefix = f"{_project(fqn)}: " if multi_project and _project(fqn) else ""
-        label, css_class = _node_line(fqn, graph, prefix=prefix, show_columns=show_columns)
+        node_line = _node_line(fqn, graph, prefix=prefix, show_columns=show_columns)
+        label, css_class = node_line.label, node_line.css_class
         if css_class == "table" and root_project and _project(fqn) not in ("", root_project):
             css_class = "cross_table"
         lines.append(f'  {sanitize_mermaid_id(fqn)}["{escape_mermaid_label(label)}"]:::{css_class}')
