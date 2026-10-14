@@ -128,6 +128,34 @@ class TestRefuseTreeOfAnotherProject:
         client.list_components_with_configs.assert_called()
 
 
+class TestAllProjects:
+    """--all-projects counts a refused tree as a failed project."""
+
+    def test_diff_all_counts_a_refused_tree_as_failed(self, tmp_path: Path) -> None:
+        base_dir = tmp_path / "trees"
+        _write_manifest(base_dir / "prod", project_id=999)
+        client = _client()
+        svc = SyncService(config_store=_store(tmp_path), client_factory=lambda u, t: client)
+
+        result = svc.diff_all(base_dir)
+
+        assert result["summary"]["failed"] == 1
+        assert "belongs to project 999" in result["projects"]["prod"]["error"]
+        client.list_components_with_configs.assert_not_called()
+
+    def test_push_all_counts_a_refused_tree_as_failed(self, tmp_path: Path) -> None:
+        base_dir = tmp_path / "trees"
+        _write_manifest(base_dir / "prod", project_id=999)
+        client = _client()
+        svc = SyncService(config_store=_store(tmp_path), client_factory=lambda u, t: client)
+
+        result = svc.push_all(base_dir)
+
+        assert result["summary"]["failed"] == 1
+        assert "belongs to project 999" in result["projects"]["prod"]["error"]
+        client.list_components_with_configs.assert_not_called()
+
+
 class TestProjectWithoutStoredId:
     """A registered project without project_id reads it from token verification."""
 
