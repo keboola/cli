@@ -794,11 +794,15 @@ class MergeRequestService(BaseService):
             ).get("branchFromId")
             branch_from_id = _coerce_branch_id(raw_branch_from)
             record_branch(self._config_store, alias, branch_from_id, "merge_request", role="source")
+            merged_earlier: dict[str, Any] | None = None
             try:
                 job = client.merge_requests.merge(merge_request_id)
             except KeboolaApiError as exc:
-                self._remap_merge_conflict(exc)
-                raise
+                merged_earlier = self._merged_by_earlier_call(client, merge_request_id, exc)
+                if merged_earlier is None:
+                    self._remap_merge_conflict(exc)
+                    raise
+                job = None
         finally:
             client.close()
 
@@ -843,10 +847,18 @@ class MergeRequestService(BaseService):
             logger.warning("Post-merge sync-mapping cleanup failed: %s", exc)
             warnings.append(f"Post-merge sync-mapping cleanup failed: {exc}")
 
-        results = job.get("results")
-        mr_after: dict[str, Any] = results if isinstance(results, dict) else {}
-
-        message_parts = [f"Merge request {merge_request_id} merged into production."]
+        if merged_earlier is not None:
+            mr_after: dict[str, Any] = merged_earlier
+            message_parts = [
+                (
+                    f"Merge request {merge_request_id} was already merged into production "
+                    "(by an earlier call); nothing was merged again."
+                )
+            ]
+        else:
+            results = (job or {}).get("results")
+            mr_after = results if isinstance(results, dict) else {}
+            message_parts = [f"Merge request {merge_request_id} merged into production."]
         if branch_from_id is not None:
             message_parts.append(
                 f"Source branch {branch_from_id} is being deleted (a separate async "
@@ -868,6 +880,8 @@ class MergeRequestService(BaseService):
             "job": job,
             "message": " ".join(message_parts),
         }
+        if merged_earlier is not None:
+            result["status"] = "already_merged"
         if mr_after.get("state"):
             result["state"] = mr_after["state"]
             result["derived_state"] = derive_state(mr_after)
@@ -886,6 +900,27 @@ class MergeRequestService(BaseService):
             # deleted). The text carries the specificity the key does not.
             result["warnings"] = warnings
         return result
+
+    def _merged_by_earlier_call(
+        self, client: Any, merge_request_id: int, exc: KeboolaApiError
+    ) -> dict[str, Any] | None:
+        """Return the MR when a not-ready 409 hides a merge that already happened.
+
+        A merge whose response was lost has already merged the MR, so a repeat
+        gets ``notReadyToMerge``. Read the MR once: state ``published`` means
+        the earlier call merged it. Any other state, or a failed read, returns
+        ``None`` and the 409 is reported as before.
+        """
+        if exc.status_code != 409 or exc.details.get("api_error_code") != self._NOT_READY_CODE:
+            return None
+        try:
+            current = client.merge_requests.get(merge_request_id)
+        except KeboolaApiError as read_exc:
+            logger.warning("Merge request read after a not-ready 409 failed: %s", read_exc)
+            return None
+        if isinstance(current, dict) and current.get("state") == "published":
+            return current
+        return None
 
     def _remap_merge_conflict(self, exc: KeboolaApiError) -> None:
         """Raise the RFC's dedicated error for a known merge 409; return for others.

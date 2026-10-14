@@ -629,32 +629,28 @@ class FlowService(BaseService):
         config_id: str,
         branch_id: int | None = None,
     ) -> dict[str, Any]:
-        """Delete a conditional-flow (keboola.flow) configuration.
+        """Soft-delete a conditional-flow (keboola.flow) configuration into the trash.
+
+        Uses the same locate-first delete as ``config delete``: a flow already
+        in the trash is NOT deleted again (a second DELETE would purge it
+        permanently) and the result has status ``already_in_trash``.
 
         Does NOT automatically remove associated keboola.scheduler configs.
         Use remove_flow_schedule() first if needed.
         """
+        from . import _config_trash as trash
+
         projects = self.resolve_projects([alias])
         project = projects[alias]
         effective_branch = resolve_branch(self._config_store, alias, branch_id)
 
         client = self._client_factory(project.stack_url, project.token)
         try:
-            client.delete_config(
-                component_id=FLOW_COMPONENT_ID,
-                config_id=config_id,
-                branch_id=effective_branch,
+            return trash.execute_delete(
+                client, alias, FLOW_COMPONENT_ID, config_id, effective_branch, dry_run=False
             )
         finally:
             client.close()
-
-        return {
-            "status": "deleted",
-            "project_alias": alias,
-            "component_id": FLOW_COMPONENT_ID,
-            "config_id": config_id,
-            "branch_id": effective_branch,
-        }
 
     # ── schedule ────────────────────────────────────────────────────
 

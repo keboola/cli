@@ -8,7 +8,7 @@ import pytest
 from helpers import make_failing_client, make_mock_client
 from keboola_agent_cli.auth.sentinel import make_session_token
 from keboola_agent_cli.config_store import ConfigStore
-from keboola_agent_cli.errors import ConfigError, KeboolaApiError
+from keboola_agent_cli.errors import ConfigError, ErrorCode, KeboolaApiError
 from keboola_agent_cli.models import ProjectConfig
 from keboola_agent_cli.services.config_service import ConfigService
 from keboola_agent_cli.services.job_service import JobService
@@ -5195,6 +5195,35 @@ class TestJobServiceRunJobIdempotency:
         assert second["id"] == "job-2"
         assert "idempotent_replay" not in second
         assert mock_client.create_job.call_count == 2
+
+    def test_replay_after_lost_response_refuses(self, tmp_config_dir: Path) -> None:
+        """A create that timed out may have started a job: the replay must not start another."""
+        mock_client = MagicMock()
+        mock_client.create_job.side_effect = KeboolaApiError(
+            message="read timeout", status_code=0, error_code=ErrorCode.TIMEOUT
+        )
+        service = self._service(tmp_config_dir, mock_client)
+
+        with pytest.raises(KeboolaApiError) as first:
+            service.run_job(
+                alias="prod",
+                component_id="c",
+                config_id="cfg",
+                no_variables=True,
+                idempotency_key="K",
+            )
+        assert first.value.error_code == ErrorCode.TIMEOUT
+        with pytest.raises(KeboolaApiError) as replay:
+            service.run_job(
+                alias="prod",
+                component_id="c",
+                config_id="cfg",
+                no_variables=True,
+                idempotency_key="K",
+            )
+        assert replay.value.error_code == ErrorCode.INVALID_ARGUMENT
+        assert "--force-rerun" in replay.value.message
+        mock_client.create_job.assert_called_once()
 
     def test_no_key_never_dedups(self, tmp_config_dir: Path) -> None:
         mock_client = MagicMock()

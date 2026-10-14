@@ -2125,6 +2125,38 @@ config, the retry fires, and the retry destroys it for good.
   DELETE specifically; idempotency here is a property of the endpoint, not
   of the method.
 
+## Repeated `flow delete`, `job run --idempotency-key` and `merge-request merge` no longer do damage
+
+*(since vNEXT)*
+
+Each of these commands could do harm when an agent repeated it after a lost
+response. Now:
+
+- **`flow delete` uses the same locate-first delete as `config delete`.** A
+  flow already in the trash answers `status: "already_in_trash"` with exit 0
+  and kbagent sends no DELETE (a second DELETE would purge the flow). A flow
+  in neither place is `NOT_FOUND`. `DELETE /flows/{project}/{config_id}` over
+  `kbagent serve` does the same. Undo with `config restore --component-id
+  keboola.flow`. On older kbagent, a repeated `flow delete` purges the flow.
+- **`job run --idempotency-key` records a pending entry before it creates the
+  job.** A definite create failure (a 4xx, or a refusal before the request
+  left) removes the entry. An unknown outcome (a timeout, a 5xx, a connection
+  error) keeps it, because the job may exist. A replay with the same key that
+  finds the pending entry exits 1 with `INVALID_ARGUMENT` (HTTP 400 over
+  `kbagent serve`) and creates nothing. Check with `kbagent job list
+  --component-id C --config-id ID`. If no job started, run again with
+  `--force-rerun`. `POST /jobs/{project}/run` now accepts `idempotency_key`
+  and `force_rerun` in the body.
+- **The four merge-request state changes are sent once.** `request-review`,
+  `approve`, `request-changes` and `merge` are no longer repeated by the HTTP
+  layer after a 5xx or a read timeout. The error goes to the caller, who
+  checks `merge-request detail` before trying again.
+- **`merge-request merge` after a merge that already happened answers
+  `status: "already_merged"` with exit 0.** On `MR_NOT_READY_TO_MERGE` kbagent
+  reads the merge request. State `published` means an earlier call merged it,
+  so the result says so and the local cleanup (active branch, sync mapping)
+  still runs. Any other state keeps the `MR_NOT_READY_TO_MERGE` error.
+
 ## `data-app` JSON output: key for the app's own id is `app_id`
 
 - Every `kbagent --json data-app <subcommand>` envelope emits the
@@ -4430,6 +4462,9 @@ de-duplicates **client-side**: a `<config-dir>/job_idempotency.json` map of
   always creates fresh.
 - Reusing a key for a *different* `--component-id`/`--config-id` exits
   `INVALID_ARGUMENT` (it refuses to return the wrong job), not silently.
+- A create with an unknown outcome leaves a pending entry, and the next
+  replay with that key refuses -- see "Repeated `flow delete`,
+  `job run --idempotency-key` and `merge-request merge` no longer do damage".
 - In-process SDK users get the same via `Client.run_job(idempotency_key=...,
   idempotency_store=JobIdempotencyStore(path))` -- the facade is config-dir-free,
   so you must supply the store path.
@@ -5802,6 +5837,7 @@ It carries the command name, the outcome, and the duration -- never argument val
   server-side and the project-wide merge lock makes a premature retry answer
   `MR_NOT_READY_TO_MERGE` rather than start a second merge, so the retry is harmless. Wait
   and re-check with `merge-request detail` (state `in_merge` -> `merged`) before retrying.
+  A retry after the merge finished answers `status: "already_merged"`, exit 0 (since vNEXT).
 - **Every result may carry `warnings[]`** (post-merge cleanup failure, a dropped
   `--change-description` on a delete resolution). A truncated conflict list inside
   `MR_MERGE_CONFLICT` carries `details.api_error_params_truncated: true` -- run `conflicts`.

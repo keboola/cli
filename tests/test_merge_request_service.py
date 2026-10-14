@@ -557,6 +557,62 @@ class TestMerge:
         assert exc_info.value.error_code == ErrorCode.MR_NOT_READY_TO_MERGE
         assert exc_info.value.retryable is True
 
+    @staticmethod
+    def _not_ready() -> KeboolaApiError:
+        return KeboolaApiError(
+            message="API error 409: Cannot merge.",
+            status_code=409,
+            error_code=ErrorCode.API_ERROR,
+            details={"api_error_code": "storage.mergeRequests.notReadyToMerge"},
+        )
+
+    def test_not_ready_after_an_earlier_merge_returns_already_merged(
+        self, store, client_factory, monkeypatch
+    ) -> None:
+        """The first merge landed but its response was lost: the repeat gets a
+        not-ready 409, reads the MR, and reports already_merged with exit 0."""
+        factory, mock = client_factory
+        mock.merge_requests.get.side_effect = [
+            _wire_mr(7, "approved", branch_from=123),
+            _wire_mr(7, "published", branch_from=None),
+        ]
+        mock.merge_requests.merge.side_effect = self._not_ready()
+        monkeypatch.setattr(
+            "keboola_agent_cli.sync.branch_mapping.cleanup_branch_id_from_mapping",
+            lambda branch_id: None,
+        )
+        store.set_project_branch(ALIAS, 123)
+        result = _svc(store, factory).merge(ALIAS, 7)
+        assert result["status"] == "already_merged"
+        assert result["derived_state"] == "merged"
+        assert result["job"] is None
+        assert "already merged" in result["message"]
+        mock.merge_requests.merge.assert_called_once()
+        # The merge happened, so the local cleanup still runs.
+        assert store.get_project(ALIAS).active_branch_id is None
+
+    def test_not_ready_on_an_open_mr_still_raises(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        mock.merge_requests.get.side_effect = [
+            _wire_mr(7, "approved"),
+            _wire_mr(7, "in_merge"),
+        ]
+        mock.merge_requests.merge.side_effect = self._not_ready()
+        with pytest.raises(KeboolaApiError) as exc_info:
+            _svc(store, factory).merge(ALIAS, 7)
+        assert exc_info.value.error_code == ErrorCode.MR_NOT_READY_TO_MERGE
+
+    def test_not_ready_with_a_failed_read_reports_the_409(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        mock.merge_requests.get.side_effect = [
+            _wire_mr(7, "approved"),
+            KeboolaApiError(message="boom", status_code=500, error_code=ErrorCode.API_ERROR),
+        ]
+        mock.merge_requests.merge.side_effect = self._not_ready()
+        with pytest.raises(KeboolaApiError) as exc_info:
+            _svc(store, factory).merge(ALIAS, 7)
+        assert exc_info.value.error_code == ErrorCode.MR_NOT_READY_TO_MERGE
+
     def test_409_without_code_maps_to_conflict_with_next_step(self, store, client_factory) -> None:
         factory, mock = client_factory
         mock.merge_requests.get.return_value = _wire_mr(7, "approved")

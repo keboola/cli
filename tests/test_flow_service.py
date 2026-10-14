@@ -381,6 +381,38 @@ def test_delete_flow_uses_keboola_flow_component():
     result = svc.delete_flow(alias="prod", config_id="5")
     assert client.delete_config.call_args.kwargs["component_id"] == "keboola.flow"
     assert result["component_id"] == "keboola.flow"
+    assert result["status"] == "deleted"
+
+
+def test_delete_flow_already_in_trash_sends_no_second_delete():
+    """A repeated flow delete must not purge the trashed flow.
+
+    The first delete moved the flow to the trash, so the GET answers 404 and
+    the trash listing holds it. A second DELETE would purge it for good.
+    """
+    client = MagicMock()
+    client.get_config_detail.side_effect = KeboolaApiError(
+        message="not found", status_code=404, error_code="NOT_FOUND"
+    )
+    client.list_deleted_configs.return_value = [{"id": "5", "name": "CF"}]
+    svc = _make_flow_service(client)
+    result = svc.delete_flow(alias="prod", config_id="5")
+    assert result["status"] == "already_in_trash"
+    assert result["component_id"] == "keboola.flow"
+    client.delete_config.assert_not_called()
+
+
+def test_delete_flow_missing_raises_not_found_without_delete():
+    client = MagicMock()
+    client.get_config_detail.side_effect = KeboolaApiError(
+        message="not found", status_code=404, error_code="NOT_FOUND"
+    )
+    client.list_deleted_configs.return_value = []
+    svc = _make_flow_service(client)
+    with pytest.raises(KeboolaApiError) as exc_info:
+        svc.delete_flow(alias="prod", config_id="5")
+    assert exc_info.value.error_code == ErrorCode.NOT_FOUND
+    client.delete_config.assert_not_called()
 
 
 def test_get_flow_detail_uses_keboola_flow_component():

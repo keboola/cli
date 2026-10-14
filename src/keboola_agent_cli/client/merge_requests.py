@@ -133,6 +133,11 @@ class MergeRequests:
     is deliberately NOT done here -- a missing feature surfaces as a 403
     byte-for-byte identical to a role denial, so only a Layer 2 pre-flight
     can word the error.
+
+    The four state-transition PUTs (request-review, approve, request-changes,
+    merge) pass ``retry_safe=False``: a repeat after a lost response lands on
+    the new state and fails, or reports a wrong error. ``update`` sets fields
+    to the same values on repeat, so it keeps the PUT retry.
     """
 
     def __init__(self, requester: StorageRequester) -> None:  # never sees the client
@@ -258,14 +263,18 @@ class MergeRequests:
 
         PUT /v2/storage/merge-request/{id}/request-review (no body)
         """
-        return self._requester.request("PUT", f"{_BASE}/{merge_request_id}/request-review").json()
+        return self._requester.request(
+            "PUT", f"{_BASE}/{merge_request_id}/request-review", retry_safe=False
+        ).json()
 
     def approve(self, merge_request_id: int) -> dict[str, Any]:
         """Add the caller's approval to the MR.
 
         PUT /v2/storage/merge-request/{id}/approve (no body)
         """
-        return self._requester.request("PUT", f"{_BASE}/{merge_request_id}/approve").json()
+        return self._requester.request(
+            "PUT", f"{_BASE}/{merge_request_id}/approve", retry_safe=False
+        ).json()
 
     def request_changes(self, merge_request_id: int, reason: str | None = None) -> dict[str, Any]:
         """Send the MR back to ``development`` to be revised.
@@ -283,7 +292,7 @@ class MergeRequests:
         if reason is not None:
             body["reason"] = reason
         return self._requester.request(
-            "PUT", f"{_BASE}/{merge_request_id}/request-changes", json=body
+            "PUT", f"{_BASE}/{merge_request_id}/request-changes", json=body, retry_safe=False
         ).json()
 
     def merge(self, merge_request_id: int) -> dict[str, Any]:
@@ -317,7 +326,9 @@ class MergeRequests:
         conflicting configurations in ``params.errors``); mapping them is
         Layer 2's concern.
         """
-        response = self._requester.request("PUT", f"{_BASE}/{merge_request_id}/merge")
+        response = self._requester.request(
+            "PUT", f"{_BASE}/{merge_request_id}/merge", retry_safe=False
+        )
         return self._requester.wait_for_storage_job(response.json(), max_wait=MERGE_JOB_MAX_WAIT)
 
 

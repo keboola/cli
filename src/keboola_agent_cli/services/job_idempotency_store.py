@@ -34,6 +34,11 @@ Scope / limits:
 - Policy: a prior job that is still running or finished non-failed is returned
   (no new side effect); a prior job that *failed* is re-run (a replay after a
   fix should make progress), unless the caller pins the prior job explicitly.
+- A *pending* entry is recorded BEFORE the create. A definite create failure
+  (a 4xx, or a refusal raised before the request left) removes it. An unknown
+  outcome (a timeout, a 5xx, a connection error) keeps it: the job may exist
+  even though no response arrived, so a replay that finds the pending entry
+  refuses instead of creating a second job.
 """
 
 from __future__ import annotations
@@ -72,6 +77,9 @@ class JobIdempotencyEntry:
     config_id: str
     branch_id: int | None
     created_at: str
+    # True between the pre-create record and the create's answer. An entry
+    # left pending means the create's outcome is unknown.
+    pending: bool = False
 
     @classmethod
     def _from_dict(cls, data: dict[str, Any]) -> JobIdempotencyEntry:
@@ -81,6 +89,7 @@ class JobIdempotencyEntry:
             config_id=str(data.get("config_id", "")),
             branch_id=data.get("branch_id"),
             created_at=str(data.get("created_at", "")),
+            pending=bool(data.get("pending", False)),
         )
 
     def _to_dict(self) -> dict[str, Any]:
@@ -90,6 +99,7 @@ class JobIdempotencyEntry:
             "config_id": self.config_id,
             "branch_id": self.branch_id,
             "created_at": self.created_at,
+            "pending": self.pending,
         }
 
 
@@ -176,6 +186,7 @@ class JobIdempotencyStore:
         component_id: str,
         config_id: str,
         branch_id: int | None = None,
+        pending: bool = False,
     ) -> JobIdempotencyEntry:
         """Persist (or overwrite) the entry for ``key`` under an exclusive lock."""
         entry = JobIdempotencyEntry(
@@ -184,6 +195,7 @@ class JobIdempotencyStore:
             config_id=config_id,
             branch_id=branch_id,
             created_at=datetime.now(UTC).isoformat(),
+            pending=pending,
         )
         with self._locked():
             # Read-modify-write *inside* the lock so concurrent records (distinct
@@ -227,6 +239,11 @@ def run_idempotent_job(
     purged (404) prior job, or ``force_rerun=True`` falls through to a fresh
     ``create()`` (which is then recorded under ``key``).
 
+    A pending entry is recorded before ``create()``. A definite create failure
+    removes it. An unknown outcome keeps it, and a later call with the same
+    key refuses until the caller checks ``kbagent job list`` and decides with
+    ``force_rerun``.
+
     Args:
         store: The dedup store, or ``None`` to disable dedup entirely.
         key: The caller's idempotency key, or ``None`` to disable dedup.
@@ -240,7 +257,8 @@ def run_idempotent_job(
 
     Raises:
         KeboolaApiError: If ``key`` was already recorded for a different
-            component/config (``ErrorCode.INVALID_ARGUMENT``).
+            component/config, or a pending entry shows an earlier create with
+            an unknown outcome (both ``ErrorCode.INVALID_ARGUMENT``).
     """
     if not key or store is None:
         return create(), False
@@ -263,6 +281,18 @@ def run_idempotent_job(
                 status_code=0,
                 error_code=ErrorCode.INVALID_ARGUMENT,
             )
+        if existing.pending:
+            raise KeboolaApiError(
+                message=(
+                    f"Idempotency key {key!r} has a pending run of {component_id}/{config_id}: "
+                    "an earlier create got no answer, so a job may already exist. Not "
+                    "creating another one. Check with 'kbagent job list --component-id "
+                    f"{component_id} --config-id {config_id}'. If no job started, run "
+                    "again with --force-rerun."
+                ),
+                status_code=0,
+                error_code=ErrorCode.INVALID_ARGUMENT,
+            )
         prior = _safe_fetch(fetch, existing.job_id)
         if prior is not None and not _job_is_failed(prior):
             logger.info(
@@ -274,7 +304,20 @@ def run_idempotent_job(
             return prior, True
         # Prior run failed / was purged -> fall through and re-run.
 
-    job = create()
+    store.record(
+        key,
+        job_id="",
+        component_id=component_id,
+        config_id=config_id,
+        branch_id=branch_id,
+        pending=True,
+    )
+    try:
+        job = create()
+    except KeboolaApiError as exc:
+        if not _create_outcome_unknown(exc):
+            store.forget(key)
+        raise
     store.record(
         key,
         job_id=str(job.get("id", "")),
@@ -283,6 +326,22 @@ def run_idempotent_job(
         branch_id=branch_id,
     )
     return job, False
+
+
+def _create_outcome_unknown(exc: KeboolaApiError) -> bool:
+    """Could the failed create still have started a job?
+
+    A 5xx, a timeout, a connection error or exhausted retries leave the
+    outcome unknown. Every other error is definite: a 4xx is a refusal, and a
+    status-0 error with another code was raised before the request left.
+    """
+    if exc.status_code >= 500:
+        return True
+    return exc.error_code in (
+        ErrorCode.TIMEOUT,
+        ErrorCode.CONNECTION_ERROR,
+        ErrorCode.RETRY_EXHAUSTED,
+    )
 
 
 def _safe_fetch(fetch: Callable[[str], dict[str, Any]], job_id: str) -> dict[str, Any] | None:

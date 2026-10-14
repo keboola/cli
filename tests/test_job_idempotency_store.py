@@ -289,3 +289,109 @@ class TestRunIdempotentJob:
                 fetch=fetch_500,
             )
         assert exc.value.status_code == 500
+
+
+class _FailingCreate:
+    """A create() thunk that raises ``exc`` and records its call count."""
+
+    def __init__(self, exc: KeboolaApiError) -> None:
+        self._exc = exc
+        self.calls: list[int] = []
+
+    def __call__(self) -> dict[str, Any]:
+        self.calls.append(1)
+        raise self._exc
+
+
+def _run(store: JobIdempotencyStore, create: Any, *, force_rerun: bool = False) -> Any:
+    return run_idempotent_job(
+        store=store,
+        key="K",
+        component_id="c",
+        config_id="cfg",
+        branch_id=None,
+        force_rerun=force_rerun,
+        create=create,
+        fetch=lambda jid: {"id": jid, "status": "processing"},
+    )
+
+
+_UNKNOWN_OUTCOMES = [
+    KeboolaApiError("read timeout", status_code=0, error_code=ErrorCode.TIMEOUT),
+    KeboolaApiError("bad gateway", status_code=502, error_code=ErrorCode.API_ERROR),
+    KeboolaApiError("no route", status_code=0, error_code=ErrorCode.CONNECTION_ERROR),
+    KeboolaApiError("gave up", status_code=0, error_code=ErrorCode.RETRY_EXHAUSTED),
+]
+
+_DEFINITE_FAILURES = [
+    KeboolaApiError("bad body", status_code=400, error_code=ErrorCode.API_ERROR),
+    KeboolaApiError("denied", status_code=403, error_code=ErrorCode.ACCESS_DENIED),
+    KeboolaApiError("no config", status_code=404, error_code=ErrorCode.NOT_FOUND),
+    KeboolaApiError("bad mode", status_code=0, error_code=ErrorCode.INVALID_ARGUMENT),
+]
+
+
+class TestPendingEntry:
+    """A lost create response must not let a replay start a second job."""
+
+    def test_pending_entry_is_recorded_before_create(self, store: JobIdempotencyStore) -> None:
+        seen: list[JobIdempotencyEntry | None] = []
+
+        def create() -> dict[str, Any]:
+            seen.append(store.lookup("K"))
+            return {"id": "j1", "status": "processing"}
+
+        _run(store, create)
+        assert seen[0] is not None and seen[0].pending is True
+        assert _entry(store, "K").pending is False
+        assert _entry(store, "K").job_id == "j1"
+
+    @pytest.mark.parametrize("exc", _UNKNOWN_OUTCOMES, ids=lambda e: str(e.error_code))
+    def test_unknown_outcome_keeps_pending_and_replay_refuses(
+        self, store: JobIdempotencyStore, exc: KeboolaApiError
+    ) -> None:
+        with pytest.raises(KeboolaApiError):
+            _run(store, _FailingCreate(exc))
+        assert _entry(store, "K").pending is True
+
+        replay = _Create({"id": "second", "status": "processing"})
+        with pytest.raises(KeboolaApiError) as refused:
+            _run(store, replay)
+        assert refused.value.error_code == ErrorCode.INVALID_ARGUMENT
+        assert "kbagent job list" in refused.value.message
+        assert "--force-rerun" in refused.value.message
+        assert replay.calls == []  # no second job
+
+    @pytest.mark.parametrize("exc", _DEFINITE_FAILURES, ids=lambda e: str(e.status_code))
+    def test_definite_failure_removes_entry(
+        self, store: JobIdempotencyStore, exc: KeboolaApiError
+    ) -> None:
+        with pytest.raises(KeboolaApiError):
+            _run(store, _FailingCreate(exc))
+        assert store.lookup("K") is None
+
+        retry = _Create({"id": "fresh", "status": "processing"})
+        job, replayed = _run(store, retry)
+        assert job["id"] == "fresh" and replayed is False
+
+    def test_force_rerun_passes_a_pending_entry(self, store: JobIdempotencyStore) -> None:
+        with pytest.raises(KeboolaApiError):
+            _run(store, _FailingCreate(_UNKNOWN_OUTCOMES[0]))
+        job, replayed = _run(
+            store, _Create({"id": "fresh", "status": "processing"}), force_rerun=True
+        )
+        assert job["id"] == "fresh" and replayed is False
+        assert _entry(store, "K").pending is False
+
+    def test_entry_without_pending_field_is_not_pending(self, store: JobIdempotencyStore) -> None:
+        """A store file written before the pending field keeps the old behavior."""
+        store.path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "entries": {"K": {"job_id": "prior", "component_id": "c", "config_id": "cfg"}},
+                }
+            ),
+            encoding="utf-8",
+        )
+        assert _entry(store, "K").pending is False

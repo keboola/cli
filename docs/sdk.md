@@ -151,7 +151,7 @@ with Client(url=URL, token=TOKEN, idempotency_store=store) as kbc:
         print("a prior run for this key was returned — no new side effect")
 ```
 
-A prior still-running or non-failed job is returned (with `idempotent_replay=True`) instead of firing a duplicate; a prior *failed* run is re-run; `force_rerun=True` always creates fresh. Passing `idempotency_key` without a store raises `ValueError`.
+A prior still-running or non-failed job is returned (with `idempotent_replay=True`) instead of firing a duplicate; a prior *failed* run is re-run; `force_rerun=True` always creates fresh. A create with an unknown outcome (a timeout, a 5xx, a connection error) leaves a pending entry, and the next call with that key raises `KeboolaApiError` (`INVALID_ARGUMENT`) instead of creating a second job; check the job list, then pass `force_rerun=True`. Passing `idempotency_key` without a store raises `ValueError`.
 
 ### `config_detail(component_id, config_id, *, branch_id=None) -> ConfigDetailResult`
 
