@@ -26,6 +26,21 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.99.1": [
+        "Fix (#846, #849): `lineage build --ai` now writes the real path of each code file into "
+        "`.lineage_ai_tasks.json`. In a single-project sync every path pointed at a file that "
+        "did not exist. The scan also reads each config from its branch directory in the "
+        "manifest instead of always `main`, and reads config rows from the config's own folder.",
+        "Fix (#847, #849): AI results now add `writes` edges from `outputs`, so tables a Python app "
+        "writes through the Storage API get a producer. `external` systems are kept and shown. "
+        "Column mappings match the input table exactly. Outputs that cannot be matched, and "
+        "results whose code has changed since, are listed in `ai_status` and not applied.",
+        "Fix (#848, #849): `lineage show` prints a real tree, with each node under its actual parent. "
+        "`--column` follows one column hop by hop and says where its mapping is unknown. Edges "
+        "read `reads` / `writes` with an `[AI]` badge. Diagrams always flow left to right, "
+        "`-f html` defaults to depth 3, `--columns` now works for diagrams, and the ER view "
+        "always lists columns. The server's Both view no longer breaks the ER diagram.",
+    ],
     "0.99.0": [
         "New (#728): `project add` and `project edit` can take a Storage token without putting "
         "it on the command line. Use `--token-stdin` (a hidden prompt in a terminal, or a pipe), "

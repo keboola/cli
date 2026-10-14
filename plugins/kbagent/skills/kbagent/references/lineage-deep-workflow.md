@@ -28,7 +28,7 @@ Pass the directory that *contains* the manifest (flat) or the parent of all
 project subdirs (nested). When the build finds zero projects it emits a
 warning with a hint rather than silently returning an empty graph.
 
-Branch trees *(since vNEXT)*: each configuration is read from the branch tree
+Branch trees *(since 0.99.1)*: each configuration is read from the branch tree
 its manifest entry belongs to (`branchId` missing / 0 / unknown -> the
 default tree, `branches[0].path`), not from a hardcoded `main/`. When one
 manifest spans several branch trees only the default tree is scanned and the
@@ -59,7 +59,7 @@ kbagent lineage show -l lineage.json --downstream "my-project:in.c-main.users"
 kbagent lineage show -l lineage.json --upstream "my-project:out.c-analytics.report"
 ```
 
-The text output is a real tree *(since vNEXT)*: every node sits under the node
+The text output is a real tree *(since 0.99.1)*: every node sits under the node
 it is actually connected to. A node reached a second time is printed as a leaf
 with `(see above)`. Lines start with the node type (`[table]`,
 `[transformation]`, ...) and the edge meaning: `reads`, `writes` or `shares`
@@ -69,7 +69,7 @@ prints them as `external: Slack (write)`, even when it has no table edges.
 
 Traversal is breadth-first: an edge's `depth` is its shortest distance from the
 queried node, and nothing within `--depth` is lost because a longer path
-reached a node first (before vNEXT a shorter second path to an already visited
+reached a node first (before 0.99.1 a shorter second path to an already visited
 node dropped that node's descendants).
 
 ## Column-level detail
@@ -81,7 +81,7 @@ kbagent lineage show -l lineage.json --downstream "my-project:in.c-main.users" -
 
 In the text tree `--columns` prints the mapping (or column list) of each EDGE
 under that edge's line, including a `(see above)` repeat -- two configs reading
-the same table each show their own mapping (since vNEXT). Columns of a
+the same table each show their own mapping (since 0.99.1). Columns of a
 configuration reading one table through several input mappings are merged into
 one edge. AI-recorded `external:` systems print under every configuration in
 the tree (at its first occurrence), not only under the queried node.
@@ -91,7 +91,7 @@ the tree (at its first occurrence), not only under the queried node.
 kbagent lineage show -l lineage.json --downstream "my-project:in.c-main.users" -c user_id
 ```
 
-`--column` / `-c` *(since vNEXT)* is a hop-by-hop trace, not a filter:
+`--column` / `-c` *(since 0.99.1)* is a hop-by-hop trace, not a filter:
 
 - The focus must be a **table**; a configuration focus is a usage error (exit 2).
   `--column` works with text and `--json` only; with `-f mermaid|html|er` it is
@@ -112,7 +112,7 @@ kbagent lineage show -l lineage.json --downstream "my-project:in.c-main.users" -
 - JSON edges carry `source_column` / `target_column` and only the relevant
   mapping entry; the result has `column` (and the legacy `column_filter`).
 
-Before vNEXT `-c` kept every edge without column info and dropped edges whose
+Before 0.99.1 `-c` kept every edge without column info and dropped edges whose
 column list lacked the name, so unrelated branches stayed and real hops vanished.
 
 ## Refresh in one step
@@ -146,7 +146,7 @@ An AI agent reads `.lineage_ai_tasks.json`, analyzes each code block, and
 writes results back to `.lineage_ai_results.json`.
 
 Each task's `code_file` is the configuration's real file on disk
-(`transform.sql` / `code.py` in the scanned branch tree; since vNEXT also right
+(`transform.sql` / `code.py` in the scanned branch tree; since 0.99.1 also right
 for the flat layout and for aliases that differ from the directory name). A
 configuration whose code file does not exist gets no task; it is listed in
 `ai_status.ai_tasks_missing_code_file` (`{config_fqn, code_file}`).
@@ -165,9 +165,9 @@ Result entry format (one per `config_fqn`, keep the task's `_code_hash`):
 }
 ```
 
-Rules *(since vNEXT)*:
+Rules *(since 0.99.1)*:
 
-- `outputs[]` become `writes` edges (detection `ai`); before vNEXT they were
+- `outputs[]` become `writes` edges (detection `ai`); before 0.99.1 they were
   silently ignored. `table` should be the full table id (`out.c-bucket.table`).
   A local name is resolved through the config's output mapping (its `source`,
   else a unique destination table name). An ambiguous name, a
@@ -183,7 +183,7 @@ Rules *(since vNEXT)*:
 - `col_map[].in_table` must be the full input table id (or its
   `alias:`-qualified form, or an input-mapping destination of that config that
   maps to exactly one source). Empty or ambiguous values are skipped and
-  counted in `ai_col_map_skipped` -- before vNEXT a substring match could
+  counted in `ai_col_map_skipped` -- before 0.99.1 a substring match could
   attach a mapping to the wrong input table. A config that reads the same
   table under two input-mapping aliases is NOT ambiguous: the mapping goes
   onto every reads edge of that one source.
@@ -265,10 +265,10 @@ kbagent lineage show -l lineage.json --downstream "my-project:in.c-main.users" -
 
 Formats: `text` (default), `mermaid`, `html`, `er`.
 
-Diagrams *(since vNEXT)*:
+Diagrams *(since 0.99.1)*:
 
 - Flowcharts are always `graph LR` -- data flows left to right in every view
-  (before vNEXT upstream views were drawn right-to-left). The queried node has
+  (before 0.99.1 upstream views were drawn right-to-left). The queried node has
   a thick border (`focus` class).
 - Edges are labelled `reads` / `writes` / `shares`; AI-detected edges are dashed
   with an `AI` badge (`-.->|writes · AI|`).
@@ -281,7 +281,7 @@ Diagrams *(since vNEXT)*:
   `-f html --columns` saves to `lineage_<dir>_<node>_columns.html`, so it does
   not overwrite the plain diagram.
 - The ER view (`-f er`, and the `lineage server` ER tab) always lists each
-  table's columns as attributes -- before vNEXT it showed only a rows/cols
+  table's columns as attributes -- before 0.99.1 it showed only a rows/cols
   count unless `--columns` was given; `--columns` no longer changes it.
   External systems render as `ext:<system>` entities related to the tables
   their config touches (or to the config itself when it touches none).
@@ -301,7 +301,7 @@ kbagent lineage server -l lineage.json --port 8080 --host 0.0.0.0
 Opens a sidebar-based node picker with mermaid/ER diagram rendering and
 export capabilities. Useful for exploring large graphs visually.
 
-"Both" directions *(since vNEXT)* are computed server-side as one deduplicated
+"Both" directions *(since 0.99.1)* are computed server-side as one deduplicated
 union and rendered once (`direction=both` on `/api/query` + `/api/mermaid`, and
 on `kbagent serve`'s `GET /lineage/walk` + `GET /lineage/mermaid`). The browser
 used to merge two rendered diagrams, which corrupted the ER view. A
