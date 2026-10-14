@@ -54,6 +54,7 @@ from ._helpers import (
     map_error_to_exit_code,
     read_password_stdin,
 )
+from ._project_pin import print_active_project_change
 from ._url_copy import LINK_STYLE, CopyableUrlWait
 
 auth_app = typer.Typer(
@@ -193,6 +194,7 @@ def _format_login_result(console: Console, result: LoginResult) -> None:
 
     for warning in result.warnings:
         console.print(f"[bold yellow]Warning:[/bold yellow] {escape(warning)}")
+    print_active_project_change(console, result.active_project_set, None)
 
     if result.registered_projects:
         _render_session_restrictions(console, result.session_unsupported_features)
@@ -281,6 +283,7 @@ def _format_logout_result(console: Console, result: LogoutResult) -> None:
         )
     if result.removed_projects:
         console.print(f"[dim]Removed project alias(es): {', '.join(result.removed_projects)}[/dim]")
+    print_active_project_change(console, None, result.active_project_cleared)
 
 
 def _format_register_projects_result(console: Console, result: RegisterProjectsResult) -> None:
@@ -291,6 +294,7 @@ def _format_register_projects_result(console: Console, result: RegisterProjectsR
         _render_registered_projects_table(console, result.registered_projects)
     for warning in result.warnings:
         console.print(f"[bold yellow]Warning:[/bold yellow] {escape(warning)}")
+    print_active_project_change(console, result.active_project_set, None)
     if result.registered_projects:
         _render_session_restrictions(console, result.session_unsupported_features)
 

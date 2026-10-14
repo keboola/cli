@@ -80,7 +80,7 @@ class ProjectService(BaseService):
             org_name=token_info.org_name,
         )
 
-        self._config_store.add_project(alias, project)
+        became_active = self._config_store.add_project(alias, project)
 
         return {
             "alias": alias,
@@ -90,22 +90,28 @@ class ProjectService(BaseService):
             "token": mask_token(token),
             "org_id": token_info.org_id,
             "org_name": token_info.org_name,
+            "active_project_set": alias if became_active else None,
         }
 
-    def remove_project(self, alias: str) -> dict[str, str]:
+    def remove_project(self, alias: str) -> dict[str, Any]:
         """Remove a project from the configuration.
 
         Args:
             alias: The project alias to remove.
 
         Returns:
-            Dict confirming the removal.
+            Dict confirming the removal. ``active_project_cleared`` is the
+            alias when it was the active project (now cleared), else None.
 
         Raises:
             ConfigError: If the alias does not exist.
         """
-        self._config_store.remove_project(alias)
-        return {"alias": alias, "message": f"Project '{alias}' removed."}
+        was_active = self._config_store.remove_project(alias)
+        return {
+            "alias": alias,
+            "message": f"Project '{alias}' removed.",
+            "active_project_cleared": alias if was_active else None,
+        }
 
     def bulk_remove_projects(
         self,
@@ -127,9 +133,11 @@ class ProjectService(BaseService):
                 removed without mutating ``config.json``.
 
         Returns:
-            ``{"removed": [...], "failed": [{"alias", "error"}], "dry_run": bool}``
-            where ``removed`` lists the aliases removed (or that would be
-            removed in dry-run mode).
+            ``{"removed": [...], "failed": [{"alias", "error"}], "dry_run": bool,
+            "active_project_cleared": str | None}`` where ``removed`` lists the
+            aliases removed (or that would be removed in dry-run mode) and
+            ``active_project_cleared`` names the removed alias that was the
+            active project (always None in dry-run mode).
         """
         seen: set[str] = set()
         ordered: list[str] = []
@@ -140,6 +148,7 @@ class ProjectService(BaseService):
 
         removed: list[str] = []
         failed: list[dict[str, str]] = []
+        active_project_cleared: str | None = None
         for alias in ordered:
             try:
                 if dry_run:
@@ -150,12 +159,18 @@ class ProjectService(BaseService):
                     self._config_store.ensure_removable(alias)
                     removed.append(alias)
                 else:
-                    self._config_store.remove_project(alias)
+                    if self._config_store.remove_project(alias):
+                        active_project_cleared = alias
                     removed.append(alias)
             except ConfigError as exc:
                 failed.append({"alias": alias, "error": exc.message})
 
-        return {"removed": removed, "failed": failed, "dry_run": dry_run}
+        return {
+            "removed": removed,
+            "failed": failed,
+            "dry_run": dry_run,
+            "active_project_cleared": active_project_cleared,
+        }
 
     def edit_project(
         self,
@@ -866,7 +881,8 @@ class ProjectService(BaseService):
             alias: The project alias to pin.
 
         Returns:
-            Dict with the new pin, previous pin, and source.
+            Dict with the new pin, previous pin, source, and
+            ``active_project_set`` (the alias, always set by this command).
 
         Raises:
             ConfigError: If the alias does not exist.
@@ -888,6 +904,7 @@ class ProjectService(BaseService):
             "previous": previous,
             "source": "pin",
             "env_override": env_override or None,
+            "active_project_set": alias,
         }
 
     def current_project(self) -> dict[str, Any]:
@@ -906,10 +923,18 @@ class ProjectService(BaseService):
         stays as typed, the flag is False (commands using it fail), and
         ``env_error`` carries the message those commands fail with.
 
+        ``resolved_alias`` and ``resolved_source`` report the project that a
+        single-project command without ``--project`` would use, through the
+        same chain as :meth:`resolve_pinned_alias`: ``env``,
+        ``active_project`` (the pin), ``sole`` (the only registered project),
+        or ``none`` with ``resolved_alias`` None when that chain fails.
+
         Returns:
             Dict with keys: alias, source ('env' | 'pin' | 'none'), pinned,
-            env_override, env_points_to_configured_project, env_error.
+            env_override, env_points_to_configured_project, env_error,
+            resolved_alias, resolved_source.
         """
+        resolved = self._resolve_current()
         config = self._config_store.load()
         pinned = config.default_project or None
         # Treat KBAGENT_PROJECT="" the same as unset (Unix shell convention:
@@ -933,6 +958,7 @@ class ProjectService(BaseService):
                 "env_override": env_override,
                 "env_points_to_configured_project": alias in config.projects,
                 "env_error": env_error,
+                **resolved,
             }
 
         return {
@@ -942,6 +968,18 @@ class ProjectService(BaseService):
             "env_override": None,
             "env_points_to_configured_project": None,
             "env_error": None,
+            **resolved,
+        }
+
+    def _resolve_current(self) -> dict[str, str | None]:
+        """Run the single-project chain for ``current_project`` without raising."""
+        try:
+            alias, source = self.resolve_pinned_alias()
+        except ConfigError:
+            return {"resolved_alias": None, "resolved_source": "none"}
+        return {
+            "resolved_alias": alias,
+            "resolved_source": "active_project" if source == "pin" else source,
         }
 
     def get_info(self, alias: str) -> dict[str, Any]:

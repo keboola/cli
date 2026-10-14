@@ -6,6 +6,7 @@ import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -842,6 +843,161 @@ class TestProjectUse:
         data = json.loads(result.output)["data"]
         assert data["alias"] is None
         assert data["source"] == "none"
+
+
+class TestActiveProjectStability:
+    """The active project is cleared on remove, never moved (CLI-32)."""
+
+    _seed = TestProjectUse._seed
+
+    @pytest.fixture(autouse=True)
+    def _no_env_project(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("KBAGENT_PROJECT", raising=False)
+
+    def _invoke(self, config_dir: Path, args: list[str]) -> Any:
+        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore:
+            MockStore.return_value = ConfigStore(config_dir=config_dir)
+            return runner.invoke(app, args)
+
+    def test_project_add_reports_active_project_set_only_for_first(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = ConfigStore(config_dir=config_dir)
+        service = ProjectService(
+            config_store=store, client_factory=lambda url, token: make_mock_client()
+        )
+
+        first = service.add_project("prod", "https://connection.keboola.com", TEST_TOKEN)
+        second = service.add_project("stage", "https://connection.keboola.com", TEST_TOKEN)
+
+        assert first["active_project_set"] == "prod"
+        assert second["active_project_set"] is None
+
+    def test_remove_active_project_clears_it(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        self._seed(config_dir, "prod", "stage", "dev")
+
+        result = self._invoke(config_dir, ["--json", "project", "remove", "--project", "prod"])
+
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)["data"]
+        assert data["active_project_cleared"] == "prod"
+        assert data["message"] == "Project 'prod' removed."
+        assert ConfigStore(config_dir=config_dir).load().default_project == ""
+
+    def test_remove_active_project_human_line(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        self._seed(config_dir, "prod", "stage")
+
+        result = self._invoke(config_dir, ["project", "remove", "--project", "prod"])
+
+        assert result.exit_code == 0, result.output
+        assert "Project 'prod' removed." in result.output
+        assert "there is no active project now" in " ".join(result.output.split())
+
+    def test_remove_other_project_keeps_active(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        self._seed(config_dir, "prod", "stage")
+
+        result = self._invoke(config_dir, ["--json", "project", "remove", "--project", "stage"])
+
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output)["data"]["active_project_cleared"] is None
+        assert ConfigStore(config_dir=config_dir).load().default_project == "prod"
+
+    def test_next_command_after_clear_needs_a_choice(self, tmp_path: Path) -> None:
+        """With 2+ projects left, the chain ends in CONFIG_ERROR naming `project use`."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        self._seed(config_dir, "prod", "stage", "dev")
+        self._invoke(config_dir, ["--json", "project", "remove", "--project", "prod"])
+
+        service = ProjectService(config_store=ConfigStore(config_dir=config_dir))
+        with pytest.raises(ConfigError, match="project use"):
+            service.resolve_pinned_alias()
+
+    def test_next_command_after_clear_uses_sole_project(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        self._seed(config_dir, "prod", "stage")
+        self._invoke(config_dir, ["--json", "project", "remove", "--project", "prod"])
+
+        service = ProjectService(config_store=ConfigStore(config_dir=config_dir))
+        assert service.resolve_pinned_alias() == ("stage", "sole")
+
+    def test_project_use_reports_active_project_set(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        self._seed(config_dir, "prod", "stage")
+
+        result = self._invoke(config_dir, ["--json", "project", "use", "stage"])
+
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output)["data"]["active_project_set"] == "stage"
+
+    def test_project_current_resolved_from_active_project(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        self._seed(config_dir, "prod", "stage")
+
+        result = self._invoke(config_dir, ["--json", "project", "current"])
+
+        data = json.loads(result.output)["data"]
+        assert data["source"] == "pin"
+        assert data["resolved_alias"] == "prod"
+        assert data["resolved_source"] == "active_project"
+
+    def test_project_current_resolved_from_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        self._seed(config_dir, "prod", "stage")
+        monkeypatch.setenv("KBAGENT_PROJECT", "stage")
+
+        result = self._invoke(config_dir, ["--json", "project", "current"])
+
+        data = json.loads(result.output)["data"]
+        assert data["resolved_alias"] == "stage"
+        assert data["resolved_source"] == "env"
+
+    def test_project_current_resolved_from_sole_project(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        self._seed(config_dir, "prod", "stage")
+        self._invoke(config_dir, ["--json", "project", "remove", "--project", "prod"])
+
+        result = self._invoke(config_dir, ["--json", "project", "current"])
+        human = self._invoke(config_dir, ["project", "current"])
+
+        data = json.loads(result.output)["data"]
+        assert data["alias"] is None
+        assert data["source"] == "none"
+        assert data["resolved_alias"] == "stage"
+        assert data["resolved_source"] == "sole"
+        assert "only registered project: stage" in " ".join(human.output.split())
+
+    def test_project_current_resolution_fails_softly(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No active project and 2+ projects, or an unregistered env value: none."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        self._seed(config_dir, "prod", "stage", "dev")
+        self._invoke(config_dir, ["--json", "project", "remove", "--project", "prod"])
+
+        result = self._invoke(config_dir, ["--json", "project", "current"])
+        monkeypatch.setenv("KBAGENT_PROJECT", "ghost")
+        env_result = self._invoke(config_dir, ["--json", "project", "current"])
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)["data"]
+        assert (data["resolved_alias"], data["resolved_source"]) == (None, "none")
+        env_data = json.loads(env_result.output)["data"]
+        assert (env_data["resolved_alias"], env_data["resolved_source"]) == (None, "none")
 
 
 class TestFirewallFlags:
@@ -7993,11 +8149,12 @@ class TestInit:
         assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
         output = json.loads(result.output)
         assert output["data"]["projects_copied"] == 1
+        assert output["data"]["active_project_cleared"] == "prod"
 
         local_config = ConfigStore(config_dir=tmp_path / ".kbagent").load()
         assert set(local_config.projects) == {"marketing"}
-        # Global default (prod) fell outside the selection -> repointed to marketing.
-        assert local_config.default_project == "marketing"
+        # Global default (prod) fell outside the selection -> cleared, not moved.
+        assert local_config.default_project == ""
 
     def test_init_from_global_filter_multiple(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -8029,6 +8186,7 @@ class TestInit:
         assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
         output = json.loads(result.output)
         assert output["data"]["projects_copied"] == 2
+        assert output["data"]["active_project_cleared"] is None
 
         local_config = ConfigStore(config_dir=tmp_path / ".kbagent").load()
         assert set(local_config.projects) == {"prod", "erp"}

@@ -18,6 +18,7 @@ from ._helpers import (
     map_error_to_exit_code,
     resolve_manage_token,
 )
+from ._project_pin import print_active_project_change
 
 org_app = typer.Typer(help="Organization management")
 
@@ -155,6 +156,7 @@ def _format_setup_result(console: Console, data: dict) -> None:
         summary_parts.append(f"[bold red]{len(failed)} failed[/bold red]")
 
     console.print("Summary: " + ", ".join(summary_parts) if summary_parts else "No changes.")
+    print_active_project_change(console, data.get("active_project_set"), None)
 
 
 @org_app.command("setup")

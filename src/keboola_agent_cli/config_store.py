@@ -483,7 +483,7 @@ class ConfigStore:
         for alias in ephemeral_aliases:
             clean.projects.pop(alias, None)
         if clean.default_project in ephemeral_aliases:
-            clean.default_project = next(iter(clean.projects), "")
+            clean.default_project = ""
         return clean
 
     @staticmethod
@@ -603,7 +603,7 @@ class ConfigStore:
         except OSError:
             logger.debug("Could not create .gitignore in %s", self._config_dir)
 
-    def add_project(self, alias: str, project: ProjectConfig) -> None:
+    def add_project(self, alias: str, project: ProjectConfig) -> bool:
         """Add a project to the configuration.
 
         Sets it as default if no default is set yet.
@@ -611,6 +611,9 @@ class ConfigStore:
         Args:
             alias: Human-friendly project name.
             project: Project configuration with stack URL, token, and project info.
+
+        Returns:
+            True when this call made ``alias`` the active project.
 
         Raises:
             ConfigError: If the alias already exists.
@@ -622,9 +625,11 @@ class ConfigStore:
                     f"Project '{alias}' already exists. Use 'project edit' to modify it."
                 )
             config.projects[alias] = project
-            if not config.default_project:
+            became_active = not config.default_project
+            if became_active:
                 config.default_project = alias
             self.save(config)
+        return became_active
 
     def ensure_removable(self, alias: str) -> None:
         """Validate that ``alias`` can be removed, without mutating anything.
@@ -642,13 +647,19 @@ class ConfigStore:
             raise self.project_not_found_error(alias)
         self._reject_ephemeral_mutation(config, alias, "removed")
 
-    def remove_project(self, alias: str) -> None:
+    def remove_project(self, alias: str) -> bool:
         """Remove a project from the configuration.
 
-        Updates the default project if the removed project was the default.
+        Clears the default project if the removed project was the default. It
+        is not moved to another alias: the next command without ``--project``
+        then resolves through ``resolve_pinned_alias`` instead of silently
+        targeting whichever alias happens to come next.
 
         Args:
             alias: The project alias to remove.
+
+        Returns:
+            True when the removed project was the active project.
 
         Raises:
             ConfigError: If the alias does not exist, or is an ephemeral
@@ -660,9 +671,11 @@ class ConfigStore:
                 raise self.project_not_found_error(alias)
             self._reject_ephemeral_mutation(config, alias, "removed")
             del config.projects[alias]
-            if config.default_project == alias:
-                config.default_project = next(iter(config.projects), "")
+            was_active = config.default_project == alias
+            if was_active:
+                config.default_project = ""
             self.save(config)
+        return was_active
 
     def get_project(self, alias: str) -> ProjectConfig | None:
         """Get a project by alias, or None if not found."""

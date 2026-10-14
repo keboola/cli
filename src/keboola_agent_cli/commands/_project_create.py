@@ -13,6 +13,7 @@ from rich.markup import escape
 from rich.panel import Panel
 
 from ..services.auth_service import ProvisionProjectResult
+from ._project_pin import print_active_project_change
 
 
 def format_provision_result(console: Console, result: ProvisionProjectResult) -> None:
@@ -73,3 +74,4 @@ def format_provision_result(console: Console, result: ProvisionProjectResult) ->
 
     for warning in result.warnings:
         console.print(f"[bold yellow]Warning:[/bold yellow] {escape(warning)}")
+    print_active_project_change(console, result.active_project_set, None)

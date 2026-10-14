@@ -174,6 +174,7 @@ class OrgService:
         added: list[dict[str, Any]] = []
         skipped: list[dict[str, Any]] = []
         failed: list[dict[str, Any]] = list(fetch_failed)
+        active_project_set: str | None = None
 
         for project in projects:
             project_id = project.get("id", 0)
@@ -207,7 +208,7 @@ class OrgService:
 
             # Create token and register project
             try:
-                self._setup_single_project(
+                became_active = self._setup_single_project(
                     stack_url=stack_url,
                     manage_token=manage_token,
                     project_id=project_id,
@@ -219,6 +220,8 @@ class OrgService:
                     org_id=org_id,
                     org_name=org_name,
                 )
+                if became_active:
+                    active_project_set = alias
                 # Re-read to get masked token
                 registered = self._config_store.get_project(alias)
                 added.append(
@@ -258,6 +261,7 @@ class OrgService:
             "projects_failed": failed,
             "dry_run": dry_run,
             "token_expires_in": token_expires_in,
+            "active_project_set": active_project_set,
         }
 
     def refresh_tokens(
@@ -579,8 +583,10 @@ class OrgService:
         token_expires_in: int | None = None,
         org_id: int | None = None,
         org_name: str | None = None,
-    ) -> None:
+    ) -> bool:
         """Create a token for a single project, verify it, and register it.
+
+        Returns True when the registered project became the active project.
 
         Args:
             stack_url: Keboola stack URL.
@@ -632,7 +638,7 @@ class OrgService:
             org_id=token_info.org_id or org_id,
             org_name=token_info.org_name or org_name,
         )
-        self._config_store.add_project(alias, project_config)
+        return self._config_store.add_project(alias, project_config)
 
     @staticmethod
     def _unique_alias(base: str, used: set[str]) -> str:
