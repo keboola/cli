@@ -2718,6 +2718,49 @@ def test_config_trash_list_route(tmp_path: Path) -> None:
     assert cfg_svc.list_config_trash.call_args.kwargs["component_id"] == COMPONENT
 
 
+@pytest.mark.parametrize(
+    "query",
+    ["", "?dry_run=true", f"?project={PROJECT}&all_projects=true"],
+    ids=["no-target", "no-target-dry-run", "both"],
+)
+def test_workspace_gc_route_needs_one_target(tmp_path: Path, query: str) -> None:
+    """POST /workspaces/gc refuses like `kbagent workspace gc`: no implicit fan-out.
+
+    INVALID_ARGUMENT answers 400, the REST twin of the CLI's USAGE_ERROR exit 2.
+    """
+    ws_svc = MagicMock()
+    app = _make_app_with_registry(tmp_path, _mock_registry(workspace=ws_svc))
+
+    with TestClient(app) as client:
+        res = client.post(f"/workspaces/gc{query}", headers=AUTH)
+
+    assert res.status_code == 400, res.text
+    assert res.json()["error"]["code"] == "INVALID_ARGUMENT"
+    ws_svc.gc_workspaces.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("query", "aliases"),
+    [
+        (f"?project={PROJECT}&project=other", [PROJECT, "other"]),
+        ("?all_projects=true", None),
+    ],
+    ids=["projects", "all-projects"],
+)
+def test_workspace_gc_route_forwards_target(
+    tmp_path: Path, query: str, aliases: list[str] | None
+) -> None:
+    ws_svc = MagicMock()
+    ws_svc.gc_workspaces.return_value = {"dry_run": True, "would_delete": [], "errors": []}
+    app = _make_app_with_registry(tmp_path, _mock_registry(workspace=ws_svc))
+
+    with TestClient(app) as client:
+        res = client.post(f"/workspaces/gc{query}&dry_run=true", headers=AUTH)
+
+    assert res.status_code == 200, res.text
+    ws_svc.gc_workspaces.assert_called_once_with(aliases=aliases, dry_run=True)
+
+
 def test_workspace_load_route_defaults(tmp_path: Path) -> None:
     """POST .../load forwards the auto defaults and never passes a guard prompt.
 

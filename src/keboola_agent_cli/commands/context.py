@@ -1464,8 +1464,10 @@ remain branch-aware because modifying a dev branch is the expected intent.
   kbagent workspace from-transformation --project ALIAS --component-id ID --config-id ID [--row-id ID]
     Create workspace from transformation config. Loads input tables automatically.
 
-  kbagent workspace gc [--project NAME] [--dry-run] [--yes]
+  kbagent workspace gc (--project NAME ... | --all-projects) [--dry-run] [--yes]
     Garbage-collect orphaned workspaces (keboola.sandboxes config missing). Use --dry-run to preview.
+    Needs --project or --all-projects (neither or both = USAGE_ERROR, exit 2). A project whose
+    sandbox configs cannot be listed goes to errors[]; nothing is deleted there.
 
 ### Data Apps (Python/JS by default; Streamlit via --type)
 

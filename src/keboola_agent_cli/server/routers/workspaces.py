@@ -11,6 +11,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from ...constants import AI_SQL_HELPER_TIMEOUT, QUERY_RESULTS_DEFAULT_LIMIT
+from ...errors import ErrorCode, KeboolaApiError
 from ..dependencies import ServiceRegistry, get_registry
 
 router = APIRouter(prefix="/workspaces", tags=["workspaces"])
@@ -112,6 +113,35 @@ def list_workspaces(
         branch_id=branch,
         qs_compatible_only=qs_compatible,
     )
+
+
+# Declared before POST /{project}: that route would otherwise take /gc as a
+# project alias and the gc route would never match.
+@router.post("/gc", summary="Garbage-collect orphaned workspaces")
+def gc(
+    project: list[str] | None = Query(None),
+    all_projects: bool = False,
+    dry_run: bool = False,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """Clean up orphaned workspaces. Mirrors `kbagent workspace gc`.
+
+    Needs `project` (repeatable) or `all_projects=true`, never both. The
+    refusal is INVALID_ARGUMENT (HTTP 400), the REST twin of the CLI's exit 2.
+    """
+    message = None
+    if all_projects and project:
+        message = "Cannot use project with all_projects"
+    elif not all_projects and not project:
+        message = "Specify project or all_projects"
+    if message:
+        raise KeboolaApiError(
+            message=message,
+            status_code=400,
+            error_code=ErrorCode.INVALID_ARGUMENT,
+            retryable=False,
+        )
+    return registry.workspace.gc_workspaces(aliases=project, dry_run=dry_run)
 
 
 @router.post("/{project}", summary="Create a workspace")
@@ -307,13 +337,3 @@ def from_transformation(
         config_id=body.config_id,
         row_id=body.row_id,
     )
-
-
-@router.post("/gc", summary="Garbage-collect orphaned workspaces")
-def gc(
-    project: list[str] | None = Query(None),
-    dry_run: bool = False,
-    registry: ServiceRegistry = Depends(get_registry),
-) -> dict[str, Any]:
-    """Clean up orphaned workspaces across projects. Mirrors `kbagent workspace gc`."""
-    return registry.workspace.gc_workspaces(aliases=project, dry_run=dry_run)

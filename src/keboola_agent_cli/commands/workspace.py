@@ -590,7 +590,12 @@ def workspace_gc(
     project: list[str] | None = typer.Option(
         None,
         "--project",
-        help="Project alias to query (can be repeated). None = all projects.",
+        help="Project alias to clean up (can be repeated). Required unless --all-projects.",
+    ),
+    all_projects: bool = typer.Option(
+        False,
+        "--all-projects",
+        help="Clean up every registered project",
     ),
     dry_run: bool = typer.Option(
         False,
@@ -609,9 +614,26 @@ def workspace_gc(
     An orphaned workspace is one backed by keboola.sandboxes whose
     sandbox config no longer exists. Running gc deletes those workspaces
     (and any lingering sandbox configs). Use --dry-run to preview first.
+
+    Use --project for specific projects or --all-projects for every
+    registered project. A project whose sandbox configs cannot be listed
+    is reported in errors[] and nothing is deleted there.
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "workspace_service")
+
+    if all_projects and project:
+        formatter.error(
+            message="Cannot use --project with --all-projects",
+            error_code=ErrorCode.USAGE_ERROR,
+        )
+        raise typer.Exit(code=2)
+    if not all_projects and not project:
+        formatter.error(
+            message="Specify --project ALIAS or --all-projects",
+            error_code=ErrorCode.USAGE_ERROR,
+        )
+        raise typer.Exit(code=2)
 
     # Name each project's branch before the prompt; the service resolves the same one.
     try:

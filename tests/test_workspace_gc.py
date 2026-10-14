@@ -252,6 +252,51 @@ class TestWorkspaceGc:
         data = json.loads(result.output)
         assert data["data"]["count_deleted"] == 0
 
+    def test_gc_without_target_is_usage_error(self, tmp_path: Path) -> None:
+        """A bare `workspace gc` deletes nothing; it names both target options."""
+        store = _setup_store(tmp_path)
+        mock_ws = MagicMock()
+        result = _invoke(store, mock_ws, "--json", "workspace", "gc", "--yes")
+        assert result.exit_code == 2, result.output
+        error = json.loads(result.output)["error"]
+        assert error["code"] == "USAGE_ERROR"
+        assert "--project" in error["message"]
+        assert "--all-projects" in error["message"]
+        mock_ws.gc_workspaces.assert_not_called()
+
+    def test_gc_project_with_all_projects_is_usage_error(self, tmp_path: Path) -> None:
+        store = _setup_store(tmp_path)
+        mock_ws = MagicMock()
+        result = _invoke(
+            store,
+            mock_ws,
+            "--json",
+            "workspace",
+            "gc",
+            "--project",
+            "prod",
+            "--all-projects",
+            "--yes",
+        )
+        assert result.exit_code == 2, result.output
+        assert json.loads(result.output)["error"]["code"] == "USAGE_ERROR"
+        mock_ws.gc_workspaces.assert_not_called()
+
+    def test_gc_all_projects_selects_every_project(self, tmp_path: Path) -> None:
+        store = _setup_store(tmp_path)
+        mock_ws = MagicMock()
+        mock_ws.resolve_projects.return_value = {}
+        mock_ws.gc_workspaces.return_value = {
+            "dry_run": True,
+            "would_delete": [],
+            "count": 0,
+            "errors": [],
+            "message": "DRY RUN: 0 orphaned workspace(s) would be deleted.",
+        }
+        result = _invoke(store, mock_ws, "--json", "workspace", "gc", "--all-projects", "--dry-run")
+        assert result.exit_code == 0, result.output
+        mock_ws.gc_workspaces.assert_called_once_with(aliases=None, dry_run=True)
+
 
 # ── WorkspaceService.gc_workspaces unit tests ──────────────────────────
 
@@ -390,3 +435,61 @@ class TestWorkspaceServiceGc:
         # Error should be accumulated, not raised
         assert result["count_deleted"] == 0
         assert result["count_errors"] == 1
+
+    def test_gc_failed_config_listing_deletes_nothing(self, tmp_path: Path) -> None:
+        """A project whose sandbox configs cannot be listed goes to errors[].
+
+        Before the fix the failure was swallowed into an empty mapping, so every
+        keboola.sandboxes workspace counted as an orphan and was deleted.
+        """
+        svc, mock_client = self._make_service(tmp_path)
+        live_ws = {
+            "id": 88,
+            "name": "WORKSPACE_88",
+            "component": "keboola.sandboxes",
+            "configurationId": "live-cfg",
+            "connection": {"backend": "snowflake"},
+            "created": "2025-01-01",
+        }
+        self._setup_client_for_list(mock_client, raw_workspaces=[live_ws], sandbox_configs=[])
+        mock_client.list_component_configs.side_effect = KeboolaApiError(
+            message="Service unavailable", status_code=503, error_code="API_ERROR", retryable=True
+        )
+        result = svc.gc_workspaces(aliases=["prod"], dry_run=False)
+        assert result["count_deleted"] == 0
+        assert result["errors"] == [
+            {"project_alias": "prod", "error_code": "API_ERROR", "message": "Service unavailable"}
+        ]
+        mock_client.delete_workspace.assert_not_called()
+        mock_client.delete_config.assert_not_called()
+
+    def test_list_orphaned_failed_config_listing_reports_error(self, tmp_path: Path) -> None:
+        """`workspace list --orphaned` shares the rule: no false orphans."""
+        svc, mock_client = self._make_service(tmp_path)
+        live_ws = {
+            "id": 88,
+            "component": "keboola.sandboxes",
+            "configurationId": "live-cfg",
+            "connection": {},
+        }
+        self._setup_client_for_list(mock_client, raw_workspaces=[live_ws], sandbox_configs=[])
+        mock_client.list_component_configs.side_effect = RuntimeError("boom")
+        result = svc.list_workspaces(aliases=["prod"], orphaned_only=True)
+        assert result["workspaces"] == []
+        assert result["errors"][0]["project_alias"] == "prod"
+
+    def test_list_without_orphaned_keeps_name_fallback(self, tmp_path: Path) -> None:
+        """A plain listing still falls back to internal names on a failed config listing."""
+        svc, mock_client = self._make_service(tmp_path)
+        live_ws = {
+            "id": 88,
+            "name": "WORKSPACE_88",
+            "component": "keboola.sandboxes",
+            "configurationId": "live-cfg",
+            "connection": {},
+        }
+        self._setup_client_for_list(mock_client, raw_workspaces=[live_ws], sandbox_configs=[])
+        mock_client.list_component_configs.side_effect = RuntimeError("boom")
+        result = svc.list_workspaces(aliases=["prod"])
+        assert result["errors"] == []
+        assert result["workspaces"][0]["name"] == "WORKSPACE_88"

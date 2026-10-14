@@ -288,13 +288,18 @@ class WorkspaceService(BaseService):
             client.close()
 
     def _fetch_sandbox_config_names(
-        self, client: Any, branch_id: int | None = None
+        self, client: Any, branch_id: int | None = None, required: bool = False
     ) -> dict[str, str]:
         """Fetch sandbox configuration names for workspace name resolution.
 
         The workspace API returns internal names (WORKSPACE_xxxxx). The user-given
         name lives on the keboola.sandboxes configuration. This method fetches those
         configs and builds a config_id -> name mapping.
+
+        Args:
+            required: If True, a failed listing raises instead of returning {}.
+                Orphan detection needs this: an empty mapping makes every
+                sandbox workspace an orphan.
 
         Returns:
             Dict mapping config_id (str) to config name.
@@ -303,6 +308,8 @@ class WorkspaceService(BaseService):
             configs = client.list_component_configs("keboola.sandboxes", branch_id=branch_id)
             return {str(cfg.get("id", "")): cfg.get("name", "") for cfg in configs}
         except Exception:
+            if required:
+                raise
             # Non-critical: fall back to internal workspace names
             return {}
 
@@ -691,8 +698,12 @@ class WorkspaceService(BaseService):
                 effective_branch = self._resolve_branch_id(alias, project, branch_id)
                 raw_workspaces = client.list_workspaces(branch_id=effective_branch)
 
-                # Fetch sandbox configs to resolve user-given names
-                config_names = self._fetch_sandbox_config_names(client, effective_branch)
+                # Fetch sandbox configs to resolve user-given names. Orphan
+                # detection fails closed: a failed listing puts the project in
+                # errors[] instead of marking every sandbox workspace an orphan.
+                config_names = self._fetch_sandbox_config_names(
+                    client, effective_branch, required=orphaned_only
+                )
 
                 workspaces: list[dict[str, Any]] = []
                 for ws in raw_workspaces:
