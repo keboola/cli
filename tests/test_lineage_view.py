@@ -615,3 +615,21 @@ class TestBothDirections:
 
         assert "seenER" not in _LINEAGE_HTML_TEMPLATE
         assert "direction=upstream&depth" not in _LINEAGE_HTML_TEMPLATE
+
+
+class TestHtmlCharset:
+    """Standalone HTML declares UTF-8: labels carry non-ASCII (`·`, `⚠`, names)."""
+
+    def test_render_html_declares_utf8_before_title(self) -> None:
+        from keboola_agent_cli.services._lineage_mermaid import render_html
+
+        html = render_html("graph LR\n  a -.->|reads · AI| b", "t")
+        head = html.split("<title>", 1)[0]
+        assert '<meta charset="utf-8">' in head
+
+    def test_server_download_html_declares_utf8(self) -> None:
+        from keboola_agent_cli.commands import lineage as lineage_cmd
+
+        source = Path(lineage_cmd.__file__).read_text(encoding="utf-8")
+        builder = source.split("function buildStandaloneHtml", 1)[1].split("<title>", 1)[0]
+        assert '<meta charset="utf-8">' in builder

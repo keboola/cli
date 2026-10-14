@@ -1036,6 +1036,7 @@ body {
 
   function buildStandaloneHtml(mermaidCode, title) {
     return '<!DOCTYPE html>\n<html>\n<head>\n' +
+      '  <meta charset="utf-8">\n' +
       '  <title>' + escapeHtml(title) + '</title>\n' +
       '  <script __MERMAID_SCRIPT_ATTRS__><' + '/script>\n' +
       '  <style>\n' +

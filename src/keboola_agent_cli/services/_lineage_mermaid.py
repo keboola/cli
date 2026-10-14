@@ -207,6 +207,7 @@ def render_html(mermaid_code: str, title: str) -> str:
         "<!DOCTYPE html>\n"
         "<html>\n"
         "<head>\n"
+        '  <meta charset="utf-8">\n'
         f"  <title>{escaped_title}</title>\n"
         f"  <script {MERMAID_SCRIPT_ATTRS}></script>\n"
         "  <style>\n"
