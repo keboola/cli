@@ -28,6 +28,7 @@ from ._helpers import (
     get_formatter,
     get_service,
 )
+from ._lineage_build_output import print_ai_status
 
 lineage_app = typer.Typer(
     help="Column-level data lineage across projects.\n\n"
@@ -136,21 +137,7 @@ def lineage_build(
             formatter.console.print("\n  Detection methods:")
             for k, v in sorted(summary["detection_methods"].items(), key=lambda x: -x[1]):
                 formatter.console.print(f"    {k}: {v}")
-        # AI status
-        ai_status = result.get("ai_status", {})
-        if ai_status.get("ai_results_applied"):
-            formatter.console.print(
-                f"\n  AI results applied: {ai_status.get('ai_edges_added', 0)} edges added"
-            )
-        if ai_status.get("ai_tasks_generated"):
-            formatter.console.print(
-                f"\n  [bold]AI tasks generated: {ai_status['ai_tasks_generated']}[/bold]"
-                f" (already done: {ai_status.get('ai_already_done', 0)})"
-            )
-            formatter.console.print(f"  Task file: {ai_status['ai_tasks_file']}")
-            formatter.console.print(
-                "  Next: let your AI agent process the tasks, then re-run this command."
-            )
+        print_ai_status(formatter, result.get("ai_status", {}))
         # Surface warnings (e.g. empty scan) so users notice layout issues.
         for warning in result.get("warnings", []) or []:
             formatter.console.print(f"\n[yellow]Warning:[/yellow] {warning}")

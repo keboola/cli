@@ -7,7 +7,6 @@ and optionally uses AI to parse SQL/Python code for hidden dependencies.
 Architecture: reads from disk only, no API calls. Requires sync'd data.
 """
 
-import hashlib
 import html
 import json
 import logging
@@ -21,6 +20,7 @@ import yaml
 
 from ..config_store import ConfigStore
 from ..constants import MERMAID_SCRIPT_ATTRS
+from ._lineage_paths import select_scan_entries, skipped_trees_warning
 
 logger = logging.getLogger(__name__)
 
@@ -252,6 +252,8 @@ class Configuration:
     output_tables: list[dict] = field(default_factory=list)
     code: str = ""
     code_type: str = ""
+    external: list[dict] = field(default_factory=list)
+    source_dir: str = ""
 
     @property
     def fqn(self) -> str:
@@ -360,6 +362,7 @@ class LineageGraph:
                     "code_type": c.code_type,
                     "input_table_count": len(c.input_tables),
                     "output_table_count": len(c.output_tables),
+                    "external": c.external,
                 }
                 for fqn, c in self.configurations.items()
             },
@@ -462,7 +465,7 @@ class DeepLineageService:
         warnings: list[str] = []
 
         # Phase 1: Scan
-        graph = self._scan_projects(root, project_id_to_alias)
+        graph = self._scan_projects(root, project_id_to_alias, warnings)
 
         # Empty-scan warning -- most often caused by a layout mismatch between
         # ``sync pull --project X`` (flat) and ``sync pull --all-projects`` (nested).
@@ -589,7 +592,9 @@ class DeepLineageService:
             logger.debug("building project-id to alias mapping failed", exc_info=True)
         return mapping
 
-    def _scan_projects(self, root: Path, project_id_to_alias: dict[int, str]) -> LineageGraph:
+    def _scan_projects(
+        self, root: Path, project_id_to_alias: dict[int, str], warnings: list[str]
+    ) -> LineageGraph:
         """Scan all sync'd projects and build initial graph.
 
         Supports two directory layouts (written by ``kbagent sync pull``):
@@ -607,7 +612,7 @@ class DeepLineageService:
         flat_manifest = root / ".keboola" / "manifest.json"
         if flat_manifest.exists():
             project_alias = self._resolve_alias_from_manifest(flat_manifest, fallback=root.name)
-            self._scan_one_project(root, project_alias, project_id_to_alias, graph)
+            self._scan_one_project(root, project_alias, project_id_to_alias, graph, warnings)
         else:
             for project_dir in sorted(root.iterdir()):
                 if not project_dir.is_dir() or project_dir.name.startswith("."):
@@ -615,7 +620,9 @@ class DeepLineageService:
                 manifest_path = project_dir / ".keboola" / "manifest.json"
                 if not manifest_path.exists():
                     continue
-                self._scan_one_project(project_dir, project_dir.name, project_id_to_alias, graph)
+                self._scan_one_project(
+                    project_dir, project_dir.name, project_id_to_alias, graph, warnings
+                )
 
         # Store mapping for cross-project resolution
         graph._project_id_to_alias = project_id_to_alias
@@ -650,6 +657,7 @@ class DeepLineageService:
         project_alias: str,
         project_id_to_alias: dict[int, str],
         graph: LineageGraph,
+        warnings: list[str],
     ) -> None:
         """Populate ``graph`` with tables and configs from a single project dir."""
         manifest_path = project_dir / ".keboola" / "manifest.json"
@@ -680,13 +688,18 @@ class DeepLineageService:
                     )
                     graph.tables[table.fqn] = table
 
-        # Scan configurations
-        for config_entry in manifest.get("configurations", []):
-            self._scan_configuration(project_dir, config_entry, project_alias, project_id, graph)
+        # Scan configurations from their branch tree (never a hardcoded ``main``).
+        selection = select_scan_entries(manifest)
+        if selection.skipped:
+            warnings.append(skipped_trees_warning(project_alias, selection))
+        for item in selection.entries:
+            self._scan_configuration(
+                project_dir / item.tree, item.entry, project_alias, project_id, graph
+            )
 
     def _scan_configuration(
         self,
-        project_dir: Path,
+        tree_dir: Path,
         config_entry: dict,
         project_alias: str,
         project_id: int,
@@ -695,7 +708,7 @@ class DeepLineageService:
         config_path = config_entry["path"]
         component_id = config_entry["componentId"]
         config_id = config_entry["id"]
-        full_path = project_dir / "main" / config_path
+        full_path = tree_dir / config_path
 
         component_type = config_path.split("/")[0] if "/" in config_path else "unknown"
 
@@ -723,9 +736,9 @@ class DeepLineageService:
             code = _read_source(code_py)
             code_type = "python"
 
-        # Include config row mappings
+        # Include config row mappings. Row paths are relative to the config dir.
         for row_entry in config_entry.get("rows", []):
-            row_path = project_dir / "main" / row_entry.get("path", "")
+            row_path = full_path / row_entry.get("path", "")
             row_config = row_path / "_config.yml"
             if row_config.exists():
                 with open(row_config) as f:
@@ -745,6 +758,7 @@ class DeepLineageService:
             output_tables=output_tables,
             code=code,
             code_type=code_type,
+            source_dir=str(full_path),
         )
         graph.configurations[config.fqn] = config
 
@@ -870,176 +884,16 @@ class DeepLineageService:
         project_id_to_alias: dict[int, str],
     ) -> dict[str, Any]:
         """Apply AI results from .lineage_ai_results.json if present."""
-        results_path = root / AI_RESULTS_FILE
-        if not results_path.exists():
-            return {"ai_results_applied": False}
+        # Imported here: _lineage_ai builds Edge objects from this module.
+        from ._lineage_ai import apply_ai_results_file
 
-        with open(results_path) as f:
-            ai_results = json.load(f)
-
-        applied = 0
-        for entry in ai_results.get("results", []):
-            config_fqn = entry.get("config_fqn", "")
-            config = graph.configurations.get(config_fqn)
-            if not config:
-                continue
-
-            # SQL-style results: inputs with pid/bucket/table
-            for inp in entry.get("inputs", []):
-                ref_pid = inp.get("pid", config.project_id)
-                bucket = inp.get("bucket", "")
-                table = inp.get("table", "")
-                if not bucket or not table:
-                    continue
-                table_id = f"{bucket}.{table}"
-                ref_alias = project_id_to_alias.get(ref_pid, config.project_alias)
-                table_fqn = f"{ref_alias}:{table_id}"
-                if any(
-                    e.source_fqn == table_fqn and e.target_fqn == config_fqn for e in graph.edges
-                ):
-                    continue
-                detection = "ai_cross_project" if ref_pid != config.project_id else "ai"
-                graph.add_edge(
-                    Edge(
-                        source_fqn=table_fqn,
-                        target_fqn=config_fqn,
-                        source_type="table",
-                        target_type="config",
-                        edge_type="reads",
-                        detection=detection,
-                        columns=inp.get("columns", []),
-                    )
-                )
-                applied += 1
-
-            # Python-style results: extra_inputs with table_id
-            for inp in entry.get("extra_inputs", []):
-                table_id = inp.get("table_id", "")
-                if not table_id:
-                    continue
-                table_fqn = f"{config.project_alias}:{table_id}"
-                if any(
-                    e.source_fqn == table_fqn and e.target_fqn == config_fqn for e in graph.edges
-                ):
-                    continue
-                graph.add_edge(
-                    Edge(
-                        source_fqn=table_fqn,
-                        target_fqn=config_fqn,
-                        source_type="table",
-                        target_type="config",
-                        edge_type="reads",
-                        detection="ai",
-                    )
-                )
-                applied += 1
-
-            # Column mappings
-            for cm in entry.get("col_map", []):
-                out_col = cm.get("out", "")
-                in_table = cm.get("in_table", "")
-                in_col = cm.get("in_col", "")
-                if out_col and in_col:
-                    for edge in graph.edges:
-                        if edge.target_fqn == config_fqn and in_table in edge.source_fqn:
-                            edge.column_mapping[out_col] = f"{in_table}.{in_col}"
-
-        return {"ai_results_applied": True, "ai_edges_added": applied}
+        return apply_ai_results_file(graph, root, project_id_to_alias)
 
     def _generate_ai_tasks(self, graph: LineageGraph, root: Path) -> dict[str, Any]:
         """Generate .lineage_ai_tasks.json for AI agent to process."""
-        configs_needing_ai = [
-            c
-            for c in graph.configurations.values()
-            if c.code and ((c.code_type == "sql" and not c.input_tables) or c.code_type == "python")
-        ]
+        from ._lineage_ai import generate_ai_tasks
 
-        # Check which already have results
-        results_path = root / AI_RESULTS_FILE
-        existing_hashes: dict[str, str] = {}
-        if results_path.exists():
-            with open(results_path) as f:
-                for entry in json.load(f).get("results", []):
-                    fqn = entry.get("config_fqn", "")
-                    h = entry.get("_code_hash", "")
-                    if fqn and h:
-                        existing_hashes[fqn] = h
-
-        tasks = []
-        for config in configs_needing_ai:
-            code_hash = hashlib.sha256(config.code.encode()).hexdigest()[:16]
-            if existing_hashes.get(config.fqn) == code_hash:
-                continue  # already analyzed, code unchanged
-
-            # Resolve the code file path on disk
-            project_dir = root / config.project_alias
-            full_path = project_dir / "main" / config.path
-            code_file = full_path / ("transform.sql" if config.code_type == "sql" else "code.py")
-
-            task: dict[str, Any] = {
-                "config_fqn": config.fqn,
-                "project_alias": config.project_alias,
-                "project_id": config.project_id,
-                "component_id": config.component_id,
-                "config_name": config.config_name,
-                "code_type": config.code_type,
-                "code_file": str(code_file),
-                "_code_hash": code_hash,
-            }
-            if config.code_type == "python":
-                task["known_inputs"] = [t.get("source", "") for t in config.input_tables[:10]]
-                task["known_outputs"] = [
-                    t.get("destination", "") for t in config.output_tables[:10]
-                ]
-            tasks.append(task)
-
-        tasks_data = {
-            "description": "AI analysis tasks for column-level lineage.",
-            "instructions": (
-                "For each task, read the code_file from disk and extract table dependencies. "
-                "Write results to .lineage_ai_results.json (see output_format). "
-                "Then re-run `kbagent lineage build` to incorporate the results."
-            ),
-            "output_file": str(root / AI_RESULTS_FILE),
-            "output_format": {
-                "results": [
-                    {
-                        "config_fqn": "project:component/config_id",
-                        "_code_hash": "hash from task",
-                        "inputs": [
-                            {"pid": 123, "bucket": "in.c-x", "table": "y", "columns": ["a"]}
-                        ],
-                        "outputs": [{"table": "local_name", "columns": ["b"]}],
-                        "col_map": [
-                            {
-                                "out": "b",
-                                "in_table": "in.c-x.y",
-                                "in_col": "a",
-                                "transform": "direct",
-                            }
-                        ],
-                        "extra_inputs": [{"table_id": "bucket.table", "evidence": "code line"}],
-                        "external": [{"system": "Slack", "op": "write"}],
-                    }
-                ]
-            },
-            "sql_context": (
-                'Snowflake SQL uses \'KBC_USE4_{project_id}\'."bucket_id"."table_name" '
-                "for cross-project references. Same-project tables may use just "
-                '"bucket_id"."table_name" or aliased names from input mapping.'
-            ),
-            "tasks": tasks,
-        }
-
-        tasks_path = root / AI_TASKS_FILE
-        with open(tasks_path, "w") as f:
-            json.dump(tasks_data, f, indent=2)
-
-        return {
-            "ai_tasks_generated": len(tasks),
-            "ai_tasks_file": str(tasks_path),
-            "ai_already_done": len(configs_needing_ai) - len(tasks),
-        }
+        return generate_ai_tasks(graph, root)
 
     @staticmethod
     def _graph_from_dict(data: dict) -> LineageGraph:
@@ -1056,6 +910,7 @@ class DeepLineageService:
                 project_id=c_data["project_id"],
                 path=c_data["path"],
                 code_type=c_data.get("code_type", ""),
+                external=c_data.get("external", []),
             )
         for e_data in data.get("edges", []):
             graph.add_edge(
