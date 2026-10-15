@@ -840,6 +840,8 @@ def flow_delete(
 
     if formatter.json_mode:
         formatter.output(result)
+    elif result.get("status") == "already_in_trash":
+        formatter.console.print(f"[yellow]{escape(result['message'])}[/yellow]")
     else:
         formatter.success(f"Deleted flow keboola.flow/{escape(flow_id)}")
 

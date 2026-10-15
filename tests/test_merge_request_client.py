@@ -215,6 +215,29 @@ class TestStateTransitions:
         assert _sent_json(httpx_mock.get_requests()[0]) == {}
 
 
+class TestStateTransitionsAreNotRepeated:
+    """A state-transition PUT is sent once: a repeat after a lost response lands on the new state."""
+
+    @pytest.mark.parametrize(
+        ("suffix", "call"),
+        [
+            ("request-review", lambda mr: mr.request_review(42)),
+            ("approve", lambda mr: mr.approve(42)),
+            ("request-changes", lambda mr: mr.request_changes(42)),
+            ("merge", lambda mr: mr.merge(42)),
+        ],
+    )
+    def test_5xx_is_not_retried(self, client, httpx_mock, monkeypatch, suffix, call) -> None:
+        monkeypatch.setattr("keboola_agent_cli.http_base.time.sleep", lambda *_: None)
+        httpx_mock.add_response(url=f"{MR_BASE}/42/{suffix}", status_code=503, text="down")
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            call(client.merge_requests)
+
+        assert exc_info.value.status_code == 503
+        assert len(httpx_mock.get_requests()) == 1
+
+
 class TestMerge:
     """merge() awaits the Storage job implicitly, like every job-backed client method."""
 

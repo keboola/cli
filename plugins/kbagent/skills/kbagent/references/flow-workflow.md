@@ -188,6 +188,10 @@ kbagent --json flow schedule-remove --project prod --flow-id 111 --yes
 kbagent --json flow delete --project prod --flow-id 111 --yes
 ```
 
+The delete moves the flow to the trash. A repeated delete answers
+`status: "already_in_trash"` (exit 0) and sends nothing, so retrying after a
+timeout is safe. Undo with `config restore --component-id keboola.flow`.
+
 ## Validation errors
 
 `flow new` / `flow update` validate the body against the **live** conditional-flow

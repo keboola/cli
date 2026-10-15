@@ -32,6 +32,8 @@ class JobRun(BaseModel):
     variable_values_id: str | None = None
     no_variables: bool = False
     mode: str = DEFAULT_JOB_MODE
+    idempotency_key: str | None = None
+    force_rerun: bool = False
 
 
 class JobTerminate(BaseModel):
@@ -108,6 +110,8 @@ def run(
         poll_strategy=poll_strategy,
         log_tail_lines=log_tail_lines,
         mode=body.mode,
+        idempotency_key=body.idempotency_key,
+        force_rerun=body.force_rerun,
     )
 
 

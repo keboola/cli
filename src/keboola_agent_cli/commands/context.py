@@ -680,6 +680,9 @@ Use `kbagent <command> --help` for full flag details and examples.
     redirects the output to a Storage File tagged `debug-<jobId>` instead of into destination
     buckets -- safe for dry-runs and for reproducing a failing run on a production configuration
     without touching production data. Invalid values exit 2 via Click choice gate.
+    --idempotency-key records a pending entry before the create. An unknown outcome (read
+    timeout, 5xx, exhausted retries) keeps it, and a replay with the same key then exits 1
+    (INVALID_ARGUMENT) without creating a job: check `job list`, then pass --force-rerun.
     --json response shapes by exit code:
       - exit 0 (success): {{status:"ok", data:{{..., logTail?:[...]}}}}
       - exit 1 (QUEUE_JOB_FAILED, remote job status=error):
@@ -1203,8 +1206,9 @@ remain branch-aware because modifying a dev branch is the expected intent.
     semantic-only + warning).
 
   kbagent flow delete --project NAME --flow-id ID [--branch ID] [--yes]
-    Delete a flow. Does NOT remove associated keboola.scheduler configs.
-    Run 'flow schedule-remove' first if you want to clean up schedules.
+    Soft-delete a flow into the trash. Does NOT remove associated keboola.scheduler configs.
+    Run 'flow schedule-remove' first if you want to clean up schedules. A flow already
+    in the trash answers status "already_in_trash", exit 0, and is not deleted again.
 
   kbagent flow schedule --project NAME --flow-id ID --cron "0 6 * * *" [--timezone TZ] [--enabled/--disabled] [--name NAME] [--branch ID]
     Upsert a cron schedule: updates the existing keboola.scheduler config if one exists, creates one
@@ -1423,6 +1427,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
   Errors: FEATURE_NOT_ENABLED (exit 5) from any command whose target was resolved implicitly
   on a project without the feature; MR_MERGE_CONFLICT / MR_NOT_READY_TO_MERGE from merge;
   a scoped token 403s on everything but list. Every result may carry warnings[].
+  A merge repeated after an earlier merge already landed answers status "already_merged", exit 0.
 
 ### Workspaces (SQL Debugging)
 

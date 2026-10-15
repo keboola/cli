@@ -437,7 +437,8 @@ class Client:
         safe -- a prior still-running or non-failed job is returned (with
         ``JobResult.idempotent_replay = True``) instead of creating a duplicate.
         A prior *failed* run is re-run; ``force_rerun=True`` always creates a
-        fresh job. The Queue API has no server-side idempotency, so this is
+        fresh job. A create with an unknown outcome leaves a pending entry, and
+        the next call with that key raises ``INVALID_ARGUMENT`` instead. The Queue API has no server-side idempotency, so this is
         client-side and scoped to the supplied store.
 
         Args:

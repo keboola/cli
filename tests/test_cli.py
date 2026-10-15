@@ -3522,6 +3522,59 @@ class TestJobRun:
         # Human mode surfaces the replay note when the result was deduplicated.
         assert "prior run" in result.output
 
+    def test_job_run_idempotency_replay_after_lost_response_refuses(self, tmp_path: Path) -> None:
+        """A create that timed out keeps a pending entry, so the replay exits 1
+        without a second create, and the hint names job list and --force-rerun."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config_test(
+            config_dir,
+            {"prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"}},
+        )
+        mock_client = MagicMock()
+        mock_client.create_job.side_effect = KeboolaApiError(
+            message="read timeout", status_code=0, error_code="TIMEOUT"
+        )
+        args = [
+            "--json",
+            "job",
+            "run",
+            "--project",
+            "prod",
+            "--component-id",
+            "keboola.snowflake-transformation",
+            "--config-id",
+            "100",
+            "--no-variables",
+            "--idempotency-key",
+            "build-step-1",
+        ]
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+            patch("keboola_agent_cli.cli.JobService") as MockJobService,
+        ):
+            MockStore.return_value = store
+            MockJobService.return_value = JobService(
+                config_store=store, client_factory=lambda url, token: mock_client
+            )
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockCfgService.return_value = ConfigService(config_store=store)
+
+            first = runner.invoke(app, args)
+            replay = runner.invoke(app, args)
+
+        assert first.exit_code == 4, first.output
+        assert replay.exit_code == 1, replay.output
+        error = json.loads(replay.output)["error"]
+        assert error["code"] == "INVALID_ARGUMENT"
+        assert "kbagent job list" in error["message"]
+        assert "--force-rerun" in error["message"]
+        mock_client.create_job.assert_called_once()
+
     def test_job_run_active_branch_resolved(self, tmp_path: Path) -> None:
         """job run without --branch uses active_branch_id from config."""
         config_dir = tmp_path / "config"

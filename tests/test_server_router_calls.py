@@ -1172,6 +1172,41 @@ def test_flows_update_drops_component_id(tmp_path: Path) -> None:
     assert "component_id" not in flow_svc.update_flow.call_args.kwargs
 
 
+def test_flows_delete_repeated_does_not_purge(tmp_path: Path) -> None:
+    """DELETE /flows/{project}/{id} on a flow already in the trash -> 200, no DELETE.
+
+    Uses the real FlowService over a mock Storage client: the route must reach
+    the locate-first delete, so a repeated call answers ``already_in_trash``
+    instead of sending the DELETE that would purge the trashed flow.
+    """
+    from keboola_agent_cli.services.flow_service import FlowService
+
+    storage = MagicMock()
+    storage.get_config_detail.side_effect = KeboolaApiError(
+        message="not found", status_code=404, error_code=ErrorCode.NOT_FOUND
+    )
+    storage.list_deleted_configs.return_value = [{"id": "999"}]
+    store = MagicMock()
+    store.get_project.return_value = MagicMock(
+        stack_url="https://connection.keboola.com", token="tok", active_branch_id=None
+    )
+    store.load.return_value.projects = {PROJECT: store.get_project.return_value}
+    flow_svc = FlowService(
+        config_store=store,
+        client_factory=lambda url, token: storage,
+        ai_client_factory=lambda url, token: MagicMock(),
+        scheduler_client_factory=lambda url, token: MagicMock(),
+    )
+    app = _make_app_with_registry(tmp_path, _mock_registry(flow=flow_svc))
+
+    with TestClient(app) as client:
+        res = client.delete(f"/flows/{PROJECT}/999", headers=AUTH)
+
+    assert res.status_code == 200, res.text
+    assert res.json()["status"] == "already_in_trash"
+    storage.delete_config.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # data_apps.py  managed-repo REST parity (0.65.0)
 # ---------------------------------------------------------------------------
@@ -2605,6 +2640,67 @@ def test_jobs_detail_defaults_to_no_log_tail(tmp_path: Path) -> None:
     assert job_svc.get_job_detail.call_args.kwargs["log_tail_lines"] == 0
 
 
+def test_jobs_run_forwards_idempotency_key_and_force_rerun(tmp_path: Path) -> None:
+    """POST /jobs/{p}/run accepts the same idempotency pair as `job run`."""
+    job_svc = MagicMock()
+    job_svc.run_job.return_value = {"id": "1"}
+    app = _make_app_with_registry(tmp_path, _mock_registry(job=job_svc))
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/jobs/{PROJECT}/run",
+            headers=AUTH,
+            json={
+                "component_id": COMPONENT,
+                "config_id": CONFIG_ID,
+                "idempotency_key": "build-step-1",
+                "force_rerun": True,
+            },
+        )
+
+    assert res.status_code == 200, res.text
+    kwargs = job_svc.run_job.call_args.kwargs
+    assert kwargs["idempotency_key"] == "build-step-1"
+    assert kwargs["force_rerun"] is True
+
+
+def test_jobs_run_replay_after_lost_response_is_400(tmp_path: Path) -> None:
+    """A create that timed out leaves a pending entry: the replay answers 400, no second job."""
+    from keboola_agent_cli.config_store import ConfigStore
+    from keboola_agent_cli.models import ProjectConfig
+    from keboola_agent_cli.services.job_service import JobService
+
+    store = ConfigStore(config_dir=tmp_path / "svc")
+    store.add_project(
+        PROJECT,
+        ProjectConfig(
+            stack_url="https://connection.keboola.com",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
+        ),
+    )
+    queue = MagicMock()
+    queue.create_job.side_effect = KeboolaApiError(
+        message="read timeout", status_code=0, error_code=ErrorCode.TIMEOUT
+    )
+    job_svc = JobService(config_store=store, client_factory=lambda url, token: queue)
+    app = _make_app_with_registry(tmp_path, _mock_registry(job=job_svc))
+    body = {
+        "component_id": COMPONENT,
+        "config_id": CONFIG_ID,
+        "no_variables": True,
+        "idempotency_key": "build-step-1",
+    }
+
+    with TestClient(app) as client:
+        first = client.post(f"/jobs/{PROJECT}/run", headers=AUTH, json=body)
+        replay = client.post(f"/jobs/{PROJECT}/run", headers=AUTH, json=body)
+
+    assert first.status_code == 502, first.text
+    assert replay.status_code == 400, replay.text
+    assert replay.json()["error"]["code"] == "INVALID_ARGUMENT"
+    queue.create_job.assert_called_once()
+
+
 def test_search_forwards_scopes(tmp_path: Path) -> None:
     """GET /search must forward repeated ?scope= as scopes=."""
     search_svc = MagicMock()
@@ -3145,6 +3241,47 @@ def test_merge_request_merge_conflict_is_409_with_details_over_http(tmp_path: Pa
     body = res.json()["error"]
     assert body["code"] == ErrorCode.MR_MERGE_CONFLICT
     assert body["details"]["api_error_params"]["errors"][0]["configurationId"] == "1"
+
+
+def test_merge_request_merge_after_lost_response_is_already_merged_over_http(
+    tmp_path: Path,
+) -> None:
+    """Real service: a not-ready 409 on an MR that an earlier call merged answers 200."""
+    from keboola_agent_cli.client import KeboolaClient
+    from keboola_agent_cli.client.merge_requests import MergeRequests
+    from keboola_agent_cli.config_store import ConfigStore
+    from keboola_agent_cli.models import ProjectConfig
+    from keboola_agent_cli.services.merge_request_service import MergeRequestService
+
+    store = ConfigStore(config_dir=tmp_path / "svc")
+    store.add_project(
+        PROJECT,
+        ProjectConfig(
+            stack_url="https://connection.keboola.com",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
+        ),
+    )
+    storage = MagicMock(spec=KeboolaClient)
+    storage.merge_requests = MagicMock(spec=MergeRequests)
+    storage.has_feature.return_value = True
+    published = {"id": MR_ID, "state": "published", "branches": {"branchFromId": None}}
+    storage.merge_requests.get.return_value = published
+    storage.merge_requests.merge.side_effect = KeboolaApiError(
+        message="API error 409: Cannot merge.",
+        status_code=409,
+        error_code=ErrorCode.API_ERROR,
+        details={"api_error_code": "storage.mergeRequests.notReadyToMerge"},
+    )
+    svc = MergeRequestService(store, client_factory=lambda url, token: storage)
+
+    app = _make_app_with_registry(tmp_path, _mock_registry(merge_request=svc))
+
+    with TestClient(app) as client:
+        res = client.post(f"/merge-requests/{PROJECT}/{MR_ID}/merge", headers=AUTH)
+
+    assert res.status_code == 200, res.text
+    assert res.json()["status"] == "already_merged"
+    storage.merge_requests.merge.assert_called_once()
 
 
 def test_merge_request_caller_mistakes_from_the_service_are_400_over_http(tmp_path: Path) -> None:

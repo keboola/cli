@@ -567,6 +567,26 @@ class TestFlowDelete:
         assert data["data"]["status"] == "deleted"
         assert "component_id" not in mock_flow.delete_flow.call_args.kwargs
 
+    def test_delete_already_in_trash_is_exit_zero(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        mock_flow = MagicMock()
+        mock_flow.delete_flow.return_value = {
+            "status": "already_in_trash",
+            "project_alias": "prod",
+            "component_id": "keboola.flow",
+            "config_id": "1",
+            "branch_id": None,
+            "message": "Configuration 'keboola.flow/1' is already in the trash",
+        }
+        result = _invoke(
+            store,
+            mock_flow,
+            ["flow", "delete", "--project", "prod", "--flow-id", "1", "--yes"],
+        )
+        assert result.exit_code == 0, result.output
+        assert "already in the trash" in result.output
+        assert "Deleted flow" not in result.output
+
     def test_delete_dry_run_does_not_call_service(self, tmp_path: Path) -> None:
         store = _setup_config(tmp_path / "cfg", {"prod": {}})
         mock_flow = MagicMock()

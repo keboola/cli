@@ -603,6 +603,10 @@ kbagent job list [--project NAME] [--component-id ID] [--config-id ID] [--status
 kbagent job detail --project NAME --job-id ID [--log-tail-lines N]
 kbagent job run --project NAME --component-id ID --config-id ID [--row-id ID ...] [--wait] [--timeout N] [--branch ID] [--mode run|debug] [--variable-values-id ID] [--no-variables] [--poll-strategy exponential|fixed] [--log-tail-lines N] [--idempotency-key KEY] [--force-rerun]
 kbagent job terminate --project NAME (--job-id ID [--job-id ID ...] | --status any|created|waiting|processing [--component-id ID] [--config-id ID] [--branch ID] [--limit N]) [--dry-run] [--yes]
+# job run --idempotency-key: a pending entry is recorded BEFORE the create. A definite failure (4xx,
+#   refused connection, connect timeout) removes it; an unknown outcome (read timeout, 5xx, exhausted
+#   retries) keeps it, because the job may exist. A replay that finds the pending entry exits 1 (INVALID_ARGUMENT, HTTP 400 over serve) and
+#   creates nothing; check `job list`, then `--force-rerun`. Version gate lives in gotchas.md.
 
 kbagent storage buckets [--project NAME] [--branch ID]
 kbagent storage bucket-detail --project NAME --bucket-id ID [--branch ID]
@@ -926,7 +930,10 @@ kbagent merge-request resolve --component-id C --config-id I (--take ours|theirs
 #   Errors: a project without the feature answers FEATURE_NOT_ENABLED (exit 5) from every command whose
 #   target was resolved implicitly, reads included -- two wordings, missing feature vs SOX project. A
 #   scoped Storage token 403s (ACCESS_DENIED) on everything but `list`. `MR_MERGE_CONFLICT` /
-#   `MR_NOT_READY_TO_MERGE` (exit 1; the latter retryable) come from the merge 409; a truncated conflict
+#   `MR_NOT_READY_TO_MERGE` (exit 1; the latter retryable) come from the merge 409. After
+#   MR_NOT_READY_TO_MERGE, `merge` reads the MR: state `published` (an earlier call merged it) answers
+#   status "already_merged", exit 0. The four state-change PUTs are never repeated by the HTTP layer.
+#   Version gate lives in gotchas.md. A truncated conflict
 #   list in the error carries `details.api_error_params_truncated: true` -- run `conflicts` for the full set.
 #   `merge` blocks for up to 10 minutes (no --wait/--timeout). Every result may carry `warnings[]`
 #   (post-merge cleanup failures, a dropped --change-description on a delete resolution). A merge whose
@@ -1336,6 +1343,9 @@ kbagent flow validate --file @flow.yaml|- [--project NAME]
 kbagent flow new --project NAME --name NAME [--description D] [--file @path.yaml|-|JSON] [--branch ID]
 kbagent flow update --project NAME --flow-id ID [--name N] [--description D] [--file @path.yaml|-|JSON] [--branch ID]
 kbagent flow delete --project NAME --flow-id ID [--branch ID] [--yes]
+# flow delete: the same locate-first soft delete as `config delete` -- a flow already in the trash
+#   answers status "already_in_trash", exit 0, and no second DELETE (it would purge). Version gate
+#   lives in gotchas.md.
 kbagent flow schedule --project NAME --flow-id ID --cron "0 6 * * *" [--timezone TZ] [--disabled] [--branch ID]
 kbagent flow schedule-remove --project NAME --flow-id ID [--branch ID] [--yes]
 kbagent flow triggers --project NAME --flow-id ID [--branch ID]
