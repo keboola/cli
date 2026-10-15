@@ -147,6 +147,10 @@ def clone_project(
         save_manifest(target_path, manifest)
 
     if not already_cloned:
+        # Resolved before the first write: a failed token verification must
+        # leave no target directory, or the retry would take the
+        # already-cloned path with the source manifest still in place.
+        target_project_id = _target_project_id(service, target_alias, target_project, target_path)
         copy_reference_tree(source_dir, target_path)
         manifest = load_manifest(target_path)
         # Capture the source's own default branch id BEFORE the re-point moves
@@ -166,7 +170,7 @@ def clone_project(
         # _resolve_branch_id, so this only aligns the tree, never the API target.
         repoint_manifest_project(
             manifest,
-            project_id=_target_project_id(service, target_alias, target_project, target_path),
+            project_id=target_project_id,
             api_host=urlparse(target_project.stack_url).netloc,
             default_branch_id=(
                 branch_override if branch_override is not None else target_default_branch_id

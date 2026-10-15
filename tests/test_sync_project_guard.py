@@ -332,3 +332,36 @@ class TestCloneTargetWithoutStoredId:
 
         assert result["status"] == "no_changes"
         assert load_manifest(target_dir).project.id == 258
+
+    def test_failed_verification_leaves_no_target_and_retry_succeeds(self, tmp_path: Path) -> None:
+        """A failed verification on a fresh clone writes nothing, so a retry starts fresh."""
+        source = tmp_path / "golden"
+        _write_manifest(source, project_id=999)
+        target_dir = tmp_path / "clone"
+        client = _client(verified_project_id=258)
+        client.verify_token.side_effect = KeboolaApiError(
+            message="Invalid access token", status_code=401, error_code="INVALID_TOKEN"
+        )
+        svc = SyncService(
+            config_store=_store(tmp_path, project_id=None), client_factory=lambda u, t: client
+        )
+
+        with pytest.raises(ConfigError, match="token verification failed"):
+            svc.clone_project(
+                source=source,
+                target_alias="prod",
+                target_dir=target_dir,
+                overrides={"create_buckets": False},
+            )
+        assert not target_dir.exists()
+
+        client.verify_token.side_effect = None
+        result = svc.clone_project(
+            source=source,
+            target_alias="prod",
+            target_dir=target_dir,
+            overrides={"create_buckets": False},
+        )
+
+        assert result["status"] == "no_changes"
+        assert load_manifest(target_dir).project.id == 258
