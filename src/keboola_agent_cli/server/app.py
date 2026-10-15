@@ -43,6 +43,7 @@ from .dependencies import (
     ServiceRegistry,
     install_permission_engine,
     install_registry,
+    reject_undeclared_dry_run,
     translate_project_refs,
 )
 from .route_permissions import enforce_route_permission
@@ -880,8 +881,10 @@ def create_app(
         # route is refused rather than silently exempted. Listed first, so a
         # denied request is refused before any other dependency runs.
         # A project ID in `{project}` / `?project=` becomes its alias (CLI-22).
+        # A mutating route refuses a `dry_run` it does not declare (CLI-33).
         dependencies=[
             Depends(enforce_route_permission),
+            Depends(reject_undeclared_dry_run),
             Depends(translate_project_refs("project")),
         ],
         title="kbagent serve",

@@ -8,11 +8,17 @@ per request.
 
 from __future__ import annotations
 
+import email.message
+import types
+import typing
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from urllib.parse import parse_qsl, urlencode
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, params
+from fastapi.dependencies.utils import get_flat_dependant
+from fastapi.routing import APIRoute
+from pydantic import BaseModel
 
 from ..config_store import ConfigStore
 from ..dev_portal_client import DeveloperPortalClient
@@ -311,6 +317,127 @@ def translate_project_refs(*names: str) -> Callable[..., None]:
             request.__dict__.pop("_query_params", None)
 
     return _translate
+
+
+_MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+# The strings pydantic reads as a false ``bool`` (compared lower-cased).
+_FALSE_STRINGS = frozenset({"false", "0", "no", "off", "f", "n"})
+# Largest body the check reads on a route that has no body parameter itself.
+_MAX_UNREAD_BODY_BYTES = 1024 * 1024
+
+
+async def reject_undeclared_dry_run(request: Request) -> None:
+    """App-level dependency: refuse a ``dry_run`` that the matched mutating route does not declare.
+
+    FastAPI ignores undeclared query parameters and body fields. Without this
+    check, ``DELETE /flows/p/123?dry_run=true`` runs the real delete while the
+    caller expects a preview (CLI-33). A route declares ``dry_run`` as a query
+    parameter or as a field of its JSON body model. A ``dry_run`` sent in any
+    other place answers HTTP 422 before the route runs.
+
+    A clearly false value (``false``, ``0``, ``no``, ``off``, ``f``, ``n`` in
+    any case, or JSON ``false`` / ``0``) is ignored: it asks for the real
+    operation, which is what the route does anyway. Any other value -- ``true``,
+    ``null``, an unknown string, an object -- is refused.
+
+    Body cost: for a route with a JSON body, FastAPI parses the body before it
+    solves dependencies and Starlette caches the result on the request, so
+    ``request.json()`` here reuses that copy. A route without a body parameter
+    has nothing that reads its body, so reading a JSON body here takes nothing
+    away from it. It reads such a body only when ``Content-Length`` is present
+    and at most 1 MiB, so a missing or larger length skips the body check there.
+    A form route (the multipart uploads, which spool the file to disk) is
+    checked on the query string only: its body is never read here.
+    """
+    if request.method.upper() not in _MUTATING_METHODS:
+        return
+    route = request.scope.get("route")
+    if not isinstance(route, APIRoute):
+        return
+    flat = get_flat_dependant(route.dependant)
+    in_query = any(p.alias == "dry_run" for p in flat.query_params)
+    in_body = _body_declares_dry_run(flat.body_params)
+    where = f"{request.method.upper()} {route.path}"
+    query_values = request.query_params.getlist("dry_run")
+    if not in_query and not all(_is_false(value) for value in query_values):
+        _refuse(where, "the query string", "the JSON body" if in_body else None)
+    if in_body or any(isinstance(p.field_info, params.Form) for p in flat.body_params):
+        return
+    if not _is_json(request.headers.get("content-type")):
+        return
+    if not flat.body_params:
+        length = request.headers.get("content-length", "")
+        if not length.isdigit() or int(length) > _MAX_UNREAD_BODY_BYTES:
+            return
+    try:
+        body = await request.json()
+    except (ValueError, RecursionError):
+        # Malformed or too deeply nested JSON on a route without a body
+        # parameter: the route never read it, so this check leaves it alone.
+        return
+    if isinstance(body, dict) and "dry_run" in body and not _is_false(body["dry_run"]):
+        _refuse(where, "the JSON body", "the query string" if in_query else None)
+
+
+def _body_declares_dry_run(body_params: list[typing.Any]) -> bool:
+    """Whether the route's JSON body has a top-level ``dry_run`` field."""
+    if any(p.alias == "dry_run" for p in body_params):
+        return True
+    if len(body_params) != 1 or getattr(body_params[0].field_info, "embed", False):
+        # Several body parameters (or ``Body(embed=True)``): FastAPI nests each
+        # one under its own name, so only a parameter named ``dry_run`` counts.
+        return False
+    for model in _models_in(body_params[0].field_info.annotation):
+        fields = model.model_fields
+        if "dry_run" in fields or any(f.alias == "dry_run" for f in fields.values()):
+            return True
+    return False
+
+
+def _models_in(annotation: object) -> list[type[BaseModel]]:
+    """The pydantic models in ``annotation``, also inside ``X | None`` and ``Annotated``."""
+    origin = typing.get_origin(annotation)
+    if origin is typing.Annotated:
+        return _models_in(typing.get_args(annotation)[0])
+    if origin in (typing.Union, types.UnionType):
+        return [model for arg in typing.get_args(annotation) for model in _models_in(arg)]
+    if origin is None and isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        return [annotation]
+    return []
+
+
+def _is_false(value: object) -> bool:
+    """Whether ``value`` asks for the real operation (a false ``dry_run``)."""
+    if isinstance(value, str):
+        return value.lower() in _FALSE_STRINGS
+    if isinstance(value, bool):
+        return value is False
+    return isinstance(value, int | float) and value == 0
+
+
+def _is_json(content_type: str | None) -> bool:
+    """Same content-type test FastAPI applies before it parses a JSON body."""
+    if not content_type:
+        return False
+    message = email.message.Message()
+    message["content-type"] = content_type
+    subtype = message.get_content_subtype()
+    return message.get_content_maintype() == "application" and (
+        subtype == "json" or subtype.endswith("+json")
+    )
+
+
+def _refuse(where: str, sent_in: str, declared_in: str | None) -> typing.NoReturn:
+    if declared_in is None:
+        reason = f"{where} has no dry run: `dry_run` in {sent_in} is not a parameter of this route."
+        remedy = "Remove `dry_run` to run the real operation."
+    else:
+        reason = f"{where} takes `dry_run` in {declared_in}, not in {sent_in}."
+        remedy = f"Send `dry_run` in {declared_in}."
+    raise HTTPException(
+        status_code=422,
+        detail=f"{reason} The request was refused and nothing was changed. {remedy}",
+    )
 
 
 def get_manage_token(request: Request) -> str | None:
