@@ -377,7 +377,7 @@ swapped schema to production (only configs merge). Delete the branch
 (this also drops the branch-local `data_typed` sibling):
 
 ```bash
-kbagent branch delete --project ALIAS --branch <BRANCH_ID> --yes
+kbagent branch delete --project ALIAS --branch <BRANCH_ID>
 ```
 
 Keep a written record of what the rehearsal proved -- the Phase 2 profile

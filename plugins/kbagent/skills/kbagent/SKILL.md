@@ -42,7 +42,7 @@ If kbagent is not installed or you need the full standalone reference, run `kbag
 4. **Write commands need `--project`**: specify the target project alias
 5. **Tokens are always masked** in output -- this is expected, not an error
 6. **Always fetch fresh before write**: configs change between commands and across users. Re-fetch from the API immediately before any update; never reuse a config dump from earlier in the session. Stale local files are how `vN+1` silently overwrites someone else's `vN` changes.
-7. **Always `--dry-run` first** for destructive operations (`config update`, `config delete`, `storage delete-*`, `branch delete`, `sync push`). Show the user the diff and get explicit confirmation before applying.
+7. **Always `--dry-run` first** for writes that have it (`config update`, `config delete`, `storage delete-*`, `sync push`). Show the user the diff and get explicit confirmation before applying. Some destructive commands have no `--dry-run` (`branch delete`, `workspace delete`, `http delete`). For these, describe the change and get confirmation first.
 8. **There is no MCP passthrough.** `kbagent tool list` / `tool call` and `agent --type mcp_tool` were removed in v0.85.0 -- every catalog tool has a native command. If a user names an old tool (`update_config`, `get_configs`, `query_data`, ...), map it via `docs/mcp-migration.md` in the repo and run the native command instead.
 9. **Never auto-run jobs after config changes**. `config update` (or `sync push`) and `job run` are always two separate steps. Wait for the user to confirm before triggering a run -- do not chain them.
 

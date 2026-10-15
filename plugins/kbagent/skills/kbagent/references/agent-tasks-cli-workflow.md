@@ -67,7 +67,8 @@ They are passed verbatim to the AI CLI and can disable its safety rails, so
 ### Create + inspect + run
 
 The convenience flags cover the typical single-action case. For complex
-payloads, use `--from-file PATH|-` with the full JSON envelope.
+payloads, use `--from-file @path` (or `-` for stdin) with the full JSON envelope.
+A bare path is read as inline JSON and fails.
 
 ```bash
 # (1) Scheduled cli_command -- daily 06:00 health check

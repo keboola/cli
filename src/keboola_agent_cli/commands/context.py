@@ -335,7 +335,7 @@ Use `kbagent <command> --help` for full flag details and examples.
     a row synthesized for a project whose connection failed, so a consumer can
     depend on it instead of testing for absence. This is the answer to "which
     mode is this project in":
-      kbagent project list --json | jq '.data[].auth_mode'
+      kbagent --json project list | jq '.data[].auth_mode'
     In the human table a session project's `Token` cell is a dash: the stored
     sentinel is not a credential, and masked (`kbc-...9840`) it reads like a
     truncated real token. The --json `token` value is unchanged -- still
@@ -2152,7 +2152,7 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
                                         [--extra-arg ARG ...] [--timeout SECONDS]
                        |--type cli_command --argv ARG [--argv ARG ...]
                                            [--timeout SECONDS]
-                       |--from-file PATH|@path|-)
+                       |--from-file JSON|@path|-)
                        [--trigger-task-id ID --trigger-on success|error|always]
     Persist a new scheduled task. --manual skips the cron loop. Use
     --from-file for the full {{"type":..., "params":...}} JSON envelope
@@ -2187,7 +2187,7 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
   kbagent agent run-events TASK_ID RUN_ID
     Replay the persisted ai_agent event timeline.
 
-  kbagent agent test [--type ... | --from-file PATH] [--stream] [--name N]
+  kbagent agent test [--type ... | --from-file JSON|@path|-] [--stream] [--name N]
                      [common action flags from `create`]
     Execute an action ad-hoc -- nothing is persisted. Useful for
     sanity-checking a prompt or argv before saving.
@@ -2595,6 +2595,7 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
   4  Network error (timeout, unreachable server)
   5  Configuration error (corrupt config, missing alias)
   6  Permission denied (operation blocked by policy)
+  7  Job timed out and was cancelled (JOB_TIMEOUT_TERMINATED)
 
 When you receive a non-zero exit code, use --json to get structured error details.
 
