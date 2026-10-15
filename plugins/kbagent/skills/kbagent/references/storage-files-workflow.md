@@ -13,7 +13,7 @@ by default (auto-deleted after ~15 days) unless marked as permanent.
 | `storage file-upload` | Upload a local file |
 | `storage file-download` | Download a file (by ID or by tag) |
 | `storage file-tag` | Add/remove tags |
-| `storage file-delete` | Delete files |
+| `storage file-delete` | Delete files (asks on a terminal unless `--yes`) |
 | `storage load-file` | Import an uploaded file into a table |
 | `storage unload-table` | Export a table to a Storage File |
 

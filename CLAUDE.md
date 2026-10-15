@@ -682,6 +682,13 @@ kbagent storage delete-table --project NAME --table-id ID [--table-id ...] [--fo
 kbagent storage truncate-table --project NAME --table-id ID [--table-id ...] [--dry-run] [--yes] [--branch ID]
 kbagent storage delete-column --project NAME --table-id ID --column COL [--column ...] [--force] [--dry-run] [--yes] [--branch ID]
 kbagent storage delete-bucket --project NAME --bucket-id ID [--bucket-id ...] [--force] [--dry-run] [--yes] [--branch ID]
+# delete-bucket / file-delete (CLI-30): both read --yes. Without it they ask on a terminal (stdin and
+#   stderr are a terminal, --json off). --json, --dry-run and a session without a terminal never ask.
+#   A declined prompt exits 0 and deletes nothing. delete-bucket --force cascade-deletes tables only:
+#   a shared bucket (`sharing` set in the bucket detail) is never deleted, also not with --force or
+#   over REST (DELETE /storage/buckets/{project}?force=true). It gets a failed[] entry that names
+#   `kbagent sharing unshare --project ALIAS --bucket-id ID`, the other buckets are still processed,
+#   and the run exits 1. Version gate lives in gotchas.md.
 kbagent storage swap-tables --project NAME --table-id ID --target-table-id ID --branch ID [--dry-run] [--yes] [--timeout SECONDS]
     # --timeout SECONDS on create-table and swap-tables (since 0.99.0, #713): both halves
     #   of the repartition path move real data yet used to inherit the 60s metadata-job

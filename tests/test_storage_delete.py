@@ -1,7 +1,11 @@
-"""Tests for storage delete-table and delete-bucket commands and service methods."""
+"""Tests for storage delete-table, delete-bucket and file-delete commands and service methods."""
 
+import contextlib
 import json
+import sys
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -170,20 +174,53 @@ class TestDeleteBucketsService:
         assert len(result["failed"]) == 1
         assert "shared" in result["failed"][0]["error"].lower()
 
-    def test_shared_bucket_allowed_with_force(self, tmp_path: Path) -> None:
+    def test_shared_bucket_blocked_with_force(self, tmp_path: Path) -> None:
+        """--force overrides only the non-empty guard: a shared bucket is kept,
+        its failed[] entry names the unshare command, and the other buckets of
+        the same call are still deleted (with force, so their tables go too)."""
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_bucket_detail.side_effect = [
+            {"id": "in.c-full"},
+            {"id": "in.c-shared", "sharing": "organization"},
+            {"id": "in.c-other"},
+        ]
+        mock_client.delete_bucket.return_value = {"id": 1, "status": "success"}
+        service = _make_service(store, mock_client)
+
+        result = service.delete_buckets(
+            alias="test", bucket_ids=["in.c-full", "in.c-shared", "in.c-other"], force=True
+        )
+
+        assert result["deleted"] == ["in.c-full", "in.c-other"]
+        assert len(result["failed"]) == 1
+        assert result["failed"][0]["id"] == "in.c-shared"
+        assert (
+            "kbagent sharing unshare --project test --bucket-id in.c-shared"
+            in result["failed"][0]["error"]
+        )
+        assert [c.args[0] for c in mock_client.delete_bucket.call_args_list] == [
+            "in.c-full",
+            "in.c-other",
+        ]
+        assert all(c.kwargs["force"] is True for c in mock_client.delete_bucket.call_args_list)
+
+    def test_shared_bucket_blocked_with_force_in_dry_run(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
         mock_client = MagicMock()
         mock_client.get_bucket_detail.return_value = {
             "id": "in.c-shared",
             "sharing": "organization",
         }
-        mock_client.delete_bucket.return_value = {"id": 1, "status": "success"}
         service = _make_service(store, mock_client)
 
-        result = service.delete_buckets(alias="test", bucket_ids=["in.c-shared"], force=True)
+        result = service.delete_buckets(
+            alias="test", bucket_ids=["in.c-shared"], force=True, dry_run=True
+        )
 
-        assert result["deleted"] == ["in.c-shared"]
-        mock_client.delete_bucket.assert_called_once()
+        assert result["would_delete"] == []
+        assert result["failed"][0]["id"] == "in.c-shared"
+        mock_client.delete_bucket.assert_not_called()
 
     def test_dry_run(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
@@ -1280,3 +1317,138 @@ class TestStorageReadIgnoresActiveBranch:
         assert result.exit_code == 0, result.output
         call_kwargs = svc.delete_tables.call_args.kwargs
         assert call_kwargs["branch_id"] == 15931
+
+
+# ---------------------------------------------------------------------------
+# delete-bucket / file-delete: --yes and the terminal prompt
+# ---------------------------------------------------------------------------
+
+_PROMPT_COMMANDS = {
+    "delete-bucket": (
+        ["storage", "delete-bucket", "--project", "test", "--bucket-id", "in.c-data"],
+        "delete_buckets",
+        {"deleted": ["in.c-data"], "failed": [], "dry_run": False, "project_alias": "test"},
+    ),
+    "file-delete": (
+        ["storage", "file-delete", "--project", "test", "--file-id", "12345"],
+        "delete_files",
+        {"deleted": [12345], "failed": [], "dry_run": False, "project_alias": "test"},
+    ),
+}
+
+
+class _TerminalRunner(CliRunner):
+    """CliRunner whose stdin and stderr report a terminal, as an interactive
+    shell does. Uses only the public ``CliRunner.isolation`` hook: the streams
+    it installs get an instance-level ``isatty``."""
+
+    def __init__(self, stdin_tty: bool = True, stderr_tty: bool = True) -> None:
+        super().__init__()
+        self.stdin_tty = stdin_tty
+        self.stderr_tty = stderr_tty
+
+    @contextlib.contextmanager
+    def isolation(self, *args: Any, **kwargs: Any) -> Iterator[Any]:
+        with super().isolation(*args, **kwargs) as streams:
+            stdin_tty, stderr_tty = self.stdin_tty, self.stderr_tty
+            setattr(sys.stdin, "isatty", lambda: stdin_tty)  # noqa: B010
+            setattr(sys.stderr, "isatty", lambda: stderr_tty)  # noqa: B010
+            yield streams
+
+
+def _invoke_delete(
+    tmp_path: Path,
+    command: str,
+    extra: list[str],
+    user_input: str | None = None,
+    cli_runner: CliRunner | None = None,
+) -> tuple[Any, MagicMock]:
+    args, method, payload = _PROMPT_COMMANDS[command]
+    store = _make_store(tmp_path)
+    with (
+        patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+        patch("keboola_agent_cli.cli.StorageService") as MockSvc,
+    ):
+        MockStore.return_value = store
+        svc = MockSvc.return_value
+        getattr(svc, method).return_value = payload
+        json_flag = ["--json"] if "--json" in extra else []
+        rest = [a for a in extra if a != "--json"]
+        result = (cli_runner or _TerminalRunner()).invoke(
+            app, [*json_flag, *args, *rest], input=user_input
+        )
+    return result, getattr(svc, method)
+
+
+@pytest.mark.parametrize("command", list(_PROMPT_COMMANDS))
+class TestDeletePromptOnTerminal:
+    """`storage delete-bucket` and `file-delete` read --yes like delete-table,
+    but ask only in an interactive session (stdin and stderr are a terminal,
+    --json is off). Non-interactive callers see no change."""
+
+    def test_terminal_without_yes_asks_and_proceeds_on_yes(
+        self, tmp_path: Path, command: str
+    ) -> None:
+        result, method = _invoke_delete(tmp_path, command, [], user_input="y\n")
+        assert result.exit_code == 0, result.output
+        assert "[y/N]" in result.output
+        method.assert_called_once()
+
+    def test_terminal_decline_aborts_and_deletes_nothing(
+        self, tmp_path: Path, command: str
+    ) -> None:
+        result, method = _invoke_delete(tmp_path, command, [], user_input="n\n")
+        assert result.exit_code == 0, result.output
+        assert "Aborted." in result.output
+        method.assert_not_called()
+
+    def test_terminal_with_yes_does_not_ask(self, tmp_path: Path, command: str) -> None:
+        result, method = _invoke_delete(tmp_path, command, ["--yes"])
+        assert result.exit_code == 0, result.output
+        assert "[y/N]" not in result.output
+        method.assert_called_once()
+
+    def test_terminal_with_json_does_not_ask(self, tmp_path: Path, command: str) -> None:
+        result, method = _invoke_delete(tmp_path, command, ["--json"])
+        assert result.exit_code == 0, result.output
+        assert "[y/N]" not in result.output
+        method.assert_called_once()
+
+    def test_terminal_dry_run_does_not_ask(self, tmp_path: Path, command: str) -> None:
+        result, method = _invoke_delete(tmp_path, command, ["--dry-run"])
+        assert result.exit_code == 0, result.output
+        assert "[y/N]" not in result.output
+        assert method.call_args.kwargs["dry_run"] is True
+
+    def test_no_terminal_does_not_ask(self, tmp_path: Path, command: str) -> None:
+        result, method = _invoke_delete(tmp_path, command, [], cli_runner=runner)
+        assert result.exit_code == 0, result.output
+        assert "[y/N]" not in result.output
+        method.assert_called_once()
+
+    @pytest.mark.parametrize(("stdin_tty", "stderr_tty"), [(True, False), (False, True)])
+    def test_only_one_stream_on_terminal_does_not_ask(
+        self, tmp_path: Path, command: str, stdin_tty: bool, stderr_tty: bool
+    ) -> None:
+        result, method = _invoke_delete(
+            tmp_path, command, [], cli_runner=_TerminalRunner(stdin_tty, stderr_tty)
+        )
+        assert result.exit_code == 0, result.output
+        assert "[y/N]" not in result.output
+        method.assert_called_once()
+
+    def test_prompt_goes_to_stderr(self, tmp_path: Path, command: str) -> None:
+        result, _ = _invoke_delete(tmp_path, command, [], user_input="n\n")
+        assert "[y/N]" in result.stderr
+        assert "[y/N]" not in result.stdout
+
+
+def test_delete_bucket_prompt_says_shared_and_linked_are_skipped(tmp_path: Path) -> None:
+    result, _ = _invoke_delete(tmp_path, "delete-bucket", [], user_input="n\n")
+    assert "Shared and linked buckets are skipped." in result.stderr
+
+
+def test_delete_bucket_force_prompt_names_tables(tmp_path: Path) -> None:
+    result, _ = _invoke_delete(tmp_path, "delete-bucket", ["--force"], user_input="n\n")
+    assert "Shared and linked buckets are skipped." in result.stderr
+    assert "All tables in the deleted buckets are deleted too." in result.stderr

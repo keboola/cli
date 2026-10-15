@@ -3455,3 +3455,50 @@ def test_merge_request_create_and_update_bodies_have_no_auto_merge_field(tmp_pat
         )
     assert "auto_merge_strategy" not in svc.create_merge_request.call_args.kwargs
     assert "auto_merge_strategy" not in svc.update_merge_request.call_args.kwargs
+
+
+# ---------------------------------------------------------------------------
+# storage.py  DELETE /storage/buckets/{p}?force=true
+# The route and `storage delete-bucket` share StorageService.delete_buckets, so
+# `force` overrides only the non-empty guard here too: a shared bucket is kept.
+# ---------------------------------------------------------------------------
+
+
+def test_storage_delete_buckets_force_keeps_shared_bucket(tmp_path: Path) -> None:
+    from keboola_agent_cli.config_store import ConfigStore
+    from keboola_agent_cli.models import AppConfig, ProjectConfig
+    from keboola_agent_cli.services.storage_service import StorageService
+
+    store = ConfigStore(config_dir=tmp_path / "svc")
+    store.save(
+        AppConfig(
+            projects={
+                PROJECT: ProjectConfig(
+                    stack_url="https://connection.keboola.com",
+                    token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
+                )
+            }
+        )
+    )
+    api = MagicMock()
+    api.get_bucket_detail.side_effect = [
+        {"id": "in.c-shared", "sharing": "organization"},
+        {"id": "in.c-full"},
+    ]
+    api.delete_bucket.return_value = {"id": 1, "status": "success"}
+    storage_svc = StorageService(config_store=store, client_factory=lambda url, token: api)
+    app = _make_app_with_registry(tmp_path, _mock_registry(storage=storage_svc))
+
+    with TestClient(app) as client:
+        res = client.delete(
+            f"/storage/buckets/{PROJECT}",
+            headers=AUTH,
+            params={"bucket_id": ["in.c-shared", "in.c-full"], "force": "true"},
+        )
+
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["deleted"] == ["in.c-full"]
+    assert body["failed"][0]["id"] == "in.c-shared"
+    assert "kbagent sharing unshare" in body["failed"][0]["error"]
+    api.delete_bucket.assert_called_once_with("in.c-full", force=True, branch_id=None)
