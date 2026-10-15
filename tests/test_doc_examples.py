@@ -44,6 +44,20 @@ def _opts(cmd: Any) -> set[str]:
     return {o for p in cmd.params for o in (*p.opts, *p.secondary_opts)} | {"--help"}
 
 
+def _cut(example: str) -> str:
+    """Cut at a comment, redirect, `&&` or `;`, and at a pipe outside `[...]` / `(...)`."""
+    example = re.split(r"\s+(?:#|\\$|2?>)|\s*(?:&&|;)", example)[0]
+    depth = 0
+    for i, char in enumerate(example):
+        if char in "[(":
+            depth += 1
+        elif char in "])":
+            depth = max(depth - 1, 0)
+        elif char == "|" and depth == 0 and example[i - 1 : i].isspace():
+            return example[:i].strip()
+    return example.strip()
+
+
 def _examples(text: str, *, markdown: bool) -> list[tuple[int, str]]:
     out: list[tuple[int, str]] = []
     fence = False
@@ -63,7 +77,7 @@ def _examples(text: str, *, markdown: bool) -> list[tuple[int, str]]:
                 found.append(cmd)
         for ex in found:
             # Cut at a shell operator or a comment.
-            out.append((n, re.split(r"\s+(?:#|\\$|2?>|\|)|\s*(?:&&|;)", ex)[0].strip()))
+            out.append((n, _cut(ex)))
     return out
 
 
@@ -154,3 +168,11 @@ def test_checker_ignores_quoted_values() -> None:
     assert _problem('kbagent agent test --prompt "a --zz" --bogus', root) == (
         "agent test has no option --bogus"
     )
+
+
+def test_checker_reads_options_after_a_spaced_alternation() -> None:
+    root = typer.main.get_command(app)
+    [(_, ex)] = _examples("```\nkbagent agent test (--type T | --bogus X)\n```\n", markdown=True)
+    assert _problem(ex, root) == "agent test has no option --bogus"
+    [(_, ex)] = _examples("```\nkbagent --json project list | jq .\n```\n", markdown=True)
+    assert ex == "kbagent --json project list"
