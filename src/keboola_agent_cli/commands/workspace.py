@@ -618,7 +618,8 @@ def workspace_gc(
     Use --project for specific projects or --all-projects for every
     registered project. A project whose sandbox configs cannot be listed
     is reported in errors[] and nothing is deleted there. A NOT_FOUND
-    listing means the project has no sandbox configs.
+    listing means "no sandbox configs" only when the branch component
+    listing confirms it.
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "workspace_service")

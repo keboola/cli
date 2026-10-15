@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
+import pytest
 from typer.testing import CliRunner
 
 from keboola_agent_cli.cli import app
@@ -301,6 +303,32 @@ class TestWorkspaceGc:
 # ── WorkspaceService.gc_workspaces unit tests ──────────────────────────
 
 
+# Branch component listings that confirm "no keboola.sandboxes configs".
+_CONFIRMED_ABSENT = pytest.mark.parametrize(
+    "confirm",
+    [
+        [],
+        [{"id": "keboola.ex-http", "configurations": [{"id": "1"}]}],
+        [{"id": "keboola.sandboxes", "configurations": []}],
+    ],
+    ids=["no-components", "other-component", "sandboxes-empty"],
+)
+
+# Answers that do not confirm it: the check fails, or sandbox configs exist.
+_NOT_CONFIRMED = pytest.mark.parametrize(
+    "confirm",
+    [
+        KeboolaApiError(
+            message="Branch not found", status_code=404, error_code="NOT_FOUND", retryable=False
+        ),
+        RuntimeError("connection reset"),
+        [{"id": "keboola.sandboxes", "configurations": [{"id": "live-cfg"}]}],
+        [{"id": "keboola.sandboxes"}],
+    ],
+    ids=["check-404", "check-error", "sandboxes-has-configs", "sandboxes-no-key"],
+)
+
+
 class TestWorkspaceServiceGc:
     """Test gc_workspaces service method with a mocked client."""
 
@@ -463,13 +491,8 @@ class TestWorkspaceServiceGc:
         mock_client.delete_workspace.assert_not_called()
         mock_client.delete_config.assert_not_called()
 
-    def test_gc_not_found_config_listing_means_no_configs(self, tmp_path: Path) -> None:
-        """NOT_FOUND from the listing means the component has no configs left.
-
-        Every sandbox workspace is then an orphan and gc deletes it, as
-        flow_service treats a NOT_FOUND from list_component_configs.
-        """
-        svc, mock_client = self._make_service(tmp_path)
+    def _setup_not_found_listing(self, mock_client: MagicMock, confirm: Any) -> None:
+        """One orphan; the sandbox config listing 404s; ``confirm`` answers the check."""
         orphan_ws = {
             "id": 77,
             "name": "WORKSPACE_77",
@@ -480,34 +503,64 @@ class TestWorkspaceServiceGc:
         }
         self._setup_client_for_list(mock_client, raw_workspaces=[orphan_ws], sandbox_configs=[])
         mock_client.list_component_configs.side_effect = KeboolaApiError(
-            message="Component not found", status_code=404, error_code="NOT_FOUND", retryable=False
+            message="Resource not found", status_code=404, error_code="NOT_FOUND", retryable=False
         )
+        if isinstance(confirm, Exception):
+            mock_client.list_components_summary.side_effect = confirm
+        else:
+            mock_client.list_components_summary.return_value = confirm
         mock_client.get_workspace.return_value = {
             "id": 77,
             "component": "keboola.sandboxes",
             "configurationId": "orphan-cfg",
             "connection": {},
         }
+
+    @_CONFIRMED_ABSENT
+    def test_gc_not_found_confirmed_absent_deletes_orphan(
+        self, tmp_path: Path, confirm: list[dict]
+    ) -> None:
+        """A 404 plus a branch listing without sandbox configs means "no configs"."""
+        svc, mock_client = self._make_service(tmp_path)
+        self._setup_not_found_listing(mock_client, confirm)
         result = svc.gc_workspaces(aliases=["prod"], dry_run=False)
         assert result["errors"] == []
         assert result["count_deleted"] == 1
+        mock_client.list_components_summary.assert_called_once_with(branch_id=100)
         mock_client.delete_workspace.assert_called_once_with(77, branch_id=100)
 
-    def test_list_orphaned_not_found_config_listing_lists_orphans(self, tmp_path: Path) -> None:
+    @_NOT_CONFIRMED
+    def test_gc_not_found_unconfirmed_deletes_nothing(self, tmp_path: Path, confirm: Any) -> None:
+        """A 404 alone (deleted branch, routing problem) never makes orphans."""
         svc, mock_client = self._make_service(tmp_path)
-        orphan_ws = {
-            "id": 77,
-            "component": "keboola.sandboxes",
-            "configurationId": "orphan-cfg",
-            "connection": {},
-        }
-        self._setup_client_for_list(mock_client, raw_workspaces=[orphan_ws], sandbox_configs=[])
-        mock_client.list_component_configs.side_effect = KeboolaApiError(
-            message="Component not found", status_code=404, error_code="NOT_FOUND", retryable=False
-        )
+        self._setup_not_found_listing(mock_client, confirm)
+        result = svc.gc_workspaces(aliases=["prod"], dry_run=False)
+        assert result["count_deleted"] == 0
+        assert result["errors"] == [
+            {"project_alias": "prod", "error_code": "NOT_FOUND", "message": "Resource not found"}
+        ]
+        mock_client.delete_workspace.assert_not_called()
+        mock_client.delete_config.assert_not_called()
+
+    @_CONFIRMED_ABSENT
+    def test_list_orphaned_not_found_confirmed_absent_lists_orphan(
+        self, tmp_path: Path, confirm: list[dict]
+    ) -> None:
+        svc, mock_client = self._make_service(tmp_path)
+        self._setup_not_found_listing(mock_client, confirm)
         result = svc.list_workspaces(aliases=["prod"], orphaned_only=True)
         assert result["errors"] == []
         assert [ws["id"] for ws in result["workspaces"]] == [77]
+
+    @_NOT_CONFIRMED
+    def test_list_orphaned_not_found_unconfirmed_reports_error(
+        self, tmp_path: Path, confirm: Any
+    ) -> None:
+        svc, mock_client = self._make_service(tmp_path)
+        self._setup_not_found_listing(mock_client, confirm)
+        result = svc.list_workspaces(aliases=["prod"], orphaned_only=True)
+        assert result["workspaces"] == []
+        assert result["errors"][0]["error_code"] == "NOT_FOUND"
 
     def test_list_orphaned_failed_config_listing_reports_error(self, tmp_path: Path) -> None:
         """`workspace list --orphaned` shares the rule: no false orphans."""

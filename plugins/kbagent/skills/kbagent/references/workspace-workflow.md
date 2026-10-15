@@ -333,8 +333,10 @@ Behavior:
 - *(since vNEXT)* A project whose `keboola.sandboxes` configs cannot be
   listed goes to `errors[]`; gc deletes nothing there and `list --orphaned`
   lists no orphans for it. Before, a failed listing made every sandbox
-  workspace of that project an orphan. A `NOT_FOUND` listing is not a
-  failure: the project has no sandbox configs, so every sandbox workspace
-  there is an orphan.
+  workspace of that project an orphan. A `NOT_FOUND` listing counts as
+  "no sandbox configs" only when the branch component listing confirms
+  that the branch is reachable and has no `keboola.sandboxes` configs.
+  Then every sandbox workspace there is an orphan. Otherwise the project
+  goes to `errors[]`.
 - Registered as `destructive` in the permission engine -- blocked by
   `--deny-destructive` / `--deny-writes`.

@@ -1444,10 +1444,14 @@ sandbox workspace of that project counted as an orphan and gc deleted it.
 Now that project goes to `errors[]`, nothing is deleted there, and the run
 exits 1. `workspace list --orphaned` uses the same rule: the project is
 reported in `errors[]` instead of listing its live workspaces as orphans.
-A `NOT_FOUND` listing is not a failure. It means the project or branch has
-no `keboola.sandboxes` configs left, so every sandbox workspace there is an
-orphan and gc deletes it. A plain `workspace list` still falls back to the
-internal workspace names.
+A `NOT_FOUND` from the sandbox config listing is ambiguous. It is the
+mapping of any HTTP 404, also of a deleted branch or a routing problem.
+kbagent then lists the components of the branch. Only when that call
+succeeds and shows no `keboola.sandboxes` configs does the 404 mean "no
+configs left". Then every sandbox workspace there is an orphan and gc
+deletes it. In every other case the project goes to `errors[]` and nothing
+is deleted there. A plain `workspace list` still falls back to the internal
+workspace names.
 
 Before this version, `POST /workspaces/gc` was matched by
 `POST /workspaces/{project}` (create a workspace in a project named `gc`),
