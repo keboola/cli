@@ -35,6 +35,23 @@ class _ConfigsMixin(_CoreClient):
         response = self._request("GET", f"{prefix}/components", params=params)
         return response.json()
 
+    def list_components_summary(self, branch_id: int | None = None) -> list[dict[str, Any]]:
+        """List the components that have configurations, without config bodies.
+
+        No ``include`` parameter, so each configuration carries only its
+        metadata. The Storage API lists a component only while it has at
+        least one configuration in the branch.
+
+        Args:
+            branch_id: If set, list components from a specific dev branch.
+
+        Returns:
+            List of component dicts from the API.
+        """
+        prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
+        response = self._request("GET", f"{prefix}/components")
+        return response.json()
+
     def list_components_with_configs(
         self,
         branch_id: int | None = None,

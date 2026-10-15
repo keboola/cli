@@ -310,6 +310,9 @@ kbagent workspace gc --project prod
 
 # Skip interactive confirmation (useful in CI or agent workflows)
 kbagent workspace gc --project prod --yes
+
+# Every registered project, explicitly
+kbagent workspace gc --all-projects --dry-run
 ```
 
 Behavior:
@@ -323,7 +326,17 @@ Behavior:
   project that could not be listed) exits 1, also under `--dry-run`.
 - **`--dry-run`** surfaces the would-be-deleted list via `data.would_delete[]`
   in JSON mode and a Rich table in human mode.
-- Multi-project: `workspace list --orphaned` / `workspace gc` accept
-  repeatable `--project` or run against all connected projects when omitted.
+- Multi-project: `workspace list --orphaned` accepts repeatable `--project`
+  or reads all connected projects when omitted. *(since vNEXT)* `workspace gc`
+  needs repeatable `--project` or `--all-projects`; a bare `workspace gc`
+  exits 2 with `USAGE_ERROR`.
+- *(since vNEXT)* A project whose `keboola.sandboxes` configs cannot be
+  listed goes to `errors[]`; gc deletes nothing there and `list --orphaned`
+  lists no orphans for it. Before, a failed listing made every sandbox
+  workspace of that project an orphan. A `NOT_FOUND` listing counts as
+  "no sandbox configs" only when the branch component listing confirms
+  that the branch is reachable and has no `keboola.sandboxes` configs.
+  Then every sandbox workspace there is an orphan. Otherwise the project
+  goes to `errors[]`.
 - Registered as `destructive` in the permission engine -- blocked by
   `--deny-destructive` / `--deny-writes`.

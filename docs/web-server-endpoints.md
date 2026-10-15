@@ -325,6 +325,7 @@ Snowflake / BigQuery workspaces -- CRUD, load tables, run SQL via Query Service,
 | Method | Path | Summary |
 |---|---|---|
 | `GET` | `/workspaces` | List workspaces across projects |
+| `POST` | `/workspaces/gc` | Garbage-collect orphaned workspaces |
 | `POST` | `/workspaces/{project}` | Create a workspace |
 | `GET` | `/workspaces/{project}/{workspace_id}` | Get workspace detail |
 | `DELETE` | `/workspaces/{project}/{workspace_id}` | Delete a workspace |
@@ -333,7 +334,6 @@ Snowflake / BigQuery workspaces -- CRUD, load tables, run SQL via Query Service,
 | `POST` | `/workspaces/{project}/{workspace_id}/query` | Run SQL in a workspace |
 | `POST` | `/workspaces/sql/improve/stream` | Stream AI SQL helper (SSE) |
 | `POST` | `/workspaces/{project}/from-transformation` | Create workspace from a transformation |
-| `POST` | `/workspaces/gc` | Garbage-collect orphaned workspaces |
 
 ## Development
 

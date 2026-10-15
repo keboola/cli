@@ -1000,7 +1000,11 @@ kbagent workspace query --project ALIAS --workspace-id ID --file query.sql
 # query: default reads results inline via Query Service `GET .../results` (fast, JSON columns+rows),
 #   capped at --limit rows (default 500); pass --full for the complete CSV export (slower, uncapped).
 #   Each statement carries structured columns+rows + a synthesized csv_data (back-compat) since 0.59.0.
-kbagent workspace gc [--project NAME ...] [--dry-run] [--yes]
+kbagent workspace gc (--project NAME ... | --all-projects) [--dry-run] [--yes]
+# gc (CLI-28): needs --project or --all-projects (neither or both = USAGE_ERROR, exit 2), also over
+#   REST (`project=` or `all_projects=true`, else HTTP 400 INVALID_ARGUMENT). A project whose sandbox
+#   configs cannot be listed goes to errors[] and nothing is deleted there. A NOT_FOUND listing counts as
+#   "no sandbox configs" only when the branch component listing confirms it. Version gate lives in gotchas.md.
 kbagent workspace from-transformation --project ALIAS --component-id ID --config-id ID [--row-id ID]
 
 kbagent data-app list [--project NAME ...] [--branch ID]

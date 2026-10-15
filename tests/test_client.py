@@ -670,6 +670,25 @@ class TestListComponents:
             assert result[0]["id"] == "keboola.ex-db-snowflake"
 
 
+class TestListComponentsSummary:
+    """Tests for list_components_summary()."""
+
+    def test_list_components_summary_sends_no_include(self, httpx_mock) -> None:
+        """No include parameter, so no configuration bodies are fetched."""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/branch/123/components",
+            json=[{"id": "keboola.sandboxes", "configurations": []}],
+            status_code=200,
+        )
+
+        with KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
+        ) as client:
+            result = client.list_components_summary(branch_id=123)
+            assert result == [{"id": "keboola.sandboxes", "configurations": []}]
+
+
 class TestGetConfigDetail:
     """Tests for get_config_detail()."""
 

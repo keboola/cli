@@ -288,7 +288,7 @@ class WorkspaceService(BaseService):
             client.close()
 
     def _fetch_sandbox_config_names(
-        self, client: Any, branch_id: int | None = None
+        self, client: Any, branch_id: int | None = None, required: bool = False
     ) -> dict[str, str]:
         """Fetch sandbox configuration names for workspace name resolution.
 
@@ -296,15 +296,45 @@ class WorkspaceService(BaseService):
         name lives on the keboola.sandboxes configuration. This method fetches those
         configs and builds a config_id -> name mapping.
 
+        Args:
+            required: If True, a failed listing raises instead of returning {}.
+                Orphan detection needs this: an empty mapping makes every
+                sandbox workspace an orphan. A NOT_FOUND counts as "no
+                configs" only when a second call confirms it (see
+                ``_sandbox_configs_confirmed_absent``).
+
         Returns:
             Dict mapping config_id (str) to config name.
         """
         try:
             configs = client.list_component_configs("keboola.sandboxes", branch_id=branch_id)
             return {str(cfg.get("id", "")): cfg.get("name", "") for cfg in configs}
+        except Exception as exc:
+            if not required:
+                # Non-critical: fall back to internal workspace names
+                return {}
+            not_found = isinstance(exc, KeboolaApiError) and exc.error_code == ErrorCode.NOT_FOUND
+            if not_found and self._sandbox_configs_confirmed_absent(client, branch_id):
+                return {}
+            raise
+
+    def _sandbox_configs_confirmed_absent(self, client: Any, branch_id: int | None) -> bool:
+        """Confirm that a branch is reachable and has no keboola.sandboxes configs.
+
+        A 404 is the generic mapping of any HTTP 404 (a deleted branch, a
+        routing problem), so it alone must not make every sandbox workspace an
+        orphan. The branch component listing names each component that still
+        has a configuration. A failed listing, or a keboola.sandboxes entry
+        with configurations (or without the key), means "not confirmed".
+        """
+        try:
+            components = client.list_components_summary(branch_id=branch_id)
         except Exception:
-            # Non-critical: fall back to internal workspace names
-            return {}
+            return False
+        return not any(
+            comp.get("id") == "keboola.sandboxes" and comp.get("configurations", [None])
+            for comp in components
+        )
 
     def _detect_backend(self, client: Any) -> str:
         """Detect the project's default backend via token verification.
@@ -691,8 +721,12 @@ class WorkspaceService(BaseService):
                 effective_branch = self._resolve_branch_id(alias, project, branch_id)
                 raw_workspaces = client.list_workspaces(branch_id=effective_branch)
 
-                # Fetch sandbox configs to resolve user-given names
-                config_names = self._fetch_sandbox_config_names(client, effective_branch)
+                # Fetch sandbox configs to resolve user-given names. Orphan
+                # detection fails closed: a failed listing puts the project in
+                # errors[] instead of marking every sandbox workspace an orphan.
+                config_names = self._fetch_sandbox_config_names(
+                    client, effective_branch, required=orphaned_only
+                )
 
                 workspaces: list[dict[str, Any]] = []
                 for ws in raw_workspaces:

@@ -1453,6 +1453,36 @@ provision SQL workspaces through it. The sandbox-service record the green job
 registered is not removed by the rollback (the UI lists only `python`/`r`
 sandboxes, so it is invisible there).
 
+## `workspace gc` needs `--project` or `--all-projects`, and skips a project it cannot list (CLI-28)
+
+*(since vNEXT)* `workspace gc` no longer cleans up every registered project
+when `--project` is omitted. Name the projects with `--project` (repeatable)
+or pass `--all-projects`. A bare `workspace gc` exits 2 with `USAGE_ERROR`,
+and so does `--project` together with `--all-projects`. The default-project
+chain (`KBAGENT_PROJECT`, `project use`) is not used. Over REST,
+`POST /workspaces/gc` needs `project=` or `all_projects=true` and answers
+HTTP 400 `INVALID_ARGUMENT` otherwise.
+
+Orphan detection now fails closed. gc lists the `keboola.sandboxes` configs
+of each project to decide which workspaces are orphans. Before, a failed
+listing (expired token, 5xx, timeout) was read as "no configs", so every
+sandbox workspace of that project counted as an orphan and gc deleted it.
+Now that project goes to `errors[]`, nothing is deleted there, and the run
+exits 1. `workspace list --orphaned` uses the same rule: the project is
+reported in `errors[]` instead of listing its live workspaces as orphans.
+A `NOT_FOUND` from the sandbox config listing is ambiguous. It is the
+mapping of any HTTP 404, also of a deleted branch or a routing problem.
+kbagent then lists the components of the branch. Only when that call
+succeeds and shows no `keboola.sandboxes` configs does the 404 mean "no
+configs left". Then every sandbox workspace there is an orphan and gc
+deletes it. In every other case the project goes to `errors[]` and nothing
+is deleted there. A plain `workspace list` still falls back to the internal
+workspace names.
+
+Before this version, `POST /workspaces/gc` was matched by
+`POST /workspaces/{project}` (create a workspace in a project named `gc`),
+so the gc route was never reached over REST.
+
 ## `config detail --component-id keboola.sandboxes` now annotates the misleading `parameters.id` (since v0.42.0, closes #304)
 
 The sandbox config's `parameters.id` field (e.g. `1296392806`) looks like
