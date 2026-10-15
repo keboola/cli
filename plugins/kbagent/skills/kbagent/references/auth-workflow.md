@@ -123,7 +123,11 @@ has an account and should create the project in the Keboola UI instead.
 
 1. Resolves the target **stack** (not project) -- `--stack` accepts a bare
    stack URL (`connection.keboola.com`) or an existing project alias (its
-   stack is used); omitted, it falls back to the default project's stack.
+   stack is used); omitted, it uses the stack of `KBAGENT_PROJECT`, then of
+   the active project, then of the sole registered project *(since vNEXT;
+   before, only the active project)*. A `KBAGENT_PROJECT` that names no
+   registered project is skipped with a warning here, and is `CONFIG_ERROR`
+   in `auth status` and `auth logout`.
 2. Picks a flow:
    - **PKCE (browser) by default.** Opens the Keboola login page in your
      default browser via a short-lived local (loopback) HTTP listener that

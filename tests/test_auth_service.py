@@ -297,6 +297,270 @@ class TestResolveStackUrl:
             service._resolve_stack_url("http://insecure.example.com")
 
 
+OTHER_STACK_URL = "https://connection.north-europe.azure.keboola.com"
+
+
+class TestResolveStackUrlChain:
+    """Implicit stack order: KBAGENT_PROJECT > active project > sole project (CLI-32).
+
+    Two projects on different stacks make every step observable: ``a`` is on
+    STACK_URL and is the active project (first added), ``b`` is on
+    OTHER_STACK_URL.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _no_env_project(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("KBAGENT_PROJECT", raising=False)
+
+    def _two_stacks(self, store: ConfigStore) -> None:
+        store.add_project("a", ProjectConfig(stack_url=STACK_URL, token=STATIC_TOKEN, project_id=1))
+        store.add_project(
+            "b", ProjectConfig(stack_url=OTHER_STACK_URL, token=STATIC_TOKEN, project_id=2)
+        )
+
+    def test_explicit_stack_alias_wins_over_env(self, store, state_store, monkeypatch) -> None:
+        self._two_stacks(store)
+        monkeypatch.setenv("KBAGENT_PROJECT", "b")
+        service = _make_service(store, state_store, _FakeAuthClient())
+        assert service._resolve_stack_url("a") == STACK_URL
+
+    def test_explicit_stack_url_wins_and_env_is_not_read(
+        self, store, state_store, monkeypatch
+    ) -> None:
+        self._two_stacks(store)
+        # An unregistered env value would raise if it were read.
+        monkeypatch.setenv("KBAGENT_PROJECT", "not-registered")
+        service = _make_service(store, state_store, _FakeAuthClient())
+        assert service._resolve_stack_url(OTHER_STACK_URL) == OTHER_STACK_URL
+
+    def test_env_project_wins_over_active_project(self, store, state_store, monkeypatch) -> None:
+        self._two_stacks(store)
+        monkeypatch.setenv("KBAGENT_PROJECT", "b")
+        service = _make_service(store, state_store, _FakeAuthClient())
+        assert service._resolve_stack_url(None) == OTHER_STACK_URL
+
+    def test_env_project_id_resolves_to_its_alias(self, store, state_store, monkeypatch) -> None:
+        self._two_stacks(store)
+        monkeypatch.setenv("KBAGENT_PROJECT", "2")
+        service = _make_service(store, state_store, _FakeAuthClient())
+        assert service._resolve_stack_url(None) == OTHER_STACK_URL
+
+    def test_active_project_used_without_env(self, store, state_store) -> None:
+        self._two_stacks(store)
+        service = _make_service(store, state_store, _FakeAuthClient())
+        assert service._resolve_stack_url(None) == STACK_URL
+
+    def test_sole_project_used_without_active_project(self, store, state_store) -> None:
+        store.add_project(
+            "b", ProjectConfig(stack_url=OTHER_STACK_URL, token=STATIC_TOKEN, project_id=2)
+        )
+        config = store.load()
+        config.default_project = ""
+        store.save(config)
+        service = _make_service(store, state_store, _FakeAuthClient())
+        assert service._resolve_stack_url(None) == OTHER_STACK_URL
+
+    def test_stale_active_project_raises_instead_of_using_the_sole_project(
+        self, store, state_store
+    ) -> None:
+        """Same refusal as resolve_pinned_alias: never fall through to another stack."""
+        store.add_project(
+            "b", ProjectConfig(stack_url=OTHER_STACK_URL, token=STATIC_TOKEN, project_id=2)
+        )
+        config = store.load()
+        config.default_project = "gone"
+        store.save(config)
+        service = _make_service(store, state_store, _FakeAuthClient())
+        with pytest.raises(ConfigError) as exc_info:
+            service._resolve_stack_url(None)
+        assert "'gone' is not registered" in str(exc_info.value)
+
+    def test_status_with_stale_active_project_is_config_error(self, store, state_store) -> None:
+        store.add_project(
+            "b", ProjectConfig(stack_url=OTHER_STACK_URL, token=STATIC_TOKEN, project_id=2)
+        )
+        config = store.load()
+        config.default_project = "gone"
+        store.save(config)
+        service = _make_service(store, state_store, _FakeAuthClient())
+        with pytest.raises(ConfigError, match="'gone' is not registered"):
+            service.status()
+
+    def _ambiguous_id(self, store: ConfigStore) -> None:
+        """Project ID 7 under two static aliases on two stacks; ``a`` stays active."""
+        self._two_stacks(store)
+        store.add_project("x", ProjectConfig(stack_url=STACK_URL, token=STATIC_TOKEN, project_id=7))
+        store.add_project(
+            "y", ProjectConfig(stack_url=OTHER_STACK_URL, token=STATIC_TOKEN, project_id=7)
+        )
+
+    def test_status_with_ambiguous_env_id_is_config_error(
+        self, store, state_store, monkeypatch
+    ) -> None:
+        self._ambiguous_id(store)
+        monkeypatch.setenv("KBAGENT_PROJECT", "7")
+        service = _make_service(store, state_store, _FakeAuthClient())
+        with pytest.raises(ConfigError) as exc_info:
+            service.status()
+        assert "'x'" in exc_info.value.message
+        assert "'y'" in exc_info.value.message
+
+    def test_login_with_ambiguous_env_id_warns_and_uses_active_project(
+        self, store, state_store, monkeypatch
+    ) -> None:
+        self._ambiguous_id(store)
+        monkeypatch.setenv("KBAGENT_PROJECT", "7")
+        client = _FakeAuthClient()
+        client.exchange_response = _tokens()
+        client.introspect_response = _introspect()
+        service = _make_service(store, state_store, client)
+
+        result = service.login()
+
+        assert result.stack_url == STACK_URL
+        assert any(
+            "KBAGENT_PROJECT='7'" in w and "ignored when choosing the stack" in w
+            for w in result.warnings
+        )
+
+    def test_several_projects_without_active_project_raise(self, store, state_store) -> None:
+        self._two_stacks(store)
+        store.add_project("c", ProjectConfig(stack_url=STACK_URL, token=STATIC_TOKEN, project_id=3))
+        store.remove_project("a")  # clears the active project; b and c are left
+        service = _make_service(store, state_store, _FakeAuthClient())
+        with pytest.raises(ConfigError) as exc_info:
+            service._resolve_stack_url(None)
+        message = exc_info.value.message
+        assert "--stack" in message
+        assert "KBAGENT_PROJECT" in message
+        assert "project use" in message
+
+    def test_unregistered_env_raises_without_warning_sink(
+        self, store, state_store, monkeypatch
+    ) -> None:
+        self._two_stacks(store)
+        monkeypatch.setenv("KBAGENT_PROJECT", "ghost")
+        service = _make_service(store, state_store, _FakeAuthClient())
+        with pytest.raises(ConfigError, match="KBAGENT_PROJECT='ghost'"):
+            service._resolve_stack_url(None)
+
+    def test_unregistered_env_is_skipped_with_warning_sink(
+        self, store, state_store, monkeypatch
+    ) -> None:
+        self._two_stacks(store)
+        monkeypatch.setenv("KBAGENT_PROJECT", "ghost")
+        service = _make_service(store, state_store, _FakeAuthClient())
+        warnings: list[str] = []
+        assert service._resolve_stack_url(None, warnings) == STACK_URL
+        assert len(warnings) == 1
+        assert "KBAGENT_PROJECT='ghost'" in warnings[0]
+
+    def test_status_uses_env_stack(self, store, state_store, monkeypatch) -> None:
+        self._two_stacks(store)
+        monkeypatch.setenv("KBAGENT_PROJECT", "b")
+        service = _make_service(store, state_store, _FakeAuthClient())
+        assert service.status().stack_url == OTHER_STACK_URL
+
+    def test_logout_with_unregistered_env_is_config_error(
+        self, store, state_store, monkeypatch
+    ) -> None:
+        self._two_stacks(store)
+        state_store.put_session(_existing_session(session_id="sess-1", refresh_token="rt-1"))
+        monkeypatch.setenv("KBAGENT_PROJECT", "ghost")
+        service = _make_service(store, state_store, _FakeAuthClient())
+        with pytest.raises(ConfigError):
+            service.logout()
+        # Nothing was revoked or cleared.
+        assert state_store.get_session(STACK_URL) is not None
+
+    def test_login_with_unregistered_env_warns_and_uses_active_project(
+        self, store, state_store, monkeypatch
+    ) -> None:
+        self._two_stacks(store)
+        monkeypatch.setenv("KBAGENT_PROJECT", "ghost")
+        client = _FakeAuthClient()
+        client.exchange_response = _tokens()
+        client.introspect_response = _introspect()
+        service = _make_service(store, state_store, client)
+
+        result = service.login()
+
+        assert result.stack_url == STACK_URL
+        assert any("KBAGENT_PROJECT='ghost'" in w for w in result.warnings)
+
+    def test_register_projects_with_unregistered_env_warns(
+        self, store, state_store, monkeypatch
+    ) -> None:
+        self._two_stacks(store)
+        state_store.put_session(_existing_session(session_id="sess-1", refresh_token="rt-1"))
+        monkeypatch.setenv("KBAGENT_PROJECT", "ghost")
+        client = _FakeAuthClient()
+        client.introspect_response = _introspect()
+        service = _make_service(store, state_store, client)
+
+        result = service.register_projects(select_all=True)
+
+        assert result.stack_url == STACK_URL
+        assert any("KBAGENT_PROJECT='ghost'" in w for w in result.warnings)
+
+
+class TestActiveProjectReporting:
+    """`active_project_set` / `active_project_cleared` on auth results (CLI-32)."""
+
+    def test_first_registration_sets_active_project(self, store, state_store) -> None:
+        state_store.put_session(_existing_session(session_id="sess-1", refresh_token="rt-1"))
+        client = _FakeAuthClient()
+        client.introspect_response = _introspect()
+        service = _make_service(store, state_store, client)
+
+        result = service.register_projects(stack=STACK_URL, select_all=True)
+
+        assert result.active_project_set == "prod-project"
+        assert store.load().default_project == "prod-project"
+
+    def test_registration_keeps_existing_active_project(self, store, state_store) -> None:
+        store.add_project("a", ProjectConfig(stack_url=STACK_URL, token=STATIC_TOKEN, project_id=1))
+        state_store.put_session(_existing_session(session_id="sess-1", refresh_token="rt-1"))
+        client = _FakeAuthClient()
+        client.introspect_response = _introspect()
+        service = _make_service(store, state_store, client)
+
+        result = service.register_projects(stack=STACK_URL, select_all=True)
+
+        assert result.active_project_set is None
+        assert store.load().default_project == "a"
+
+    def test_login_register_projects_reports_active_project_set(self, store, state_store) -> None:
+        client = _FakeAuthClient()
+        client.exchange_response = _tokens()
+        client.introspect_response = _introspect()
+        service = _make_service(store, state_store, client)
+
+        result = service.login(stack=STACK_URL, register_projects=True)
+
+        assert result.active_project_set == "prod-project"
+
+    def test_logout_remove_projects_clears_active_project(self, store, state_store) -> None:
+        store.add_project(
+            "sess-alias",
+            ProjectConfig(stack_url=STACK_URL, token="kbc-session://101", project_id=101),
+        )
+        store.add_project(
+            "static", ProjectConfig(stack_url=STACK_URL, token=STATIC_TOKEN, project_id=2)
+        )
+        state_store.put_session(_existing_session(session_id="sess-1", refresh_token="rt-1"))
+        client = _FakeAuthClient()
+        client.revoke_result = RevokeResult(confirmed=True)
+        service = _make_service(store, state_store, client)
+
+        result = service.logout(stack=STACK_URL, remove_projects=True)
+
+        assert result.removed_projects == ["sess-alias"]
+        assert result.active_project_cleared == "sess-alias"
+        # Cleared, not moved to the remaining project.
+        assert store.load().default_project == ""
+
+
 # ----------------------------------------------------------------------------
 # login -- PKCE / device selection
 # ----------------------------------------------------------------------------

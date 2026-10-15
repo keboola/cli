@@ -197,6 +197,9 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   (`CONFIG_ERROR`). That exit is the fix working, not a bug -- pass `--project`
   or run `project use`. On <= 0.90.1 the same commands silently used the FIRST
   registered project and ignored the pin (issue #684). gotchas.md.
+- *(since vNEXT)* removing the active project clears it (it used to move to
+  the next alias). With 2+ projects left, a command without `--project` exits
+  5 -- ask which project, then `project use`.
 
 **`--project` given a numeric project ID (0.96.1+)**
 - `--project`, `KBAGENT_PROJECT`, `project use`, the other alias options and

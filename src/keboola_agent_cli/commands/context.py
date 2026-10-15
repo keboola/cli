@@ -99,7 +99,12 @@ Use `kbagent <command> --help` for full flag details and examples.
     access; the target project for a given command is still selected the
     usual way (--project / KBAGENT_PROJECT / pin) and bound to the request
     via X-KBC-ProjectId. --stack accepts a stack URL or an existing project
-    alias (its stack is used). --device-code forces the device flow even on
+    alias (its stack is used). Without --stack, every `auth` command takes
+    the stack of KBAGENT_PROJECT, then of the active project, then of the
+    sole registered project (since vNEXT; before, only the active project).
+    A KBAGENT_PROJECT that names no registered project is CONFIG_ERROR in
+    `auth status` / `auth logout`, and is skipped with a `warnings` entry in
+    `auth login`, `login-password` and `register-projects`. --device-code forces the device flow even on
     a desktop with a browser. --register-projects additionally writes every
     accessible project into config.json with the sentinel token
     `kbc-session://{{project_id}}` (config.json schema and
@@ -338,7 +343,13 @@ Use `kbagent <command> --help` for full flag details and examples.
     is the project id, which has its own column.
 
   kbagent project remove --project NAME
-    Remove a project connection.
+    Remove a project connection. Removing the active project clears it; it
+    is not moved to another alias (since vNEXT). The result carries
+    `active_project_cleared` (the alias, or null). Commands without
+    --project then resolve KBAGENT_PROJECT > active project > sole project,
+    and with 2+ projects left fail with CONFIG_ERROR naming `project use`.
+    `project add`, `project use`, `org setup` and the `auth` registration
+    commands report `active_project_set` when they set it.
 
   kbagent project edit --project NAME [--url URL] [--token-stdin | --token-file PATH | --token-env NAME | --token TOKEN] [--new-alias NEW]
     Edit project connection. Re-verifies token if changed. The token is
@@ -387,7 +398,10 @@ Use `kbagent <command> --help` for full flag details and examples.
 
   kbagent project current
     Print the effective default project and its source (env / pin / none).
-    Resolution order for single-project operations: --project > KBAGENT_PROJECT > pin.
+    Resolution order for single-project operations: --project > KBAGENT_PROJECT > pin
+    > sole project. `resolved_alias` / `resolved_source` (env / active_project /
+    sole / none) name the project a command without --project would use
+    (since vNEXT).
 
   kbagent project info --project NAME
     Return full project details: ID, name, stack URL, default backend, enabled features,
@@ -2331,7 +2345,8 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
   kbagent init [--from-global] [--project ALIAS ...]
     Create local .kbagent/ workspace. --from-global copies existing projects;
     --project ALIAS (repeatable) copies only the named project(s) and implies
-    --from-global.
+    --from-global. When the global active project is not copied, the
+    workspace has no active project (`active_project_cleared`, since vNEXT).
 
   kbagent context
     Show this reference text.

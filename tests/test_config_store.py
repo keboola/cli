@@ -232,8 +232,8 @@ class TestRemoveProject:
         config = store.load()
         assert "test" not in config.projects
 
-    def test_remove_default_project_updates_default(self, tmp_config_dir: Path) -> None:
-        """Removing the default project updates the default to the next available."""
+    def test_remove_default_project_clears_default(self, tmp_config_dir: Path) -> None:
+        """Removing the default project clears it; it is not moved to the next alias."""
         store = ConfigStore(config_dir=tmp_config_dir)
         store.add_project(
             "first",
@@ -250,10 +250,26 @@ class TestRemoveProject:
             ),
         )
 
-        store.remove_project("first")
+        assert store.remove_project("first") is True
         config = store.load()
 
-        assert config.default_project == "second"
+        assert config.default_project == ""
+        assert set(config.projects) == {"second"}
+
+    def test_remove_other_project_keeps_default(self, tmp_config_dir: Path) -> None:
+        """Removing a project that is not the default leaves the default alone."""
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.add_project(
+            "first",
+            ProjectConfig(stack_url="https://a.com", token="901-abcdef-12345678"),
+        )
+        store.add_project(
+            "second",
+            ProjectConfig(stack_url="https://b.com", token="902-abcdef-12345678"),
+        )
+
+        assert store.remove_project("second") is False
+        assert store.load().default_project == "first"
 
     def test_remove_last_project_clears_default(self, tmp_config_dir: Path) -> None:
         """Removing the last project clears the default."""
@@ -1126,6 +1142,35 @@ class TestEnvProjectInjection:
 
         on_disk = json.loads((tmp_config_dir / "config.json").read_text())
         assert on_disk["default_project"] == ""
+
+    def test_default_not_moved_to_disk_project_when_ephemeral_stripped(
+        self, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A save in env mode does not write a disk alias as the default (CLI-32).
+
+        With one disk project and no saved default, load() defaults to
+        '__env__'. Saving must keep the default empty, so the next load()
+        still defaults to '__env__' instead of the disk project.
+        """
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.save(
+            AppConfig(
+                projects={
+                    "disk": ProjectConfig(
+                        stack_url="https://real.keboola.com",
+                        token="901-11111-realPersistedTokenXXXXXXXXXXXX",
+                    )
+                },
+            )
+        )
+        self._opt_in(monkeypatch)
+        config = store.load()
+        assert config.default_project == "__env__"
+        store.save(config)
+
+        on_disk = json.loads((tmp_config_dir / "config.json").read_text())
+        assert on_disk["default_project"] == ""
+        assert store.load().default_project == "__env__"
 
 
 class TestBackupOnSave:

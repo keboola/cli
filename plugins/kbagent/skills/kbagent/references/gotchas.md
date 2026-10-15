@@ -3218,12 +3218,62 @@ the new local workspace. Non-obvious rules:
   copy from). `--project a --project b` copies exactly those two.
 - **Unknown alias fails fast** with `CONFIG_ERROR` (exit 5) and lists the
   available global aliases; no workspace is created.
-- **`default_project` repoints** to the first selected alias if the global
-  default falls outside the selection.
+- **`default_project` is cleared** if the global default falls outside the
+  selection, and the result reports it in `active_project_cleared` (updated
+  vNEXT; before, it moved to the first selected alias). With one copied
+  project, commands still use it as the sole project.
 - **Omitting `--project` copies all global projects** (unchanged behaviour).
 
 Use it to seed a focused single-project workspace without re-entering a Storage
 API token already stored globally.
+
+## The active project is cleared, never moved; `auth` picks the stack the same way
+
+*(since vNEXT)*
+
+- **Removing the active project clears it.** Before, `project remove` (and
+  `DELETE /projects/{alias}`, `POST /projects/bulk-delete`, `auth logout
+  --remove-projects`) moved the active project to the next alias in
+  `config.json` and said nothing, so the next command without `--project`
+  ran against a project nobody chose. Now the active project is empty, and
+  the next single-project command resolves `--project` > `KBAGENT_PROJECT` >
+  active project > sole registered project. With two or more projects left
+  it fails with `CONFIG_ERROR` (exit 5) naming `kbagent project use`. With
+  one project left, that project is used.
+- **Commands that set or clear the active project say so.** `project use`,
+  `project add`, `org setup`, `auth login --register-projects`,
+  `auth login-password --register-projects`, `auth register-projects` and
+  `project create` return `active_project_set` (the alias, or null when the
+  command did not set it). `project remove`, `init --project` and `auth logout
+  --remove-projects` return `active_project_cleared` (the alias, or null).
+  Human mode prints one line (`project use` keeps its `Pinned:` line). Both
+  keys are additive. `--dry-run` of the bulk
+  REST delete reports null. `project edit --new-alias` keeps its
+  `default_project_updated` key.
+- **`KBAGENT_PROJECT_FROM_ENV` mode no longer saves a disk alias as the
+  active project.** With no saved active project, `__env__` is the active
+  project in memory. Before, any config write then saved the first disk
+  alias as the active project, and from the next command on `__env__` was no
+  longer the default.
+- **`auth` commands take the stack in this order:** `--stack` as a registered
+  alias or project ID > `--stack` as a URL > the stack of `KBAGENT_PROJECT` >
+  the stack of the active project > the stack of the sole registered project
+  > `CONFIG_ERROR` that names `--stack`, `KBAGENT_PROJECT` and `project use`.
+  Before, `auth status`, `login`, `login-password`, `logout` and
+  `register-projects` ignored `KBAGENT_PROJECT` and had no sole-project
+  step. With `--stack` given, `KBAGENT_PROJECT` is not read. `kbagent serve`
+  `GET /auth/status`, `GET /auth/projects` and `POST /auth/register-projects`
+  without a stack follow the same order.
+- **A `KBAGENT_PROJECT` that names no registered project** is `CONFIG_ERROR`
+  (exit 5, HTTP 400 over `serve`) in `auth status` and `auth logout`. In
+  `auth login`, `login-password` and `register-projects` the alias may not
+  exist yet, so it is skipped and the result's `warnings` names it.
+  `GET /auth/projects` (the picker's data source) skips it too; its result
+  has no `warnings` key. Pass `--stack` to choose the stack explicitly.
+  A project ID in `KBAGENT_PROJECT` that is registered under several aliases
+  follows the same rule: `CONFIG_ERROR` listing the aliases in `auth status`
+  and `auth logout`, a `warnings` entry in the other three. After a skipped
+  value, the stack comes from the active project, then the sole project.
 
 ## `KBAGENT_PROJECT` environment variable
 
@@ -3250,6 +3300,9 @@ Lets callers override the default project for one shell/session without editing
 - `kbagent project current` reports which of (2) or (3) is active and flags
   when the env var points to an unregistered alias, so you can diagnose
   precedence issues without reading the source.
+  Since vNEXT it also reports `resolved_alias` and `resolved_source`
+  (`env`, `active_project`, `sole`, or `none`): the project a command without
+  `--project` would use, after all five steps.
 
 ## `config update` path semantics (paths start at the configuration ROOT)
 

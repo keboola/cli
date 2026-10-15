@@ -111,6 +111,8 @@ class RegisterProjectsResult:
     registered_projects: list[RegisteredProject]
     warnings: list[str]
     session_unsupported_features: list[str] = field(default_factory=default_unsupported_features)
+    # The alias that registration made the active project (it had none), else None.
+    active_project_set: str | None = None
 
 
 def build_candidates(

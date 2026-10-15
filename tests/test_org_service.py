@@ -115,6 +115,53 @@ class TestSetupOrganization:
         config = store.load()
         assert len(config.projects) == 0
 
+    def test_reports_active_project_set_on_empty_config(self, tmp_path: Path) -> None:
+        """The first added project becomes active and the result says so (CLI-32)."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = ConfigStore(config_dir=config_dir)
+        service = OrgService(
+            config_store=store,
+            manage_client_factory=_make_manage_client([{"id": 100, "name": "Alpha"}]),
+            storage_client_factory=_make_storage_client("Alpha", 100),
+        )
+
+        result = service.setup_organization(
+            stack_url="https://connection.keboola.com",
+            manage_token="manage-token-123456789012345678",
+            org_id=42,
+        )
+
+        assert result["active_project_set"] == "alpha"
+        assert store.load().default_project == "alpha"
+
+    def test_keeps_existing_active_project(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = ConfigStore(config_dir=config_dir)
+        store.add_project(
+            "mine",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-11111-existingToken1234567890ab",
+                project_id=1,
+            ),
+        )
+        service = OrgService(
+            config_store=store,
+            manage_client_factory=_make_manage_client([{"id": 100, "name": "Alpha"}]),
+            storage_client_factory=_make_storage_client("Alpha", 100),
+        )
+
+        result = service.setup_organization(
+            stack_url="https://connection.keboola.com",
+            manage_token="manage-token-123456789012345678",
+            org_id=42,
+        )
+
+        assert result["active_project_set"] is None
+        assert store.load().default_project == "mine"
+
     def test_add_new_projects(self, tmp_path: Path) -> None:
         """Successfully adds new projects to config."""
         config_dir = tmp_path / "config"

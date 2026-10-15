@@ -168,8 +168,10 @@ kbagent auth login [--stack URL|ALIAS] [--device-code] [--register-projects]
 - **The stack is resolved, never discovered.** `--stack` accepts a stack URL
   (`https://connection.keboola.com`) or an existing project alias, whose stack
   URL is then used; an alias is matched first, since aliases are an exact,
-  closed set. Without `--stack`, the default project's stack is used. With
-  neither, the command fails and names the fix.
+  closed set. Without `--stack`, the stack of `KBAGENT_PROJECT` is used, then
+  the stack of the active project, then the stack of the sole registered
+  project (since vNEXT; before, only the active project). With none of them,
+  the command fails and names the fix.
 - **PKCE authorization-code flow by default.** A loopback listener on
   localhost receives the callback after you approve in the browser.
 - **The device flow is the fallback**, and it is chosen automatically when a

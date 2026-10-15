@@ -5,8 +5,10 @@ import logging
 import stat
 import sys
 from pathlib import Path
+from typing import Any
 
 import typer
+from rich.console import Console
 
 from ..config_store import ConfigStore
 from ..constants import ENV_PROJECT_FROM_ENV, LOCAL_CONFIG_DIR_NAME
@@ -14,6 +16,7 @@ from ..errors import ErrorCode
 from ..models import AppConfig, PermissionPolicy
 from ..output import OutputFormatter
 from ._helpers import get_formatter, get_service
+from ._project_pin import print_active_project_change
 
 
 def init_command(
@@ -52,6 +55,7 @@ def init_command(
         return
 
     config = AppConfig()
+    active_project_cleared: str | None = None
 
     # Check if global config has projects to offer
     global_store: ConfigStore = get_service(ctx, "config_store")
@@ -91,7 +95,10 @@ def init_command(
             raise typer.Exit(code=5)
         config = global_store.load()
         if selected_aliases:
+            global_default = config.default_project
             config = _filter_global_projects(config, selected_aliases, formatter)
+            if global_default and not config.default_project:
+                active_project_cleared = global_default
 
     if read_only and len(config.projects) == 0:
         # Read-only locks the config (chmod 0400 + cli:write deny), so an empty
@@ -143,8 +150,16 @@ def init_command(
             "created": True,
             "projects_copied": project_count if copy_from_global else 0,
             "read_only": read_only,
-        }
+            "active_project_cleared": active_project_cleared,
+        },
+        _format_init_result,
     )
+
+
+def _format_init_result(console: Console, data: dict[str, Any]) -> None:
+    """Print the result dict as before, plus the active-project line."""
+    console.print(data)
+    print_active_project_change(console, None, data["active_project_cleared"])
 
 
 def _filter_global_projects(
@@ -156,9 +171,9 @@ def _filter_global_projects(
 
     Validates that every requested alias exists, keeps only the selected
     projects (deduplicated, preserving the order given on the CLI), and
-    repoints ``default_project`` if the global default fell outside the
-    selection. ``dev_portal_identities`` and ``permissions`` are not
-    project-scoped, so they are left untouched.
+    clears ``default_project`` if the global default fell outside the
+    selection (it is not moved to another alias). ``dev_portal_identities``
+    and ``permissions`` are not project-scoped, so they are left untouched.
 
     Args:
         config: The freshly loaded global config (mutated in place).
@@ -202,9 +217,7 @@ def _filter_global_projects(
     filtered = {alias: config.projects[alias] for alias in selected_aliases}
     config.projects = filtered
     if config.default_project not in filtered:
-        # Match the codebase fallback convention (config_store uses the same
-        # 2-arg form); `filtered` is non-empty here, so "" is never returned.
-        config.default_project = next(iter(filtered), "")
+        config.default_project = ""
     return config
 
 

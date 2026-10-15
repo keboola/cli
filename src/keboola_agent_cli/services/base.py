@@ -25,7 +25,7 @@ from ..constants import (
     UNEXPECTED_ERROR_MAX_MESSAGE_LEN,
 )
 from ..errors import ErrorCode
-from ..models import ProjectConfig
+from ..models import AppConfig, ProjectConfig
 from ..project_ref import resolve_project_ref
 
 logger = logging.getLogger(__name__)
@@ -224,6 +224,83 @@ def make_client_factory(config_store: ConfigStore) -> ClientFactory:
     return make_session_aware_client_factory(config_store, KeboolaClient)
 
 
+class NoImplicitProjectError(ConfigError):
+    """No project could be chosen: none registered, or several and no default."""
+
+
+def resolve_implicit_alias(
+    config: AppConfig,
+    env_value: str | None,
+    *,
+    env_fix: str,
+    on_env_error: Callable[[str], None] | None = None,
+) -> tuple[str, str]:
+    """Pick the project a command uses when no project was named on it.
+
+    The one copy of the implicit cascade: ``KBAGENT_PROJECT`` (``env``), then
+    the persisted ``default_project`` pin (``pin``), then the only registered
+    project (``sole``). :meth:`BaseService.resolve_pinned_alias` and the
+    `auth` stack resolver both call it, so they cannot drift apart.
+
+    Args:
+        config: The loaded configuration.
+        env_value: The ``KBAGENT_PROJECT`` value; empty or None means unset.
+        env_fix: The fix appended to the message when ``env_value`` names no
+            registered project.
+        on_env_error: When given, an unusable ``env_value`` (not registered,
+            or an ID registered under several aliases) is passed to it as a
+            message and the cascade goes on without it. When None, it raises.
+
+    Returns:
+        Tuple of (alias, source).
+
+    Raises:
+        ConfigError: An unusable env value (without ``on_env_error``), or a
+            pin that names an unregistered alias.
+        NoImplicitProjectError: No project is registered, or several are and
+            none is pinned.
+    """
+    if env_value:
+        try:
+            alias = resolve_project_ref(config.projects, env_value)
+        except ConfigError as exc:
+            if on_env_error is None:
+                raise
+            on_env_error(f"{ENV_KBAGENT_PROJECT}='{env_value}': {exc.message}")
+        else:
+            if alias in config.projects:
+                return alias, "env"
+            message = (
+                f"{ENV_KBAGENT_PROJECT}='{env_value}' points to a project "
+                "that is not registered (no alias or project ID matches it)."
+            )
+            if on_env_error is None:
+                raise ConfigError(f"{message} {env_fix}")
+            on_env_error(message)
+
+    pinned = config.default_project
+    if pinned:
+        if pinned not in config.projects:
+            raise ConfigError(
+                f"Pinned default project '{pinned}' is not registered. "
+                "Run 'kbagent project use <alias>' to repair."
+            )
+        return pinned, "pin"
+
+    if len(config.projects) == 1:
+        (sole,) = config.projects.keys()
+        return sole, "sole"
+
+    if not config.projects:
+        raise NoImplicitProjectError("No projects configured. Run 'kbagent project add' first.")
+
+    raise NoImplicitProjectError(
+        "Multiple projects configured and no default pinned. "
+        "Pass --project <alias>, set KBAGENT_PROJECT, or run "
+        "'kbagent project use <alias>'."
+    )
+
+
 def make_telemetry_client(
     config_store: ConfigStore, stack_url: str, token: str
 ) -> KeboolaClient | None:
@@ -343,37 +420,10 @@ class BaseService:
                 )
             return alias, "explicit"
 
-        env_value = os.environ.get(ENV_KBAGENT_PROJECT)
-        if env_value:
-            alias = resolve_project_ref(config.projects, env_value)
-            if alias not in config.projects:
-                raise ConfigError(
-                    f"{ENV_KBAGENT_PROJECT}='{env_value}' points to a project "
-                    "that is not registered (no alias or project ID matches it). "
-                    "Use 'kbagent project add' or unset the env var."
-                )
-            return alias, "env"
-
-        pinned = config.default_project
-        if pinned:
-            if pinned not in config.projects:
-                raise ConfigError(
-                    f"Pinned default project '{pinned}' is not registered. "
-                    "Run 'kbagent project use <alias>' to repair."
-                )
-            return pinned, "pin"
-
-        if len(config.projects) == 1:
-            (sole,) = config.projects.keys()
-            return sole, "sole"
-
-        if not config.projects:
-            raise ConfigError("No projects configured. Run 'kbagent project add' first.")
-
-        raise ConfigError(
-            "Multiple projects configured and no default pinned. "
-            "Pass --project <alias>, set KBAGENT_PROJECT, or run "
-            "'kbagent project use <alias>'."
+        return resolve_implicit_alias(
+            config,
+            os.environ.get(ENV_KBAGENT_PROJECT),
+            env_fix="Use 'kbagent project add' or unset the env var.",
         )
 
     def _resolve_max_workers(self) -> int:

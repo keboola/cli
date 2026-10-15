@@ -40,7 +40,7 @@ from ._helpers import (
 )
 from ._metadata_input import resolve_text_input
 from ._project_create import format_provision_result
-from ._project_ref import env_override_warning
+from ._project_pin import format_current_result, format_use_result, print_active_project_change
 
 
 class ProjectBackend(StrEnum):
@@ -209,13 +209,7 @@ def project_add(
 
     try:
         result = service.add_project(alias=alias, stack_url=url, token=resolved_token)
-        formatter.output(
-            result,
-            lambda c, d: c.print(
-                f"[bold green]Success:[/bold green] Project [bold]{escape(d['alias'])}[/bold] "
-                f"added (project: {escape(d['project_name'])}, id: {d['project_id']})"
-            ),
-        )
+        formatter.output(result, _format_add_result)
         discard_token_file(token_file, keep=keep_token_file)
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
@@ -228,6 +222,14 @@ def project_add(
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
+
+
+def _format_add_result(c: Console, d: dict[str, Any]) -> None:
+    c.print(
+        f"[bold green]Success:[/bold green] Project [bold]{escape(d['alias'])}[/bold] "
+        f"added (project: {escape(d['project_name'])}, id: {d['project_id']})"
+    )
+    print_active_project_change(c, d.get("active_project_set"), None)
 
 
 @project_app.command("create")
@@ -317,12 +319,15 @@ def project_remove(
 
     try:
         result = service.remove_project(alias=alias)
-        formatter.output(
-            result, lambda c, d: c.print(f"[bold green]Success:[/bold green] {d['message']}")
-        )
+        formatter.output(result, _format_remove_result)
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
+
+
+def _format_remove_result(c: Console, d: dict[str, Any]) -> None:
+    c.print(f"[bold green]Success:[/bold green] {d['message']}")
+    print_active_project_change(c, None, d.get("active_project_cleared"))
 
 
 @project_app.command("edit")
@@ -711,25 +716,7 @@ def project_use(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
-    def _human(c: Console, d: dict[str, Any]) -> None:
-        previous = d.get("previous")
-        if previous and previous != d["alias"]:
-            c.print(
-                f"[bold green]Pinned:[/bold green] default project is now "
-                f"[bold]{d['alias']}[/bold] (was [dim]{previous}[/dim])"
-            )
-        else:
-            c.print(
-                f"[bold green]Pinned:[/bold green] default project is [bold]{d['alias']}[/bold]"
-            )
-        env_override = d.get("env_override")
-        if env_override and env_override != d["alias"]:
-            c.print(
-                f"[yellow]Note:[/yellow] KBAGENT_PROJECT='{env_override}' is set "
-                "and overrides this pin for the current shell."
-            )
-
-    formatter.output(result, _human)
+    formatter.output(result, format_use_result)
 
 
 @project_app.command("current")
@@ -738,34 +725,15 @@ def project_current(ctx: typer.Context) -> None:
 
     Reports whether the value comes from the ``KBAGENT_PROJECT`` env var
     (``env``) or the persisted pin (``pin``). Prints nothing but a hint if
-    neither is set.
+    neither is set. ``resolved_alias`` / ``resolved_source`` name the project
+    a command without ``--project`` would use (``env``, ``active_project``,
+    ``sole``, or ``none``).
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "project_service")
 
     result = service.current_project()
-
-    def _human(c: Console, d: dict[str, Any]) -> None:
-        alias = d.get("alias")
-        source = d.get("source")
-        if alias is None:
-            c.print(
-                "[dim](no default project set)[/dim] -- pass --project, set "
-                "KBAGENT_PROJECT, or run 'kbagent project use <alias>'"
-            )
-            return
-        if source == "env":
-            c.print(f"[bold cyan]{alias}[/bold cyan]  [dim](source: KBAGENT_PROJECT env var)[/dim]")
-            warning = env_override_warning(d)
-            if warning:
-                c.print(f"[yellow]Warning:[/yellow] {escape(warning)}")
-            pinned = d.get("pinned")
-            if pinned:
-                c.print(f"[dim]  (pinned in config: {pinned}, overridden)[/dim]")
-        else:
-            c.print(f"[bold cyan]{alias}[/bold cyan]  [dim](source: pinned default)[/dim]")
-
-    formatter.output(result, _human)
+    formatter.output(result, format_current_result)
 
 
 # ── Project description (dashboard KBC.projectDescription) ────────────

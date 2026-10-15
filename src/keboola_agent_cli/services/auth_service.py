@@ -12,6 +12,7 @@ docs/programmatic-auth-login-plan.md section 4.5 step 7).
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -34,7 +35,7 @@ from ..auth.state_store import AuthStateStore
 from ..auth.token_provider import SessionTokenProvider, reset_provider_registry
 from ..auth.totp import compute_totp_code
 from ..config_store import ConfigStore, validate_alias_format
-from ..constants import AUTH_CALLBACK_TIMEOUT
+from ..constants import AUTH_CALLBACK_TIMEOUT, ENV_KBAGENT_PROJECT
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..models import normalize_stack_url
 from ._auth_registration import (
@@ -50,6 +51,7 @@ from ._auth_registration import (
     require_single_selection_mode,
     resolve_selections,
 )
+from .base import NoImplicitProjectError, resolve_implicit_alias
 
 # Error codes from `provider.introspect()` (via `AuthClient.refresh`) that mean
 # "could not reach the auth service", as opposed to a definitive answer about
@@ -129,6 +131,8 @@ class LoginResult:
     # login just created, so it is always populated; the human renderer only
     # prints it once projects have actually been registered.
     session_unsupported_features: list[str] = field(default_factory=default_unsupported_features)
+    # The alias that registration made the active project (it had none), else None.
+    active_project_set: str | None = None
 
 
 @dataclass(frozen=True)
@@ -156,6 +160,7 @@ class ProvisionProjectResult:
     next_steps: list[str]
     warnings: list[str]
     session_unsupported_features: list[str] = field(default_factory=default_unsupported_features)
+    active_project_set: str | None = None
 
 
 @dataclass(frozen=True)
@@ -191,6 +196,8 @@ class LogoutResult:
     removed_projects: list[str]
     orphans_revoked: list[str]
     orphans_remaining: list[str]
+    # The removed alias that was the active project (now cleared), else None.
+    active_project_cleared: str | None = None
 
 
 AuthClientFactory = Callable[[str], AuthClient]
@@ -258,10 +265,10 @@ class AuthService:
            ~150 Storage/Manage client call sites, not for this one-shot read).
         5. Optionally register each accessible project as a local alias.
         """
-        stack_url = self._resolve_stack_url(stack)
+        warnings: list[str] = []
+        stack_url = self._resolve_stack_url(stack, warnings)
         notice = on_notice or _noop_notice
         prompt = on_device_prompt or _noop_device_prompt
-        warnings: list[str] = []
         fallback_reason = ""
         method = "device" if device_code else "pkce"
 
@@ -351,8 +358,8 @@ class AuthService:
         of the session it replaces, introspection, optional project
         registration) is identical to `login()` -- see `_finalize_login`.
         """
-        stack_url = self._resolve_stack_url(stack)
         warnings: list[str] = []
+        stack_url = self._resolve_stack_url(stack, warnings)
         with self._auth_client_factory(stack_url) as client:
             result = client.login_password(email, password)
             if isinstance(result, MfaChallengeResult):
@@ -492,6 +499,7 @@ class AuthService:
         candidates = self.candidates_from_projects(
             stack_url, [{"id": project.id, "name": project.name, "role": "admin"}]
         )
+        active_before = self._config_store.load().default_project
         registered = apply_selections(
             self._config_store,
             stack_url,
@@ -547,6 +555,7 @@ class AuthService:
             registered_projects=registered,
             next_steps=next_steps,
             warnings=warnings,
+            active_project_set=self._active_project_set_since(active_before),
         )
 
     def _finalize_login(
@@ -614,7 +623,9 @@ class AuthService:
         ]
 
         registered_projects: list[RegisteredProject] = []
+        active_project_set: str | None = None
         if register_projects:
+            active_before = self._config_store.load().default_project
             # Build candidates from the introspection this call already
             # holds -- introspecting a second time (e.g. via
             # `register_projects`) would be a redundant network round
@@ -628,6 +639,7 @@ class AuthService:
                 selections,
                 warnings,
             )
+            active_project_set = self._active_project_set_since(active_before)
 
         return LoginResult(
             status="ok",
@@ -644,6 +656,7 @@ class AuthService:
             accessible_projects=accessible_projects,
             registered_projects=registered_projects,
             warnings=warnings,
+            active_project_set=active_project_set,
         )
 
     def _wrap_device_prompt(
@@ -763,9 +776,11 @@ class AuthService:
         """Resolve the stack, require a stored session, introspect, and build candidates.
 
         The read path for the interactive picker and `auth register-projects`
-        with no selection flags -- never mutates `config.json`.
+        with no selection flags -- never mutates `config.json`. Part of the
+        `register-projects` flow, so an unregistered ``KBAGENT_PROJECT`` is
+        skipped here as well; `register_projects` reports the warning.
         """
-        stack_url = self._resolve_stack_url(stack)
+        stack_url = self._resolve_stack_url(stack, [])
         projects = self._introspect_accessible_projects(stack_url)
         candidates = self.candidates_from_projects(stack_url, projects)
         return ProjectCandidatesResult(stack_url=stack_url, candidates=candidates)
@@ -804,7 +819,8 @@ class AuthService:
         require_single_selection_mode(
             select_all=select_all, project_ids=project_ids, selections=selections
         )
-        stack_url = self._resolve_stack_url(stack)
+        warnings: list[str] = []
+        stack_url = self._resolve_stack_url(stack, warnings)
         projects = self._introspect_accessible_projects(stack_url)
         candidates = self.candidates_from_projects(stack_url, projects)
         candidates_by_id = {c.project_id: c for c in candidates}
@@ -824,7 +840,7 @@ class AuthService:
                     "no selection flags to see the accessible project ids."
                 )
 
-        warnings: list[str] = []
+        active_before = self._config_store.load().default_project
         registered = apply_selections(
             self._config_store, stack_url, candidates_by_id, resolved, warnings
         )
@@ -833,6 +849,7 @@ class AuthService:
             stack_url=stack_url,
             registered_projects=registered,
             warnings=warnings,
+            active_project_set=self._active_project_set_since(active_before),
         )
 
     # ------------------------------------------------------------------
@@ -998,13 +1015,15 @@ class AuthService:
                 self._state_store.delete_session(stack_url)
 
                 removed_projects: list[str] = []
+                active_project_cleared: str | None = None
                 if remove_projects:
                     config = self._config_store.load()
                     for alias, project in list(config.projects.items()):
                         if is_session_token(project.token) and (
                             normalize_stack_url(project.stack_url) == stack_url
                         ):
-                            self._config_store.remove_project(alias)
+                            if self._config_store.remove_project(alias):
+                                active_project_cleared = alias
                             removed_projects.append(alias)
 
                 return LogoutResult(
@@ -1016,6 +1035,7 @@ class AuthService:
                     removed_projects=removed_projects,
                     orphans_revoked=orphans_revoked,
                     orphans_remaining=orphans_remaining,
+                    active_project_cleared=active_project_cleared,
                 )
         finally:
             # Any BearerAuth-backed client elsewhere in this process must stop
@@ -1041,6 +1061,11 @@ class AuthService:
         except KeboolaApiError as exc:
             return _LiveAccessToken(token=None, unavailable_reason=exc.message)
 
+    def _active_project_set_since(self, before: str) -> str | None:
+        """The active project when registration set it (it was ``before``), else None."""
+        after = self._config_store.load().default_project
+        return after if after and after != before else None
+
     @staticmethod
     def _retry_orphans(
         client: AuthClient, orphan_ids: list[str], access_token: str
@@ -1064,14 +1089,25 @@ class AuthService:
     # shared
     # ------------------------------------------------------------------
 
-    def _resolve_stack_url(self, stack: str | None) -> str:
+    def _resolve_stack_url(self, stack: str | None, warnings: list[str] | None = None) -> str:
         """Resolve the stack to log into/out of/inspect. Never discovers one.
 
         Precedence: an explicit ``--stack`` matching a registered project
         alias wins (an alias is a closed, exact-match set, so it is checked
         before treating the same string as a literal hostname); otherwise an
-        explicit ``--stack`` is normalized as a URL; otherwise the default
-        project's stack; otherwise a `ConfigError` naming the fix.
+        explicit ``--stack`` is normalized as a URL; otherwise the stack of
+        the project that a single-project command would use without
+        ``--project`` -- ``KBAGENT_PROJECT``, then the default project, then
+        the sole registered project, through the shared
+        :func:`~keboola_agent_cli.services.base.resolve_implicit_alias`;
+        otherwise a `ConfigError` naming the fix. With ``--stack`` given,
+        ``KBAGENT_PROJECT`` is not read.
+
+        A ``KBAGENT_PROJECT`` that names no registered project, or an ID
+        registered under several aliases, is a `ConfigError` (``status``,
+        ``logout``), except when the caller passes ``warnings``: the login and
+        registration commands may run before that alias exists, so they skip
+        it with a warning and go on down the cascade.
         """
         if stack:
             project = self._config_store.get_project(stack)
@@ -1084,17 +1120,27 @@ class AuthService:
                     f"'{stack}' is not a valid stack URL or a registered project alias: {exc}"
                 ) from exc
 
-        config = self._config_store.load()
-        if config.default_project:
-            project = config.projects.get(config.default_project)
-            if project is not None:
-                return normalize_stack_url(project.stack_url)
+        skipped = warnings if warnings is not None else []
 
-        raise ConfigError(
-            "No stack to log into -- login is not stack discovery. Pass "
-            "--stack <url-or-alias>, or register/select a default project "
-            "first (`kbagent project add` / `kbagent project use`)."
-        )
+        def _skip_env(message: str) -> None:
+            skipped.append(f"{message} It was ignored when choosing the stack.")
+
+        config = self._config_store.load()
+        try:
+            alias, _source = resolve_implicit_alias(
+                config,
+                os.environ.get(ENV_KBAGENT_PROJECT),
+                env_fix="Pass --stack <url-or-alias>, register the project, or unset the env var.",
+                on_env_error=_skip_env if warnings is not None else None,
+            )
+        except NoImplicitProjectError:
+            raise ConfigError(
+                "No stack to log into -- login is not stack discovery. Pass "
+                "--stack <url-or-alias>, set KBAGENT_PROJECT to a registered alias, "
+                "or select a default project first (`kbagent project add` / "
+                "`kbagent project use <alias>`)."
+            ) from None
+        return normalize_stack_url(config.projects[alias].stack_url)
 
 
 __all__ = [

@@ -397,6 +397,12 @@ kbagent auth login-password --email EMAIL (--password PASSWORD | --password-stdi
 kbagent auth status [--stack URL|alias]
 kbagent auth logout [--stack URL|alias] [--remove-projects] [--yes]
 kbagent auth register-projects [--stack URL|alias] [--all] [--project-id ID ...] [--alias ID=ALIAS ...] [--yes]
+# auth stack (CLI-32): without --stack every auth command (and serve's /auth/* without ?stack=) takes the
+#   stack of KBAGENT_PROJECT > active project > sole registered project > CONFIG_ERROR naming --stack,
+#   KBAGENT_PROJECT and `project use`. Before, only the active project. With --stack given,
+#   KBAGENT_PROJECT is not read. A KBAGENT_PROJECT that names no registered project is CONFIG_ERROR in
+#   status/logout and is skipped with a `warnings` entry in login/login-password/register-projects.
+#   Version gate lives in gotchas.md.
 # auth login-password (0.84.0+): the deliberate unattended exception to auth login's "needs a human at
 #   a browser" rule -- email + password (+ TOTP if the account has MFA) grant, no browser, safe to run
 #   from a CI secret-backed workflow step. Prefer --password-stdin (or KBC_LOGIN_PASSWORD) over
@@ -518,6 +524,12 @@ kbagent project description-get --project NAME
 kbagent project description-set --project NAME [--text STR | --file PATH | --stdin]
 kbagent project use ALIAS
 kbagent project current
+# Active project (CLI-32): `project remove` (and DELETE /projects/{alias}, bulk-delete, `auth logout
+#   --remove-projects`) CLEARS the active project instead of moving it to the next alias; `init --project`
+#   that leaves it out clears it too. Results carry `active_project_cleared` / `active_project_set`
+#   (project use/add, org setup, auth registration, project create). `project current` adds
+#   `resolved_alias` + `resolved_source` (env|active_project|sole|none). Existing keys and the `pin`
+#   source value are unchanged. Version gate lives in gotchas.md.
 kbagent project info --project NAME
 kbagent project invite --project ALIAS --email EMAIL --role admin|guest|readOnly|share [--reason TEXT] [--dry-run]
 kbagent project invite --from-csv FILE [--default-role ROLE] [--workers N] [--dry-run]
