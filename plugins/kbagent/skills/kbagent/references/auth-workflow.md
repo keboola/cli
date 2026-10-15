@@ -308,7 +308,7 @@ kbagent auth register-projects
 # 2b. Which projects are session-backed vs static? Read auth_mode -- never
 #     parse the token. Values are exactly "session" or "static", always
 #     present. Also on `project status` / `project info`, and over HTTP.
-kbagent project list --json | jq '.data[].auth_mode'
+kbagent --json project list | jq '.data[].auth_mode'
 
 # 3. Use the registered projects exactly like any other project alias
 kbagent --json config list --project my-project-alias

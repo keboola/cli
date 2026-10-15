@@ -91,7 +91,7 @@ Never print raw text that breaks JSON parsing. Always check `formatter.json_mode
 ### Error handling
 
 - Commands catch `KeboolaApiError` and `ConfigError`, map to exit codes
-- Exit codes: 0=success, 1=general, 2=usage, 3=auth, 4=network, 5=config, 6=permission denied
+- Exit codes: 0=success, 1=general, 2=usage, 3=auth, 4=network, 5=config, 6=permission denied, 7=job timed out and cancelled
 - Multi-project operations accumulate errors -- one project failing doesn't stop others
 - Use `raise typer.Exit(code=N) from None` to suppress traceback in CLI
 

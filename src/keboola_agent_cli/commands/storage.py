@@ -75,7 +75,7 @@ def storage_buckets(
     branch: int | None = typer.Option(
         None,
         "--branch",
-        help="Dev branch ID (defaults to active branch if set via 'branch use')",
+        help="Dev branch ID (defaults to production, even after 'branch use')",
     ),
 ) -> None:
     """List storage buckets with sharing/linked bucket information.
@@ -174,7 +174,7 @@ def storage_bucket_detail(
     branch: int | None = typer.Option(
         None,
         "--branch",
-        help="Dev branch ID (defaults to active branch if set via 'branch use')",
+        help="Dev branch ID (defaults to production, even after 'branch use')",
     ),
 ) -> None:
     """Show detailed bucket info including backend-native direct access paths.
@@ -281,7 +281,7 @@ def storage_tables(
     branch: int | None = typer.Option(
         None,
         "--branch",
-        help="Dev branch ID (defaults to active branch if set via 'branch use')",
+        help="Dev branch ID (defaults to production, even after 'branch use')",
     ),
     include_usage: bool = typer.Option(
         False,
@@ -372,7 +372,7 @@ def storage_table_detail(
     branch: int | None = typer.Option(
         None,
         "--branch",
-        help="Dev branch ID (defaults to active branch if set via 'branch use')",
+        help="Dev branch ID (defaults to production, even after 'branch use')",
     ),
 ) -> None:
     """Show detailed table info including columns, types and physical layout.
@@ -1766,7 +1766,7 @@ def storage_file_list(
     branch: int | None = typer.Option(
         None,
         "--branch",
-        help="Dev branch ID (defaults to active branch if set via 'branch use')",
+        help="Dev branch ID (defaults to production, even after 'branch use')",
     ),
 ) -> None:
     """List Storage Files with optional tag filtering.

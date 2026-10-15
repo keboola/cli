@@ -481,7 +481,7 @@ Versioning convention:
   ended. `permissions list` shows it as its own row,
   `auth.logout --remove-projects`.
 - **To find out which credential mode a project uses, read `auth_mode` --
-  never parse the token.** `kbagent project list --json | jq '.data[].auth_mode'`
+  never parse the token.** `kbagent --json project list | jq '.data[].auth_mode'`
   (also on `project status` and `project info`, and over HTTP on `/projects`,
   `/projects/status`, `/projects/{alias}/info`). Exactly two values, `session`
   and `static`; the field is **always present and never empty**, including on a
@@ -3227,8 +3227,8 @@ type inventory and examples.
   The Storage API branch-scoped endpoint only returns resources locally
   modified in the dev branch (empty for a fresh branch), so auto-scoping would
   surprise users with "No tables found". Explicit `--branch ID` still works.
-  Storage **write** commands (create-*, upload-*, delete-*, file-*) stay
-  branch-aware.
+  Storage **write** commands (create-*, upload-*, delete-*, `file-upload`)
+  stay branch-aware. `file-tag` and `file-delete` take no `--branch`.
 
 ## Conversation ID
 
@@ -3703,7 +3703,7 @@ So on Windows kbagent never installs into its own live environment:
   helper, which waits until **every** kbagent process has exited and installs
   then. The current invocation continues on the old version.
 - Consequence: the new version is active on the **next** launch, not this one.
-  `kbagent update --json` marks this with `kbagent.deferred: true`; the summary
+  `kbagent --json update` marks this with `kbagent.deferred: true`; the summary
   line reads `(scheduled)`, which is **not** a failure.
 - If a kbagent process (typically `kbagent serve` or `kbagent repl`) never
   exits, the helper installs nothing and reports `skipped` -- also not a
@@ -4032,7 +4032,7 @@ The trade-off is deliberate: one big call avoids the O(unique-parents) round-tri
 Full CRUD for configuration rows is exposed as a separate `Rows` command panel:
 - `row-create` returns the new row object including `id`. Capture this ID for subsequent `row-update` / `row-delete` calls.
 - `row-update` preserves all unspecified fields — pass only the keys you want to change. `--is-disabled` and `--is-enabled` are mutually exclusive flags for toggling the row's active state.
-- `row-delete` is **destructive** (gated behind `--allow-destructive` if the session firewall is on). 404 from the API on a non-existent row surfaces as `NOT_FOUND` exit 1 — deletion is **not** treated as idempotent success.
+- `row-delete` is **destructive**: `--deny-destructive` and `--deny-writes` block it. 404 from the API on a non-existent row comes back as `NOT_FOUND` exit 1 — deletion is **not** treated as idempotent success.
 - `--json` mode auto-skips the interactive confirmation prompt on `row-delete`; in human mode pass `--yes` to skip.
 
 ## `project status` / `project list` expose `org_id` / `org_name`; `org_name` is Manage-API-only
@@ -4508,7 +4508,7 @@ prompt keeps only a one-line trigger for each and links here for the full prose.
 description). BUT `--file` is a **full-replace** of `phases` + `tasks` -- if your
 YAML omits a phase, task, transition, or per-task `retry` that existed before, it
 is silently dropped. For structural edits, always fetch via
-`kbagent flow detail --json` first, merge your diff locally, run
+`kbagent --json flow detail` first, merge your diff locally, run
 `kbagent flow validate --file @merged.yaml --project ALIAS`, then push via `--file`.
 
 ### Primary keys on new output tables crash the first run
@@ -4655,6 +4655,12 @@ default (production) branch. It resolves that branch from the API the same way
 `sync init` does (since v0.93.1). So `--branch` is optional on a fresh clone. Pass
 `--branch <id>` only to clone into a specific dev branch of the target.
 
+An active branch set with `branch use` on the target wins over production. The
+clone then pushes the configs into that dev branch. When the tree has
+git-branching enabled, the Keboola branch linked to the current git branch wins
+instead. Run `branch reset` on the target first, or pass `--branch`, to control
+where the clone writes.
+
 Before this fix, `repoint_manifest_project` left `manifest.branches` on the
 SOURCE project's id. `_resolve_branch_id` then took `manifest.branches[0].id`,
 the source branch. A clone with no `--branch` resolved that branch. The target
@@ -4786,7 +4792,7 @@ upgraded in completely different ways, and the wrong advice is actively harmful.
   the right command rather than running uv. This includes the deferred Windows
   helper from v0.78.0 -- the guard sits ahead of the `should_defer()` branch, so
   a frozen binary is never scheduled for an install it cannot receive either.
-- **Read the channel out of `kbagent version --json`.** A frozen build carries
+- **Read the channel out of `kbagent --json version`.** A frozen build carries
   two additive keys: `kbagent.install_channel` (`chocolatey` / `winget` /
   `homebrew` / `debian` / `rpm` / `system` / `archive`) and
   `kbagent.upgrade_hint` (always a human sentence). Both are **absent** on
@@ -6483,7 +6489,7 @@ of the logins the flow needs.
 The package was named `keboola-agent-cli` up to 0.62.0 and is named `keboola-cli` from 0.63.0. Both install the `kbagent` executable, so uv treats an update to `keboola-cli` as a new tool. If a user reports a kbagent that never updates, run `uv tool list` and look for a `keboola-agent-cli` entry.
 
 - **kbagent 0.59.x and older cannot update itself.** Every command prints `Auto-update failed; continuing with current version.` with no cause. Without the `[server]` extras the uv error is ``error: Executable already exists: kbagent (use `--force` to overwrite)``. The update code runs from the old install, so no release changes this.
-- **Do not tell the user to run `kbagent update` or the `upgrade_command` from that old `kbagent version --json`.** Both run the same failing command.
+- **Do not tell the user to run `kbagent update` or the `upgrade_command` from that old `kbagent --json version`.** Both run the same failing command.
 - **Move the user with two commands, in this order:** `uv tool uninstall keboola-agent-cli`, then the install one-liner from the README. The configuration folder keeps the name `keboola-agent-cli` and is not touched.
 - **The order is load-bearing.** kbagent 0.63.1 and newer updates by installing a second tool, `keboola-cli`, that takes over the `kbagent` executable. `uv tool uninstall keboola-agent-cli` after that also deletes the executable, and the shell reports `command not found`. Reinstall with `uv tool install --force --reinstall "keboola-cli[server] @ <release wheel URL>"`.
 - **Failure banner.** A failed startup update now prints a `Cause:` line with the last line of the uv output, then `Recover with: <command>`, on stderr. Before, it printed only `Auto-update failed; continuing with current version.` and the recovery command. `kbagent update` is unchanged: its `update FAILED:` summary already ends with the last uv line.

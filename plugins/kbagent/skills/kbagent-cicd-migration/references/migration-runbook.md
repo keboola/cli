@@ -134,7 +134,7 @@ Merge to `main` once validate is green.
       change on a fresh branch from the converted `main`.
 - [ ] **Delete stale feature branches** (`git push origin --delete <branch>`).
 - [ ] Tell contributors to **re-clone or hard-reset** to the new `main`.
-- [ ] First real push: run `kbagent push` (workflow_dispatch) to `dev` first, approve,
+- [ ] First real push: run the "kbagent push" workflow (workflow_dispatch) to `dev` first, approve,
       verify in the Keboola UI, then to `prod`.
 
 **This whole sequence is an ordinary commit + ordinary PR merge — never a git

@@ -48,7 +48,7 @@ hard incompatibilities make this a deliberate cutover (verified against the code
    project under the reserved alias `__env__`, and every command passes
    `--project __env__ --directory <folder>`.
 3. **The two tools cannot co-own the same tree.** Because the source-of-truth files
-   differ, you cannot have `kbc push` and `kbagent push` both treating one directory
+   differ, you cannot have `kbc push` and `kbagent sync push` both treating one directory
    as canonical. You must cut over.
 
 ### Consequence (this is what the user correctly anticipated)
@@ -100,7 +100,7 @@ path verbatim in every generated step (`--directory '{p.directory}'`); it never
 renames, moves, or re-derives the folder from the alias. Inside that folder the
 branch subdirectory (`main/`, etc.) and the `storage/`-adjacent component-type
 folders are unchanged too — only the file format one level below (`config.json`
-→ `_config.yml`) changes. **Do not** use `kbagent sync --all-projects` to "adopt"
+→ `_config.yml`) changes. **Do not** use `kbagent sync pull/push --all-projects` to "adopt"
 this layout — it enforces its own `<directory>/<alias>/` convention (see the
 guardrail below) and would rename/duplicate the tree; the generated CI never
 uses it for exactly this reason.
