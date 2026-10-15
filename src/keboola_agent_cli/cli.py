@@ -443,6 +443,7 @@ def main(
         "context",
         "repl",
         "serve",
+        "search",
     }
     _is_help = "--help" in sys.argv or "-h" in sys.argv
 

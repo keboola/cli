@@ -841,6 +841,12 @@ kbagent token refresh --project NAME --token-id ID [--yes]
 #   the handlers of scope PUT, models, items/{kind} (per-kind leaf key), import, promote
 #   and build check `<key> --scope organization` (FLAG_ESCALATIONS) for a typed OR an
 #   inherited organization scope, like the CLI.
+#   `config variables-set --replace` is destructive-class (FLAG_ESCALATIONS); the CLI and
+#   PUT /configs/.../variables with `replace: true` both check it. `token refresh` and
+#   `workspace password` are destructive-class (the old secret stops working).
+#   `http get/post/patch/delete` (group callback, key `http.<verb>`) and `search` (top-level
+#   guarded set in cli.py) check the caller's own policy and --deny-* flags before any
+#   request. Version gate lives in gotchas.md (no `(since vNEXT)` on `# ` lines).
 #   `GET /permissions/show` (serve, since 0.99.0) reports the EFFECTIVE policy (persisted block
 #   merged with the daemon's --deny-* flags); read-only by design -- no REST route can widen
 #   the policy that constrains it, so `permissions set|reset` stay terminal actions on the host.

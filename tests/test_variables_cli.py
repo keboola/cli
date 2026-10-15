@@ -16,6 +16,7 @@ from typer.testing import CliRunner
 
 from keboola_agent_cli.cli import app
 from keboola_agent_cli.config_store import ConfigStore
+from keboola_agent_cli.constants import EXIT_PERMISSION_DENIED
 from keboola_agent_cli.errors import ConfigError, KeboolaApiError
 from keboola_agent_cli.models import ProjectConfig
 from keboola_agent_cli.services.project_service import ProjectService
@@ -140,6 +141,54 @@ class TestVariablesSet:
 
         assert result.exit_code == 0
         assert mock_vars.set_variables.call_args.kwargs["replace"] is True
+
+    def test_deny_destructive_blocks_replace_but_not_merge(self, tmp_path: Path) -> None:
+        """--replace is destructive-class (FLAG_ESCALATIONS); a plain merge is a write."""
+        store = _setup_config(tmp_path / "config")
+        mock_vars = MagicMock()
+        mock_vars.set_variables.return_value = {
+            "project_alias": "prod",
+            "parent_component_id": "keboola.x",
+            "parent_config_id": "cfg-1",
+            "variables_id": "vars-1",
+            "values_id": "row-1",
+            "action": "updated",
+            "values": {"k": "v"},
+            "encrypted_keys": [],
+        }
+        args = [
+            "--deny-destructive",
+            "--json",
+            "config",
+            "variables-set",
+            "--project",
+            "prod",
+            "--component-id",
+            "keboola.x",
+            "--config-id",
+            "cfg-1",
+            "--var",
+            "k=v",
+        ]
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProj,
+            patch("keboola_agent_cli.cli.VariablesService") as MockVars,
+        ):
+            MockStore.return_value = store
+            MockProj.return_value = ProjectService(config_store=store)
+            MockVars.return_value = mock_vars
+
+            denied = runner.invoke(app, [*args, "--replace"])
+            assert denied.exit_code == EXIT_PERMISSION_DENIED, denied.output
+            assert "config.variables-set --replace" in denied.output
+            mock_vars.set_variables.assert_not_called()
+
+            merged = runner.invoke(app, args)
+
+        assert merged.exit_code == 0, merged.output
+        mock_vars.set_variables.assert_called_once()
 
     def test_no_vars_exits_with_invalid_argument(self, tmp_path: Path) -> None:
         """Missing --var exits 2 with INVALID_ARGUMENT; service NOT called."""

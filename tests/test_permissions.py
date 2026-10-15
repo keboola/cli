@@ -433,6 +433,29 @@ class TestFlagEscalations:
         assert entry["status"] == "denied"
 
 
+class TestDestructiveEffects:
+    """Commands whose effect cannot be undone are destructive-class.
+
+    `token refresh` and `workspace password` make the old secret stop working.
+    `config variables-set --replace` drops every value that is not in `--var`.
+    """
+
+    def test_secret_resets_are_destructive(self) -> None:
+        assert OPERATION_REGISTRY["token.refresh"] == "destructive"
+        assert OPERATION_REGISTRY["workspace.password"] == "destructive"
+
+    def test_variables_replace_is_a_destructive_escalation(self) -> None:
+        assert FLAG_ESCALATIONS["config.variables-set --replace"] == "destructive"
+        assert "config.variables-set --replace" not in OPERATION_REGISTRY
+
+    def test_denying_destructive_blocks_replace_but_not_the_merge(self) -> None:
+        engine = PermissionEngine(PermissionPolicy(mode="allow", deny=["cli:destructive"]))
+        assert engine.is_allowed("config.variables-set") is True
+        assert engine.is_allowed("config.variables-set --replace") is False
+        assert engine.is_allowed("token.refresh") is False
+        assert engine.is_allowed("workspace.password") is False
+
+
 class TestPatternMatchesKnownOperation:
     """Tests for pattern_matches_known_operation() -- the shared validity check
     used by both `permissions set` (to reject unknown patterns at write time)

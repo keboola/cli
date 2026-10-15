@@ -540,6 +540,34 @@ class TestOrganizationScopeEscalation:
         sl.child_scope.assert_not_called()
 
 
+class TestVariablesReplaceEscalation:
+    """`replace: true` is destructive-class over REST too, like `--replace` on the CLI."""
+
+    def test_replace_is_denied_and_merge_is_allowed(self, tmp_path: Path) -> None:
+        from unittest.mock import MagicMock
+
+        from keboola_agent_cli.server.dependencies import ServiceRegistry, get_registry
+
+        variables = MagicMock()
+        variables.set_variables.return_value = {}
+        registry = ServiceRegistry.__new__(ServiceRegistry)
+        registry.variables = variables
+        app = _app(tmp_path, deny_destructive=True)
+        app.dependency_overrides[get_registry] = lambda: registry
+        client = TestClient(app)
+        path = "/configs/demo/keboola.x/cfg-1/variables"
+
+        response = client.put(path, headers=AUTH, json={"variables": {"k": "v"}, "replace": True})
+        assert response.status_code == 403, response.text
+        assert response.json()["error"]["code"] == "PERMISSION_DENIED"
+        assert "config.variables-set --replace" in response.json()["error"]["message"]
+        variables.set_variables.assert_not_called()
+
+        response = client.put(path, headers=AUTH, json={"variables": {"k": "v"}})
+        assert response.status_code == 200, response.text
+        variables.set_variables.assert_called_once()
+
+
 _METRIC = {"project": "demo", "name": "n", "sql": "1", "dataset": "d"}
 _GLOSSARY = {"project": "demo", "term": "t", "definition": "d"}
 
@@ -781,7 +809,6 @@ class TestVerbAndRiskClassAgree:
         "POST /lineage/build",
         "POST /lineage/show",
         "POST /semantic-layer/diff",
-        "POST /workspaces/{project}/{workspace_id}/password",
     }
     # `branch merge` only ever produces a URL (the merge happens in the web
     # UI), so mirroring its `write` class on a GET is CLI parity, not a slip.
