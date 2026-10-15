@@ -27,6 +27,7 @@ from ..sync.clone import (
 )
 from ..sync.manifest import load_manifest, save_manifest
 from ._sync_clone_warnings import collect_clone_warnings, read_encrypted_values
+from ._sync_project_guard import verified_project_id
 from ._sync_storage import create_buckets_from_export
 from .base import find_default_branch_id
 
@@ -44,6 +45,15 @@ def _target_default_branch_id(service: SyncService, target_project: Any) -> int 
     with client:
         branches = client.list_dev_branches()
     return find_default_branch_id(branches)
+
+
+def _target_project_id(
+    service: SyncService, target_alias: str, target_project: Any, target_path: Path
+) -> int:
+    """Return the stored target project ID, else the one token verification reports."""
+    if target_project.project_id is not None:
+        return target_project.project_id
+    return verified_project_id(service, target_alias, target_project, target_path)
 
 
 def clone_project(
@@ -129,8 +139,18 @@ def clone_project(
     variable_overrides = 0
     renamed_instances = 0
     already_cloned = target_path.exists()
+    # The manifest must name the real target project, or the diff and push
+    # below refuse the tree (CLI-31). A clone made before that wrote id 0
+    # when the alias had no stored project_id; such a manifest is repaired.
+    if already_cloned and (manifest := load_manifest(target_path)).project.id == 0:
+        manifest.project.id = _target_project_id(service, target_alias, target_project, target_path)
+        save_manifest(target_path, manifest)
 
     if not already_cloned:
+        # Resolved before the first write: a failed token verification must
+        # leave no target directory, or the retry would take the
+        # already-cloned path with the source manifest still in place.
+        target_project_id = _target_project_id(service, target_alias, target_project, target_path)
         copy_reference_tree(source_dir, target_path)
         manifest = load_manifest(target_path)
         # Capture the source's own default branch id BEFORE the re-point moves
@@ -150,7 +170,7 @@ def clone_project(
         # _resolve_branch_id, so this only aligns the tree, never the API target.
         repoint_manifest_project(
             manifest,
-            project_id=target_project.project_id or 0,
+            project_id=target_project_id,
             api_host=urlparse(target_project.stack_url).netloc,
             default_branch_id=(
                 branch_override if branch_override is not None else target_default_branch_id

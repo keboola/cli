@@ -426,6 +426,12 @@ Stored in `.keboola/branch-mapping.json`:
 
 ## Key behaviors
 
+- **One project per directory** *(since vNEXT, CLI-31)*: pull, diff and push
+  (also `--all-projects`) refuse a directory whose manifest `project.id` or
+  `apiHost` differs from the `--project` project, with `CONFIG_ERROR` (exit 5)
+  that names both project IDs. Before, a tree of another project was diffed
+  against the `--project` project, and push created its configs there. To copy
+  configs between projects, use `sync clone` or the promotion pipeline below
 - **Pull is idempotent**: re-running pull when nothing changed writes zero files
 - **Pull protects local edits**: locally-modified files are skipped by default
   -- and "locally modified" covers the whole config, not only `_config.yml`:
