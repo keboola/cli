@@ -11,6 +11,17 @@ Versioning convention:
   behavior; the inline `(updated vX.Y.Z)` records when the refinement landed.
 -->
 
+## `kbagent serve` refuses a `dry_run` that a write route does not declare
+
+*(since vNEXT)* (CLI-33)
+
+- **A `POST`, `PUT`, `PATCH` or `DELETE` route answers HTTP 422 when the request sends `dry_run` and the route has no `dry_run` parameter.** This applies to the query string and to a top-level key of a JSON body. Before, the route ignored it and ran the real write: `DELETE /flows/{project}/{config_id}?dry_run=true` deleted the flow.
+- **A false value is ignored and the real write runs.** False values are `false`, `0`, `no`, `off`, `f` and `n` in any case, and JSON `false` or `0`. Every other value is refused: `true`, `1`, `null`, an unknown string, an object.
+- **A route that takes `dry_run` in one place refuses it in the other.** `DELETE /configs/...` takes it in the query string, so a body `{"dry_run": true}` gets 422 (a body `{"dry_run": false}` is ignored). The message names the right place.
+- **The error body is the usual envelope**, `error.code` `HTTP_ERROR`. The message names the route and `dry_run`.
+- Not checked: `GET` routes, a `dry_run` nested inside a JSON object, and the body of the multipart upload routes (their query string is checked).
+- To preview a write over REST, check the route's parameters in `docs/web-server-endpoints.md` or `/openapi.json` first. Do not assume `dry_run` exists because the CLI command has `--dry-run`.
+
 ## `http`, `search` and three destructive effects now get the permission check
 
 *(since vNEXT)*

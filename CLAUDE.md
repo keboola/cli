@@ -1485,6 +1485,14 @@ kbagent update [--beta]
 kbagent changelog [--limit N] [--full]
 # Default shows first sentences: every BREAKING note of a version, plus its first other notes until at least two show; --full / -v expands every note.
 kbagent serve [--host HOST] [--port PORT] [--ui] [--ui-dist PATH] [--reload] [--log-level LVL] [--cors-origin ORIGIN] [--config-dir DIR] [--no-banner]
+# serve dry_run (CLI-33): a POST/PUT/PATCH/DELETE route answers HTTP 422 (HTTP_ERROR) when the
+#   request sends `dry_run` in the query string or as a top-level JSON body key, and the route does
+#   not declare it there. Before, the route ignored it and ran the real write.
+#   A false value (false/0/no/off/f/n in any case, or JSON false/0) is ignored and the real write runs.
+#   Any other value (true, null, an unknown string) is refused.
+#   One app-level dependency does this: reject_undeclared_dry_run in server/dependencies.py.
+#   Not checked: GET routes, nested keys, multipart upload bodies, and a body above 1 MiB (or without
+#   Content-Length) on a route that has no body parameter. Version gate lives in gotchas.md.
 # `--config-dir` on serve (since 0.91.0, #679): `serve` is the only subcommand with a --config-dir of
 #   its own, and most specific wins -- `serve --config-dir X` beats a root `kbagent --config-dir Y`,
 #   which in turn beats KBAGENT_CONFIG_DIR / the .kbagent walk-up / global. Passing both is NOT an

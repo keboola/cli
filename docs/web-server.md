@@ -654,6 +654,28 @@ token widen the policy that constrains it would make the firewall
 self-defeating, so `permissions set` / `reset` stay terminal actions on the
 host.
 
+### A mutating route refuses a `dry_run` it does not declare
+
+*(since vNEXT — CLI-33)*
+
+FastAPI ignores query parameters and body fields that a route does not declare. Before this change, `DELETE /flows/{project}/{config_id}?dry_run=true` ran the real delete, and a client that asked for a preview got a real write.
+
+Now one app-level dependency (`reject_undeclared_dry_run` in `server/dependencies.py`) runs on every `POST`, `PUT`, `PATCH` and `DELETE` request. It answers **HTTP 422** when the request carries `dry_run` in a place the matched route does not declare:
+
+- `dry_run` in the query string, and the route has no `dry_run` query parameter;
+- a top-level `dry_run` key in a JSON body, and the route has no `dry_run` body field.
+
+A false value is ignored, because it asks for the real operation that the route runs anyway: `false`, `0`, `no`, `off`, `f` or `n` in any case (the strings pydantic reads as a false bool), or JSON `false` or `0`. Every other value is refused, for example `true`, `1`, `null`, an unknown string or an object. This also applies when the caller sends `dry_run` in the other place than the route declares. The body is the usual error envelope with `error.code` `HTTP_ERROR`. The message names the route and the parameter, and says that the route has no dry run (or where the route takes `dry_run`, when the caller sent it in the other place). Nothing runs: the dependency answers before the route and its services.
+
+Limits:
+
+- `GET` routes are not checked.
+- Only the top-level JSON key counts. A `dry_run` inside a nested object (for example in `configuration.parameters`) is data and passes.
+- The multipart upload routes (`POST /storage/tables/{project}/upload`, `POST /storage/files/upload`) are checked on the query string only. The check never reads their body, so the file still streams to a temp file as before.
+- For a route with a JSON body, the check reuses the body that FastAPI already parsed.
+- For a route with no body parameter, nothing else reads the body. The check reads it only when the `Content-Type` is JSON and `Content-Length` is present and at most 1 MiB. A larger body, or one without `Content-Length`, is not checked. JSON that does not parse, or is nested too deeply to parse, is also left alone, and the route runs as before.
+- Two routes take a free-form JSON object as the body: `POST /semantic-layer/items/{kind}` and `PUT /semantic-layer/items/{kind}/{name}`. A top-level key named `dry_run` in that entity definition is now refused, unless its value is false.
+
 ### Manage tokens are per-request
 
 Operations that need a Keboola Manage API token (`org setup`,
