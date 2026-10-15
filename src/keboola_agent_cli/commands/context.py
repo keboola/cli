@@ -872,7 +872,9 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Delete one or more columns from a table. Batch: repeat --column. --force when column is referenced by aliases. --dry-run to preview. Branch-aware.
 
   kbagent storage delete-bucket --project NAME --bucket-id ID [--bucket-id ...] [--force] [--dry-run] [--yes] [--branch ID]
-    Delete one or more buckets. --force cascade-deletes tables. Linked/shared buckets protected. Branch-aware.
+    Delete one or more buckets. --force cascade-deletes tables. Linked and shared buckets are never deleted, also not with --force:
+    they get a failed[] entry (exit 1). Unshare a shared bucket first with `sharing unshare`. Without --yes it asks on a terminal;
+    --json, --dry-run and a session without a terminal never ask. Branch-aware.
 
   kbagent storage swap-tables --project NAME --table-id ID --target-table-id ID --branch ID [--dry-run] [--yes] [--timeout SECONDS]
     Swap two storage tables in any branch, including the default/production branch (POST /tables/{{id}}/swap). Both tables exchange physical positions;
@@ -973,7 +975,8 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Show file metadata: name, size, tags, sliced/permanent status, creator token. Does not download.
 
   kbagent storage file-delete --project NAME --file-id ID [--file-id ...] [--dry-run] [--yes]
-    Delete one or more Storage Files. Batch: repeat --file-id. --dry-run to preview.
+    Delete one or more Storage Files. Batch: repeat --file-id. --dry-run to preview. Without --yes it asks on a terminal;
+    --json, --dry-run and a session without a terminal never ask.
 
   kbagent storage file-tag --project NAME --file-id ID [--add TAG ...] [--remove TAG ...]
     Add and/or remove tags on a file in a single operation. Both --add and --remove are repeatable.

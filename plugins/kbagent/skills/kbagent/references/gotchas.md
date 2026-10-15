@@ -2320,6 +2320,35 @@ response. Now:
   original command immediately afterwards. A failed or timed-out reinstall
   prints a copy-paste recovery command (#528/#530, v0.76.2).
 
+## `storage delete-bucket --force` keeps shared buckets, and two delete commands ask on a terminal
+
+*(since vNEXT)* `storage delete-bucket --force` deletes the tables of a
+non-empty bucket. It no longer deletes a shared bucket. A bucket is shared
+when its bucket detail has a `sharing` value. Such a bucket gets a
+`failed[]` entry that names the command to run first:
+`kbagent sharing unshare --project ALIAS --bucket-id ID`. The other buckets
+of the same call are still deleted, and the run exits 1. `--dry-run` reports
+the same `failed[]` entry. The REST route
+`DELETE /storage/buckets/{project}?force=true` follows the same rule.
+`sharing unshare` needs a master token in `KBC_MASTER_TOKEN_{ALIAS}` or
+`KBC_MASTER_TOKEN` (see sharing-workflow.md).
+Before, `--force` also deleted a shared bucket, against the command help.
+
+*(since vNEXT)* `storage delete-bucket` and `storage file-delete` read
+`--yes`. Before, they never asked. Now they ask for confirmation when stdin
+and stderr are a terminal and `--json` is off. A declined prompt exits 0 and
+deletes nothing. `--yes`, `--json`, `--dry-run` and a session without a
+terminal (an agent, CI, a pipe) do not ask, so these callers see no change.
+The prompt is written to stderr. It is shown before the per-bucket checks,
+so it says that shared and linked buckets are skipped.
+
+The other storage prompts do not check for a terminal. `delete-table`,
+`truncate-table`, `delete-column` and `swap-tables` ask whenever `--yes` and
+`--json` are off. In a pipe they read the answer from stdin. An empty line
+declines, so `echo | kbagent storage delete-table ...` prints `Aborted.` and
+deletes nothing. `delete-bucket` and `file-delete` in a pipe do not ask and
+delete. Pass `--yes` to all of them in scripts.
+
 ## `storage swap-tables` is branch-scoped and aliases stay put
 
 - `kbagent storage swap-tables --project P --table-id A --target-table-id B

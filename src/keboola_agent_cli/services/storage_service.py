@@ -1741,7 +1741,7 @@ class StorageService(ColumnDescriptionsMixin):
 
         Protections:
         - Linked buckets (sourceBucket set) are blocked with a helpful message.
-        - Shared buckets (sharing field set) are blocked unless --force is used.
+        - Shared buckets (sharing field set) are always blocked: unshare first.
         - Without force, non-empty buckets fail at the API level.
 
         Batch-tolerant: accumulates errors per bucket.
@@ -1749,7 +1749,7 @@ class StorageService(ColumnDescriptionsMixin):
         Args:
             alias: Project alias.
             bucket_ids: List of bucket IDs to delete.
-            force: Force delete even if bucket has tables or is shared.
+            force: Delete even if a bucket has tables (never a shared one).
             dry_run: If True, only report what would be deleted.
             branch_id: If set, target a specific dev branch.
 
@@ -1789,14 +1789,14 @@ class StorageService(ColumnDescriptionsMixin):
                     )
                     continue
 
-                # Shared bucket protection (unless force)
-                if bucket.get("sharing") and not force:
+                # Shared bucket protection: --force does not override it
+                if bucket.get("sharing"):
                     failed.append(
                         {
                             "id": bid,
                             "error": (
-                                f"Bucket '{bid}' is shared to other projects. "
-                                "Use --force to delete anyway, or 'kbagent sharing unshare' first."
+                                f"Bucket '{bid}' is shared to other projects. Unshare it first: "
+                                f"kbagent sharing unshare --project {alias} --bucket-id {bid}"
                             ),
                         }
                     )
