@@ -36,6 +36,7 @@ from ._data_app_password import (
 from ._data_app_runtime import register_secrets_commands
 from ._helpers import (
     check_cli_permission,
+    emit_api_error,
     emit_project_warnings,
     get_formatter,
     get_service,
@@ -129,12 +130,7 @@ def data_app_list(
             )
         result = service.list_data_apps(aliases=project, branch_id=branch)
     except KeboolaApiError as exc:
-        formatter.error(
-            message=exc.message,
-            error_code=exc.error_code,
-            retryable=exc.retryable,
-            details=exc.details,
-        )
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -170,12 +166,7 @@ def data_app_detail(
         branch = resolve_branch(ctx.obj["config_store"], project, branch, ignore_active_branch=True)
         result = service.get_data_app(alias=project, app_id=app_id, branch_id=branch)
     except KeboolaApiError as exc:
-        formatter.error(
-            message=exc.message,
-            error_code=exc.error_code,
-            retryable=exc.retryable,
-            details=exc.details,
-        )
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -481,12 +472,7 @@ def data_app_create(
             dry_run=dry_run,
         )
     except KeboolaApiError as exc:
-        formatter.error(
-            message=exc.message,
-            error_code=exc.error_code,
-            retryable=exc.retryable,
-            details=exc.details,
-        )
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -529,12 +515,7 @@ def _run_lifecycle(
     try:
         result = method(**kwargs)
     except KeboolaApiError as exc:
-        formatter.error(
-            message=exc.message,
-            error_code=exc.error_code,
-            retryable=exc.retryable,
-            details=exc.details,
-        )
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -675,12 +656,7 @@ def data_app_delete(
     try:
         result = service.delete_data_app(alias=project, app_id=app_id)
     except KeboolaApiError as exc:
-        formatter.error(
-            message=exc.message,
-            error_code=exc.error_code,
-            retryable=exc.retryable,
-            details=exc.details,
-        )
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -793,12 +769,7 @@ def data_app_logs(
             since=since,
         )
     except KeboolaApiError as exc:
-        formatter.error(
-            message=exc.message,
-            error_code=exc.error_code,
-            retryable=exc.retryable,
-            details=exc.details,
-        )
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -843,12 +814,7 @@ def data_app_runs(
     try:
         result = service.list_app_runs(project, app_id, limit=limit)
     except KeboolaApiError as exc:
-        formatter.error(
-            message=exc.message,
-            error_code=exc.error_code,
-            retryable=exc.retryable,
-            details=exc.details,
-        )
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -975,12 +941,7 @@ def data_app_validate_repo(
             strict=strict,
         )
     except KeboolaApiError as exc:
-        formatter.error(
-            message=exc.message,
-            error_code=exc.error_code,
-            retryable=exc.retryable,
-            details=exc.details,
-        )
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)

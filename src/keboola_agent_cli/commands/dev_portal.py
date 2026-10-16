@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from ..services.dev_portal_service import PendingWrite
 from ._helpers import (
     check_cli_permission,
+    emit_api_error,
     get_dev_portal_service,
     get_formatter,
     map_error_to_exit_code,
@@ -115,14 +116,15 @@ def identity_add(
     svc = get_dev_portal_service(ctx)
     try:
         svc.add_identity(alias, identity)
-    except (ConfigError, KeboolaApiError) as exc:
+    except ConfigError as exc:
         formatter.error(
             message=str(exc),
             error_code=getattr(exc, "error_code", ErrorCode.CONFIG_ERROR),
         )
-        raise typer.Exit(
-            code=map_error_to_exit_code(exc) if isinstance(exc, KeboolaApiError) else 5
-        ) from None
+        raise typer.Exit(code=5) from None
+    except KeboolaApiError as exc:
+        emit_api_error(formatter, exc)
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
     formatter.output({"status": "ok", "alias": alias, "username": username})
 
 
@@ -229,7 +231,7 @@ def identity_verify(
     try:
         info = svc.verify_identity(alias)
     except KeboolaApiError as exc:
-        formatter.error(message=str(exc), error_code=exc.error_code)
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
     formatter.output({"status": "ok", **info})
 
@@ -249,7 +251,7 @@ def list_apps(
     try:
         apps = svc.list_apps(alias, vendor)
     except KeboolaApiError as exc:
-        formatter.error(message=str(exc), error_code=exc.error_code)
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
     formatter.output(apps)
 
@@ -267,7 +269,7 @@ def get_app_cmd(
     try:
         result = svc.get_app(alias, vendor, app_id)
     except KeboolaApiError as exc:
-        formatter.error(message=str(exc), error_code=exc.error_code)
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
     formatter.output(result)
 
@@ -373,7 +375,7 @@ def create_cmd(
     try:
         pending = svc.prepare_create(alias, vendor, _load_payload(data))
     except KeboolaApiError as exc:
-        formatter.error(message=str(exc), error_code=exc.error_code)
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
     _render_pending(formatter, pending)
     if dry_run:
@@ -383,7 +385,7 @@ def create_cmd(
     try:
         result = svc.apply(pending)
     except KeboolaApiError as exc:
-        formatter.error(message=str(exc), error_code=exc.error_code)
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
     formatter.output({"status": "ok", "created": result})
 
@@ -438,7 +440,7 @@ def patch_cmd(
     try:
         pending = svc.prepare_patch(alias, vendor, app_id, payload)
     except KeboolaApiError as exc:
-        formatter.error(message=str(exc), error_code=exc.error_code)
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
     _render_pending(formatter, pending)
     if dry_run:
@@ -448,7 +450,7 @@ def patch_cmd(
     try:
         svc.apply(pending)
     except KeboolaApiError as exc:
-        formatter.error(message=str(exc), error_code=exc.error_code)
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
     formatter.output(
         {
@@ -479,7 +481,7 @@ def upload_icon_cmd(
     try:
         pending = svc.prepare_upload_icon(alias, vendor, app_id, file)
     except KeboolaApiError as exc:
-        formatter.error(message=str(exc), error_code=exc.error_code)
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
     _render_pending(formatter, pending)
     if dry_run:
@@ -489,7 +491,7 @@ def upload_icon_cmd(
     try:
         result = svc.apply(pending)
     except KeboolaApiError as exc:
-        formatter.error(message=str(exc), error_code=exc.error_code)
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
     formatter.output(result)
 
@@ -522,7 +524,7 @@ def publish_cmd(
     try:
         pending = svc.prepare_publish(alias, vendor, app_id)
     except KeboolaApiError as exc:
-        formatter.error(message=str(exc), error_code=exc.error_code)
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
     _render_pending(formatter, pending)
     if dry_run:
@@ -532,7 +534,7 @@ def publish_cmd(
     try:
         result = svc.apply(pending)
     except KeboolaApiError as exc:
-        formatter.error(message=str(exc), error_code=exc.error_code)
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
     formatter.output({"status": "ok", "published": result})
 
@@ -556,7 +558,7 @@ def deprecate_cmd(
     try:
         pending = svc.prepare_deprecate(alias, vendor, app_id)
     except KeboolaApiError as exc:
-        formatter.error(message=str(exc), error_code=exc.error_code)
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
     _render_pending(formatter, pending)
     if dry_run:
@@ -566,6 +568,6 @@ def deprecate_cmd(
     try:
         result = svc.apply(pending)
     except KeboolaApiError as exc:
-        formatter.error(message=str(exc), error_code=exc.error_code)
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
     formatter.output({"status": "ok", "deprecated": result})

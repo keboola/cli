@@ -23,6 +23,7 @@ from ..services._storage_jobs import validate_wait_timeout
 from ..services._workspace_load_plan import LoadTablePlan
 from ._helpers import (
     check_cli_permission,
+    emit_api_error,
     emit_project_warnings,
     get_formatter,
     get_service,
@@ -150,12 +151,7 @@ def workspace_create(
         exit_code = map_error_to_exit_code(exc)
         # details carries the #755 rollback context (sandbox_config_id,
         # sandbox_config_rolled_back, job_id) -- omitted from JSON when empty.
-        formatter.error(
-            message=exc.message,
-            error_code=exc.error_code,
-            retryable=exc.retryable,
-            details=exc.details,
-        )
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -217,7 +213,7 @@ def workspace_list(
         )
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -285,11 +281,7 @@ def workspace_detail(
         )
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
-        formatter.error(
-            message=exc.message,
-            error_code=exc.error_code,
-            retryable=exc.retryable,
-        )
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -322,11 +314,7 @@ def workspace_delete(
         )
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
-        formatter.error(
-            message=exc.message,
-            error_code=exc.error_code,
-            retryable=exc.retryable,
-        )
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -362,11 +350,7 @@ def workspace_password(
         )
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
-        formatter.error(
-            message=exc.message,
-            error_code=exc.error_code,
-            retryable=exc.retryable,
-        )
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -472,11 +456,7 @@ def workspace_load(
             formatter.console.print("Aborted.")
             raise typer.Exit(code=0) from None
         exit_code = map_error_to_exit_code(exc)
-        formatter.error(
-            message=exc.message,
-            error_code=exc.error_code,
-            retryable=exc.retryable,
-        )
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -573,11 +553,7 @@ def workspace_query(
             format_query_results(formatter.console, result)
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
-        formatter.error(
-            message=exc.message,
-            error_code=exc.error_code,
-            retryable=exc.retryable,
-        )
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -658,7 +634,7 @@ def workspace_gc(
         result = service.gc_workspaces(aliases=project, dry_run=dry_run)
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -764,11 +740,7 @@ def workspace_from_transformation(
         )
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
-        formatter.error(
-            message=exc.message,
-            error_code=exc.error_code,
-            retryable=exc.retryable,
-        )
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)

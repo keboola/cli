@@ -36,6 +36,7 @@ from ._config_variables_render import (
 from ._helpers import (
     check_cli_operation,
     check_cli_permission,
+    emit_api_error,
     emit_project_warnings,
     get_formatter,
     get_service,
@@ -283,12 +284,7 @@ def config_detail(
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
-        formatter.error(
-            message=exc.message,
-            error_code=exc.error_code,
-            project=project[0],
-            retryable=exc.retryable,
-        )
+        emit_api_error(formatter, exc, project=project[0])
         raise typer.Exit(code=exit_code) from None
 
     if config_id is not None:
@@ -438,12 +434,7 @@ def config_examples(
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
-        formatter.error(
-            message=exc.message,
-            error_code=exc.error_code,
-            project=project or "",
-            retryable=exc.retryable,
-        )
+        emit_api_error(formatter, exc, project=project or "")
         raise typer.Exit(code=exit_code) from None
 
     if row:
@@ -584,7 +575,7 @@ def _handle_config_service_error(formatter: Any, exc: ConfigError | KeboolaApiEr
     if isinstance(exc, ConfigError):
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
-    formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+    emit_api_error(formatter, exc)
     raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
 
@@ -597,7 +588,7 @@ def _guard_set_paths(formatter: Any, parsed_sets: list[tuple[str, object]] | Non
     try:
         validate_set_paths(parsed_sets)
     except KeboolaApiError as exc:
-        formatter.error(message=exc.message, error_code=exc.error_code)
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=2) from None
 
 
@@ -1355,12 +1346,7 @@ def config_new(
             raise typer.Exit(code=5) from None
         except KeboolaApiError as exc:
             exit_code = map_error_to_exit_code(exc)
-            formatter.error(
-                message=exc.message,
-                error_code=exc.error_code,
-                project=project or "",
-                retryable=exc.retryable,
-            )
+            emit_api_error(formatter, exc, project=project or "")
             raise typer.Exit(code=exit_code) from None
 
     # ── Push path: also create remotely via Storage API ──────────────────────
@@ -1383,12 +1369,7 @@ def config_new(
             raise typer.Exit(code=5) from None
         except KeboolaApiError as exc:
             exit_code = map_error_to_exit_code(exc)
-            formatter.error(
-                message=exc.message,
-                error_code=exc.error_code,
-                project=project or "",
-                retryable=exc.retryable,
-            )
+            emit_api_error(formatter, exc, project=project or "")
             raise typer.Exit(code=exit_code) from None
 
         # When --push is set AND --output-dir is given AND we're not in
@@ -1896,11 +1877,7 @@ def config_variables_set(
                 branch_id=effective_branch,
             )
         except KeboolaApiError as exc:
-            formatter.error(
-                message=exc.message,
-                error_code=exc.error_code,
-                retryable=exc.retryable,
-            )
+            emit_api_error(formatter, exc)
             raise typer.Exit(code=map_error_to_exit_code(exc)) from None
         except ConfigError as exc:
             formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -1939,11 +1916,7 @@ def config_variables_set(
             allow_plaintext_fallback=allow_plaintext,
         )
     except KeboolaApiError as exc:
-        formatter.error(
-            message=exc.message,
-            error_code=exc.error_code,
-            retryable=exc.retryable,
-        )
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -1982,11 +1955,7 @@ def config_variables_get(
             branch_id=effective_branch,
         )
     except KeboolaApiError as exc:
-        formatter.error(
-            message=exc.message,
-            error_code=exc.error_code,
-            retryable=exc.retryable,
-        )
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -2039,11 +2008,7 @@ def config_variables_clear(
             branch_id=effective_branch,
         )
     except KeboolaApiError as exc:
-        formatter.error(
-            message=exc.message,
-            error_code=exc.error_code,
-            retryable=exc.retryable,
-        )
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)

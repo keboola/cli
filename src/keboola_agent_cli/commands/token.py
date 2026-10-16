@@ -29,6 +29,7 @@ from rich.table import Table
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._helpers import (
     check_cli_permission,
+    emit_api_error,
     get_formatter,
     get_service,
     map_error_to_exit_code,
@@ -49,7 +50,7 @@ def _handle_errors(formatter: Any, exc: Exception) -> NoReturn:
         raise typer.Exit(code=5) from None
     if isinstance(exc, KeboolaApiError):
         exit_code = map_error_to_exit_code(exc)
-        formatter.error(error_code=exc.error_code, message=exc.message, retryable=exc.retryable)
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=exit_code) from None
     raise exc
 

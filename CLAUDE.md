@@ -253,7 +253,7 @@ Full author checklist: see `CONTRIBUTING.md` > "Releasing a beta (pre-release) v
 
 4. **Dual output**: every command supports `--json` for structured output and Rich formatting for human-readable output. Use `OutputFormatter.output(data, human_formatter)`.
 
-5. **Error handling**: commands catch `KeboolaApiError` and `ConfigError`, map them to the appropriate exit code, and output structured errors in JSON mode.
+5. **Error handling**: commands catch `KeboolaApiError` and `ConfigError`, map them to the appropriate exit code, and output structured errors in JSON mode. Report a `KeboolaApiError` with `emit_api_error(formatter, exc)` (`commands/_helpers.py`), which keeps its `retryable` and `details`. `tests/test_error_forwarding.py` fails on a handler that drops them.
 
 6. **Exit codes**: 0=success, 1=general error, 2=usage error, 3=auth error, 4=network error, 5=config error, 6=permission denied, 7=job timed out and cancelled (`JOB_TIMEOUT_TERMINATED`).
 

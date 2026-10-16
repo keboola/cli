@@ -23,6 +23,7 @@ import typer
 from rich.table import Table
 
 from ..commands._helpers import (
+    emit_api_error,
     emit_project_warnings,
     get_formatter,
     get_service,
@@ -168,7 +169,7 @@ def search_command(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
-        formatter.error(message=exc.message, error_code=ErrorCode.API_ERROR)
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=1) from None
 
     if formatter.json_mode:

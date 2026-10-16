@@ -23,7 +23,7 @@ from rich.markup import escape
 from ..constants import IMPORT_JOB_MAX_WAIT
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..output import OutputFormatter
-from ._helpers import get_formatter, get_service, map_error_to_exit_code
+from ._helpers import emit_api_error, get_formatter, get_service, map_error_to_exit_code
 
 _JOBS = "Jobs"
 
@@ -133,12 +133,7 @@ def register(app: typer.Typer) -> None:
             formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
             raise typer.Exit(code=5) from None
         except KeboolaApiError as exc:
-            formatter.error(
-                message=exc.message,
-                error_code=exc.error_code,
-                retryable=exc.retryable,
-                details=exc.details,
-            )
+            emit_api_error(formatter, exc)
             raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
         if result["status"] == "error":

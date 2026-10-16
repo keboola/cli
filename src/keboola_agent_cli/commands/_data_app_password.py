@@ -42,7 +42,13 @@ from ..output import OutputFormatter
 from ..services._data_app_password import PASSWORD_AUTH, DataAppPassword, data_app_auth_kind
 from ..services.data_app_service import RUNNING_STATE
 from . import _url_copy
-from ._helpers import check_cli_operation, get_formatter, get_service, map_error_to_exit_code
+from ._helpers import (
+    check_cli_operation,
+    emit_api_error,
+    get_formatter,
+    get_service,
+    map_error_to_exit_code,
+)
 
 DELIVERED_TO_CLIPBOARD = "clipboard"
 DELIVERED_TO_STDOUT = "stdout"
@@ -528,12 +534,7 @@ def register_password_command(app: typer.Typer) -> None:
         try:
             lookup = service.get_data_app_password(alias=project, app_id=app_id)
         except KeboolaApiError as exc:
-            formatter.error(
-                message=exc.message,
-                error_code=exc.error_code,
-                retryable=exc.retryable,
-                details=exc.details,
-            )
+            emit_api_error(formatter, exc)
             raise typer.Exit(code=map_error_to_exit_code(exc)) from None
         except ConfigError as exc:
             formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)

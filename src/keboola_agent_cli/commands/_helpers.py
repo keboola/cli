@@ -451,6 +451,23 @@ def map_error_to_exit_code(exc: KeboolaApiError) -> int:
     return 1
 
 
+def emit_api_error(formatter: OutputFormatter, exc: KeboolaApiError, *, project: str = "") -> None:
+    """Print a KeboolaApiError with its code, message, ``retryable`` and ``details``.
+
+    The one way a command handler reports an API error. A handler that passes
+    only the code and the message prints ``retryable: false`` for a retryable
+    error, and the agent context tells agents to retry on ``retryable``.
+    ``tests/test_error_forwarding.py`` fails on a handler that drops them.
+    """
+    formatter.error(
+        error_code=exc.error_code,
+        message=exc.message,
+        project=project,
+        retryable=exc.retryable,
+        details=exc.details,
+    )
+
+
 def emit_project_warnings(formatter: OutputFormatter, result: dict) -> None:
     """Emit warnings from multi-project operation results.
 

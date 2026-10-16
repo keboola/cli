@@ -21,6 +21,7 @@ from ..config_store import ConfigStore
 from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._helpers import (
+    emit_api_error,
     get_formatter,
     get_service,
     map_error_to_exit_code,
@@ -95,7 +96,7 @@ def register(app: typer.Typer) -> None:
             formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
             raise typer.Exit(code=5) from None
         except KeboolaApiError as exc:
-            formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+            emit_api_error(formatter, exc)
             raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
         if formatter.json_mode:
@@ -167,7 +168,7 @@ def register(app: typer.Typer) -> None:
             formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
             raise typer.Exit(code=5) from None
         except KeboolaApiError as exc:
-            formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+            emit_api_error(formatter, exc)
             raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
         if formatter.json_mode:
@@ -258,7 +259,7 @@ def register(app: typer.Typer) -> None:
             formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
             raise typer.Exit(code=5) from None
         except KeboolaApiError as exc:
-            formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+            emit_api_error(formatter, exc)
             raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
         if formatter.json_mode:
@@ -394,7 +395,7 @@ def register(app: typer.Typer) -> None:
             formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
             raise typer.Exit(code=5) from None
         except KeboolaApiError as exc:
-            formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+            emit_api_error(formatter, exc)
             raise typer.Exit(code=map_error_to_exit_code(exc)) from None
         finally:
             if progress_cm is not None:
@@ -511,9 +512,7 @@ def register(app: typer.Typer) -> None:
                 formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
                 raise typer.Exit(code=5) from None
             except KeboolaApiError as exc:
-                formatter.error(
-                    message=exc.message, error_code=exc.error_code, retryable=exc.retryable
-                )
+                emit_api_error(formatter, exc)
                 raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
         if not dry_run and not yes and not formatter.json_mode:

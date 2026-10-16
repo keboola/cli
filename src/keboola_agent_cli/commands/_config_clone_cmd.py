@@ -18,7 +18,7 @@ from rich.console import Console
 from rich.markup import escape
 
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
-from ._helpers import get_formatter, get_service, map_error_to_exit_code
+from ._helpers import emit_api_error, get_formatter, get_service, map_error_to_exit_code
 
 
 def _parse_pair_options(items: list[str] | None, flag: str, formatter: Any) -> dict[str, str]:
@@ -185,12 +185,7 @@ def register(app: typer.Typer) -> None:
             formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
             raise typer.Exit(code=5) from None
         except KeboolaApiError as exc:
-            formatter.error(
-                message=exc.message,
-                error_code=exc.error_code,
-                project=project,
-                retryable=exc.retryable,
-            )
+            emit_api_error(formatter, exc, project=project)
             raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
         formatter.output(result, _format_clone_result)

@@ -51,7 +51,7 @@ def storage_create_bucket(ctx, project, stage, name):
     try:
         result = service.create_bucket(alias=project, stage=stage, name=name)
     except KeboolaApiError as exc:
-        formatter.error(message=exc.message, error_code=exc.error_code)
+        emit_api_error(formatter, exc)  # keeps code, message, retryable, details
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
     formatter.output(result) if formatter.json_mode else ...
 
