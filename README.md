@@ -345,6 +345,7 @@ kbagent             init | context | doctor | version | update | changelog
 | [Python SDK](docs/sdk.md) | The in-process importable `Client`: method reference, typed result models, `py.typed`, idempotent jobs, gotchas, and how to extend the SDK. Demo: [`examples/storage_tui/`](examples/storage_tui/). |
 | [Build a REST client](docs/build-your-own-client.md) | The `kbagent serve` HTTP API spec for non-Python callers (JS, Go, Slack bots, Web UIs). |
 | [MCP migration](docs/mcp-migration.md) | Migrating off the removed MCP passthrough (v0.85.0): the tool-to-command map, what to do with persisted `mcp_tool` agent tasks, and how to keep `keboola-mcp-server` fresh yourself. |
+| [Migrating to 1.0](docs/migrate-to-1.0.md) | When kbagent 1.0.0 reaches each kind of install, how to move early or stay on 0.x, and what changes in 1.0.0 (draft). |
 | [Contributing](CONTRIBUTING.md) | Architecture, coding style, adding commands, testing checklist |
 
 ## Telemetry
