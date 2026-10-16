@@ -49,6 +49,7 @@ live**):
 
 import logging
 import re
+from dataclasses import dataclass
 from typing import Any, Literal, Self
 
 import httpx
@@ -92,6 +93,8 @@ SemanticType = Literal[
     "semantic-constraint",
     "semantic-glossary",
     "semantic-reference-data",
+    "rls-policy",
+    "cls-policy",
 ]
 
 
@@ -103,6 +106,8 @@ SEMANTIC_TYPES: tuple[str, ...] = (
     "semantic-constraint",
     "semantic-glossary",
     "semantic-reference-data",
+    "rls-policy",
+    "cls-policy",
 )
 
 
@@ -138,6 +143,36 @@ def _name_conflict(item_type: str, name: str, exc: KeboolaApiError) -> KeboolaAp
             "unique across all models, not per model: pick another name, or edit or remove the "
             "existing item."
         ),
+        status_code=exc.status_code,
+        error_code=ErrorCode.ALREADY_EXISTS,
+        retryable=False,
+    )
+
+
+def _exact_int(value: Any) -> int:
+    """``int(value)`` without its silent conversions: a bool or a non-integral float is rejected."""
+    if isinstance(value, bool):
+        raise TypeError("a bool is not a project id")
+    if isinstance(value, float) and not value.is_integer():
+        raise ValueError("a non-integral float is not a project id")
+    return int(value)
+
+
+_PICK_ANOTHER_NAME = "Pick another name."
+
+
+def _already_exists(
+    exc: KeboolaApiError, item_type: str, name: str | None, hint: str | None
+) -> KeboolaApiError:
+    """A duplicate-name conflict as a clean ``ALREADY_EXISTS``; ``hint`` is the caller's remedy.
+
+    Without a hint (the semantic-layer callers) the message explains the metastore's uniqueness
+    rule instead (:func:`_name_conflict`).
+    """
+    if hint is None:
+        return _name_conflict(item_type, name or "", exc)
+    return KeboolaApiError(
+        message=f"{item_type} with name {name!r} already exists. {hint}",
         status_code=exc.status_code,
         error_code=ErrorCode.ALREADY_EXISTS,
         retryable=False,
@@ -299,6 +334,7 @@ class MetastoreClient(BaseHttpClient):
         *,
         scope: ObjectScope = _DEFAULT_SCOPE,
         target_project_ids: list[int] | None = None,
+        conflict_hint: str | None = None,
     ) -> dict[str, Any]:
         """Create an item. Returns the server's stored representation.
 
@@ -360,7 +396,7 @@ class MetastoreClient(BaseHttpClient):
                 exc.status_code == 500 and "Failed to create meta object" in exc.message
             )
             if is_duplicate:
-                raise _name_conflict(item_type, name, exc) from exc
+                raise _already_exists(exc, item_type, name, conflict_hint) from exc
             raise
         body = response.json()
         return body.get("data", body) if isinstance(body, dict) else body
@@ -371,6 +407,7 @@ class MetastoreClient(BaseHttpClient):
         item_id: str,
         name: str,
         data: dict[str, Any],
+        conflict_hint: str | None = None,
     ) -> dict[str, Any]:
         """Replace an item in place via ``PUT`` (revisioned update).
 
@@ -398,7 +435,47 @@ class MetastoreClient(BaseHttpClient):
             )
         except KeboolaApiError as exc:
             if exc.status_code == 409:
-                raise _name_conflict(item_type, name, exc) from exc
+                raise _already_exists(exc, item_type, name, conflict_hint) from exc
+            raise
+        body = response.json()
+        return body.get("data", body) if isinstance(body, dict) else body
+
+    def patch_item(
+        self,
+        item_type: SemanticType,
+        item_id: str,
+        *,
+        name: str | None = None,
+        data: dict[str, Any] | None = None,
+        conflict_hint: str = _PICK_ANOTHER_NAME,
+    ) -> dict[str, Any]:
+        """Partially update an item via ``PATCH`` -- only the given fields change.
+
+        The server merges ``data`` into the stored record one TOP-LEVEL key at
+        a time (go-monorepo ``simpleJSONMerge``): a key in ``data`` replaces the
+        stored value wholesale, every key it does not name is kept, all inside
+        one transaction under a row lock. So unknown keys survive and a
+        concurrent change to another key is not overwritten -- unlike
+        :meth:`put_item`. Caveat: the server validates only the patched keys,
+        never the merged record, so the caller must validate the merged result
+        itself. Never sends ``scope`` (a scope step-up cannot be combined with
+        name/data -- :meth:`elevate_to_organization`).
+
+        Raises ``NOT_FOUND`` on 404 and ``ALREADY_EXISTS`` on 409 (a rename to
+        a taken name).
+        """
+        body: dict[str, Any] = {}
+        if name is not None:
+            body["name"] = name
+        if data is not None:
+            body["data"] = data
+        try:
+            response = self._do_request(
+                "PATCH", f"/api/v1/repository/{item_type}/{item_id}", json=body
+            )
+        except KeboolaApiError as exc:
+            if exc.status_code == 409:
+                raise _already_exists(exc, item_type, name, conflict_hint) from exc
             raise
         body = response.json()
         return body.get("data", body) if isinstance(body, dict) else body
@@ -503,3 +580,34 @@ class MetastoreClient(BaseHttpClient):
         )
         body = response.json()
         return body.get("data", []) if isinstance(body, dict) else []
+
+
+@dataclass(frozen=True)
+class ResolvedSchema:
+    """A type's JSON Schema together with the version it was resolved from (``None`` if none was)."""
+
+    schema: dict[str, Any]
+    version: str | None
+
+
+def fetch_resolved_schema(client: MetastoreClient, item_type: SemanticType) -> ResolvedSchema:
+    """Fetch the actual JSON Schema for a type, resolving the default version.
+
+    Live metastore behavior (2026-07): the bare ``/api/v1/schema/{type}``
+    endpoint returns only a ``{"versions": [...]}`` listing (metadata, no
+    schema body); the real JSON Schema lives at ``/{version}``. This resolves
+    ``isDefault`` (falling back to the first entry) and fetches the versioned
+    document. If the server someday returns the schema directly (no
+    ``versions`` key) it is passed through unchanged, with ``version=None``.
+    """
+    body = client.get_schema(item_type)
+    versions = body.get("versions")
+    if not isinstance(versions, list) or not versions:
+        return ResolvedSchema(schema=body, version=None)
+    default = next((v for v in versions if v.get("isDefault")), versions[0])
+    version_id = str(default.get("version", ""))
+    if not version_id:
+        return ResolvedSchema(schema=body, version=None)
+    return ResolvedSchema(
+        schema=client.get_schema(item_type, version=version_id), version=version_id
+    )

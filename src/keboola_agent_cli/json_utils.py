@@ -1,4 +1,4 @@
-"""JSON deep-merge and nested-path utilities.
+"""JSON deep-merge, nested-path and schema-validation utilities.
 
 Used by ``config update`` to patch configuration content without
 losing sibling keys -- the exact problem that MCP server's
@@ -10,6 +10,8 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass
 from typing import Any
+
+import jsonschema
 
 # Sentinel marking "the key does not exist on this side" in a DiffEntry --
 # distinct from an explicit ``None`` value, which is a legal JSON value.
@@ -219,3 +221,12 @@ def find_matches_in_json(
         if obj is not None and match_fn(str(obj)):
             paths.append(path)
     return paths
+
+
+def draft7_errors(document: Any, schema: dict[str, Any]) -> list[str]:
+    """Every Draft7 violation of ``document`` against ``schema``, as "Schema error at PATH: MSG"."""
+    validator = jsonschema.Draft7Validator(schema)
+    return [
+        f"Schema error at {'/'.join(str(p) for p in err.path) or '(root)'}: {err.message}"
+        for err in sorted(validator.iter_errors(document), key=lambda e: list(e.path))
+    ]
