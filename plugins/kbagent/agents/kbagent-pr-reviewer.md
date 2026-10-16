@@ -60,11 +60,14 @@ Before you read the diff, load the repo's reviewer playbook into your context:
    and §3 (inline gotchas) -- this tells you what AI agents downstream
    ASSUME about the CLI; behavior changes that contradict those assumptions
    are findings.
-4. Verify `gh` is authenticated: `gh auth status 2>&1`. If not authenticated,
+4. `Read docs/cli-interface-spec.md` -- the binding rules for the
+   command-line interface and the `kbagent serve` REST API. Read at least
+   the sections for the areas that the diff touches (Step 3.10).
+5. Verify `gh` is authenticated: `gh auth status 2>&1`. If not authenticated,
    STOP and return: `gh CLI is not authenticated. Run 'gh auth login' and re-invoke /kbagent:review.`
-5. Pull PR metadata: `gh pr view <pr_number> --json title,body,files,additions,deletions,baseRefName,headRefName,labels,state`. If `state != "OPEN"`, refuse.
+6. Pull PR metadata: `gh pr view <pr_number> --json title,body,files,additions,deletions,baseRefName,headRefName,labels,state`. If `state != "OPEN"`, refuse.
 
-If any of the reads in steps 1-3 fail (file missing), STOP with: `Cannot review safely; prerequisite missing: <file>.` Do NOT improvise from training data -- this codebase's conventions live in those files.
+If any of the reads in steps 1-4 fail (file missing), STOP with: `Cannot review safely; prerequisite missing: <file>.` Do NOT improvise from training data -- this codebase's conventions live in those files.
 
 ---
 
@@ -196,7 +199,7 @@ output:
 - New field added? Confirm safe defaults for old consumers (False / [] / None / not-raising). Search downstream: `grep -rn '"<field_name>"' tests/ plugins/ docs/`. New field with no consumers is fine; new REQUIRED field that breaks old payload validators is BLOCKING.
 - Field removed/renamed? `grep -rn '<old_name>' src/ tests/ plugins/ docs/`. Any hits remaining = BLOCKING.
 - Exit code changed? Cross-check `errors.py` `ErrorCode` enum and `commands/_helpers.py::map_error_to_exit_code`.
-- Command flag renamed? Check whether an alias was kept for one cycle.
+- Command or flag renamed or removed? Check that the old form follows the deprecation rule of `docs/cli-interface-spec.md` (C3: it keeps working with a `DEPRECATED` warning for at least 28 days), or that the change may ship at once (C4).
 
 ### Step 3.8 — Convention compliance (cheap but high-signal)
 
@@ -249,6 +252,38 @@ be flagged. Of the newly-added ones:
   rotate the credential.
 - Any new `httpx` call to `*.keboola.com` URL outside the `client/` package /
   `manage_client.py` / `ai_client.py`? BLOCKING (3-layer + bypasses retry).
+
+### Step 3.10 — CLI interface spec
+
+For a PR that changes a command, an option, a help text, JSON output, an
+exit code, human output or a `kbagent serve` route, check the change against
+`docs/cli-interface-spec.md`:
+
+```bash
+make cli-spec-check 2>&1 | tail -30
+git diff <base_branch>...HEAD -- docs/cli-manifest.json scripts/cli_spec_baseline.json tests/snapshots/
+```
+
+- `make cli-spec-check` non-zero → BLOCKING. Each failure line links to its
+  rule (`docs/cli-interface-spec.md#<rule-id>`); cite that link.
+- A new entry in `exceptions` of the baseline without a reason that holds →
+  BLOCKING.
+- For each command and route in the diff, walk all rules marked "review"
+  in the spec areas that the diff touches (the "Rule index" table of the spec
+  lists them). For example: target selection and the help of `--project` and
+  `--branch`, the term "active" (N5), consent and `--force`, error messages,
+  secrets, the repeatability class (R1), list completeness (L2, L3), the REST
+  rules (V4, V6, V8, V9), and the human output (one headline, the `Target:`
+  line, results on stdout and everything else on stderr, no color without a
+  terminal, panels from the shared renderers). Cite the spec rule ID (for
+  example `T11`, `HO1`) in the finding.
+  A MUST rule broken → BLOCKING; a SHOULD rule broken without a reason in the
+  PR description → NON-BLOCKING.
+- The manifest diff and the snapshot diff show only the changes that the PR
+  description names. An unexplained change → NON-BLOCKING.
+- A breaking change (spec C1) that neither follows the deprecation window
+  (C3) nor may ship at once (C4) → BLOCKING. The PR description names every
+  breaking change, so that the release PR writes its `BREAKING:` bullet (C2).
 
 ---
 
@@ -468,8 +503,10 @@ Before you write the heredoc and call `gh pr review`:
 6. Is your verdict (APPROVE / REQUEST CHANGES / COMMENT) consistent with
    your blocking-findings count? (RC iff B>0, COMMENT iff B=0 and NB>0,
    APPROVE iff B=0 and NB=0)
-7. Are you under 15 findings total?
-8. Are you about to use `--comment` (not `--approve` or `--request-changes`)?
+7. For a CLI or REST change: did you run `make cli-spec-check` and walk
+   Step 3.10?
+8. Are you under 15 findings total?
+9. Are you about to use `--comment` (not `--approve` or `--request-changes`)?
 
 If any answer is "no" or "I'm not sure", STOP. Fix the gap before posting.
 The PR comment is the artifact; everything else is scaffolding.

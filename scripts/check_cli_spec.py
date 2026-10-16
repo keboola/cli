@@ -73,13 +73,10 @@ SPEC_DOC = "docs/cli-interface-spec.md"
 
 # A2: one short flag = one long option; a new short flag needs an entry here.
 # The global short flags (-j, -v, -V) keep their global meaning. The others are
-# pinned from the majority use at the introduction of the check, except -c, -n
-# and -r: they are provisional tie-breaks (1:1 or 2:2 uses) that wait for review
-# in the args section of the CLI spec (CLI-38).
+# fixed from the majority use at the introduction of the check.
 SHORT_FLAGS: dict[str, str] = {
     "-V": "--version",
     "-a": "--allow",
-    "-c": "--category",
     "-d": "--directory",
     "-e": "--email",
     "-f": "--feature",
@@ -87,15 +84,18 @@ SHORT_FLAGS: dict[str, str] = {
     "-j": "--json",
     "-l": "--load",
     "-m": "--message",
-    "-n": "--limit",
     "-o": "--output",
     "-p": "--project",
     "-q": "--query",
-    "-r": "--regex",
     "-t": "--type",
     "-v": "--verbose",
     "-y": "--yes",
 }
+
+# A2: short flags whose uses are tied between two meanings (-c: --category and
+# --column; -n: --limit and --name; -r: --regex and --role). No new use with
+# either meaning; each existing use is an `exceptions` entry in the baseline.
+RESERVED_SHORT_FLAGS: frozenset[str] = frozenset({"-c", "-n", "-r"})
 
 # S3: what `--force` overrides, per command. Empty until the safety section of
 # the spec is accepted; every `--force` is a violation of a non-blocking rule.
@@ -531,7 +531,9 @@ def r_short_one_meaning(c: Context) -> Violations:
         for p in filter(is_option, lf.params):
             for s in shorts(p):
                 want = SHORT_FLAGS.get(s)
-                if want is None:
+                if s in RESERVED_SHORT_FLAGS:
+                    found[f"{lf.name} {s}"] = f"{s} is a reserved short flag (no new use)"
+                elif want is None:
                     found[f"{lf.name} {s}"] = f"{s} is not in SHORT_FLAGS"
                 elif label(p) != want:
                     found[f"{lf.name} {s}"] = f"{s} means {label(p)} here, {want} in SHORT_FLAGS"
@@ -743,7 +745,10 @@ def r_config_error_keeps_code(c: Context) -> Violations:
             and isinstance(code, ast.Attribute)
             and code.attr == "CONFIG_ERROR"
         ):
-            found[site.subject] = "a ConfigError handler replaces the error code with CONFIG_ERROR"
+            found[site.subject] = (
+                "a ConfigError handler replaces the error code with CONFIG_ERROR; pass "
+                'error_code=getattr(exc, "error_code", ErrorCode.CONFIG_ERROR)'
+            )
     return found
 
 

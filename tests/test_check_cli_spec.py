@@ -1,6 +1,6 @@
 """Tests for scripts/check_cli_spec.py -- the `make cli-spec-check` gate.
 
-They pin four things:
+They pin five things:
 
   1. The committed repository passes: the baseline and docs/cli-manifest.json
      match the live tree.
@@ -11,6 +11,8 @@ They pin four things:
      rule, growth against the base branch and a loosened blocking flag; a
      non-blocking rule never fails.
   4. Single rules find what they are for on synthetic input.
+  5. docs/cli-interface-spec.md has an anchor for every rule id, and
+     CLAUDE.md, CONTRIBUTING.md and the reviewer playbook link it (spec C7).
 """
 
 from __future__ import annotations
@@ -18,7 +20,9 @@ from __future__ import annotations
 import ast
 import importlib.util
 import json
+import re
 import sys
+from collections import Counter
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -107,6 +111,73 @@ def test_rule_ids_are_unique_and_disjoint() -> None:
     assert not (set(evaluated) & contract)
     assert not (set(evaluated) & deferred)
     assert not (contract & deferred)
+
+
+def _spec_text() -> str:
+    return (spec_check.REPO_ROOT / spec_check.SPEC_DOC).read_text(encoding="utf-8")
+
+
+def test_every_rule_id_has_one_spec_anchor() -> None:
+    """Failure lines link to `docs/cli-interface-spec.md#<rule-id>` (spec C7)."""
+    found = Counter(re.findall(r'<a id="([^"]+)"></a>', _spec_text()))
+    assert [a for a, n in found.items() if n > 1] == []
+    rule_ids = (
+        {r.id for r in spec_check.RULES}
+        | set(spec_check.CONTRACT_RULES)
+        | set(spec_check.DEFERRED_RULES)
+    )
+    assert rule_ids - set(found) == set()
+    assert {a for a in found if "." in a} - rule_ids == set()
+
+
+_NONE = "\u2013"  # en dash: the index cell of a rule without a level or version
+_RULE_HEADING = re.compile(r"^\*\*([A-Z]+-?\d+)(?: · (.+?))?(?: · (.+?))?\.\*\*", re.MULTILINE)
+_INDEX_ROW = re.compile(r"^\| \[([A-Z]+-?\d+)\]\(#\1\) \| (.+?) \| (.+?) \| .+ \|$", re.MULTILINE)
+
+
+def test_rule_index_matches_the_rule_headings() -> None:
+    """The rule index lists every rule once, with the level and version of its heading."""
+    text = _spec_text()
+    headings = [
+        (rid, "withdrawn" if rid == "T7" else (level or _NONE), applies or _NONE)
+        for rid, level, applies in _RULE_HEADING.findall(text)
+    ]
+    assert len(headings) == len({rid for rid, _, _ in headings})
+    assert _INDEX_ROW.findall(text) == headings
+
+
+def test_short_flag_table_matches_the_registries() -> None:
+    rows = re.findall(
+        r"^\| `(-[A-Za-z])` \| (.+?) \| (fixed|global|reserved) \|$", _spec_text(), re.MULTILINE
+    )
+    fixed = {flag: long.strip("`") for flag, long, status in rows if status != "reserved"}
+    reserved = {flag for flag, _, status in rows if status == "reserved"}
+    assert fixed == spec_check.SHORT_FLAGS
+    assert reserved == spec_check.RESERVED_SHORT_FLAGS
+
+
+def test_a_new_use_of_a_reserved_short_flag_fails() -> None:
+    option = SimpleNamespace(
+        param_type_name="option", name="name", opts=["--name", "-n"], secondary_opts=[]
+    )
+    leaf = spec_check.Leaf(
+        path=("demo",), category="read", params=(option,), callback=None, help="Demo.", hidden=False
+    )
+    tree = spec_check.Tree(root=None, leaves=[leaf], groups=[])
+    found = spec_check.r_short_one_meaning(spec_check.Context(tree))
+    assert found == {"demo -n": "-n is a reserved short flag (no new use)"}
+    rule = "args.short-flag-one-meaning"
+    fails = spec_check.ratchet(_results(**{rule: found}), _small_baseline())
+    assert len(fails) == 1 and fails[0].startswith(f"FAIL new      {rule}: demo -n")
+
+
+@pytest.mark.parametrize(
+    "path", ["CLAUDE.md", "CONTRIBUTING.md", "plugins/kbagent/agents/kbagent-pr-reviewer.md"]
+)
+def test_binding_documents_name_the_spec(path: str) -> None:
+    """The spec is binding through these three files (spec C7)."""
+    text = (spec_check.REPO_ROOT / path).read_text(encoding="utf-8")
+    assert spec_check.SPEC_DOC in text
 
 
 # --------------------------------------------------------------------------

@@ -91,7 +91,7 @@ Never print raw text that breaks JSON parsing. Always check `formatter.json_mode
 ### Error handling
 
 - Commands catch `KeboolaApiError` and `ConfigError`, map to exit codes
-- Exit codes: 0=success, 1=general, 2=usage, 3=auth, 4=network, 5=config, 6=permission denied, 7=job timed out and cancelled
+- Exit codes: 0=success, 1=general, 2=usage, 3=auth, 4=network, 5=config, 6=permission denied, 7=job timed out and cancelled, 130=interrupted
 - Multi-project operations accumulate errors -- one project failing doesn't stop others
 - Use `raise typer.Exit(code=N) from None` to suppress traceback in CLI
 
@@ -355,6 +355,7 @@ When adding a new command (e.g., `kbagent storage create-foo`), you must update 
 - [ ] **Permission registration** in `permissions.py` (`OPERATION_REGISTRY` dict)
 - [ ] **Branch choice** through `resolve_branch()` in `effective_branch.py` when the command takes `--branch` or uses the active branch -- never read `ProjectConfig.active_branch_id` directly. The function reports the branch (`Target:` line, `targets` in `--json`); `tests/test_effective_branch.py` fails on a new direct read.
 - [ ] **`--project` naming a NEW alias** -- every `--project` option also takes a project ID, translated to the alias before the command runs (`commands/_project_ref.py`, CLI-22). A command whose `--project` is not a registry lookup (a new alias like `project add`, an offline filter like `lineage show`) must be added to `NO_LOOKUP_COMMANDS` there, and an option with another name that takes an existing alias (like `config clone --target-project`) to `ALIAS_OPTIONS`. `tests/test_project_ref.py` fails on a new option whose flag contains `project`, `alias` or `stack` until it is in `ALIAS_OPTIONS` or in the test's `NOT_AN_ALIAS` list (with a reason); an option with any other name needs this decision by hand.
+- [ ] **CLI interface spec** -- the command, its options, help, output, exit codes and its REST route follow [`docs/cli-interface-spec.md`](docs/cli-interface-spec.md). Run `make cli-spec-check`: a new violation of a blocking rule fails it, and each failure line links to the rule. The rules marked "review" in the spec are checked by the reviewer.
 - [ ] **Service wiring** in `cli.py` if adding a new service class
 - [ ] **HTTP API endpoint** in `src/keboola_agent_cli/server/routers/<group>.py` -- `kbagent serve` exposes the CLI as a REST API so external applications (Web UI, scheduled AI agents, Slack bots, Streamlit dashboards, CI pipelines) can call the platform without forking CLI subprocesses. The current convention is **1:1**: every command in a group has a matching endpoint in that group's router (e.g. `commands/flow.py` has 8 commands, `server/routers/flows.py` has 8 routes). If you add a new command, add the corresponding route. **Skip allowed** only for genuinely terminal-only commands (interactive prompts, Rich-rendered output that has no useful JSON shape, `doctor`/`init`/`update`-style infrastructure that manages kbagent itself rather than Keboola). Document any skip in the PR description with a one-line reason so reviewers don't flag it.
 
@@ -956,7 +957,10 @@ entry. For source rules (subjects `module:function`) it compares the number
 of entries per rule, so moving a function to another file does not fail;
 the known limit is that one fixed entry can then be swapped for a new
 violation in another function without a failure.
-A permanent, reviewed exception goes into `exceptions` with a reason. Known
+A permanent, reviewed exception goes into `exceptions` with a reason.
+Renaming or moving a function or command that is in the baseline gives a
+`new` line for the new name and a `stale` line for the old one; run
+`make cli-spec-baseline` and commit the result. Known
 limit: the ratchet is keyed by subject, so a second violation of the same
 rule inside a function or command that is already in the baseline passes.
 `make check` runs the rules (`make cli-spec-rules`); `make cli-spec-check`
