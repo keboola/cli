@@ -278,8 +278,8 @@ Cron-style schedules attached to flows / configurations. Mirrors `kbagent schedu
 | Method | Path | Summary |
 |---|---|---|
 | `GET` | `/schedules` | List schedules |
-| `GET` | `/schedules/{project}/{schedule_id}` | Get schedule detail |
 | `GET` | `/schedules/find/query` | Search schedules by criteria |
+| `GET` | `/schedules/{project}/{schedule_id}` | Get schedule detail |
 
 ### `notifications` (5 operations)
 
@@ -302,6 +302,7 @@ Python/JS (default), Streamlit and R data apps -- create, deploy, start/stop, ma
 | `GET` | `/data-apps` | List data apps across projects |
 | `GET` | `/data-apps/{project}/{app_id}` | Get data app detail |
 | `DELETE` | `/data-apps/{project}/{app_id}` | Delete a data app |
+| `POST` | `/data-apps/validate-repo` | Validate a data app git repo |
 | `POST` | `/data-apps/{project}` | Create a data app |
 | `POST` | `/data-apps/{project}/{app_id}/deploy` | Deploy a data app version |
 | `POST` | `/data-apps/{project}/{app_id}/start` | Start a data app |
@@ -312,7 +313,6 @@ Python/JS (default), Streamlit and R data apps -- create, deploy, start/stop, ma
 | `PUT` | `/data-apps/{project}/{app_id}/secrets` | Set data app secrets |
 | `GET` | `/data-apps/{project}/{app_id}/secrets/{key}` | Get a single data app secret |
 | `POST` | `/data-apps/{project}/{app_id}/secrets/remove` | Remove data app secrets |
-| `POST` | `/data-apps/validate-repo` | Validate a data app git repo |
 | `GET` | `/data-apps/{project}/{app_id}/git-repo` | Get a data app's git repository |
 | `GET` | `/data-apps/{project}/{app_id}/git-repo/credentials` | List managed git credentials |
 | `POST` | `/data-apps/{project}/{app_id}/git-repo/credentials` | Create a managed git credential |

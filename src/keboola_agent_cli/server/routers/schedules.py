@@ -24,19 +24,8 @@ def list_schedules(
     )
 
 
-@router.get("/{project}/{schedule_id}", summary="Get schedule detail")
-def detail(
-    project: str,
-    schedule_id: str,
-    branch_id: int | None = None,
-    registry: ServiceRegistry = Depends(get_registry),
-) -> dict[str, Any]:
-    """Full schedule metadata including cron expression. Mirrors `kbagent schedule detail`."""
-    return registry.schedule.get_schedule_detail(
-        alias=project, schedule_id=schedule_id, branch_id=branch_id
-    )
-
-
+# Declared before GET /{project}/{schedule_id}: that route would otherwise take
+# /find/query as a project alias and schedule ID, and the find route would never match.
 @router.get("/find/query", summary="Search schedules by criteria")
 def find(
     cron_window: str | None = None,
@@ -51,4 +40,17 @@ def find(
         not_run_since_days=not_run_since,
         aliases=project,
         branch_id=branch_id,
+    )
+
+
+@router.get("/{project}/{schedule_id}", summary="Get schedule detail")
+def detail(
+    project: str,
+    schedule_id: str,
+    branch_id: int | None = None,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """Full schedule metadata including cron expression. Mirrors `kbagent schedule detail`."""
+    return registry.schedule.get_schedule_detail(
+        alias=project, schedule_id=schedule_id, branch_id=branch_id
     )
