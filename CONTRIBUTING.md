@@ -377,6 +377,7 @@ done** until every box below is ticked.
 
 - [ ] **`SKILL.md` decision table** -- run `make skill-gen` and commit the diff. **Do NOT edit the table by hand** -- the markers will be overwritten on the next `make skill-gen`. The pre-commit hook auto-regenerates and stages this file.
 - [ ] **`plugin.json` version** -- bumped via `make version-sync` from `pyproject.toml`. The pre-commit hook auto-stages this file; you should never edit it by hand.
+- [ ] **`docs/cli-manifest.json`** -- the command manifest (commands, options, help texts). Run `make cli-manifest` and commit the diff; `make cli-spec-check` fails while the file differs from the live tree.
 
 #### Plugin (`plugins/kbagent/`) -- HAND-MAINTAINED, NO CI CHECK
 
@@ -651,6 +652,8 @@ silent-drift risks summarized in the
    A leftover `(since vNEXT)` ships agents a gate no installed version can
    ever satisfy -- strictly worse than no gate, because they then refuse a
    command the user has. The release PR is the only place it can be fixed.
+   When a replaced placeholder is inside a command or option help string,
+   also run `make cli-manifest` and commit `docs/cli-manifest.json`.
 
    **This is now CI-enforced.** The `check` job runs the same check on any PR
    that RAISES `pyproject.toml`'s version, so a missed placeholder is a red
@@ -856,7 +859,7 @@ foot-gun.
 ## Running CI Locally
 
 ```bash
-make check              # CI parity: lint + format + typecheck + skill + version + command-sync + endpoints + changelog + error-codes + sentinel-guards + test
+make check              # CI parity: lint + format + typecheck + skill + version + command-sync + cli-spec + endpoints + changelog + error-codes + sentinel-guards + test
 make lint               # Just the ruff linter
 make format             # Auto-format code
 make typecheck          # Static type check (Astral `ty`)
@@ -864,6 +867,11 @@ make audit              # Audit locked dependencies for known vulnerabilities (u
 make test               # Just the test suite (no coverage)
 make test-cov           # Test suite + informational coverage report (term-missing)
 make command-sync-check # Verify every CLI command is registered + documented
+make cli-spec-rules     # Check the CLI spec rules vs the baseline and docs/cli-manifest.json (in make check)
+make cli-spec-check     # cli-spec-rules plus the contract test files of the spec
+make cli-manifest       # Regenerate docs/cli-manifest.json after a command, option or help change
+make cli-spec-baseline  # Re-record scripts/cli_spec_baseline.json after a fix (it may only shrink)
+make cli-spec-report    # Per-command inventory: category, --project shape, safety flags, violated rules
 make endpoints-check    # Verify docs/web-server-endpoints.md matches the live FastAPI app
 make endpoints-gen      # Regenerate it after adding a serve route
 make check-sentinel-guards # Verify no kbc-session:// sentinel path is unguarded
@@ -935,6 +943,27 @@ trusting the diff, because a two-dot diff (the only kind a shallow CI checkout
 can do) also fires for a stale feature branch whose base has since been
 released; arming there would tell a contributor to delete a placeholder the
 process requires them to write.
+
+**CLI spec gate** (`scripts/check_cli_spec.py`, `make cli-spec-check`): walks
+the live command tree, the serve routes and the source of `commands/`, and
+checks them against the rules of the CLI interface spec (#791). Existing
+violations are listed in `scripts/cli_spec_baseline.json`, which has a
+`blocking` flag per rule. A new violation of a blocking rule fails, and so
+does a baseline entry that is no longer a violation: after a fix, run
+`make cli-spec-baseline` and commit the shorter file. On a pull request CI
+also compares the baseline with the base branch and fails when it gained an
+entry. For source rules (subjects `module:function`) it compares the number
+of entries per rule, so moving a function to another file does not fail.
+A permanent, reviewed exception goes into `exceptions` with a reason. Known
+limit: the ratchet is keyed by subject, so a second violation of the same
+rule inside a function or command that is already in the baseline passes.
+`make check` runs the rules (`make cli-spec-rules`); `make cli-spec-check`
+also runs the contract test files.
+The same step fails when `docs/cli-manifest.json` differs from the live tree
+(`make cli-manifest`). The contract cases of the spec are in
+`tests/test_cli_contract.py`, and the human output of one command per shared
+renderer is pinned by `tests/test_cli_human_snapshots.py`; record an intended
+renderer change with `KBAGENT_UPDATE_SNAPSHOTS=1` and commit the snapshot diff.
 
 **Command-sync silent-drift gate** (`scripts/check_command_sync.py`): treats the
 live Typer command tree as the single source of truth and fails if any command

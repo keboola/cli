@@ -114,6 +114,30 @@ jobs:
         # judgement, so it's left to /kbagent:review, not gated here.)
         run: uv run python scripts/check_command_sync.py
 
+      - name: CLI spec check
+        # Checks the command tree, the serve routes and the source of
+        # commands/ against the rules of the CLI interface spec (#791) and the
+        # committed baseline scripts/cli_spec_baseline.json: a new violation
+        # of a blocking rule fails, and so does a baseline entry that is no
+        # longer a violation. It also fails when docs/cli-manifest.json differs
+        # from the live tree (`make cli-manifest`). The contract cases of the
+        # spec are pytest files and run in the `test` job.
+        #
+        # On a pull request it also reads the base branch's baseline and fails
+        # when the baseline gained an entry, so the baseline can only shrink.
+        # A base branch without the file (the PR that adds it) skips that part.
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch --no-tags --depth=1 origin "$GITHUB_BASE_REF"
+            if git show "origin/$GITHUB_BASE_REF:scripts/cli_spec_baseline.json" \
+                 > "$RUNNER_TEMP/base_cli_spec_baseline.json" 2>/dev/null; then
+              uv run --extra server python scripts/check_cli_spec.py \
+                --base-baseline "$RUNNER_TEMP/base_cli_spec_baseline.json"
+              exit $?
+            fi
+          fi
+          uv run --extra server python scripts/check_cli_spec.py
+
       - name: Serve endpoint reference freshness check
         # docs/web-server-endpoints.md is generated from create_app().openapi().
         # The hand-maintained table it replaced drifted to claiming "150+
