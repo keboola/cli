@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any
 
 from rich.console import Console
+from rich.errors import MarkupError
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
@@ -67,11 +68,26 @@ def force_utf8_when_redirected() -> None:
             continue
 
 
-def success_json(data: Any) -> str:
-    """The ``--json`` success envelope; ``targets`` only when the command recorded one."""
+# The ``code`` of a ``warnings[]`` entry from ``OutputFormatter.warning()``.
+WARNING_CODE = "WARNING"
+
+
+def success_json(data: Any, warnings: list[dict[str, Any]] | None = None) -> str:
+    """The ``--json`` success envelope; ``targets`` and ``warnings`` only when not empty."""
     targets = [target.to_dict() for target in recorded_targets()]
-    response = SuccessResponse(status="ok", targets=targets or None, data=data)
-    return response.model_dump_json(indent=2, exclude=None if targets else {"targets"})
+    response = SuccessResponse(
+        status="ok", targets=targets or None, warnings=warnings or None, data=data
+    )
+    empty = {key for key, value in (("targets", targets), ("warnings", warnings)) if not value}
+    return response.model_dump_json(indent=2, exclude=empty or None)
+
+
+def _plain_text(message: str) -> str:
+    """The text a Rich-markup message shows on a terminal, for a ``warnings[]`` entry."""
+    try:
+        return Text.from_markup(message).plain
+    except MarkupError:
+        return message
 
 
 _TARGET_REASONS = {
@@ -156,6 +172,10 @@ class OutputFormatter:
             no_color=no_color,
             force_terminal=force_terminal,
         )
+        # JSON mode: the `warnings[]` of the envelope, and whether the
+        # envelope is already on stdout (a later warning is then dropped).
+        self.warnings: list[dict[str, Any]] = []
+        self._document_written = False
 
     def output(
         self, data: Any, human_formatter: Callable[[Console, Any], object] | None = None
@@ -169,7 +189,8 @@ class OutputFormatter:
                            human-friendly output. If None in human mode, prints repr.
         """
         if self.json_mode:
-            write_machine_output(success_json(data))
+            write_machine_output(success_json(data, self.warnings))
+            self._document_written = True
         else:
             if human_formatter is not None:
                 human_formatter(self.console, data)
@@ -214,8 +235,11 @@ class OutputFormatter:
             targets = [target.to_dict() for target in recorded_targets()]
             if targets:
                 error_envelope["targets"] = targets
+            if self.warnings:
+                error_envelope["warnings"] = self.warnings
             error_envelope["error"] = err.model_dump(exclude_none=True)
             write_machine_output(json.dumps(error_envelope, indent=2))
+            self._document_written = True
         else:
             self.err_console.print(f"[bold red]Error:[/bold red] {message}")
 
@@ -226,7 +250,8 @@ class OutputFormatter:
             message: The success message to display.
         """
         if self.json_mode:
-            write_machine_output(success_json({"message": message}))
+            write_machine_output(success_json({"message": message}, self.warnings))
+            self._document_written = True
         else:
             self.console.print(f"[bold green]Success:[/bold green] {message}")
 
@@ -241,17 +266,43 @@ class OutputFormatter:
                 soft_wrap=True,
             )
 
-    def warning(self, message: str) -> None:
-        """Output a warning message to stderr (human mode only).
+    def warning(
+        self,
+        message: str,
+        *,
+        code: str = WARNING_CODE,
+        hint: str | None = None,
+        **extra: Any,
+    ) -> None:
+        """Print a warning to stderr, or add it to ``warnings[]`` in JSON mode.
 
-        In JSON mode, warnings are not printed separately -- they are
-        embedded in the structured response via the errors list.
+        In JSON mode the entry is ``{"code", "message"}``, plus ``hint`` when
+        given and every ``extra`` field (any JSON value), and it goes into the
+        top-level ``warnings`` key of the next success or error envelope. The
+        message loses its Rich markup there. A warning after the envelope is
+        written is dropped: stdout holds one JSON document. Human mode prints
+        only the message, on stderr.
+
+        Callers must escape variable text (names, IDs, backend messages) with
+        ``rich.markup.escape``: an unescaped ``[in.c-main.x]`` reads as a
+        style tag, and both modes drop it.
 
         Args:
-            message: The warning message to display.
+            message: The warning message (Rich markup allowed).
+            code: Machine-readable code of the entry.
+            hint: Optional next step for the caller.
+            **extra: Further fields of the entry.
         """
         if not self.json_mode:
             self.err_console.print(f"[bold yellow]Warning:[/bold yellow] {message}")
+            return
+        if self._document_written:
+            return
+        entry: dict[str, Any] = {"code": code, "message": _plain_text(message)}
+        if hint is not None:
+            entry["hint"] = hint
+        entry.update(extra)
+        self.warnings.append(entry)
 
 
 def format_configs_table(console: Console, data: dict[str, Any]) -> None:

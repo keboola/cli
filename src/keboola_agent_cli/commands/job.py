@@ -28,6 +28,7 @@ from ..constants import (
 from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..output import OutputFormatter, format_job_detail, format_jobs_table
+from ._all_projects import AllProjectsOption, reject_project_with_all_projects
 from ._helpers import (
     check_cli_permission,
     emit_api_error,
@@ -86,6 +87,7 @@ def job_list(
         "--project",
         help="Project alias to query (can be repeated for multiple projects)",
     ),
+    all_projects: AllProjectsOption = False,
     component_id: str | None = typer.Option(
         None,
         "--component-id",
@@ -124,6 +126,7 @@ def job_list(
 ) -> None:
     """List jobs from connected projects."""
     formatter = get_formatter(ctx)
+    reject_project_with_all_projects(formatter, project, all_projects)
     service = get_service(ctx, "job_service")
 
     # Validate status

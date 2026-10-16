@@ -517,7 +517,7 @@ kbagent project add --project NAME --url URL [--token-stdin | --token-file PATH 
 kbagent project list
 kbagent project remove --project NAME
 kbagent project edit --project NAME [--url URL] [--token-stdin | --token-file PATH [--keep-token-file] | --token-env NAME | --token TOKEN] [--new-alias NEW]
-kbagent project status [--project NAME]
+kbagent project status [--project NAME | --all-projects]
 kbagent project refresh --project ALIAS [--dry-run] [--force] [--yes] [--token-description DESC] [--token-expires-in N]
 kbagent project refresh --all [--dry-run] [--force] [--yes] [--token-description DESC] [--token-expires-in N]
 kbagent project description-get --project NAME
@@ -539,9 +539,9 @@ kbagent project invitation-cancel --project ALIAS --email EMAIL [--invitation-id
 kbagent project member-remove --project ALIAS --email EMAIL [--yes]
 kbagent project member-set-role --project ALIAS --email EMAIL --role admin|guest|readOnly|share
 
-kbagent config list [--project NAME] [--component-type TYPE] [--component-id ID] [--branch ID] [--include-rows]
+kbagent config list [--project NAME | --all-projects] [--component-type TYPE] [--component-id ID] [--branch ID] [--include-rows]
 kbagent config detail --project NAME [--project NAME ...] --component-id ID [--config-id ID] [--branch ID] [--with-state]
-kbagent config search --query PATTERN [--project NAME] [--component-type TYPE] [--ignore-case] [--regex] [--branch ID]
+kbagent config search --query PATTERN [--project NAME | --all-projects] [--component-type TYPE] [--ignore-case] [--regex] [--branch ID]
 kbagent config update --project NAME --component-id ID --config-id ID [--name N] [--description D] [--configuration JSON|@file|-] [--configuration-file PATH] [--set PATH=VALUE ...] [--merge] [--change-description TEXT] [--dry-run] [--branch ID] [--allow-plaintext-on-encrypt-failure]
 kbagent config set-default-bucket --project NAME --component-id ID --config-id ID (--bucket BUCKET_ID | --clear) [--dry-run] [--branch ID]
 kbagent config rename --project NAME --component-id ID --config-id ID --name "New Name" [--branch ID] [--directory DIR]
@@ -596,7 +596,11 @@ kbagent config clone --project P --component-id ID --config-id ID --name NAME [-
 #   how you discover what to gather. Storage bucket/table IDs are copied VERBATIM, never remapped
 #   (`sync clone` is the command that remaps).
 
-kbagent search QUERY [--project NAME] [--type table|bucket|config|flow|data-app|transformation] [--search-type textual|config-based] [--regex] [--scope PATH ...] [--limit N]
+# --all-projects (CLI-36): on the 18 fan-out reads that read all projects without --project; until 1.0.0 the
+#   same as an omitted --project, with --project USAGE_ERROR (exit 2). --json envelopes gain an optional
+#   top-level `warnings` list ({code, message, ...}), not the same as `data.warnings`. Details and version
+#   gate in gotchas.md.
+kbagent search QUERY [--project NAME | --all-projects] [--type table|bucket|config|flow|data-app|transformation] [--search-type textual|config-based] [--regex] [--scope PATH ...] [--limit N]
 # --regex (0.67.0+): opt-in regex mode (mode=regex). Case-insensitive whole-term match on ENTITY NAMES
 #   only ('report' != 'monthly_report'; use '.*report.*'). Textual only -- error with --search-type
 #   config-based. Regex does NOT match column names, so matched_columns is always empty under --regex.
@@ -606,7 +610,7 @@ kbagent search QUERY [--project NAME] [--type table|bucket|config|flow|data-app|
 #   "is this referenced anywhere" miss a table spelled DCFAmount in one config and DCFAMOUNT in
 #   another). `kbagent config search --query` stays case-sensitive by default (it has --ignore-case).
 
-kbagent job list [--project NAME] [--component-id ID] [--config-id ID] [--status STATUS] [--limit N] [--offset N] [--sort-by startTime|endTime|createdTime|durationSeconds|id] [--sort-order asc|desc]
+kbagent job list [--project NAME | --all-projects] [--component-id ID] [--config-id ID] [--status STATUS] [--limit N] [--offset N] [--sort-by startTime|endTime|createdTime|durationSeconds|id] [--sort-order asc|desc]
 # job list (0.90.1+, #675): without --project the multi-project fan-out is merged GLOBALLY by
 #   --sort-by/--sort-order (default startTime desc), missing values last in both directions,
 #   deterministic (project_alias, id) tiebreak. Before 0.90.1 rows came back grouped alias-then-id,
@@ -620,9 +624,9 @@ kbagent job terminate --project NAME (--job-id ID [--job-id ID ...] | --status a
 #   retries) keeps it, because the job may exist. A replay that finds the pending entry exits 1 (INVALID_ARGUMENT, HTTP 400 over serve) and
 #   creates nothing; check `job list`, then `--force-rerun`. Version gate lives in gotchas.md.
 
-kbagent storage buckets [--project NAME] [--branch ID]
+kbagent storage buckets [--project NAME | --all-projects] [--branch ID]
 kbagent storage bucket-detail --project NAME --bucket-id ID [--branch ID]
-kbagent storage tables [--project NAME ...] [--bucket-id ID] [--branch ID] [--include-usage]
+kbagent storage tables [--project NAME ... | --all-projects] [--bucket-id ID] [--branch ID] [--include-usage]
 kbagent storage table-detail --project NAME --table-id ID [--branch ID]
 # table-detail (0.88.0+, #621): also returns the raw Storage API `definition`. On BigQuery
 #   that object (timePartitioning / rangePartitioning / clustering / requirePartitionFilter /
@@ -768,17 +772,17 @@ kbagent lineage show --load PATH [--upstream NODE] [--downstream NODE] [--column
 kbagent lineage info --load PATH
 kbagent lineage server --load PATH [--port N] [--host HOST]
 
-kbagent sharing list [--project NAME]
+kbagent sharing list [--project NAME | --all-projects]
 kbagent sharing share --project ALIAS --bucket-id ID --type TYPE [--target-project-ids IDs] [--target-users EMAILS]
 kbagent sharing unshare --project ALIAS --bucket-id ID
 kbagent sharing link --project ALIAS --source-project-id ID --bucket-id ID [--name NAME] [--stage in|out]
 kbagent sharing unlink --project ALIAS --bucket-id ID
-kbagent sharing edges [--project NAME]
+kbagent sharing edges [--project NAME | --all-projects]
 
 kbagent org setup --org-id ID --url URL [--dry-run] [--yes] [--token-description PREFIX] [--refresh]
 kbagent org setup --project-ids 1,2,3 --url URL [--dry-run] [--yes] [--token-description PREFIX] [--refresh]
 
-kbagent billing credits [--project ALIAS ...]
+kbagent billing credits [--project ALIAS ... | --all-projects]
 # billing credits (0.84.2+, issue #594 secondary ask): read-only PAYG credit balance, fanned out
 #   across all registered projects in parallel by default (--project repeatable narrows). A project
 #   without the `pay-as-you-go` owner.features flag never touches the billing host (NXDOMAIN on some
@@ -885,7 +889,7 @@ kbagent permissions check OPERATION
 #   are kept as inert tombstones (never run, flagged by `agent list`, FAIL in `doctor`) --
 #   recreate them as `--type cli_command`.
 
-kbagent branch list [--project NAME]
+kbagent branch list [--project NAME | --all-projects]
 kbagent branch create --project ALIAS --name "..." [--description "..."]
 kbagent branch use --project ALIAS --branch ID
 # branch use: every command that then picks a branch names it -- `Target:` on stderr, `targets` in
@@ -974,7 +978,7 @@ kbagent workspace create --project ALIAS [--name NAME] [--backend TYPE] [--ui] [
 #   dropped Snowflake/BigQuery provisioning in 2026-03 (the UI uses SQL Editor sessions), so the
 #   green job attaches no Storage workspace. Not a race -- do not retry; use headless. Version
 #   gate for this entry lives in gotchas.md (these `# ` lines parse as ATX headings).
-kbagent workspace list [--project NAME ...] [--orphaned] [--branch ID] [--qs-compatible]
+kbagent workspace list [--project NAME ... | --all-projects] [--orphaned] [--branch ID] [--qs-compatible]
 kbagent workspace detail --project ALIAS --workspace-id ID [--branch ID]
 kbagent workspace delete --project ALIAS --workspace-id ID
 kbagent workspace password --project ALIAS --workspace-id ID
@@ -1014,7 +1018,7 @@ kbagent workspace gc (--project NAME ... | --all-projects) [--dry-run] [--yes]
 #   "no sandbox configs" only when the branch component listing confirms it. Version gate lives in gotchas.md.
 kbagent workspace from-transformation --project ALIAS --component-id ID --config-id ID [--row-id ID]
 
-kbagent data-app list [--project NAME ...] [--branch ID]
+kbagent data-app list [--project NAME ... | --all-projects] [--branch ID]
 kbagent data-app detail --project NAME --app-id ID [--branch ID]
 kbagent data-app create --project ALIAS --name NAME --slug SLUG (--git-repo URL | --use-managed-git-repo) [--description STR | --description-file PATH] [--git-branch main] [--git-public/--no-git-public] [--git-username USER] [--git-pat-env VAR | --git-pat-file PATH | --git-pat-encrypted KBC::Project...] [--auth password|public] [--size tiny|small|medium|large] [--auto-suspend SECONDS] [--type python-js|python|streamlit|r|...] [--workspace/--no-workspace] [--branch ID] [--no-deploy] [--wait] [--timeout SECONDS] [--keep-on-failure] [--dry-run] [--copy] [--reveal]
 # --workspace / --no-workspace (0.87.0+): DEFAULT ON. Writes runtime.workspace.enabled=true --
@@ -1079,7 +1083,7 @@ kbagent data-app git-credentials --project NAME --app-id ID
 kbagent data-app git-credentials-create --project NAME --app-id ID --type ssh_key|http_token --permissions readOnly|readWrite [--public-key KEY | --public-key-file PATH] [--name LABEL] [--yes]
 # git-repo introspects the deployed-from git repo (sandboxes-service /apps/{id}/git-repo); it returns 409 "no Git repository configured" until the app has been DEPLOYED at least once (git config syncs Storage->DS record at deploy). git-credentials* manage credentials for a MANAGED repo only; apps from `data-app create --git-repo` are external => git-credentials-create returns 409. http_token mints a ONE-TIME secret (shown once); credentials endpoints need an admin storage token.
 
-kbagent component list [--project NAME] [--type TYPE] [--query QUERY]
+kbagent component list [--project NAME | --all-projects] [--type TYPE] [--query QUERY]
 kbagent component detail --component-id ID [--project NAME]
 # component detail (since 0.90.0): the AI Service indexes the PUBLIC catalog only, so a private/
 #   deprecated component the project can run (keboola.mcp-server-tool, keboola.data-apps) 404'd
@@ -1362,7 +1366,7 @@ kbagent docs query "QUESTION" [--project NAME]
 # (0.73.0+) Documentation Q&A via the AI Service (server-side RAG). Unlike kai ask it does NOT
 #   see project data; works with any token. --json emits {query, text, source_urls}.
 
-kbagent flow list [--project NAME] [--branch ID] [--with-schedules]
+kbagent flow list [--project NAME | --all-projects] [--branch ID] [--with-schedules]
 kbagent flow detail --project NAME --flow-id ID [--branch ID]
 kbagent flow schema [--full [--project NAME]]
 kbagent flow examples [--component-id keboola.flow|keboola.orchestrator]
@@ -1415,11 +1419,11 @@ kbagent flow triggers --project NAME --flow-id ID [--branch ID]
 #   flow schedule-remove deregisters from the service before deleting each config.
 # Execute a flow with: kbagent job run --project NAME --component-id keboola.flow --config-id ID
 
-kbagent schedule list [--project NAME ...] [--enabled-only] [--branch ID]
+kbagent schedule list [--project NAME ... | --all-projects] [--enabled-only] [--branch ID]
 kbagent schedule detail --project NAME --schedule-id ID [--branch ID]
-kbagent schedule find [--cron-window START-END] [--not-run-since DAYS] [--project NAME ...] [--branch ID]
+kbagent schedule find [--cron-window START-END] [--not-run-since DAYS] [--project NAME ... | --all-projects] [--branch ID]
 
-kbagent notification list [--project NAME ...] [--event NAME] [--component-id ID] [--config-id ID]
+kbagent notification list [--project NAME ... | --all-projects] [--event NAME] [--component-id ID] [--config-id ID]
 kbagent notification detail --project NAME --subscription-id ID
 kbagent notification create --project ALIAS --event NAME --channel email|webhook --address ADDR [--component-id ID] [--config-id ID] [--branch ID] [--expires-at TS]
 kbagent notification delete --project ALIAS --subscription-id ID [--yes]

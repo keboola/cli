@@ -22,6 +22,7 @@ from typing import Any
 import typer
 from rich.table import Table
 
+from ..commands._all_projects import AllProjectsOption, reject_project_with_all_projects
 from ..commands._helpers import (
     emit_api_error,
     emit_project_warnings,
@@ -46,6 +47,7 @@ def search_command(
         "-p",
         help="Project alias to search (repeatable; defaults to all projects).",
     ),
+    all_projects: AllProjectsOption = False,
     item_type: list[str] | None = typer.Option(
         None,
         "--type",
@@ -116,6 +118,7 @@ def search_command(
       kbagent --json search revenue --type config --type flow
     """
     formatter = get_formatter(ctx)
+    reject_project_with_all_projects(formatter, project, all_projects)
     service = get_service(ctx, "search_service")
 
     # Validate --type values.

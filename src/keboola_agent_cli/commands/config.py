@@ -27,6 +27,7 @@ from ..services.component_service import (
 )
 from ..services.config_service import validate_set_paths
 from ..sync.branch_registry import default_branch_prefix
+from ._all_projects import AllProjectsOption, reject_project_with_all_projects
 from ._config_variables_render import (
     format_variables_clear,
     format_variables_dry_run,
@@ -72,6 +73,7 @@ def config_list(
         "--project",
         help="Project alias to query (can be repeated for multiple projects)",
     ),
+    all_projects: AllProjectsOption = False,
     component_type: str | None = typer.Option(
         None,
         "--component-type",
@@ -103,6 +105,7 @@ def config_list(
     are listed. Use --branch to override.
     """
     formatter = get_formatter(ctx)
+    reject_project_with_all_projects(formatter, project, all_projects)
     service = get_service(ctx, "config_service")
 
     # --branch requires --project (branch ID is per-project)
@@ -455,6 +458,7 @@ def config_search(
         "--project",
         help="Project alias to search (can be repeated for multiple projects)",
     ),
+    all_projects: AllProjectsOption = False,
     component_type: str | None = typer.Option(
         None,
         "--component-type",
@@ -492,6 +496,7 @@ def config_search(
     are searched. Use --branch to override.
     """
     formatter = get_formatter(ctx)
+    reject_project_with_all_projects(formatter, project, all_projects)
     service = get_service(ctx, "config_service")
 
     # --branch requires exactly one --project
