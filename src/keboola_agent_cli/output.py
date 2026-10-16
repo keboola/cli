@@ -1,14 +1,16 @@
 """Output formatting with JSON and Rich dual mode support."""
 
 import json
+import re
 import sys
 from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
 from rich.console import Console
-from rich.errors import MarkupError
+from rich.errors import StyleSyntaxError
 from rich.panel import Panel
+from rich.style import Style
 from rich.table import Table
 from rich.text import Text
 
@@ -82,12 +84,64 @@ def success_json(data: Any, warnings: list[dict[str, Any]] | None = None) -> str
     return response.model_dump_json(indent=2, exclude=empty or None)
 
 
-def _plain_text(message: str) -> str:
-    """The text a Rich-markup message shows on a terminal, for a ``warnings[]`` entry."""
+# A Rich markup tag, with the backslashes before it (the pattern of rich.markup).
+_MARKUP_TAG = re.compile(r"(\\*)\[([a-z#/@][^[]*?)]")
+
+
+def _is_style_tag(tag: str) -> bool:
+    """True for an opening tag that Rich reads as a style or a link."""
+    if tag == "link" or tag.startswith("link="):
+        return True
     try:
-        return Text.from_markup(message).plain
-    except MarkupError:
-        return message
+        Style.parse(tag)
+    except StyleSyntaxError:
+        return False
+    return True
+
+
+def _plain_text(message: str) -> str:
+    """The message of a ``warnings[]`` entry: Rich markup removed, other brackets kept.
+
+    Only real markup goes: a tag that parses as a Rich style, a ``[link=...]``
+    tag, and a closing tag that matches an opened one. Any other bracketed
+    text (``[in.c-main.x]``, ``[a, b]``, ``[0]``) stays as it is, so an
+    unescaped table ID or backend message is not lost. An escaped ``\\[``
+    (``rich.markup.escape``) comes out as ``[``.
+    """
+    parts: list[str] = []
+    opened: list[str] = []
+    position = 0
+    for match in _MARKUP_TAG.finditer(message):
+        escapes, tag = match.groups()
+        parts.append(message[position : match.start()])
+        position = match.end()
+        backslashes, escaped = divmod(len(escapes), 2)
+        parts.append("\\" * backslashes)
+        if not escaped and _is_markup(tag, opened):
+            continue
+        parts.append(f"[{tag}]")
+    parts.append(message[position:])
+    return "".join(parts)
+
+
+def _is_markup(tag: str, opened: list[str]) -> bool:
+    """True when ``tag`` is Rich markup; ``opened`` tracks the open tags."""
+    if tag.startswith("/"):
+        name = tag[1:].strip()
+        if not opened:
+            return False
+        if not name:
+            opened.pop()
+            return True
+        for index in range(len(opened) - 1, -1, -1):
+            if opened[index] == name:
+                del opened[index]
+                return True
+        return False
+    if not _is_style_tag(tag.strip()):
+        return False
+    opened.append(tag.partition("=")[0].strip() if tag.startswith("link") else tag.strip())
+    return True
 
 
 _TARGET_REASONS = {
@@ -283,9 +337,11 @@ class OutputFormatter:
         written is dropped: stdout holds one JSON document. Human mode prints
         only the message, on stderr.
 
-        Callers must escape variable text (names, IDs, backend messages) with
-        ``rich.markup.escape``: an unescaped ``[in.c-main.x]`` reads as a
-        style tag, and both modes drop it.
+        Callers should escape variable text (names, IDs, backend messages)
+        with ``rich.markup.escape``: in human mode Rich reads an unescaped
+        ``[in.c-main.x]`` as a tag and drops it. The JSON path does not
+        depend on it: it removes only real Rich markup and keeps any other
+        bracketed text (see :func:`_plain_text`).
 
         Args:
             message: The warning message (Rich markup allowed).

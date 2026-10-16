@@ -21,9 +21,10 @@ from rich.markup import escape
 from typer.testing import CliRunner
 
 from keboola_agent_cli.cli import app
+from keboola_agent_cli.commands._helpers import emit_project_warnings
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.models import ProjectConfig
-from keboola_agent_cli.output import OutputFormatter
+from keboola_agent_cli.output import OutputFormatter, _plain_text
 
 runner = CliRunner()
 
@@ -312,3 +313,43 @@ class TestComponentListQueryWithAllProjects:
 
         assert result.exit_code == 0, result.output
         assert "warnings" not in json.loads(result.stdout)
+
+
+class TestPlainTextKeepsBrackets:
+    """The JSON path removes only real Rich markup; other bracketed text stays."""
+
+    @pytest.mark.parametrize(
+        ("message", "expected"),
+        [
+            ("[bold]x[/bold]", "x"),
+            ("[bold red]x[/] y", "x y"),
+            ("[link=https://example.com]docs[/link]", "docs"),
+            ("Bucket [in.c-main.x] failed", "Bucket [in.c-main.x] failed"),
+            ("list [a, b]", "list [a, b]"),
+            ("item [0]", "item [0]"),
+            ("mode [sync]", "mode [sync]"),
+            ("escaped \\[x]", "escaped [x]"),
+            ("[bold]Table[/bold] [in.c-main.x]", "Table [in.c-main.x]"),
+            ("closing tag [/x] without an opening tag", "closing tag [/x] without an opening tag"),
+        ],
+    )
+    def test_plain_text(self, message: str, expected: str) -> None:
+        assert _plain_text(message) == expected
+
+    def test_escaped_text_comes_back_unchanged(self) -> None:
+        assert _plain_text(escape("[bold] and [in.c-main.x]")) == "[bold] and [in.c-main.x]"
+
+    def test_emit_project_warnings_keeps_a_bracketed_backend_message(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The commands call this helper only in human mode; this runs it in JSON mode."""
+        formatter = OutputFormatter(json_mode=True)
+        emit_project_warnings(
+            formatter,
+            {"errors": [{"project_alias": "prod", "message": "Bucket [in.c-main.x] failed"}]},
+        )
+        formatter.output({})
+
+        assert _json_document(capsys)["warnings"] == [
+            {"code": "WARNING", "message": "Project 'prod': Bucket [in.c-main.x] failed"}
+        ]
