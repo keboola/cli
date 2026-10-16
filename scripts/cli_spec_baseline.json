@@ -653,6 +653,8 @@
       "PUT /configs/{project}/{component_id}/{config_id}/variables"
     ],
     "serve.partial-update-uses-patch": [
+      "PUT /configs/{project}/{component_id}/{config_id}/variables",
+      "PUT /data-apps/{project}/{app_id}/secrets",
       "PUT /merge-requests/{project}/{merge_request_id}",
       "PUT /semantic-layer/items/{kind}/{name}"
     ]

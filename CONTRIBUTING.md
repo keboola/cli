@@ -953,7 +953,9 @@ does a baseline entry that is no longer a violation: after a fix, run
 `make cli-spec-baseline` and commit the shorter file. On a pull request CI
 also compares the baseline with the base branch and fails when it gained an
 entry. For source rules (subjects `module:function`) it compares the number
-of entries per rule, so moving a function to another file does not fail.
+of entries per rule, so moving a function to another file does not fail;
+the known limit is that one fixed entry can then be swapped for a new
+violation in another function without a failure.
 A permanent, reviewed exception goes into `exceptions` with a reason. Known
 limit: the ratchet is keyed by subject, so a second violation of the same
 rule inside a function or command that is already in the baseline passes.

@@ -104,10 +104,15 @@ FORCE_MEANINGS: dict[str, str] = {}
 # N4: hidden alias path -> canonical path. No hidden leaf exists yet.
 COMMAND_ALIASES: dict[str, str] = {}
 
-# V9: REST routes that change only the fields in the request (#791 comment).
-# The two routes that merge by default wait for decision D10 and are not here.
+# V9: REST routes that change only the fields in the request (#791 comment),
+# and, by decision D10, the two routes that merge by default (variables, secrets).
 PARTIAL_UPDATE_ROUTES: frozenset[str] = frozenset(
-    {"/semantic-layer/items/{kind}/{name}", "/merge-requests/{project}/{merge_request_id}"}
+    {
+        "/semantic-layer/items/{kind}/{name}",
+        "/merge-requests/{project}/{merge_request_id}",
+        "/configs/{project}/{component_id}/{config_id}/variables",
+        "/data-apps/{project}/{app_id}/secrets",
+    }
 )
 
 # I-rules: file input is `--file` or `--<field>-file` next to `--<field>`.
@@ -1325,7 +1330,8 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    text = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
+    path.write_text(text, encoding="utf-8", newline="\n")
 
 
 # --------------------------------------------------------------------------- #
@@ -1386,12 +1392,19 @@ def main(argv: list[str] | None = None) -> int:
 
     tree = load_tree()
     if args.write_manifest:
-        MANIFEST_PATH.write_text(manifest_text(tree), encoding="utf-8")
+        MANIFEST_PATH.write_text(manifest_text(tree), encoding="utf-8", newline="\n")
         print(f"wrote {MANIFEST_PATH.relative_to(REPO_ROOT)}")
         return 0
 
     results = evaluate(tree)
     if args.details:
+        if args.details not in results:
+            print(
+                f"unknown rule {args.details!r}; see 'python scripts/check_cli_spec.py "
+                "--list-rules' for the rule ids",
+                file=sys.stderr,
+            )
+            return 2
         for subject, why in sorted(results[args.details].items()):
             print(f"{subject:70s} {why}")
         return 0

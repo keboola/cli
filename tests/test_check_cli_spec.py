@@ -226,11 +226,18 @@ def test_stale_manifest_is_a_violation(
     tree: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     manifest = tmp_path / "cli-manifest.json"
-    manifest.write_text(spec_check.manifest_text(tree).replace("Scheduled agent", "Agent"))
+    manifest.write_text(
+        spec_check.manifest_text(tree).replace("Scheduled agent", "Agent"), encoding="utf-8"
+    )
     monkeypatch.setattr(spec_check, "MANIFEST_PATH", manifest)
     assert spec_check.r_manifest_fresh(spec_check.Context(tree)) == {
         "docs/cli-manifest.json": "differs from the live tree: agent; run 'make cli-manifest'"
     }
+
+
+def test_details_of_an_unknown_rule_exits_2(capsys: pytest.CaptureFixture[str]) -> None:
+    assert spec_check.main(["--details", "no.such-rule"]) == 2
+    assert "unknown rule 'no.such-rule'" in capsys.readouterr().err
 
 
 def test_build_baseline_keeps_flags_and_drops_fixed_exceptions() -> None:
