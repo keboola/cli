@@ -96,7 +96,7 @@ def _action_from_flags(
     argv: list[str],
     timeout: int | None,
 ) -> AgentAction:
-    """Build an AgentAction from CLI flags or ``--from-file PATH|-``.
+    """Build an AgentAction from CLI flags or ``--from-file JSON|@path|-``.
 
     ``--from-file`` wins outright -- the file is expected to contain the
     full ``{type, params}`` envelope, mirroring the REST POST body. The
@@ -125,7 +125,7 @@ def _action_from_flags(
     if action_type is None:
         formatter.error(
             message="--type is required (one of: ai_agent, cli_command) "
-            "or pass --from-file PATH|- with a full {type, params} JSON.",
+            "or pass --from-file JSON|@path|- with a full {type, params} JSON.",
             error_code=ErrorCode.MISSING_PARAMETER,
         )
         raise typer.Exit(code=2) from None
@@ -552,7 +552,7 @@ def agent_create(
     from_file: str | None = typer.Option(
         None,
         "--from-file",
-        help='Full action JSON ({"type": "...", "params": {...}}). PATH, @path, or - for stdin.',
+        help='Full action JSON ({"type": "...", "params": {...}}): inline, @path, or - for stdin.',
     ),
     cli: str | None = typer.Option(None, "--cli", help="ai_agent: claude|codex|gemini"),
     prompt: str | None = typer.Option(None, "--prompt", help="ai_agent: prompt body"),
@@ -579,7 +579,7 @@ def agent_create(
     """Register a new scheduled task.
 
     Two ways to specify the action:
-    1. ``--from-file PATH|-`` with the full {type, params} JSON envelope.
+    1. ``--from-file JSON|@path|-`` with the full {type, params} JSON envelope.
     2. ``--type TYPE`` plus the type-specific flags (ai_agent: --cli/--prompt,
        cli_command: --argv ...).
     """

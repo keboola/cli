@@ -42,7 +42,7 @@ If kbagent is not installed or you need the full standalone reference, run `kbag
 4. **Write commands need `--project`**: specify the target project alias
 5. **Tokens are always masked** in output -- this is expected, not an error
 6. **Always fetch fresh before write**: configs change between commands and across users. Re-fetch from the API immediately before any update; never reuse a config dump from earlier in the session. Stale local files are how `vN+1` silently overwrites someone else's `vN` changes.
-7. **Always `--dry-run` first** for destructive operations (`config update`, `config delete`, `storage delete-*`, `branch delete`, `sync push`). Show the user the diff and get explicit confirmation before applying.
+7. **Always `--dry-run` first** for writes that have it (`config update`, `config delete`, `storage delete-*`, `sync push`). Show the user the diff and get explicit confirmation before applying. Some destructive commands have no `--dry-run` (`branch delete`, `workspace delete`, `http delete`). For these, describe the change and get confirmation first.
 8. **There is no MCP passthrough.** `kbagent tool list` / `tool call` and `agent --type mcp_tool` were removed in v0.85.0 -- every catalog tool has a native command. If a user names an old tool (`update_config`, `get_configs`, `query_data`, ...), map it via `docs/mcp-migration.md` in the repo and run the native command instead.
 9. **Never auto-run jobs after config changes**. `config update` (or `sync push`) and `job run` are always two separate steps. Wait for the user to confirm before triggering a run -- do not chain them.
 
@@ -174,13 +174,11 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Delete one or more columns from a storage table | `kbagent storage delete-column --project PROJECT --table-id TABLE-ID --column COLUMN` |
 | Swap two storage tables (any branch, including the default/production branch) | `kbagent storage swap-tables --project PROJECT --table-id TABLE-ID --target-table-id TARGET-TABLE-ID` |
 | Clone (pull) a production table into a development branch | `kbagent storage clone-table --project PROJECT --table-id TABLE-ID` |
-| Delete one or more storage buckets | `kbagent storage delete-bucket --project PROJECT --bucket-id BUCKET-ID` |
 | List Storage Files with optional tag filtering | `kbagent storage files --project PROJECT` |
 | Show Storage File metadata (without downloading) | `kbagent storage file-detail --project PROJECT --file-id FILE-ID` |
 | Upload a local file to Storage Files | `kbagent storage file-upload --project PROJECT --file FILE` |
 | Download a Storage File to local disk | `kbagent storage file-download --project PROJECT` |
 | Add and/or remove tags on a Storage File | `kbagent storage file-tag --project PROJECT --file-id FILE-ID` |
-| Delete one or more Storage Files | `kbagent storage file-delete --project PROJECT --file-id FILE-ID` |
 | Load a Storage File into a table | `kbagent storage load-file --project PROJECT --file-id FILE-ID --table-id TABLE-ID` |
 | Export a table to a Storage File | `kbagent storage unload-table --project PROJECT --table-id TABLE-ID` |
 | List snapshots of a table | `kbagent storage snapshots --project PROJECT --table-id TABLE-ID` |
@@ -194,6 +192,8 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Apply descriptions to buckets, tables, and columns from a YAML file | `kbagent storage describe-batch --project PROJECT --from-file FROM-FILE` |
 | Convert legacy KBC.column.* descriptions to the native definition endpoint | `kbagent storage describe-migrate --project PROJECT` |
 | Show a Storage job -- status, table, rows imported, timing, error | `kbagent storage job-detail --project PROJECT --job-id JOB-ID` |
+| Delete one or more storage buckets | `kbagent storage delete-bucket --project PROJECT --bucket-id BUCKET-ID` |
+| Delete one or more Storage Files | `kbagent storage file-delete --project PROJECT --file-id FILE-ID` |
 | List Data Streams sources in a project | `kbagent stream list --project PROJECT` |
 | Create an OTLP (or HTTP) source and return its endpoint | `kbagent stream create-source --project PROJECT --name NAME` |
 | Show a source's endpoints, protocol, and destination tables | `kbagent stream detail [SOURCE-ID] --project PROJECT` |

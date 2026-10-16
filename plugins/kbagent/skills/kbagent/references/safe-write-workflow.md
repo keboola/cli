@@ -222,9 +222,14 @@ DELETE. See [gotchas.md](gotchas.md).
 
 ## When dry-run is not available
 
-A few destructive operations don't (yet) have `--dry-run`:
+Many writes have no `--dry-run`. Check `--help` before you rely on it.
+Destructive commands without `--dry-run` include:
 
-- some `branch` operations
+- `branch delete`, `branch metadata-delete`
+- `config row-delete`, `config delete-metadata`, `config variables-clear`
+- `workspace delete`, `data-app delete`, `notification delete`, `token delete`
+- `http delete`
+- the `merge-request` transitions (`request-review`, `approve`, `merge`, ...)
 
 For these, **describe the intended change to the user in plain English
 first** and get confirmation before invoking. The verbal preview replaces

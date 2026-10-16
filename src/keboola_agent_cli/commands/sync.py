@@ -1228,7 +1228,7 @@ def sync_clone(
     branch: int | None = typer.Option(
         None,
         "--branch",
-        help="Target dev branch id (defaults to the target project's production branch)",
+        help="Target dev branch id (default: the target's 'branch use' branch, else production)",
     ),
     create_buckets: bool = typer.Option(
         True,

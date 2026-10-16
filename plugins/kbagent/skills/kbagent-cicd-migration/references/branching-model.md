@@ -63,5 +63,5 @@ kbagent sync init  --git-branching --project <alias> -d <dir>
 git checkout -b feature/x
 kbagent sync branch-link   --project <alias> -d <dir> --branch-name feature/x
 kbagent sync pull/push     --project <alias> -d <dir>     # now targets the dev branch
-kbagent sync branch-status --project <alias> -d <dir>
+kbagent sync branch-status -d <dir>
 ```

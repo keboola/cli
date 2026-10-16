@@ -43,7 +43,7 @@ Then in the GitHub UI (or via the environments API):
    its dry-run check against prod-scoped projects until the push step (which
    still gets full approval gating). Do not scope the secret and expect
    `validate` to see it -- that combination silently breaks PR-time checks.
-2. Add **required reviewers** to the `prod` environment so `kbagent push` to prod
+2. Add **required reviewers** to the `prod` environment so the "kbagent push" workflow
    blocks on manual approval (this replaces the demo's environment gating).
 3. Optionally restrict the `prod` environment to the `main` branch.
 

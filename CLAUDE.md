@@ -255,7 +255,7 @@ Full author checklist: see `CONTRIBUTING.md` > "Releasing a beta (pre-release) v
 
 5. **Error handling**: commands catch `KeboolaApiError` and `ConfigError`, map them to the appropriate exit code, and output structured errors in JSON mode.
 
-6. **Exit codes**: 0=success, 1=general error, 2=usage error, 3=auth error, 4=network error, 5=config error.
+6. **Exit codes**: 0=success, 1=general error, 2=usage error, 3=auth error, 4=network error, 5=config error, 6=permission denied, 7=job timed out and cancelled (`JOB_TIMEOUT_TERMINATED`).
 
 7. **Token masking**: tokens are never printed in full. Use `mask_token()` from `errors.py`.
 
@@ -682,6 +682,13 @@ kbagent storage delete-table --project NAME --table-id ID [--table-id ...] [--fo
 kbagent storage truncate-table --project NAME --table-id ID [--table-id ...] [--dry-run] [--yes] [--branch ID]
 kbagent storage delete-column --project NAME --table-id ID --column COL [--column ...] [--force] [--dry-run] [--yes] [--branch ID]
 kbagent storage delete-bucket --project NAME --bucket-id ID [--bucket-id ...] [--force] [--dry-run] [--yes] [--branch ID]
+# delete-bucket / file-delete (CLI-30): both read --yes. Without it they ask on a terminal (stdin and
+#   stderr are a terminal, --json off). --json, --dry-run and a session without a terminal never ask.
+#   A declined prompt exits 0 and deletes nothing. delete-bucket --force cascade-deletes tables only:
+#   a shared bucket (`sharing` set in the bucket detail) is never deleted, also not with --force or
+#   over REST (DELETE /storage/buckets/{project}?force=true). It gets a failed[] entry that names
+#   `kbagent sharing unshare --project ALIAS --bucket-id ID`, the other buckets are still processed,
+#   and the run exits 1. Version gate lives in gotchas.md.
 kbagent storage swap-tables --project NAME --table-id ID --target-table-id ID --branch ID [--dry-run] [--yes] [--timeout SECONDS]
     # --timeout SECONDS on create-table and swap-tables (since 0.99.0, #713): both halves
     #   of the repartition path move real data yet used to inherit the 60s metadata-job
@@ -1169,7 +1176,7 @@ kbagent sync push --project ALIAS [--all-projects] [--dry-run] [--force] [--allo
 #   any API call. A project without a stored project_id costs one token verification call. Copy configs between
 #   projects with `sync clone`. Version gate lives in gotchas.md (no `(since vNEXT)` on `# ` lines).
 kbagent sync clone --source DIR --target ALIAS --target-dir DIR [--bucket-map FILE] [--variable-values FILE] [--instance-rename FILE] [--no-create-buckets] [--dry-run] [--branch ID]
-# `sync clone` (0.63.0+) copies a reference synced tree into a fresh target project + parameterizes it: applies bucket_map / variable_values / instance_rename overrides (JSON/YAML files), then pushes so every config CREATEs fresh -- keboola.flow and keboola.orchestrator task configIds (and configRowIds), schedule targets, and transformation variable and shared-code links are remapped reference->ULID by push Phase C/D (`link_remaps` counts each kind; a link it cannot set is an `errors[]` entry, and a failed PUT is sent again by the next push). Schedules are never activated and data apps never deployed: `warnings[]` (also on --dry-run, human mode prints them) lists those, copied `KBC::` values the target cannot decrypt, and tasks that run a config not in the tree. Only the run that creates the configs reports them; a re-run returns `warnings: []`. Idempotent: re-run with an existing --target-dir reports no_changes. Fails fast if the target already contains the reference's configs (clone needs a fresh target). Override files must be flat {id: scalar} mappings (0.89.0+): a nested mapping/list/null value is rejected with CONFIG_ERROR naming the key + actual type, instead of being silently stringified into a bogus ID. `--branch` is optional on a fresh clone. It defaults to the target's production branch, resolved from the API like `sync init`. Pass it only to target a dev branch of the target. Clone recreates the reference tree's storage buckets in the target from the `storage/buckets.json` pull export BY DEFAULT -- `--no-create-buckets` skips it. Idempotent: an existing bucket is skipped, a per-bucket failure is collected in `bucket_errors`, a linked (shared) bucket is linked to the same source as in the reference (listed in `linked_buckets`; the source's sharing settings decide, a refused link lands in `bucket_errors`). Only the buckets are created, never their tables or data (the export carries no table data). Version gate in gotchas.md.
+# `sync clone` (0.63.0+) copies a reference synced tree into a fresh target project + parameterizes it: applies bucket_map / variable_values / instance_rename overrides (JSON/YAML files), then pushes so every config CREATEs fresh -- keboola.flow and keboola.orchestrator task configIds (and configRowIds), schedule targets, and transformation variable and shared-code links are remapped reference->ULID by push Phase C/D (`link_remaps` counts each kind; a link it cannot set is an `errors[]` entry, and a failed PUT is sent again by the next push). Schedules are never activated and data apps never deployed: `warnings[]` (also on --dry-run, human mode prints them) lists those, copied `KBC::` values the target cannot decrypt, and tasks that run a config not in the tree. Only the run that creates the configs reports them; a re-run returns `warnings: []`. Idempotent: re-run with an existing --target-dir reports no_changes. Fails fast if the target already contains the reference's configs (clone needs a fresh target). Override files must be flat {id: scalar} mappings (0.89.0+): a nested mapping/list/null value is rejected with CONFIG_ERROR naming the key + actual type, instead of being silently stringified into a bogus ID. `--branch` is optional on a fresh clone. It defaults to the target's production branch, resolved from the API like `sync init`. An active branch set with `branch use` on the target wins over production. Pass `--branch` only to target a dev branch of the target. Clone recreates the reference tree's storage buckets in the target from the `storage/buckets.json` pull export BY DEFAULT -- `--no-create-buckets` skips it. Idempotent: an existing bucket is skipped, a per-bucket failure is collected in `bucket_errors`, a linked (shared) bucket is linked to the same source as in the reference (listed in `linked_buckets`; the source's sharing settings decide, a refused link lands in `bucket_errors`). Only the buckets are created, never their tables or data (the export carries no table data). Version gate in gotchas.md.
 kbagent sync branch-link --project ALIAS (--branch-id ID | --branch-name NAME) [--directory DIR]
 kbagent sync branch-unlink [--directory DIR]
 kbagent sync branch-status [--directory DIR]
@@ -1308,14 +1315,14 @@ kbagent http delete PATH [--timeout SECONDS]
 
 kbagent agent list
 kbagent agent show TASK_ID
-kbagent agent create --name NAME [--description D] [--cron CRON] [--manual] [--enabled/--disabled] (--type ai_agent --cli CLI --prompt P [--extra-arg ARG ...] [--timeout SECONDS] | --type cli_command --argv ARG [--argv ARG ...] [--timeout SECONDS] | --from-file PATH|@path|-) [--trigger-task-id ID --trigger-on success|error|always]
+kbagent agent create --name NAME [--description D] [--cron CRON] [--manual] [--enabled/--disabled] (--type ai_agent --cli CLI --prompt P [--extra-arg ARG ...] [--timeout SECONDS] | --type cli_command --argv ARG [--argv ARG ...] [--timeout SECONDS] | --from-file JSON|@path|-) [--trigger-task-id ID --trigger-on success|error|always]
 kbagent agent update TASK_ID [--name N] [--description D] [--cron C] [--enabled/--disabled] [--manual/--auto] [--clear-trigger] [--trigger-task-id ID --trigger-on success|error|always]
 kbagent agent delete TASK_ID [--yes]
 kbagent agent run TASK_ID [--stream] [--runtime-prompt TEXT | --runtime-input JSON|@file|-]
 kbagent agent runs TASK_ID [--limit N]
 kbagent agent run-detail TASK_ID RUN_ID
 kbagent agent run-events TASK_ID RUN_ID
-kbagent agent test (--type ai_agent --cli CLI --prompt P | --type cli_command --argv ARG ... | --from-file PATH) [--name N] [--stream] [--timeout SECONDS]
+kbagent agent test (--type ai_agent --cli CLI --prompt P | --type cli_command --argv ARG ... | --from-file JSON|@path|-) [--name N] [--stream] [--timeout SECONDS]
 kbagent agent cron-preview --cron "0 6 * * 1" [--count N]
 kbagent agent prompt-improve --goal "..." [--draft "..."] [--cli claude|codex|gemini] [--project ALIAS] [--extra-arg X ...] [--stream/--no-stream]
 # `agent` reads/writes <config_dir>/agents.json directly (offline-first, no
@@ -1485,6 +1492,14 @@ kbagent update [--beta]
 kbagent changelog [--limit N] [--full]
 # Default shows first sentences: every BREAKING note of a version, plus its first other notes until at least two show; --full / -v expands every note.
 kbagent serve [--host HOST] [--port PORT] [--ui] [--ui-dist PATH] [--reload] [--log-level LVL] [--cors-origin ORIGIN] [--config-dir DIR] [--no-banner]
+# serve dry_run (CLI-33): a POST/PUT/PATCH/DELETE route answers HTTP 422 (HTTP_ERROR) when the
+#   request sends `dry_run` in the query string or as a top-level JSON body key, and the route does
+#   not declare it there. Before, the route ignored it and ran the real write.
+#   A false value (false/0/no/off/f/n in any case, or JSON false/0) is ignored and the real write runs.
+#   Any other value (true, null, an unknown string) is refused.
+#   One app-level dependency does this: reject_undeclared_dry_run in server/dependencies.py.
+#   Not checked: GET routes, nested keys, multipart upload bodies, and a body above 1 MiB (or without
+#   Content-Length) on a route that has no body parameter. Version gate lives in gotchas.md.
 # `--config-dir` on serve (since 0.91.0, #679): `serve` is the only subcommand with a --config-dir of
 #   its own, and most specific wins -- `serve --config-dir X` beats a root `kbagent --config-dir Y`,
 #   which in turn beats KBAGENT_CONFIG_DIR / the .kbagent walk-up / global. Passing both is NOT an

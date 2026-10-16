@@ -11,6 +11,17 @@ Versioning convention:
   behavior; the inline `(updated vX.Y.Z)` records when the refinement landed.
 -->
 
+## `kbagent serve` refuses a `dry_run` that a write route does not declare
+
+*(since vNEXT)* (CLI-33)
+
+- **A `POST`, `PUT`, `PATCH` or `DELETE` route answers HTTP 422 when the request sends `dry_run` and the route has no `dry_run` parameter.** This applies to the query string and to a top-level key of a JSON body. Before, the route ignored it and ran the real write: `DELETE /flows/{project}/{config_id}?dry_run=true` deleted the flow.
+- **A false value is ignored and the real write runs.** False values are `false`, `0`, `no`, `off`, `f` and `n` in any case, and JSON `false` or `0`. Every other value is refused: `true`, `1`, `null`, an unknown string, an object.
+- **A route that takes `dry_run` in one place refuses it in the other.** `DELETE /configs/...` takes it in the query string, so a body `{"dry_run": true}` gets 422 (a body `{"dry_run": false}` is ignored). The message names the right place.
+- **The error body is the usual envelope**, `error.code` `HTTP_ERROR`. The message names the route and `dry_run`.
+- Not checked: `GET` routes, a `dry_run` nested inside a JSON object, and the body of the multipart upload routes (their query string is checked).
+- To preview a write over REST, check the route's parameters in `docs/web-server-endpoints.md` or `/openapi.json` first. Do not assume `dry_run` exists because the CLI command has `--dry-run`.
+
 ## `http`, `search` and three destructive effects now get the permission check
 
 *(since vNEXT)*
@@ -481,7 +492,7 @@ Versioning convention:
   ended. `permissions list` shows it as its own row,
   `auth.logout --remove-projects`.
 - **To find out which credential mode a project uses, read `auth_mode` --
-  never parse the token.** `kbagent project list --json | jq '.data[].auth_mode'`
+  never parse the token.** `kbagent --json project list | jq '.data[].auth_mode'`
   (also on `project status` and `project info`, and over HTTP on `/projects`,
   `/projects/status`, `/projects/{alias}/info`). Exactly two values, `session`
   and `static`; the field is **always present and never empty**, including on a
@@ -2320,6 +2331,35 @@ response. Now:
   original command immediately afterwards. A failed or timed-out reinstall
   prints a copy-paste recovery command (#528/#530, v0.76.2).
 
+## `storage delete-bucket --force` keeps shared buckets, and two delete commands ask on a terminal
+
+*(since vNEXT)* `storage delete-bucket --force` deletes the tables of a
+non-empty bucket. It no longer deletes a shared bucket. A bucket is shared
+when its bucket detail has a `sharing` value. Such a bucket gets a
+`failed[]` entry that names the command to run first:
+`kbagent sharing unshare --project ALIAS --bucket-id ID`. The other buckets
+of the same call are still deleted, and the run exits 1. `--dry-run` reports
+the same `failed[]` entry. The REST route
+`DELETE /storage/buckets/{project}?force=true` follows the same rule.
+`sharing unshare` needs a master token in `KBC_MASTER_TOKEN_{ALIAS}` or
+`KBC_MASTER_TOKEN` (see sharing-workflow.md).
+Before, `--force` also deleted a shared bucket, against the command help.
+
+*(since vNEXT)* `storage delete-bucket` and `storage file-delete` read
+`--yes`. Before, they never asked. Now they ask for confirmation when stdin
+and stderr are a terminal and `--json` is off. A declined prompt exits 0 and
+deletes nothing. `--yes`, `--json`, `--dry-run` and a session without a
+terminal (an agent, CI, a pipe) do not ask, so these callers see no change.
+The prompt is written to stderr. It is shown before the per-bucket checks,
+so it says that shared and linked buckets are skipped.
+
+The other storage prompts do not check for a terminal. `delete-table`,
+`truncate-table`, `delete-column` and `swap-tables` ask whenever `--yes` and
+`--json` are off. In a pipe they read the answer from stdin. An empty line
+declines, so `echo | kbagent storage delete-table ...` prints `Aborted.` and
+deletes nothing. `delete-bucket` and `file-delete` in a pipe do not ask and
+delete. Pass `--yes` to all of them in scripts.
+
 ## `storage swap-tables` is branch-scoped and aliases stay put
 
 - `kbagent storage swap-tables --project P --table-id A --target-table-id B
@@ -3228,8 +3268,8 @@ type inventory and examples.
   The Storage API branch-scoped endpoint only returns resources locally
   modified in the dev branch (empty for a fresh branch), so auto-scoping would
   surprise users with "No tables found". Explicit `--branch ID` still works.
-  Storage **write** commands (create-*, upload-*, delete-*, file-*) stay
-  branch-aware.
+  Storage **write** commands (create-*, upload-*, delete-*, `file-upload`)
+  stay branch-aware. `file-tag` and `file-delete` take no `--branch`.
 
 ## Conversation ID
 
@@ -3704,7 +3744,7 @@ So on Windows kbagent never installs into its own live environment:
   helper, which waits until **every** kbagent process has exited and installs
   then. The current invocation continues on the old version.
 - Consequence: the new version is active on the **next** launch, not this one.
-  `kbagent update --json` marks this with `kbagent.deferred: true`; the summary
+  `kbagent --json update` marks this with `kbagent.deferred: true`; the summary
   line reads `(scheduled)`, which is **not** a failure.
 - If a kbagent process (typically `kbagent serve` or `kbagent repl`) never
   exits, the helper installs nothing and reports `skipped` -- also not a
@@ -4034,7 +4074,7 @@ The trade-off is deliberate: one big call avoids the O(unique-parents) round-tri
 Full CRUD for configuration rows is exposed as a separate `Rows` command panel:
 - `row-create` returns the new row object including `id`. Capture this ID for subsequent `row-update` / `row-delete` calls.
 - `row-update` preserves all unspecified fields — pass only the keys you want to change. `--is-disabled` and `--is-enabled` are mutually exclusive flags for toggling the row's active state.
-- `row-delete` is **destructive** (gated behind `--allow-destructive` if the session firewall is on). 404 from the API on a non-existent row surfaces as `NOT_FOUND` exit 1 — deletion is **not** treated as idempotent success.
+- `row-delete` is **destructive**: `--deny-destructive` and `--deny-writes` block it. 404 from the API on a non-existent row comes back as `NOT_FOUND` exit 1 — deletion is **not** treated as idempotent success.
 - `--json` mode auto-skips the interactive confirmation prompt on `row-delete`; in human mode pass `--yes` to skip.
 
 ## `project status` / `project list` expose `org_id` / `org_name`; `org_name` is Manage-API-only
@@ -4510,7 +4550,7 @@ prompt keeps only a one-line trigger for each and links here for the full prose.
 description). BUT `--file` is a **full-replace** of `phases` + `tasks` -- if your
 YAML omits a phase, task, transition, or per-task `retry` that existed before, it
 is silently dropped. For structural edits, always fetch via
-`kbagent flow detail --json` first, merge your diff locally, run
+`kbagent --json flow detail` first, merge your diff locally, run
 `kbagent flow validate --file @merged.yaml --project ALIAS`, then push via `--file`.
 
 ### Primary keys on new output tables crash the first run
@@ -4657,6 +4697,12 @@ default (production) branch. It resolves that branch from the API the same way
 `sync init` does (since v0.93.1). So `--branch` is optional on a fresh clone. Pass
 `--branch <id>` only to clone into a specific dev branch of the target.
 
+An active branch set with `branch use` on the target wins over production. The
+clone then pushes the configs into that dev branch. When the tree has
+git-branching enabled, the Keboola branch linked to the current git branch wins
+instead. Run `branch reset` on the target first, or pass `--branch`, to control
+where the clone writes.
+
 Before this fix, `repoint_manifest_project` left `manifest.branches` on the
 SOURCE project's id. `_resolve_branch_id` then took `manifest.branches[0].id`,
 the source branch. A clone with no `--branch` resolved that branch. The target
@@ -4788,7 +4834,7 @@ upgraded in completely different ways, and the wrong advice is actively harmful.
   the right command rather than running uv. This includes the deferred Windows
   helper from v0.78.0 -- the guard sits ahead of the `should_defer()` branch, so
   a frozen binary is never scheduled for an install it cannot receive either.
-- **Read the channel out of `kbagent version --json`.** A frozen build carries
+- **Read the channel out of `kbagent --json version`.** A frozen build carries
   two additive keys: `kbagent.install_channel` (`chocolatey` / `winget` /
   `homebrew` / `debian` / `rpm` / `system` / `archive`) and
   `kbagent.upgrade_hint` (always a human sentence). Both are **absent** on
@@ -6485,7 +6531,7 @@ of the logins the flow needs.
 The package was named `keboola-agent-cli` up to 0.62.0 and is named `keboola-cli` from 0.63.0. Both install the `kbagent` executable, so uv treats an update to `keboola-cli` as a new tool. If a user reports a kbagent that never updates, run `uv tool list` and look for a `keboola-agent-cli` entry.
 
 - **kbagent 0.59.x and older cannot update itself.** Every command prints `Auto-update failed; continuing with current version.` with no cause. Without the `[server]` extras the uv error is ``error: Executable already exists: kbagent (use `--force` to overwrite)``. The update code runs from the old install, so no release changes this.
-- **Do not tell the user to run `kbagent update` or the `upgrade_command` from that old `kbagent version --json`.** Both run the same failing command.
+- **Do not tell the user to run `kbagent update` or the `upgrade_command` from that old `kbagent --json version`.** Both run the same failing command.
 - **Move the user with two commands, in this order:** `uv tool uninstall keboola-agent-cli`, then the install one-liner from the README. The configuration folder keeps the name `keboola-agent-cli` and is not touched.
 - **The order is load-bearing.** kbagent 0.63.1 and newer updates by installing a second tool, `keboola-cli`, that takes over the `kbagent` executable. `uv tool uninstall keboola-agent-cli` after that also deletes the executable, and the shell reports `command not found`. Reinstall with `uv tool install --force --reinstall "keboola-cli[server] @ <release wheel URL>"`.
 - **Failure banner.** A failed startup update now prints a `Cause:` line with the last line of the uv output, then `Recover with: <command>`, on stderr. Before, it printed only `Auto-update failed; continuing with current version.` and the recovery command. `kbagent update` is unchanged: its `update FAILED:` summary already ends with the last uv line.

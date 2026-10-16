@@ -58,6 +58,9 @@ KBC_MASTER_TOKEN_PROJ_A="..." kbagent --json sharing unshare \
 Unshare fails with "bucket is already linked in other projects" if any project
 still has a linked bucket pointing to it.
 
+`storage delete-bucket` does not delete a shared bucket, also not with
+`--force` *(since vNEXT)*. Unshare the bucket first, then delete it.
+
 ## Share to specific projects
 
 ```bash
