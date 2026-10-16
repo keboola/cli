@@ -2746,6 +2746,7 @@ delete. Pass `--yes` to all of them in scripts.
   Auto-log-dump on deploy failure (calling `data-app logs` from
   inside `data-app create` / `data-app deploy` when the job ends in
   a failure state) is still tracked as a separate follow-up.
+- *(since vNEXT)* `POST /data-apps/validate-repo` over `kbagent serve` now reaches the validate handler. Before, `POST /data-apps/{project}` took the request and answered HTTP 422 for a missing `name` and `slug`. On an older `serve`, run `kbagent data-app validate-repo` instead. The CLI command always worked.
 
 ## Manage token: env var is ignored without `--allow-env-manage-token` (since v0.29.0)
 
@@ -4028,6 +4029,7 @@ Why not always populate? Because `last_run_at` costs one `list_jobs(limit=1)` Qu
 - **Force `last_run_at` population without filtering:** pass `--not-run-since 0`. That fires the Queue API lookup for every row (N extra calls per project) and returns every row (no staleness filter applied because any past timestamp counts as stale at threshold 0 and `null` also counts as stale).
 - **`--not-run-since` + `--branch <DEV_ID>`:** the Queue API has no branch parameter. The timestamp comparison still hits production jobs, so schedules in a dev branch that were freshly deployed will register as stale even if their parent ran on main moments ago.
 - **`_fetch_latest_job_ts` silently returns `None` on Queue API errors** -- permission problems on Queue API are invisible in `errors[]`. If one project shows a suspiciously uniform "never ran" cluster, run `kbagent job list --project <alias>` to sanity-check the token.
+- *(since vNEXT)* `GET /schedules/find/query` over `kbagent serve` now reaches the find handler. Before, `GET /schedules/{project}/{schedule_id}` took the request and looked up a schedule `query` in a project `find`. On an older `serve`, run `kbagent schedule find` instead. The CLI command always worked.
 
 ## `schedule list` + `schedule find` payload size scales with project size, not schedule count
 
