@@ -13,6 +13,7 @@ from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..output import format_branch_metadata_table, format_branches_table
 from ._helpers import (
     check_cli_permission,
+    emit_api_error,
     emit_project_warnings,
     get_formatter,
     get_service,
@@ -95,11 +96,7 @@ def branch_create(
         )
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
-        formatter.error(
-            message=exc.message,
-            error_code=exc.error_code,
-            retryable=exc.retryable,
-        )
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -136,11 +133,7 @@ def branch_use(
         )
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
-        formatter.error(
-            message=exc.message,
-            error_code=exc.error_code,
-            retryable=exc.retryable,
-        )
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -205,11 +198,7 @@ def branch_delete(
         )
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
-        formatter.error(
-            message=exc.message,
-            error_code=exc.error_code,
-            retryable=exc.retryable,
-        )
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -293,7 +282,7 @@ def branch_metadata_list(
         result = service.list_branch_metadata(alias=project, branch_id=branch)
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -328,7 +317,7 @@ def branch_metadata_get(
         result = service.get_branch_metadata(alias=project, key=key, branch_id=branch)
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -386,7 +375,7 @@ def branch_metadata_set(
         )
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -437,7 +426,7 @@ def branch_metadata_delete(
         )
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)

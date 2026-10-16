@@ -15,7 +15,13 @@ import typer
 
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._checkbox_select import CheckboxItem, CheckboxUnavailable, checkbox_select
-from ._helpers import check_cli_operation, get_formatter, get_service, map_error_to_exit_code
+from ._helpers import (
+    check_cli_operation,
+    emit_api_error,
+    get_formatter,
+    get_service,
+    map_error_to_exit_code,
+)
 
 
 class ScopeChoice(StrEnum):
@@ -57,12 +63,7 @@ def _handle_service_call(ctx: typer.Context, func, *args, **kwargs):  # type: ig
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
-        formatter.error(
-            message=exc.message,
-            error_code=exc.error_code,
-            retryable=exc.retryable,
-            details=exc.details,
-        )
+        emit_api_error(formatter, exc)
         # A bad option value is a usage error (exit 2), not a general failure.
         is_usage_error = exc.error_code == ErrorCode.INVALID_ARGUMENT
         raise typer.Exit(code=2 if is_usage_error else map_error_to_exit_code(exc)) from None

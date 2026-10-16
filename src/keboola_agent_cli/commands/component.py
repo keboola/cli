@@ -19,6 +19,7 @@ from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..services.component_service import DOCUMENTATION_SOURCE_STORAGE_CATALOG
 from ._helpers import (
     check_cli_permission,
+    emit_api_error,
     emit_project_warnings,
     get_formatter,
     get_service,
@@ -224,12 +225,7 @@ def component_detail(
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
-        formatter.error(
-            message=exc.message,
-            error_code=exc.error_code,
-            project=project or "",
-            retryable=exc.retryable,
-        )
+        emit_api_error(formatter, exc, project=project or "")
         raise typer.Exit(code=exit_code) from None
 
 
@@ -366,10 +362,5 @@ def component_sync_action(
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
-        formatter.error(
-            message=exc.message,
-            error_code=exc.error_code,
-            project=project,
-            retryable=exc.retryable,
-        )
+        emit_api_error(formatter, exc, project=project)
         raise typer.Exit(code=exit_code) from None

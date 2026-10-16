@@ -30,6 +30,7 @@ from ._helpers import (
     TOKEN_STDIN_OPTION,
     check_cli_permission,
     discard_token_file,
+    emit_api_error,
     get_formatter,
     get_service,
     item_failure_exit_code,
@@ -213,11 +214,7 @@ def project_add(
         discard_token_file(token_file, keep=keep_token_file)
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
-        formatter.error(
-            message=exc.message,
-            error_code=exc.error_code,
-            retryable=exc.retryable,
-        )
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -287,7 +284,7 @@ def project_create(
         formatter.output(result, format_provision_result)
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -448,11 +445,7 @@ def project_edit(
         discard_token_file(token_file, keep=keep_token_file, dry_run=dry_run)
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
-        formatter.error(
-            message=exc.message,
-            error_code=exc.error_code,
-            retryable=exc.retryable,
-        )
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -566,11 +559,7 @@ def project_status(
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
-        formatter.error(
-            message=exc.message,
-            error_code=exc.error_code,
-            retryable=exc.retryable,
-        )
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=exit_code) from None
 
 
@@ -651,11 +640,7 @@ def project_refresh(
             preview = service.refresh_tokens(**refresh_kwargs, dry_run=True)
         except KeboolaApiError as exc:
             exit_code = map_error_to_exit_code(exc)
-            formatter.error(
-                message=exc.message,
-                error_code=exc.error_code,
-                retryable=exc.retryable,
-            )
+            emit_api_error(formatter, exc)
             raise typer.Exit(code=exit_code) from None
 
         _format_refresh_result(formatter.console, preview)
@@ -680,11 +665,7 @@ def project_refresh(
         result = service.refresh_tokens(**refresh_kwargs, dry_run=dry_run)
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
-        formatter.error(
-            message=exc.message,
-            error_code=exc.error_code,
-            retryable=exc.retryable,
-        )
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=exit_code) from None
 
     formatter.output(result, _format_refresh_result)
@@ -761,7 +742,7 @@ def project_description_get(
         result = service.get_project_description(alias=project)
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -818,7 +799,7 @@ def project_description_set(
         )
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -890,7 +871,7 @@ def project_info(
         result = service.get_info(alias=project)
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=exit_code) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -1110,11 +1091,7 @@ def project_invite(
         raise typer.Exit(code=2) from None
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
-        formatter.error(
-            message=exc.message,
-            error_code=exc.error_code,
-            retryable=exc.retryable,
-        )
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=exit_code) from None
 
     formatter.output(result, _format_invite_result)
@@ -1144,7 +1121,7 @@ def project_member_list(
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=exit_code) from None
 
     formatter.output(result, _format_member_list)
@@ -1169,7 +1146,7 @@ def project_invitation_list(
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=exit_code) from None
 
     formatter.output(result, _format_invitation_list)
@@ -1217,7 +1194,7 @@ def project_invitation_cancel(
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=exit_code) from None
 
     formatter.output(
@@ -1260,7 +1237,7 @@ def project_member_remove(
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=exit_code) from None
 
     formatter.output(
@@ -1304,7 +1281,7 @@ def project_member_set_role(
         raise typer.Exit(code=2) from None
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=exit_code) from None
 
     formatter.output(

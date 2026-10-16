@@ -12,6 +12,7 @@ from ..constants import DEFAULT_TOKEN_DESCRIPTION, ENV_KBC_STORAGE_API_URL
 from ..errors import ErrorCode, KeboolaApiError
 from ._helpers import (
     check_cli_permission,
+    emit_api_error,
     get_formatter,
     get_service,
     item_failure_exit_code,
@@ -313,9 +314,5 @@ def org_setup(
 def _handle_api_error(formatter, exc: KeboolaApiError) -> None:
     """Handle a KeboolaApiError by outputting it and raising Exit."""
     exit_code = map_error_to_exit_code(exc)
-    formatter.error(
-        message=exc.message,
-        error_code=exc.error_code,
-        retryable=exc.retryable,
-    )
+    emit_api_error(formatter, exc)
     raise typer.Exit(code=exit_code)

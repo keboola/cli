@@ -21,7 +21,7 @@ import typer
 from rich.console import Console
 
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
-from ._helpers import get_formatter, get_service, map_error_to_exit_code
+from ._helpers import emit_api_error, get_formatter, get_service, map_error_to_exit_code
 
 # sandboxes-service git-repo credential enums (API contract literals).
 _GIT_CRED_TYPES = ("ssh_key", "http_token")
@@ -48,12 +48,7 @@ def register_git_commands(app: typer.Typer) -> None:
         try:
             result = service.get_data_app_git_repo(alias=project, app_id=app_id)
         except KeboolaApiError as exc:
-            formatter.error(
-                message=exc.message,
-                error_code=exc.error_code,
-                retryable=exc.retryable,
-                details=exc.details,
-            )
+            emit_api_error(formatter, exc)
             raise typer.Exit(code=map_error_to_exit_code(exc)) from None
         except ConfigError as exc:
             formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -88,12 +83,7 @@ def register_git_commands(app: typer.Typer) -> None:
         try:
             result = service.list_data_app_git_credentials(alias=project, app_id=app_id)
         except KeboolaApiError as exc:
-            formatter.error(
-                message=exc.message,
-                error_code=exc.error_code,
-                retryable=exc.retryable,
-                details=exc.details,
-            )
+            emit_api_error(formatter, exc)
             raise typer.Exit(code=map_error_to_exit_code(exc)) from None
         except ConfigError as exc:
             formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -229,12 +219,7 @@ def register_git_commands(app: typer.Typer) -> None:
                 name=name,
             )
         except KeboolaApiError as exc:
-            formatter.error(
-                message=exc.message,
-                error_code=exc.error_code,
-                retryable=exc.retryable,
-                details=exc.details,
-            )
+            emit_api_error(formatter, exc)
             raise typer.Exit(code=map_error_to_exit_code(exc)) from None
         except ConfigError as exc:
             formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)

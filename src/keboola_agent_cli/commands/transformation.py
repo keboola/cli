@@ -22,6 +22,7 @@ from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..services.transformation_service import TransformationService
 from ._helpers import (
     check_cli_permission,
+    emit_api_error,
     get_formatter,
     map_error_to_exit_code,
     parse_json_arg,
@@ -188,7 +189,7 @@ def transformation_create(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
     def _human(console: Console, data: dict[str, Any]) -> None:
@@ -252,7 +253,7 @@ def transformation_show(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
     formatter.output(result, _render_blocks_human)
@@ -380,7 +381,7 @@ def transformation_edit(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
-        formatter.error(message=exc.message, error_code=exc.error_code, retryable=exc.retryable)
+        emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
     def _human(console: Console, data: dict[str, Any]) -> None:

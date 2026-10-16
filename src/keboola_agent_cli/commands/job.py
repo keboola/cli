@@ -30,6 +30,7 @@ from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..output import OutputFormatter, format_job_detail, format_jobs_table
 from ._helpers import (
     check_cli_permission,
+    emit_api_error,
     emit_project_warnings,
     get_formatter,
     get_service,
@@ -228,12 +229,7 @@ def job_detail(
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
-        formatter.error(
-            message=exc.message,
-            error_code=exc.error_code,
-            project=project,
-            retryable=exc.retryable,
-        )
+        emit_api_error(formatter, exc, project=project)
         raise typer.Exit(code=exit_code) from None
 
 
@@ -434,13 +430,7 @@ def job_run(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
-        formatter.error(
-            message=exc.message,
-            error_code=exc.error_code,
-            project=project,
-            retryable=exc.retryable,
-            details=exc.details or None,
-        )
+        emit_api_error(formatter, exc, project=project)
         if not formatter.json_mode:
             _render_log_tail(formatter, exc.details)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
@@ -626,12 +616,7 @@ def job_terminate(
             formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
             raise typer.Exit(code=5) from None
         except KeboolaApiError as exc:
-            formatter.error(
-                message=exc.message,
-                error_code=exc.error_code,
-                project=project,
-                retryable=exc.retryable,
-            )
+            emit_api_error(formatter, exc, project=project)
             raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
         resolved_ids = [str(j.get("id")) for j in matched if j.get("id")]
@@ -698,12 +683,7 @@ def job_terminate(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
-        formatter.error(
-            message=exc.message,
-            error_code=exc.error_code,
-            project=project,
-            retryable=exc.retryable,
-        )
+        emit_api_error(formatter, exc, project=project)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
     if filter_context is not None:

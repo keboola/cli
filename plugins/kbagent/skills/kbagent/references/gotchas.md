@@ -22,6 +22,15 @@ Versioning convention:
 - Not checked: `GET` routes, a `dry_run` nested inside a JSON object, and the body of the multipart upload routes (their query string is checked).
 - To preview a write over REST, check the route's parameters in `docs/web-server-endpoints.md` or `/openapi.json` first. Do not assume `dry_run` exists because the CLI command has `--dry-run`.
 
+## `--json` API errors carry `retryable` and `details` from every command
+
+*(since vNEXT)* (CLI-34)
+
+- **Every command now copies `retryable` and `details` of an API error into the `--json` error envelope.** Before, these commands sent `retryable: false` for a retryable error and left out `details`: the `kai` group, `dev-portal` (identity add and verify, list, get and the writes), `config restore`, `config trash-list`, the `--set` path check of `config update` and `config row-update`, and `search`. Most other commands sent `retryable` but left out `details`. Among them are the `config`, `project`, `storage`, `workspace`, `data-app`, `flow`, `branch`, `job`, `sync`, `auth`, `token`, `feature` and `stream` groups.
+- **`search` keeps the code of the API error.** Before, it reported every API error as `API_ERROR`. Now it reports `TIMEOUT`, `INVALID_TOKEN`, `NOT_FOUND` and so on. The exit code stays 1.
+- The envelope keys do not change: `details` is still left out when it is empty. Human output does not change.
+- On an older kbagent, `retryable: false` from these commands does not prove that a retry is unsafe.
+
 ## `http`, `search` and three destructive effects now get the permission check
 
 *(since vNEXT)*

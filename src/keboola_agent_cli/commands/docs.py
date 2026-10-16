@@ -12,6 +12,7 @@ from rich.panel import Panel
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._helpers import (
     check_cli_permission,
+    emit_api_error,
     get_formatter,
     get_service,
     map_error_to_exit_code,
@@ -72,10 +73,5 @@ def docs_query(
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
-        formatter.error(
-            message=exc.message,
-            error_code=exc.error_code,
-            project=project or "",
-            retryable=exc.retryable,
-        )
+        emit_api_error(formatter, exc, project=project or "")
         raise typer.Exit(code=exit_code) from None
