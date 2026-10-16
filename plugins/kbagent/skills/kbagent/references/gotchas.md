@@ -11,6 +11,17 @@ Versioning convention:
   behavior; the inline `(updated vX.Y.Z)` records when the refinement landed.
 -->
 
+## `--all-projects` on the fan-out reads, and a top-level `warnings[]` in `--json`
+
+*(since vNEXT)* (CLI-36, #791)
+
+- **18 reads accept `--all-projects`:** `search`, `billing credits`, `component list`, `config list`, `config search`, `data-app list`, `job list`, `storage buckets`, `storage tables`, `sharing list`, `sharing edges`, `flow list`, `schedule list`, `schedule find`, `notification list`, `branch list`, `workspace list`, `project status`. On this version it does the same as an omitted `--project`: the same service call and the same output. `component list --query` uses the default project when `--project` is omitted, so with `--all-projects` it does too, and adds a warning that `--all-projects` has no effect there.
+- **Why it exists:** from 1.0.0 an omitted `--project` on these reads reads only the default project (`KBAGENT_PROJECT`, then `project use`, then the sole project), and all projects need `--all-projects`. A script that writes `--all-projects` now works unchanged on 1.0.0. On an older kbagent the option does not exist (exit 2).
+- **`--all-projects` together with `--project` is `USAGE_ERROR`, exit 2** ("Cannot use --project with --all-projects"), as in `workspace gc`. `config detail` has no `--all-projects`: it requires `--project`. The `kbagent serve` routes of these reads do not change: they take no `all_projects` parameter.
+- **The `--json` envelope has an optional top-level `warnings` key**, a list of entries with `code` and `message` (`code` is `WARNING` today); an entry can also carry `hint` and further fields, so read the keys you know and ignore the rest. It is in the success envelope (`status`, `targets`, `warnings`, `data`) and in the error envelope (`status`, `targets`, `warnings`, `error`), and only when a command gave a warning; without one the key is absent. Before, a warning in `--json` mode was dropped. Human mode is unchanged: warnings go to stderr.
+- **A warning after the envelope is written is dropped**, so stdout stays one JSON document. Some commands warn only after their output (for example the `merge-request` group); their warnings stay in `data.warnings`.
+- **Top-level `warnings` is not `data.warnings`.** Some commands return their own `warnings` inside `data` (`data-app deploy`, `sync clone`, `sync push`, `merge-request`, `flow new/update`, `project edit`, `lineage show`). That key is part of the command result and does not change. The top-level key is set by the output layer and has the same entry shape for every command. A command can fill both, or only one of them: read both.
+
 ## `kbagent serve` refuses a `dry_run` that a write route does not declare
 
 *(since vNEXT)* (CLI-33)

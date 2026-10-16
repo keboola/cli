@@ -27,6 +27,7 @@ from ..services.flow_service import (
     get_flow_examples,
 )
 from ..services.flow_validation import find_unreachable_phases, validate_conditional_flow
+from ._all_projects import AllProjectsOption, reject_project_with_all_projects
 from ._helpers import (
     check_cli_permission,
     emit_api_error,
@@ -154,6 +155,7 @@ def flow_list(
         "--project",
         help="Project alias (repeatable for multiple projects; omit for all)",
     ),
+    all_projects: AllProjectsOption = False,
     branch: int | None = typer.Option(
         None, "--branch", help="Dev branch ID (per-project; requires single --project)"
     ),
@@ -174,6 +176,7 @@ def flow_list(
     any schedule get ``schedules=[]``.
     """
     formatter = get_formatter(ctx)
+    reject_project_with_all_projects(formatter, project, all_projects)
     service = get_service(ctx, "flow_service")
 
     if branch is not None and (not project or len(project) != 1):

@@ -21,6 +21,7 @@ from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..output import OutputFormatter, format_query_results, format_workspaces_table
 from ..services._storage_jobs import validate_wait_timeout
 from ..services._workspace_load_plan import LoadTablePlan
+from ._all_projects import AllProjectsOption, reject_project_with_all_projects
 from ._helpers import (
     check_cli_permission,
     emit_api_error,
@@ -166,6 +167,7 @@ def workspace_list(
         "--project",
         help="Project alias to query (can be repeated for multiple projects)",
     ),
+    all_projects: AllProjectsOption = False,
     orphaned: bool = typer.Option(
         False,
         "--orphaned",
@@ -195,6 +197,7 @@ def workspace_list(
     workspace without firing a probe query (closes #304).
     """
     formatter = get_formatter(ctx)
+    reject_project_with_all_projects(formatter, project, all_projects)
     service = get_service(ctx, "workspace_service")
 
     if branch is not None and (not project or len(project) != 1):

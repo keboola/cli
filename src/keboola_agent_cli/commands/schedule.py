@@ -20,6 +20,7 @@ from rich.table import Table
 
 from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
+from ._all_projects import AllProjectsOption, reject_project_with_all_projects
 from ._helpers import (
     check_cli_permission,
     emit_api_error,
@@ -135,6 +136,7 @@ def schedule_list(
         "--project",
         help="Project alias (repeatable; omit for all registered projects)",
     ),
+    all_projects: AllProjectsOption = False,
     enabled_only: bool = typer.Option(
         False,
         "--enabled-only",
@@ -150,6 +152,7 @@ def schedule_list(
     and config name, cron expression, timezone, and enabled state.
     """
     formatter = get_formatter(ctx)
+    reject_project_with_all_projects(formatter, project, all_projects)
     service = get_service(ctx, "schedule_service")
 
     if branch is not None and (not project or len(project) != 1):
@@ -254,6 +257,7 @@ def schedule_find(
         "--project",
         help="Project alias (repeatable; omit for all projects)",
     ),
+    all_projects: AllProjectsOption = False,
     cron_window: str | None = typer.Option(
         None,
         "--cron-window",
@@ -307,6 +311,7 @@ def schedule_find(
       kbagent --json schedule find --not-run-since 0
     """
     formatter = get_formatter(ctx)
+    reject_project_with_all_projects(formatter, project, all_projects)
     service = get_service(ctx, "schedule_service")
 
     if branch is not None and (not project or len(project) != 1):

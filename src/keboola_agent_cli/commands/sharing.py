@@ -10,6 +10,7 @@ import typer
 
 from ..constants import BUCKET_STAGES, DEFAULT_LINK_STAGE
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
+from ._all_projects import AllProjectsOption, reject_project_with_all_projects
 from ._helpers import (
     check_cli_permission,
     emit_api_error,
@@ -42,6 +43,7 @@ def sharing_list(
         "--project",
         help="Project alias (repeatable). Omit to query all projects.",
     ),
+    all_projects: AllProjectsOption = False,
 ) -> None:
     """List shared buckets available for linking.
 
@@ -49,6 +51,7 @@ def sharing_list(
     into your projects. Uses the regular project token.
     """
     formatter = get_formatter(ctx)
+    reject_project_with_all_projects(formatter, project, all_projects)
     service = get_service(ctx, "sharing_service")
 
     try:
@@ -333,6 +336,7 @@ def sharing_edges(
         "--project",
         help="Project alias to query (can be repeated for multiple projects).",
     ),
+    all_projects: AllProjectsOption = False,
 ) -> None:
     """Show cross-project data flow edges via bucket sharing.
 
@@ -342,6 +346,7 @@ def sharing_edges(
     For column-level lineage, use `lineage build` + `lineage show`.
     """
     formatter = get_formatter(ctx)
+    reject_project_with_all_projects(formatter, project, all_projects)
     service = get_service(ctx, "lineage_service")
 
     try:
