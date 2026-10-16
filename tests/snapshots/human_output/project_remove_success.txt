@@ -1,0 +1,6 @@
+exit: 0
+--- stdout ---
+Success: Project 'prod' removed.
+Note: 'prod' was the active project; there is no active project now. Run 'kbagent project use <alias>' to choose one.
+--- stderr ---
+

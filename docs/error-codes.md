@@ -8,7 +8,7 @@ of `ErrorCode` in `src/keboola_agent_cli/errors.py`.
 | Change | Version impact |
 |---|---|
 | Add a new code | Minor bump |
-| Rename or remove a code | Major bump |
+| Rename or remove a code | Breaking change: the old code keeps working for at least 28 days, then a minor release removes it ([CLI spec C3, C8](cli-interface-spec.md#C8)) |
 
 ## Code catalogue
 

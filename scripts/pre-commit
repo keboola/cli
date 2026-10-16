@@ -39,6 +39,11 @@ if [ -n "$STAGED" ]; then
     fi
 fi
 
+# CLI spec check (rules vs scripts/cli_spec_baseline.json, docs/cli-manifest.json freshness)
+if git diff --cached --name-only | grep -qE '^(src/keboola_agent_cli/|scripts/cli_spec_baseline\.json|docs/cli-manifest\.json)'; then
+    uv run --extra server python scripts/check_cli_spec.py || { echo "CLI spec check failed. See 'make cli-spec-check'."; exit 1; }
+fi
+
 # Auto-regenerate SKILL.md if CLI commands changed
 SKILL_FILE="plugins/kbagent/skills/kbagent/SKILL.md"
 if [ -f "scripts/generate_skill.py" ]; then

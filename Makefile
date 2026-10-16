@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help install install-server sync test test-unit test-integration test-e2e test-e2e-local test-e2e-invite test-e2e-feature test-e2e-stream test-e2e-auth test-file test-cov lint lint-fix format format-check typecheck typecheck-warn audit skill-check skill-gen version-sync version-check version-gate-check vnext-check vnext-resolve gate-floor-report release-scope-check changelog changelog-check check-error-codes check-sentinel-guards loc-check loc-report loc-baseline command-sync-check gen-command-reference endpoints-gen endpoints-check check clean hooks web-install web-dev-backend web-dev-frontend web-build web-clean
+.PHONY: help install install-server sync test test-unit test-integration test-e2e test-e2e-local test-e2e-invite test-e2e-feature test-e2e-stream test-e2e-auth test-file test-cov lint lint-fix format format-check typecheck typecheck-warn audit skill-check skill-gen version-sync version-check version-gate-check vnext-check vnext-resolve gate-floor-report release-scope-check changelog changelog-check check-error-codes check-sentinel-guards loc-check loc-report loc-baseline command-sync-check cli-spec-rules cli-spec-check cli-spec-baseline cli-spec-report cli-manifest gen-command-reference endpoints-gen endpoints-check check clean hooks web-install web-dev-backend web-dev-frontend web-build web-clean
 
 help: ## Show this help message
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -121,6 +121,22 @@ check-error-codes: ## Reject raw error_code string literals in source (use Error
 command-sync-check: ## Verify every CLI command is registered + documented (silent-drift gate)
 	uv run python scripts/check_command_sync.py
 
+cli-spec-rules: ## Check the CLI spec rules vs scripts/cli_spec_baseline.json and the manifest (no tests; part of `check`)
+	uv run --extra server python scripts/check_cli_spec.py
+
+# `check` uses cli-spec-rules: its `test` step already runs the contract cases.
+cli-spec-check: cli-spec-rules ## Check the CLI against its spec: the rules (cli-spec-rules) plus the contract cases
+	uv run --extra server pytest -q tests/test_cli_contract.py tests/test_cli_human_snapshots.py tests/test_doc_examples.py tests/test_server_dry_run_guard.py
+
+cli-spec-baseline: ## Re-record scripts/cli_spec_baseline.json after a fix (the baseline may only shrink)
+	uv run --extra server python scripts/check_cli_spec.py --write-baseline
+
+cli-spec-report: ## Print the per-command spec inventory: category, --project shape, safety flags, violated rules
+	uv run --extra server python scripts/check_cli_spec.py --report
+
+cli-manifest: ## Regenerate docs/cli-manifest.json (commands, options, help texts) from the live Typer app
+	uv run --extra server python scripts/check_cli_spec.py --write-manifest
+
 version-gate-check: ## Reject a (since vX.Y.Z) / X.Y.Z+ marker naming an unreleased version
 	uv run python scripts/check_version_gates.py
 
@@ -173,7 +189,7 @@ hooks: ## Install git pre-commit hook (lint + format on staged files)
 	chmod +x .git/hooks/pre-commit
 	@echo "Pre-commit hook installed."
 
-check: lint format-check typecheck skill-check version-check version-gate-check command-sync-check endpoints-check changelog-check check-error-codes check-sentinel-guards loc-check test ## Run all checks (lint + format + typecheck + skill + version + version-gates + command-sync + endpoints + changelog + error-codes + sentinel-guards + file-size + test)
+check: lint format-check typecheck skill-check version-check version-gate-check command-sync-check cli-spec-rules endpoints-check changelog-check check-error-codes check-sentinel-guards loc-check test ## Run all checks (lint + format + typecheck + skill + version + version-gates + command-sync + cli-spec + endpoints + changelog + error-codes + sentinel-guards + file-size + test)
 
 clean: ## Remove build artifacts and caches
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
