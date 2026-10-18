@@ -113,6 +113,24 @@ def detail(
     return registry.data_app.get_data_app(alias=project, app_id=app_id, branch_id=branch_id)
 
 
+# Declared before POST /{project}: that route would otherwise take /validate-repo
+# as a project alias and the validate-repo route would never match.
+@router.post("/validate-repo", summary="Validate a data app git repo")
+def validate_repo(
+    body: RepoValidate, registry: ServiceRegistry = Depends(get_registry)
+) -> dict[str, Any]:
+    """Validate that a git repo is a deployable data app. Mirrors `kbagent data-app validate-repo`."""
+    git_pat = _resolve_git_pat(body.git_pat_env, body.git_pat_file)
+    return registry.repo_validate.validate_repo(
+        git_repo=body.git_repo,
+        git_branch=body.git_branch,
+        git_public=body.git_public,
+        git_pat=git_pat,
+        type_=body.type,
+        strict=body.strict,
+    )
+
+
 @router.post("/{project}", summary="Create a data app")
 def create(
     project: str, body: DataAppCreate, registry: ServiceRegistry = Depends(get_registry)
@@ -330,22 +348,6 @@ def secrets_remove(
         keys=body.keys,
         branch_id=body.branch_id,
         dry_run=body.dry_run,
-    )
-
-
-@router.post("/validate-repo", summary="Validate a data app git repo")
-def validate_repo(
-    body: RepoValidate, registry: ServiceRegistry = Depends(get_registry)
-) -> dict[str, Any]:
-    """Validate that a git repo is a deployable data app. Mirrors `kbagent data-app validate-repo`."""
-    git_pat = _resolve_git_pat(body.git_pat_env, body.git_pat_file)
-    return registry.repo_validate.validate_repo(
-        git_repo=body.git_repo,
-        git_branch=body.git_branch,
-        git_public=body.git_public,
-        git_pat=git_pat,
-        type_=body.type,
-        strict=body.strict,
     )
 
 

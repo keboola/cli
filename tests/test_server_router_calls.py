@@ -3457,6 +3457,40 @@ def test_merge_request_create_and_update_bodies_have_no_auto_merge_field(tmp_pat
     assert "auto_merge_strategy" not in svc.update_merge_request.call_args.kwargs
 
 
+def test_data_app_validate_repo_route_reaches_its_handler(tmp_path: Path) -> None:
+    """POST /data-apps/validate-repo must not be taken by POST /data-apps/{project}."""
+    validate_svc = MagicMock()
+    validate_svc.validate_repo.return_value = {"valid": True}
+    data_app_svc = MagicMock()
+    registry = _mock_registry(repo_validate=validate_svc, data_app=data_app_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.post(
+            "/data-apps/validate-repo",
+            headers=AUTH,
+            json={"git_repo": "https://github.com/o/r.git"},
+        )
+
+    assert res.status_code == 200, res.text
+    assert validate_svc.validate_repo.call_args.kwargs["git_repo"] == "https://github.com/o/r.git"
+    data_app_svc.create_data_app.assert_not_called()
+
+
+def test_schedule_find_route_reaches_its_handler(tmp_path: Path) -> None:
+    """GET /schedules/find/query must not be taken by GET /schedules/{project}/{schedule_id}."""
+    schedule_svc = MagicMock()
+    schedule_svc.find_schedules.return_value = {"schedules": [], "errors": []}
+    app = _make_app_with_registry(tmp_path, _mock_registry(schedule=schedule_svc))
+
+    with TestClient(app) as client:
+        res = client.get("/schedules/find/query?not_run_since=7", headers=AUTH)
+
+    assert res.status_code == 200, res.text
+    assert schedule_svc.find_schedules.call_args.kwargs["not_run_since_days"] == 7
+    schedule_svc.get_schedule_detail.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # storage.py  DELETE /storage/buckets/{p}?force=true
 # The route and `storage delete-bucket` share StorageService.delete_buckets, so
