@@ -17,6 +17,7 @@ from ..constants import VALID_COMPONENT_TYPES
 from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..services.component_service import DOCUMENTATION_SOURCE_STORAGE_CATALOG
+from ._all_projects import ALL_PROJECTS_HELP, reject_project_with_all_projects
 from ._helpers import (
     check_cli_permission,
     emit_api_error,
@@ -154,6 +155,11 @@ def component_list(
         "--project",
         help="Project alias to query (can be repeated for multiple projects)",
     ),
+    all_projects: bool = typer.Option(
+        False,
+        "--all-projects",
+        help=f"{ALL_PROJECTS_HELP} No effect with --query: --query searches only the default project.",
+    ),
     component_type: str | None = typer.Option(
         None,
         "--type",
@@ -168,6 +174,7 @@ def component_list(
 ) -> None:
     """List available components from connected projects."""
     formatter = get_formatter(ctx)
+    reject_project_with_all_projects(formatter, project, all_projects)
     service = get_service(ctx, "component_service")
 
     # Validate component_type if provided
@@ -178,6 +185,11 @@ def component_list(
             error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2)
+
+    if all_projects and query:
+        formatter.warning(
+            "--query searches only the default project; --all-projects has no effect with it."
+        )
 
     try:
         result = service.list_components(

@@ -391,6 +391,10 @@ class SuccessResponse(BaseModel):
     targets: list[dict[str, Any]] | None = Field(
         default=None, description="Projects and branches the command used (issue #766)"
     )
+    warnings: list[dict[str, Any]] | None = Field(
+        default=None,
+        description="Warnings of the command as {code, message, hint?, ...} entries (#791)",
+    )
     data: Any = Field(default=None, description="Response payload")
 
 
