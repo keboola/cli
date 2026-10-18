@@ -91,7 +91,7 @@ Never print raw text that breaks JSON parsing. Always check `formatter.json_mode
 ### Error handling
 
 - Commands catch `KeboolaApiError` and `ConfigError`, map to exit codes
-- Exit codes: 0=success, 1=general, 2=usage, 3=auth, 4=network, 5=config, 6=permission denied, 7=job timed out and cancelled
+- Exit codes: 0=success, 1=general, 2=usage, 3=auth, 4=network, 5=config, 6=permission denied, 7=job timed out and cancelled, 130=interrupted
 - Multi-project operations accumulate errors -- one project failing doesn't stop others
 - Use `raise typer.Exit(code=N) from None` to suppress traceback in CLI
 
@@ -355,6 +355,7 @@ When adding a new command (e.g., `kbagent storage create-foo`), you must update 
 - [ ] **Permission registration** in `permissions.py` (`OPERATION_REGISTRY` dict)
 - [ ] **Branch choice** through `resolve_branch()` in `effective_branch.py` when the command takes `--branch` or uses the active branch -- never read `ProjectConfig.active_branch_id` directly. The function reports the branch (`Target:` line, `targets` in `--json`); `tests/test_effective_branch.py` fails on a new direct read.
 - [ ] **`--project` naming a NEW alias** -- every `--project` option also takes a project ID, translated to the alias before the command runs (`commands/_project_ref.py`, CLI-22). A command whose `--project` is not a registry lookup (a new alias like `project add`, an offline filter like `lineage show`) must be added to `NO_LOOKUP_COMMANDS` there, and an option with another name that takes an existing alias (like `config clone --target-project`) to `ALIAS_OPTIONS`. `tests/test_project_ref.py` fails on a new option whose flag contains `project`, `alias` or `stack` until it is in `ALIAS_OPTIONS` or in the test's `NOT_AN_ALIAS` list (with a reason); an option with any other name needs this decision by hand.
+- [ ] **CLI interface spec** -- the command, its options, help, output, exit codes and its REST route follow [`docs/cli-interface-spec.md`](docs/cli-interface-spec.md). Run `make cli-spec-check`: a new violation of a blocking rule fails it, and each failure line links to the rule. The rules marked "review" in the spec are checked by the reviewer.
 - [ ] **Service wiring** in `cli.py` if adding a new service class
 - [ ] **HTTP API endpoint** in `src/keboola_agent_cli/server/routers/<group>.py` -- `kbagent serve` exposes the CLI as a REST API so external applications (Web UI, scheduled AI agents, Slack bots, Streamlit dashboards, CI pipelines) can call the platform without forking CLI subprocesses. The current convention is **1:1**: every command in a group has a matching endpoint in that group's router (e.g. `commands/flow.py` has 8 commands, `server/routers/flows.py` has 8 routes). If you add a new command, add the corresponding route. **Skip allowed** only for genuinely terminal-only commands (interactive prompts, Rich-rendered output that has no useful JSON shape, `doctor`/`init`/`update`-style infrastructure that manages kbagent itself rather than Keboola). Document any skip in the PR description with a one-line reason so reviewers don't flag it.
 
@@ -377,6 +378,7 @@ done** until every box below is ticked.
 
 - [ ] **`SKILL.md` decision table** -- run `make skill-gen` and commit the diff. **Do NOT edit the table by hand** -- the markers will be overwritten on the next `make skill-gen`. The pre-commit hook auto-regenerates and stages this file.
 - [ ] **`plugin.json` version** -- bumped via `make version-sync` from `pyproject.toml`. The pre-commit hook auto-stages this file; you should never edit it by hand.
+- [ ] **`docs/cli-manifest.json`** -- the command manifest (commands, options, help texts). Run `make cli-manifest` and commit the diff; `make cli-spec-check` fails while the file differs from the live tree.
 
 #### Plugin (`plugins/kbagent/`) -- HAND-MAINTAINED, NO CI CHECK
 
@@ -651,6 +653,8 @@ silent-drift risks summarized in the
    A leftover `(since vNEXT)` ships agents a gate no installed version can
    ever satisfy -- strictly worse than no gate, because they then refuse a
    command the user has. The release PR is the only place it can be fixed.
+   When a replaced placeholder is inside a command or option help string,
+   also run `make cli-manifest` and commit `docs/cli-manifest.json`.
 
    **This is now CI-enforced.** The `check` job runs the same check on any PR
    that RAISES `pyproject.toml`'s version, so a missed placeholder is a red
@@ -856,7 +860,7 @@ foot-gun.
 ## Running CI Locally
 
 ```bash
-make check              # CI parity: lint + format + typecheck + skill + version + command-sync + endpoints + changelog + error-codes + sentinel-guards + test
+make check              # CI parity: lint + format + typecheck + skill + version + command-sync + cli-spec + endpoints + changelog + error-codes + sentinel-guards + test
 make lint               # Just the ruff linter
 make format             # Auto-format code
 make typecheck          # Static type check (Astral `ty`)
@@ -864,6 +868,11 @@ make audit              # Audit locked dependencies for known vulnerabilities (u
 make test               # Just the test suite (no coverage)
 make test-cov           # Test suite + informational coverage report (term-missing)
 make command-sync-check # Verify every CLI command is registered + documented
+make cli-spec-rules     # Check the CLI spec rules vs the baseline and docs/cli-manifest.json (in make check)
+make cli-spec-check     # cli-spec-rules plus the contract test files of the spec
+make cli-manifest       # Regenerate docs/cli-manifest.json after a command, option or help change
+make cli-spec-baseline  # Re-record scripts/cli_spec_baseline.json after a fix (it may only shrink)
+make cli-spec-report    # Per-command inventory: category, --project shape, safety flags, violated rules
 make endpoints-check    # Verify docs/web-server-endpoints.md matches the live FastAPI app
 make endpoints-gen      # Regenerate it after adding a serve route
 make check-sentinel-guards # Verify no kbc-session:// sentinel path is unguarded
@@ -935,6 +944,38 @@ trusting the diff, because a two-dot diff (the only kind a shallow CI checkout
 can do) also fires for a stale feature branch whose base has since been
 released; arming there would tell a contributor to delete a placeholder the
 process requires them to write.
+
+**CLI spec gate** (`scripts/check_cli_spec.py`, `make cli-spec-check`): walks
+the live command tree, the serve routes and the source of `commands/`, and
+checks them against the rules of the CLI interface spec (#791). Existing
+violations are listed in `scripts/cli_spec_baseline.json`, which has a
+`blocking` flag per rule. A new violation of a blocking rule fails, and so
+does a baseline entry that is no longer a violation: after a fix, run
+`make cli-spec-baseline` and commit the shorter file. A permanent, reviewed
+exception goes into `exceptions` with a reason. Renaming or moving a function
+or command that is in the baseline gives a `new` line for the new name and a
+`stale` line for the old one; run `make cli-spec-baseline` and commit the
+result.
+
+On a pull request CI also compares the baseline with the base branch, for
+every blocking rule. It fails when a rule has more `violations` entries than
+on the base branch (entries are counted per rule, so a renamed command, a
+hidden alias that keeps the old name, or a function moved to another file is
+no growth), when a rule of the base branch is missing or no longer blocking,
+and when a subject was added to `exceptions`. A new exception passes only when
+a reviewer has checked the exception and its reason and added the label
+`cli-spec-exception` to the pull request; re-run the CI job after adding the
+label. Known limits: the count lets one fixed entry be swapped for a new
+violation of the same rule elsewhere, and the ratchet is keyed by subject, so
+a second violation of the same rule inside a function or command that is
+already in the baseline passes.
+`make check` runs the rules (`make cli-spec-rules`); `make cli-spec-check`
+also runs the contract test files.
+The same step fails when `docs/cli-manifest.json` differs from the live tree
+(`make cli-manifest`). The contract cases of the spec are in
+`tests/test_cli_contract.py`, and the human output of one command per shared
+renderer is pinned by `tests/test_cli_human_snapshots.py`; record an intended
+renderer change with `KBAGENT_UPDATE_SNAPSHOTS=1` and commit the snapshot diff.
 
 **Command-sync silent-drift gate** (`scripts/check_command_sync.py`): treats the
 live Typer command tree as the single source of truth and fails if any command
