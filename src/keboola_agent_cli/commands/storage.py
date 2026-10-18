@@ -15,6 +15,7 @@ from ..constants import TABLE_DATA_JOB_MAX_WAIT
 from ..effective_branch import record_branch, resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..services._storage_jobs import validate_wait_timeout
+from ._all_projects import AllProjectsOption, reject_project_with_all_projects
 from ._helpers import (
     check_cli_permission,
     emit_api_error,
@@ -73,6 +74,7 @@ def storage_buckets(
         "--project",
         help="Project alias (can be repeated for multiple projects)",
     ),
+    all_projects: AllProjectsOption = False,
     branch: int | None = typer.Option(
         None,
         "--branch",
@@ -91,6 +93,7 @@ def storage_buckets(
     a dev branch explicitly.
     """
     formatter = get_formatter(ctx)
+    reject_project_with_all_projects(formatter, project, all_projects)
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
 
@@ -274,6 +277,7 @@ def storage_tables(
         help="Project alias (can be repeated for multiple projects). "
         "Omit to query all connected projects in parallel.",
     ),
+    all_projects: AllProjectsOption = False,
     bucket_id: str | None = typer.Option(
         None,
         "--bucket-id",
@@ -309,6 +313,7 @@ def storage_tables(
     nothing. Pass --branch to query a dev branch explicitly.
     """
     formatter = get_formatter(ctx)
+    reject_project_with_all_projects(formatter, project, all_projects)
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
 

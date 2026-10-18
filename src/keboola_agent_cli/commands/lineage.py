@@ -17,6 +17,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import typer
+from rich.markup import escape
 
 from ..constants import MERMAID_SCRIPT_ATTRS
 from ..errors import ErrorCode
@@ -371,7 +372,7 @@ def lineage_show(
             raise typer.Exit(code=1)
 
         for warning in query_result.get("warnings", []):
-            formatter.warning(warning)  # no-op in JSON mode: it rides in the payload
+            formatter.warning(escape(str(warning)))  # JSON: payload and warnings[]
 
         if formatter.json_mode:
             formatter.output(query_result)

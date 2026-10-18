@@ -368,7 +368,7 @@ Use `kbagent <command> --help` for full flag details and examples.
     (use `project remove`). In --json mode the warning is carried in an
     additive top-level "warnings" array; --dry-run previews the same text.
 
-  kbagent project status [--project NAME]
+  kbagent project status [--project NAME | --all-projects]
     Test connectivity. Shows OK/ERROR with response time. Carries the same
     `auth_mode` field (and an `Auth` column right after `Status`) as
     `project list`, including on an ERROR row.
@@ -447,7 +447,7 @@ Use `kbagent <command> --help` for full flag details and examples.
 
 ### Component Discovery
 
-  kbagent component list [--project NAME] [--type TYPE] [--query "search"]
+  kbagent component list [--project NAME | --all-projects] [--type TYPE] [--query "search"]
     List or AI-search available components. --type: extractor, writer, transformation, application.
 
   kbagent component detail --component-id ID [--project NAME]
@@ -480,7 +480,7 @@ Use `kbagent <command> --help` for full flag details and examples.
 
 ### Configuration Browsing
 
-  kbagent config list [--project NAME] [--component-type TYPE] [--component-id ID] [--branch ID] [--include-rows]
+  kbagent config list [--project NAME | --all-projects] [--component-type TYPE] [--component-id ID] [--branch ID] [--include-rows]
     List configs from one/many/all projects. --project repeatable. Branch-aware.
     --include-rows extends each row with full configuration + rows bodies
     (significantly larger payload -- use only when bodies are needed).
@@ -579,7 +579,7 @@ Use `kbagent <command> --help` for full flag details and examples.
     to list exactly which paths need one. Storage bucket/table IDs are copied verbatim, NOT
     remapped -- use sync clone for that.
 
-  kbagent config search --query PATTERN [--project NAME] [--component-type TYPE] [-i] [-r] [--branch ID]
+  kbagent config search --query PATTERN [--project NAME | --all-projects] [--component-type TYPE] [-i] [-r] [--branch ID]
     Search config bodies for string/regex. Reports match location in JSON tree. Branch-aware.
 
   kbagent config examples --component-id ID [--project NAME] [--row]
@@ -651,7 +651,7 @@ Use `kbagent <command> --help` for full flag details and examples.
 
 ### Cross-Project Search
 
-  kbagent search QUERY [--project NAME] [--type table|bucket|config|flow|data-app|transformation] [--search-type textual|config-based] [--regex] [--scope PATH ...] [--limit N]
+  kbagent search QUERY [--project NAME | --all-projects] [--type table|bucket|config|flow|data-app|transformation] [--search-type textual|config-based] [--regex] [--scope PATH ...] [--limit N]
     Search for items across one or more projects. Textual mode (default) searches item names
     via the Storage API global-search endpoint. Config-based mode scans full configuration JSON bodies.
     --type is repeatable. --limit applies per project in textual mode (1-100, default 50).
@@ -664,7 +664,7 @@ Use `kbagent <command> --help` for full flag details and examples.
 
 ### Job History
 
-  kbagent job list [--project NAME] [--component-id ID] [--config-id ID] [--status STATUS] [--limit N] [--offset N] [--sort-by FIELD] [--sort-order asc|desc]
+  kbagent job list [--project NAME | --all-projects] [--component-id ID] [--config-id ID] [--status STATUS] [--limit N] [--offset N] [--sort-by FIELD] [--sort-order asc|desc]
     List jobs from Queue API. --status: processing, terminated, cancelled, success, error.
     Without --project the fan-out over every registered project is merged GLOBALLY by
     --sort-by/--sort-order (default startTime desc), missing values last, deterministic
@@ -724,7 +724,7 @@ in the dev branch, so a freshly-created branch lists nothing. Pass
 Storage WRITE commands (create-*, upload-*, delete-*, file-upload, etc.)
 remain branch-aware because modifying a dev branch is the expected intent.
 
-  kbagent storage buckets [--project NAME] [--branch ID]
+  kbagent storage buckets [--project NAME | --all-projects] [--branch ID]
     List buckets with sharing/linked info. Shows source project for linked buckets.
     Uses production by default; pass --branch to query a dev branch explicitly.
 
@@ -739,7 +739,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Prefer sql_path/sql_dialect in agent code instead of branching on backend yourself.
     Uses production by default; pass --branch to query a dev branch explicitly.
 
-  kbagent storage tables [--project NAME ...] [--bucket-id BUCKET_ID] [--branch ID] [--include-usage]
+  kbagent storage tables [--project NAME ... | --all-projects] [--bucket-id BUCKET_ID] [--branch ID] [--include-usage]
     List storage tables from one or more projects (in parallel). Omit --project
     to query all connected projects. Repeat --project for a specific subset.
     Multi-project by default, matching `storage buckets`, `config list`, `job list`.
@@ -1070,7 +1070,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
 
 ### Sharing (Cross-Project)
 
-  kbagent sharing list [--project NAME]
+  kbagent sharing list [--project NAME | --all-projects]
     List shared buckets available for linking. Multi-project, uses regular token.
 
   kbagent sharing share --project ALIAS --bucket-id ID --type TYPE [--target-project-ids IDs] [--target-users EMAILS]
@@ -1086,7 +1086,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
   kbagent sharing unlink --project ALIAS --bucket-id ID
     Remove a linked bucket from a project. Uses regular token.
 
-  kbagent sharing edges [--project NAME]
+  kbagent sharing edges [--project NAME | --all-projects]
     Show cross-project data flow edges via bucket sharing. --project repeatable.
 
 ### Data Lineage
@@ -1141,7 +1141,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
 
 ### Billing / PAYG Credits (since v0.84.2)
 
-  kbagent billing credits [--project ALIAS ...]
+  kbagent billing credits [--project ALIAS ... | --all-projects]
     Read-only PAYG (pay-as-you-go) credit balance. Fans out across all
     registered projects in parallel by default; --project (repeatable)
     narrows to specific aliases. Per-project failures degrade individually
@@ -1180,7 +1180,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
 
 ### Flows (Conditional Flows -- keboola.flow only; orchestrator dropped in 0.57.0)
 
-  kbagent flow list [--project NAME] [--branch ID] [--with-schedules]
+  kbagent flow list [--project NAME | --all-projects] [--branch ID] [--with-schedules]
     List conditional flows (keboola.flow) across projects. Legacy keboola.orchestrator
     flows are NOT listed; their count is surfaced as legacy_orchestrator_count + a warning.
     --with-schedules enriches each row with {{schedule_id, cron, timezone, enabled}}
@@ -1245,7 +1245,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
 
 ### Schedule Discovery & Audit (Fleet-Wide)
 
-  kbagent schedule list [--project NAME ...] [--enabled-only] [--branch ID]
+  kbagent schedule list [--project NAME ... | --all-projects] [--enabled-only] [--branch ID]
     Fleet-wide list of every keboola.scheduler config across one, many, or all
     projects (multi-project fan-out; no --project means all). Each row shows
     project_alias, schedule_id, schedule_name, parent_component_id, parent_config_id,
@@ -1257,7 +1257,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
     parent config's component_id/config_id/name. Orphaned schedules (parent
     deleted) still return with parent_name="" -- never hard-fails.
 
-  kbagent schedule find [--cron-window START-END] [--not-run-since DAYS] [--project NAME ...] [--branch ID]
+  kbagent schedule find [--cron-window START-END] [--not-run-since DAYS] [--project NAME ... | --all-projects] [--branch ID]
     Audit filters, combinable with AND:
     * --cron-window "02:00-04:00" matches schedules whose cron's hour field
       is entirely inside the window. Hour-level approximation -- see gotchas.md.
@@ -1272,7 +1272,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
 
 ### Notification Subscriptions (Flow Notifications Tab)
 
-  kbagent notification list [--project NAME ...] [--event NAME] [--component-id ID] [--config-id ID]
+  kbagent notification list [--project NAME ... | --all-projects] [--event NAME] [--component-id ID] [--config-id ID]
     Fleet-wide list of Notification Service subscriptions -- the recipients
     behind the Flow Builder's Notifications tab (bell icon: Success / Error /
     Processing-delay / Warning cards). These live in a SEPARATE platform
@@ -1341,7 +1341,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
 
 ### Development Branches
 
-  kbagent branch list [--project NAME]
+  kbagent branch list [--project NAME | --all-projects]
     List dev branches. --project repeatable.
 
   kbagent branch create --project ALIAS --name "name" [--description "..."]
@@ -1453,7 +1453,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
     --ui is BROKEN on current SaaS stacks (#755): the keboola.sandboxes create job no longer provisions SQL workspaces, so it ends in WORKSPACE_NOT_FOUND -- do not retry, use headless. A failed create (either mode) trashes the sandbox config it created; when the outcome is unknown (5xx / read-write TIMEOUT / RETRY_EXHAUSTED on the create POST, or any error after the --ui job was queued except QUEUE_JOB_FAILED / WORKSPACE_NOT_FOUND) it keeps the config (a workspace may exist -- check 'workspace list', then 'config delete' if nothing appears); --json error.details carries sandbox_config_id / sandbox_config_rolled_back / sandbox_config_kept_reason / job_id.
     Since 0.47.1, Snowflake headless creates return private_key and an empty password field; use key-pair auth.
 
-  kbagent workspace list [--project NAME] [--orphaned] [--branch ID] [--qs-compatible]
+  kbagent workspace list [--project NAME | --all-projects] [--orphaned] [--branch ID] [--qs-compatible]
     List workspaces. Without --branch uses each alias's active branch (`branch use`), else
     production. The Target line names it. Each entry carries login_type, read_only, qs_compatible so callers can pick a
     Query-Service-compatible workspace without firing a probe query. --qs-compatible filters to RO +
@@ -1500,7 +1500,7 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
 (/apps -- deployment record, state, URL, configVersion). Encapsulates the
 §9 redeploy contract so callers cannot pin to the empty-shell v2.
 
-  kbagent data-app list [--project NAME ...] [--branch ID]
+  kbagent data-app list [--project NAME ... | --all-projects] [--branch ID]
     List data apps across one or many projects. Merges Data Science /apps
     index with Storage config names. Multi-project parallel.
 
@@ -2489,9 +2489,22 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
    request's branch); merge-request merge and an armed auto-merge also list
    production as "target".
    No "targets" key = the command chose no branch (it does NOT mean production).
+   A command that gave a warning also carries a top-level "warnings" list
+   (success AND error, since vNEXT): [{{"code": "WARNING", "message": "..."}}];
+   an entry may also carry "hint" and further fields.
+   Read it: before, these warnings went only to stderr in human mode. No
+   "warnings" key = no warning. It is not the "warnings" key some commands put
+   inside "data" (data-app deploy, sync clone, merge-request, ...): that one is
+   part of the result and stays where it was; read both.
 
 3. Multi-project: most read commands accept repeatable --project flag.
    Omit --project to query ALL connected projects in parallel.
+   --all-projects (since vNEXT) says the same explicitly on search, billing
+   credits, component list, config list/search, data-app list, job list,
+   storage buckets/tables, sharing list/edges, flow list, schedule list/find,
+   notification list, branch list, workspace list and project status. Use it
+   in scripts: from 1.0.0 an omitted --project reads only the default project.
+   --all-projects with --project is USAGE_ERROR (exit 2).
    --project takes an alias or a registered project's numeric ID (since 0.96.1).
    An alias wins over an ID. An ID registered under several aliases fails with
    CONFIG_ERROR (exit 5) and lists them -- unless all are on one stack and

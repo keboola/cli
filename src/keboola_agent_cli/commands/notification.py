@@ -32,6 +32,7 @@ from rich.table import Table
 from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..services.notification_service import KNOWN_EVENTS, SCOPE_PROJECT_WIDE, VALID_CHANNELS
+from ._all_projects import AllProjectsOption, reject_project_with_all_projects
 from ._helpers import (
     check_cli_permission,
     emit_api_error,
@@ -181,6 +182,7 @@ def notification_list(
         "--project",
         help="Project alias (repeatable; omit for all registered projects)",
     ),
+    all_projects: AllProjectsOption = False,
     event: str | None = typer.Option(None, "--event", help=_EVENT_HELP),
     component_id: str | None = typer.Option(
         None,
@@ -206,6 +208,7 @@ def notification_list(
     notification *tasks* -- a different mechanism from these subscriptions.
     """
     formatter = get_formatter(ctx)
+    reject_project_with_all_projects(formatter, project, all_projects)
     service = get_service(ctx, "notification_service")
 
     try:

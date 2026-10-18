@@ -11,6 +11,7 @@ import typer
 from ..effective_branch import report_branch_ref
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..output import format_branch_metadata_table, format_branches_table
+from ._all_projects import AllProjectsOption, reject_project_with_all_projects
 from ._helpers import (
     check_cli_permission,
     emit_api_error,
@@ -43,9 +44,11 @@ def branch_list(
         "--project",
         help="Project alias to query (can be repeated for multiple projects)",
     ),
+    all_projects: AllProjectsOption = False,
 ) -> None:
     """List development branches from connected projects."""
     formatter = get_formatter(ctx)
+    reject_project_with_all_projects(formatter, project, all_projects)
     service = get_service(ctx, "branch_service")
 
     try:

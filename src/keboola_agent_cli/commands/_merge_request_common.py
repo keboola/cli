@@ -308,7 +308,8 @@ def _require_explicit_target_under_json(
 
 def _emit_warnings(formatter: Any, result: dict[str, Any]) -> None:
     """Render ``warnings[]`` -- the group's one soft-failure key -- in human mode.
-    In ``--json`` the key is in the payload; ``formatter.warning`` is human-only."""
+    In ``--json`` the key is in the payload; a call after ``formatter.output`` adds
+    nothing, a call before ``formatter.error`` adds to the envelope's ``warnings``."""
     for warning in result.get("warnings") or []:
         # Backend / exception text rides in here; an unbalanced `[/x]` would
         # raise MarkupError AFTER the irreversible operation succeeded.

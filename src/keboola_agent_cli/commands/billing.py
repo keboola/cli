@@ -23,6 +23,7 @@ from rich.markup import escape
 from rich.table import Table
 
 from ..errors import ConfigError, ErrorCode
+from ._all_projects import AllProjectsOption, reject_project_with_all_projects
 from ._helpers import check_cli_permission, get_formatter, get_service
 
 billing_app = typer.Typer(
@@ -74,6 +75,7 @@ def billing_credits(
         "--project",
         help="Project alias (repeatable; omit for all registered projects)",
     ),
+    all_projects: AllProjectsOption = False,
 ) -> None:
     """Show the current PAYG credit balance for one or more projects.
 
@@ -90,6 +92,7 @@ def billing_credits(
     does not accept a plain project Storage API token (issue #594).
     """
     formatter = get_formatter(ctx)
+    reject_project_with_all_projects(formatter, project, all_projects)
     service = get_service(ctx, "billing_service")
 
     try:

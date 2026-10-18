@@ -72,19 +72,25 @@ def _iter_api_routes(app: Any) -> list[Any]:
     its full path template), but a test that walks ``app.routes`` naively would
     audit four routes, find nothing wrong, and pass. A coverage test that can
     pass by seeing nothing is worse than no coverage test, hence the recursion.
+
+    The result keeps match order: each include is expanded in place, in the
+    order Starlette tries the routes. The shadowing test depends on this.
     """
-    stack, seen, routes = list(app.routes), set(), []
-    while stack:
-        route = stack.pop()
-        if id(route) in seen:
-            continue
-        seen.add(id(route))
-        inner = getattr(route, "original_router", None)
-        if inner is not None:
-            stack.extend(inner.routes)
-            continue
-        if getattr(route, "methods", None):
-            routes.append(route)
+    seen: set[int] = set()
+    routes: list[Any] = []
+
+    def walk(items: list[Any]) -> None:
+        for route in items:
+            if id(route) in seen:
+                continue
+            seen.add(id(route))
+            inner = getattr(route, "original_router", None)
+            if inner is not None:
+                walk(inner.routes)
+            elif getattr(route, "methods", None):
+                routes.append(route)
+
+    walk(list(app.routes))
     return routes
 
 
@@ -222,6 +228,30 @@ class TestTableCoversTheLiveApp:
             assert _declares_inline_guard(app, method, path), f"{method} {path} lost its guard"
 
 
+def test_no_route_is_shadowed_by_an_earlier_route(tmp_path: Path) -> None:
+    """A static path declared after a parameterized one with the same method never matches.
+
+    ``POST /data-apps/{project}`` took ``/data-apps/validate-repo`` (422 for a
+    missing ``name``), and ``GET /schedules/{project}/{schedule_id}`` took
+    ``/schedules/find/query``. Each path parameter is replaced by a sample value:
+    when an earlier route of the same method matches the result, that route
+    answers every request meant for the later one.
+
+    The sample value "sample" matches only the ``str`` and ``path`` converters,
+    the only ones the app uses. A typed converter such as ``{id:int}`` needs a
+    sample value of its own here.
+    """
+    routes = _iter_api_routes(_app(tmp_path))
+    shadowed = []
+    for index, later in enumerate(routes):
+        sample = re.sub(r"\{[^}]+\}", "sample", later.path)
+        for earlier in routes[:index]:
+            methods = (earlier.methods & later.methods) - {"HEAD", "OPTIONS"}
+            if methods and earlier.path_regex.match(sample):
+                shadowed.append(f"{sorted(methods)} {later.path} <- {earlier.path}")
+    assert shadowed == [], f"Routes taken by an earlier route: {shadowed}"
+
+
 class TestResolveRouteOperation:
     def test_exempt_path_resolves_to_none(self) -> None:
         assert resolve_route_operation("GET", "/health/ping") is None
@@ -272,6 +302,17 @@ class TestEnforcementOnRealRoutes:
     def test_deny_writes_flag_leaves_reads_alone(self, tmp_path: Path) -> None:
         client = _client(tmp_path, deny_writes=True)
         assert client.get("/version", headers=AUTH).status_code == 200
+
+    def test_deny_writes_checks_validate_repo_as_a_read(self, tmp_path: Path) -> None:
+        """validate-repo is checked as its own read operation, not as data-app.create."""
+        client = _client(tmp_path, deny_writes=True)
+        # An empty repo URL stops in the handler before any network call.
+        validate = client.post("/data-apps/validate-repo", headers=AUTH, json={"git_repo": ""})
+        assert validate.status_code != 403, validate.text
+        assert validate.json()["error"]["code"] == "MISSING_PARAMETER"
+        create = client.post("/data-apps/demo", headers=AUTH, json={"name": "n", "slug": "s"})
+        assert create.status_code == 403
+        assert "data-app.create" in create.json()["error"]["message"]
 
     def test_token_delete_is_denied_by_an_exact_pattern(self, tmp_path: Path) -> None:
         """Exact-name patterns work over REST, not just category ones."""

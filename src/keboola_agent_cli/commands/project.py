@@ -23,6 +23,7 @@ from ..constants import (
 )
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..services.project_service import AUTH_MODE_SESSION, AUTH_MODE_STATIC
+from ._all_projects import AllProjectsOption, reject_project_with_all_projects
 from ._helpers import (
     KEEP_TOKEN_FILE_OPTION,
     TOKEN_ENV_OPTION,
@@ -436,10 +437,11 @@ def project_edit(
                 )
 
         # Converting a browser-login project to a static token is allowed but
-        # noteworthy: stderr in human mode (never pollutes stdout), and the
-        # additive "warnings" key already carries it in --json mode.
+        # noteworthy: stderr in human mode (never pollutes stdout); in --json
+        # mode it is in the result's `data.warnings` and in the top-level
+        # `warnings[]` of the envelope.
         for warning in result.get("warnings", []):
-            formatter.warning(warning)
+            formatter.warning(escape(str(warning)))
 
         formatter.output(result, _human)
         discard_token_file(token_file, keep=keep_token_file, dry_run=dry_run)
@@ -544,9 +546,11 @@ def project_status(
     project: str | None = typer.Option(
         None, "--project", help="Check only this project (default: all)"
     ),
+    all_projects: AllProjectsOption = False,
 ) -> None:
     """Test connectivity to connected Keboola projects."""
     formatter = get_formatter(ctx)
+    reject_project_with_all_projects(formatter, project, all_projects)
     service = get_service(ctx, "project_service")
 
     aliases = [project] if project else None
