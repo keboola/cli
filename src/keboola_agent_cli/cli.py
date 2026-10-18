@@ -260,7 +260,7 @@ def main(
     if conversation_id is not None:
         os.environ[ENV_CONVERSATION_ID] = conversation_id
 
-    maybe_auto_update()
+    maybe_auto_update(json_mode=json_output)
 
     # If the user explicitly asked for `kbagent changelog`, they'll see the
     # full changelog below -- prepending the "What's new" summary is pure

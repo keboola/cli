@@ -33,13 +33,18 @@ from keboola_agent_cli.constants import (
     ENV_SKIP_UPDATE,
 )
 from keboola_agent_cli.frozen_dist import FrozenChannel, FrozenDistribution
-from keboola_agent_cli.services.version_service import KbagentUpdatePlan
+from keboola_agent_cli.services.version_service import GatedRelease, KbagentUpdatePlan
 from keboola_agent_cli.update_runner import (
     DeferredUpdateReport,
     DeferredUpdateStatus,
     InstallRun,
     InstallStatus,
 )
+
+
+def _gated(version: str | None) -> GatedRelease:
+    """A lookup result of the running major (the major gate is in test_major_gate.py)."""
+    return GatedRelease(latest_version=version, same_major_version=version)
 
 
 # ---------------------------------------------------------------------------
@@ -569,7 +574,7 @@ class TestMaybeAutoUpdate:
                 "keboola_agent_cli.auto_update._should_skip_all",
                 return_value=True,
             ) as mock_skip_all,
-            patch("keboola_agent_cli.auto_update._fetch_kbagent_latest_version") as mock_fetch,
+            patch("keboola_agent_cli.auto_update.fetch_gated_release") as mock_fetch,
         ):
             maybe_auto_update()
         mock_skip_all.assert_called_once()
@@ -581,10 +586,10 @@ class TestMaybeAutoUpdate:
     def test_cache_fresh_no_fetch_or_ttl_refresh(self, mock_up_to_date, mock_fresh, mock_cache):
         mock_cache.return_value = {
             "last_check": time.time(),
-            "latest_version": "1.0.0",
+            "latest_version": "0.1.0",
         }
         with (
-            patch("keboola_agent_cli.auto_update._fetch_kbagent_latest_version") as mock_fetch,
+            patch("keboola_agent_cli.auto_update.fetch_gated_release") as mock_fetch,
             patch("keboola_agent_cli.auto_update._write_cache") as mock_write,
         ):
             maybe_auto_update()
@@ -592,7 +597,7 @@ class TestMaybeAutoUpdate:
             mock_write.assert_not_called()
 
     @patch("keboola_agent_cli.auto_update._read_cache", return_value=None)
-    @patch("keboola_agent_cli.auto_update._fetch_kbagent_latest_version", return_value="2.0.0")
+    @patch("keboola_agent_cli.auto_update.fetch_gated_release", return_value=_gated("1.1.0"))
     @patch("keboola_agent_cli.auto_update._write_cache")
     @patch("keboola_agent_cli.auto_update._is_up_to_date", return_value=True)
     def test_cache_stale_fetches(self, mock_up_to_date, mock_write, mock_fetch, mock_cache):
@@ -602,11 +607,11 @@ class TestMaybeAutoUpdate:
         # args) so the test inspects call_args.kwargs.
         mock_write.assert_called_once()
         kwargs = mock_write.call_args.kwargs
-        assert kwargs.get("latest_version") == "2.0.0"
-        assert set(kwargs) == {"latest_version"}
+        assert kwargs.get("latest_version") == "1.1.0"
+        assert set(kwargs) == {"latest_version", "next_major_keys"}
 
     @patch("keboola_agent_cli.auto_update._read_cache", return_value=None)
-    @patch("keboola_agent_cli.auto_update._fetch_kbagent_latest_version", return_value="1.0.0")
+    @patch("keboola_agent_cli.auto_update.fetch_gated_release", return_value=_gated("1.0.0"))
     @patch("keboola_agent_cli.auto_update._write_cache")
     @patch("keboola_agent_cli.auto_update._is_up_to_date", return_value=True)
     @patch("keboola_agent_cli.auto_update._perform_update")
@@ -617,7 +622,7 @@ class TestMaybeAutoUpdate:
         mock_update.assert_not_called()
 
     @patch("keboola_agent_cli.auto_update._read_cache", return_value=None)
-    @patch("keboola_agent_cli.auto_update._fetch_kbagent_latest_version", return_value="2.0.0")
+    @patch("keboola_agent_cli.auto_update.fetch_gated_release", return_value=_gated("1.1.0"))
     @patch("keboola_agent_cli.auto_update._write_cache")
     @patch("keboola_agent_cli.auto_update._is_up_to_date", return_value=False)
     @patch(
@@ -637,12 +642,12 @@ class TestMaybeAutoUpdate:
     ):
         maybe_auto_update()
         mock_update.assert_called_once()
-        assert mock_update.call_args.args == ("2.0.0",)
+        assert mock_update.call_args.args == ("1.1.0",)
         assert "command" in mock_update.call_args.kwargs
         mock_reexec.assert_called_once()
 
     @patch("keboola_agent_cli.auto_update._read_cache", return_value=None)
-    @patch("keboola_agent_cli.auto_update._fetch_kbagent_latest_version", return_value="2.0.0")
+    @patch("keboola_agent_cli.auto_update.fetch_gated_release", return_value=_gated("1.1.0"))
     @patch("keboola_agent_cli.auto_update._write_cache")
     @patch("keboola_agent_cli.auto_update._is_up_to_date", return_value=False)
     @patch(
@@ -666,7 +671,7 @@ class TestMaybeAutoUpdate:
         mock_reexec.assert_not_called()
 
     @patch("keboola_agent_cli.auto_update._read_cache", return_value=None)
-    @patch("keboola_agent_cli.auto_update._fetch_kbagent_latest_version", return_value="2.0.0")
+    @patch("keboola_agent_cli.auto_update.fetch_gated_release", return_value=_gated("1.1.0"))
     @patch("keboola_agent_cli.auto_update._is_up_to_date", return_value=False)
     @patch(
         "keboola_agent_cli.auto_update._perform_update",
@@ -703,7 +708,7 @@ class TestMaybeAutoUpdate:
         assert "Recover with:" not in err
 
     @patch("keboola_agent_cli.auto_update._read_cache", return_value=None)
-    @patch("keboola_agent_cli.auto_update._fetch_kbagent_latest_version", return_value=None)
+    @patch("keboola_agent_cli.auto_update.fetch_gated_release", return_value=_gated(None))
     @patch("keboola_agent_cli.auto_update._perform_update")
     def test_fetch_failure_continues(self, mock_update, mock_fetch, mock_cache):
         """If fetch returns None, should continue without updating."""
@@ -849,9 +854,7 @@ class TestReExecPathSkipsKbagentStage:
         with (
             patch.dict(os.environ, env, clear=True),
             patch("sys.argv", ["kbagent", "config", "list"]),
-            patch(
-                "keboola_agent_cli.auto_update._fetch_kbagent_latest_version"
-            ) as mock_fetch_kbagent,
+            patch("keboola_agent_cli.auto_update.fetch_gated_release") as mock_fetch_kbagent,
             patch("keboola_agent_cli.auto_update._read_cache", return_value=None),
             patch("keboola_agent_cli.auto_update._write_cache"),
         ):
@@ -867,9 +870,7 @@ class TestReExecPathSkipsKbagentStage:
         with (
             patch.dict(os.environ, env, clear=True),
             patch("sys.argv", ["kbagent", "update"]),
-            patch(
-                "keboola_agent_cli.auto_update._fetch_kbagent_latest_version"
-            ) as mock_fetch_kbagent,
+            patch("keboola_agent_cli.auto_update.fetch_gated_release") as mock_fetch_kbagent,
         ):
             maybe_auto_update()
 
@@ -883,9 +884,7 @@ class TestReExecPathSkipsKbagentStage:
         with (
             patch.dict(os.environ, env, clear=True),
             patch("sys.argv", ["kbagent", "config", "list"]),
-            patch(
-                "keboola_agent_cli.auto_update._fetch_kbagent_latest_version"
-            ) as mock_fetch_kbagent,
+            patch("keboola_agent_cli.auto_update.fetch_gated_release") as mock_fetch_kbagent,
         ):
             maybe_auto_update()
 
@@ -942,7 +941,7 @@ class TestProcessLevelSentinel:
     @patch("keboola_agent_cli.auto_update._should_skip_all", return_value=False)
     @patch("keboola_agent_cli.auto_update._should_skip_kbagent_stage", return_value=False)
     @patch("keboola_agent_cli.auto_update._read_cache", return_value=None)
-    @patch("keboola_agent_cli.auto_update._fetch_kbagent_latest_version", return_value="1.0.0")
+    @patch("keboola_agent_cli.auto_update.fetch_gated_release", return_value=_gated("1.0.0"))
     @patch("keboola_agent_cli.auto_update._is_up_to_date", return_value=True)
     @patch("keboola_agent_cli.auto_update._write_cache")
     def test_second_call_short_circuits(
@@ -993,10 +992,10 @@ class TestSafeStartupUpdateOrder:
         events: list[str] = []
         mutated = False
 
-        def fetch_kbagent(*args: object, **kwargs: object) -> str:
+        def fetch_kbagent(*args: object, **kwargs: object) -> GatedRelease:
             assert not mutated
             events.append("fetch_kbagent")
-            return "2.0.0"
+            return _gated("0.100.0")
 
         def prepare_kbagent(latest: str | None) -> KbagentUpdatePlan:
             assert not mutated
@@ -1028,7 +1027,7 @@ class TestSafeStartupUpdateOrder:
         monkeypatch.setattr(auto_update_module, "_should_skip_all", lambda: False)
         monkeypatch.setattr(auto_update_module, "_should_skip_kbagent_stage", lambda: False)
         monkeypatch.setattr(auto_update_module, "_read_cache", lambda: None)
-        monkeypatch.setattr(auto_update_module, "_fetch_kbagent_latest_version", fetch_kbagent)
+        monkeypatch.setattr(auto_update_module, "fetch_gated_release", fetch_kbagent)
         monkeypatch.setattr(auto_update_module, "prepare_kbagent_update_plan", prepare_kbagent)
         monkeypatch.setattr(auto_update_module, "_write_cache", write_cache)
         monkeypatch.setattr(auto_update_module, "_perform_update", perform)
@@ -1067,7 +1066,7 @@ class TestStartupFailureBanner:
             monkeypatch.setattr(auto_update_module, "_read_cache", lambda: None)
             monkeypatch.setattr(auto_update_module, "_write_cache", lambda **_: None)
             monkeypatch.setattr(
-                auto_update_module, "_fetch_kbagent_latest_version", lambda **_: "2.0.0"
+                auto_update_module, "fetch_gated_release", lambda **_: _gated("2.0.0")
             )
             monkeypatch.setattr(auto_update_module, "_prepare_auto_kbagent_plan", lambda _: plan)
             monkeypatch.setattr(auto_update_module, "__version__", "1.0.0")
@@ -1126,8 +1125,8 @@ class TestStartupDefersTheReinstall:
                 "keboola_agent_cli.auto_update.report_finished_deferred_update",
             ),
             patch(
-                "keboola_agent_cli.auto_update._fetch_kbagent_latest_version",
-                return_value="2.0.0",
+                "keboola_agent_cli.auto_update.fetch_gated_release",
+                return_value=_gated("1.1.0"),
             ),
             patch("keboola_agent_cli.auto_update._is_up_to_date", return_value=False),
             patch("keboola_agent_cli.auto_update.__version__", "1.0.0"),
@@ -1151,7 +1150,7 @@ class TestStartupDefersTheReinstall:
         mock_reexec.assert_not_called()
         request = mock_request.call_args.args[0]
         assert request.from_version == "1.0.0"
-        assert request.target_version == "2.0.0"
+        assert request.target_version == "1.1.0"
         # The hardlink retry (#786) is derived from the same install command.
         mock_retry.assert_called_once_with(request.install_command)
         assert request.hardlink_retry_command == ("uv", "retry-in-copy-mode")
@@ -1287,7 +1286,7 @@ class TestFrozenBuildGuard:
         ):
             yield
 
-    def _run_frozen(self, *, cached: bool, latest: str | None = "99.0.0"):
+    def _run_frozen(self, *, cached: bool, latest: str | None = "0.999.0"):
         """Run the hook as a frozen Chocolatey binary; return the patch mocks."""
         cache = {"last_check": time.time(), "latest_version": latest} if cached else None
         with (
@@ -1298,8 +1297,8 @@ class TestFrozenBuildGuard:
             patch("keboola_agent_cli.auto_update._read_cache", return_value=cache),
             patch("keboola_agent_cli.auto_update._is_cache_fresh", return_value=cached),
             patch(
-                "keboola_agent_cli.auto_update._fetch_kbagent_latest_version",
-                return_value=latest,
+                "keboola_agent_cli.auto_update.fetch_gated_release",
+                return_value=_gated(latest),
             ),
             patch("keboola_agent_cli.auto_update._prepare_auto_kbagent_plan") as mock_plan,
             patch("keboola_agent_cli.auto_update._perform_update") as mock_perform,
@@ -1329,7 +1328,7 @@ class TestFrozenBuildGuard:
         self._run_frozen(cached=False)
         stderr = capsys.readouterr().err
         assert "choco upgrade keboola-cli2" in stderr
-        assert "99.0.0" in stderr
+        assert "0.999.0" in stderr
         # The exact bug this guards against.
         assert "uv tool install" not in stderr
 
@@ -1368,8 +1367,8 @@ class TestFrozenBuildGuard:
             ),
             patch("keboola_agent_cli.auto_update._read_cache", return_value=None),
             patch(
-                "keboola_agent_cli.auto_update._fetch_kbagent_latest_version",
-                return_value="99.0.0",
+                "keboola_agent_cli.auto_update.fetch_gated_release",
+                return_value=_gated("99.0.0"),
             ),
             patch("keboola_agent_cli.auto_update._perform_update") as mock_perform,
             patch("keboola_agent_cli.auto_update.request_deferred_update") as mock_defer,
@@ -1394,8 +1393,8 @@ class TestFrozenBuildGuard:
             ),
             patch("keboola_agent_cli.auto_update._read_cache", return_value=None),
             patch(
-                "keboola_agent_cli.auto_update._fetch_kbagent_latest_version",
-                return_value="99.0.0",
+                "keboola_agent_cli.auto_update.fetch_gated_release",
+                return_value=_gated("99.0.0"),
             ),
             patch("keboola_agent_cli.auto_update._prepare_auto_kbagent_plan", return_value=plan),
             patch(
@@ -1476,8 +1475,8 @@ class TestFrozenBuildIsNotADevInstall:
             patch("keboola_agent_cli.auto_update._read_cache", return_value=None),
             patch("sys.argv", ["kbagent", "config", "list"]),
             patch(
-                "keboola_agent_cli.auto_update._fetch_kbagent_latest_version",
-                return_value="99.0.0",
+                "keboola_agent_cli.auto_update.fetch_gated_release",
+                return_value=_gated("99.0.0"),
             ),
             patch("keboola_agent_cli.auto_update._write_cache"),
             patch("keboola_agent_cli.auto_update._perform_update") as mock_perform,

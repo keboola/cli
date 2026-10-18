@@ -26,6 +26,8 @@ from . import __version__
 from .changelog import ENV_UPDATED_FROM, format_whats_new
 from .constants import (
     AUTO_UPDATE_CHECK_INTERVAL,
+    DEPRECATION_NOTICE_FINAL_WINDOW_SECONDS,
+    DEPRECATION_NOTICE_INTERVAL_SECONDS,
     ENV_AUTO_UPDATE,
     ENV_SKIP_UPDATE,
     VERSION_CACHE_FILENAME,
@@ -33,16 +35,22 @@ from .constants import (
 )
 from .frozen_dist import FrozenDistribution, detect_frozen_distribution, is_frozen_build
 from .services.version_service import (
+    GatedRelease,
     KbagentUpdatePlan,
-    _fetch_kbagent_latest_version,
+    NextMajorRelease,
     _is_up_to_date,
+    _major_of,
     build_hardlink_retry_command,
     build_kbagent_upgrade_command,
+    fetch_gated_release,
     get_update_timeout,
+    next_major_cache_keys,
+    next_major_from_cache,
     prepare_kbagent_update_plan,
     resolve_kbagent_wheel_url,
     summarize_install_failure,
 )
+from .update_notice import DeprecationNotice, NoticeMode, build_notice, print_once, register
 from .update_runner import (
     DeferredUpdateReport,
     DeferredUpdateRequest,
@@ -126,26 +134,48 @@ def _read_cache() -> dict | None:
         return None
 
 
-def _write_cache(latest_version: str | None) -> None:
+def _write_cache(latest_version: str | None, *, next_major_keys: dict | None = None) -> None:
     """Write the version cache file.
 
     Args:
         latest_version: kbagent latest version. Falls back to the running
             interpreter's ``__version__`` when None -- the caller is in a
             re-exec'd process where the update stage was skipped and we
-            still want the TTL to tick.
+            still want the TTL to tick. Never a version of a higher major:
+            clients older than the major gate read this file and would
+            install it (#791 section 4.3).
+        next_major_keys: The next-major keys (``next_major_version``,
+            ``next_major_release_id``, ``next_major_published_at``,
+            ``checked_at``) from :func:`next_major_cache_keys`.
     """
     if latest_version is None:
         # Re-exec path: persist the running version so cache_is_fresh
         # logic on the NEXT run still has a kbagent-side anchor.
         latest_version = __version__
+    payload: dict = {
+        "last_check": time.time(),
+        "latest_version": latest_version,
+        **(next_major_keys or {}),
+    }
+    previous = _read_cache()
+    if previous and "notice_shown_at" in previous:
+        payload["notice_shown_at"] = previous["notice_shown_at"]
+    _write_cache_payload(payload)
+
+
+def _mark_notice_shown(now: float) -> None:
+    """Record when the human deprecation notice was printed (once per 24 hours)."""
+    cache = _read_cache()
+    if cache is None:
+        return
+    _write_cache_payload({**cache, "notice_shown_at": now})
+
+
+def _write_cache_payload(payload: dict) -> None:
+    """Replace the cache file with ``payload`` in one atomic step."""
     cache_path = _get_cache_path()
     try:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
-        payload: dict = {
-            "last_check": time.time(),
-            "latest_version": latest_version,
-        }
         # Atomic replace (issue #271 sec-12): write a temp file next to the
         # cache, then rename it over the cache in one step. A reader never sees
         # a partial file, and a failed write keeps the previous cache. Each
@@ -256,6 +286,11 @@ def _top_level_subcommand_is_versioning(args: list[str]) -> bool:
     return False
 
 
+def _auto_update_disabled() -> bool:
+    """``KBAGENT_AUTO_UPDATE`` is one of ``false``, ``0``, ``no``."""
+    return os.environ.get(ENV_AUTO_UPDATE, "").lower().strip() in ("false", "0", "no")
+
+
 def _should_skip_all() -> bool:
     """Whether the entire auto-update flow should be skipped.
 
@@ -271,8 +306,7 @@ def _should_skip_all() -> bool:
     not the cache refresh. See :func:`_should_skip_kbagent_stage`.
     """
     # User opt-out
-    auto_update_val = os.environ.get(ENV_AUTO_UPDATE, "").lower().strip()
-    if auto_update_val in ("false", "0", "no"):
+    if _auto_update_disabled():
         return True
 
     # Dev install
@@ -503,10 +537,96 @@ def _prepare_auto_kbagent_plan(latest_version: str | None) -> KbagentUpdatePlan:
         up_to_date=up_to_date,
         command=prepared.command if up_to_date is False else None,
         recovery_command=prepared.recovery_command,
+        crosses_major=up_to_date is False and _major_of(latest_version) > _major_of(__version__),
     )
 
 
-def maybe_auto_update() -> None:
+def _notice_mode() -> tuple[NoticeMode, str | None]:
+    """The text form of the deprecation notice, and the channel command of a native binary."""
+    frozen = detect_frozen_distribution()
+    if frozen is not None:
+        return NoticeMode.FROZEN, frozen.upgrade_command or frozen.upgrade_hint
+    if _auto_update_disabled():
+        return NoticeMode.AUTO_UPDATE_OFF, None
+    return NoticeMode.AUTO_UPDATE, None
+
+
+def register_deprecation_notice(
+    next_major: NextMajorRelease | None, *, now: float | None = None
+) -> DeprecationNotice | None:
+    """Build the deprecation notice for ``next_major`` and keep it for the output layer.
+
+    Returns None (and keeps nothing) when no release of the next major is known.
+    """
+    if next_major is None or _major_of(next_major.version) != _major_of(__version__) + 1:
+        return None
+    mode, channel_command = _notice_mode()
+    notice = build_notice(
+        current_version=__version__,
+        next_version=next_major.version,
+        published_ts=next_major.published_ts(),
+        migration_ts=next_major.migration_ts(),
+        now=now if now is not None else time.time(),
+        mode=mode,
+        channel_command=channel_command,
+    )
+    register(notice)
+    return notice
+
+
+def show_deprecation_notice(*, json_mode: bool) -> None:
+    """Show the notice in ``version``, ``update``, ``doctor`` and ``context``: on every run.
+
+    Uses the notice this run already built (startup check, or the fresh lookup
+    of ``version`` / ``update``), else the next-major keys of the cache, so it
+    needs no network. JSON mode only keeps it for ``warnings[]``.
+    """
+    try:
+        from .update_notice import current
+
+        if current() is None:
+            next_major, _ = next_major_from_cache(_read_cache(), _major_of(__version__) + 1)
+            register_deprecation_notice(next_major)
+        if not json_mode:
+            print_once()
+    except Exception:
+        logger.debug("Could not show the deprecation notice", exc_info=True)
+
+
+def _publish_startup_notice(
+    next_major: NextMajorRelease | None, cache: dict | None, *, json_mode: bool
+) -> None:
+    """The deprecation notice of the startup check.
+
+    ``--json``: a ``warnings[]`` entry on every run. Human mode: one stderr line
+    once per :data:`DEPRECATION_NOTICE_INTERVAL_SECONDS`, and on every run from
+    :data:`DEPRECATION_NOTICE_FINAL_WINDOW_SECONDS` before M.
+    """
+    notice = register_deprecation_notice(next_major)
+    if notice is None or json_mode or next_major is None:
+        return
+    now = time.time()
+    migration = next_major.migration_ts()
+    final_window = (
+        migration is not None and now >= migration - DEPRECATION_NOTICE_FINAL_WINDOW_SECONDS
+    )
+    shown_at = cache.get("notice_shown_at") if cache else None
+    due = (
+        final_window
+        or not isinstance(shown_at, int | float)
+        or now - float(shown_at) >= DEPRECATION_NOTICE_INTERVAL_SECONDS
+    )
+    if due and print_once():
+        _mark_notice_shown(now)
+
+
+def _cached_gate(cache: dict | None, latest_version: str | None) -> GatedRelease:
+    """A :class:`GatedRelease` from the cache alone; it never crosses a major."""
+    next_major, checked_at = next_major_from_cache(cache, _major_of(__version__) + 1)
+    return GatedRelease(latest_version, latest_version, next_major, checked_at)
+
+
+def maybe_auto_update(*, json_mode: bool = False) -> None:
     """Main entry point for the auto-update flow.
 
     Called from ``cli.py`` at the very top of ``main()``. If the installed
@@ -514,6 +634,14 @@ def maybe_auto_update() -> None:
     the same argv is ``execvpe``'d into the new binary. The new process
     re-enters this function and short-circuits as up-to-date, because the
     re-exec sets ``KBAGENT_SKIP_UPDATE=1``.
+
+    **Major versions are gated** (#791 section 4.3): the lookup is
+    :func:`fetch_gated_release`, which stays on the running major until the
+    migration date of the next one. A crossing is never installed inline and
+    never re-execs: it goes to the deferred helper on every OS, so this
+    command finishes on the old major and the next run starts on the new one.
+    While a next major is known, the deprecation notice is shown
+    (``json_mode``: in ``warnings[]`` instead of on stderr).
 
     **Frozen (PyInstaller) builds get a notification instead of an install.**
     A native binary from Chocolatey / WinGet / Homebrew / apt / dnf is not a
@@ -555,6 +683,10 @@ def maybe_auto_update() -> None:
         cache = _read_cache()
         cache_is_fresh = bool(cache and _is_cache_fresh(cache, AUTO_UPDATE_CHECK_INTERVAL))
         cached_kbagent = cache.get("latest_version") if cache else None
+        # A kbagent older than the major gate on the same machine may have
+        # written a version of a higher major here. Never install it.
+        if isinstance(cached_kbagent, str) and _major_of(cached_kbagent) > _major_of(__version__):
+            cached_kbagent = None
         skip_kbagent_stage = _should_skip_kbagent_stage()
         # A frozen (PyInstaller) binary is upgraded by the package manager that
         # placed it, never by us. Detected BEFORE planning so the wheel-URL HEAD
@@ -563,15 +695,13 @@ def maybe_auto_update() -> None:
         # command this process is never allowed to run.
         frozen_dist = detect_frozen_distribution()
         use_cached_kbagent = cache_is_fresh and isinstance(cached_kbagent, str)
-        latest_version = (
-            cached_kbagent
-            if use_cached_kbagent
-            else (
-                None
-                if skip_kbagent_stage
-                else _fetch_kbagent_latest_version(timeout=VERSION_CHECK_TIMEOUT)
-            )
-        )
+        if use_cached_kbagent:
+            gated = _cached_gate(cache, cached_kbagent)
+        elif skip_kbagent_stage:
+            gated = _cached_gate(cache, None)
+        else:
+            gated = fetch_gated_release(timeout=VERSION_CHECK_TIMEOUT, cache=cache)
+        latest_version = gated.latest_version
 
         # Planning is complete before any subprocess can mutate the tool
         # environment. In particular, all HTTP requests, import probes, PATH
@@ -582,17 +712,21 @@ def maybe_auto_update() -> None:
             else KbagentUpdatePlan(__version__, latest_version, True, None, None)
         )
 
-        # Persist the prepared cache before any self-mutation.
+        # Persist the prepared cache before any self-mutation. Only the
+        # running major's version goes there (see `_write_cache`).
         if not use_cached_kbagent:
             _write_cache(
                 latest_version=(
-                    latest_version
-                    if latest_version is not None
+                    gated.same_major_version
+                    if gated.same_major_version is not None
                     else cached_kbagent
                     if isinstance(cached_kbagent, str)
                     else None
                 ),
+                next_major_keys=next_major_cache_keys(gated),
             )
+
+        _publish_startup_notice(gated.next_major, cache, json_mode=json_mode)
 
         # Frozen builds: the install becomes a notification. Deliberately placed
         # AFTER the cache write -- letting the TTL tick is what throttles the
@@ -627,8 +761,9 @@ def maybe_auto_update() -> None:
         # Where the reinstall runs is the whole fix for issue #528: an in-place
         # `uv tool install` deletes the venv this process runs from, which
         # Windows cannot survive. Defer there; keep the proven inline install +
-        # re-exec on POSIX, where replacing an open file is safe.
-        if should_defer():
+        # re-exec on POSIX, where replacing an open file is safe. A major
+        # crossing is deferred on every OS and never re-execs (#791 UP2).
+        if should_defer() or kbagent_plan.crosses_major:
             _schedule_deferred_update(kbagent_plan)
             return
 

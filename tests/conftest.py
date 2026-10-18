@@ -1,5 +1,6 @@
 """Shared test fixtures for Keboola Agent CLI tests."""
 
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -74,6 +75,16 @@ def _no_wheel_asset_probe(monkeypatch: pytest.MonkeyPatch) -> None:
         )
 
     monkeypatch.setattr(version_service.httpx, "head", _head)
+
+
+@pytest.fixture(autouse=True)
+def _reset_update_notice() -> Iterator[None]:
+    """The deprecation notice is module state (CLI-40); no test may leak it to the next."""
+    from keboola_agent_cli import update_notice
+
+    update_notice.reset()
+    yield
+    update_notice.reset()
 
 
 @pytest.fixture(autouse=True)

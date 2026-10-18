@@ -16,6 +16,7 @@ from rich.text import Text
 
 from .effective_branch import BranchTarget, recorded_targets
 from .models import ErrorResponse, SuccessResponse
+from .update_notice import pending_warnings
 
 
 def force_utf8_when_redirected() -> None:
@@ -74,9 +75,15 @@ def force_utf8_when_redirected() -> None:
 WARNING_CODE = "WARNING"
 
 
+def _envelope_warnings(warnings: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """The command's warnings after those the startup update check left (CLI-40)."""
+    return [*pending_warnings(), *(warnings or [])]
+
+
 def success_json(data: Any, warnings: list[dict[str, Any]] | None = None) -> str:
     """The ``--json`` success envelope; ``targets`` and ``warnings`` only when not empty."""
     targets = [target.to_dict() for target in recorded_targets()]
+    warnings = _envelope_warnings(warnings)
     response = SuccessResponse(
         status="ok", targets=targets or None, warnings=warnings or None, data=data
     )
@@ -289,8 +296,9 @@ class OutputFormatter:
             targets = [target.to_dict() for target in recorded_targets()]
             if targets:
                 error_envelope["targets"] = targets
-            if self.warnings:
-                error_envelope["warnings"] = self.warnings
+            warnings = _envelope_warnings(self.warnings)
+            if warnings:
+                error_envelope["warnings"] = warnings
             error_envelope["error"] = err.model_dump(exclude_none=True)
             write_machine_output(json.dumps(error_envelope, indent=2))
             self._document_written = True
