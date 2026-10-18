@@ -67,7 +67,7 @@ Before you read the diff, load the repo's reviewer playbook into your context:
    STOP and return: `gh CLI is not authenticated. Run 'gh auth login' and re-invoke /kbagent:review.`
 6. Pull PR metadata: `gh pr view <pr_number> --json title,body,files,additions,deletions,baseRefName,headRefName,labels,state`. If `state != "OPEN"`, refuse.
 
-If any of the reads in steps 1-4 fail (file missing), STOP with: `Cannot review safely; prerequisite missing: <file>.` Do NOT improvise from training data -- this codebase's conventions live in those files.
+If any of the reads in steps 1-3 fail (file missing), STOP with: `Cannot review safely; prerequisite missing: <file>.` Do NOT improvise from training data -- this codebase's conventions live in those files. If only `docs/cli-interface-spec.md` (step 4) is missing, continue: skip the spec rules of Step 3.10 (still run `make cli-spec-check`) and write in the review that the spec steps were skipped because the file does not exist on this branch.
 
 ---
 
@@ -267,7 +267,9 @@ git diff <base_branch>...HEAD -- docs/cli-manifest.json scripts/cli_spec_baselin
 - `make cli-spec-check` non-zero → BLOCKING. Each failure line links to its
   rule (`docs/cli-interface-spec.md#<rule-id>`); cite that link.
 - A new entry in `exceptions` of the baseline without a reason that holds →
-  BLOCKING.
+  BLOCKING. CI accepts a new exception only when the PR has the label
+  `cli-spec-exception`; check each new exception and its reason before a
+  maintainer adds that label, and say in the review which ones you checked.
 - For each command and route in the diff, walk all rules marked "review"
   in the spec areas that the diff touches (the "Rule index" table of the spec
   lists them). For example: target selection and the help of `--project` and

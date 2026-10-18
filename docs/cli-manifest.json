@@ -278,7 +278,8 @@
       "category": "read",
       "help": "Show the current PAYG credit balance for one or more projects.\n\nBalance only -- consumed, remaining, and total (a client-side\n`consumed + remaining`, NOT a purchase figure: credit purchases are\nexactly what this command cannot see), plus the balance expressed in\nminutes (the Keboola UI's unit: minutes = credits * 60). A project\nwithout the `pay-as-you-go` feature flag surfaces as a per-project\nwarning (`PAYG_NOT_AVAILABLE`), not a hard failure -- one non-PAYG\nproject in a multi-project run never blocks the others.\n\nPurchase history and Stripe invoice IDs are NOT available here: that\ndata lives on `connection.<stack>` `/pay-as-you-go/billing/*`, which\ndoes not accept a plain project Storage API token (issue #594).",
       "params": [
-        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias (repeatable; omit for all registered projects)"}
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias (repeatable; omit for all registered projects)"},
+        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Until 1.0.0 the same as omitting --project; from 1.0.0 an omitted --project reads only the default project. Cannot be used with --project."}
       ]
     },
     {
@@ -317,7 +318,8 @@
       "category": "read",
       "help": "List development branches from connected projects.",
       "params": [
-        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias to query (can be repeated for multiple projects)"}
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias to query (can be repeated for multiple projects)"},
+        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Until 1.0.0 the same as omitting --project; from 1.0.0 an omitted --project reads only the default project. Cannot be used with --project."}
       ]
     },
     {
@@ -439,6 +441,7 @@
       "help": "List available components from connected projects.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias to query (can be repeated for multiple projects)"},
+        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Until 1.0.0 the same as omitting --project; from 1.0.0 an omitted --project reads only the default project. Cannot be used with --project. No effect with --query: --query searches only the default project."},
         {"kind": "option", "name": "component_type", "opts": ["--type"], "type": "text", "default": null, "help": "Filter by component type: extractor, writer, transformation, application"},
         {"kind": "option", "name": "query", "opts": ["--query", "-q"], "type": "text", "default": null, "help": "Search query to filter components by name or description"}
       ]
@@ -564,6 +567,7 @@
       "help": "List configurations from connected projects.\n\nIf a dev branch is active (via 'branch use'), configs from that branch\nare listed. Use --branch to override.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias to query (can be repeated for multiple projects)"},
+        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Until 1.0.0 the same as omitting --project; from 1.0.0 an omitted --project reads only the default project. Cannot be used with --project."},
         {"kind": "option", "name": "component_type", "opts": ["--component-type"], "type": "text", "default": null, "help": "Filter by component type: extractor, writer, transformation, application"},
         {"kind": "option", "name": "component_id", "opts": ["--component-id"], "type": "text", "default": null, "help": "Filter by specific component ID (e.g. keboola.ex-db-snowflake)"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "List configs from a specific dev branch ID (defaults to active branch)"},
@@ -713,6 +717,7 @@
       "params": [
         {"kind": "option", "name": "query", "opts": ["--query", "-q"], "type": "text", "required": true, "default": null, "help": "Search string or regex pattern"},
         {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias to search (can be repeated for multiple projects)"},
+        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Until 1.0.0 the same as omitting --project; from 1.0.0 an omitted --project reads only the default project. Cannot be used with --project."},
         {"kind": "option", "name": "component_type", "opts": ["--component-type"], "type": "text", "default": null, "help": "Filter by component type: extractor, writer, transformation, application"},
         {"kind": "option", "name": "component_id", "opts": ["--component-id"], "type": "text", "default": null, "help": "Filter by specific component ID (e.g. keboola.ex-db-snowflake)"},
         {"kind": "option", "name": "ignore_case", "opts": ["--ignore-case", "-i"], "type": "boolean", "is_flag": true, "default": false, "help": "Case-insensitive matching"},
@@ -1014,6 +1019,7 @@
       "help": "List data apps across one or more registered projects.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias to query (repeatable). None = all projects."},
+        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Until 1.0.0 the same as omitting --project; from 1.0.0 an omitted --project reads only the default project. Cannot be used with --project."},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Storage branch ID for the config-name lookup (defaults to production)."}
       ]
     },
@@ -1519,6 +1525,7 @@
       "help": "List conditional flows (keboola.flow) across projects.\n\nLegacy keboola.orchestrator flows are NOT listed (orchestrator support was\ndropped in 0.57.0); a count of any that exist is shown as a warning.\n\nWith ``--with-schedules`` each row includes a ``schedules`` list of\n``{schedule_id, cron, timezone, enabled}`` entries. Flows without\nany schedule get ``schedules=[]``.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias (repeatable for multiple projects; omit for all)"},
+        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Until 1.0.0 the same as omitting --project; from 1.0.0 an omitted --project reads only the default project. Cannot be used with --project."},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID (per-project; requires single --project)"},
         {"kind": "option", "name": "with_schedules", "opts": ["--with-schedules"], "type": "boolean", "is_flag": true, "default": false, "help": "Enrich each flow row with the cron schedules that target it (one extra API call per project, NOT per flow)."}
       ]
@@ -1706,6 +1713,7 @@
       "help": "List jobs from connected projects.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias to query (can be repeated for multiple projects)"},
+        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Until 1.0.0 the same as omitting --project; from 1.0.0 an omitted --project reads only the default project. Cannot be used with --project."},
         {"kind": "option", "name": "component_id", "opts": ["--component-id"], "type": "text", "default": null, "help": "Filter by component ID (e.g. keboola.ex-db-snowflake)"},
         {"kind": "option", "name": "config_id", "opts": ["--config-id"], "type": "text", "default": null, "help": "Filter by configuration ID (requires --component-id)"},
         {"kind": "option", "name": "status", "opts": ["--status"], "type": "text", "default": null, "help": "Filter by job status: processing, terminated, cancelled, success, error"},
@@ -2110,6 +2118,7 @@
       "help": "List notification subscriptions (Flow Notifications tab) across projects.\n\nEach row shows the project, event, the configuration the subscription is\nscoped to, and the recipient that gets paged.\n\nSubscriptions are project-level, not branch-scoped: a branch-specific one\ncarries a ``branch.id`` filter, shown in the Branch column. Configuration\nnames are resolved against each project's active branch.\n\nCompanion to ``flow list`` / ``flow detail``, which only expose in-flow\nnotification *tasks* -- a different mechanism from these subscriptions.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias (repeatable; omit for all registered projects)"},
+        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Until 1.0.0 the same as omitting --project; from 1.0.0 an omitted --project reads only the default project. Cannot be used with --project."},
         {"kind": "option", "name": "event", "opts": ["--event"], "type": "text", "default": null, "help": "Event name filter, e.g. 'job-failed'. Known events: job-failed, job-succeeded, job-succeeded-with-warning, job-processing-long, phase-job-failed, phase-job-succeeded, phase-job-succeeded-with-warning, phase-job-processing-long. Not validated against that list -- the service may add more."},
         {"kind": "option", "name": "component_id", "opts": ["--component-id"], "type": "text", "default": null, "help": "Only subscriptions filtering on this component (e.g. keboola.flow)"},
         {"kind": "option", "name": "config_id", "opts": ["--config-id"], "type": "text", "default": null, "help": "Only subscriptions filtering on this configuration ID"}
@@ -2417,7 +2426,8 @@
       "category": "read",
       "help": "Test connectivity to connected Keboola projects.",
       "params": [
-        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "default": null, "help": "Check only this project (default: all)"}
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "default": null, "help": "Check only this project (default: all)"},
+        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Until 1.0.0 the same as omitting --project; from 1.0.0 an omitted --project reads only the default project. Cannot be used with --project."}
       ]
     },
     {
@@ -2464,6 +2474,7 @@
       "help": "Audit schedules by cron window or job-freshness.\n\nThe ``last_run_at`` and ``matches_cron_window`` columns are always\npresent in the output but populated only when the corresponding\nfilter is active. Without filters both stay ``None`` -- this avoids\nN extra Queue API calls per project purely to populate columns the\ncaller did not ask for. Pass ``--not-run-since 0`` to force the\n``last_run_at`` lookup for every row (N extra API calls per\nproject).\n\n``--not-run-since`` resolves jobs via the Queue API, which has no\nbranch-awareness: ``schedule find --branch <DEV> --not-run-since N``\nstill compares against production jobs. Expect false-positive\n\"stale\" matches for dev branches with freshly-deployed configs.\n\n\b\nExamples:\n  # Schedules that fire between 02:00 and 04:00 across every project\n  kbagent --json schedule find --cron-window \"02:00-04:00\"\n\n  # Schedules whose parent hasn't run in the last 90 days\n  kbagent --json schedule find --not-run-since 90\n\n  # Both filters combined (AND)\n  kbagent --json schedule find --cron-window \"00:00-05:00\" --not-run-since 30\n\n  # No filters -> same rows as 'schedule list' plus empty last_run_at +\n  # empty matches_cron_window columns (populated only when filters active)\n  kbagent --json schedule find\n\n  # Force last_run_at population on every row (no staleness filter)\n  kbagent --json schedule find --not-run-since 0",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias (repeatable; omit for all projects)"},
+        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Until 1.0.0 the same as omitting --project; from 1.0.0 an omitted --project reads only the default project. Cannot be used with --project."},
         {"kind": "option", "name": "cron_window", "opts": ["--cron-window"], "type": "text", "default": null, "help": "Only include schedules firing entirely inside an hour window, e.g. '02:00-04:00'. Hour-field approximation -- see gotchas.md."},
         {"kind": "option", "name": "not_run_since", "opts": ["--not-run-since"], "type": "integer", "default": null, "help": "Only include schedules whose parent config has not produced a job in the last N days (or never ran). Pass 0 to force the last_run_at lookup for every row without applying a staleness filter. NOTE: Queue API is not branch-aware -- combining with --branch still compares against production jobs."},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID (requires single --project)"}
@@ -2477,6 +2488,7 @@
       "help": "List cron schedules (keboola.scheduler configs) across projects.\n\nEach row shows: project alias, schedule ID + name, parent component ID\nand config name, cron expression, timezone, and enabled state.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias (repeatable; omit for all registered projects)"},
+        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Until 1.0.0 the same as omitting --project; from 1.0.0 an omitted --project reads only the default project. Cannot be used with --project."},
         {"kind": "option", "name": "enabled_only", "opts": ["--enabled-only"], "type": "boolean", "is_flag": true, "default": false, "help": "Only show schedules whose state is 'enabled'"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID (requires single --project)"}
       ]
@@ -2490,6 +2502,7 @@
       "params": [
         {"kind": "argument", "name": "query", "opts": ["query"], "type": "text", "required": true, "default": null, "help": "Search query string."},
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "multiple": true, "default": null, "help": "Project alias to search (repeatable; defaults to all projects)."},
+        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Until 1.0.0 the same as omitting --project; from 1.0.0 an omitted --project reads only the default project. Cannot be used with --project."},
         {"kind": "option", "name": "item_type", "opts": ["--type", "-t"], "type": "text", "multiple": true, "default": null, "help": "Item type to restrict results. Repeatable. Valid values: table, bucket, config, flow, data-app, transformation."},
         {"kind": "option", "name": "search_type", "opts": ["--search-type"], "type": "text", "default": "textual", "help": "Search mode. ``textual`` (default) searches item names via the Storage API. ``config-based`` scans full configuration JSON bodies. Both modes match case-insensitively."},
         {"kind": "option", "name": "limit", "opts": ["--limit", "-l"], "type": "integer", "default": 50, "help": "Maximum number of results per project (textual search only, 1-100)."},
@@ -3137,7 +3150,8 @@
       "category": "read",
       "help": "Show cross-project data flow edges via bucket sharing.\n\nLists how data flows between projects through shared and linked buckets.\nEach edge represents a source bucket shared to a target project.\n\nFor column-level lineage, use `lineage build` + `lineage show`.",
       "params": [
-        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias to query (can be repeated for multiple projects)."}
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias to query (can be repeated for multiple projects)."},
+        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Until 1.0.0 the same as omitting --project; from 1.0.0 an omitted --project reads only the default project. Cannot be used with --project."}
       ]
     },
     {
@@ -3161,7 +3175,8 @@
       "category": "read",
       "help": "List shared buckets available for linking.\n\nShows buckets shared within your organization that can be linked\ninto your projects. Uses the regular project token.",
       "params": [
-        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias (repeatable). Omit to query all projects."}
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias (repeatable). Omit to query all projects."},
+        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Until 1.0.0 the same as omitting --project; from 1.0.0 an omitted --project reads only the default project. Cannot be used with --project."}
       ]
     },
     {
@@ -3241,6 +3256,7 @@
       "help": "List storage buckets with sharing/linked bucket information.\n\nShows which buckets are linked from other projects, including the\nsource project ID and name.\n\nBranch handling: this read command uses the production endpoint by\ndefault, even when a dev branch is active via `branch use`. The\nStorage API branch-scoped endpoint only returns locally-modified\nbuckets, so a fresh dev branch lists nothing. Pass --branch to query\na dev branch explicitly.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias (can be repeated for multiple projects)"},
+        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Until 1.0.0 the same as omitting --project; from 1.0.0 an omitted --project reads only the default project. Cannot be used with --project."},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID (defaults to production, even after 'branch use')"}
       ]
     },
@@ -3654,6 +3670,7 @@
       "help": "List storage tables from one or more projects.\n\nQueries all connected projects in parallel by default, matching the\nbehaviour of ``storage buckets``, ``config list``, ``job list``, and other\nread commands. Each row in the output is tagged with ``project_alias``\nso results from multiple projects can be distinguished.\n\nBranch handling: this read command uses the production endpoint by\ndefault, even when a dev branch is active via `branch use`. The\nStorage API branch-scoped endpoint only returns tables that were\nlocally modified in the dev branch, so a fresh dev branch lists\nnothing. Pass --branch to query a dev branch explicitly.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias (can be repeated for multiple projects). Omit to query all connected projects in parallel."},
+        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Until 1.0.0 the same as omitting --project; from 1.0.0 an omitted --project reads only the default project. Cannot be used with --project."},
         {"kind": "option", "name": "bucket_id", "opts": ["--bucket-id"], "type": "text", "default": null, "help": "Filter tables by bucket ID (applied independently per project)"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID (defaults to production, even after 'branch use')"},
         {"kind": "option", "name": "include_usage", "opts": ["--include-usage"], "type": "boolean", "is_flag": true, "default": false, "help": "Also report which configurations read or write each table, from their storage input/output mapping. Costs one extra component listing per project (not per table), but that listing carries every configuration body -- expect it to be slow in a big project."}
@@ -4119,6 +4136,7 @@
       "help": "List workspaces from connected projects.\n\nBranch handling: without `--branch`, each project's active branch (`branch\nuse`) is used, else production. The `Target:` line on stderr (`targets` in\n--json) names the branch of each project.\n\nEach workspace entry exposes `login_type`, `read_only` and\n`qs_compatible` so data-app developers can pick a Query-Service-compatible\nworkspace without firing a probe query (closes #304).",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias to query (can be repeated for multiple projects)"},
+        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Until 1.0.0 the same as omitting --project; from 1.0.0 an omitted --project reads only the default project. Cannot be used with --project."},
         {"kind": "option", "name": "orphaned", "opts": ["--orphaned"], "type": "boolean", "is_flag": true, "default": false, "help": "Show only orphaned workspaces (keboola.sandboxes config missing)"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID. Defaults to each project's active branch (`kbagent branch use`), else production. Requires exactly one --project."},
         {"kind": "option", "name": "qs_compatible", "opts": ["--qs-compatible"], "type": "boolean", "is_flag": true, "default": false, "help": "Show only workspaces whose loginType is known to work with the Query Service AND that are read-only -- the canonical shape for a data-app."}

@@ -128,7 +128,7 @@ cli-spec-rules: ## Check the CLI spec rules vs scripts/cli_spec_baseline.json an
 cli-spec-check: cli-spec-rules ## Check the CLI against its spec: the rules (cli-spec-rules) plus the contract cases
 	uv run --extra server pytest -q tests/test_cli_contract.py tests/test_cli_human_snapshots.py tests/test_doc_examples.py tests/test_server_dry_run_guard.py
 
-cli-spec-baseline: ## Re-record scripts/cli_spec_baseline.json after a fix (the baseline may only shrink)
+cli-spec-baseline: ## Re-record scripts/cli_spec_baseline.json after a fix (entry counts may only shrink)
 	uv run --extra server python scripts/check_cli_spec.py --write-baseline
 
 cli-spec-report: ## Print the per-command spec inventory: category, --project shape, safety flags, violated rules

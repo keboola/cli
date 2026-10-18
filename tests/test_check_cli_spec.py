@@ -257,7 +257,50 @@ def test_growth_against_base_fails_for_blocking_rules_only() -> None:
     base = _small_baseline()
     base["violations"] = {}
     fails = spec_check.ratchet(_results(), _small_baseline(), base)
-    assert fails == [f"FAIL grown    {RULE}: branch delete -- the baseline gained an entry"]
+    assert fails == [f"FAIL grown    {RULE}: 0 -> 1 entries -- the baseline gained entries"]
+
+
+def test_renamed_command_in_a_tree_rule_is_no_growth() -> None:
+    """A rename (or a hidden alias that keeps the old name, C3) changes the subject only."""
+    head = _small_baseline()
+    head["violations"][RULE] = ["branch remove"]
+    renamed = _results(**{RULE: {"branch remove": "x", "config delete": "x"}})
+    assert spec_check.ratchet(renamed, head, _small_baseline()) == []
+
+
+def test_new_exception_fails_without_the_flag() -> None:
+    head = _small_baseline()
+    head["exceptions"][RULE]["workspace delete"] = "reviewed"
+    found = _results(
+        **{RULE: {"branch delete": "x", "config delete": "x", "workspace delete": "x"}}
+    )
+    assert spec_check.ratchet(found, head, _small_baseline()) == [
+        (
+            f"FAIL exception {RULE}: workspace delete -- new exception; a reviewer adds the "
+            "'cli-spec-exception' label to the pull request to accept it"
+        )
+    ]
+    assert spec_check.ratchet(found, head, _small_baseline(), allow_new_exceptions=True) == []
+
+
+def test_moving_a_violation_into_exceptions_fails() -> None:
+    head = _small_baseline()
+    head["violations"][RULE] = []
+    head["exceptions"][RULE]["branch delete"] = "now an exception"
+    fails = spec_check.ratchet(_results(), head, _small_baseline())
+    assert fails == [
+        (
+            f"FAIL exception {RULE}: branch delete -- new exception; a reviewer adds the "
+            "'cli-spec-exception' label to the pull request to accept it"
+        )
+    ]
+
+
+def test_rule_removed_together_with_its_baseline_fails() -> None:
+    base = _small_baseline()
+    base["blocking"]["safety.retired-rule"] = True
+    fails = spec_check.ratchet(_results(), _small_baseline(), base)
+    assert fails == ["FAIL removed  safety.retired-rule: a rule of the base baseline is missing"]
 
 
 def test_growth_of_a_source_rule_is_counted_not_named() -> None:

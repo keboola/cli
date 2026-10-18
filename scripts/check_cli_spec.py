@@ -10,8 +10,11 @@ Ratchet (per rule; the baseline holds a `blocking` flag for every rule):
   - new violation (in neither `violations` nor `exceptions`): FAIL;
   - stale entry (listed, no longer violating): FAIL, so the baseline shrinks;
   - unknown rule id, or a rule without a `blocking` flag: FAIL;
-  - with --base-baseline: an entry added to `violations` of a blocking rule,
-    or a rule changed from blocking to non-blocking: FAIL.
+  - with --base-baseline (the baseline of the base branch), for a blocking rule:
+    more `violations` entries than the base (counted per rule, so a renamed
+    command or a moved function is no growth), a subject added to `exceptions`
+    (unless --allow-new-exceptions), a rule changed from blocking to
+    non-blocking, or a rule of the base that is missing: FAIL.
   A non-blocking rule prints the same lines as NOTE and never fails.
 
 `help.manifest-fresh` takes no baseline: `docs/cli-manifest.json` must always
@@ -97,8 +100,9 @@ SHORT_FLAGS: dict[str, str] = {
 # either meaning; each existing use is an `exceptions` entry in the baseline.
 RESERVED_SHORT_FLAGS: frozenset[str] = frozenset({"-c", "-n", "-r"})
 
-# S3: what `--force` overrides, per command. Empty until the safety section of
-# the spec is accepted; every `--force` is a violation of a non-blocking rule.
+# S3: what `--force` overrides, per command. Empty until the registry is
+# reviewed; until then every `--force` is in the baseline of the blocking rule
+# safety.force-meaning-registered, and a new `--force` fails.
 FORCE_MEANINGS: dict[str, str] = {}
 
 # N4: hidden alias path -> canonical path. No hidden leaf exists yet.
@@ -1272,6 +1276,7 @@ def ratchet(
     results: dict[str, Violations],
     baseline: dict[str, Any],
     base: dict[str, Any] | None = None,
+    allow_new_exceptions: bool = False,
 ) -> list[str]:
     """Return failure lines (empty = pass); prints NOTE lines for non-blocking rules."""
     known = {r.id: r for r in RULES}
@@ -1307,26 +1312,48 @@ def ratchet(
             for line in lines:
                 print(line)
     if base is not None:
-        old_listed: dict[str, list[str]] = base.get("violations", {})
-        old_blocking: dict[str, bool] = base.get("blocking", {})
-        for rid, subjects in sorted(listed.items()):
-            if not blocking.get(rid, True):
-                continue
-            old_subjects = old_listed.get(rid, [])
-            if known.get(rid) is not None and known[rid].kind == "ast":
-                # A source subject names a function; moving the function to
-                # another module renames the subject. Only the count counts.
-                if len(subjects) > len(old_subjects):
-                    fails.append(
-                        f"FAIL grown    {rid}: {len(old_subjects)} -> {len(subjects)} "
-                        "entries -- the baseline gained entries"
-                    )
-                continue
-            for s in sorted(set(subjects) - set(old_subjects)):
-                fails.append(f"FAIL grown    {rid}: {s} -- the baseline gained an entry")
-        for rid, was in sorted(old_blocking.items()):
-            if was and not blocking.get(rid, True):
-                fails.append(f"FAIL loosened {rid}: changed from blocking to non-blocking")
+        fails.extend(_growth(blocking, listed, excepted, base, allow_new_exceptions))
+    return fails
+
+
+def _growth(
+    blocking: dict[str, bool],
+    listed: dict[str, list[str]],
+    excepted: dict[str, dict[str, str]],
+    base: dict[str, Any],
+    allow_new_exceptions: bool,
+) -> list[str]:
+    """Failure lines for a baseline that is looser than the base branch's.
+
+    Entries are counted per rule, not compared by subject: renaming a command,
+    keeping the old name as a hidden alias (C3) or moving a function to another
+    module renames its subject, and that is no growth. Known limit: a fixed
+    entry can be swapped for a new violation of the same rule elsewhere.
+    """
+    old_listed: dict[str, list[str]] = base.get("violations", {})
+    old_excepted: dict[str, dict[str, str]] = base.get("exceptions", {})
+    old_blocking: dict[str, bool] = base.get("blocking", {})
+    fails: list[str] = []
+    for rid in sorted(set(blocking) | set(listed) | set(excepted)):
+        if not blocking.get(rid, True):
+            continue
+        old_count, count = len(old_listed.get(rid, [])), len(listed.get(rid, []))
+        if count > old_count:
+            fails.append(
+                f"FAIL grown    {rid}: {old_count} -> {count} entries -- the baseline "
+                "gained entries"
+            )
+        if not allow_new_exceptions:
+            for s in sorted(set(excepted.get(rid, {})) - set(old_excepted.get(rid, {}))):
+                fails.append(
+                    f"FAIL exception {rid}: {s} -- new exception; a reviewer adds the "
+                    "'cli-spec-exception' label to the pull request to accept it"
+                )
+    for rid, was in sorted(old_blocking.items()):
+        if rid not in blocking:
+            fails.append(f"FAIL removed  {rid}: a rule of the base baseline is missing")
+        elif was and not blocking[rid]:
+            fails.append(f"FAIL loosened {rid}: changed from blocking to non-blocking")
     return fails
 
 
@@ -1379,6 +1406,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Check the CLI against its spec.")
     parser.add_argument("--baseline", type=Path, default=BASELINE_PATH)
     parser.add_argument("--base-baseline", type=Path, help="baseline of the base branch")
+    parser.add_argument(
+        "--allow-new-exceptions",
+        action="store_true",
+        help="accept subjects added to 'exceptions' against --base-baseline (reviewed PRs)",
+    )
     parser.add_argument("--details", metavar="RULE", help="print every subject of one rule")
     parser.add_argument("--list-rules", action="store_true")
     parser.add_argument("--report", action="store_true")
@@ -1424,7 +1456,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     base = _read_json(args.base_baseline) if args.base_baseline else None
-    fails = ratchet(results, old, base)
+    fails = ratchet(results, old, base, args.allow_new_exceptions)
     for line in fails:
         print(line)
     if fails:

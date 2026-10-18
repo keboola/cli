@@ -951,18 +951,24 @@ checks them against the rules of the CLI interface spec (#791). Existing
 violations are listed in `scripts/cli_spec_baseline.json`, which has a
 `blocking` flag per rule. A new violation of a blocking rule fails, and so
 does a baseline entry that is no longer a violation: after a fix, run
-`make cli-spec-baseline` and commit the shorter file. On a pull request CI
-also compares the baseline with the base branch and fails when it gained an
-entry. For source rules (subjects `module:function`) it compares the number
-of entries per rule, so moving a function to another file does not fail;
-the known limit is that one fixed entry can then be swapped for a new
-violation in another function without a failure.
-A permanent, reviewed exception goes into `exceptions` with a reason.
-Renaming or moving a function or command that is in the baseline gives a
-`new` line for the new name and a `stale` line for the old one; run
-`make cli-spec-baseline` and commit the result. Known
-limit: the ratchet is keyed by subject, so a second violation of the same
-rule inside a function or command that is already in the baseline passes.
+`make cli-spec-baseline` and commit the shorter file. A permanent, reviewed
+exception goes into `exceptions` with a reason. Renaming or moving a function
+or command that is in the baseline gives a `new` line for the new name and a
+`stale` line for the old one; run `make cli-spec-baseline` and commit the
+result.
+
+On a pull request CI also compares the baseline with the base branch, for
+every blocking rule. It fails when a rule has more `violations` entries than
+on the base branch (entries are counted per rule, so a renamed command, a
+hidden alias that keeps the old name, or a function moved to another file is
+no growth), when a rule of the base branch is missing or no longer blocking,
+and when a subject was added to `exceptions`. A new exception passes only when
+a reviewer has checked the exception and its reason and added the label
+`cli-spec-exception` to the pull request; re-run the CI job after adding the
+label. Known limits: the count lets one fixed entry be swapped for a new
+violation of the same rule elsewhere, and the ratchet is keyed by subject, so
+a second violation of the same rule inside a function or command that is
+already in the baseline passes.
 `make check` runs the rules (`make cli-spec-rules`); `make cli-spec-check`
 also runs the contract test files.
 The same step fails when `docs/cli-manifest.json` differs from the live tree

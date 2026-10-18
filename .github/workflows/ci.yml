@@ -123,16 +123,28 @@ jobs:
         # from the live tree (`make cli-manifest`). The contract cases of the
         # spec are pytest files and run in the `test` job.
         #
-        # On a pull request it also reads the base branch's baseline and fails
-        # when the baseline gained an entry, so the baseline can only shrink.
+        # On a pull request it also reads the base branch's baseline. For each
+        # blocking rule it fails when the rule has more entries than on the base
+        # branch (counted per rule, so a rename is no growth), when the rule is
+        # missing or no longer blocking, and when a subject was added to
+        # `exceptions`. A new exception passes only with the PR label
+        # `cli-spec-exception`, which a reviewer adds after checking the
+        # exception and its reason (re-run the job after labelling). The label
+        # is read as a boolean through `env`, never pasted into the script.
         # A base branch without the file (the PR that adds it) skips that part.
+        env:
+          ALLOW_NEW_EXCEPTIONS: ${{ contains(github.event.pull_request.labels.*.name, 'cli-spec-exception') }}
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             git fetch --no-tags --depth=1 origin "$GITHUB_BASE_REF"
             if git show "origin/$GITHUB_BASE_REF:scripts/cli_spec_baseline.json" \
                  > "$RUNNER_TEMP/base_cli_spec_baseline.json" 2>/dev/null; then
+              extra=""
+              if [ "$ALLOW_NEW_EXCEPTIONS" = "true" ]; then
+                extra="--allow-new-exceptions"
+              fi
               uv run --extra server python scripts/check_cli_spec.py \
-                --base-baseline "$RUNNER_TEMP/base_cli_spec_baseline.json"
+                --base-baseline "$RUNNER_TEMP/base_cli_spec_baseline.json" $extra
               exit $?
             fi
           fi
