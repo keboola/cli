@@ -1,0 +1,6 @@
+exit: 1
+--- stdout ---
+
+--- stderr ---
+Target: project 'prod', production
+Error: API error 418 from https://connection.keboola.com (token: ***): no mocked route for GET /v2/storage/components/keboola.ex-db-mysql/configs/99

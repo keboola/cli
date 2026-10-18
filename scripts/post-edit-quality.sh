@@ -65,4 +65,22 @@ if printf '%s\n' "$TY_OUTPUT" | grep -qE '^error'; then
     FAILED=1
 fi
 
+# CLI spec check: a change in commands/ can break a rule of the CLI interface
+# spec or leave docs/cli-manifest.json stale (`make cli-manifest`).
+case "$FILE_PATH" in
+    */src/keboola_agent_cli/commands/*|src/keboola_agent_cli/commands/*)
+        if ! SPEC_OUTPUT="$(uv run --quiet --extra server python scripts/check_cli_spec.py 2>&1)"; then
+            echo "post-edit: CLI spec check failed (blocking -- fix before continuing):" >&2
+            printf '%s\n' "$SPEC_OUTPUT" | grep -E '^(FAIL|Traceback|[A-Za-z]*Error)' | head -10 >&2 || true
+            if printf '%s\n' "$SPEC_OUTPUT" | grep -q '^FAIL stale'; then
+                echo "post-edit: a fixed violation is still in the baseline; run 'make cli-spec-baseline'." >&2
+            fi
+            if printf '%s\n' "$SPEC_OUTPUT" | grep -q 'help.manifest-fresh'; then
+                echo "post-edit: docs/cli-manifest.json is stale; run 'make cli-manifest'." >&2
+            fi
+            FAILED=1
+        fi
+        ;;
+esac
+
 exit $FAILED

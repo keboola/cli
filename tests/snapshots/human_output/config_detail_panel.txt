@@ -1,0 +1,19 @@
+exit: 0
+--- stdout ---
+╭─── Configuration Detail - prod ───╮
+│ Name: Orders                      │
+│ Config ID: 11                     │
+│ Component:                        │
+│ Description: Nightly load         │
+│                                   │
+│ Configuration:                    │
+│ {                                 │
+│   "parameters": {                 │
+│     "db": {                       │
+│       "host": "mysql.example.com" │
+│     }                             │
+│   }                               │
+│ }                                 │
+╰───────────────────────────────────╯
+--- stderr ---
+Target: project 'prod', production

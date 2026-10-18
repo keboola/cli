@@ -255,7 +255,7 @@ Full author checklist: see `CONTRIBUTING.md` > "Releasing a beta (pre-release) v
 
 5. **Error handling**: commands catch `KeboolaApiError` and `ConfigError`, map them to the appropriate exit code, and output structured errors in JSON mode. Report a `KeboolaApiError` with `emit_api_error(formatter, exc)` (`commands/_helpers.py`), which keeps its `retryable` and `details`. `tests/test_error_forwarding.py` fails on a handler that drops them.
 
-6. **Exit codes**: 0=success, 1=general error, 2=usage error, 3=auth error, 4=network error, 5=config error, 6=permission denied, 7=job timed out and cancelled (`JOB_TIMEOUT_TERMINATED`).
+6. **Exit codes**: 0=success, 1=general error, 2=usage error, 3=auth error, 4=network error, 5=config error, 6=permission denied, 7=job timed out and cancelled (`JOB_TIMEOUT_TERMINATED`), 130=interrupted.
 
 7. **Token masking**: tokens are never printed in full. Use `mask_token()` from `errors.py`.
 
@@ -318,6 +318,8 @@ Full author checklist: see `CONTRIBUTING.md` > "Releasing a beta (pre-release) v
     `project`, `alias` or `stack` until it is in `ALIAS_OPTIONS` or in the
     test's `NOT_AN_ALIAS` list; an option with any other name (like
     `sync clone --target`) needs that decision by hand.
+
+21. **The CLI interface spec is binding.** Every change to the command-line interface or the `kbagent serve` REST API follows [`docs/cli-interface-spec.md`](docs/cli-interface-spec.md); `make cli-spec-check` enforces the rules that a machine can check.
 
 ## Claude Code Plugin
 
