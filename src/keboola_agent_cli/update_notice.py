@@ -146,6 +146,9 @@ def pending_warnings() -> list[dict[str, Any]]:
 def print_once() -> bool:
     """Write the notice to stderr unless it was written in this process already.
 
+    Only for the startup check, which runs before the ``OutputFormatter``
+    exists (#791 section 4.3); commands use :func:`take_unprinted_text`.
+
     Returns:
         True when a line was written.
     """
@@ -155,6 +158,20 @@ def print_once() -> bool:
     sys.stderr.write(f"Warning: {_current.text}\n")
     _printed = True
     return True
+
+
+def take_unprinted_text() -> str | None:
+    """The notice text for a command's own output, once per process.
+
+    For ``version``, ``update``, ``doctor`` and ``context``, which print it
+    through ``OutputFormatter.warning``. None when there is no notice or it was
+    printed already.
+    """
+    global _printed
+    if _current is None or _printed:
+        return None
+    _printed = True
+    return _current.text
 
 
 def reset() -> None:

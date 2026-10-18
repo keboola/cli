@@ -19,6 +19,7 @@ import time
 from dataclasses import dataclass
 from importlib.metadata import distribution
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import platformdirs
 
@@ -57,10 +58,14 @@ from .update_runner import (
     DeferredUpdateStatus,
     InstallStatus,
     collect_finished_deferred_update,
+    pending_update_target,
     request_deferred_update,
     run_install,
     should_defer,
 )
+
+if TYPE_CHECKING:
+    from .output import OutputFormatter
 
 logger = logging.getLogger(__name__)
 
@@ -483,6 +488,13 @@ def _schedule_deferred_update(plan: KbagentUpdatePlan) -> None:
     target = plan.latest_version or __version__
     if plan.command is None:
         return
+    pending = pending_update_target()
+    if pending is not None and pending != target:
+        sys.stderr.write(
+            f"An update to v{pending} is already scheduled; v{target} is not scheduled "
+            "until it has run.\n"
+        )
+        return
     request = DeferredUpdateRequest(
         from_version=__version__,
         target_version=target,
@@ -574,21 +586,28 @@ def register_deprecation_notice(
     return notice
 
 
-def show_deprecation_notice(*, json_mode: bool) -> None:
+def show_deprecation_notice(formatter: "OutputFormatter") -> None:
     """Show the notice in ``version``, ``update``, ``doctor`` and ``context``: on every run.
 
     Uses the notice this run already built (startup check, or the fresh lookup
     of ``version`` / ``update``), else the next-major keys of the cache, so it
-    needs no network. JSON mode only keeps it for ``warnings[]``.
+    needs no network. JSON mode only keeps it for ``warnings[]`` (the envelope
+    builders read it); human mode prints it through ``formatter.warning`` on
+    stderr (spec HO1, UP3), unless the startup check printed it already.
     """
     try:
-        from .update_notice import current
+        from rich.markup import escape
+
+        from .update_notice import current, take_unprinted_text
 
         if current() is None:
             next_major, _ = next_major_from_cache(_read_cache(), _major_of(__version__) + 1)
             register_deprecation_notice(next_major)
-        if not json_mode:
-            print_once()
+        if formatter.json_mode:
+            return
+        text = take_unprinted_text()
+        if text is not None:
+            formatter.warning(escape(text))
     except Exception:
         logger.debug("Could not show the deprecation notice", exc_info=True)
 

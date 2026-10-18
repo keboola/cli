@@ -29,6 +29,7 @@ from ..constants import (
     KBAGENT_INSTALL_SOURCE,
     MAJOR_MIGRATION_DELAY_SECONDS,
     NEXT_MAJOR_RECHECK_SECONDS,
+    RELEASE_LIST_MAX_PAGES,
     RELEASE_LIST_PAGE_SIZE,
     UPDATE_TIMEOUT_SECONDS,
     VERSION_CHECK_TIMEOUT,
@@ -37,6 +38,7 @@ from ..frozen_dist import FrozenDistribution, detect_frozen_distribution
 from ..update_runner import (
     DeferredUpdateRequest,
     InstallStatus,
+    pending_update_target,
     request_deferred_update,
     run_install,
     should_defer,
@@ -70,6 +72,8 @@ class KbagentUpdatePlan:
     crosses_major: bool = False
     #: The crossing was asked for with ``kbagent update --major``.
     major_flag: bool = False
+    #: No release of the running major in the newest pages of the release list.
+    same_major_missing: bool = False
 
 
 @dataclass(frozen=True)
@@ -382,6 +386,9 @@ class GatedRelease:
     #: The ``Date`` header of the GitHub response; None when nothing was fetched
     #: or the header was missing (a crossing then waits).
     server_now: float | None = None
+    #: The release list was read, but its newest pages hold no release of the
+    #: running major (``latest_version`` is None for that reason, not offline).
+    same_major_missing: bool = False
 
     @property
     def crosses_major(self) -> bool:
@@ -496,9 +503,20 @@ class _ListedRelease:
     stable: bool
 
 
-def _read_release_list(timeout: float) -> tuple[list[_ListedRelease], float | None] | None:
-    """``GET /releases?per_page=100``: drafts and invalid tags dropped; None on failure."""
-    answer = _github_get("/releases", timeout=timeout, params={"per_page": RELEASE_LIST_PAGE_SIZE})
+@dataclass(frozen=True)
+class _Page:
+    listed: list[_ListedRelease]
+    server_now: float | None
+    #: The page held a full page of entries, so an older page may exist.
+    full: bool
+
+
+def _read_release_list(timeout: float, *, page: int = 1) -> _Page | None:
+    """``GET /releases?per_page=100[&page=N]``: drafts and invalid tags dropped; None on failure."""
+    params: dict[str, Any] = {"per_page": RELEASE_LIST_PAGE_SIZE}
+    if page > 1:
+        params["page"] = page
+    answer = _github_get("/releases", timeout=timeout, params=params)
     if answer is None or answer.status != 200 or not isinstance(answer.body, list):
         return None
     listed = []
@@ -506,7 +524,36 @@ def _read_release_list(timeout: float) -> tuple[list[_ListedRelease], float | No
         parsed = _release_version(entry)
         if parsed is not None:
             listed.append(_ListedRelease(parsed[0], parsed[1], _is_stable(entry, parsed[0])))
-    return listed, answer.server_now
+    return _Page(listed, answer.server_now, len(answer.body) >= RELEASE_LIST_PAGE_SIZE)
+
+
+@dataclass(frozen=True)
+class _SameMajor:
+    version: str | None
+    #: The pages were read but held no release of the running major.
+    missing: bool
+
+
+def _same_major_from_pages(
+    first: _Page | None, major: int, *, include_prerelease: bool, timeout: float
+) -> _SameMajor | None:
+    """Highest release of ``major`` in the release list; None when a page read failed.
+
+    Reads older pages (up to :data:`RELEASE_LIST_MAX_PAGES`) only while the
+    pages read so far hold no release of ``major`` -- the case of a held 0.x
+    install after more than 100 releases of 1.x.
+    """
+    page = first if first is not None else _read_release_list(timeout)
+    number = 1
+    listed: list[_ListedRelease] = []
+    while page is not None:
+        listed += page.listed
+        found = _highest(_of_major(listed, major, include_prerelease=include_prerelease))
+        if found is not None or not page.full or number >= RELEASE_LIST_MAX_PAGES:
+            return _SameMajor(found, found is None)
+        number += 1
+        page = _read_release_list(timeout, page=number)
+    return None
 
 
 def _of_major(
@@ -680,12 +727,13 @@ def fetch_gated_release(
     offline = GatedRelease(None, None, cached_next, cached_checked)
 
     listed: list[_ListedRelease] | None = None
+    first_page: _Page | None = None
     latest: tuple[Version, str] | None = None
     if include_prerelease:
-        read = _read_release_list(timeout)
-        if read is None:
+        first_page = _read_release_list(timeout)
+        if first_page is None:
             return offline
-        listed, server_now = read
+        listed, server_now = first_page.listed, first_page.server_now
     else:
         answer = _github_get("/releases/latest", timeout=timeout)
         if answer is None or answer.status != 200:
@@ -723,28 +771,35 @@ def fetch_gated_release(
                 migration = next_major.migration_ts() if next_major is not None else None
         may_cross = migration is not None and server_now is not None and server_now >= migration
 
+    # `--beta --major` may take a pre-release of the next major before a
+    # stable `v<N+1>.0.0` exists; the automatic crossing and the notice still
+    # need the stable release.
+    beta_major = allow_major and include_prerelease
     target: str | None = None
-    if may_cross and next_major is not None:
+    if may_cross and (next_major is not None or beta_major):
         if latest is not None and latest[0].major == next_number:
             target = latest[1]
         else:
             if listed is None:
-                read = _read_release_list(timeout)
-                listed = read[0] if read is not None else []
+                first_page = _read_release_list(timeout)
+                listed = first_page.listed if first_page is not None else []
             target = _highest(_of_major(listed, next_number, include_prerelease=include_prerelease))
     if target is not None:
         return GatedRelease(target, None, next_major, checked_at, server_now)
 
     if latest is not None and latest[0].major <= running.major:
-        same = latest[1]
-    else:
-        if listed is None:
-            read = _read_release_list(timeout)
-            if read is None:
-                return GatedRelease(None, None, next_major, checked_at, server_now)
-            listed = read[0]
-        same = _highest(_of_major(listed, running.major, include_prerelease=include_prerelease))
-    return GatedRelease(same, same, next_major, checked_at, server_now)
+        return GatedRelease(latest[1], latest[1], next_major, checked_at, server_now)
+    same = _same_major_from_pages(
+        first_page,
+        running.major,
+        include_prerelease=include_prerelease,
+        timeout=timeout,
+    )
+    if same is None:
+        return GatedRelease(None, None, next_major, checked_at, server_now)
+    return GatedRelease(
+        same.version, same.version, next_major, checked_at, server_now, same.missing
+    )
 
 
 def _is_up_to_date(local: str | None, latest: str | None) -> bool | None:
@@ -766,7 +821,11 @@ def _is_up_to_date(local: str | None, latest: str | None) -> bool | None:
 
 
 def prepare_kbagent_update_plan(
-    latest_version: str | None, *, include_prerelease: bool = False, major_flag: bool = False
+    latest_version: str | None,
+    *,
+    include_prerelease: bool = False,
+    major_flag: bool = False,
+    same_major_missing: bool = False,
 ) -> KbagentUpdatePlan:
     """Prepare the terminal self-reinstall without mutating any environment.
 
@@ -803,6 +862,7 @@ def prepare_kbagent_update_plan(
         frozen_distribution=frozen_distribution,
         crosses_major=up_to_date is False and _major_of(latest_version) > _major_of(__version__),
         major_flag=major_flag,
+        same_major_missing=same_major_missing,
     )
 
 
@@ -816,6 +876,21 @@ def _read_startup_cache() -> dict[str, Any] | None:
     except Exception:
         logger.debug("Could not read the version cache", exc_info=True)
         return None
+
+
+def _cache_same_major(gated: GatedRelease, cache: Mapping[str, Any] | None) -> str | None:
+    """The same-major version for the startup cache.
+
+    A crossing run does not look the same-major version up; it keeps the
+    cached one instead of replacing it with the running version, which would
+    delay a same-major update by one cache TTL.
+    """
+    if gated.same_major_version is not None or gated.latest_version is None:
+        return gated.same_major_version
+    cached = cache.get("latest_version") if cache else None
+    if isinstance(cached, str) and _major_of(cached) == _major_of(__version__):
+        return cached
+    return None
 
 
 def _register_notice(gated: GatedRelease) -> None:
@@ -841,7 +916,10 @@ def prepare_update_plan(
     )
     return UpdatePlan(
         kbagent=prepare_kbagent_update_plan(
-            gated.latest_version, include_prerelease=include_prerelease, major_flag=allow_major
+            gated.latest_version,
+            include_prerelease=include_prerelease,
+            major_flag=allow_major,
+            same_major_missing=gated.same_major_missing,
         ),
         gated=gated,
     )
@@ -895,7 +973,7 @@ class VersionService:
 
             if not include_prerelease:
                 _write_cache(
-                    latest_version=gated.same_major_version,
+                    latest_version=_cache_same_major(gated, startup_cache),
                     next_major_keys=next_major_cache_keys(gated),
                 )
         except Exception:
@@ -1143,6 +1221,22 @@ class VersionService:
         # local problem. Separate them, and never print a recovery command that
         # is not runnable -- the old fallback rendered as a bare
         # `uv tool install --force --reinstall` with no package to install.
+        if kbagent_latest is None and plan.same_major_missing:
+            major = _major_of(old_version)
+            return {
+                "planned": False,
+                "updated": False,
+                "up_to_date": up_to_date,
+                "current_version": old_version,
+                "latest_version": None,
+                "reason": "same_major_not_found",
+                "message": (
+                    f"No kbagent {major}.x release is among the newest "
+                    f"{RELEASE_LIST_PAGE_SIZE * RELEASE_LIST_MAX_PAGES} GitHub releases, so "
+                    f"v{old_version} was left untouched. Run `kbagent update --major` to move "
+                    f"to {major + 1}.x."
+                ),
+            }
         if kbagent_latest is None:
             return {
                 "planned": False,
@@ -1183,6 +1277,23 @@ class VersionService:
         # finishes on the old major, and a running `kbagent serve` holds the
         # install until it stops (the helper gives up after 15 minutes).
         if should_defer() or plan.crosses_major:
+            pending = pending_update_target()
+            if pending is not None and pending != kbagent_latest:
+                return {
+                    "planned": True,
+                    "updated": False,
+                    "deferred": False,
+                    "up_to_date": False,
+                    "current_version": old_version,
+                    "latest_version": kbagent_latest,
+                    "reason": "other_update_pending",
+                    "message": (
+                        f"An update to v{pending} is already scheduled and runs once every "
+                        f"kbagent process has exited. v{kbagent_latest} was not scheduled; run "
+                        "this command again after that update has finished."
+                    ),
+                    "recovery_command": plan.recovery_command,
+                }
             scheduled = request_deferred_update(
                 DeferredUpdateRequest(
                     from_version=old_version,

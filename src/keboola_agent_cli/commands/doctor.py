@@ -16,5 +16,5 @@ def doctor_command(ctx: typer.Context) -> None:
     doctor_service = get_service(ctx, "doctor_service")
 
     result = doctor_service.run_checks()
-    show_deprecation_notice(json_mode=formatter.json_mode)
+    show_deprecation_notice(formatter)
     formatter.output(result, format_doctor_panel)

@@ -27,6 +27,7 @@ import pytest
 from keboola_agent_cli.constants import (
     DEFERRED_UPDATE_ABANDONED_MARKER,
     DEFERRED_UPDATE_EXIT_FILENAME,
+    DEFERRED_UPDATE_HARDLINK_FAILURE_TEXT,
     DEFERRED_UPDATE_MARKER_FILENAME,
     DEFERRED_UPDATE_STALE_SECONDS,
     ENV_DEFER_UPDATE,
@@ -40,6 +41,7 @@ from keboola_agent_cli.update_runner import (
     build_waiter_script,
     collect_finished_deferred_update,
     is_update_pending,
+    pending_update_target,
     quote_for_powershell,
     request_deferred_update,
     resolve_powershell,
@@ -325,6 +327,21 @@ class TestRequestDeferredUpdate:
         assert request_deferred_update(REQUEST) is False
         assert not (tmp_path / DEFERRED_UPDATE_MARKER_FILENAME).exists()
 
+    def test_a_pending_update_for_another_target_is_not_this_request(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        spawns: list[object] = []
+        monkeypatch.setattr(
+            "keboola_agent_cli.update_runner.subprocess.Popen",
+            lambda *a, **k: spawns.append(a) or object(),
+        )
+        assert request_deferred_update(REQUEST) is True
+
+        other = replace(REQUEST, target_version="1.0.0", major_flag=True)
+        assert request_deferred_update(other) is False
+        assert pending_update_target() == "0.76.4"
+        assert len(spawns) == 1
+
     def test_spawn_failure_clears_the_marker(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -428,6 +445,50 @@ class TestPosixWaiterScriptRuns:
             check=True,
         )
         return int(finished.stdout)
+
+    def test_hardlink_failure_is_retried_once(self, tmp_path: Path) -> None:
+        fail = f"print('error: {DEFERRED_UPDATE_HARDLINK_FAILURE_TEXT} x'); raise SystemExit(1)"
+        request = replace(
+            REQUEST,
+            install_command=(sys.executable, "-c", fail),
+            hardlink_retry_command=(sys.executable, "-c", "print('retried')"),
+        )
+        exit_file, log_file = tmp_path / "exit", tmp_path / "log"
+        script = build_posix_waiter_script(
+            request,
+            pid=self._dead_pid(),
+            exit_file=exit_file,
+            install_log=log_file,
+            max_wait_seconds=5,
+            poll_seconds=1,
+            process_name="kbagent-test-no-such-process",
+        )
+        subprocess.run(["/bin/sh", "-c", script], check=True, timeout=30)
+
+        assert exit_file.read_text().strip() == "0"
+        assert "retrying with --link-mode copy" in log_file.read_text()
+        assert "retried" in log_file.read_text()
+
+    def test_other_failures_are_not_retried(self, tmp_path: Path) -> None:
+        request = replace(
+            REQUEST,
+            install_command=(sys.executable, "-c", "raise SystemExit(3)"),
+            hardlink_retry_command=(sys.executable, "-c", "print('retried')"),
+        )
+        exit_file, log_file = tmp_path / "exit", tmp_path / "log"
+        script = build_posix_waiter_script(
+            request,
+            pid=self._dead_pid(),
+            exit_file=exit_file,
+            install_log=log_file,
+            max_wait_seconds=5,
+            poll_seconds=1,
+            process_name="kbagent-test-no-such-process",
+        )
+        subprocess.run(["/bin/sh", "-c", script], check=True, timeout=30)
+
+        assert exit_file.read_text().strip() == "3"
+        assert "retried" not in log_file.read_text()
 
     @pytest.mark.parametrize("home", ["home", "First Last"])
     def test_a_running_entry_point_holds_the_install(self, tmp_path: Path, home: str) -> None:

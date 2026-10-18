@@ -400,6 +400,45 @@ class TestMajorFlag:
         assert installer.defer.call_args.args[0].target_version == "1.0.1"
         assert result["kbagent"]["deferred"] is True
 
+    def test_beta_major_takes_a_1x_prerelease_before_the_stable_release(
+        self, httpx_mock, local_clock, installer
+    ) -> None:
+        local_clock(self.NOW)
+        releases = [_release("v1.0.0b1", prerelease=True), *ZERO_X]
+        _github(httpx_mock, now=self.NOW, latest=None, tag=404, releases=releases)
+
+        VersionService().self_update(include_prerelease=True, allow_major=True)
+
+        assert installer.defer.call_args.args[0].target_version == "1.0.0b1"
+        assert update_notice.current() is None  # no stable v1.0.0: no notice
+
+    def test_beta_alone_does_not_take_a_1x_prerelease(
+        self, httpx_mock, local_clock, installer
+    ) -> None:
+        local_clock(self.NOW)
+        releases = [_release("v1.0.0b1", prerelease=True), *ZERO_X]
+        _github(httpx_mock, now=self.NOW, latest=None, tag=404, releases=releases)
+
+        VersionService().self_update(include_prerelease=True)
+
+        installer.defer.assert_not_called()
+        assert installer.run.call_args.args[0] == INSTALL  # 0.106.0
+
+    def test_another_pending_target_is_reported_not_replaced(
+        self, httpx_mock, local_clock, installer, monkeypatch
+    ) -> None:
+        local_clock(self.NOW)
+        monkeypatch.setattr(version_service, "pending_update_target", lambda: "0.106.0")
+        _github(httpx_mock, now=self.NOW, tag=V1_TAG, releases=WITH_ONE_X)
+
+        result = VersionService().self_update(allow_major=True)
+
+        installer.defer.assert_not_called()
+        installer.run.assert_not_called()
+        assert result["kbagent"]["reason"] == "other_update_pending"
+        assert result["kbagent"]["deferred"] is False
+        assert "v0.106.0 is already scheduled" in result["kbagent"]["message"]
+
     def test_update_without_major_stays_on_0x(self, httpx_mock, local_clock, installer) -> None:
         local_clock(self.NOW)
         _github(httpx_mock, now=self.NOW, tag=V1_TAG)
@@ -497,6 +536,42 @@ class TestSameMajorBeyondTheFirstPage:
         assert gated.latest_version == "0.106.0"
         assert gated.same_major_version == "0.106.0"
         assert _urls(httpx_mock) == [LATEST_URL, TAG_URL, LIST_URL]
+
+
+class TestSameMajorOnOlderPages:
+    """More than 100 releases of 1.x: a held 0.x install reads older pages (at most 3)."""
+
+    NOW = M + timedelta(days=60)
+
+    @staticmethod
+    def _one_x(start: int, count: int) -> list[dict]:
+        return [_release(f"v1.{n}.0", release_id=1000 + n) for n in range(start, start - count, -1)]
+
+    def test_reads_page_two_for_the_newest_0x(self, httpx_mock, local_clock) -> None:
+        local_clock(self.NOW)
+        _github(httpx_mock, now=self.NOW, latest=self._one_x(150, 1)[0], tag=403)
+        _answer(httpx_mock, LIST_URL, self._one_x(150, 100), self.NOW)
+        _answer(httpx_mock, f"{LIST_URL}&page=2", [*self._one_x(50, 50), *ZERO_X], self.NOW)
+
+        gated = fetch_gated_release()
+
+        assert gated.latest_version == "0.106.0"
+        assert gated.same_major_missing is False
+
+    def test_no_0x_in_three_pages_is_reported_as_such(self, httpx_mock, local_clock, monkeypatch):
+        monkeypatch.setattr(version_service, "run_install", MagicMock())
+        local_clock(self.NOW)
+        _github(httpx_mock, now=self.NOW, latest=self._one_x(400, 1)[0], tag=403)
+        _answer(httpx_mock, LIST_URL, self._one_x(400, 100), self.NOW)
+        _answer(httpx_mock, f"{LIST_URL}&page=2", self._one_x(300, 100), self.NOW)
+        _answer(httpx_mock, f"{LIST_URL}&page=3", self._one_x(200, 100), self.NOW)
+
+        result = VersionService().self_update()
+
+        assert result["kbagent"]["reason"] == "same_major_not_found"
+        message = result["kbagent"]["message"]
+        assert "No kbagent 0.x release is among the newest 300 GitHub releases" in message
+        assert "network" not in message
 
 
 class TestMissingOrChangedRelease:
@@ -609,6 +684,20 @@ class TestCommands:
         VersionService().get_versions(include_prerelease=True)
 
         assert not (tmp_path / "version_cache.json").exists()
+
+    def test_crossing_run_keeps_the_cached_same_major_version(
+        self, httpx_mock, local_clock, tmp_path
+    ) -> None:
+        now = M + timedelta(minutes=1)
+        local_clock(now)
+        cache_file = tmp_path / "version_cache.json"
+        cache_file.write_text(json.dumps(_cache(latest_version="0.106.0")))
+        _github(httpx_mock, now=now, latest=V1, tag=V1_TAG)
+
+        result = VersionService().get_versions()
+
+        assert result["kbagent"]["latest_version"] == "1.0.1"
+        assert json.loads(cache_file.read_text())["latest_version"] == "0.106.0"
 
     def test_doctor_shows_the_cached_notice(self, local_clock, tmp_path, monkeypatch) -> None:
         local_clock(self.NOW)

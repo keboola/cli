@@ -472,10 +472,37 @@ def build_posix_waiter_script(
             f'  printf "%s\\n" {shlex.quote(abandoned_marker)} > "$exit_file"',
             "  exit 0",
             "fi",
-            f'{argv} >> "$log_file" 2>&1',
-            'printf "%s\\n" "$?" > "$exit_file"',
+            f"out=$({argv} 2>&1)",
+            "code=$?",
+            'printf "%s\\n" "$out" >> "$log_file"',
+            *_posix_hardlink_retry_lines(request),
+            'printf "%s\\n" "$code" > "$exit_file"',
         ]
     )
+
+
+def _posix_hardlink_retry_lines(request: DeferredUpdateRequest) -> list[str]:
+    """``sh`` lines that retry the install once after a uv hardlink error (#786).
+
+    The same contract as :func:`_hardlink_retry_lines`. Today the retry
+    command is built only on Windows (``_uv_link_mode_args``), so on Linux and
+    macOS these lines are emitted only when a caller passes one.
+    """
+    if request.hardlink_retry_command is None:
+        return []
+    retry = " ".join(shlex.quote(part) for part in request.hardlink_retry_command)
+    failure_text = shlex.quote(DEFERRED_UPDATE_HARDLINK_FAILURE_TEXT)
+    notice = shlex.quote(
+        "kbagent: the install failed on a hardlink error; retrying with --link-mode copy"
+    )
+    return [
+        f'if [ "$code" -ne 0 ] && printf "%s" "$out" | grep -qF -- {failure_text}; then',
+        f'  printf "%s\\n" {notice} >> "$log_file"',
+        f"  out=$({retry} 2>&1)",
+        "  code=$?",
+        '  printf "%s\\n" "$out" >> "$log_file"',
+        "fi",
+    ]
 
 
 def resolve_posix_shell() -> str | None:
@@ -555,6 +582,15 @@ def _read_marker() -> dict | None:
     return data if isinstance(data, dict) else None
 
 
+def pending_update_target() -> str | None:
+    """The target version of a deferred update that is still waiting, or None."""
+    if not is_update_pending():
+        return None
+    marker = _read_marker()
+    target = marker.get("target_version") if marker else None
+    return str(target) if target else None
+
+
 def request_deferred_update(request: DeferredUpdateRequest) -> bool:
     """Schedule ``request`` to be installed once no kbagent process is left.
 
@@ -568,7 +604,10 @@ def request_deferred_update(request: DeferredUpdateRequest) -> bool:
         reason to fall back to an in-place install.
     """
     if is_update_pending():
-        return True
+        # Single flight. A waiting helper for ANOTHER target is not this
+        # request: report it as not scheduled (callers check
+        # `pending_update_target()` first to say why).
+        return pending_update_target() == request.target_version
 
     exit_file = _exit_path()
     install_log = log_path()

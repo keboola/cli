@@ -10,6 +10,7 @@ from rich.panel import Panel
 from rich.text import Text
 
 from ..auto_update import show_deprecation_notice
+from ..services.version_service import _major_of
 from ._helpers import get_formatter, get_service
 
 
@@ -51,7 +52,7 @@ def version_command(
     version_service = get_service(ctx, "version_service")
     include_prerelease = beta or _env_opted_into_prerelease()
     result = version_service.get_versions(include_prerelease=include_prerelease)
-    show_deprecation_notice(json_mode=formatter.json_mode)
+    show_deprecation_notice(formatter)
     formatter.output(result, _format_version_panel)
 
 
@@ -113,7 +114,7 @@ def update_command(
     result = version_service.self_update(include_prerelease=include_prerelease, allow_major=major)
     # No notice in the run that has just scheduled the crossing to the next major.
     if not _scheduled_major_crossing(result.get("kbagent", {})):
-        show_deprecation_notice(json_mode=formatter.json_mode)
+        show_deprecation_notice(formatter)
 
     if formatter.json_mode:
         formatter.output(result)
@@ -137,9 +138,9 @@ def _scheduled_major_crossing(kbagent_result: dict) -> bool:
     """Whether the update result is a deferred install of a higher major version."""
     if not kbagent_result.get("deferred"):
         return False
-    current = str(kbagent_result.get("current_version") or "")
-    latest = str(kbagent_result.get("latest_version") or "")
-    return latest.split(".")[0] != current.split(".")[0]
+    current = kbagent_result.get("current_version")
+    latest = kbagent_result.get("latest_version")
+    return _major_of(latest) > _major_of(current)
 
 
 def _env_opted_into_prerelease() -> bool:

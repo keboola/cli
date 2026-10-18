@@ -2681,7 +2681,7 @@ def context_command(ctx: typer.Context) -> None:
     from ..auto_update import show_deprecation_notice
 
     formatter = get_formatter(ctx)
-    show_deprecation_notice(json_mode=formatter.json_mode)
+    show_deprecation_notice(formatter)
 
     if formatter.json_mode:
         # In JSON mode, output the context text as structured data

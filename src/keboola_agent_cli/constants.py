@@ -466,6 +466,8 @@ MAJOR_MIGRATION_DELAY_SECONDS: int = 28 * 86_400
 # Page size of `GET /releases`, read only for --beta, when /releases/latest
 # names a higher major, or to find the newest release of a crossing.
 RELEASE_LIST_PAGE_SIZE: int = 100
+# Older pages are read only to find a release of the running major.
+RELEASE_LIST_MAX_PAGES: int = 3
 # The release `v<N+1>.0.0` is read again at most this often before M.
 NEXT_MAJOR_RECHECK_SECONDS: int = 86_400
 # The human deprecation notice prints once per this interval ...
