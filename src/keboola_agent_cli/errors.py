@@ -167,6 +167,13 @@ class ErrorCode(StrEnum):
     MR_NOT_READY_TO_MERGE = "MR_NOT_READY_TO_MERGE"
     MR_MERGE_CONFLICT = "MR_MERGE_CONFLICT"
 
+    # Updates (#791, CLI-51). After an automatic update to a higher major the
+    # first write or destructive command is refused once (exit 6). Reads before
+    # it get the same code as a `warnings[]` entry. UPDATED_ACROSS_BREAKING is only a
+    # `warnings[]` entry: the update crossed versions with `BREAKING:` notes.
+    UPDATED_ACROSS_MAJOR = "UPDATED_ACROSS_MAJOR"
+    UPDATED_ACROSS_BREAKING = "UPDATED_ACROSS_BREAKING"
+
 
 def mask_token(token: str) -> str:
     """Mask a Keboola Storage API token for safe display.
@@ -452,6 +459,11 @@ ERROR_CODE_TABLE: dict[str, ErrorClass] = {
     # Workspace / Query
     ErrorCode.MISSING_QUERY: ErrorClass("api", 2),
     ErrorCode.WORKSPACE_NOT_FOUND: ErrorClass("api", 1),
+    # Updates (CLI-51). A refusal by kbagent itself, with the same exit code 6 as
+    # a policy denial.
+    ErrorCode.UPDATED_ACROSS_MAJOR: ErrorClass("authorization", EXIT_PERMISSION_DENIED),
+    # Only a `warnings[]` entry, never an error exit.
+    ErrorCode.UPDATED_ACROSS_BREAKING: ErrorClass("api", 1),
     # A refused-by-us safety guard, not an upstream fault: nothing was sent to
     # the API, and the caller fixes it by re-issuing the request with --force.
     ErrorCode.WORKSPACE_LOAD_COPY_TOO_LARGE: ErrorClass("validation", 1),

@@ -11,7 +11,12 @@
     {
       "name": "kbagent",
       "version": "0.100.0",
-      "source": "./plugins/kbagent",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/keboola/cli.git",
+        "path": "plugins/kbagent",
+        "ref": "v0.100.0"
+      },
       "description": "DEPRECATED — install from keboola/ai-kit: /plugin marketplace add keboola/ai-kit && /plugin install kbagent@keboola-claude-kit — AI-friendly interface to Keboola Connection projects — explore configs, jobs, lineage, sync configs as files, manage dev branches, and debug SQL in workspaces",
       "category": "development"
     }
