@@ -164,6 +164,13 @@ class ErrorCode(StrEnum):
     MR_NOT_READY_TO_MERGE = "MR_NOT_READY_TO_MERGE"
     MR_MERGE_CONFLICT = "MR_MERGE_CONFLICT"
 
+    # Updates (#791, CLI-51). After an automatic update to a higher major the
+    # first write or destructive command is refused once (exit 6). Reads before
+    # it get the same code as a `warnings[]` entry. UPDATED_ACROSS_BREAKING is only a
+    # `warnings[]` entry: the update crossed versions with `BREAKING:` notes.
+    UPDATED_ACROSS_MAJOR = "UPDATED_ACROSS_MAJOR"
+    UPDATED_ACROSS_BREAKING = "UPDATED_ACROSS_BREAKING"
+
 
 def mask_token(token: str) -> str:
     """Mask a Keboola Storage API token for safe display.
@@ -367,6 +374,8 @@ _ERROR_CODE_TO_TYPE: dict[str, str] = {
     ErrorCode.SYNC_CONFLICT: "conflict",
     ErrorCode.SYNC_LEGACY_BOUNDARY: "conflict",
     ErrorCode.PERMISSION_DENIED: "authorization",
+    # A refusal by kbagent itself with the same exit code 6 as a policy denial.
+    ErrorCode.UPDATED_ACROSS_MAJOR: "authorization",
     ErrorCode.DP_LOGIN_FAILED: "authentication",
     ErrorCode.DP_MFA_REQUIRED: "authentication",
     ErrorCode.DP_APP_NOT_FOUND: "not_found",
