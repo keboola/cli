@@ -620,6 +620,10 @@ catch you** if you skip them; they are the manual safety net for the
 silent-drift risks summarized in the
 [Plugin synchronization map](#plugin-synchronization-map) above.
 
+> **Releasing a new major version (1.0.0)?** Walk this checklist as usual, and
+> also follow [Releasing a new major version](#releasing-a-new-major-version)
+> below: the GitHub "latest" flag, PyPI and the old-major fixes follow extra rules.
+
 > **Want to ship a beta first?** You can. PEP 440 pre-release versions
 > (`0.43.0b1`, `0.43.0rc1`) are fully supported by `kbagent update --beta`
 > since v0.42.0. The startup auto-update hook never silently lands on a
@@ -856,6 +860,98 @@ highest PEP 440 version -- the freshly rebased `b2`.
 each invocation has to opt in. This is deliberate: betas should always be
 an active choice, never a forgotten "I once typed --beta six months ago"
 foot-gun.
+
+### Releasing a new major version
+
+These rules apply to 1.0.0 and to every later major. What users see and how to
+stay on 0.x is in [docs/migrate-to-1.0.md](docs/migrate-to-1.0.md); the
+maintainer rehearsal before T0 is
+[docs/release-1.0-rehearsal.md](docs/release-1.0-rehearsal.md).
+
+- **T0** is the `published_at` of the GitHub release `v<N>.0.0`.
+- **M** is T0 + 28 days (28 x 86,400 seconds, UTC).
+- Until M, `releases/latest` names the newest release of the previous major.
+  Clients older than the 0.x patch follow `releases/latest`, so they stay on
+  0.x until M. From M, the newest release of the new major is latest.
+
+**What the automation does.** `scripts/release_latest.py` holds the rules; the
+workflows only call it. It reads `published_at` from the GitHub API, and "now"
+is the `Date` header of the GitHub response, the same clock the clients use.
+
+| Release | Before T0 | From T0 to M | From M |
+|---|---|---|---|
+| 0.x (stable) | `make_latest: true` | `make_latest: true` | `make_latest: false` |
+| 1.x (stable), `v1.0.0` included | n/a | `make_latest: false` | `make_latest: true` |
+| any pre-release | `make_latest: false` | `make_latest: false` | `make_latest: false` |
+
+- `release-kbagent.yml` sets `make_latest` explicitly on every release, never
+  the GitHub default (which marks every new stable release as latest). The
+  `github-release` job decides it right before it publishes, and the "Fill
+  release notes" step sends the same value again with `gh release edit
+  --latest=<value>`. A version lower than the current latest never gets
+  `true`, so a re-run of an older tag does not take the flag back.
+- `promote-major.yml` runs every hour (minute 17) from the default branch. At
+  M it marks the newest stable release of the new major as latest (`gh release
+  edit <tag> --latest`). Before T0 and before M it does nothing. It is
+  idempotent, and it also corrects a release that was decided before M but
+  published after M. Run it by hand with `gh workflow run promote-major.yml`.
+- For `v<N>.0.0` (output `MAJOR_START`), the `pypi` job publishes only after
+  `github-release` succeeded, so PyPI never names a new major before T0
+  exists. For every other tag, `pypi` waits for `github-release` too, but a
+  failed `github-release` does not stop it.
+- A tag of an old major after T0 (output `OLD_LINE`: `v<N+1>.0.0` is
+  published) skips the `homebrew` and `ai-kit-marketplace` jobs, because both
+  hold one version and would move back to the old major. Chocolatey, winget,
+  apt/rpm and PyPI keep every version, so they still publish it.
+  `test-install` installs the exact tagged version with apt and dnf.
+- `install.sh` and the PowerShell block of `README.md` take the version from
+  PyPI (`info.version`, the highest stable version), not from the
+  `releases/latest` redirect, so new installs get the new major from T0.
+
+**Steps for the maintainer.**
+
+1. **Before the first 1.0.0 change merges to `main`:**
+   - Make sure the workflows above are on `main`. A tag runs the workflow file
+     of the tagged commit, so `release/0.N` must be created from a commit that
+     has them.
+   - Create `release/0.N` from the last 0.x minor release.
+   - Pin the deprecated marketplace shim. Its relative `source` follows the
+     default branch, so it would serve 1.x plugin documents to 0.x installs.
+     In `.claude-plugin/marketplace.json`, replace the `kbagent` entry's
+     `"source": "./plugins/kbagent"` with
+     `{"source": "git-subdir", "url": "https://github.com/keboola/cli.git", "path": "plugins/kbagent", "ref": "v0.N.x"}`
+     (the shape the ai-kit marketplace uses) and set its `version` to `0.N.x`.
+     `scripts/sync_version.py` keeps the version of a pinned entry as it is,
+     and for a version of major 1 or higher it fails while the source is
+     still relative. So the 1.0.0 release PR cannot pass `make version-sync`,
+     `make version-check` or the release `gate` with an unpinned shim.
+   - Walk the rehearsal in [docs/release-1.0-rehearsal.md](docs/release-1.0-rehearsal.md).
+2. **T0 − 14 days or earlier:** release the 0.N.x patch from `release/0.N`.
+   Check that `promote-major` runs on `main` and prints `tag=` (nothing to do).
+3. **T0:** open the 1.0.0 release PR as usual (steps 1-15 above), merge it,
+   and push the tag `v1.0.0`. Do not create the GitHub release by hand, not
+   even as a draft: publishing a draft sets a new `published_at`. Never delete
+   or re-publish `v1.0.0`: a release with a new `published_at` restarts the
+   28 days. Edit it in place if something must change. Then check:
+   - `gh api repos/keboola/cli/releases/latest --jq .tag_name` still names 0.x.
+   - `gh release view v1.0.0` shows the release, and the releases page does
+     not mark it "Latest".
+   - PyPI has 1.0.0 only after the GitHub release exists.
+4. **From T0 to M:**
+   - 1.x releases come from `main` as usual and get `make_latest: false`.
+   - 0.N.x fixes come from `release/0.N`: a release PR against that branch,
+     then a tag on its merge commit. Add the same changelog entry to `main`
+     too, because `make changelog-check` audits every published release.
+     Homebrew and ai-kit skip these tags; they stay `make_latest: true`.
+5. **M:** `promote-major` marks the newest 1.x release as latest within one
+   hour. Check it with `gh api repos/keboola/cli/releases/latest --jq .tag_name`.
+6. **After M:** a 0.N.x tag still publishes, with `make_latest: false`. Stop
+   0.N.x releases unless a fix is critical.
+
+To delete the shim later instead of keeping it pinned, also remove
+`.claude-plugin/marketplace.json` from `make version-check` and from the
+"SKILL.md + version drift" step of the release `gate`: both give the path to
+`git diff`, which fails on a path that does not exist.
 
 ## Running CI Locally
 

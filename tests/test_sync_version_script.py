@@ -34,7 +34,7 @@ def isolated_repo(tmp_path: Path, monkeypatch):
     """Lay out a miniature repo tree the sync script can operate on."""
     pyproject = tmp_path / "pyproject.toml"
     pyproject.write_text(
-        '[project]\nname = "keboola-cli"\nversion = "9.9.9"\n',
+        '[project]\nname = "keboola-cli"\nversion = "0.9.9"\n',
         encoding="utf-8",
     )
 
@@ -93,36 +93,36 @@ def isolated_repo(tmp_path: Path, monkeypatch):
 
 
 def test_get_pyproject_version_reads_source(isolated_repo: dict) -> None:
-    assert _sync.get_pyproject_version() == "9.9.9"
+    assert _sync.get_pyproject_version() == "0.9.9"
 
 
 def test_sync_plugin_json_updates_version(isolated_repo: dict) -> None:
-    changed = _sync.sync_plugin_json("9.9.9")
+    changed = _sync.sync_plugin_json("0.9.9")
     assert changed is True
     data = json.loads(isolated_repo["plugin_json"].read_text(encoding="utf-8"))
-    assert data["version"] == "9.9.9"
+    assert data["version"] == "0.9.9"
 
 
 def test_sync_plugin_json_idempotent(isolated_repo: dict) -> None:
-    _sync.sync_plugin_json("9.9.9")
-    assert _sync.sync_plugin_json("9.9.9") is False
+    _sync.sync_plugin_json("0.9.9")
+    assert _sync.sync_plugin_json("0.9.9") is False
 
 
 def test_sync_marketplace_json_adds_plugin_version(isolated_repo: dict) -> None:
     """The kbagent entry starts without a version -- we should add it."""
-    changed = _sync.sync_marketplace_json("9.9.9")
+    changed = _sync.sync_marketplace_json("0.9.9")
     assert changed is True
 
     data = json.loads(isolated_repo["marketplace_json"].read_text(encoding="utf-8"))
     kb = next(p for p in data["plugins"] if p["name"] == "kbagent")
-    assert kb["version"] == "9.9.9"
+    assert kb["version"] == "0.9.9"
 
 
 def test_sync_marketplace_json_places_version_right_after_name(
     isolated_repo: dict,
 ) -> None:
     """Layout check: name -> version -> ... -- easy to spot in reviews."""
-    _sync.sync_marketplace_json("9.9.9")
+    _sync.sync_marketplace_json("0.9.9")
     data = json.loads(isolated_repo["marketplace_json"].read_text(encoding="utf-8"))
     kb = next(p for p in data["plugins"] if p["name"] == "kbagent")
     keys = list(kb.keys())
@@ -131,8 +131,8 @@ def test_sync_marketplace_json_places_version_right_after_name(
 
 
 def test_sync_marketplace_json_idempotent(isolated_repo: dict) -> None:
-    _sync.sync_marketplace_json("9.9.9")
-    assert _sync.sync_marketplace_json("9.9.9") is False
+    _sync.sync_marketplace_json("0.9.9")
+    assert _sync.sync_marketplace_json("0.9.9") is False
 
 
 def test_sync_marketplace_json_does_not_touch_top_level_version(
@@ -140,7 +140,7 @@ def test_sync_marketplace_json_does_not_touch_top_level_version(
 ) -> None:
     """Top-level `version` is the marketplace DESCRIPTOR version, not the
     plugin version; the sync script must leave it alone."""
-    _sync.sync_marketplace_json("9.9.9")
+    _sync.sync_marketplace_json("0.9.9")
     data = json.loads(isolated_repo["marketplace_json"].read_text(encoding="utf-8"))
     assert data["version"] == "1.0.0"  # unchanged
 
@@ -158,12 +158,12 @@ def test_sync_marketplace_json_updates_existing_version(
         json.dumps(data, indent=2) + "\n", encoding="utf-8"
     )
 
-    changed = _sync.sync_marketplace_json("9.9.9")
+    changed = _sync.sync_marketplace_json("0.9.9")
     assert changed is True
 
     data = json.loads(isolated_repo["marketplace_json"].read_text(encoding="utf-8"))
     kb = next(p for p in data["plugins"] if p["name"] == "kbagent")
-    assert kb["version"] == "9.9.9"
+    assert kb["version"] == "0.9.9"
 
 
 def test_sync_marketplace_json_missing_plugin_entry_is_noop(isolated_repo: dict, capsys) -> None:
@@ -175,7 +175,7 @@ def test_sync_marketplace_json_missing_plugin_entry_is_noop(isolated_repo: dict,
         json.dumps(data, indent=2) + "\n", encoding="utf-8"
     )
 
-    changed = _sync.sync_marketplace_json("9.9.9")
+    changed = _sync.sync_marketplace_json("0.9.9")
     assert changed is False
     err = capsys.readouterr().err
     assert "no plugin entry" in err.lower()
@@ -186,51 +186,51 @@ def test_sync_marketplace_json_absent_file_is_skipped(isolated_repo: dict, monke
     not crash -- just skip the marketplace step."""
     missing = isolated_repo["root"] / "does-not-exist.json"
     monkeypatch.setattr(_sync, "MARKETPLACE_JSON", missing)
-    assert _sync.sync_marketplace_json("9.9.9") is False
+    assert _sync.sync_marketplace_json("0.9.9") is False
 
 
 def test_main_runs_end_to_end(isolated_repo: dict, capsys) -> None:
     _sync.main()
     out = capsys.readouterr().out
-    assert "Updated plugin.json to 9.9.9" in out
+    assert "Updated plugin.json to 0.9.9" in out
     assert "Updated marketplace.json" in out
-    assert "Updated uv.lock keboola-cli version to 9.9.9" in out
+    assert "Updated uv.lock keboola-cli version to 0.9.9" in out
 
     # Second run prints the idempotent message on all targets.
     _sync.main()
     out = capsys.readouterr().out
-    assert "plugin.json already at 9.9.9" in out
-    assert "marketplace.json" in out and "already at 9.9.9" in out
-    assert "uv.lock keboola-cli version already at 9.9.9" in out
+    assert "plugin.json already at 0.9.9" in out
+    assert "marketplace.json" in out and "already at 0.9.9" in out
+    assert "uv.lock keboola-cli version already at 0.9.9" in out
 
 
 def test_sync_uv_lock_updates_self_version(isolated_repo: dict) -> None:
-    changed = _sync.sync_uv_lock("9.9.9")
+    changed = _sync.sync_uv_lock("0.9.9")
     assert changed is True
     text = isolated_repo["uv_lock"].read_text(encoding="utf-8")
-    assert 'name = "keboola-cli"\nversion = "9.9.9"' in text
+    assert 'name = "keboola-cli"\nversion = "0.9.9"' in text
 
 
 def test_sync_uv_lock_does_not_touch_other_packages(isolated_repo: dict) -> None:
     """The scoped regex must only rewrite our own package's version pin."""
-    _sync.sync_uv_lock("9.9.9")
+    _sync.sync_uv_lock("0.9.9")
     text = isolated_repo["uv_lock"].read_text(encoding="utf-8")
     # The unrelated croniter entry keeps its version.
     assert 'name = "croniter"\nversion = "1.2.3"' in text
     # Only one version line was rewritten to the new value.
-    assert text.count('version = "9.9.9"') == 1
+    assert text.count('version = "0.9.9"') == 1
 
 
 def test_sync_uv_lock_idempotent(isolated_repo: dict) -> None:
-    _sync.sync_uv_lock("9.9.9")
-    assert _sync.sync_uv_lock("9.9.9") is False
+    _sync.sync_uv_lock("0.9.9")
+    assert _sync.sync_uv_lock("0.9.9") is False
 
 
 def test_sync_uv_lock_absent_file_is_skipped(isolated_repo: dict, monkeypatch) -> None:
     """Repos without a uv.lock (e.g. a fresh checkout pre-lock) must not crash."""
     missing = isolated_repo["root"] / "no-such-uv.lock"
     monkeypatch.setattr(_sync, "UV_LOCK", missing)
-    assert _sync.sync_uv_lock("9.9.9") is False
+    assert _sync.sync_uv_lock("0.9.9") is False
 
 
 def test_sync_uv_lock_missing_package_entry_warns(isolated_repo: dict, capsys) -> None:
@@ -239,6 +239,78 @@ def test_sync_uv_lock_missing_package_entry_warns(isolated_repo: dict, capsys) -
         '[[package]]\nname = "croniter"\nversion = "1.2.3"\n',
         encoding="utf-8",
     )
-    changed = _sync.sync_uv_lock("9.9.9")
+    changed = _sync.sync_uv_lock("0.9.9")
     assert changed is False
     assert "keboola-cli" in capsys.readouterr().err.lower()
+
+
+# --- the deprecated shim before a new major ----------------------------------
+# The shim's relative `source` follows the default branch, so from 1.0.0 it would
+# serve 1.x plugin documents to 0.x installs. A 1.x version must refuse it until the
+# entry is pinned to a 0.x tag, and a pinned entry's version belongs to its tag.
+
+PINNED_SOURCE = {
+    "source": "git-subdir",
+    "url": "https://github.com/keboola/cli.git",
+    "path": "plugins/kbagent",
+    "ref": "v0.105.2",
+}
+
+
+def _pin_shim(isolated_repo: dict, version: str = "0.105.2") -> str:
+    data = json.loads(isolated_repo["marketplace_json"].read_text(encoding="utf-8"))
+    for p in data["plugins"]:
+        if p["name"] == "kbagent":
+            p["version"] = version
+            p["source"] = PINNED_SOURCE
+    text = json.dumps(data, indent=2) + "\n"
+    isolated_repo["marketplace_json"].write_text(text, encoding="utf-8")
+    return text
+
+
+def test_sync_marketplace_json_refuses_relative_shim_for_major_one(
+    isolated_repo: dict, capsys
+) -> None:
+    before = isolated_repo["marketplace_json"].read_text(encoding="utf-8")
+
+    with pytest.raises(SystemExit) as exc:
+        _sync.sync_marketplace_json("1.0.0")
+
+    assert exc.value.code == 1
+    assert "pin its kbagent entry to the last 0.x tag" in capsys.readouterr().err
+    assert isolated_repo["marketplace_json"].read_text(encoding="utf-8") == before
+
+
+def test_sync_marketplace_json_refuses_relative_shim_for_a_major_one_beta(
+    isolated_repo: dict,
+) -> None:
+    with pytest.raises(SystemExit):
+        _sync.sync_marketplace_json("1.0.0b1")
+
+
+def test_sync_marketplace_json_leaves_pinned_shim_alone_for_major_one(
+    isolated_repo: dict,
+) -> None:
+    before = _pin_shim(isolated_repo)
+
+    assert _sync.sync_marketplace_json("1.0.0") is False
+    assert isolated_repo["marketplace_json"].read_text(encoding="utf-8") == before
+
+
+def test_sync_marketplace_json_leaves_pinned_shim_alone_on_zero_x(
+    isolated_repo: dict,
+) -> None:
+    """A pinned entry's version belongs to its tag, also while main is still on 0.x."""
+    before = _pin_shim(isolated_repo)
+
+    assert _sync.sync_marketplace_json("0.106.0") is False
+    assert isolated_repo["marketplace_json"].read_text(encoding="utf-8") == before
+
+
+def test_main_fails_on_a_relative_shim_for_major_one(isolated_repo: dict) -> None:
+    isolated_repo["pyproject"].write_text(
+        '[project]\nname = "keboola-cli"\nversion = "1.0.0"\n', encoding="utf-8"
+    )
+    with pytest.raises(SystemExit) as exc:
+        _sync.main()
+    assert exc.value.code == 1

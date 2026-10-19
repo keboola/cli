@@ -4,15 +4,23 @@
 # Usage:
 #   curl -LsSf https://raw.githubusercontent.com/keboola/cli/main/install.sh | sh
 #
-# Installs the kbagent CLI from a PREBUILT wheel attached to the latest GitHub
-# release -- no source build. This is the fast path for issue #353: building
-# from `git+` recompiles the bundled React SPA via npm on every install, which
-# takes 2-4 minutes on WSL2. A prebuilt wheel is a few-seconds download instead.
+# Installs the kbagent CLI from a PREBUILT wheel attached to the GitHub release
+# of the highest stable version on PyPI -- no source build. This is the fast path
+# for issue #353: building from `git+` recompiles the bundled React SPA via npm on
+# every install, which takes 2-4 minutes on WSL2. A prebuilt wheel is a
+# few-seconds download instead.
+#
+# The version comes from PyPI (`info.version` of the keboola-cli JSON API: the
+# highest stable version, no rate limit), not from the GitHub `releases/latest`
+# redirect: while a new major is in its migration window, `releases/latest` still
+# names the previous major on purpose (CONTRIBUTING.md > "Releasing a new major
+# version"), and a new install must get the new major.
 #
 # Requirements: `curl`. `uv` (the install backend) is auto-installed from its
 # official source if missing -- opt out with KBAGENT_NO_UV_BOOTSTRAP=1 to manage uv
-# yourself. If no wheel asset exists for the latest release yet (older releases
-# predate the release workflow), this falls back to the `git+` source build.
+# yourself. If the wheel asset is missing or fails, this installs the same version
+# from PyPI; if the version cannot be resolved, the newest stable version from
+# PyPI. The last fallback is the `git+` source build of the resolved tag.
 #
 # Env knobs:
 #   KBAGENT_NO_SERVER=1        install CLI-only (skip the [server] extras: FastAPI/
@@ -30,6 +38,7 @@ set -eu
 REPO="keboola/cli"
 PKG="keboola-cli"
 DIST="keboola_cli" # normalized distribution name used in the wheel filename
+PYPI_JSON_URL="https://pypi.org/pypi/${PKG}/json"
 
 # ---------------------------------------------------------------------------
 # Presentation helpers (issue: first-run UX -- "quiet the wall + brand + next
@@ -205,38 +214,55 @@ else
   spec="${PKG}[server]"
 fi
 
-# --- resolve the latest release version -----------------------------------
-# Read the redirect target of /releases/latest instead of calling the GitHub
-# API -- no token, no 60-req/h rate limit. The effective URL after following
-# redirects looks like https://github.com/keboola/cli/releases/tag/v0.59.0.
-info "${DIM}Resolving latest ${PKG} release...${RESET}"
-final_url=$(curl -fsSLI -o /dev/null -w '%{url_effective}' \
-  "https://github.com/${REPO}/releases/latest" 2>/dev/null || true)
-version=$(printf '%s' "$final_url" | sed -n 's#.*/releases/tag/v\{0,1\}##p')
+# --- resolve the version -----------------------------------------------------
+# `info.version` of the PyPI JSON API is the highest stable version. PyPI returns
+# compact JSON whose `info` object comes first; the description inside it is a
+# JSON string, so a "version" key quoted there is escaped and does not match.
+# Anything that is not a plain X.Y.Z[.postN] version is rejected.
+resolve_version() {
+  curl -fsSL "$PYPI_JSON_URL" 2>/dev/null |
+    grep -o '"version": *"[^"]*"' |
+    head -n 1 |
+    sed 's/.*"\([^"]*\)"$/\1/' |
+    grep -E '^[0-9]+\.[0-9]+\.[0-9]+(\.post[0-9]+)?$' || true
+}
+
+info "${DIM}Resolving the latest ${PKG} version...${RESET}"
+version=$(resolve_version)
 
 # --- install --------------------------------------------------------------
 installed=0
 if [ -n "$version" ]; then
   wheel_url="https://github.com/${REPO}/releases/download/v${version}/${DIST}-${version}-py3-none-any.whl"
-  # Confirm the asset exists before committing to it (a release may predate the
-  # wheel-publishing workflow and have no asset attached).
+  # Confirm the asset exists before committing to it (the wheel is attached a few
+  # minutes after the release is created).
   if curl -fsSL -I "$wheel_url" >/dev/null 2>&1; then
     if run_step "Installing kbagent v${version} (prebuilt wheel)" \
       uv tool install --force "${spec} @ ${wheel_url}"; then
       installed=1
     else
-      info "${DIM}Prebuilt wheel install failed; falling back to source build.${RESET}"
+      info "${DIM}Prebuilt wheel install failed; installing from PyPI.${RESET}"
     fi
   else
-    info "${DIM}No prebuilt wheel for v${version} yet; falling back to source build.${RESET}"
+    info "${DIM}No prebuilt wheel for v${version} yet; installing from PyPI.${RESET}"
+  fi
+  if [ "$installed" -ne 1 ]; then
+    if run_step "Installing kbagent v${version} from PyPI" \
+      uv tool install --force "${spec}==${version}"; then
+      installed=1
+    fi
+  fi
+  # Last resort: the source build of the resolved tag, never the default branch.
+  if [ "$installed" -ne 1 ]; then
+    if run_step "Building kbagent v${version} from source (this can take a few minutes on WSL)" \
+      uv tool install --force "${spec} @ git+https://github.com/${REPO}@v${version}"; then
+      installed=1
+    fi
   fi
 else
-  info "${DIM}Could not resolve the latest version; falling back to source build.${RESET}"
-fi
-
-if [ "$installed" -ne 1 ]; then
-  if run_step "Building kbagent from source (this can take a few minutes on WSL)" \
-    uv tool install --force "${spec} @ git+https://github.com/${REPO}"; then
+  info "${DIM}Could not resolve the latest version; installing the newest stable version from PyPI.${RESET}"
+  if run_step "Installing kbagent from PyPI" \
+    uv tool install --force "${spec}"; then
     installed=1
   fi
 fi

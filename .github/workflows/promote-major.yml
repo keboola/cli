@@ -1,0 +1,63 @@
+# Marks the newest release of a new major as the GitHub "latest" release at M.
+#
+# T0 is the `published_at` of the stable GitHub release v<N>.0.0, M is T0 + 28 days.
+# release-kbagent.yml publishes every release of major N with `make_latest: false`
+# until M, so `releases/latest` keeps naming major N-1 and the clients that follow it
+# stay there. This workflow moves the flag at M. It reads the same `published_at` as
+# the clients, so the server and the clients use one M.
+#
+# Safe at any time: before T0, and before M, there is nothing to promote (no-op).
+# Idempotent: when the newest release of the promoted major is already latest, it
+# does nothing. It also corrects a flag that a release published across M got wrong.
+# The decision is scripts/release_latest.py `promote` (unit-tested in
+# tests/test_release_latest.py); the job that writes runs only when it names a tag.
+#
+# Scheduled workflows run from the default branch only, so this must be on `main`
+# before T0. See CONTRIBUTING.md > "Releasing a new major version".
+name: promote-major
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  # Same logic on demand (for example right after M, or to check the decision).
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: promote-major
+  cancel-in-progress: false
+
+jobs:
+  decide:
+    runs-on: ubuntu-latest
+    outputs:
+      TAG: ${{ steps.promote.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: scripts/release_latest.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - id: promote
+        shell: bash # -o pipefail: a failed script must fail the step, not vanish into tee
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/release_latest.py promote | tee -a "$GITHUB_OUTPUT"
+
+  promote:
+    needs: [decide]
+    if: needs.decide.outputs.TAG != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # gh release edit --latest
+    steps:
+      - name: Mark the release as latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.decide.outputs.TAG }}
+        run: |
+          gh release edit "$TAG" --latest
+          echo "marked $TAG as the latest release"
