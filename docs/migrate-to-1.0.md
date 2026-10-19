@@ -69,7 +69,7 @@ When the check for a new version fails (offline, proxy error, HTTP 403 or 429), 
 
 - The updater of kbagent 0.100.0 and later installs 1.x for the next run. The current command finishes on 0.x; no 0.x command line runs again under 1.x. A running `kbagent serve` holds the update until it stops; from M the notice tells you to restart it.
 - A client older than 0.100.0 follows the release that GitHub marks as latest. That release stays on 0.x until M, so these clients also move at M, within one hour, but without a notice.
-- The first run of 1.x after the update from 0.x refuses one write or destructive command, with an error that links this page. Reads run, with a `warnings[]` entry. The next command runs normally. An update that you start with `kbagent update --major` does not refuse.
+- After the automatic update from 0.x, 1.x refuses the first write or destructive command once, with the error `UPDATED_ACROSS_MAJOR` (exit 6) that links this page. Until that command, every read runs with a `warnings[]` entry `UPDATED_ACROSS_MAJOR`, also in later runs. The protection has no time limit. After the refused command, every command runs normally. An update that you start with `kbagent update --major` does not refuse. Admin commands (for example `project add`, `init`, `serve`, `update`) are not refused, and the REST routes of `kbagent serve` are not covered.
 - The post-update banner lists the `BREAKING:` bullets of every version that the update crossed. Under `--json`, the first command after the update adds a `warnings[]` entry `UPDATED_ACROSS_BREAKING`.
 
 ### Pre-releases
@@ -150,7 +150,7 @@ Every change below has a `BREAKING:` bullet in the 1.0.0 changelog. The number i
 | 13 | `kai` and `semantic-layer token` report `CONFIG_ERROR` for other errors; `INVALID_ARGUMENT`, `USAGE_ERROR`, `MISSING_PARAMETER` and `FILE_NOT_FOUND` have no explicit `error_type` | Typed error codes; an explicit `error_type` for the 4 codes | `error.code`, `error.error_type` | agents |
 | 21 | 4 paths use an exit code that does not match their error code: `transformation` `VALIDATION_ERROR` (1), `lineage` `FILE_NOT_FOUND` (1), `flow` `NOT_FOUND` (4), `http` `CONFIG_ERROR` (2) | The exit code from the table in [error-codes.md](error-codes.md) (its exit-code column is added in 1.0.0) | exit code | scripts, agents |
 | 30 | `auth login` prints its human-mode notices on stdout | Notices on stderr; results stay on stdout | notices on stderr | scripts |
-| 28 | – | The first run after the update from 0.x refuses one write or destructive command | a named error that links this page | scripts, agents |
+| 28 | – | After an automatic update from 0.x, the first write or destructive command is refused once. Reads before it run with a warning. Then every command runs. Admin commands, REST routes of `kbagent serve` and an update started with `kbagent update --major` are not refused | `UPDATED_ACROSS_MAJOR` (exit 6) that links this page. On a read, a `warnings[]` entry with the same code | scripts, agents (unattended jobs that run at M) |
 | 18 | REST: 26 routes use production when `branch_id` is omitted | The routes use the active branch, as the CLI does; send `branch_id: 0` for production | `Kbagent-Targets` header; `targets` in REST errors | REST |
 | 26 | REST: 4 partial-update routes use `PUT` (see [REST API](#rest-api)) | `PATCH`; the `PUT` form keeps working until at least M + 28 days; the first minor release after that date can remove it | `Kbagent-Warnings` header; after the removal, HTTP 405 naming `PATCH` | REST |
 

@@ -27,6 +27,8 @@ from . import __version__
 from .changelog import ENV_UPDATED_FROM, format_whats_new
 from .constants import (
     AUTO_UPDATE_CHECK_INTERVAL,
+    CROSSING_PENDING_FILENAME,
+    DEFERRED_UPDATE_MARKER_FILENAME,
     DEPRECATION_NOTICE_FINAL_WINDOW_SECONDS,
     DEPRECATION_NOTICE_INTERVAL_SECONDS,
     ENV_AUTO_UPDATE,
@@ -51,6 +53,7 @@ from .services.version_service import (
     resolve_kbagent_wheel_url,
     summarize_install_failure,
 )
+from .update_crossing import announce_pending_crossing, note_finished_update
 from .update_notice import DeprecationNotice, NoticeMode, build_notice, print_once, register
 from .update_runner import (
     DeferredUpdateReport,
@@ -59,6 +62,7 @@ from .update_runner import (
     InstallStatus,
     collect_finished_deferred_update,
     pending_update_target,
+    remove_stale_claims,
     request_deferred_update,
     run_install,
     should_defer,
@@ -107,13 +111,28 @@ class UpdateResult:
 _AUTO_UPDATE_RAN: bool = False
 
 
+def version_cache_filename(version: str) -> str:
+    """The cache file name of the running major (#791 section 4.3).
+
+    The cache file is shared by all installs of one user. 0.x keeps
+    ``version_cache.json``. Major N from 1 on uses ``version_cache_v<N>.json``,
+    so a 0.x client older than the major gate never reads a version of a
+    higher major there and installs it.
+    """
+    major = _major_of(version)
+    if major < 1:
+        return VERSION_CACHE_FILENAME
+    stem, _, suffix = VERSION_CACHE_FILENAME.rpartition(".")
+    return f"{stem}_v{major}.{suffix}"
+
+
 def _get_cache_path() -> Path:
-    """Return path to the version cache file.
+    """Return path to the version cache file of the running major.
 
     Uses the global config directory (~/.config/keboola-agent-cli/).
     """
     config_dir = Path(platformdirs.user_config_dir("keboola-agent-cli"))
-    return config_dir / VERSION_CACHE_FILENAME
+    return config_dir / version_cache_filename(__version__)
 
 
 def _read_cache() -> dict | None:
@@ -447,6 +466,10 @@ def report_finished_deferred_update() -> None:
         return
     if report is None:
         return
+    # Only the process that claimed the marker records the update, so two
+    # processes that start at once cannot both record it.
+    if report.status is DeferredUpdateStatus.SUCCEEDED and report.claimed:
+        note_finished_update(report.from_version, __version__, major_flag=report.major_flag)
     sys.stderr.write(_format_deferred_report(report))
 
 
@@ -669,8 +692,9 @@ def maybe_auto_update(*, json_mode: bool = False) -> None:
     copy instead of upgrading the running one (full rationale in
     :mod:`keboola_agent_cli.frozen_dist`).
 
-    Cache discipline: a single cache file at
-    ``~/.config/keboola-agent-cli/version_cache.json`` stores
+    Cache discipline: a single cache file per major at
+    ``~/.config/keboola-agent-cli/version_cache.json`` (0.x) or
+    ``version_cache_v<N>.json`` (major N from 1 on) stores
     ``latest_version`` so we make at most one GitHub round-trip per
     ``AUTO_UPDATE_CHECK_INTERVAL``.
 
@@ -692,7 +716,15 @@ def maybe_auto_update(*, json_mode: bool = False) -> None:
         # exits, so its outcome has to be reported by someone else. Do it before
         # the skip gates: the user is owed the result -- especially a failure and
         # its recovery command -- even on a run that will not update anything.
+        remove_stale_claims((DEFERRED_UPDATE_MARKER_FILENAME, CROSSING_PENDING_FILENAME))
         report_finished_deferred_update()
+        # The POSIX update of the previous run set this before it ran the same
+        # command again under the new version (also a 0.x client older than
+        # the major gate). `show_post_update_changelog` removes it later.
+        updated_from = os.environ.get(ENV_UPDATED_FROM, "")
+        if updated_from:
+            note_finished_update(updated_from, __version__)
+        announce_pending_crossing(json_mode=json_mode)
 
         # Wide gates (dev install / opt-out / update|version commands)
         # skip the update entirely -- there is nothing reasonable to do.

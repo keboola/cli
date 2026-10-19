@@ -1506,6 +1506,17 @@ kbagent update [--beta] [--major]
 #   envelopes). Cache keys next_major_version/_release_id/_published_at, checked_at,
 #   notice_shown_at; a cached latest_version of a higher major is ignored; `version --beta` no
 #   longer writes the cache. Version gate lives in gotchas.md.
+# 1.x updater and the crossing (CLI-51, #791 section 4.4): when /releases/latest names a LOWER
+#   major (a 1.x client before M), the updater reads the first page of the release list and takes
+#   the highest stable release of its own major (pre-releases only with --beta). The cache file is
+#   per major: version_cache.json (0.x), version_cache_v<N>.json (N >= 1). An automatic update
+#   to a higher major (KBAGENT_UPDATED_FROM, or the claimed marker of a finished deferred update
+#   with major_flag not true) writes crossing_pending.json in the state dir. Until the first
+#   write/destructive command (permissions.py class, not admin) every read gets a warnings[] entry
+#   UPDATED_ACROSS_MAJOR. That command claims the file with os.replace and exits 6 with
+#   UPDATED_ACROSS_MAJOR, from check_cli_permission() (update_crossing.py). Fail open on any I/O
+#   error. Not for serve REST routes. The banner lists the BREAKING: notes of every crossed version. Under --json
+#   the first command adds UPDATED_ACROSS_BREAKING. Version gate lives in gotchas.md.
 # `--beta` (or env `KBAGENT_INCLUDE_PRERELEASE=1`) opts into pre-release versions
 # (PEP 440 betas/rc, e.g. 0.43.0b1). Default (no flag) is stable-only -- auto-update
 # startup hook never silently lands on a beta.

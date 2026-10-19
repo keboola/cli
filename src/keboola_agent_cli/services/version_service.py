@@ -501,13 +501,18 @@ class _SameMajor:
 
 
 def _same_major_from_pages(
-    first: _Page | None, major: int, *, include_prerelease: bool, timeout: float
+    first: _Page | None,
+    major: int,
+    *,
+    include_prerelease: bool,
+    timeout: float,
+    max_pages: int = RELEASE_LIST_MAX_PAGES,
 ) -> _SameMajor | None:
     """Highest release of ``major`` in the release list; None when a page read failed.
 
-    Reads older pages (up to :data:`RELEASE_LIST_MAX_PAGES`) only while the
-    pages read so far hold no release of ``major`` -- the case of a held 0.x
-    install after more than 100 releases of 1.x.
+    Reads older pages (up to ``max_pages``) only while the pages read so far
+    hold no release of ``major`` -- the case of a held 0.x install after more
+    than 100 releases of 1.x.
     """
     page = first if first is not None else _read_release_list(timeout)
     number = 1
@@ -515,7 +520,7 @@ def _same_major_from_pages(
     while page is not None:
         listed += page.listed
         found = _highest(_of_major(listed, major, include_prerelease=include_prerelease))
-        if found is not None or not page.full or number >= RELEASE_LIST_MAX_PAGES:
+        if found is not None or not page.full or number >= max_pages:
             return _SameMajor(found, found is None)
         number += 1
         page = _read_release_list(timeout, page=number)
@@ -660,9 +665,12 @@ def fetch_gated_release(
     Requests, smallest first:
 
     * ``GET /releases/latest`` (stable channel). When it names the running
-      major, that is the same-major version. When it names a higher major
-      (after M, or a misconfigured release), ``GET /releases?per_page=100``
-      is read once for the highest stable release of the running major.
+      major, that is the same-major version. When it names another major,
+      ``GET /releases?per_page=100`` is read once for the highest stable
+      release of the running major: a higher major after M (or a
+      misconfigured release), and a lower major on a client of the new major
+      before M, when ``/releases/latest`` still names the previous one
+      (#791 section 4.4, UP1).
       ``include_prerelease`` (``--beta``) reads that list instead, as the
       pre-release path always did.
     * ``GET /releases/tags/v<N+1>.0.0`` at most once per
@@ -753,16 +761,25 @@ def fetch_gated_release(
     if target is not None:
         return GatedRelease(target, None, next_major, checked_at, server_now)
 
-    if latest is not None and latest[0].major <= running.major:
+    if latest is not None and latest[0].major == running.major:
         return GatedRelease(latest[1], latest[1], next_major, checked_at, server_now)
+    # A lower major in /releases/latest: the running major is the newest one,
+    # so its releases are on the first page.
+    newest_major = latest is not None and latest[0].major < running.major
     same = _same_major_from_pages(
         first_page,
         running.major,
         include_prerelease=include_prerelease,
         timeout=timeout,
+        max_pages=1 if newest_major else RELEASE_LIST_MAX_PAGES,
     )
     if same is None:
         return GatedRelease(None, None, next_major, checked_at, server_now)
+    if same.missing and newest_major:
+        # Before M, /releases/latest names the previous major, and the list
+        # holds no stable release of this one yet (a pre-release is running
+        # without --beta): nothing newer to install.
+        return GatedRelease(__version__, __version__, next_major, checked_at, server_now)
     return GatedRelease(
         same.version, same.version, next_major, checked_at, server_now, same.missing
     )
