@@ -29,6 +29,7 @@ from ._helpers import (
     TOKEN_ENV_OPTION,
     TOKEN_FILE_OPTION,
     TOKEN_STDIN_OPTION,
+    RefuseAtFile,
     check_cli_permission,
     discard_token_file,
     emit_api_error,
@@ -768,7 +769,9 @@ def project_description_set(
         "--project",
         help="Project alias to update",
     ),
-    text: str | None = typer.Option(None, "--text", help="Inline description string"),
+    text: str | None = typer.Option(
+        None, "--text", help="Inline description string", callback=RefuseAtFile("--file").callback
+    ),
     file: Path | None = typer.Option(
         None,
         "--file",

@@ -13,6 +13,7 @@ from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..output import format_branch_metadata_table, format_branches_table
 from ._all_projects import AllProjectsOption, reject_project_with_all_projects
 from ._helpers import (
+    RefuseAtFile,
     check_cli_permission,
     emit_api_error,
     emit_project_warnings,
@@ -337,7 +338,9 @@ def branch_metadata_set(
     ctx: typer.Context,
     project: str = typer.Option(..., "--project", help="Project alias"),
     key: str = typer.Option(..., "--key", help="Metadata key to set"),
-    text: str | None = typer.Option(None, "--text", help="Inline string value"),
+    text: str | None = typer.Option(
+        None, "--text", help="Inline string value", callback=RefuseAtFile("--file").callback
+    ),
     file: Path | None = typer.Option(
         None,
         "--file",

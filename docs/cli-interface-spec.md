@@ -272,7 +272,7 @@ What stays as it is:
 - Checked by: `args.no-positional-arguments`, `args.no-bare-id-option` (both report only).
 
 <a id="A4"></a><a id="args.list-option-repeatable"></a>
-**A4 · MUST · now for new options; 1.0.0 for existing ones.** A list-valued option is repeatable. An option whose values are IDs or fixed values (project IDs, table IDs, types) also accepts a comma list in one occurrence. An option with free-form values (JSON, `KEY=VALUE`, `PATH=VALUE`, SQL, text; for example `transformation edit --op`, `config update --set`, `config variables-set --var`) is repeat-only, because a comma can be part of the value. Until 1.0.0, the nine existing comma-only options (`org setup --project-ids`, `sharing share --target-project-ids` and `--target-users`, and six `semantic-layer` options) take one comma string.
+**A4 · MUST · now for new options; 1.0.0 for existing ones.** A list-valued option is repeatable. An option whose values are IDs or fixed values (project IDs, table IDs, types) also accepts a comma list in one occurrence. An option with free-form values (JSON, `KEY=VALUE`, `PATH=VALUE`, SQL, text; for example `transformation edit --op`, `config update --set`, `config variables-set --var`) is repeat-only, because a comma can be part of the value. `split_multi()` in `commands/_helpers.py` flattens the values of an ID or fixed-value option. From 1.0.0 this covers the nine options that took one comma string before (`org setup --project-ids`, `sharing share --target-project-ids` and `--target-users`, and six `semantic-layer` options); in 0.x they take one comma string.
 
 - Checked by: `args.list-option-repeatable`.
 
@@ -295,7 +295,7 @@ What stays as it is:
 ## 4. Input
 
 <a id="I1"></a><a id="input.single-parser"></a>
-**I1 · MUST · now.** A structured value (JSON or YAML) accepts inline text, `@path`, and `-` for stdin, with the behavior of `parse_json_arg` in `commands/_helpers.py`. New code calls it. The other copies of this parsing move to it when their command is changed.
+**I1 · MUST · now.** A structured value (JSON or YAML) accepts inline text, `@path`, and `-` for stdin, with the behavior of `parse_json_arg` in `commands/_helpers.py`, and every structured option calls it (`allow_yaml=True` for YAML). The only other code that reads an `@` value is the refusal of I3.
 
 - Checked by: `input.single-parser`.
 
@@ -306,13 +306,13 @@ What stays as it is:
 - Checked by: `input.file-option-vocabulary` (report only).
 
 <a id="I3"></a><a id="input.content-option-refuses-at-file"></a>
-**I3 · MUST · 1.0.0.** A free-text content option refuses a value that is `@` followed by the path of an existing file, with exit 2 and a hint that names the file option. In 1.0.0 this covers the four commands that use `resolve_text_input` and `transformation create/edit --sql`; the other free-text options follow after 1.0.0. Until then, such a value is stored as text.
+**I3 · MUST · 1.0.0.** A free-text content option refuses a value that is `@` followed by the path of an existing file (a relative path is relative to the current directory), with exit 2 and a hint that names the file option. The hint also says how to store text that starts with `@`: write it to a file and pass that file with the file option. The option declares `callback=RefuseAtFile("--file").callback` (`commands/_helpers.py`); `@` followed by anything that is not a file stays text. In 1.0.0 this covers only five options: `--text` of the four commands that use `resolve_text_input` and `transformation create --sql` (`transformation edit` has no `--sql`). The other free-text options follow after 1.0.0 and store `@<file>` as text until then. In 0.x, such a value is stored as text. A free-text content option is an option of a write, destructive or admin command whose name is in `CONTENT_OPTIONS` in `scripts/check_cli_spec.py`.
 
 - Why: project and branch metadata keep no old value, so a wrong guess cannot be undone.
-- Checked by: `input.content-option-refuses-at-file` (deferred: lands in 1.0.0).
+- Checked by: `input.content-option-refuses-at-file` (the options without the refusal are in the baseline).
 
 <a id="I4"></a>
-**I4 · MUST · 1.0.0.** A bad input value is a usage error (exit 2, `INVALID_ARGUMENT`) that names the option, never a traceback. Until 1.0.0, some bad values end in a traceback with exit 1.
+**I4 · MUST · 1.0.0.** A bad input value is a usage error (exit 2, `INVALID_ARGUMENT`) that names the option, never a traceback. In 0.x, some bad values end in a traceback with exit 1. Known gaps in 1.0.0: the structured options that exited 2 before 1.0.0 keep their error code (`config` `--configuration`, `--state` and `--config-data`: `VALIDATION_ERROR`; `encrypt values --input`: `INPUT_ERROR`; `agent --from-file` and `--runtime-input`: `INVALID_FORMAT`; `flow --file`: `VALIDATION_ERROR`; `data-app create --description-file`: `READ_ERROR`; `data-app secrets-set --secrets-file`: `DATA_APP_INVALID_SECRET`; `semantic-layer reference-data set --members-file`: `VALIDATION_ERROR`), and a value refused by Click or by `typer.BadParameter` is `USAGE_ERROR`.
 
 - Checked by: `output.one-json-document` (crash case, deferred) and review.
 

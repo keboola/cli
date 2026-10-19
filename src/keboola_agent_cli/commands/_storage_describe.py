@@ -21,6 +21,7 @@ from ..config_store import ConfigStore
 from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._helpers import (
+    RefuseAtFile,
     emit_api_error,
     get_formatter,
     get_service,
@@ -50,6 +51,7 @@ def register(app: typer.Typer) -> None:
             None,
             "--text",
             help="Description text (inline)",
+            callback=RefuseAtFile("--file").callback,
         ),
         file: Path | None = typer.Option(
             None,
@@ -122,6 +124,7 @@ def register(app: typer.Typer) -> None:
             None,
             "--text",
             help="Description text (inline)",
+            callback=RefuseAtFile("--file").callback,
         ),
         file: Path | None = typer.Option(
             None,

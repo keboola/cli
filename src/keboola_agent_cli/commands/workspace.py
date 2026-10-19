@@ -30,6 +30,7 @@ from ._helpers import (
     get_service,
     item_failure_exit_code,
     map_error_to_exit_code,
+    read_text_arg,
 )
 
 workspace_app = typer.Typer(help="Workspace lifecycle for SQL debugging")
@@ -539,7 +540,7 @@ def workspace_query(
         effective_sql = sql
     else:
         assert file is not None  # guaranteed: guard above exits if both sql and file absent
-        effective_sql = file.read_text(encoding="utf-8")
+        effective_sql = read_text_arg(formatter, file, label="--file")
 
     try:
         result = service.execute_query(

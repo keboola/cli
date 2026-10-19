@@ -21,7 +21,13 @@ import typer
 from rich.console import Console
 
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
-from ._helpers import emit_api_error, get_formatter, get_service, map_error_to_exit_code
+from ._helpers import (
+    emit_api_error,
+    get_formatter,
+    get_service,
+    map_error_to_exit_code,
+    read_text_arg,
+)
 
 # sandboxes-service git-repo credential enums (API contract literals).
 _GIT_CRED_TYPES = ("ssh_key", "http_token")
@@ -179,13 +185,9 @@ def register_git_commands(app: typer.Typer) -> None:
 
         resolved_public_key = public_key
         if public_key_file is not None:
-            try:
-                resolved_public_key = public_key_file.read_text(encoding="utf-8").strip()
-            except OSError as exc:
-                raise typer.BadParameter(
-                    f"Cannot read public-key file {public_key_file}: {exc}",
-                    param_hint="--public-key-file",
-                ) from exc
+            resolved_public_key = read_text_arg(
+                formatter, public_key_file, label="--public-key-file"
+            ).strip()
 
         if cred_type == "ssh_key" and not resolved_public_key:
             raise typer.BadParameter(

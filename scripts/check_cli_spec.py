@@ -119,6 +119,32 @@ PARTIAL_UPDATE_ROUTES: frozenset[str] = frozenset(
     }
 )
 
+# I3: the option names that carry free text a write, destructive or admin
+# command stores. Such an option has the RefuseAtFile callback (commands/_helpers.py).
+CONTENT_OPTIONS: frozenset[str] = frozenset(
+    {
+        "--change-description",
+        "--definition",
+        "--description",
+        "--draft",
+        "--goal",
+        "--message",
+        "--new-definition",
+        "--new-description",
+        "--new-sql",
+        "--prompt",
+        "--public-key",
+        "--reason",
+        "--runtime-prompt",
+        "--sql",
+        "--text",
+        "--title",
+        "--value",
+    }
+)
+# I1/I3: the functions that may read an `@` value: the parser and the refusal.
+_AT_VALUE_READERS = ("parse_json_arg", "RefuseAtFile.callback")
+
 # I-rules: file input is `--file` or `--<field>-file` next to `--<field>`.
 _INPUT_EXTRA = frozenset({"--from-file", "--stdin", "--from-csv", "--input"})
 # S1: leaf verbs that delete; such a leaf is `destructive` or `admin`.
@@ -714,8 +740,32 @@ def r_single_parser(c: Context) -> Violations:
         and site.call.args
         and isinstance(site.call.args[0], ast.Constant)
         and site.call.args[0].value == "@"
-        and not site.function.endswith("parse_json_arg")
+        and not site.function.endswith(_AT_VALUE_READERS)
     }
+
+
+def r_content_refuses_at_file(c: Context) -> Violations:
+    return {
+        f"{lf.name} {label(p)}": "free-text content option stores @<file> as text"
+        for lf in c.tree.leaves
+        if lf.category in ("write", "destructive", "admin")
+        for p in filter(is_option, lf.params)
+        if not getattr(p, "is_flag", False)
+        and label(p) in CONTENT_OPTIONS
+        and not _refuses_at_file(p)
+    }
+
+
+def _refuses_at_file(p: Any) -> bool:
+    """True when the option callback is ``RefuseAtFile(...).callback``.
+
+    Typer wraps a parameter callback in a closure, so the bound method is
+    looked up in the closure cells as well.
+    """
+    callback = getattr(p, "callback", None)
+    cells = getattr(callback, "__closure__", None) or ()
+    found = (callback, *(cell.cell_contents for cell in cells))
+    return any(hasattr(getattr(obj, "__self__", None), "file_option") for obj in found)
 
 
 def r_forward_retryable(c: Context) -> Violations:
@@ -986,6 +1036,12 @@ RULES: tuple[Rule, ...] = (
         r_single_parser,
     ),
     Rule(
+        "input.content-option-refuses-at-file",
+        "tree",
+        "a free-text content option refuses @<existing file> (RefuseAtFile)",
+        r_content_refuses_at_file,
+    ),
+    Rule(
         "target.project-help-states-default",
         "tree",
         "an optional or repeatable --project help states the omitted default",
@@ -1123,7 +1179,6 @@ CONTRACT_RULES: dict[str, str] = {
 DEFERRED_RULES: dict[str, str] = {
     "args.global-option-one-shape": "the GLOBAL_OPTIONS registry is not reviewed yet (A1)",
     "naming.verb-vocabulary": "the verb vocabulary file is not reviewed yet",
-    "input.content-option-refuses-at-file": "the @file refusal lands in 1.0.0 (Input)",
     "output.ok-then-exit-declares-exit-code": "OutputFormatter.output() has no exit_code yet; "
     "it lands with the 1.0.0 envelope",
     "output.no-warning-after-output": "lands with warnings[] in the --json envelope",

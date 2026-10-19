@@ -1,10 +1,10 @@
 """`kbagent http` -- thin Typer wrapper for HttpForwarderService.
 
-All transport / body parsing / env-var resolution lives in
+All transport / env-var resolution lives in
 ``services/http_forwarder_service.py``; this command layer only does
 what CONTRIBUTING.md §3-Layer architecture requires of commands:
 
-1. Parse Typer arguments.
+1. Parse Typer arguments (``--body`` through ``parse_json_arg``).
 2. Call the service method.
 3. Format and output the result via ``OutputFormatter``.
 4. Catch :class:`ForwarderError` and map ``exit_code`` to ``typer.Exit``.
@@ -21,13 +21,14 @@ from typing import Any
 import typer
 
 from ..constants import HTTP_DEFAULT_TIMEOUT
+from ..errors import ErrorCode
 from ..output import write_machine_output
 from ..services.http_forwarder_service import (
     ForwardedResponse,
     ForwarderError,
     HttpForwarderService,
 )
-from ._helpers import check_cli_permission, get_formatter
+from ._helpers import check_cli_permission, get_formatter, parse_json_arg
 
 http_app = typer.Typer(
     help=(
@@ -88,11 +89,18 @@ def _do_request(
     """Shared dispatch for get/post/patch/delete -- thin wrapper layer."""
     formatter = get_formatter(ctx)
     service = _resolve_service(ctx)
+    payload: Any = None
+    if body:
+        try:
+            payload = parse_json_arg(body, label="--body")
+        except ValueError as exc:
+            formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
+            raise typer.Exit(code=2) from None
     try:
         result: ForwardedResponse = service.request(
             method,
             path,
-            body=body,
+            payload=payload,
             timeout=timeout,
         )
     except ForwarderError as exc:

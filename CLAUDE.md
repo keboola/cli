@@ -782,7 +782,15 @@ kbagent lineage info --load PATH
 kbagent lineage server --load PATH [--port N] [--host HOST]
 
 kbagent sharing list [--project NAME | --all-projects]
-kbagent sharing share --project ALIAS --bucket-id ID --type TYPE [--target-project-ids IDs] [--target-users EMAILS]
+kbagent sharing share --project ALIAS --bucket-id ID --type TYPE [--target-project-ids ID ...] [--target-users EMAIL ...]
+# Input forms (CLI-48, #791): the 9 list options -- sharing share --target-project-ids/--target-users,
+#   org setup --project-ids, semantic-layer add constraint --metrics, edit constraint --new-metrics,
+#   build --tables, import/promote --types, schema --type -- repeat AND take a comma list (before: one
+#   comma string, a repeat kept the last value). `--text` of project description-set, storage
+#   describe-bucket/describe-table, branch metadata-set and `transformation create --sql` refuse
+#   `@<existing file>` with INVALID_ARGUMENT, exit 2, naming --file / --sql-file (RefuseAtFile in
+#   commands/_helpers.py). A bad input value exits 2 naming the option, never a traceback. Structured
+#   `JSON|@file|-` values go through parse_json_arg only (spec I1). Version gate lives in gotchas.md.
 kbagent sharing unshare --project ALIAS --bucket-id ID
 kbagent sharing link --project ALIAS --source-project-id ID --bucket-id ID [--name NAME] [--stage in|out]
 kbagent sharing unlink --project ALIAS --bucket-id ID

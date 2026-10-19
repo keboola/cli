@@ -2,9 +2,9 @@
 
 This is the *business* layer for ``kbagent http get|post|patch|delete``.
 The command (``commands/http_client.py``) is a thin Typer wrapper that
-parses CLI options, calls ``HttpForwarderService.request()``, and
-formats the result. All HTTP transport, body parsing, env-var
-resolution, and response decoding live here so the CLI stays a pure
+parses CLI options (``--body`` through ``parse_json_arg``), calls
+``HttpForwarderService.request()``, and formats the result. All HTTP
+transport, env-var resolution, and response decoding live here so the CLI stays a pure
 presentation layer (CONTRIBUTING.md §3-Layer architecture).
 
 Why a service for what is conceptually "shuttle bytes between two
@@ -20,8 +20,8 @@ processes"? Three reasons:
    Typer/argv -- e.g. a Python integration test that wants to call
    ``GET /agents`` without spawning a subprocess.
 3. **Single error vocabulary.** The transport surface returns / raises
-   the same ``ForwarderError`` regardless of cause (missing env, body
-   parse, transport error, HTTP non-2xx); commands map those to exit
+   the same ``ForwarderError`` regardless of cause (missing env,
+   transport error, HTTP non-2xx); commands map those to exit
    codes once, not per-method.
 
 Unlike most Keboola-facing services, this one does *not* take a
@@ -35,7 +35,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import sys
 from dataclasses import dataclass
 from typing import Any
 
@@ -88,8 +87,8 @@ class HttpForwarderService:
 
     Stateless and dependency-free at the HTTP layer: every request opens
     a fresh ``httpx.Client`` (context-managed for descriptor safety per
-    CONTRIBUTING.md §Resource management). Endpoint discovery and body
-    parsing are pure functions, exposed as ``@staticmethod`` so callers
+    CONTRIBUTING.md §Resource management). Endpoint discovery is a pure
+    function, exposed as ``@staticmethod`` so callers
     that want to validate inputs without performing a request (e.g. a
     dry-run) can use them directly.
 
@@ -123,51 +122,17 @@ class HttpForwarderService:
             )
         return url, token
 
-    @staticmethod
-    def resolve_body(body: str | None) -> Any:
-        """Parse a ``--body`` argument into a Python object for ``json=``.
-
-        Three input shapes:
-        - ``None`` / ``""`` -> ``None`` (no body sent)
-        - ``"-"``           -> read JSON from stdin
-        - ``"@<path>"``     -> read JSON from a file
-        - anything else     -> treat as inline JSON literal
-
-        Raises:
-            ForwarderError: with ``exit_code=2`` if the resulting string
-                is not valid JSON. Includes the parser's column/line so
-                the user can fix the literal without rerunning with
-                ``--verbose``.
-        """
-        if body is None or body == "":
-            return None
-        if body == "-":
-            raw = sys.stdin.read()
-        elif body.startswith("@"):
-            with open(body[1:], encoding="utf-8") as f:
-                raw = f.read()
-        else:
-            raw = body
-        try:
-            return json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise ForwarderError(
-                error_code=ErrorCode.CONFIG_ERROR,
-                message=f"--body is not valid JSON: {exc}",
-                exit_code=2,
-            ) from None
-
     def request(
         self,
         method: str,
         path: str,
         *,
-        body: str | None = None,
+        payload: Any = None,
         timeout: float,
     ) -> ForwardedResponse:
         """Perform one HTTP request against the running ``kbagent serve``.
 
-        Resolves env-vars + parses body BEFORE opening the HTTP client, so
+        Resolves env-vars BEFORE opening the HTTP client, so
         a usage error doesn't even create a connection. The client itself
         is context-managed (``with httpx.Client()``) so descriptors close
         on every exit path including exceptions -- the LLM-trap that
@@ -178,7 +143,8 @@ class HttpForwarderService:
             path: Endpoint path. Leading ``/`` is added if missing so
                 callers can be sloppy ("``projects``" works as well as
                 "``/projects``").
-            body: ``--body`` shape (see :meth:`resolve_body`).
+            payload: The parsed ``--body`` value sent as JSON, or ``None``
+                for no body.
             timeout: Per-request seconds. Plumbed from the caller so a
                 slow Storage listing can opt into a longer wait.
 
@@ -192,7 +158,6 @@ class HttpForwarderService:
                 ``exit_code`` field is the CLI's intended outcome.
         """
         base_url, token = self.resolve_endpoint()
-        payload = self.resolve_body(body)
 
         if not path.startswith("/"):
             path = "/" + path

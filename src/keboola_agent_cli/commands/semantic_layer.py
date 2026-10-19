@@ -24,6 +24,7 @@ from ._helpers import (
     get_formatter,
     get_service,
     item_failure_exit_code,
+    split_multi,
 )
 from ._semantic_layer_crud import add_app, edit_app, remove_app
 from ._semantic_layer_helpers import (
@@ -473,10 +474,10 @@ def semantic_layer_build(
         "--model",
         help="Update this existing model (name or UUID). If omitted, a new model is created.",
     ),
-    tables: str | None = typer.Option(
+    tables: list[str] | None = typer.Option(
         None,
         "--tables",
-        help="Comma-separated tableIds to base the model on (required).",
+        help="Table ID to base the model on (repeatable or comma-separated; required).",
     ),
     name: str | None = typer.Option(
         None, "--name", help="Model name when creating (default: kbagent_build_model)."
@@ -529,11 +530,11 @@ def semantic_layer_build(
 
     if not tables:
         formatter.error(
-            message="--tables is required (comma-separated tableIds).",
+            message="--tables is required (table IDs, repeatable or comma-separated).",
             error_code=ErrorCode.MISSING_PARAMETER,
         )
         raise typer.Exit(code=2)
-    table_ids = [t.strip() for t in tables.split(",") if t.strip()]
+    table_ids = split_multi(tables)
     if not table_ids:
         formatter.error(
             message="--tables contained no tableIds.",
@@ -575,10 +576,11 @@ def semantic_layer_promote(
     to_model: str | None = typer.Option(
         None, "--to-model", help="Target model name or UUID (defaults to sole)"
     ),
-    types: str | None = typer.Option(
+    types: list[str] | None = typer.Option(
         None,
         "--types",
-        help="Comma-separated subset (datasets,metrics,relationships,glossary,constraints)",
+        help="Item type to copy (repeatable or comma-separated): "
+        "datasets, metrics, relationships, glossary, constraints",
     ),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Classify NEW/IDENTICAL/CHANGED without writing"
@@ -599,7 +601,7 @@ def semantic_layer_promote(
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
-    type_list = [t.strip() for t in types.split(",") if t.strip()] if types else None
+    type_list = split_multi(types) if types else None
 
     if (
         not yes
@@ -650,12 +652,11 @@ def semantic_layer_import(
     model: str | None = typer.Option(
         None, "--model", help="Target model name or UUID (defaults to the sole model)"
     ),
-    types: str | None = typer.Option(
+    types: list[str] | None = typer.Option(
         None,
         "--types",
-        help=(
-            "Comma-separated subset to import: datasets,metrics,relationships,glossary,constraints"
-        ),
+        help="Item type to import (repeatable or comma-separated): "
+        "datasets, metrics, relationships, glossary, constraints",
     ),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Plan the import without calling any write API"
@@ -677,7 +678,7 @@ def semantic_layer_import(
     # --yes is the alias for the default skip-on-conflict mode; users can
     # still opt into destructive overwrite via --overwrite.
     _ = yes  # explicit (no behavioural effect when --overwrite is False)
-    type_list = [t.strip() for t in types.split(",") if t.strip()] if types else None
+    type_list = split_multi(types) if types else None
     target_projects = resolve_scope_targets(
         ctx,
         operation="semantic-layer.import",
@@ -764,11 +765,11 @@ def _print_schemas(console: Console, data: dict) -> None:
 def semantic_layer_schema(
     ctx: typer.Context,
     project: str = typer.Option(..., "--project", help="Project alias"),
-    types: str | None = typer.Option(
+    types: list[str] | None = typer.Option(
         None,
         "--type",
         help=(
-            "Comma-separated semantic type(s): "
+            "Semantic type (repeatable or comma-separated): "
             "model | dataset | metric | relationship | constraint | glossary."
         ),
     ),
@@ -780,13 +781,13 @@ def semantic_layer_schema(
 
     Schemas are fetched live from the project's metastore (never bundled),
     so they always match the deployed metastore version. Pass exactly one
-    of ``--type`` (comma-separated list) or ``--all``.
+    of ``--type`` (repeatable or comma-separated) or ``--all``.
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
 
     # Mutual exclusion: exactly one of --type / --all.
-    if all_types == (types is not None):
+    if all_types == bool(types):
         formatter.error(
             message="Specify exactly one of --type or --all.",
             error_code=ErrorCode.USAGE_ERROR,
@@ -796,7 +797,7 @@ def semantic_layer_schema(
     if all_types:
         type_list = list(SCHEMA_TYPE_ALIAS)
     else:
-        type_list = [t.strip() for t in (types or "").split(",") if t.strip()]
+        type_list = split_multi(types)
         if not type_list:
             formatter.error(
                 message="--type contained no type names.",
