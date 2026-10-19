@@ -14,6 +14,8 @@ from keboola_agent_cli.services.version_service import (
     VersionService,
     _is_up_to_date,
     _recovery_command,
+    _render_command,
+    _uv_link_mode_args,
     build_hardlink_retry_command,
     build_kbagent_upgrade_command,
     fetch_gated_release,
@@ -110,9 +112,18 @@ class TestVersionService:
 
         result = VersionService().get_versions()
 
-        assert result["kbagent"]["upgrade_command"] == (
-            "uv tool install --force --reinstall "
-            "'keboola-cli @ git+https://github.com/keboola/cli@v9.9.9'"
+        # Quoting is per platform (shlex on POSIX, list2cmdline on Windows),
+        # so the expected text is rendered the same way.
+        assert result["kbagent"]["upgrade_command"] == _render_command(
+            (
+                "uv",
+                "tool",
+                "install",
+                "--force",
+                "--reinstall",
+                *_uv_link_mode_args(),
+                "keboola-cli @ git+https://github.com/keboola/cli@v9.9.9",
+            )
         )
 
     @patch("keboola_agent_cli.auto_update._write_cache")
