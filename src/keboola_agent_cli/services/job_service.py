@@ -848,6 +848,12 @@ class JobService(BaseService):
         Returns the full job dicts (not just IDs) so callers can display context
         in dry-run output. branch_id is applied client-side because the Queue
         API /search/jobs endpoint does not accept a branch filter.
+
+        ``branch_id`` 0 is production (``--branch 0``). A production job
+        carries the numeric ID of the default branch, so 0 matches only that
+        ID, read from the API. A job without a ``branchId`` is not matched: the
+        command terminates jobs, and no recorded Queue response shows such a
+        job for production.
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
@@ -860,11 +866,12 @@ class JobService(BaseService):
                 status=status,
                 limit=limit,
             )
+            if branch_id == 0:
+                branch_id = self.production_branch_id(client, alias)
+            if branch_id is not None:
+                jobs = [j for j in jobs if str(j.get("branchId")) == str(branch_id)]
         finally:
             client.close()
-
-        if branch_id is not None:
-            jobs = [j for j in jobs if str(j.get("branchId")) == str(branch_id)]
 
         return jobs
 

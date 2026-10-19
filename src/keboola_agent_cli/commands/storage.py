@@ -15,6 +15,7 @@ from ..constants import TABLE_DATA_JOB_MAX_WAIT
 from ..effective_branch import record_branch, resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..services._storage_jobs import validate_wait_timeout
+from ..services._storage_tables import CLONE_TABLE_PRODUCTION_MESSAGE
 from ._all_projects import AllProjectsOption, reject_project_with_all_projects
 from ._helpers import (
     check_cli_permission,
@@ -557,7 +558,10 @@ def storage_create_table(
     source_branch_id: int | None = typer.Option(
         None,
         "--source-branch-id",
-        help="Branch ID the source table is resolved in (defaults to the request branch).",
+        help=(
+            "Branch ID the source table is resolved in (defaults to the request branch). "
+            "0 means production."
+        ),
     ),
     time_partitioning_type: str | None = typer.Option(
         None,
@@ -659,7 +663,7 @@ def storage_create_table(
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
     effective_branch = resolve_branch(config_store, project, branch)
-    if source_table_id and source_branch_id:
+    if source_table_id and source_branch_id is not None:  # 0 is production
         record_branch(config_store, project, source_branch_id, "explicit", role="source")
 
     try:
@@ -1471,7 +1475,8 @@ def storage_swap_tables(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
-    effective_branch = resolve_branch(config_store, project, branch, required=True)
+    # --branch 0 is production, which a swap accepts (the service reads its ID).
+    effective_branch = resolve_branch(config_store, project, branch, required=branch != 0)
 
     try:
         # Before the confirmation prompt: a bad budget is a usage error, and
@@ -1558,7 +1563,8 @@ def storage_clone_table(
         "--branch",
         help=(
             "Target dev branch ID. Required; defaults to the active branch "
-            "set via 'kbagent branch use'. The pull is one-way: default -> branch."
+            "set via 'kbagent branch use'. The pull is one-way: default -> branch. "
+            "0 (production) is refused: the target must be a dev branch."
         ),
     ),
     dry_run: bool = typer.Option(
@@ -1586,6 +1592,14 @@ def storage_clone_table(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
+    # The service refuses 0 too (refuse_production_clone, for REST callers), but
+    # resolve_branch(required=True) turns 0 into None, and the service would then
+    # report a missing branch (CONFIG_ERROR, exit 5). Refuse here first: exit 2.
+    if branch == 0:
+        formatter.error(
+            message=CLONE_TABLE_PRODUCTION_MESSAGE, error_code=ErrorCode.INVALID_ARGUMENT
+        )
+        raise typer.Exit(code=2)
     effective_branch = resolve_branch(config_store, project, branch, required=True)
     if effective_branch is not None:  # the table is pulled from production into it
         record_branch(config_store, project, None, "production", fixed=True, role="source")

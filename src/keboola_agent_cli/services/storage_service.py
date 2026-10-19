@@ -31,7 +31,7 @@ from ._storage_jobs import (
     with_import_hint,
     with_job_timeout_hint,
 )
-from ._storage_tables import normalize_table_rows
+from ._storage_tables import build_table_source, normalize_table_rows, refuse_production_clone
 from ._table_detail import build_table_detail
 from .table_usage import collect_table_usage, fetch_usage_components
 
@@ -143,25 +143,6 @@ def _parse_default_assignments(defaults: list[str] | None) -> dict[str, str]:
             raise ValueError(f"Invalid --default {spec!r}: empty column name.")
         result[name] = value
     return result
-
-
-def _build_source(
-    source_table_id: str | None,
-    source_branch_id: int | None,
-) -> dict[str, Any] | None:
-    """Build the optional ``source`` object for the tables-definition endpoint.
-
-    Returns ``None`` when no source is requested. ``branchId`` is only included
-    when explicitly given; otherwise the API defaults it to the request branch.
-    """
-    if source_table_id is None:
-        return None
-    if not source_table_id.strip():
-        raise ValueError("--source-table-id must not be empty.")
-    source: dict[str, Any] = {"tableId": source_table_id}
-    if source_branch_id is not None:
-        source["branchId"] = source_branch_id
-    return source
 
 
 def _build_bigquery_layout(
@@ -761,7 +742,9 @@ class StorageService(ColumnDescriptionsMixin):
                 must be lowercase per Keboola API validation. Not valid in
                 source mode.
             source_table_id: Storage table ID to copy from (BigQuery only).
-            source_branch_id: Optional branch the source is resolved in.
+            source_branch_id: Optional branch the source is resolved in. 0 is
+                production: omitted from the request in a production request,
+                the ID of the default branch in a dev-branch request.
             time_partitioning_type/field/expiration_ms: BigQuery time
                 partitioning (``type`` required when any is set).
             range_partitioning_field/start/end/interval: BigQuery integer-range
@@ -805,7 +788,7 @@ class StorageService(ColumnDescriptionsMixin):
         if source_branch_id is not None and source_table_id is None:
             raise ValueError("--source-branch-id requires --source-table-id.")
 
-        source = _build_source(source_table_id, source_branch_id)
+        source = build_table_source(source_table_id, source_branch_id)
         time_partitioning, range_partitioning, clustering = _build_bigquery_layout(
             time_partitioning_type,
             time_partitioning_field,
@@ -892,6 +875,8 @@ class StorageService(ColumnDescriptionsMixin):
                         "require a BigQuery backend."
                     )
 
+            if source is not None and source_branch_id == 0 and branch_id:
+                source["branchId"] = self.production_branch_id(client, alias, role="source")
             auto_created_bucket = _ensure_bucket_exists_in_branch(client, bucket_id, branch_id)
             try:
                 results = client.create_table(
@@ -1594,6 +1579,8 @@ class StorageService(ColumnDescriptionsMixin):
             table_id: Full ID of the first table.
             target_table_id: Full ID of the second table.
             branch_id: Branch ID (must not be None; any branch accepted, including the default/production branch).
+                0 is production: the swap endpoint needs a branch ID in its path, so
+                the service reads the ID of the default branch before the swap.
             dry_run: If True, only report what would be swapped.
             timeout: Seconds to wait for the swap job. ``None`` means
                 ``TABLE_DATA_JOB_MAX_WAIT``. A swap on a large BigQuery table
@@ -1643,6 +1630,8 @@ class StorageService(ColumnDescriptionsMixin):
 
         client = self._client_factory(project.stack_url, project.token)
         try:
+            if branch_id == 0:  # production: the swap endpoint exists only under a branch ID
+                branch_id = self.production_branch_id(client, alias)
             response = client.swap_tables(
                 table_id=table_id,
                 target_table_id=target_table_id,
@@ -1683,7 +1672,7 @@ class StorageService(ColumnDescriptionsMixin):
         Args:
             alias: Project alias.
             table_id: Full ID of the table to pull into the branch.
-            branch_id: Target dev branch ID (must not be None).
+            branch_id: Target dev branch ID (must not be None or 0).
             dry_run: If True, only report what would be pulled.
 
         Returns:
@@ -1692,6 +1681,8 @@ class StorageService(ColumnDescriptionsMixin):
 
         Raises:
             ConfigError: If branch_id is None.
+            KeboolaApiError: ``INVALID_ARGUMENT`` when branch_id is 0
+                (production), before any HTTP call.
             KeboolaApiError: If the API call fails.
         """
         if branch_id is None:
@@ -1700,6 +1691,7 @@ class StorageService(ColumnDescriptionsMixin):
                 "'kbagent branch use --project <P> --branch <ID>' or pass "
                 "--branch <ID> directly. The pull is one-way: default -> branch."
             )
+        refuse_production_clone(branch_id)
 
         projects = self.resolve_projects([alias])
         project = projects[alias]

@@ -24,6 +24,7 @@ from ..constants import (
     ENV_MAX_PARALLEL_WORKERS,
     UNEXPECTED_ERROR_MAX_MESSAGE_LEN,
 )
+from ..effective_branch import TargetRole, record_branch
 from ..errors import ErrorCode
 from ..models import AppConfig, ProjectConfig
 from ..project_ref import resolve_project_ref
@@ -378,6 +379,36 @@ class BaseService:
             resolved[alias] = config.projects[alias]
 
         return resolved
+
+    def production_branch_id(
+        self, client: KeboolaClient, alias: str, *, role: TargetRole = "target"
+    ) -> int:
+        """The numeric ID of the default (production) branch of project ``alias``.
+
+        ``--branch 0`` means production (``effective_branch.resolve_branch``),
+        and the Storage client paths send a falsy branch ID to the production
+        endpoint. Some calls need the ID itself: an endpoint that exists only
+        under ``/v2/storage/branch/{id}/`` (``swap-tables``), or a match on the
+        ``branchId`` of a Queue job (``job terminate --status``), or a source
+        table branch inside a dev-branch request (``create-table
+        --source-branch-id 0``). The branch is recorded as production with
+        the ID, in ``role``.
+
+        Raises:
+            ConfigError: the project reports no default branch (``CONFIG_ERROR``,
+                exit 5, HTTP 400 over ``kbagent serve``). It is a state of the
+                project, not a failed API call, and the workspace and config
+                services word the same case as ``ConfigError`` too.
+        """
+        branch_id = find_default_branch_id(client.list_dev_branches())
+        if branch_id is None:
+            raise ConfigError(
+                f"Project '{alias}' reports no default branch, so kbagent cannot "
+                f"find the production branch ID. Check the branches with "
+                f"'kbagent branch list --project {alias}'."
+            )
+        record_branch(self._config_store, alias, branch_id, "production", role=role)
+        return branch_id
 
     def resolve_pinned_alias(self, explicit: str | None = None) -> tuple[str, str]:
         """Resolve the effective project alias for a single-project operation.
