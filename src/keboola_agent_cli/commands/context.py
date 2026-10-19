@@ -2441,6 +2441,15 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
     hint, current_version, next_version, released_at, migration_at, url).
     AGENTS: when `kbagent --version` is 0.x and this notice appears, ASK THE
     USER before you run `kbagent update --major`. Never run it on your own.
+    After an automatic update to a higher major (since vNEXT): the first
+    write or destructive command is refused once with UPDATED_ACROSS_MAJOR
+    (exit 6, details.url = migration page). Reads before it get a warnings[]
+    entry with that code. Then every command runs. Not after `update --major`,
+    not for admin commands, not for `serve` REST routes. The first command
+    after an update across BREAKING changelog notes adds a warnings[] entry
+    UPDATED_ACROSS_BREAKING (versions = the versions with such notes).
+    AGENTS: on UPDATED_ACROSS_MAJOR read the migration page before you run the
+    command again.
 
   kbagent changelog [--limit N] [--full]
     Show recent changelog (what changed in each version). Default: last 5

@@ -162,6 +162,14 @@ class DeferredUpdateReport:
     exit_code: int | None
     recovery_command: str | None
     log_path: Path
+    #: The marker of the major gate said ``kbagent update --major`` (CLI-40).
+    #: False for a marker of an older client, which has no such key.
+    major_flag: bool = False
+    #: This process moved the marker away before it read it, so no other
+    #: process reports the same update (#791 row 28). False when the state
+    #: directory did not allow the move: the report is still shown, but the
+    #: first-run refusal of a major update is not recorded from it.
+    claimed: bool = False
 
 
 def state_dir() -> Path:
@@ -704,6 +712,12 @@ def collect_finished_deferred_update() -> DeferredUpdateReport | None:
     elif not _marker_is_stale(marker):
         return None  # helper is still waiting for kbagent to exit
 
+    claim = claim_file(_marker_path())
+    if claim is ClaimResult.LOST:
+        return None  # another kbagent process took this report
+    if claim is ClaimResult.CLAIMED:
+        # Read the marker again: the moved copy is the one this process owns.
+        marker = read_claimed_json(_marker_path()) or marker
     _clear_deferred_state()
 
     classified = _classify_exit(raw_exit, helper_reported=reported)
@@ -714,6 +728,8 @@ def collect_finished_deferred_update() -> DeferredUpdateReport | None:
         exit_code=classified.exit_code,
         recovery_command=marker.get("recovery_command"),
         log_path=log_path(),
+        major_flag=marker.get("major_flag") is True,
+        claimed=claim is ClaimResult.CLAIMED,
     )
 
 
@@ -744,6 +760,73 @@ def _classify_exit(raw_exit: str | None, *, helper_reported: bool) -> Classified
     if exit_code == 0:
         return ClassifiedExit(DeferredUpdateStatus.SUCCEEDED, 0)
     return ClassifiedExit(DeferredUpdateStatus.FAILED, exit_code)
+
+
+class ClaimResult(Enum):
+    """Outcome of :func:`claim_file`."""
+
+    CLAIMED = "claimed"  # this process moved the file away and owns its content
+    LOST = "lost"  # the file was gone: another process claimed it first
+    FAILED = "failed"  # the file is there but could not be moved (read-only directory)
+
+
+def _claimed_name(path: Path) -> str:
+    return f"{path.name}.{os.getpid()}.claimed"
+
+
+def claim_file(path: Path) -> ClaimResult:
+    """Move ``path`` to a name of this process, so at most one process owns it.
+
+    ``os.replace`` is atomic within one directory: of several processes that
+    try at the same time, exactly one succeeds and the others find the file
+    gone. The moved copy keeps the content for the winner to read and delete.
+    """
+    try:
+        os.replace(path, path.with_name(_claimed_name(path)))
+    except FileNotFoundError:
+        return ClaimResult.LOST
+    except OSError:
+        logger.debug("Could not claim %s", path, exc_info=True)
+        return ClaimResult.FAILED
+    return ClaimResult.CLAIMED
+
+
+def read_claimed_json(path: Path) -> dict | None:
+    """Read the copy of ``path`` this process claimed, then delete it. None when unreadable."""
+    claimed = path.with_name(_claimed_name(path))
+    data = _read_json(claimed)
+    try:
+        claimed.unlink(missing_ok=True)
+    except OSError:
+        logger.debug("Could not delete %s", claimed, exc_info=True)
+    return data
+
+
+def remove_stale_claims(names: tuple[str, ...]) -> None:
+    """Delete claimed copies of ``names`` older than one day, best effort.
+
+    A process that crashed between :func:`claim_file` and the delete in
+    :func:`read_claimed_json` leaves its copy behind. Any error is ignored.
+    """
+    cutoff = time.time() - DEFERRED_UPDATE_STALE_SECONDS
+    try:
+        for name in names:
+            for leftover in state_dir().glob(f"{name}.*.claimed"):
+                try:
+                    if leftover.stat().st_mtime < cutoff:
+                        leftover.unlink(missing_ok=True)
+                except OSError:
+                    logger.debug("Could not remove %s", leftover, exc_info=True)
+    except OSError:
+        logger.debug("Could not list leftover claims", exc_info=True)
+
+
+def _read_json(path: Path) -> dict | None:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def _clear_deferred_state() -> None:
