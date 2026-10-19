@@ -1,10 +1,13 @@
 name: CI
 
+# `release/**` is the maintenance branch of the previous major version
+# (`release/0.N`) once main holds the next one. It gets the same checks as
+# main: CONTRIBUTING.md > "Releasing a new major version".
 on:
   push:
-    branches: [main]
+    branches: [main, "release/**"]
   pull_request:
-    branches: [main]
+    branches: [main, "release/**"]
 
 # One in-flight run per PR. Pushing again to an open PR supersedes the previous
 # run, which used to keep burning a full ~39 billed minutes (a Windows job bills
@@ -12,9 +15,9 @@ on:
 # 219 PR runs (13%) were still executing when the next push landed, and a single
 # iterating branch racked up 23 runs.
 #
-# A push to main is the post-merge verification of a commit that is already
-# shipped, so it must never be dropped: losing the signal for the commit in
-# between two merges is exactly when you want it.
+# A push to main (or to a release/** branch) is the post-merge verification of
+# a commit that is already shipped, so it must never be dropped: losing the
+# signal for the commit in between two merges is exactly when you want it.
 #
 # `cancel-in-progress: false` is NOT enough to guarantee that. It protects a
 # RUNNING run; GitHub keeps at most one running plus one PENDING run per group

@@ -931,6 +931,9 @@ is the `Date` header of the GitHub response, the same clock the clients use.
       from `main` first (a normal release PR) and use its tag.
    3. Create `release/0.N` from the commit of that tag:
       `git push origin 'v0.N.x^{commit}:refs/heads/release/0.N'`.
+      CI runs on `release/0.N` only when its `ci.yml` and `frontend.yml` have
+      the `release/**` triggers. If that tag is older than the triggers, the
+      first PR into `release/0.N` adds them.
    4. Pin the deprecated marketplace shim in a PR to `main`, and merge it
       before the first 1.0.0 change. Its relative `source` follows the
       default branch, so it would serve 1.x plugin documents to 0.x installs.

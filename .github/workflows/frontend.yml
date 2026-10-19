@@ -25,18 +25,19 @@ name: Frontend
 
 on:
   push:
-    branches: [main]
+    branches: [main, "release/**"]
     paths:
       - "web/**"
       - ".github/workflows/frontend.yml"
   pull_request:
-    branches: [main]
+    branches: [main, "release/**"]
     paths:
       - "web/**"
       - ".github/workflows/frontend.yml"
 
 # Same rationale, and the same pending-run caveat, as ci.yml: supersede an
-# in-flight PR run when the branch is pushed again, but never drop a main push.
+# in-flight PR run when the branch is pushed again, but never drop a push to
+# main or to a release/** branch.
 # Pushes are keyed on the SHA rather than the ref because `cancel-in-progress:
 # false` only protects a RUNNING run -- a PENDING one is cancelled when a newer
 # run queues into the same group. See the longer note in ci.yml.
