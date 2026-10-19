@@ -20,6 +20,14 @@ is the version of the marketplace *descriptor shape*, bumped only when
 the catalogue's structure changes (e.g. when plugins are added or
 removed), not on every plugin release.
 
+``.claude-plugin/marketplace.json`` is the deprecated shim marketplace. Its
+relative ``source`` follows the default branch, so from 1.0.0 it would serve
+1.x plugin documents to 0.x installs. For a version of major 1 or higher this
+script therefore refuses a relative ``source`` (exit code 1) until the shim is
+pinned to the last 0.x tag. It never changes the version of a pinned entry: that
+version belongs to the pinned tag (CONTRIBUTING.md > "Releasing a new major
+version").
+
 Safe to run repeatedly (idempotent).
 
 Usage:
@@ -54,6 +62,11 @@ def get_pyproject_version() -> str:
         print("ERROR: could not find version in pyproject.toml", file=sys.stderr)
         sys.exit(1)
     return match.group(1)
+
+
+def _major(version: str) -> int:
+    """Major number of a PEP 440 version string (``1.0.0b1`` -> 1)."""
+    return int(version.split(".", 1)[0])
 
 
 def sync_plugin_json(version: str) -> bool:
@@ -93,6 +106,19 @@ def sync_marketplace_json(version: str) -> bool:
             file=sys.stderr,
         )
         return False
+
+    if not isinstance(kbagent_entry.get("source"), str):
+        # Pinned to a tag (a git source object): the entry's version belongs to that tag.
+        return False
+    if _major(version) >= 1:
+        print(
+            "ERROR: .claude-plugin/marketplace.json (the deprecated shim) still has a "
+            "relative 'source', which follows the default branch. Before a 1.x version "
+            "reaches main, pin its kbagent entry to the last 0.x tag; see CONTRIBUTING.md "
+            '> "Releasing a new major version".',
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     if kbagent_entry.get("version") == version:
         return False

@@ -12,7 +12,7 @@ No more switching between the UI, the old CLI, and raw API calls. `kbagent` wrap
 curl -LsSf https://raw.githubusercontent.com/keboola/cli/main/install.sh | sh
 ```
 
-This installs a **prebuilt wheel** from the latest GitHub release -- a few-seconds download, no source build. Building from `git+` instead recompiles the bundled React SPA via npm on every install, which takes minutes on WSL ([#353](https://github.com/keboola/cli/issues/353)). The script bundles the `[server]` extras by default (set `KBAGENT_NO_SERVER=1` for a CLI-only install) and needs only `curl` + [`uv`](https://docs.astral.sh/uv/).
+This installs a **prebuilt wheel** of the highest stable version on PyPI from its GitHub release -- a few-seconds download, no source build. Building from `git+` instead recompiles the bundled React SPA via npm on every install, which takes minutes on WSL ([#353](https://github.com/keboola/cli/issues/353)). The script bundles the `[server]` extras by default (set `KBAGENT_NO_SERVER=1` for a CLI-only install) and needs only `curl` + [`uv`](https://docs.astral.sh/uv/).
 
 Requires **Python >=3.12**. `uv` normally fetches a matching interpreter on its own even if your default Python is older, but if it doesn't (offline, or Python downloads disabled) the install fails with `does not satisfy Python>=3.12` -- set `UV_PYTHON` (a standard `uv` env var) to a 3.12-or-newer interpreter you actually have -- `UV_PYTHON=3.12`, `UV_PYTHON=3.13`, or a full path. It has to reach `sh`, not `curl` -- `curl -LsSf https://raw.githubusercontent.com/keboola/cli/main/install.sh | UV_PYTHON=3.12 sh`, or `export UV_PYTHON=3.12` beforehand. Prefixing the whole pipeline (`UV_PYTHON=3.12 curl ... | sh`) assigns it to `curl`, where it has no effect.
 
@@ -32,11 +32,15 @@ Pick whichever fits the machine:
 
 ```powershell
 winget install --id astral-sh.uv -e            # skip if uv is already installed
-$ver = (Invoke-RestMethod "https://api.github.com/repos/keboola/cli/releases/latest").tag_name.TrimStart('v')
+$ver = (Invoke-RestMethod "https://pypi.org/pypi/keboola-cli/json").info.version
 uv tool install --force `
   "keboola-cli[server] @ https://github.com/keboola/cli/releases/download/v$ver/keboola_cli-$ver-py3-none-any.whl"
+if ($LASTEXITCODE -ne 0 -and $ver) { uv tool install --force "keboola-cli[server]==$ver" }   # fallback: the same version from PyPI
+if ($LASTEXITCODE -ne 0) { uv tool install --force "keboola-cli[server]" }                    # last fallback: the newest stable version from PyPI
 uv tool update-shell                            # puts %USERPROFILE%\.local\bin on PATH
 ```
+
+The version comes from PyPI (the highest stable version), like in `install.sh`. If the wheel install fails, the next line installs the same version from PyPI, and if that fails too (or the version could not be read), the newest stable version from PyPI.
 
 Works in the in-box Windows PowerShell 5.1 -- no PowerShell 7 needed.
 
@@ -48,7 +52,7 @@ Then **open a new shell** -- `uv tool update-shell` edits the persisted `PATH`, 
 & "C:\Program Files\Git\bin\bash.exe" -lc "curl -LsSf https://raw.githubusercontent.com/keboola/cli/main/install.sh | sh"
 ```
 
-**No Python on the machine?** Every release ships a self-contained binary -- download `keboola-cli2_<version>_windows_amd64.zip` from the [releases page](https://github.com/keboola/cli/releases/latest), unpack it, and put the folder on `PATH`. It carries its own interpreter, needs neither Python nor uv, and (since 0.79.0) will not try to self-update -- it tells you to re-download instead.
+**No Python on the machine?** Every release ships a self-contained binary -- download `keboola-cli2_<version>_windows_amd64.zip` of the newest release from the [releases page](https://github.com/keboola/cli/releases), unpack it, and put the folder on `PATH`. It carries its own interpreter, needs neither Python nor uv, and (since 0.79.0) will not try to self-update -- it tells you to re-download instead.
 
 A note on package managers, so nobody loses an afternoon to it: there is **no WinGet package** -- nothing has been submitted to `microsoft/winget-pkgs` -- and the **Chocolatey package lags far behind** (`keboola-cli2` was still on 0.66.1 while the current release was 0.80.0). Check its version before trusting it, or just use one of the three paths above.
 
@@ -75,7 +79,7 @@ curl -LsSf https://raw.githubusercontent.com/keboola/cli/main/install.sh | sh
 
 On Windows, run the PowerShell install from the Windows section above as the second step. Your configuration is not touched: the configuration folder keeps the name `keboola-agent-cli` on purpose.
 
-If `uv tool list` shows `keboola-cli` next to `keboola-agent-cli`, the update already worked. kbagent runs from `keboola-cli` and the old entry does no harm. Do not remove the old entry on its own: `uv tool uninstall keboola-agent-cli` also deletes the `kbagent` executable that `keboola-cli` uses, and the shell then reports `command not found`. To restore the executable, run `uv tool install --force --reinstall "keboola-cli[server] @ https://github.com/keboola/cli/releases/download/v<version>/keboola_cli-<version>-py3-none-any.whl"` with the latest version number from the [releases page](https://github.com/keboola/cli/releases/latest).
+If `uv tool list` shows `keboola-cli` next to `keboola-agent-cli`, the update already worked. kbagent runs from `keboola-cli` and the old entry does no harm. Do not remove the old entry on its own: `uv tool uninstall keboola-agent-cli` also deletes the `kbagent` executable that `keboola-cli` uses, and the shell then reports `command not found`. To restore the executable, run `uv tool install --force --reinstall "keboola-cli[server] @ https://github.com/keboola/cli/releases/download/v<version>/keboola_cli-<version>-py3-none-any.whl"` with the newest version number from the [releases page](https://github.com/keboola/cli/releases).
 
 A failed startup update prints the last line of the uv output as `Cause:` (since 0.99.0), then the recovery command.
 
