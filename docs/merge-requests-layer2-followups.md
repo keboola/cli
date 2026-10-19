@@ -99,8 +99,8 @@ call sites at once (scope the match on project id, which the mapping entry would
 ## F7 — Small ends from the approval
 
 *Origin: Zajca approval, #4.*
-- `config_service.py:172` still tests `if folder_branch_id:` by truthiness; `sync_service.py:338`
-  was tightened to `is not None`. One site left out of the sweep.
+- ~~`config_service.py:172` still tests `if folder_branch_id:` by truthiness~~ -- gone with
+  DMD-2348: `config list` reads the `folder` field and no longer resolves a folder branch.
 - In `resolve_conflict`, the `isDisabled` type check runs before the `missing` report, so a body
   missing `name` and carrying `"false"` reports only the `isDisabled` fault. Errors are not
   accumulated. Noted, not necessarily to change — a caller fixing one fault at a time is the

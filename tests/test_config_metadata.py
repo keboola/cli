@@ -647,16 +647,35 @@ class TestConfigServiceMetadata:
         mock_client.delete_config_metadata.assert_called_once_with(COMP_ID, CFG_ID, 7, branch_id=1)
         mock_client.close.assert_called_once()
 
-    def test_set_config_folder_uses_correct_key(self, tmp_path: Path) -> None:
+    def test_set_config_folder_writes_the_folder_field(self, tmp_path: Path) -> None:
+        """set-folder PUTs the config's ``folder`` field, never the metadata key."""
         svc, mock_client = self._make_service(tmp_path)
-        mock_client.set_config_metadata.return_value = [
-            {"id": 9, "key": "KBC.configuration.folderName", "value": "My Group"}
-        ]
-        result = svc.set_config_folder("prod", COMP_ID, CFG_ID, folder_name="My Group")
-        assert result["folder"] == "My Group"
-        mock_client.set_config_metadata.assert_called_once_with(
-            COMP_ID,
-            CFG_ID,
-            entries=[("KBC.configuration.folderName", "My Group")],
+        mock_client.update_config.return_value = {
+            "id": CFG_ID,
+            "name": "Cfg",
+            "folder": "My Group",
+        }
+        result = svc.set_config_folder("prod", COMP_ID, CFG_ID, folder_name=" My Group ")
+        mock_client.update_config.assert_called_once_with(
+            component_id=COMP_ID,
+            config_id=CFG_ID,
+            folder=" My Group ",
             branch_id=1,
         )
+        mock_client.set_config_metadata.assert_not_called()
+        # The keys of the metadata-era result are kept; key is frozen.
+        assert result["folder"] == "My Group"
+        assert result["key"] == "KBC.configuration.folderName"
+        assert result["value"] == "My Group"
+        assert result["result"] == {"id": CFG_ID, "name": "Cfg", "folder": "My Group"}
+        assert result["branch_id"] == 1
+
+    def test_set_config_folder_clear_reports_empty_value(self, tmp_path: Path) -> None:
+        """An empty name clears the folder: the API answers null, value is ''."""
+        svc, mock_client = self._make_service(tmp_path)
+        mock_client.update_config.return_value = {"id": CFG_ID, "name": "Cfg", "folder": None}
+        result = svc.set_config_folder("prod", COMP_ID, CFG_ID, folder_name="")
+        assert mock_client.update_config.call_args.kwargs["folder"] == ""
+        assert result["folder"] == ""
+        assert result["value"] == ""
+        assert "cleared" in result["message"]

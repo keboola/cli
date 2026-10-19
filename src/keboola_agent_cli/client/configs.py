@@ -323,41 +323,6 @@ class _ConfigsMixin(_CoreClient):
         )
         return response.json()
 
-    def list_config_folder_metadata(self, branch_id: int) -> dict[str, str]:
-        """Fetch folder names for all configurations via metadata search.
-
-        Uses the search/component-configurations endpoint to find configs
-        with ``KBC.configuration.folderName`` metadata.
-
-        Note: This endpoint requires a branch ID (branch-only route).
-
-        Args:
-            branch_id: Branch ID (required — use default branch for production).
-
-        Returns:
-            Dict mapping ``"{component_id}/{config_id}"`` to folder name.
-        """
-        prefix = f"/v2/storage/branch/{branch_id}"
-        resp = self._request(
-            "GET",
-            f"{prefix}/search/component-configurations",
-            params={
-                "metadataKeys[]": "KBC.configuration.folderName",
-                "include": "filteredMetadata",
-            },
-        )
-        folder_map: dict[str, str] = {}
-        for item in resp.json():
-            comp_id = item.get("idComponent", "")
-            config_id = str(item.get("configurationId", ""))
-            meta = next(
-                (m for m in item.get("metadata", []) if m["key"] == "KBC.configuration.folderName"),
-                None,
-            )
-            if meta:
-                folder_map[f"{comp_id}/{config_id}"] = meta["value"]
-        return folder_map
-
     def list_config_metadata(
         self,
         component_id: str,
@@ -424,6 +389,7 @@ class _ConfigsMixin(_CoreClient):
         description: str = "",
         branch_id: int | None = None,
         is_disabled: bool = False,
+        folder: str | None = None,
     ) -> dict[str, Any]:
         """Create a new configuration for a component.
 
@@ -437,6 +403,8 @@ class _ConfigsMixin(_CoreClient):
             branch_id: If set, target a specific dev branch.
             is_disabled: When True, the configuration is created in disabled
                 state (mirrors ``create_config_row``).
+            folder: UI folder of the new configuration. ``None`` sends no
+                ``folder`` field, so the configuration has no folder.
 
         Returns:
             Created configuration dict including the assigned 'id'.
@@ -449,6 +417,8 @@ class _ConfigsMixin(_CoreClient):
         }
         if is_disabled:
             data["isDisabled"] = "1"
+        if folder is not None:
+            data["folder"] = folder
         resp = self._request(
             "POST",
             f"{prefix}/components/{quote(component_id)}/configs",
@@ -512,6 +482,7 @@ class _ConfigsMixin(_CoreClient):
         change_description: str = "",
         branch_id: int | None = None,
         is_disabled: bool | None = None,
+        folder: str | None = None,
     ) -> dict[str, Any]:
         """Update an existing configuration.
 
@@ -519,7 +490,9 @@ class _ConfigsMixin(_CoreClient):
 
         Only provided (non-None) fields are sent in the request.
         ``is_disabled=None`` leaves the remote enabled/disabled state
-        untouched (mirrors ``update_config_row``).
+        untouched (mirrors ``update_config_row``). ``folder`` sets the UI
+        folder; an empty string clears it. Setting the folder creates no
+        configuration version.
 
         Returns:
             Updated configuration dict.
@@ -534,6 +507,8 @@ class _ConfigsMixin(_CoreClient):
             data["configuration"] = json.dumps(configuration)
         if is_disabled is not None:
             data["isDisabled"] = "1" if is_disabled else "0"
+        if folder is not None:
+            data["folder"] = folder
         if change_description:
             data["changeDescription"] = change_description
         resp = self._request(

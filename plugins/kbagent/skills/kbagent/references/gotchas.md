@@ -11,6 +11,33 @@ Versioning convention:
   behavior; the inline `(updated vX.Y.Z)` records when the refinement landed.
 -->
 
+## Config folder is the configuration's `folder` field, not the `KBC.configuration.folderName` metadata key
+
+*(since vNEXT)* (DMD-2348)
+
+- **`config set-folder`** (and `POST /configs/{project}/{component_id}/{config_id}/folder`
+  over `kbagent serve`) writes the configuration's `folder` field with a config PUT. The
+  Storage API trims the name, rejects one over 255 characters (HTTP 400), stores an empty one
+  as "no folder", and creates no configuration version. The `--json` result keeps its keys:
+  `folder`, `value` (the folder as stored, `""` when cleared), `key` (frozen at
+  `"KBC.configuration.folderName"`), and `result` (now `{id, name, folder}` from the PUT
+  response instead of the metadata POST response).
+- **`config list`** reads `folder` from the components listing it already fetches. The
+  `search/component-configurations` call (and the `dev-branches` lookup it needed) is gone,
+  so one project costs one request instead of three.
+- **`sync pull`** reads the folder the same way and stores it in the manifest under the old
+  key name `KBC.configuration.folderName`, so existing trees and scaffolds keep working.
+  When the listing carries no `folder` field at all (a stack without it), pull keeps each
+  config's folder from the previous pull and reports `folder_lookup_failed: true`.
+- **`sync push` / `sync clone`** send the manifest folder as the create POST's `folder`
+  field. They no longer POST `KBC.configuration.folderName` to the metadata API; other
+  `KBC.*` manifest keys still go there. Only the create path carries the folder: a plain
+  push does not change the folder of an existing config, and `config clone` (server-side
+  copy) does not copy it -- use `config set-folder` for both.
+- Do not write `KBC.configuration.folderName` with `config set-metadata` any more. The
+  metadata API still serves that key from the same column, but first-party clients no
+  longer use it.
+
 ## `--branch 0` is production in `job terminate`, `swap-tables`, `clone-table` and `create-table --source-branch-id`
 
 *(since 0.100.0)* (CLI-21, #791)
@@ -1131,13 +1158,14 @@ Two follow-on contract notes:
   reports `status: no_changes, created: 0`. No more "every fresh-create
   emit doubles the manifest" workaround needed.
 - **`KBC.configuration.*` metadata propagates on CREATE.** If a placeholder
-  entry's `metadata` dict contains keys starting with `KBC.` (e.g.
-  `KBC.configuration.folderName`), they are POSTed to the metadata API
-  via `client.set_config_metadata` immediately after the create call.
+  entry's `metadata` dict contains keys starting with `KBC.`, they are
+  POSTed to the metadata API via `client.set_config_metadata` immediately
+  after the create call. (updated vNEXT) `KBC.configuration.folderName` is
+  sent as the create call's `folder` field instead, never to the metadata API.
   Bookkeeping keys (`pull_hash`, `pull_config_hash`, ...) are filtered
   out by the `KBC.` prefix check. `_push_update` does **not** propagate
-  metadata — use `kbagent config set-metadata` (or `config set-folder`)
-  for that.
+  metadata — use `kbagent config set-metadata` (or `config set-folder`
+  for the folder) for that.
 
 If a downstream consumer has been working around the duplication by
 post-processing the manifest, drop that workaround. The single-entry
@@ -1232,6 +1260,12 @@ non-dict body), pull keeps each config's folder from the previous pull instead o
 stripping it, and reports `folder_lookup_failed: true` in the result. A `true`
 value means the folders were not refreshed this pull -- it separates "no folders
 configured" from "the lookup failed".
+
+- (updated vNEXT) Pull no longer makes the `search/component-configurations` call:
+  the folder is the configuration's own `folder` field in the listing pull already
+  reads, and push / clone send it on the create POST. `folder_lookup_failed: true`
+  now means the listing carried no `folder` field. See "Config folder is the
+  configuration's `folder` field" at the top.
 
 ## `storage create-table --if-not-exists` returns `action: skipped` instead of raising on duplicate display name
 

@@ -106,6 +106,7 @@ def _configs(n: int) -> list[dict[str, Any]]:
             "changeDescription": "",
             "isDeleted": False,
             "isDisabled": False,
+            "folder": None,
             "configuration": {"parameters": {}},
             "rows": [],
             "state": {},
@@ -224,36 +225,29 @@ class TestConfigCallCounts:
     def test_config_list_constant_in_config_count(
         self, tmp_config_dir: Path, httpx_mock, n: int
     ) -> None:
-        """Components (with configs inlined) + default-branch lookup + folder metadata.
+        """One call: components with configs inlined, each carrying its ``folder``.
 
         The count must not grow with the number of configurations.
         """
         setup_single_project(tmp_config_dir)
+        components = _components(n)
+        components[0]["configurations"][0]["folder"] = "Extractors"
         mock_api_routes(
             httpx_mock,
             {
-                ("GET", "/v2/storage/components"): _components(n),
-                ("GET", "/v2/storage/dev-branches"): DEV_BRANCHES,
-                (
-                    "GET",
-                    f"/v2/storage/branch/{DEFAULT_BRANCH_ID}/search/component-configurations",
-                ): [],
+                ("GET", "/v2/storage/components"): components,
             },
         )
         result = _invoke(tmp_config_dir, "config", "list", "--project", "prod")
-        assert len(_data(result)["configs"]) == 3 * n
+        configs = _data(result)["configs"]
+        assert len(configs) == 3 * n
+        # The folder comes from the listing; null reads as "" (no folder).
+        assert configs[0]["folder"] == "Extractors"
+        assert {c["folder"] for c in configs[1:]} == {""}
         assert_api_calls(
             httpx_mock,
             [
                 ("GET", "/v2/storage/components?include=configuration"),
-                ("GET", "/v2/storage/dev-branches"),
-                (
-                    "GET",
-                    (
-                        f"/v2/storage/branch/{DEFAULT_BRANCH_ID}/search/component-configurations"
-                        "?metadataKeys[]=KBC.configuration.folderName&include=filteredMetadata"
-                    ),
-                ),
             ],
             include_query=True,
         )

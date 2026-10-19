@@ -521,11 +521,10 @@ class TestCloneProjectOrchestration:
 
         assert result["status"] == "cloned"
         assert result["created"] == 1
-        # The folder reached the target via the create-path metadata POST.
-        client.set_config_metadata.assert_called_once()
-        call = client.set_config_metadata.call_args
-        assert call.kwargs["config_id"] == "NEW-ULID-1"
-        assert dict(call.kwargs["entries"]) == {"KBC.configuration.folderName": "Extractors"}
+        # The folder reached the target as the create POST's ``folder`` field,
+        # never through the metadata API (DMD-2348).
+        assert client.create_config.call_args.kwargs["folder"] == "Extractors"
+        client.set_config_metadata.assert_not_called()
 
     def test_clone_propagates_folder_git_branching(
         self, tmp_path: Path, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
@@ -594,10 +593,8 @@ class TestCloneProjectOrchestration:
 
         assert result["status"] == "cloned"
         assert result["created"] == 1
-        client.set_config_metadata.assert_called_once()
-        assert dict(client.set_config_metadata.call_args.kwargs["entries"]) == {
-            "KBC.configuration.folderName": "Extractors"
-        }
+        assert client.create_config.call_args.kwargs["folder"] == "Extractors"
+        client.set_config_metadata.assert_not_called()
         # The created entry sits on production (0) -- what push resolves.
         post = load_manifest(tmp_path / "clone")
         assert [c.branch_id for c in post.configurations if c.id == "NEW-ULID-1"] == [0]
@@ -672,7 +669,8 @@ class TestCloneProjectOrchestration:
             ).read_text()
         )
         assert copied["input"]["tables"][0]["source"] == "in.c-prod.users"
-        client.set_config_metadata.assert_called_once()
+        assert client.create_config.call_args.kwargs["folder"] == "Extractors"
+        client.set_config_metadata.assert_not_called()
         # --branch skips the target-default fetch (CLI-5 / #744).
         client.list_dev_branches.assert_not_called()
 
@@ -682,7 +680,7 @@ class TestCloneProjectOrchestration:
         # Regression guard (CLI-9 / zajca). The bug's whole failure mode was a
         # branch-id mismatch: the create-path writeback did NOT match its
         # placeholder, so a SECOND manifest entry with no KBC.* metadata was
-        # appended and the folder was never POSTed. The old tests missed it
+        # appended and the folder never reached the target. The old tests missed it
         # because their fixtures used branch id 0. Pin the symptom directly:
         # after a clone with a realistic source branch id (!= target default),
         # each config keeps exactly ONE entry, that entry carries the folder,
@@ -734,11 +732,9 @@ class TestCloneProjectOrchestration:
         )
 
         assert result["status"] == "cloned"
-        # The folder was POSTed (not silently dropped).
-        client.set_config_metadata.assert_called_once()
-        assert dict(client.set_config_metadata.call_args.kwargs["entries"]) == {
-            "KBC.configuration.folderName": "Extractors"
-        }
+        # The folder was sent on the create (not silently dropped).
+        assert client.create_config.call_args.kwargs["folder"] == "Extractors"
+        client.set_config_metadata.assert_not_called()
         post = load_manifest(tmp_path / "clone")
         # Exactly ONE entry -- no stale duplicate from a failed writeback match.
         assert len(post.configurations) == 1

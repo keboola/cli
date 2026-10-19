@@ -1760,10 +1760,11 @@ def config_set_folder(
         None, "--branch", help="Dev branch ID (defaults to active branch)"
     ),
 ) -> None:
-    """Set the folder (KBC.configuration.folderName) on a configuration.
+    """Set the UI folder of a configuration (its `folder` field).
 
-    Organises configs into named groups in the Keboola UI.
-    Pass an empty string to remove the folder assignment.
+    Organises configs into named groups in the Keboola UI. The name is
+    trimmed; pass an empty string to remove the folder assignment.
+    Setting the folder creates no configuration version.
     """
     formatter = get_formatter(ctx)
     config_store: ConfigStore = ctx.obj["config_store"]

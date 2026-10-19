@@ -615,8 +615,9 @@ Use `kbagent <command> --help` for full flag details and examples.
     Delete a configuration metadata entry by numeric ID (from metadata-list).
 
   kbagent config set-folder --project NAME --component-id ID --config-id ID --name "FolderName" [--branch ID]
-    Sugar: writes KBC.configuration.folderName metadata. Groups the config in the Keboola UI.
-    Pass --name "" to remove the folder assignment.
+    Sets the configuration's `folder` field (no new version). Groups the config in the Keboola UI.
+    Pass --name "" to remove the folder assignment. Do not write the KBC.configuration.folderName
+    metadata key with set-metadata: the folder is a configuration field now.
 
   kbagent config row-create --project NAME --component-id ID --config-id ID --name ROW_NAME [--description D] [--configuration JSON|@file|-] [--is-disabled] [--branch ID] [--allow-plaintext-on-encrypt-failure]
     Create a new configuration row. Returns the new row ID. Optional --configuration accepts JSON inline, @file, or stdin. #-prefixed secrets auto-encrypt before write (fail-closed; since 0.54.0).
