@@ -9,6 +9,8 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
+from ..auto_update import show_deprecation_notice
+from ..services.version_service import _major_of
 from ._helpers import get_formatter, get_service
 
 
@@ -50,6 +52,7 @@ def version_command(
     version_service = get_service(ctx, "version_service")
     include_prerelease = beta or _env_opted_into_prerelease()
     result = version_service.get_versions(include_prerelease=include_prerelease)
+    show_deprecation_notice(formatter)
     formatter.output(result, _format_version_panel)
 
 
@@ -60,11 +63,21 @@ def update_command(
         "--beta",
         help=(
             "Opt into pre-release versions (beta / rc). Without this flag (the "
-            "default) and without KBAGENT_INCLUDE_PRERELEASE=1 in env, the "
-            "GitHub /releases/latest endpoint -- which filters out prereleases "
-            "server-side -- is used, so a beta release will never silently "
-            "install. With --beta, the resolver opts into PEP 440 prereleases "
-            "(``uv --prerelease=allow`` / ``pip --pre``)."
+            "default) and without KBAGENT_INCLUDE_PRERELEASE=1 in env, every "
+            "release marked as a pre-release on GitHub is skipped, so a beta "
+            "release will never silently install. With --beta, the resolver opts into PEP 440 prereleases "
+            "(``uv --prerelease=allow`` / ``pip --pre``). --beta never installs "
+            "a new major version without --major."
+        ),
+    ),
+    major: bool = typer.Option(
+        False,
+        "--major",
+        help=(
+            "Install the next major version now (for example 0.x -> 1.x). Without "
+            "this flag kbagent stays on the running major version until 28 days "
+            "after the next major is released, then updates itself. The new major "
+            "is installed after this command exits, once no kbagent process runs."
         ),
     ),
 ) -> None:
@@ -89,11 +102,19 @@ def update_command(
     ``KBAGENT_INCLUDE_PRERELEASE=1`` in env) to opt into beta / rc
     releases. The startup auto-update hook never auto-installs a beta;
     only this explicit command does.
+
+    Major versions (CLI-40): without ``--major`` the update stays on the
+    running major until the migration date of the next one and prints the
+    deprecation notice. ``--major`` installs the next major through the
+    deferred helper: this command finishes on the old version.
     """
     formatter = get_formatter(ctx)
     version_service = get_service(ctx, "version_service")
     include_prerelease = beta or _env_opted_into_prerelease()
-    result = version_service.self_update(include_prerelease=include_prerelease)
+    result = version_service.self_update(include_prerelease=include_prerelease, allow_major=major)
+    # No notice in the run that has just scheduled the crossing to the next major.
+    if not _scheduled_major_crossing(result.get("kbagent", {})):
+        show_deprecation_notice(formatter)
 
     if formatter.json_mode:
         formatter.output(result)
@@ -111,6 +132,15 @@ def update_command(
         kbagent_stage = result.get("kbagent", {})
         if kbagent_stage.get("deferred") is True:
             formatter.console.print(kbagent_stage["message"])
+
+
+def _scheduled_major_crossing(kbagent_result: dict) -> bool:
+    """Whether the update result is a deferred install of a higher major version."""
+    if not kbagent_result.get("deferred"):
+        return False
+    current = kbagent_result.get("current_version")
+    latest = kbagent_result.get("latest_version")
+    return _major_of(latest) > _major_of(current)
 
 
 def _env_opted_into_prerelease() -> bool:

@@ -799,8 +799,10 @@ users safe from accidentally landing on a beta:
    **skipping** pre-releases unless the resolver is told otherwise (`--pre`
    for pip, `--prerelease=allow` for uv).
 2. **GitHub Release `prerelease: true` flag.** The auto-update startup
-   hook calls `GET /releases/latest`, which GitHub explicitly defines as
-   "the most recent non-prerelease, non-draft release". Marking the release
+   hook reads `GET /releases/latest`, which never names a release marked
+   `prerelease`; the release list is read only with `--beta` or when the
+   latest release is of a higher major, and then pre-releases are skipped
+   unless `--beta` is given. Marking the release
    `--prerelease` makes it invisible to the auto-update path.
 
 **Workflow:**

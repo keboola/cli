@@ -38,6 +38,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shlex
 import shutil
 import subprocess
 import time
@@ -128,6 +129,10 @@ class DeferredUpdateRequest:
     #: ``install_command`` in copy link mode, run once only when the first
     #: install fails on a uv hardlink error (issue #786). ``None`` = no retry.
     hardlink_retry_command: tuple[str, ...] | None = None
+    #: A major crossing asked for with ``kbagent update --major`` (CLI-40).
+    #: Written to the marker so the next major can tell it from the automatic
+    #: crossing at the migration date.
+    major_flag: bool = False
 
 
 class DeferredUpdateStatus(Enum):
@@ -416,6 +421,97 @@ def build_waiter_script(
     )
 
 
+def build_posix_waiter_script(
+    request: DeferredUpdateRequest,
+    *,
+    pid: int,
+    exit_file: Path,
+    install_log: Path,
+    max_wait_seconds: int = DEFERRED_UPDATE_MAX_WAIT_SECONDS,
+    poll_seconds: int = DEFERRED_UPDATE_POLL_SECONDS,
+    process_name: str = DEFERRED_UPDATE_PROCESS_NAME,
+    abandoned_marker: str = DEFERRED_UPDATE_ABANDONED_MARKER,
+) -> str:
+    """Build the ``sh`` program of the detached helper on Linux and macOS (CLI-40).
+
+    POSIX installs inline everywhere else (replacing an open file is safe
+    there), but a major crossing must not run under a live kbagent: the
+    current command finishes on the old major, and a running ``kbagent serve``
+    holds the install. The contract is the PowerShell helper's: wait for the
+    scheduling PID, then for every other kbagent; give up after
+    ``max_wait_seconds`` and record ``abandoned_marker`` without installing.
+
+    Other kbagent processes of the same user are found by ``pgrep -u``:
+    ``-x kbagent`` (Linux names a script after its file) and ``-f`` on the
+    entry point, a Python interpreter followed by a path ending in
+    ``/bin/kbagent`` (macOS names the process after the interpreter). The path
+    may contain spaces (``/Users/First Last/.local/bin/kbagent``). A command
+    line without a Python interpreter or without ``/bin/kbagent`` does not count. The ``[/]``
+    bracket keeps the pattern from matching this script's own command line.
+    Without ``pgrep`` only the scheduling process is waited for.
+    """
+    argv = " ".join(shlex.quote(part) for part in request.install_command)
+    exact = shlex.quote(process_name)
+    entry_point = shlex.quote(f"[Pp]ython[^ ]* .*[/]bin[/]{process_name}( |$)")
+    others = (
+        f'{{ pgrep -u "$(id -u)" -x {exact} || pgrep -u "$(id -u)" -f {entry_point}; }}'
+        " >/dev/null 2>&1"
+    )
+    return "\n".join(
+        [
+            f"exit_file={shlex.quote(str(exit_file))}",
+            f"log_file={shlex.quote(str(install_log))}",
+            f"deadline=$(( $(date +%s) + {max_wait_seconds} ))",
+            f'while kill -0 {pid} 2>/dev/null && [ "$(date +%s)" -lt "$deadline" ]; do',
+            f"  sleep {poll_seconds}",
+            "done",
+            f'while {others} && [ "$(date +%s)" -lt "$deadline" ]; do',
+            f"  sleep {poll_seconds}",
+            "done",
+            f"if kill -0 {pid} 2>/dev/null || {others}; then",
+            f'  printf "%s\\n" {shlex.quote(abandoned_marker)} > "$exit_file"',
+            "  exit 0",
+            "fi",
+            f"out=$({argv} 2>&1)",
+            "code=$?",
+            'printf "%s\\n" "$out" >> "$log_file"',
+            *_posix_hardlink_retry_lines(request),
+            'printf "%s\\n" "$code" > "$exit_file"',
+        ]
+    )
+
+
+def _posix_hardlink_retry_lines(request: DeferredUpdateRequest) -> list[str]:
+    """``sh`` lines that retry the install once after a uv hardlink error (#786).
+
+    The same contract as :func:`_hardlink_retry_lines`. Today the retry
+    command is built only on Windows (``_uv_link_mode_args``), so on Linux and
+    macOS these lines are emitted only when a caller passes one.
+    """
+    if request.hardlink_retry_command is None:
+        return []
+    retry = " ".join(shlex.quote(part) for part in request.hardlink_retry_command)
+    failure_text = shlex.quote(DEFERRED_UPDATE_HARDLINK_FAILURE_TEXT)
+    notice = shlex.quote(
+        "kbagent: the install failed on a hardlink error; retrying with --link-mode copy"
+    )
+    return [
+        f'if [ "$code" -ne 0 ] && printf "%s" "$out" | grep -qF -- {failure_text}; then',
+        f'  printf "%s\\n" {notice} >> "$log_file"',
+        f"  out=$({retry} 2>&1)",
+        "  code=$?",
+        '  printf "%s\\n" "$out" >> "$log_file"',
+        "fi",
+    ]
+
+
+def resolve_posix_shell() -> str | None:
+    """``/bin/sh`` for the POSIX helper; None on Windows or when it is missing."""
+    if os.name == "nt":
+        return None
+    return "/bin/sh" if Path("/bin/sh").is_file() else None
+
+
 def resolve_powershell() -> str | None:
     """Locate an interpreter for the detached helper.
 
@@ -486,6 +582,15 @@ def _read_marker() -> dict | None:
     return data if isinstance(data, dict) else None
 
 
+def pending_update_target() -> str | None:
+    """The target version of a deferred update that is still waiting, or None."""
+    if not is_update_pending():
+        return None
+    marker = _read_marker()
+    target = marker.get("target_version") if marker else None
+    return str(target) if target else None
+
+
 def request_deferred_update(request: DeferredUpdateRequest) -> bool:
     """Schedule ``request`` to be installed once no kbagent process is left.
 
@@ -499,21 +604,38 @@ def request_deferred_update(request: DeferredUpdateRequest) -> bool:
         reason to fall back to an in-place install.
     """
     if is_update_pending():
-        return True
-
-    powershell = resolve_powershell()
-    if powershell is None:
-        logger.debug("No PowerShell interpreter found; cannot defer the update")
-        return False
+        # Single flight. A waiting helper for ANOTHER target is not this
+        # request: report it as not scheduled (callers check
+        # `pending_update_target()` first to say why).
+        return pending_update_target() == request.target_version
 
     exit_file = _exit_path()
     install_log = log_path()
-    script = build_waiter_script(
-        request,
-        pid=os.getpid(),
-        exit_file=exit_file,
-        install_log=install_log,
-    )
+    # PowerShell on Windows only. On Linux and macOS the `sh` helper is used
+    # even when `pwsh` is installed: its process lookup is the POSIX one.
+    if os.name == "nt":
+        powershell = resolve_powershell()
+        if powershell is None:
+            logger.debug("No PowerShell interpreter found; cannot defer the update")
+            return False
+        helper = build_helper_command(
+            powershell,
+            build_waiter_script(
+                request, pid=os.getpid(), exit_file=exit_file, install_log=install_log
+            ),
+        )
+    else:
+        posix_shell = resolve_posix_shell()
+        if posix_shell is None:
+            logger.debug("No /bin/sh found; cannot defer the update")
+            return False
+        helper = [
+            posix_shell,
+            "-c",
+            build_posix_waiter_script(
+                request, pid=os.getpid(), exit_file=exit_file, install_log=install_log
+            ),
+        ]
 
     try:
         state_dir().mkdir(parents=True, exist_ok=True)
@@ -526,6 +648,8 @@ def request_deferred_update(request: DeferredUpdateRequest) -> bool:
                     "from_version": request.from_version,
                     "target_version": request.target_version,
                     "recovery_command": request.recovery_command,
+                    # Read by the first run of the next major (#791 step 3).
+                    "major_flag": request.major_flag,
                 }
             ),
             encoding="utf-8",
@@ -536,12 +660,14 @@ def request_deferred_update(request: DeferredUpdateRequest) -> bool:
 
     try:
         subprocess.Popen(
-            build_helper_command(powershell, script),
+            helper,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             close_fds=True,
             creationflags=_CREATE_NO_WINDOW | _CREATE_NEW_PROCESS_GROUP,
+            # POSIX: its own session, so closing the terminal does not kill it.
+            start_new_session=os.name != "nt",
         )
     except OSError:
         logger.debug("Could not spawn the deferred-update helper", exc_info=True)

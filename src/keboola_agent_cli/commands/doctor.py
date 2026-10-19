@@ -5,6 +5,7 @@ Delegates all health check logic to DoctorService (3-layer architecture).
 
 import typer
 
+from ..auto_update import show_deprecation_notice
 from ..output import format_doctor_panel
 from ._helpers import get_formatter, get_service
 
@@ -15,4 +16,5 @@ def doctor_command(ctx: typer.Context) -> None:
     doctor_service = get_service(ctx, "doctor_service")
 
     result = doctor_service.run_checks()
+    show_deprecation_notice(formatter)
     formatter.output(result, format_doctor_panel)

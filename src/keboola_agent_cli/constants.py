@@ -459,6 +459,24 @@ ENV_AUTO_UPDATE: str = "KBAGENT_AUTO_UPDATE"
 ENV_SKIP_UPDATE: str = "KBAGENT_SKIP_UPDATE"
 AUTO_UPDATE_CHECK_INTERVAL: int = 3600  # 1 hour TTL for version cache
 VERSION_CACHE_FILENAME: str = "version_cache.json"
+# Major-version gate (CLI-40, #791 section 4.3). An installed client of major N
+# moves to N+1 at M = `published_at` of the GitHub release `v<N+1>.0.0` plus
+# this delay; before M it stays on N unless `kbagent update --major` is given.
+MAJOR_MIGRATION_DELAY_SECONDS: int = 28 * 86_400
+# Page size of `GET /releases`, read only for --beta, when /releases/latest
+# names a higher major, or to find the newest release of a crossing.
+RELEASE_LIST_PAGE_SIZE: int = 100
+# Older pages are read only to find a release of the running major.
+RELEASE_LIST_MAX_PAGES: int = 3
+# The release `v<N+1>.0.0` is read again at most this often before M.
+NEXT_MAJOR_RECHECK_SECONDS: int = 86_400
+# The human deprecation notice prints once per this interval ...
+DEPRECATION_NOTICE_INTERVAL_SECONDS: int = 86_400
+# ... and on every run in this last window before M.
+DEPRECATION_NOTICE_FINAL_WINDOW_SECONDS: int = 72 * 3600
+MIGRATION_GUIDE_URL: str = (
+    f"https://github.com/{KBAGENT_GITHUB_REPO}/blob/main/docs/migrate-to-1.0.md"
+)
 # Self-update subprocess timeout. Previously a hardcoded 120s in two places,
 # which falsely tripped on WSL where the git+ source build (npm/React SPA) runs
 # for minutes (issue #353). The prebuilt-wheel install is a seconds download, so

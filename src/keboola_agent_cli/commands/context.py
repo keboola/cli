@@ -2412,7 +2412,7 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
     --beta reports the latest pre-release (beta / rc) instead
     of the latest stable. Same env override: KBAGENT_INCLUDE_PRERELEASE=1.
 
-  kbagent update [--beta]
+  kbagent update [--beta] [--major]
     Upgrade kbagent. Since 0.85.0 this is the ONLY thing `update` touches --
     keboola-mcp-server is neither installed nor refreshed by kbagent; keep it
     fresh yourself with `uv tool install --upgrade --prerelease=allow
@@ -2427,11 +2427,20 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
     kbagent.upgrade_hint; upgrade_command is empty for a hand-unpacked
     archive.
     --beta opts into pre-release versions (PEP 440 betas/rc,
-    e.g. 0.43.0b1). Without --beta the auto-update path uses GitHub's
-    /releases/latest endpoint, which excludes prereleases server-side --
-    stable users never silently land on a beta. Set
+    e.g. 0.43.0b1). Without --beta the auto-update path skips every
+    pre-release -- stable users never silently land on a beta. Set
     KBAGENT_INCLUDE_PRERELEASE=1 in env to make every update in the session
     treat betas as installable without re-typing --beta.
+    Major versions (since vNEXT): the updater stays on the running major.
+    It installs the next major (0.x -> 1.x) only 28 days after the GitHub
+    release v1.0.0 is published, or with `update --major`; --beta alone
+    never does. The new major is installed after the command ends and all
+    other kbagent processes have exited (a running `serve` holds it). While v1.0.0 exists,
+    human mode prints a deprecation notice on stderr and --json adds a
+    top-level warnings[] entry with code DEPRECATED_VERSION (keys message,
+    hint, current_version, next_version, released_at, migration_at, url).
+    AGENTS: when `kbagent --version` is 0.x and this notice appears, ASK THE
+    USER before you run `kbagent update --major`. Never run it on your own.
 
   kbagent changelog [--limit N] [--full]
     Show recent changelog (what changed in each version). Default: last 5
@@ -2669,7 +2678,10 @@ Without the plugin, this `kbagent context` output is your standalone reference.
 
 def context_command(ctx: typer.Context) -> None:
     """Show usage instructions for AI agents interacting with Keboola."""
+    from ..auto_update import show_deprecation_notice
+
     formatter = get_formatter(ctx)
+    show_deprecation_notice(formatter)
 
     if formatter.json_mode:
         # In JSON mode, output the context text as structured data

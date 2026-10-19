@@ -17,6 +17,7 @@ import os
 import subprocess
 import sys
 import time
+import uuid
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,7 @@ import pytest
 from keboola_agent_cli.constants import (
     DEFERRED_UPDATE_ABANDONED_MARKER,
     DEFERRED_UPDATE_EXIT_FILENAME,
+    DEFERRED_UPDATE_HARDLINK_FAILURE_TEXT,
     DEFERRED_UPDATE_MARKER_FILENAME,
     DEFERRED_UPDATE_STALE_SECONDS,
     ENV_DEFER_UPDATE,
@@ -35,9 +37,11 @@ from keboola_agent_cli.update_runner import (
     DeferredUpdateStatus,
     InstallStatus,
     build_helper_command,
+    build_posix_waiter_script,
     build_waiter_script,
     collect_finished_deferred_update,
     is_update_pending,
+    pending_update_target,
     quote_for_powershell,
     request_deferred_update,
     resolve_powershell,
@@ -313,14 +317,30 @@ class TestRequestDeferredUpdate:
         assert request_deferred_update(REQUEST) is True
         assert spawns == 1
 
-    def test_without_powershell_nothing_is_scheduled(
+    def test_without_any_helper_shell_nothing_is_scheduled(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The caller must be told, not silently given an unsafe inline install."""
         monkeypatch.setattr("keboola_agent_cli.update_runner.resolve_powershell", lambda: None)
+        monkeypatch.setattr("keboola_agent_cli.update_runner.resolve_posix_shell", lambda: None)
 
         assert request_deferred_update(REQUEST) is False
         assert not (tmp_path / DEFERRED_UPDATE_MARKER_FILENAME).exists()
+
+    def test_a_pending_update_for_another_target_is_not_this_request(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        spawns: list[object] = []
+        monkeypatch.setattr(
+            "keboola_agent_cli.update_runner.subprocess.Popen",
+            lambda *a, **k: spawns.append(a) or object(),
+        )
+        assert request_deferred_update(REQUEST) is True
+
+        other = replace(REQUEST, target_version="1.0.0", major_flag=True)
+        assert request_deferred_update(other) is False
+        assert pending_update_target() == "0.76.4"
+        assert len(spawns) == 1
 
     def test_spawn_failure_clears_the_marker(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -332,6 +352,188 @@ class TestRequestDeferredUpdate:
 
         assert request_deferred_update(REQUEST) is False
         assert not (tmp_path / DEFERRED_UPDATE_MARKER_FILENAME).exists()
+
+
+class TestPosixHelper:
+    """A major crossing is deferred on Linux and macOS too (CLI-40, #791 UP2)."""
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX helper selection")
+    def test_posix_uses_sh_even_when_pwsh_exists(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        spawned: list[dict] = []
+
+        def fake_popen(argv: list[str], **kwargs: object) -> object:
+            spawned.append({"argv": argv, "kwargs": kwargs})
+            return object()
+
+        monkeypatch.setattr(
+            "keboola_agent_cli.update_runner.resolve_powershell", lambda: "/usr/bin/pwsh"
+        )
+        monkeypatch.setattr(
+            "keboola_agent_cli.update_runner.resolve_posix_shell", lambda: "/bin/sh"
+        )
+        monkeypatch.setattr("keboola_agent_cli.update_runner.subprocess.Popen", fake_popen)
+
+        assert request_deferred_update(replace(REQUEST, major_flag=True)) is True
+
+        assert spawned[0]["argv"][:2] == ["/bin/sh", "-c"]
+        assert 'pgrep -u "$(id -u)"' in spawned[0]["argv"][2]
+        assert spawned[0]["kwargs"]["start_new_session"] is True
+        marker = json.loads((tmp_path / DEFERRED_UPDATE_MARKER_FILENAME).read_text())
+        assert marker["major_flag"] is True
+
+
+@pytest.mark.skipif(os.name == "nt", reason="exercises the POSIX sh helper")
+class TestPosixWaiterScriptRuns:
+    """Run the generated sh program for real; the installer is a harmless python call."""
+
+    @staticmethod
+    def _run(
+        tmp_path: Path,
+        *,
+        pid: int,
+        max_wait: int = 5,
+        process_name: str = "kbagent-test-no-such-process",
+    ) -> tuple[str, str]:
+        installer = (sys.executable, "-c", "print('installed')")
+        request = replace(REQUEST, install_command=installer)
+        exit_file = tmp_path / "exit"
+        log_file = tmp_path / "log"
+        script = build_posix_waiter_script(
+            request,
+            pid=pid,
+            exit_file=exit_file,
+            install_log=log_file,
+            max_wait_seconds=max_wait,
+            poll_seconds=1,
+            process_name=process_name,
+        )
+        subprocess.run(["/bin/sh", "-c", script], check=True, timeout=30)
+        log = log_file.read_text() if log_file.exists() else ""
+        return exit_file.read_text().strip(), log
+
+    def test_installs_once_the_scheduling_process_is_gone(self, tmp_path: Path) -> None:
+        finished = subprocess.run(
+            [sys.executable, "-c", "import os; print(os.getpid())"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        exit_code, log = self._run(tmp_path, pid=int(finished.stdout))
+
+        assert exit_code == "0"
+        assert "installed" in log
+
+    def test_gives_up_without_installing_while_the_process_runs(self, tmp_path: Path) -> None:
+        sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        try:
+            exit_code, log = self._run(tmp_path, pid=sleeper.pid, max_wait=2)
+        finally:
+            sleeper.kill()
+            sleeper.wait()
+
+        assert exit_code == DEFERRED_UPDATE_ABANDONED_MARKER
+        assert "installed" not in log
+
+    @staticmethod
+    def _dead_pid() -> int:
+        finished = subprocess.run(
+            [sys.executable, "-c", "import os; print(os.getpid())"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return int(finished.stdout)
+
+    def test_hardlink_failure_is_retried_once(self, tmp_path: Path) -> None:
+        fail = f"print('error: {DEFERRED_UPDATE_HARDLINK_FAILURE_TEXT} x'); raise SystemExit(1)"
+        request = replace(
+            REQUEST,
+            install_command=(sys.executable, "-c", fail),
+            hardlink_retry_command=(sys.executable, "-c", "print('retried')"),
+        )
+        exit_file, log_file = tmp_path / "exit", tmp_path / "log"
+        script = build_posix_waiter_script(
+            request,
+            pid=self._dead_pid(),
+            exit_file=exit_file,
+            install_log=log_file,
+            max_wait_seconds=5,
+            poll_seconds=1,
+            process_name="kbagent-test-no-such-process",
+        )
+        subprocess.run(["/bin/sh", "-c", script], check=True, timeout=30)
+
+        assert exit_file.read_text().strip() == "0"
+        assert "retrying with --link-mode copy" in log_file.read_text()
+        assert "retried" in log_file.read_text()
+
+    def test_other_failures_are_not_retried(self, tmp_path: Path) -> None:
+        request = replace(
+            REQUEST,
+            install_command=(sys.executable, "-c", "raise SystemExit(3)"),
+            hardlink_retry_command=(sys.executable, "-c", "print('retried')"),
+        )
+        exit_file, log_file = tmp_path / "exit", tmp_path / "log"
+        script = build_posix_waiter_script(
+            request,
+            pid=self._dead_pid(),
+            exit_file=exit_file,
+            install_log=log_file,
+            max_wait_seconds=5,
+            poll_seconds=1,
+            process_name="kbagent-test-no-such-process",
+        )
+        subprocess.run(["/bin/sh", "-c", script], check=True, timeout=30)
+
+        assert exit_file.read_text().strip() == "3"
+        assert "retried" not in log_file.read_text()
+
+    @pytest.mark.parametrize("home", ["home", "First Last"])
+    def test_a_running_entry_point_holds_the_install(self, tmp_path: Path, home: str) -> None:
+        """A live Python process running ``.../bin/<name>`` holds the install.
+
+        The decoy is a real process of the same user; ``First Last`` covers a
+        path with a space (macOS home directories).
+        """
+        name = f"kbagent-decoy-{uuid.uuid4().hex[:8]}"
+        script = tmp_path / home / "bin" / name
+        script.parent.mkdir(parents=True)
+        script.write_text("import time\ntime.sleep(30)\n")
+        holder = subprocess.Popen([sys.executable, str(script), "serve"])
+        try:
+            exit_code, log = self._run(
+                tmp_path, pid=self._dead_pid(), max_wait=2, process_name=name
+            )
+        finally:
+            holder.kill()
+            holder.wait()
+
+        assert exit_code == DEFERRED_UPDATE_ABANDONED_MARKER
+        assert "installed" not in log
+
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            lambda name: [sys.executable, "-c", "import time; time.sleep(30)", f"/x/{name}"],
+            lambda name: ["sh", "-c", "sleep 30", f"/src/bin/{name}"],
+        ],
+        ids=["python-c", "sh-c"],
+    )
+    def test_an_unrelated_command_line_naming_the_path_does_not(self, tmp_path: Path, argv) -> None:
+        name = f"kbagent-decoy-{uuid.uuid4().hex[:8]}"
+        unrelated = subprocess.Popen(argv(name))
+        try:
+            exit_code, log = self._run(
+                tmp_path, pid=self._dead_pid(), max_wait=5, process_name=name
+            )
+        finally:
+            unrelated.kill()
+            unrelated.wait()
+
+        assert exit_code == "0"
+        assert "installed" in log
 
 
 class TestCollectFinishedDeferredUpdate:

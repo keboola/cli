@@ -206,7 +206,7 @@ from that branch -- the branch temporarily *is* the release PR.
 Beta and release-candidate versions follow **PEP 440**: `0.44.0b1`, `0.44.0rc1`, ... -- **not** the SemVer `-beta.1` form (hatchling + uv require PEP 440 syntax in `pyproject.toml`). Three independent gates keep stable users safe from accidentally landing on a beta:
 
 1. **PEP 440 pre-release suffix.** pip / uv default to **skipping** pre-releases unless told otherwise (`--pre` for pip, `--prerelease=allow` for uv).
-2. **GitHub Release `prerelease: true` flag.** The auto-update startup hook calls `/releases/latest`, which GitHub defines as "the most recent non-prerelease, non-draft release". Marking the release `--prerelease` makes it invisible to the auto-update path.
+2. **GitHub Release `prerelease: true` flag.** The auto-update startup hook reads `/releases/latest`, which never names a release marked `prerelease`; when it reads the release list, it skips every release marked `prerelease` (and every PEP 440 pre-release version) unless `--beta` is given. Marking the release `--prerelease` makes it invisible to the auto-update path.
 3. **Tag-pinned install URL.** When `--beta` opts into a pre-release, the install command appends `@v<version>` to the git+ source URL so uv pulls the **exact commit** the tag points to. Without this, uv would resolve the default branch (`main`) and -- if the beta lives on a feature branch -- silently install the stale main HEAD even though the version fetcher advertised the beta tag.
 
 **Author workflow (release a beta from a feature branch):**
@@ -237,7 +237,7 @@ When the beta cooks long enough, merge the PR (stable squash) and ship `0.44.0` 
 - Per-shell: `export KBAGENT_INCLUDE_PRERELEASE=1` -- every `kbagent update` / `kbagent version` in that shell treats betas as installable.
 - **No persistent setting.** Each beta install is an active choice; never a forgotten "I once typed --beta six months ago" foot-gun.
 
-The startup auto-update hook is **never** affected by `--beta` / env opt-in -- it always uses `/releases/latest` (stable channel). Beta installs only come from explicit `kbagent update --beta`.
+The startup auto-update hook is **never** affected by `--beta` / env opt-in -- it uses the stable channel only. Beta installs only come from explicit `kbagent update --beta`.
 
 Full author checklist: see `CONTRIBUTING.md` > "Releasing a beta (pre-release) version".
 
@@ -1474,7 +1474,20 @@ kbagent doctor
 # each as `--type cli_command` using the map in docs/mcp-migration.md.
 # `doctor` has no `--fix` since 0.85.0 -- it only ever installed keboola-mcp-server.
 kbagent version [--beta]
-kbagent update [--beta]
+kbagent update [--beta] [--major]
+# Major gate (CLI-40, #791 section 4.3): the updater (startup hook, `update`, `version`) reads
+#   /releases/latest (the list /releases?per_page=100 only for --beta or when latest names a higher
+#   major) plus /releases/tags/v<N+1>.0.0 at most once per 24 h, and stays on the running major. It installs the next major only at M
+#   (published_at of the GitHub release v<N+1>.0.0 + 28 days, "now" = the GitHub Date header) or
+#   with `update --major`; `--beta` alone never crosses. A crossing always goes through the deferred
+#   helper (update_runner.py; /bin/sh + pgrep on POSIX, PowerShell on Windows): the command finishes
+#   on the old major, no re-exec, a running `serve` holds it (helper gives up after 900 s). While
+#   v<N+1>.0.0 exists the DEPRECATED_VERSION notice shows: stderr once per 24 h and every run in the
+#   last 72 h before M; always in version/update/doctor/context; under --json a top-level warnings[]
+#   entry on every run (update_notice.py keeps it at module level, output.py adds it to both
+#   envelopes). Cache keys next_major_version/_release_id/_published_at, checked_at,
+#   notice_shown_at; a cached latest_version of a higher major is ignored; `version --beta` no
+#   longer writes the cache. Version gate lives in gotchas.md.
 # `--beta` (or env `KBAGENT_INCLUDE_PRERELEASE=1`) opts into pre-release versions
 # (PEP 440 betas/rc, e.g. 0.43.0b1). Default (no flag) is stable-only -- auto-update
 # startup hook never silently lands on a beta.

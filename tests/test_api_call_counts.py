@@ -64,7 +64,7 @@ def _no_auto_update(monkeypatch: pytest.MonkeyPatch) -> None:
 
     Without it the exact counts hold only because an editable install skips the
     check (``_is_dev_install``); an installed wheel would add a GitHub
-    ``releases/latest`` call to the first invocation.
+    release-list call to the first invocation.
     """
     monkeypatch.setenv(ENV_AUTO_UPDATE, "false")
 
