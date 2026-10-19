@@ -634,7 +634,7 @@ escalated key when the body asks for `organization`. As on the CLI, an omitted
 `import`, `promote`, and `build` with a `model`) gets the same check; the model
 lookup runs only when a policy is active. Under `--deny-destructive` these calls
 answer 403 `PERMISSION_DENIED`; the same calls at `project` or `targeted` scope
-are allowed. *(since vNEXT)* `PUT /configs/{project}/{component_id}/{config_id}/variables`
+are allowed. *(since 0.100.0)* `PUT /configs/{project}/{component_id}/{config_id}/variables`
 with `"replace": true` checks `config.variables-set --replace` (destructive) in the
 same way; a merge without `replace` is a write.
 
@@ -656,7 +656,7 @@ host.
 
 ### A mutating route refuses a `dry_run` it does not declare
 
-*(since vNEXT — CLI-33)*
+*(since 0.100.0 — CLI-33)*
 
 FastAPI ignores query parameters and body fields that a route does not declare. Before this change, `DELETE /flows/{project}/{config_id}?dry_run=true` ran the real delete, and a client that asked for a preview got a real write.
 
@@ -699,7 +699,7 @@ telling the AI: "you can call this serve via `kbagent http get /…` —
 that is the preferred path because it shares state with this very
 process, instead of forking a CLI tree against possibly stale config."
 
-*(since vNEXT)* `kbagent http` also checks `http.<verb>` against the
+*(since 0.100.0)* `kbagent http` also checks `http.<verb>` against the
 caller's own policy and `--deny-*` flags before it sends the request, so
 `kbagent --deny-destructive http delete …` exits 6 and the serve gets no
 request.

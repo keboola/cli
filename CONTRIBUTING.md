@@ -873,8 +873,9 @@ maintainer rehearsal before T0 is
 - **T0** is the `published_at` of the GitHub release `v<N>.0.0`.
 - **M** is T0 + 28 days (28 x 86,400 seconds, UTC).
 - Until M, `releases/latest` names the newest release of the previous major.
-  Clients older than the 0.x patch follow `releases/latest`, so they stay on
-  0.x until M. From M, the newest release of the new major is latest.
+  Clients older than the 0.x release with the major gate (0.100.0) follow
+  `releases/latest`, so they stay on 0.x until M. From M, the newest release
+  of the new major is latest.
 
 **What the automation does.** `scripts/release_latest.py` holds the rules; the
 workflows only call it. It reads `published_at` from the GitHub API, and "now"
@@ -945,7 +946,8 @@ is the `Date` header of the GitHub response, the same clock the clients use.
       changes the plugin documents, set `ref` and `version` on `main` to that
       release in the same way.
    5. Walk the rehearsal in [docs/release-1.0-rehearsal.md](docs/release-1.0-rehearsal.md).
-2. **T0 − 14 days or earlier:** release the 0.N.x patch from `release/0.N`.
+2. **T0 − 14 days or earlier:** the 0.x release with the major gate (0.100.0)
+   must be published by now, at least 14 days before T0.
    Check that `promote-major` runs on `main` and prints `tag=` (nothing to do).
 3. **T0:** open the 1.0.0 release PR as usual (steps 1-15 above), merge it,
    and push the tag `v1.0.0`. Do not create the GitHub release by hand, not

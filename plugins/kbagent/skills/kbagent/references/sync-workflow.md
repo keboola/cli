@@ -426,7 +426,7 @@ Stored in `.keboola/branch-mapping.json`:
 
 ## Key behaviors
 
-- **One project per directory** *(since vNEXT, CLI-31)*: pull, diff and push
+- **One project per directory** *(since 0.100.0, CLI-31)*: pull, diff and push
   (also `--all-projects`) refuse a directory whose manifest `project.id` or
   `apiHost` differs from the `--project` project, with `CONFIG_ERROR` (exit 5)
   that names both project IDs. Before, a tree of another project was diffed

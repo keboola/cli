@@ -13,7 +13,7 @@ Versioning convention:
 
 ## `--branch 0` is production in `job terminate`, `swap-tables`, `clone-table` and `create-table --source-branch-id`
 
-*(since vNEXT)* (CLI-21, #791)
+*(since 0.100.0)* (CLI-21, #791)
 
 - **`job terminate --status ... --branch 0` terminates production jobs.** A production job carries the numeric ID of the default branch, so kbagent reads that ID (one `GET /v2/storage/dev-branches`) and matches only it. A job without a `branchId` is not matched. Before, the filter compared `branchId` with `"0"`, matched no job, and terminated nothing. `filter.branch_id` in the result stays `0`; `targets` names production with the default branch ID.
 - **`storage swap-tables --branch 0` swaps in production.** The swap endpoint needs a branch ID in its path, so kbagent reads the default branch ID first and swaps on it; `branch_id` in the result is that ID (`--dry-run` reports `0` and makes no call). Before, the command refused with `CONFIG_ERROR` "requires a branch" (exit 5), and `POST /storage/tables/{project}/{table_id}/swap` with `branch_id: 0` called `/v2/storage/branch/0/...`.
@@ -23,7 +23,7 @@ Versioning convention:
 
 ## The updater stays on the running major version; `kbagent update --major`
 
-*(since vNEXT)* (CLI-40, #791)
+*(since 0.100.0)* (CLI-40, #791)
 
 - **The updater does not install a new major version on its own until its migration date.** The startup auto-update, `kbagent update` and `kbagent version` still read `/releases/latest`, but they take its version only when it is of the running major. When it names a higher major, they read the release list (`/releases?per_page=100`) and take the highest stable release of the running major; only when that page holds none they read up to two older pages. If three pages hold no release of the running major, `kbagent update` says so (`reason: same_major_not_found`) and names `kbagent update --major`, instead of reporting a network problem. A kbagent 0.x stays on 0.x. Before, they installed any newer version, so every 0.x client would have installed 1.0.0 within one hour of its release. They also read the release `v1.0.0` (`/releases/tags/v1.0.0`) at most once per 24 hours to find out if it exists; `kbagent update --major` reads it on every run.
 - **Migration date (M):** the `published_at` of the GitHub release `v1.0.0` plus 28 days, in UTC. The current time is the `Date` header of the GitHub response, so a wrong local clock does not move M. At or after M the next startup check installs the newest 1.x release.
@@ -38,7 +38,7 @@ Versioning convention:
 
 ## Install kbagent from `install.sh` or a release tag, never from `main`
 
-*(since vNEXT)* (CLI-39, #791)
+*(since 0.100.0)* (CLI-39, #791)
 
 - **`main` can contain the next major version before it is released.** A git install without a tag (`uv tool install` of the `git+` URL of this repository with no `@v<version>`) builds `main`, so it can install unreleased 1.x code.
 - **Use `curl -LsSf https://raw.githubusercontent.com/keboola/cli/main/install.sh | sh`** (it installs the highest stable version from PyPI, with the `[server]` extras), or a pinned tag: `uv tool install 'git+https://github.com/keboola/cli@v<version>'`. The README, the tutorial and the agent-task references now show these forms.
@@ -50,7 +50,7 @@ Versioning convention:
 
 ## `--all-projects` on the fan-out reads, and a top-level `warnings[]` in `--json`
 
-*(since vNEXT)* (CLI-36, #791)
+*(since 0.100.0)* (CLI-36, #791)
 
 - **18 reads accept `--all-projects`:** `search`, `billing credits`, `component list`, `config list`, `config search`, `data-app list`, `job list`, `storage buckets`, `storage tables`, `sharing list`, `sharing edges`, `flow list`, `schedule list`, `schedule find`, `notification list`, `branch list`, `workspace list`, `project status`. On this version it does the same as an omitted `--project`: the same service call and the same output. `component list --query` uses the default project when `--project` is omitted, so with `--all-projects` it does too, and adds a warning that `--all-projects` has no effect there.
 - **Why it exists:** from 1.0.0 an omitted `--project` on these reads reads only the default project (`KBAGENT_PROJECT`, then `project use`, then the sole project), and all projects need `--all-projects`. A script that writes `--all-projects` now works unchanged on 1.0.0. On an older kbagent the option does not exist (exit 2).
@@ -61,7 +61,7 @@ Versioning convention:
 
 ## The web UI production view sends `branch_id: 0`, and `0` means production on every route it calls
 
-*(since vNEXT)* (CLI-43, #791)
+*(since 0.100.0)* (CLI-43, #791)
 
 - **In its production view (no branch selected), the web UI now sends `branch_id: 0` to each branch-aware route.** Before, it sent no `branch_id`. Some routes (configs, flows, schedules) then used the active branch saved by `kbagent branch use`, so a page that said "production" could show or change the active branch. From 1.0.0 the routes listed in spec rule V2 use the active branch when `branch_id` is omitted, and "Run job" in the production view would have run on the active branch. A REST client that wants production must send `branch_id: 0` too.
 - **Re-run of a job without a branch** sends `branch_id: 0`. The Data Streams page sends `branch=0` / `branch_id: "0"`. The Local AI chat sends `branch_id: 0`, and its prompt then tells the AI to pass `--branch 0`, so the `kbagent` commands it runs do not use the active branch.
@@ -73,7 +73,7 @@ Versioning convention:
 
 ## `kbagent serve` refuses a `dry_run` that a write route does not declare
 
-*(since vNEXT)* (CLI-33)
+*(since 0.100.0)* (CLI-33)
 
 - **A `POST`, `PUT`, `PATCH` or `DELETE` route answers HTTP 422 when the request sends `dry_run` and the route has no `dry_run` parameter.** This applies to the query string and to a top-level key of a JSON body. Before, the route ignored it and ran the real write: `DELETE /flows/{project}/{config_id}?dry_run=true` deleted the flow.
 - **A false value is ignored and the real write runs.** False values are `false`, `0`, `no`, `off`, `f` and `n` in any case, and JSON `false` or `0`. Every other value is refused: `true`, `1`, `null`, an unknown string, an object.
@@ -84,7 +84,7 @@ Versioning convention:
 
 ## `--json` API errors carry `retryable` and `details` from every command
 
-*(since vNEXT)* (CLI-34)
+*(since 0.100.0)* (CLI-34)
 
 - **Every command now copies `retryable` and `details` of an API error into the `--json` error envelope.** Before, these commands sent `retryable: false` for a retryable error and left out `details`: the `kai` group, `dev-portal` (identity add and verify, list, get and the writes), `config restore`, `config trash-list`, the `--set` path check of `config update` and `config row-update`, and `search`. Most other commands sent `retryable` but left out `details`. Among them are the `config`, `project`, `storage`, `workspace`, `data-app`, `flow`, `branch`, `job`, `sync`, `auth`, `token`, `feature` and `stream` groups.
 - **`search` keeps the code of the API error.** Before, it reported every API error as `API_ERROR`. Now it reports `TIMEOUT`, `INVALID_TOKEN`, `NOT_FOUND` and so on. The exit code stays 1.
@@ -93,7 +93,7 @@ Versioning convention:
 
 ## `http`, `search` and three destructive effects now get the permission check
 
-*(since vNEXT)*
+*(since 0.100.0)*
 
 - **`kbagent http get/post/patch/delete` checks `http.<verb>` against the
   caller's own policy and `--deny-*` flags before it sends a request.**
@@ -968,7 +968,7 @@ Versioning convention:
 
 ## `sync pull` / `diff` / `push` refuse a sync directory of another project
 
-*(since vNEXT, CLI-31)*
+*(since 0.100.0, CLI-31)*
 
 A sync directory belongs to one project. Its `.keboola/manifest.json` records
 `project.id` and `apiHost`. `sync pull`, `sync diff` and `sync push` (also with
@@ -1563,7 +1563,7 @@ sandboxes, so it is invisible there).
 
 ## `workspace gc` needs `--project` or `--all-projects`, and skips a project it cannot list (CLI-28)
 
-*(since vNEXT)* `workspace gc` no longer cleans up every registered project
+*(since 0.100.0)* `workspace gc` no longer cleans up every registered project
 when `--project` is omitted. Name the projects with `--project` (repeatable)
 or pass `--all-projects`. A bare `workspace gc` exits 2 with `USAGE_ERROR`,
 and so does `--project` together with `--all-projects`. The default-project
@@ -2291,7 +2291,7 @@ config, the retry fires, and the retry destroys it for good.
 
 ## Repeated `flow delete`, `job run --idempotency-key` and `merge-request merge` no longer do damage
 
-*(since vNEXT)*
+*(since 0.100.0)*
 
 Each of these commands could do harm when an agent repeated it after a lost
 response. Now:
@@ -2402,7 +2402,7 @@ response. Now:
 
 ## `storage delete-bucket --force` keeps shared buckets, and two delete commands ask on a terminal
 
-*(since vNEXT)* `storage delete-bucket --force` deletes the tables of a
+*(since 0.100.0)* `storage delete-bucket --force` deletes the tables of a
 non-empty bucket. It no longer deletes a shared bucket. A bucket is shared
 when its bucket detail has a `sharing` value. Such a bucket gets a
 `failed[]` entry that names the command to run first:
@@ -2414,7 +2414,7 @@ the same `failed[]` entry. The REST route
 `KBC_MASTER_TOKEN` (see sharing-workflow.md).
 Before, `--force` also deleted a shared bucket, against the command help.
 
-*(since vNEXT)* `storage delete-bucket` and `storage file-delete` read
+*(since 0.100.0)* `storage delete-bucket` and `storage file-delete` read
 `--yes`. Before, they never asked. Now they ask for confirmation when stdin
 and stderr are a terminal and `--json` is off. A declined prompt exits 0 and
 deletes nothing. `--yes`, `--json`, `--dry-run` and a session without a
@@ -2815,7 +2815,7 @@ delete. Pass `--yes` to all of them in scripts.
   Auto-log-dump on deploy failure (calling `data-app logs` from
   inside `data-app create` / `data-app deploy` when the job ends in
   a failure state) is still tracked as a separate follow-up.
-- *(since vNEXT)* `POST /data-apps/validate-repo` over `kbagent serve` now reaches the validate handler. Before, `POST /data-apps/{project}` took the request and answered HTTP 422 for a missing `name` and `slug`. On an older `serve`, run `kbagent data-app validate-repo` instead. The CLI command always worked.
+- *(since 0.100.0)* `POST /data-apps/validate-repo` over `kbagent serve` now reaches the validate handler. Before, `POST /data-apps/{project}` took the request and answered HTTP 422 for a missing `name` and `slug`. On an older `serve`, run `kbagent data-app validate-repo` instead. The CLI command always worked.
 
 ## Manage token: env var is ignored without `--allow-env-manage-token` (since v0.29.0)
 
@@ -3388,7 +3388,7 @@ the new local workspace. Non-obvious rules:
   available global aliases; no workspace is created.
 - **`default_project` is cleared** if the global default falls outside the
   selection, and the result reports it in `active_project_cleared` (updated
-  vNEXT; before, it moved to the first selected alias). With one copied
+  0.100.0; before, it moved to the first selected alias). With one copied
   project, commands still use it as the sole project.
 - **Omitting `--project` copies all global projects** (unchanged behaviour).
 
@@ -3397,7 +3397,7 @@ API token already stored globally.
 
 ## The active project is cleared, never moved; `auth` picks the stack the same way
 
-*(since vNEXT)*
+*(since 0.100.0)*
 
 - **Removing the active project clears it.** Before, `project remove` (and
   `DELETE /projects/{alias}`, `POST /projects/bulk-delete`, `auth logout
@@ -3468,7 +3468,7 @@ Lets callers override the default project for one shell/session without editing
 - `kbagent project current` reports which of (2) or (3) is active and flags
   when the env var points to an unregistered alias, so you can diagnose
   precedence issues without reading the source.
-  Since vNEXT it also reports `resolved_alias` and `resolved_source`
+  Since 0.100.0 it also reports `resolved_alias` and `resolved_source`
   (`env`, `active_project`, `sole`, or `none`): the project a command without
   `--project` would use, after all five steps.
 
@@ -4098,7 +4098,7 @@ Why not always populate? Because `last_run_at` costs one `list_jobs(limit=1)` Qu
 - **Force `last_run_at` population without filtering:** pass `--not-run-since 0`. That fires the Queue API lookup for every row (N extra calls per project) and returns every row (no staleness filter applied because any past timestamp counts as stale at threshold 0 and `null` also counts as stale).
 - **`--not-run-since` + `--branch <DEV_ID>`:** the Queue API has no branch parameter. The timestamp comparison still hits production jobs, so schedules in a dev branch that were freshly deployed will register as stale even if their parent ran on main moments ago.
 - **`_fetch_latest_job_ts` silently returns `None` on Queue API errors** -- permission problems on Queue API are invisible in `errors[]`. If one project shows a suspiciously uniform "never ran" cluster, run `kbagent job list --project <alias>` to sanity-check the token.
-- *(since vNEXT)* `GET /schedules/find/query` over `kbagent serve` now reaches the find handler. Before, `GET /schedules/{project}/{schedule_id}` took the request and looked up a schedule `query` in a project `find`. On an older `serve`, run `kbagent schedule find` instead. The CLI command always worked.
+- *(since 0.100.0)* `GET /schedules/find/query` over `kbagent serve` now reaches the find handler. Before, `GET /schedules/{project}/{schedule_id}` took the request and looked up a schedule `query` in a project `find`. On an older `serve`, run `kbagent schedule find` instead. The CLI command always worked.
 
 ## `schedule list` + `schedule find` payload size scales with project size, not schedule count
 
@@ -6097,7 +6097,7 @@ It carries the command name, the outcome, and the duration -- never argument val
   server-side and the project-wide merge lock makes a premature retry answer
   `MR_NOT_READY_TO_MERGE` rather than start a second merge, so the retry is harmless. Wait
   and re-check with `merge-request detail` (state `in_merge` -> `merged`) before retrying.
-  A retry after the merge finished answers `status: "already_merged"`, exit 0 (since vNEXT).
+  A retry after the merge finished answers `status: "already_merged"`, exit 0 (since 0.100.0).
 - **Every result may carry `warnings[]`** (post-merge cleanup failure, a dropped
   `--change-description` on a delete resolution). A truncated conflict list inside
   `MR_MERGE_CONFLICT` carries `details.api_error_params_truncated: true` -- run `conflicts`.

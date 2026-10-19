@@ -29,15 +29,15 @@ kbagent reads M from GitHub and never from a hardcoded date. It takes `published
 | Existing install with `KBAGENT_AUTO_UPDATE=false`, or a native package held by its package manager (`brew pin`, `apt-mark hold`, ...) | 0.x | 0.x; `kbagent version` and `kbagent doctor` show the notice | 0.x until you upgrade |
 | Existing native package (Homebrew, apt/rpm, Chocolatey, winget, zip binary) | 0.x | 1.x on the next upgrade by the package manager; the notice names its command | 1.x on the next upgrade |
 
-`kbagent update --major` exists from the 0.N.x patch on (see [The notice](#the-notice)); earlier 0.x releases do not have the option.
+`kbagent update --major` exists from kbagent 0.100.0 on (see [The notice](#the-notice)); older 0.x releases do not have the option.
 
 An unpinned CI pipeline installs kbagent again on every run, so it never shows the notice. It gets 1.x at T0. If the pipeline must stay on 0.x, pin `keboola-cli<1` for the install and set `KBAGENT_AUTO_UPDATE=false` for the run (see [Stay on 0.x](#stay-on-0x)).
 
 ### The notice
 
-A 0.x patch release (called 0.N.x on this page) adds the notice and the major-version gate to the updater. It is published at least 14 days before T0. Before the patch, kbagent installs any newer version, also a new major version, so update to the patch before T0.
+kbagent 0.100.0 adds the notice and the major-version gate to the updater. It is published at least 14 days before T0. Older 0.x releases install any newer version, also a new major version, so update to 0.100.0 or later before T0.
 
-From the moment the patched client sees a published, stable `v1.0.0`:
+From the moment kbagent 0.100.0 or later sees a published, stable `v1.0.0`:
 
 - In human mode it prints one line on stderr once per 24 hours, and on every run in the last 72 hours before M. `kbagent version`, `kbagent update`, `kbagent doctor` and `kbagent context` always show it.
 - Under `--json` it adds an entry to the top-level `warnings[]` of the success and the error envelope, on every run:
@@ -67,21 +67,21 @@ When the check for a new version fails (offline, proxy error, HTTP 403 or 429), 
 
 ### At M
 
-- The patched updater installs 1.x for the next run. The current command finishes on 0.x; no 0.x command line runs again under 1.x. A running `kbagent serve` holds the update until it stops; from M the notice tells you to restart it.
-- A client older than the 0.N.x patch follows the release that GitHub marks as latest. That release stays on 0.x until M, so these clients also move at M, within one hour, but without a notice.
+- The updater of kbagent 0.100.0 and later installs 1.x for the next run. The current command finishes on 0.x; no 0.x command line runs again under 1.x. A running `kbagent serve` holds the update until it stops; from M the notice tells you to restart it.
+- A client older than 0.100.0 follows the release that GitHub marks as latest. That release stays on 0.x until M, so these clients also move at M, within one hour, but without a notice.
 - The first run of 1.x after the update from 0.x refuses one write or destructive command, with an error that links this page. Reads run, with a `warnings[]` entry. The next command runs normally. An update that you start with `kbagent update --major` does not refuse.
 - The post-update banner lists the `BREAKING:` bullets of every version that the update crossed. Under `--json`, the first command after the update adds a `warnings[]` entry `UPDATED_ACROSS_BREAKING`.
 
 ### Pre-releases
 
-No 1.x pre-release is published until the 0.N.x patch has been out for 14 days. A client older than the patch that runs `kbagent version --beta` or `kbagent update --beta` can still install a 1.x pre-release. Update to the 0.N.x patch first; it never crosses a major version with `--beta` alone.
+No 1.x pre-release is published until kbagent 0.100.0 has been out for 14 days. A client older than 0.100.0 that runs `kbagent version --beta` or `kbagent update --beta` can still install a 1.x pre-release. Update to 0.100.0 or later first; it never crosses a major version with `--beta` alone.
 
 ## Move to 1.0 early
 
 From T0, on an install that updates through kbagent (`install.sh`, `/kbagent:setup`, `uv tool`):
 
 ```bash
-kbagent update --major   # 0.N.x patch and later
+kbagent update --major   # kbagent 0.100.0 and later
 ```
 
 `kbagent update` without `--major` stays on 0.x and prints the notice. On a native package, use the upgrade command of the package manager (see [Install channels](#install-channels)).
@@ -165,7 +165,7 @@ These changes fixed a bug, a security gap or a data-loss path, so they shipped i
 - 0.96.1: `sync push` deletes remote configurations and rows only with `--force` (row 1); `sync push --force` is destructive under a deny policy (row 2).
 - 0.98.0: a command that processes several items exits 1 after a failed item, also in `--dry-run` (row 3).
 - 0.99.0: the permission policy applies to every REST route (row 2).
-- The first release after 0.99.1 (since vNEXT):
+- 0.100.0:
   - The deny policies hold for `http *`, `search`, `token refresh`, `workspace password` and `config variables-set --replace` (row 2).
   - `workspace gc` needs `--project` or `--all-projects`, in the CLI and over REST, and deletes nothing in a project whose configuration listing failed (row 4).
   - `sync pull`, `sync diff` and `sync push` refuse a sync directory of another project with `CONFIG_ERROR` (row 5).
@@ -175,7 +175,7 @@ These changes fixed a bug, a security gap or a data-loss path, so they shipped i
   - A mutating REST route rejects an undeclared `dry_run` with HTTP 422 (row 11).
   - A second `flow delete` of a flow in the trash answers `already_in_trash` and sends no DELETE; `job run --idempotency-key` refuses a replay that finds a pending entry; `merge-request merge` after a lost response returns `already_merged` (row 14).
 
-### Changes in the 0.N.x patch
+### Changes in 0.100.0 for the move to 1.0
 
 - `kbagent update` stays on the running major version unless `--major` is given (row 29).
 - The deprecation notice, and the `DEPRECATED_VERSION` entry in `warnings[]` under `--json`.
@@ -270,14 +270,14 @@ For the Claude Code plugin from `keboola/ai-kit` and the agents that use it:
 
 - From T0 to M, the plugin documents use only forms that work on 0.x and on 1.x: an explicit `--project` or `--all-projects`, and flags that 1.x keeps as hidden aliases.
 - At M, the plugin documents change to the 1.x forms.
-- The version gate of the plugin tells the agent: when `kbagent --version` reports 0.x, ask the user before it runs `kbagent update --major` (0.N.x patch and later).
+- The version gate of the plugin tells the agent: when `kbagent --version` reports 0.x, ask the user before it runs `kbagent update --major` (0.100.0 and later).
 - The deprecated marketplace entry in this repository (`.claude-plugin/marketplace.json`) is removed or pinned to the last 0.x tag before the 1.x documents reach `main`.
 
 ## Install channels
 
 | Channel | 1.0 arrives | Stay on 0.x | Go back to 0.x |
 |---|---|---|---|
-| `install.sh`, `/kbagent:setup`, `uv tool` | new install: at T0; existing install: at M, or at once with `kbagent update --major` (0.N.x patch and later) | `KBAGENT_AUTO_UPDATE=false` (a version pin alone does not stop the self-update) | `uv tool install --force 'keboola-cli[server]<1'` and `KBAGENT_AUTO_UPDATE=false` |
+| `install.sh`, `/kbagent:setup`, `uv tool` | new install: at T0; existing install: at M, or at once with `kbagent update --major` (0.100.0 and later) | `KBAGENT_AUTO_UPDATE=false` (a version pin alone does not stop the self-update) | `uv tool install --force 'keboola-cli[server]<1'` and `KBAGENT_AUTO_UPDATE=false` |
 | PyPI (`pip`, `uv pip`, CI) | at T0 for an unpinned install | `keboola-cli<1` for the install and `KBAGENT_AUTO_UPDATE=false` for the run | install `keboola-cli<1` and set `KBAGENT_AUTO_UPDATE=false` |
 | Homebrew (`keboola/keboola-cli2` tap) | on the next `brew upgrade` from T0 | `brew pin keboola-cli2` | the tap holds only the newest formula: use the zip binary of the last 0.x release, or the `uv tool` install |
 | apt (`keboola-cli2`) | on the next `apt upgrade` from T0 | `sudo apt-mark hold keboola-cli2` | `sudo apt-get install keboola-cli2=<version>` when the repository still lists that version, then hold it |
