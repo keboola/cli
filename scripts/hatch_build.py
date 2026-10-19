@@ -2,7 +2,7 @@
 
 End-users install this package via:
 
-- ``uv tool install git+https://github.com/keboola/cli`` --
+- ``uv tool install git+https://github.com/keboola/cli@v<version>`` --
   uv clones the repo, runs ``hatchling`` to produce a wheel, installs it,
   then deletes the clone. The user does NOT have a checkout on disk.
 - ``pip install keboola-cli`` (PyPI) -- prebuilt wheel.

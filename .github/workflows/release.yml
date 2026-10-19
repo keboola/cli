@@ -3,7 +3,7 @@ name: Release wheel
 # Publish a prebuilt wheel as a GitHub Release asset so end users install a
 # ready-made artifact instead of git-building from source on their machine.
 #
-# Why this exists (issue #353): `uv tool install git+https://github.com/keboola/cli`
+# Why this exists (issue #353): `uv tool install git+https://github.com/keboola/cli@v<version>`
 # rebuilds the bundled React SPA via `npm ci` + `vite build` on EVERY install,
 # and the uv cache does not cover the npm build. On WSL2 that is 2-4 minutes and
 # blows past the auto-update timeout. Building the (universal `py3-none-any`)

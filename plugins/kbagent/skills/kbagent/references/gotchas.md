@@ -26,6 +26,18 @@ Versioning convention:
 - **Version cache (`version_cache.json`):** new keys `next_major_version`, `next_major_release_id`, `next_major_published_at`, `checked_at` (the release is read again at most once per 24 hours before M, and once more right before the install) and `notice_shown_at`. `latest_version` there is always a version of the running major, and a cached `latest_version` of a higher major (written by an older kbagent) is ignored. `kbagent version --beta` no longer writes the cache.
 - **For agents:** when `kbagent --version` shows 0.x and the `DEPRECATED_VERSION` notice appears, ask the user before you run `kbagent update --major`. Do not run it on your own. To stay on 0.x, set `KBAGENT_AUTO_UPDATE=false`; in CI also pin `keboola-cli<1` for the install. A `keboola-cli<1` pin alone does not keep a self-updating install on 0.x: the updater reinstalls from an exact wheel URL and `uv tool` keeps no pin, and the startup check also runs in CI.
 
+## Install kbagent from `install.sh` or a release tag, never from `main`
+
+*(since vNEXT)* (CLI-39, #791)
+
+- **`main` can contain the next major version before it is released.** A git install without a tag (`uv tool install` of the `git+` URL of this repository with no `@v<version>`) builds `main`, so it can install unreleased 1.x code.
+- **Use `curl -LsSf https://raw.githubusercontent.com/keboola/cli/main/install.sh | sh`** (it installs the highest stable version from PyPI, with the `[server]` extras), or a pinned tag: `uv tool install 'git+https://github.com/keboola/cli@v<version>'`. The README, the tutorial and the agent-task references now show these forms.
+- **`kbagent --json version`, `upgrade_command`:** when neither uv nor pip is on `PATH`, it is now `uv tool install --force --reinstall 'keboola-cli @ git+https://github.com/keboola/cli@v<latest_version>'`. Before, it was an untagged git install.
+- **`kbagent update` that cannot prepare an install command** points to the release page of the target version (`/releases/tag/v<version>`), not to `/releases/latest`, which can name another major.
+- **`kbagent serve` without the `[server]` extras** prints `uv tool install --force 'keboola-cli[server]==<running version>'` (from PyPI), or `'keboola-cli[server]'` without a version for a development build. Before, it printed an untagged git install.
+- **Standalone binary from a hand-unpacked archive:** `upgrade_hint` now names the releases list (`https://github.com/keboola/cli/releases`), not `/releases/latest`, which names the previous major until the migration date.
+- **For agents:** never install kbagent from git without `@v<version>`.
+
 ## `--all-projects` on the fan-out reads, and a top-level `warnings[]` in `--json`
 
 *(since vNEXT)* (CLI-36, #791)

@@ -912,22 +912,39 @@ is the `Date` header of the GitHub response, the same clock the clients use.
 
 **Steps for the maintainer.**
 
-1. **Before the first 1.0.0 change merges to `main`:**
-   - Make sure the workflows above are on `main`. A tag runs the workflow file
-     of the tagged commit, so `release/0.N` must be created from a commit that
-     has them.
-   - Create `release/0.N` from the last 0.x minor release.
-   - Pin the deprecated marketplace shim. Its relative `source` follows the
-     default branch, so it would serve 1.x plugin documents to 0.x installs.
-     In `.claude-plugin/marketplace.json`, replace the `kbagent` entry's
-     `"source": "./plugins/kbagent"` with
-     `{"source": "git-subdir", "url": "https://github.com/keboola/cli.git", "path": "plugins/kbagent", "ref": "v0.N.x"}`
-     (the shape the ai-kit marketplace uses) and set its `version` to `0.N.x`.
-     `scripts/sync_version.py` keeps the version of a pinned entry as it is,
-     and for a version of major 1 or higher it fails while the source is
-     still relative. So the 1.0.0 release PR cannot pass `make version-sync`,
-     `make version-check` or the release `gate` with an unpinned shim.
-   - Walk the rehearsal in [docs/release-1.0-rehearsal.md](docs/release-1.0-rehearsal.md).
+1. **Before the first 1.0.0 change merges to `main`**, in this order:
+   1. Make sure `main` has the workflow changes above (`release-kbagent.yml`,
+      `promote-major.yml`, `scripts/release_latest.py`) and no install from
+      git without a release tag (`tests/test_pinned_installs.py` checks it).
+      A tag runs the workflow file of the tagged commit, so `release/0.N`
+      must start from a commit that has them. `install.sh` on `main` must
+      install any stable release of both majors, because it installs what
+      PyPI names: 0.x until T0, the new major from T0.
+      `tests/test_install_script.py` runs its install paths with a 0.x and a
+      1.x version; keep both.
+   2. Find the last 0.x release (stable tag only):
+      `git fetch --tags origin`, then
+      `git tag --list 'v0.*' --sort=-v:refname | grep -E '^v0\.[0-9]+\.[0-9]+$' | head -n 1`.
+      N is its minor version (`v0.105.2` gives `release/0.105`). If that tag
+      is older than the changes of step 1.1, release one more 0.x version
+      from `main` first (a normal release PR) and use its tag.
+   3. Create `release/0.N` from the commit of that tag:
+      `git push origin 'v0.N.x^{commit}:refs/heads/release/0.N'`.
+   4. Pin the deprecated marketplace shim in a PR to `main`, and merge it
+      before the first 1.0.0 change. Its relative `source` follows the
+      default branch, so it would serve 1.x plugin documents to 0.x installs.
+      In `.claude-plugin/marketplace.json`, replace the `kbagent` entry's
+      `"source": "./plugins/kbagent"` with
+      `{"source": "git-subdir", "url": "https://github.com/keboola/cli.git", "path": "plugins/kbagent", "ref": "v0.N.x"}`
+      (the shape the ai-kit marketplace uses; `v0.N.x` is the tag of step
+      1.2) and set its `version` to `0.N.x`. `scripts/sync_version.py` keeps
+      the version of a pinned entry as it is, and for a version of major 1 or
+      higher it fails while the source is still relative. So the 1.0.0
+      release PR cannot pass `make version-sync`, `make version-check` or the
+      release `gate` with an unpinned shim. When a later 0.N.x release
+      changes the plugin documents, set `ref` and `version` on `main` to that
+      release in the same way.
+   5. Walk the rehearsal in [docs/release-1.0-rehearsal.md](docs/release-1.0-rehearsal.md).
 2. **T0 − 14 days or earlier:** release the 0.N.x patch from `release/0.N`.
    Check that `promote-major` runs on `main` and prints `tag=` (nothing to do).
 3. **T0:** open the 1.0.0 release PR as usual (steps 1-15 above), merge it,

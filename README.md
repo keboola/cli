@@ -16,11 +16,13 @@ This installs a **prebuilt wheel** of the highest stable version on PyPI from it
 
 Requires **Python >=3.12**. `uv` normally fetches a matching interpreter on its own even if your default Python is older, but if it doesn't (offline, or Python downloads disabled) the install fails with `does not satisfy Python>=3.12` -- set `UV_PYTHON` (a standard `uv` env var) to a 3.12-or-newer interpreter you actually have -- `UV_PYTHON=3.12`, `UV_PYTHON=3.13`, or a full path. It has to reach `sh`, not `curl` -- `curl -LsSf https://raw.githubusercontent.com/keboola/cli/main/install.sh | UV_PYTHON=3.12 sh`, or `export UV_PYTHON=3.12` beforehand. Prefixing the whole pipeline (`UV_PYTHON=3.12 curl ... | sh`) assigns it to `curl`, where it has no effect.
 
-Prefer to build from source, or pin a specific ref?
+Prefer to build from source, or pin a specific version?
 
 ```bash
-uv tool install git+https://github.com/keboola/cli
+uv tool install 'git+https://github.com/keboola/cli@v<version>'
 ```
+
+Use a version from the [releases page](https://github.com/keboola/cli/releases). Always give the tag: without it uv builds `main`, which can contain changes that are not released yet, including the next major version.
 
 ### Windows
 
@@ -88,12 +90,12 @@ A failed startup update prints the last line of the uv output as `Cause:` (since
 Want a browser dashboard? One command:
 
 ```bash
-uv tool install --with 'keboola-cli[server]' 'git+https://github.com/keboola/cli'
+curl -LsSf https://raw.githubusercontent.com/keboola/cli/main/install.sh | sh
 kbagent serve --ui
 # Open the URL printed at startup -- the browser is auto-authenticated.
 ```
 
-The React SPA is bundled inside the wheel by a hatchling build hook (requires Node 20+ on the install host so `npm run build` can run during wheel creation). Single Python process at runtime; no Node needed once installed. Covers everything the CLI exposes (projects, configs, storage, jobs, flows, schedules, lineage, scheduled AI agents with cost/token timeline). Agent runs that produce long-form reports (e.g. "Storage Cleanup Advisor", "Schedule Drift Detector") surface in a dedicated **Artifacts** tab — GFM-rendered preview in a VSCode-style viewer with one-click Copy / Download `.md` for hand-off to Slack, Notion, or your editor. See [`web/README.md`](web/README.md) for the dev-mode setup with hot reload.
+`install.sh` includes the `[server]` extras by default. The React SPA is bundled inside the wheel by a hatchling build hook (a build from `git+` source requires Node 20+ on the install host so `npm run build` can run during wheel creation). Single Python process at runtime; no Node needed once installed. Covers everything the CLI exposes (projects, configs, storage, jobs, flows, schedules, lineage, scheduled AI agents with cost/token timeline). Agent runs that produce long-form reports (e.g. "Storage Cleanup Advisor", "Schedule Drift Detector") appear in a dedicated **Artifacts** tab — GFM-rendered preview in a VSCode-style viewer with one-click Copy / Download `.md` for hand-off to Slack, Notion, or your editor. See [`web/README.md`](web/README.md) for the dev-mode setup with hot reload.
 
 ## Agent Tasks
 
@@ -111,7 +113,7 @@ Build the agent once, schedule it, walk away — the platform handles auth, sche
 The scheduler runs **inside `kbagent serve`** -- the same single Python process that hosts the Web UI. If you already installed kbagent with the `[server]` extras (see [Web UI](#web-ui-optional) above), you're set; otherwise:
 
 ```bash
-uv tool install --with 'keboola-cli[server]' 'git+https://github.com/keboola/cli'
+curl -LsSf https://raw.githubusercontent.com/keboola/cli/main/install.sh | sh
 kbagent serve --ui
 # Open the URL printed at startup -> sidebar "Agent Tasks" -> "+ New task".
 ```

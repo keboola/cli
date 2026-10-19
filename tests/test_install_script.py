@@ -147,12 +147,17 @@ def wheel(version: str) -> str:
     return f"{WHEEL_PREFIX}/v{version}/keboola_cli-{version}-py3-none-any.whl"
 
 
+# install.sh on `main` installs whatever PyPI names: 0.x until T0, 1.x from T0.
+BOTH_MAJORS = pytest.mark.parametrize("version", ["0.105.2", "1.0.0"])
+
+
 class TestVersionFromPyPI:
-    def test_installs_the_github_wheel_of_the_pypi_version(self, run_install) -> None:
-        run = run_install(pypi_json("1.0.0"))
+    @BOTH_MAJORS
+    def test_installs_the_github_wheel_of_the_pypi_version(self, run_install, version) -> None:
+        run = run_install(pypi_json(version))
 
         assert run.proc.returncode == 0, run.output
-        assert run.uv_specs == [f"keboola-cli[server] @ {wheel('1.0.0')}"]
+        assert run.uv_specs == [f"keboola-cli[server] @ {wheel(version)}"]
 
     def test_never_reads_the_releases_latest_redirect(self, run_install) -> None:
         run = run_install(pypi_json("1.0.0"))
@@ -179,11 +184,12 @@ class TestVersionFromPyPI:
 
 
 class TestFallbacks:
-    def test_missing_wheel_installs_the_same_version_from_pypi(self, run_install) -> None:
-        run = run_install(pypi_json("1.0.0"), wheel_head="fail")
+    @BOTH_MAJORS
+    def test_missing_wheel_installs_the_same_version_from_pypi(self, run_install, version) -> None:
+        run = run_install(pypi_json(version), wheel_head="fail")
 
         assert run.proc.returncode == 0, run.output
-        assert run.uv_specs == ["keboola-cli[server]==1.0.0"]
+        assert run.uv_specs == [f"keboola-cli[server]=={version}"]
 
     def test_failed_wheel_install_installs_the_same_version_from_pypi(self, run_install) -> None:
         run = run_install(pypi_json("1.0.0"), uv_fail=".whl")
@@ -193,11 +199,14 @@ class TestFallbacks:
             "keboola-cli[server]==1.0.0",
         ]
 
-    def test_source_build_is_pinned_to_the_resolved_tag(self, run_install) -> None:
-        run = run_install(pypi_json("1.0.0"), uv_fail=".whl|==1.0.0")
+    @BOTH_MAJORS
+    def test_source_build_is_pinned_to_the_resolved_tag(self, run_install, version) -> None:
+        run = run_install(pypi_json(version), uv_fail=f".whl|=={version}")
 
         assert run.proc.returncode == 0, run.output
-        assert run.uv_specs[-1] == "keboola-cli[server] @ git+https://github.com/keboola/cli@v1.0.0"
+        assert run.uv_specs[-1] == (
+            f"keboola-cli[server] @ git+https://github.com/keboola/cli@v{version}"
+        )
 
     def test_unreachable_pypi_installs_the_newest_stable_from_pypi(self, run_install) -> None:
         run = run_install(None)

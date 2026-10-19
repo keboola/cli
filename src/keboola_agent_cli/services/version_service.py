@@ -205,7 +205,7 @@ def build_hardlink_retry_command(command: tuple[str, ...] | None) -> tuple[str, 
 
 
 def build_kbagent_upgrade_command(
-    *, prerelease: bool = False, target_version: str | None = None, wheel_url: str | None = None
+    *, prerelease: bool = False, target_version: str, wheel_url: str | None = None
 ) -> list[str] | None:
     """Build the argv command to recreate the kbagent tool environment.
 
@@ -223,9 +223,10 @@ def build_kbagent_upgrade_command(
             are the newest available -- the default-deny behaviour we
             want for cron-driven auto-update so stable users never
             silently land on a beta release.
-        target_version: Exact target release. Git fallbacks are always pinned
-            to ``@v<target_version>``; mutable ``main`` is never safe for a
-            recovery operation.
+        target_version: Exact target release. The git source is always pinned
+            to ``@v<target_version>``: ``main`` can carry the code of the next
+            major before it is released (#791), so an untagged install is never
+            built.
         wheel_url: When set, install the prebuilt wheel at this URL (a GitHub
             Release asset) via a PEP 508 direct reference instead of building
             from ``git+`` source -- the issue #353 fast path that skips the
@@ -238,41 +239,6 @@ def build_kbagent_upgrade_command(
         neither ``uv`` nor ``pip`` is on ``PATH`` (in which case the
         caller surfaces a manual-install hint).
     """
-    # Compatibility for callers that only render a non-actionable command.
-    # Every production update path supplies ``target_version`` and therefore
-    # takes the exact, full-reinstall branch below.
-    if target_version is None:
-        legacy_source = wheel_url or KBAGENT_INSTALL_SOURCE
-        legacy_has_server = has_server_extras()
-        legacy_spec = (
-            f"keboola-cli[server] @ {legacy_source}"
-            if legacy_has_server
-            else f"keboola-cli @ {legacy_source}"
-            if wheel_url
-            else legacy_source
-        )
-        uv_path = shutil.which("uv")
-        if uv_path:
-            if wheel_url:
-                cmd = [uv_path, "tool", "install", "--force"]
-            elif legacy_has_server:
-                cmd = [uv_path, "tool", "install", "--force", "--with", "keboola-cli[server]"]
-            else:
-                cmd = [uv_path, "tool", "install", "--upgrade"]
-            if prerelease:
-                cmd.append("--prerelease=allow")
-            cmd.append(legacy_spec if wheel_url else legacy_source)
-            return cmd
-        pip_path = shutil.which("pip")
-        if pip_path is None:
-            return None
-        cmd = [pip_path, "install"]
-        if prerelease:
-            cmd.append("--pre")
-        cmd.append("--upgrade")
-        cmd.append(legacy_spec)
-        return cmd
-
     # The wheel is already an exact release artifact. When it is unavailable,
     # pin the source fallback to the corresponding immutable Git tag.
     install_source = wheel_url or f"{KBAGENT_INSTALL_SOURCE}@v{target_version}"
@@ -1002,7 +968,7 @@ class VersionService:
             # single command (hand-unpacked archive, unidentified system
             # package) carry the sentence in `upgrade_hint` instead.
             kbagent_upgrade_str = frozen_distribution.upgrade_command or ""
-        elif kbagent_up_to_date is not False:
+        elif kbagent_up_to_date is not False or kbagent_target_version is None:
             # Nothing to upgrade TO, so name nothing. `upgrade_command` is
             # documented as a string a consumer may shell out to verbatim, and
             # this branch used to build one unconditionally -- which made the two
@@ -1039,7 +1005,7 @@ class VersionService:
             kbagent_upgrade_str = (
                 " ".join(kbagent_upgrade_cmd)
                 if kbagent_upgrade_cmd is not None
-                else f"uv tool install --upgrade {KBAGENT_INSTALL_SOURCE}"
+                else _recovery_command(None, kbagent_target_version) or ""
             )
         kbagent_entry: dict[str, Any] = {
             "version": __version__,
@@ -1267,7 +1233,7 @@ class VersionService:
                     else (
                         f"Could not prepare a self-update command for v{kbagent_latest}. "
                         "Reinstall kbagent from the release wheel for that version: "
-                        "https://github.com/keboola/cli/releases/latest"
+                        f"https://github.com/{KBAGENT_GITHUB_REPO}/releases/tag/v{kbagent_latest}"
                     )
                 ),
                 "recovery_command": plan.recovery_command,

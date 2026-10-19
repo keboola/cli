@@ -15,7 +15,7 @@ Pick the section that matches your situation; skip the rest.
 Install the CLI once (auto-updates on every launch):
 
 ```bash
-uv tool install git+https://github.com/keboola/cli
+curl -LsSf https://raw.githubusercontent.com/keboola/cli/main/install.sh | sh
 ```
 
 Verify:

@@ -914,6 +914,6 @@ The 0.x line, until T0, ships only bug, security and data-loss fixes (C4), the u
 - Checked by: unit tests (with the patch).
 
 <a id="UP5"></a>
-**UP5 · MUST · before T0.** `install.sh` installs the highest stable release from the release list, not the release that GitHub marks as latest.
+**UP5 · MUST · before T0.** `install.sh` and the PowerShell block of `README.md` install the highest stable version on PyPI (`info.version` of `https://pypi.org/pypi/keboola-cli/json`), not the release that GitHub marks as latest and not the GitHub release list.
 
 - Checked by: review.
