@@ -186,6 +186,15 @@ def _command(root: Any, path: tuple[str, ...]) -> Any:
     return node
 
 
+_ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+_BOX = re.compile(r"[\u2500-\u257f]")
+
+
+def _plain(text: str) -> str:
+    """stderr without color codes, Rich box lines and line wrapping, for substring checks."""
+    return " ".join(_BOX.sub(" ", _ANSI.sub("", text)).split())
+
+
 def test_the_tree_has_commands_and_groups_to_check() -> None:
     assert len(LEAVES) > 250
     assert len(GROUPS) > 25
@@ -231,7 +240,7 @@ def test_one_json_document_for_a_crash(
     assert document["status"] == "error"
     assert document["error"]["code"] == "INTERNAL_ERROR"
     assert "simulated crash" in document["error"]["message"]
-    assert "Traceback" in result.stderr
+    assert "Traceback" in _plain(result.stderr)
 
 
 def _exit_with_code(code: int) -> Any:
@@ -315,7 +324,7 @@ def test_human_mode_parse_error_keeps_stdout_empty(tmp_path: Path) -> None:
     result = runner.invoke(app, ["--config-dir", str(tmp_path), "project", "list", BAD_FLAG])
     assert result.exit_code == 2
     assert result.stdout == ""
-    assert BAD_FLAG in result.stderr
+    assert BAD_FLAG in _plain(result.stderr)
 
 
 # -- output.bare-group-exits-2 -----------------------------------------------
@@ -329,19 +338,19 @@ def test_bare_group_exits_2_with_help_on_stderr(
         result = runner.invoke(app, ["--config-dir", str(tmp_path), *args])
         document = _usage_error_document(result)
         assert "Missing command" in document["error"]["message"]
-        assert "Usage" in result.stderr
+        assert "Usage" in _plain(result.stderr)
 
     human = runner.invoke(app, ["--config-dir", str(tmp_path), *path])
     assert human.exit_code == 2
     assert human.stdout == ""
-    assert "Usage" in human.stderr
+    assert "Usage" in _plain(human.stderr)
 
 
 def test_json_without_a_command_exits_2(tmp_path: Path) -> None:
     result = runner.invoke(app, ["--config-dir", str(tmp_path), "--json"])
     document = _usage_error_document(result)
     assert "Missing command" in document["error"]["message"]
-    assert "Usage" in result.stderr
+    assert "Usage" in _plain(result.stderr)
 
 
 # -- output.root-flags-anywhere ----------------------------------------------
@@ -387,7 +396,7 @@ def test_an_option_value_equal_to_json_stays_a_value(tmp_path: Path) -> None:
     result = runner.invoke(app, ["--config-dir", str(tmp_path), *args])
     assert result.exit_code == 5, result.output
     assert result.stdout == ""
-    assert "Error" in result.stderr
+    assert "Error" in _plain(result.stderr)
 
 
 # -- output.envelope-schema --------------------------------------------------
@@ -498,8 +507,8 @@ def test_repeated_single_value_option(
     single = runner.invoke(app, ["--config-dir", str(tmp_path), *path, *once])
     twice = runner.invoke(app, ["--config-dir", str(tmp_path), *path, *args])
     assert twice.exit_code == single.exit_code
-    assert f"{name} given more than once" in twice.stderr
-    assert "given more than once" not in single.stderr
+    assert f"{name} given more than once" in _plain(twice.stderr)
+    assert "given more than once" not in _plain(single.stderr)
 
 
 def test_most_commands_have_a_single_value_option(root: Any) -> None:
@@ -510,7 +519,7 @@ def test_repeated_project_on_a_destructive_command_names_the_option(tmp_path: Pa
     args = ["storage", "delete-bucket", "--project", "x", "--bucket-id", "in.c-a"]
     result = runner.invoke(app, ["--config-dir", str(tmp_path), *args, "--project", "test"])
     assert result.exit_code == 2
-    assert "--project given more than once" in result.stderr
+    assert "--project given more than once" in _plain(result.stderr)
 
 
 def test_repeated_project_on_an_admin_command_is_refused(tmp_path: Path) -> None:
@@ -527,3 +536,39 @@ def test_repeated_option_on_a_read_command_is_a_warning_entry(tmp_path: Path) ->
     [entry] = [w for w in _json_document(result.stdout)["warnings"] if w["code"] != "WARNING"]
     assert entry["code"] == "REPEATED_OPTION"
     assert entry["options"] == ["--category"]
+
+
+# -- output.one-json-document: a --stream command keeps stdout NDJSON --------
+
+
+def _stream_then(failure: BaseException) -> Any:
+    async def stream_run(self: Any, task_id: str, runtime_input: Any = None) -> Any:
+        yield {"event": "init", "data": {"task_id": task_id}}
+        yield {"event": "stdout", "data": {"line": "working"}}
+        raise failure
+
+    return stream_run
+
+
+@pytest.mark.parametrize(
+    ("failure", "exit_code", "error_code"),
+    [(KeyboardInterrupt(), 130, "INTERRUPTED"), (RuntimeError("boom"), 1, "INTERNAL_ERROR")],
+    ids=["interrupt", "crash"],
+)
+def test_a_stream_that_fails_stays_ndjson(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: BaseException,
+    exit_code: int,
+    error_code: str,
+) -> None:
+    """After the first NDJSON line the error is one more line, not a JSON document."""
+    from keboola_agent_cli.services.agent_service import AgentService
+
+    monkeypatch.setattr(AgentService, "stream_run", _stream_then(failure))
+    args = ["--config-dir", str(tmp_path), "--json", "agent", "run", "abc123", "--stream"]
+    result = runner.invoke(app, args)
+    assert result.exit_code == exit_code, result.output
+    events = [json.loads(line) for line in result.stdout.splitlines()]
+    assert [e["event"] for e in events] == ["init", "stdout", "error"]
+    assert events[-1]["data"]["code"] == error_code

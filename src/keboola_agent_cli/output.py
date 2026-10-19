@@ -243,11 +243,31 @@ class OutputFormatter:
         # envelope is already on stdout (a later warning is then dropped).
         self.warnings: list[dict[str, Any]] = []
         self._document_written = False
+        # JSON mode: a `--stream` command wrote NDJSON; stdout belongs to the stream.
+        self._streaming = False
 
     @property
     def document_written(self) -> bool:
         """True once the JSON envelope is on stdout; stdout then holds no second document."""
         return self._document_written
+
+    @property
+    def streaming(self) -> bool:
+        """True once a ``--stream`` command wrote its first NDJSON line (JSON mode)."""
+        return self._streaming
+
+    def stream_line(self, event: dict[str, Any]) -> None:
+        """Write one NDJSON line of a ``--stream`` command (JSON mode).
+
+        From the first line on, stdout belongs to the stream (O1): an error
+        becomes one more NDJSON line, never a second JSON document.
+        """
+        # `ensure_ascii=False` keeps the event text readable, which means raw
+        # non-ASCII reaches stdout -- so it must not go through the console's
+        # encoder (issue #546). `write_machine_output` also flushes, which a
+        # stream consumer depends on.
+        write_machine_output(json.dumps(event, ensure_ascii=False))
+        self._streaming = True
 
     def output(
         self,
@@ -296,6 +316,10 @@ class OutputFormatter:
                 When empty/None, the field is omitted from JSON output so
                 consumers can key off presence.
         """
+        if self.json_mode and self._streaming:
+            # One NDJSON line at the end of the stream, in the shape of its events.
+            self.stream_line({"event": "error", "data": {"code": error_code, "message": message}})
+            return
         if self.json_mode:
             if not error_type:
                 from .errors import map_error_code_to_type

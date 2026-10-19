@@ -194,7 +194,9 @@ class RootGroup(ProjectRefGroup):
         except (typer.Exit, SystemExit) as exc:
             # A non-zero exit that wrote no document still writes one (O1).
             code = exc.exit_code if isinstance(exc, typer.Exit) else exc.code
-            if ctx.params.get("json_output") and code not in (0, None):
+            if ctx.params.get("json_output") and code == 130:
+                _emit_error(ctx, "The command was interrupted.", ErrorCode.INTERRUPTED)
+            elif ctx.params.get("json_output") and code not in (0, None):
                 _emit_error(ctx, f"The command exited with code {code}.", ErrorCode.UNKNOWN_ERROR)
             raise
         except (typer.Abort, KeyboardInterrupt):
@@ -226,7 +228,8 @@ def _emit_error(ctx: Any, message: str, error_code: str) -> None:
     formatter = obj.get("formatter")
     if formatter is None or not formatter.json_mode:
         formatter = OutputFormatter(json_mode=True)
-    if not formatter.document_written:
+    # After NDJSON lines, `error()` adds one more line, not a second document.
+    if formatter.streaming or not formatter.document_written:
         formatter.error(message=message, error_code=error_code)
 
 
