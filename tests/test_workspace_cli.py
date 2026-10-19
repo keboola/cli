@@ -1017,6 +1017,44 @@ class TestWorkspaceLoad:
         assert result.exit_code == 0, result.output
         assert "Aborted." in result.output
 
+    def test_workspace_load_guard_without_terminal_refuses(self, tmp_path: Path) -> None:
+        """Human mode without a terminal: no prompt, a piped 'y' does not approve (S4).
+
+        A plain CliRunner has no terminal. The command passes no guard
+        callback, so the service refuses with WORKSPACE_LOAD_COPY_TOO_LARGE.
+        """
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+
+        mock_ws = _make_workspace_mock()
+        mock_ws.load_tables.side_effect = _guard_tripping_load(_LOAD_RESULT)
+
+        with _patched_services(store, mock_ws):
+            result = runner.invoke(
+                app,
+                [
+                    "workspace",
+                    "load",
+                    "--project",
+                    "prod",
+                    "--workspace-id",
+                    "42",
+                    "--tables",
+                    "in.c-main.big",
+                ],
+                input="y\n",
+            )
+
+        assert result.exit_code == 1, result.output
+        mock_ws.load_tables.assert_called_once()
+        assert mock_ws.load_tables.call_args.kwargs["on_copy_guard"] is None
+        assert "Refusing to COPY" in result.stderr
+        assert "--force" in result.stderr
+        assert "Large COPY" not in result.output
+        assert "[y/N]" not in result.output
+        assert "Success" not in result.output
+
     def test_workspace_load_guard_json_reports_error(self, tmp_path: Path) -> None:
         """--json gets the structured refusal (no prompt, non-zero exit)."""
         config_dir = tmp_path / "config"
