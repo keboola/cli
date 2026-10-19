@@ -581,12 +581,14 @@ _COMPARISON_OPS = tuple(COMPARISON_SQL)  # eq, ne, gt, gte, lt, lte
 _VALUE_HINT = 'parsed as JSON when it is one (42, 4.5, true); quote it ("42") to force a string'
 
 
-def _prompt_choice(text: str, choices: tuple[str, ...], default: str) -> str:
+def _prompt_choice(formatter: Any, text: str, choices: tuple[str, ...], default: str) -> str:
     while True:
         value = typer.prompt(text, default=default)
         if value in choices:
             return value
-        typer.echo(f"Enter one of: {', '.join(choices)}")
+        formatter.err_console.print(
+            f"Enter one of: {', '.join(choices)}", markup=False, highlight=False
+        )
 
 
 def _typed_value(raw: str) -> Any:
@@ -602,33 +604,33 @@ def _typed_value(raw: str) -> Any:
     return value if isinstance(value, str | int | float | bool) else raw
 
 
-def _prompt_condition() -> dict[str, Any]:
-    typer.echo(_CONDITION_MENU)
-    choice = _prompt_choice("Choice", ("1", "2", "3", "4"), default="1")
+def _prompt_condition(formatter: Any) -> dict[str, Any]:
+    formatter.err_console.print(_CONDITION_MENU, markup=False, highlight=False)
+    choice = _prompt_choice(formatter, "Choice", ("1", "2", "3", "4"), default="1")
     if choice == "4":
         return {"true": True}
     column = typer.prompt("Column name")
     if choice == "1":
-        op = _prompt_choice("Operator", _COMPARISON_OPS, default="eq")
+        op = _prompt_choice(formatter, "Operator", _COMPARISON_OPS, default="eq")
         value = _typed_value(typer.prompt(f"Value ({_VALUE_HINT})"))
         return {"column": column, "op": op, "value": value}
     if choice == "2":
-        op = _prompt_choice("Operator", ("in", "not_in"), default="in")
+        op = _prompt_choice(formatter, "Operator", ("in", "not_in"), default="in")
         raw_values = typer.prompt(f"Values (comma-separated; each {_VALUE_HINT})")
         values = [_typed_value(v.strip()) for v in raw_values.split(",") if v.strip()]
         return {"column": column, "op": op, "values": values}
-    op = _prompt_choice("Operator", ("is_null", "is_not_null"), default="is_null")
+    op = _prompt_choice(formatter, "Operator", ("is_null", "is_not_null"), default="is_null")
     return {"column": column, "op": op}
 
 
-def _build_rules_interactively() -> list[dict[str, Any]]:
+def _build_rules_interactively(formatter: Any) -> list[dict[str, Any]]:
     rules: list[dict[str, Any]] = []
     while True:
         principal = typer.prompt(
             "Principal (user email, comma-separated list for a group, or * for every identified reader)"
         )
         principals = [p.strip() for p in principal.split(",") if p.strip()]
-        condition = _prompt_condition()
+        condition = _prompt_condition(formatter)
         rule: dict[str, Any] = {"condition": condition}
         if len(principals) == 1:
             rule["principal"] = principals[0]
@@ -695,7 +697,7 @@ def rls_setup(
     parsed_rules = (
         _parse_rules_arg(formatter, rules, RLS.rules_shape)
         if rules is not None
-        else _build_rules_interactively()
+        else _build_rules_interactively(formatter)
     )
     service = get_service(ctx, RLS.service)
     selected_tables = [str(tables[i]["id"]) for i in indices]

@@ -420,6 +420,91 @@
       ]
     },
     {
+      "path": "cls",
+      "kind": "group",
+      "hidden": false,
+      "help": "Manage column-level security policies (metastore-backed, per-principal column allowlist). 'list'/'detail'/'schema' are read-only; 'create'/'update'/'delete' are gated as admin -- see CONTRIBUTING.md."
+    },
+    {
+      "path": "cls create",
+      "kind": "command",
+      "hidden": false,
+      "category": "admin",
+      "help": "Create one CLS policy for one table (``targeted`` scope unless ``--scope organization``).",
+      "params": [
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "required": true, "default": null, "help": "Project alias -- the project that owns the policy"},
+        {"kind": "option", "name": "table_id", "opts": ["--table-id"], "type": "text", "required": true, "default": null, "help": "Storage table ID, e.g. in.c-crm.invoices"},
+        {"kind": "option", "name": "rules", "opts": ["--rules"], "type": "text", "required": true, "default": null, "help": "JSON|@file|- array of {principal|principals, visible_columns} objects; visible_columns is the allowlist of columns that principal can read"},
+        {"kind": "option", "name": "dialect", "opts": ["--dialect"], "type": "choice", "choices": ["snowflake", "bigquery"], "default": null, "help": "Workspace SQL dialect; must match the project backend (default: the backend)"},
+        {"kind": "option", "name": "scope", "opts": ["--scope"], "type": "choice", "choices": ["targeted", "organization"], "default": "targeted", "help": "targeted (default): the owning project plus --target-project grants. organization: EVERY project of the organization that has the row-level-security feature -- an explicit, organization-admin-only choice, gated as destructive."},
+        {"kind": "option", "name": "target_project", "opts": ["--target-project"], "type": "text", "multiple": true, "default": null, "help": "Project alias or ID the policy also applies to (repeatable or comma-separated; --scope targeted only; granting needs the organization-admin role)"},
+        {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Preview the projection without writing"},
+        {"kind": "option", "name": "yes", "opts": ["--yes", "-y"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip confirmation prompt"}
+      ]
+    },
+    {
+      "path": "cls delete",
+      "kind": "command",
+      "hidden": false,
+      "category": "destructive",
+      "help": "Delete a CLS policy -- its table's columns become unrestricted.",
+      "params": [
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "required": true, "default": null, "help": "Project alias"},
+        {"kind": "option", "name": "policy_id", "opts": ["--policy-id"], "type": "text", "required": true, "default": null, "help": "CLS policy ID"},
+        {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Show the policy without deleting it"},
+        {"kind": "option", "name": "yes", "opts": ["--yes", "-y"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip confirmation prompt"}
+      ]
+    },
+    {
+      "path": "cls detail",
+      "kind": "command",
+      "hidden": false,
+      "category": "read",
+      "help": "Show one CLS policy's full rule set.",
+      "params": [
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "required": true, "default": null, "help": "Project alias"},
+        {"kind": "option", "name": "policy_id", "opts": ["--policy-id"], "type": "text", "required": true, "default": null, "help": "CLS policy ID"}
+      ]
+    },
+    {
+      "path": "cls list",
+      "kind": "command",
+      "hidden": false,
+      "category": "read",
+      "help": "List column-level security policies visible to a project.",
+      "params": [
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "required": true, "default": null, "help": "Project alias"}
+      ]
+    },
+    {
+      "path": "cls schema",
+      "kind": "command",
+      "hidden": false,
+      "category": "read",
+      "help": "Print the live ``cls-policy`` JSON Schema fetched from the metastore.\n\nLive-only (no bundled snapshot): if the metastore of that stack does not\nhave the ``cls-policy`` object type registered, this fails with a clean,\nclassified ``NOT_FOUND`` error.",
+      "params": [
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "required": true, "default": null, "help": "Project alias -- fetch the live schema from this stack"}
+      ]
+    },
+    {
+      "path": "cls update",
+      "kind": "command",
+      "hidden": false,
+      "category": "admin",
+      "help": "Update an existing CLS policy.\n\nOnly the flags you pass change -- an omitted flag keeps the policy's\ncurrent value. The write is a partial update (PATCH) of just those keys.",
+      "params": [
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "required": true, "default": null, "help": "Project alias"},
+        {"kind": "option", "name": "policy_id", "opts": ["--policy-id"], "type": "text", "required": true, "default": null, "help": "CLS policy ID"},
+        {"kind": "option", "name": "table_id", "opts": ["--table-id"], "type": "text", "default": null, "help": "New table (unset = unchanged)"},
+        {"kind": "option", "name": "dialect", "opts": ["--dialect"], "type": "choice", "choices": ["snowflake", "bigquery"], "default": null, "help": "New dialect, must match the project backend (unset = unchanged)"},
+        {"kind": "option", "name": "rules", "opts": ["--rules"], "type": "text", "default": null, "help": "New JSON|@file|- rules array (unset = unchanged)"},
+        {"kind": "option", "name": "target_project", "opts": ["--target-project"], "type": "text", "multiple": true, "default": null, "help": "Project alias or ID the policy also applies to (repeatable or comma-separated; --scope targeted only; granting needs the organization-admin role); replaces the list (unset = unchanged)"},
+        {"kind": "option", "name": "clear_target_projects", "opts": ["--clear-target-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Revoke every project the policy is shared with (cannot be combined with --target-project)"},
+        {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Preview the projection without writing"},
+        {"kind": "option", "name": "yes", "opts": ["--yes", "-y"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip confirmation prompt"}
+      ]
+    },
+    {
       "path": "component",
       "kind": "group",
       "hidden": false,
@@ -2452,6 +2537,108 @@
       "category": "read",
       "help": "Start interactive REPL mode for kbagent.",
       "params": []
+    },
+    {
+      "path": "rls",
+      "kind": "group",
+      "hidden": false,
+      "help": "Manage row-level security policies (metastore-backed). 'list'/'detail'/'schema' are read-only; 'create'/'update'/'setup'/'delete' are gated as admin -- see CONTRIBUTING.md."
+    },
+    {
+      "path": "rls create",
+      "kind": "command",
+      "hidden": false,
+      "category": "admin",
+      "help": "Create one RLS policy for one table (``targeted`` scope unless ``--scope organization``).",
+      "params": [
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "required": true, "default": null, "help": "Project alias -- the project that owns the policy"},
+        {"kind": "option", "name": "table_id", "opts": ["--table-id"], "type": "text", "required": true, "default": null, "help": "Storage table ID, e.g. in.c-crm.invoices"},
+        {"kind": "option", "name": "rules", "opts": ["--rules"], "type": "text", "required": true, "default": null, "help": "JSON|@file|- array of {principal|principals|groups, condition} objects; rules matching one identity combine with OR (see rls-workflow.md for the condition shape)"},
+        {"kind": "option", "name": "default", "opts": ["--default"], "type": "text", "default": null, "help": "JSON|@file|- condition for identities no rule matches, e.g. '{\"false\": true}' (no rows); omitted, their reads are refused"},
+        {"kind": "option", "name": "dialect", "opts": ["--dialect"], "type": "choice", "choices": ["snowflake", "bigquery"], "default": null, "help": "Workspace SQL dialect; must match the project backend (default: the backend)"},
+        {"kind": "option", "name": "scope", "opts": ["--scope"], "type": "choice", "choices": ["targeted", "organization"], "default": "targeted", "help": "targeted (default): the owning project plus --target-project grants. organization: EVERY project of the organization that has the row-level-security feature -- an explicit, organization-admin-only choice, gated as destructive."},
+        {"kind": "option", "name": "target_project", "opts": ["--target-project"], "type": "text", "multiple": true, "default": null, "help": "Project alias or ID the policy also applies to (repeatable or comma-separated; --scope targeted only; granting needs the organization-admin role)"},
+        {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Preview the compiled condition without writing"},
+        {"kind": "option", "name": "yes", "opts": ["--yes", "-y"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip confirmation prompt"}
+      ]
+    },
+    {
+      "path": "rls delete",
+      "kind": "command",
+      "hidden": false,
+      "category": "destructive",
+      "help": "Delete an RLS policy -- its table's rows are no longer filtered.",
+      "params": [
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "required": true, "default": null, "help": "Project alias"},
+        {"kind": "option", "name": "policy_id", "opts": ["--policy-id"], "type": "text", "required": true, "default": null, "help": "RLS policy ID"},
+        {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Show the policy without deleting it"},
+        {"kind": "option", "name": "yes", "opts": ["--yes", "-y"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip confirmation prompt"}
+      ]
+    },
+    {
+      "path": "rls detail",
+      "kind": "command",
+      "hidden": false,
+      "category": "read",
+      "help": "Show one RLS policy's full rule set.",
+      "params": [
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "required": true, "default": null, "help": "Project alias"},
+        {"kind": "option", "name": "policy_id", "opts": ["--policy-id"], "type": "text", "required": true, "default": null, "help": "RLS policy ID"}
+      ]
+    },
+    {
+      "path": "rls list",
+      "kind": "command",
+      "hidden": false,
+      "category": "read",
+      "help": "List row-level security policies visible to a project.",
+      "params": [
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "required": true, "default": null, "help": "Project alias"}
+      ]
+    },
+    {
+      "path": "rls schema",
+      "kind": "command",
+      "hidden": false,
+      "category": "read",
+      "help": "Print the live ``rls-policy`` JSON Schema fetched from the metastore.\n\nUnlike ``flow schema``, there is no offline bundled snapshot -- the\nschema is authoritative only from the live metastore, and on a stack whose\nmetastore predates it, fetching fails with a clean, classified error.",
+      "params": [
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "required": true, "default": null, "help": "Project alias -- fetch the live schema from this stack"}
+      ]
+    },
+    {
+      "path": "rls setup",
+      "kind": "command",
+      "hidden": false,
+      "category": "admin",
+      "help": "Guided RLS setup: pick tables, build a condition, preview, then write.\n\nInteractive-terminal-only (with ``--json`` or without a terminal it exits 2\nwith a usage error -- use ``rls create`` there). Creates one RLS policy per\nselected table, all sharing the same rules, via the exact same write path\n``rls create`` uses.",
+      "params": [
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "required": true, "default": null, "help": "Project alias whose tables you're protecting"},
+        {"kind": "option", "name": "dialect", "opts": ["--dialect"], "type": "choice", "choices": ["snowflake", "bigquery"], "default": null, "help": "Workspace SQL dialect; must match the project backend (default: the backend)"},
+        {"kind": "option", "name": "rules", "opts": ["--rules"], "type": "text", "default": null, "help": "JSON|@file|- rules array -- skips the interactive condition builder"},
+        {"kind": "option", "name": "scope", "opts": ["--scope"], "type": "choice", "choices": ["targeted", "organization"], "default": "targeted", "help": "targeted (default): the owning project plus --target-project grants. organization: EVERY project of the organization that has the row-level-security feature -- an explicit, organization-admin-only choice, gated as destructive."},
+        {"kind": "option", "name": "target_project", "opts": ["--target-project"], "type": "text", "multiple": true, "default": null, "help": "Project alias or ID the policy also applies to (repeatable or comma-separated; --scope targeted only; granting needs the organization-admin role)"},
+        {"kind": "option", "name": "yes", "opts": ["--yes", "-y"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip the final confirmation"}
+      ]
+    },
+    {
+      "path": "rls update",
+      "kind": "command",
+      "hidden": false,
+      "category": "admin",
+      "help": "Update an existing RLS policy.\n\nOnly the flags you pass change -- an omitted flag keeps the policy's\ncurrent value. The write is a partial update (PATCH) of just those keys.",
+      "params": [
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "required": true, "default": null, "help": "Project alias"},
+        {"kind": "option", "name": "policy_id", "opts": ["--policy-id"], "type": "text", "required": true, "default": null, "help": "RLS policy ID"},
+        {"kind": "option", "name": "table_id", "opts": ["--table-id"], "type": "text", "default": null, "help": "New table (unset = unchanged)"},
+        {"kind": "option", "name": "dialect", "opts": ["--dialect"], "type": "choice", "choices": ["snowflake", "bigquery"], "default": null, "help": "New dialect, must match the project backend (unset = unchanged)"},
+        {"kind": "option", "name": "rules", "opts": ["--rules"], "type": "text", "default": null, "help": "New JSON|@file|- rules array (unset = unchanged)"},
+        {"kind": "option", "name": "default", "opts": ["--default"], "type": "text", "default": null, "help": "New default condition (unset = unchanged; to remove one, recreate the policy)"},
+        {"kind": "option", "name": "target_project", "opts": ["--target-project"], "type": "text", "multiple": true, "default": null, "help": "Project alias or ID the policy also applies to (repeatable or comma-separated; --scope targeted only; granting needs the organization-admin role); replaces the list (unset = unchanged)"},
+        {"kind": "option", "name": "clear_target_projects", "opts": ["--clear-target-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Revoke every project the policy is shared with (cannot be combined with --target-project)"},
+        {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Preview the compiled condition without writing"},
+        {"kind": "option", "name": "yes", "opts": ["--yes", "-y"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip confirmation prompt"}
+      ]
     },
     {
       "path": "schedule",
