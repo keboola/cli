@@ -438,7 +438,7 @@ def flow_schema(
                 message=f"Could not fetch the conditional-flow schema: {reason}",
                 error_code=ErrorCode.NOT_FOUND,
             )
-            raise typer.Exit(code=4)
+            raise typer.Exit(code=1)
 
         _print_json_schema(formatter, schema, "live")
         return

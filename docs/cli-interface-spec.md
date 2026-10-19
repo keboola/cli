@@ -98,7 +98,7 @@ Every rule with its level, the version from which it applies, and how it is chec
 | [O7](#O7) | SHOULD | 1.0.0 | `output.root-flags-anywhere` |
 | [O8](#O8) | MUST | now | review |
 | [E1](#E1) | MUST | 1.0.0 | `errors.code-has-type-and-exit` |
-| [E2](#E2) | MUST | now; the single list: not yet | review |
+| [E2](#E2) | MUST | now; the single list: 1.0.0 | review, `errors.code-has-type-and-exit` |
 | [E3](#E3) | MUST | now | `errors.forward-retryable`, `errors.config-error-keeps-code`, `tests/test_error_forwarding.py` |
 | [E4](#E4) | MUST | now for writes; 1.0.0 for fan-out reads | `errors.fanout-exit`, unit tests |
 | [E5](#E5) | SHOULD | now | review |
@@ -498,12 +498,12 @@ Shape of the success envelope in 1.0.0 (`storage delete-table --project prod`, a
 <a id="E1"></a><a id="errors.code-has-type-and-exit"></a>
 **E1 · MUST · 1.0.0.** One table `ErrorCode → (error_type, exit_code)` in `errors.py` gives every code an explicit entry, and `map_error_to_exit_code` reads it. Until 1.0.0, `map_error_to_exit_code` in `commands/_helpers.py` maps codes with defaults, and four paths use an exit code that differs from the table above (`transformation` `VALIDATION_ERROR` 1, `lineage` `FILE_NOT_FOUND` 1, `flow` `NOT_FOUND` 4, `http` `CONFIG_ERROR` 2); they follow the table in 1.0.0.
 
-- Checked by: `errors.code-has-type-and-exit` (deferred: lands with the table).
+- Checked by: `errors.code-has-type-and-exit` (in `scripts/check_error_codes.py`, which also checks that `docs/error-codes.md` repeats each entry).
 
 <a id="E2"></a>
-**E2 · MUST · now; the single list: not yet.** Exit codes follow the table above, and a new error code gets its exit code from the table. Not yet: `docs/error-codes.md` gets `Exit` and `Type` columns and becomes the one list of codes, exit codes and types that other documents link to. Until then, this table is the list of exit codes.
+**E2 · MUST · now; the single list: 1.0.0.** Exit codes follow the table above, and a new error code gets its exit code from the table. From 1.0.0, `docs/error-codes.md` has `Exit` and `Type` columns and is the one list of codes, exit codes and types that other documents link to.
 
-- Checked by: review.
+- Checked by: review, and `errors.code-has-type-and-exit` for the equality of `docs/error-codes.md` and the table in `errors.py`.
 
 <a id="E3"></a><a id="errors.forward-retryable"></a><a id="errors.config-error-keeps-code"></a>
 **E3 · MUST · now.** An error handler forwards `retryable` and `details` (use `emit_api_error` in `commands/_helpers.py`) and keeps a typed code: a `ConfigError` handler passes `getattr(exc, "error_code", ErrorCode.CONFIG_ERROR)`, not a fixed `CONFIG_ERROR`. `kai` and `semantic-layer token` get typed codes in 1.0.0.

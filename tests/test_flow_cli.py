@@ -318,7 +318,8 @@ class TestFlowSchema:
             schema=None, reason="network down"
         )
         result = _invoke(store, mock_flow, ["flow", "schema", "--full", "--project", "prod"])
-        assert result.exit_code == 4
+        # NOT_FOUND exits 1 (spec E1). This path exited 4 before 1.0.0.
+        assert result.exit_code == 1
         assert "network down" in result.output
 
 

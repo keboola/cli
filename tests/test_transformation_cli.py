@@ -356,7 +356,8 @@ class TestTransformationCreate:
             ],
         )
 
-        assert result.exit_code == 1, result.output
+        # VALIDATION_ERROR exits 2 (spec E1). This path exited 1 before 1.0.0.
+        assert result.exit_code == 2, result.output
         assert json.loads(result.output)["error"]["code"] == "VALIDATION_ERROR"
         client.create_config.assert_not_called()
 
@@ -664,7 +665,8 @@ class TestTransformationEdit:
             ],
         )
 
-        assert result.exit_code == 1, result.output
+        # VALIDATION_ERROR exits 2 (spec E1). This path exited 1 before 1.0.0.
+        assert result.exit_code == 2, result.output
         payload = json.loads(result.output)
         assert payload["error"]["code"] == "VALIDATION_ERROR"
         assert "Valid block ids: b0" in payload["error"]["message"]

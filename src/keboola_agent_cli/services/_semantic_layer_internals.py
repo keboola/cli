@@ -41,6 +41,7 @@ from typing import TYPE_CHECKING, Any
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._semantic_layer_fqn import append_fqn_mismatch_warnings
 from ._semantic_layer_scope import NewItemScope, inherited_scope, post_child
+from .base import item_failure
 
 logger = logging.getLogger(__name__)
 
@@ -452,7 +453,7 @@ def run_import_loop(
                     client.put_item(type_slug, existing_by_name[key]["id"], key, attrs)
                     per_type["overwritten"] += 1
                 except KeboolaApiError as exc:
-                    per_type["failed"].append({"name": key, "reason": exc.message})
+                    per_type["failed"].append(item_failure(exc, name=key, reason=exc.message))
                 continue
 
             if dry_run:
@@ -472,7 +473,7 @@ def run_import_loop(
                 )
                 per_type["created"] += 1
             except KeboolaApiError as exc:
-                per_type["failed"].append({"name": key, "reason": exc.message})
+                per_type["failed"].append(item_failure(exc, name=key, reason=exc.message))
 
         imported[plural] = per_type
     return imported
@@ -538,7 +539,7 @@ def run_promote_loop(
                     stats["overwritten"] += 1
                     stats["changes"].append({id_key: key, "diff_keys": diff_keys})
                 except KeboolaApiError as exc:
-                    stats["failed"].append({"name": key, "reason": exc.message})
+                    stats["failed"].append(item_failure(exc, name=key, reason=exc.message))
                 continue
 
             if dry_run:
@@ -558,7 +559,7 @@ def run_promote_loop(
                 )
                 stats["new"] += 1
             except KeboolaApiError as exc:
-                stats["failed"].append({"name": key, "reason": exc.message})
+                stats["failed"].append(item_failure(exc, name=key, reason=exc.message))
 
         result[plural] = stats
     return result
@@ -971,7 +972,7 @@ def enrich_schemas_with_workspace_types(
         try:
             result = execute_query(alias, workspace_id, sql)
         except (KeboolaApiError, ConfigError) as exc:
-            unresolved.append({"table_id": tid, "error": str(exc)})
+            unresolved.append(item_failure(exc, table_id=tid, error=str(exc)))
             continue
         type_map = _parse_information_schema_result(result)
         if not type_map:

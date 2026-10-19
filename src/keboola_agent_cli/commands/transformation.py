@@ -184,7 +184,7 @@ def transformation_create(
         )
     except ValueError as exc:
         formatter.error(message=str(exc), error_code=ErrorCode.VALIDATION_ERROR)
-        raise typer.Exit(code=1) from None
+        raise typer.Exit(code=2) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
@@ -376,7 +376,7 @@ def transformation_edit(
         )
     except ValueError as exc:
         formatter.error(message=str(exc), error_code=ErrorCode.VALIDATION_ERROR)
-        raise typer.Exit(code=1) from None
+        raise typer.Exit(code=2) from None
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
