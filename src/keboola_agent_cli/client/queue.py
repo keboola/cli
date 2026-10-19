@@ -151,7 +151,9 @@ class _QueueMixin(_CoreClient):
             "config": config_id,
             "mode": mode,
         }
-        if branch_id is not None:
+        # 0 is production (`--branch 0`, `branch_id: 0` over serve), like an
+        # omitted branchId; the Queue API has no branch "0".
+        if branch_id:
             body["branchId"] = str(branch_id)
         if config_data:
             body["configData"] = config_data

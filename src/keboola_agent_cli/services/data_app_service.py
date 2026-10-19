@@ -1799,7 +1799,7 @@ class DataAppService(BaseService):
         workspace = bool(kwargs.get("workspace", True))
 
         post_body = {
-            "branchId": kwargs["branch_id"],
+            "branchId": kwargs["branch_id"] or None,  # 0 (`--branch 0`) is production
             "type": type_,
             "name": kwargs["name"],
             "description": "",

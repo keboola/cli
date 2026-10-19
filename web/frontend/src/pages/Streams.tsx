@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Copy, Eye, EyeOff, Plus, Radio, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
+import { branchParam } from "../lib/branch";
 import { Drawer } from "../components/Drawer";
 import { Empty, ErrorBox, Loading, PageTitle } from "../components/Empty";
 import { JsonView } from "../components/JsonView";
@@ -28,11 +29,11 @@ interface StreamListResp {
  * global `branchId` is a numeric Storage branch ID; numeric IDs are valid refs
  * (see `test_branch_override` in `tests/test_stream_service.py`, which drives
  * `branch_id="1234"`), so we stringify here to match the API contract
- * explicitly rather than lean on JSON/query coercion. `null` (default branch)
- * maps to `undefined`, letting the backend fall back to its `"default"` ref.
+ * explicitly rather than lean on JSON/query coercion. `null` (production)
+ * maps to `"0"`, which the stream routes send as the `"default"` ref.
  */
-function branchRef(branchId: number | null): string | undefined {
-  return branchId != null ? String(branchId) : undefined;
+function branchRef(branchId: number | null): string {
+  return String(branchParam(branchId));
 }
 
 export function StreamsPage() {

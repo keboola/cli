@@ -604,11 +604,17 @@ def build_local_ai_meta_prompt(
         "pick one if a single-project answer is required, or use explicit "
         "`--project NAME` flags / `kbagent project list` to discover)"
     )
-    branch_block = (
-        f"- Active branch: #{branch_id} (use `--branch {branch_id}` where supported)"
-        if branch_id
-        else "- Active branch: main (production)"
-    )
+    if branch_id:
+        branch_block = f"- Active branch: #{branch_id} (use `--branch {branch_id}` where supported)"
+    elif branch_id == 0:
+        # The UI's production view. Without `--branch 0` a command uses the
+        # active branch saved by `kbagent branch use`, not production.
+        branch_block = (
+            "- Active branch: main (production). Use `--branch 0` where supported, so "
+            "commands do not use an active branch saved with `kbagent branch use`"
+        )
+    else:
+        branch_block = "- Active branch: main (production)"
     serve_block = (
         f"- `kbagent http get|post /...` reaches the running serve at {serve_url}. "
         "Env vars `KBAGENT_SERVE_URL` + `KBAGENT_SERVE_TOKEN` are pre-set, so "

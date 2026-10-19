@@ -40,6 +40,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { api } from "../api/client";
+import { branchParam } from "../lib/branch";
 import { PALETTE_ONLY_PAGES, SECTIONS } from "../layout/Sidebar";
 import { buildStorageSel } from "../pages/Storage";
 import { type PageId, useUIState } from "../state";
@@ -166,7 +167,7 @@ export function CommandPalette() {
     queryKey: ["buckets", project, branchId],
     queryFn: () =>
       api.get("/storage/buckets", {
-        query: { project: project ?? undefined, branch_id: branchId ?? undefined },
+        query: { project: project ?? undefined, branch_id: branchParam(branchId) },
       }),
     enabled: open && !!project,
   });
@@ -176,7 +177,7 @@ export function CommandPalette() {
     queryKey: ["tables", project, null, branchId],
     queryFn: () =>
       api.get("/storage/tables", {
-        query: { project: project ?? undefined, branch_id: branchId ?? undefined },
+        query: { project: project ?? undefined, branch_id: branchParam(branchId) },
       }),
     enabled: open && !!project,
   });

@@ -946,11 +946,13 @@ class TestPushDelete:
 
 
 class TestSessionListing:
-    def test_production_without_branch_id_resolves_default_branch(self) -> None:
+    # 0 is `--branch 0`: production, never a branch "0" (CLI-43).
+    @pytest.mark.parametrize("branch_id", [None, 0])
+    def test_production_resolves_default_branch(self, branch_id: int | None) -> None:
         client = _client()
         client.list_editor_sessions.return_value = _sessions()
 
-        sessions = list_workspace_sessions(client, {"ws-shared"}, None)
+        sessions = list_workspace_sessions(client, {"ws-shared"}, branch_id)
 
         client.list_editor_sessions.assert_called_once_with(branch_id=BRANCH_ID)
         assert sessions == {"ws-shared": ["s-mine", "s-other-user"]}

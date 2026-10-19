@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, sseSubscribe } from "../api/client";
+import { PRODUCTION_BRANCH_ID } from "../lib/branch";
 import { ConfirmModal } from "../components/ConfirmModal";
 import { Drawer } from "../components/Drawer";
 import { ErrorBox, Loading } from "../components/Empty";
@@ -67,16 +68,16 @@ export function jobLabel(job: Job): string {
 }
 
 /**
- * The job's branch as the `JobRun` body wants it: an integer, or `undefined`
- * for the default branch. The Queue API is inconsistent about whether
+ * The job's branch as the `JobRun` body wants it: its branch ID, or `0`
+ * (production) for a job without one. The Queue API is inconsistent about whether
  * `branchId` arrives numeric or as a string, and the router declares
- * `branch_id: int | None`, so anything non-numeric is dropped rather than
- * sent as a value FastAPI would reject.
+ * `branch_id: int | None`, so anything non-numeric is treated as production
+ * rather than sent as a value FastAPI would reject.
  */
-export function jobBranchId(job: Job): number | undefined {
-  if (job.branchId === null || job.branchId === undefined) return undefined;
+export function jobBranchId(job: Job): number {
+  if (job.branchId === null || job.branchId === undefined) return PRODUCTION_BRANCH_ID;
   const n = Number(job.branchId);
-  return Number.isFinite(n) ? n : undefined;
+  return Number.isFinite(n) ? n : PRODUCTION_BRANCH_ID;
 }
 
 export function formatDuration(sec: number): string {
@@ -124,11 +125,11 @@ export function JobActions({ job, compact = true }: { job: Job; compact?: boolea
       api.post(`/jobs/${encodeURIComponent(job.project_alias)}/run`, {
         component_id: job.component,
         config_id: job.config,
-        // Branch fidelity: omitting this resolves to the DEFAULT branch
-        // server-side, so a job that originally ran against a dev-branch
-        // config would silently re-run against the production one -- a
-        // different configuration, writing to different tables. The row
-        // already carries the branch, so pass it straight back.
+        // Branch fidelity: omitting this lets the server choose the branch,
+        // so a job that ran on a dev branch could re-run on production (and,
+        // from 1.0.0, a production job on the active branch) -- a different
+        // configuration, writing to different tables. The row already
+        // carries the branch, so pass it straight back.
         branch_id: jobBranchId(job),
       }),
     onError: (e) => setError((e as Error).message),
@@ -179,7 +180,7 @@ export function JobActions({ job, compact = true }: { job: Job; compact?: boolea
           // Name the branch in the tooltip: the whole point of threading
           // branch_id through is that the user can trust where this lands.
           title={`Start a new job for ${job.component} / ${job.config} on ${
-            jobBranchId(job) === undefined ? "the default branch" : `branch #${jobBranchId(job)}`
+            jobBranchId(job) === PRODUCTION_BRANCH_ID ? "the default branch" : `branch #${jobBranchId(job)}`
           }`}
         >
           <RotateCw className={`w-3 h-3 ${rerun.isPending ? "animate-spin" : ""}`} />

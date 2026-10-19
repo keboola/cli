@@ -50,6 +50,18 @@ _SIGNAL_NAMES: dict[str, str] = {path: path.split("/")[-1] for path in OTLP_SIGN
 _SECRET_MASK = "***"
 
 
+def _branch_ref(branch_id: str | None) -> str:
+    """The Stream API branch ref for --branch / branch_id.
+
+    Unset and "0" are the default branch: --branch 0 means production
+    (CLI spec T5), and the web UI sends "0" in its production view. The
+    Stream API has no branch 0.
+    """
+    if not branch_id or branch_id == "0":
+        return STREAM_DEFAULT_BRANCH
+    return branch_id
+
+
 class StreamService:
     """Business logic for Data Streams sources (list / create / detail / delete)."""
 
@@ -70,7 +82,7 @@ class StreamService:
     def list_sources(self, *, alias: str, branch_id: str | None = None) -> dict[str, Any]:
         """List sources in the alias's project (default branch unless overridden)."""
         creds = self._resolve_project(alias)
-        branch = branch_id or STREAM_DEFAULT_BRANCH
+        branch = _branch_ref(branch_id)
         client = self._stream_client_factory(creds.stack_url, creds.token)
         try:
             raw = client.list_sources(branch)
@@ -105,7 +117,7 @@ class StreamService:
         also reconciled when ``provision_sinks`` so a half-set-up source heals).
         """
         creds = self._resolve_project(alias)
-        branch = branch_id or STREAM_DEFAULT_BRANCH
+        branch = _branch_ref(branch_id)
         client = self._stream_client_factory(creds.stack_url, creds.token)
         try:
             if if_not_exists:
@@ -151,7 +163,7 @@ class StreamService:
         if not source_id and not name:
             raise ConfigError("Provide a source id (positional) or --name.")
         creds = self._resolve_project(alias)
-        branch = branch_id or STREAM_DEFAULT_BRANCH
+        branch = _branch_ref(branch_id)
         client = self._stream_client_factory(creds.stack_url, creds.token)
         try:
             if source_id:
@@ -180,7 +192,7 @@ class StreamService:
     ) -> dict[str, Any]:
         """Delete a source (async task polled to completion)."""
         creds = self._resolve_project(alias)
-        branch = branch_id or STREAM_DEFAULT_BRANCH
+        branch = _branch_ref(branch_id)
         if dry_run:
             return {
                 "status": "dry_run",

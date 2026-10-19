@@ -176,7 +176,8 @@ class DataScienceClient(BaseHttpClient):
         deleted when the app is deleted.
         """
         payload: dict[str, Any] = {
-            "branchId": branch_id,
+            # null is production; 0 (`--branch 0`) is production too.
+            "branchId": branch_id or None,
             "type": type_,
             "name": name,
             "description": description,

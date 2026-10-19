@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, ApiError } from "../api/client";
+import { branchParam, PRODUCTION_BRANCH_ID } from "../lib/branch";
 import { Drawer } from "../components/Drawer";
 import { Empty, ErrorBox, Loading, PageTitle } from "../components/Empty";
 import { JsonView } from "../components/JsonView";
@@ -190,7 +191,7 @@ export function StoragePage() {
   const bucketsQ = useQuery<BucketsResp>({
     queryKey: ["buckets", project, branchId],
     queryFn: () =>
-      api.get("/storage/buckets", { query: { project: project ?? undefined, branch_id: branchId ?? undefined } }),
+      api.get("/storage/buckets", { query: { project: project ?? undefined, branch_id: branchParam(branchId) } }),
     enabled: !!project,
   });
   const tablesQ = useQuery<TablesResp>({
@@ -200,7 +201,7 @@ export function StoragePage() {
         query: {
           project: project ?? undefined,
           bucket_id: bucketFilter ?? undefined,
-          branch_id: branchId ?? undefined,
+          branch_id: branchParam(branchId),
         },
       }),
     enabled: !!project && tab === "tables",
@@ -339,7 +340,7 @@ function TableDetailDrawer({
     queryFn: () =>
       api.get(
         `/storage/table-detail/${encodeURIComponent(table!.project_alias)}/${encodeURIComponent(table!.id)}`,
-        { query: { branch_id: branchId ?? undefined } },
+        { query: { branch_id: branchParam(branchId) } },
       ),
     enabled: !!table,
   });
@@ -355,9 +356,7 @@ function TableDetailDrawer({
   });
 
   const downloadHref = table
-    ? `/api/storage/table-download/${encodeURIComponent(table.project_alias)}/${encodeURIComponent(table.id)}${
-        branchId ? `?branch_id=${branchId}` : ""
-      }`
+    ? `/api/storage/table-download/${encodeURIComponent(table.project_alias)}/${encodeURIComponent(table.id)}?branch_id=${branchParam(branchId)}`
     : "#";
 
   return (
@@ -578,7 +577,7 @@ function RepartitionTab({ d, onClose }: { d: TableDetail; onClose: () => void })
       api.delete(`/storage/tables/${encodeURIComponent(project!)}`, {
         query: {
           table_id: tempTableId,
-          branch_id: effectiveBranchId ?? undefined,
+          branch_id: effectiveBranchId ?? PRODUCTION_BRANCH_ID,
           force: true,
         },
       }),
@@ -595,7 +594,7 @@ function RepartitionTab({ d, onClose }: { d: TableDetail; onClose: () => void })
       api.delete(`/storage/tables/${encodeURIComponent(project!)}`, {
         query: {
           table_id: tempTableId,
-          branch_id: effectiveBranchId ?? undefined,
+          branch_id: effectiveBranchId ?? PRODUCTION_BRANCH_ID,
           force: true,
         },
       }),
@@ -1033,7 +1032,7 @@ function SchemaTab({ d }: { d: TableDetail }) {
     mutationFn: (vars: DescribeVars) =>
       api.post(
         `/storage/columns/${encodeURIComponent(project!)}/${encodeURIComponent(d.table_id)}/describe`,
-        { columns: { [vars.column]: vars.description }, branch_id: branchId ?? undefined },
+        { columns: { [vars.column]: vars.description }, branch_id: branchParam(branchId) },
       ),
     onError: (e, vars) => {
       setError(e instanceof ApiError ? e.message : String(e));

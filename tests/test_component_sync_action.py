@@ -99,6 +99,21 @@ class TestClientRunSyncAction:
         body = json.loads(httpx_mock.get_requests()[0].content)
         assert body["branchId"] == 456
 
+    def test_run_sync_action_branch_0_is_production(self, httpx_mock) -> None:
+        """branch_id=0 (`--branch 0`) omits branchId like production (CLI-43)."""
+        httpx_mock.add_response(
+            url=f"{SYNC_ACTIONS_URL}/actions",
+            method="POST",
+            json={"status": "success"},
+            status_code=200,
+        )
+
+        with KeboolaClient(stack_url=STACK_URL, token=TEST_TOKEN) as client:
+            client.run_sync_action(COMPONENT_ID, "testConnection", {"parameters": {}}, branch_id=0)
+
+        body = json.loads(httpx_mock.get_requests()[0].content)
+        assert "branchId" not in body
+
     def test_run_sync_action_api_error(self, httpx_mock) -> None:
         """Non-retryable HTTP errors raise KeboolaApiError."""
         httpx_mock.add_response(
@@ -651,6 +666,58 @@ class TestComponentSyncActionCli:
             config_data_override=None,
             timeout=120,
         )
+
+    def test_sync_action_branch_0_runs_on_production_with_an_active_branch(
+        self, tmp_path: Path, httpx_mock
+    ) -> None:
+        """`--branch 0` beats the active branch: production config, no branchId (CLI-43)."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = ConfigStore(config_dir=config_dir)
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url=STACK_URL, token=TEST_TOKEN, project_id=1234, active_branch_id=777
+            ),
+        )
+        httpx_mock.add_response(
+            url=f"{STACK_URL}/v2/storage/components/{COMPONENT_ID}/configs/{CONFIG_ID}",
+            method="GET",
+            json={"id": CONFIG_ID, "configuration": {"parameters": {"db": "x"}}},
+        )
+        httpx_mock.add_response(
+            url=f"{SYNC_ACTIONS_URL}/actions", method="POST", json={"status": "success"}
+        )
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ComponentService") as MockCompService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockCompService.return_value = ComponentService(config_store=store)
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "component",
+                    "sync-action",
+                    "testConnection",
+                    "--component-id",
+                    COMPONENT_ID,
+                    "--config-id",
+                    CONFIG_ID,
+                    "--project",
+                    "prod",
+                    "--branch",
+                    "0",
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        action_request = httpx_mock.get_requests(url=f"{SYNC_ACTIONS_URL}/actions")[0]
+        assert "branchId" not in json.loads(action_request.content)
 
     def test_sync_action_human(self, tmp_path: Path) -> None:
         """Human mode renders a JSON syntax panel with the action title."""
