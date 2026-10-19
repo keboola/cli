@@ -1008,6 +1008,7 @@ class TestMerge:
         assert result.exit_code == 0, result.output
         service.merge.assert_called_once_with(ALIAS, 7)
 
+    @pytest.mark.usefixtures("interactive_terminal")
     def test_human_keeps_the_fallback_and_prompts_with_branch_and_title(
         self, tmp_path, service
     ) -> None:
@@ -1083,6 +1084,7 @@ class TestMerge:
         service.get_merge_request_row.assert_not_called()
         assert _json(result)["data"]["branch_from_id"] == 123  # from merge()'s own result
 
+    @pytest.mark.usefixtures("interactive_terminal")
     def test_human_merge_with_explicit_id_fetches_the_row_for_the_prompt(
         self, tmp_path, service
     ) -> None:
@@ -1472,6 +1474,7 @@ class TestStaticDestructiveClass:
 
 
 class TestAutoMerge:
+    @pytest.mark.usefixtures("interactive_terminal")
     def test_arm_forwards_to_update_and_prompts_in_human_mode(self, tmp_path, service) -> None:
         service.update_merge_request.return_value = _row(autoMergeStrategy="immediately")
         args = [

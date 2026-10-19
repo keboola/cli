@@ -144,9 +144,9 @@ Every change below has a `BREAKING:` bullet in the 1.0.0 changelog. The number i
 | 19 | A single-value option given twice: the last value wins, with no message | Usage error (exit 2) on write and destructive commands; a warning on the other commands | `USAGE_ERROR` naming the option | scripts, agents |
 | 23 | 9 list options take only one comma-separated value (`org setup --project-ids`, `sharing share --target-project-ids`, `sharing share --target-users`, 6 `semantic-layer` options); a repeated option keeps only the last value | The options are repeatable and still accept a comma list | the target list in `data` | scripts, agents |
 | 24 | A free-text option stores a literal `@<existing file>` (`--text` of `project description-set`, `storage describe-bucket`, `storage describe-table`, `branch metadata-set`; `transformation create --sql`) | Refused with exit 2 and a hint that names the file option | `INVALID_ARGUMENT` | scripts, agents |
-| 16 | Human mode without a terminal: a confirmation reads the answer from stdin (`echo y \| kbagent ...`) | Refused unless `--yes`; no change under `--json` | `CONFIRMATION_REQUIRED` (exit 2) naming `--yes` | scripts |
-| 17 | `branch delete` and `workspace delete` delete without a confirmation | Both ask on a terminal and take `--yes` (1.0.0 form: `kbagent branch delete --branch ID --yes`) | the prompt, or the row 16 refusal | scripts |
-| 20 | `stream delete --force` skips the confirmation; `semantic-layer import --yes` has no effect | `stream delete --yes`; `semantic-layer import` without `--yes`. The old flags keep working as hidden aliases until at least M + 28 days; the first minor release after that date can remove them | `DEPRECATED` entry in `warnings[]` with `replacement` and `remove_after` | scripts, agents |
+| 16 | Human mode without a terminal: a confirmation reads the answer from stdin (`echo y \| kbagent ...`), and `storage delete-bucket` and `storage file-delete` delete without asking | Refused unless `--yes`, also when stdin is a pipe that answers `y`; no change under `--json` | `CONFIRMATION_REQUIRED` (exit 2) naming `--yes` | scripts |
+| 17 | `branch delete` and `workspace delete` delete without a confirmation | Both ask on a terminal and take `--yes`, and a `--dry-run` that only reads (1.0.0 form: `kbagent branch delete --branch ID --yes`). The REST routes do not ask and accept `dry_run` | the prompt, or the row 16 refusal | scripts |
+| 20 | `stream delete --force` skips the confirmation; `semantic-layer import --yes` has no effect | `stream delete --yes`; `semantic-layer import` without `--yes`. The old flags keep working as hidden aliases until at least M + 28 days; the first minor release after that date can remove them | `DEPRECATED` entry in `warnings[]` with `replacement` and `remove_after` (null until the date is known), and one stderr line in human mode | scripts, agents |
 | 13 | `kai` and `semantic-layer token` report `CONFIG_ERROR` for other errors; `INVALID_ARGUMENT`, `USAGE_ERROR`, `MISSING_PARAMETER` and `FILE_NOT_FOUND` have no explicit `error_type` | Typed error codes; an explicit `error_type` for the 4 codes | `error.code`, `error.error_type` | agents |
 | 21 | 4 paths use an exit code that does not match their error code: `transformation` `VALIDATION_ERROR` (1), `lineage` `FILE_NOT_FOUND` (1), `flow` `NOT_FOUND` (4), `http` `CONFIG_ERROR` (2) | The exit code from the table in [error-codes.md](error-codes.md) (its exit-code column is added in 1.0.0) | exit code | scripts, agents |
 | 30 | `auth login` prints its human-mode notices on stdout | Notices on stderr; results stay on stdout | notices on stderr | scripts |
@@ -235,7 +235,7 @@ Exit codes in 1.0.0: 0 success; 1 general or partial failure; 2 usage, validatio
 ### Consent
 
 - `--yes` and `--json` still mean consent; a destructive command under `--json` does not ask.
-- `branch delete` and `workspace delete` ask before they delete, and take `--yes` (row 17).
+- `branch delete` and `workspace delete` ask before they delete, and take `--yes` and `--dry-run` (row 17).
 - `stream delete --force` becomes `stream delete --yes` (row 20).
 
 ### Terminal

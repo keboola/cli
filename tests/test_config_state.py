@@ -828,6 +828,7 @@ class TestConfigStateCli:
         assert payload["data"]["changed"] is True
         mock_client.update_config_state.assert_called_once()
 
+    @pytest.mark.usefixtures("interactive_terminal")
     def test_state_set_human_mode_without_yes_prompts_and_aborts_on_no(
         self, tmp_config_dir: Path
     ) -> None:
@@ -858,6 +859,7 @@ class TestConfigStateCli:
         assert "Aborted" in result.output
         mock_client.update_config_state.assert_not_called()
 
+    @pytest.mark.usefixtures("interactive_terminal")
     def test_state_set_human_mode_without_yes_prompts_and_writes_on_yes(
         self, tmp_config_dir: Path
     ) -> None:

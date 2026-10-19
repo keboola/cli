@@ -28,6 +28,7 @@ from rich.table import Table
 
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._helpers import (
+    _confirm_or_abort,
     check_cli_permission,
     emit_api_error,
     get_formatter,
@@ -339,15 +340,11 @@ def token_delete(
 ) -> None:
     """Revoke a Storage API token immediately (destructive; only non-master tokens)."""
     formatter = get_formatter(ctx)
-    if (
-        not formatter.json_mode
-        and not yes
-        and not typer.confirm(
-            f"Revoke token '{token_id}' in project {project}? It stops authenticating at once."
-        )
-    ):
-        formatter.console.print("Aborted.")
-        raise typer.Exit(code=0)
+    _confirm_or_abort(
+        formatter,
+        yes,
+        f"Revoke token '{token_id}' in project {project}? It stops authenticating at once.",
+    )
     service = get_service(ctx, "token_service")
     try:
         result = service.delete_token(alias=project, token_id=token_id)
@@ -371,15 +368,11 @@ def token_refresh(
     leaves the alias holding a dead value until you run `project edit --token-stdin`.
     """
     formatter = get_formatter(ctx)
-    if (
-        not formatter.json_mode
-        and not yes
-        and not typer.confirm(
-            f"Rotate token '{token_id}' in project {project}? The current value becomes invalid."
-        )
-    ):
-        formatter.console.print("Aborted.")
-        raise typer.Exit(code=0)
+    _confirm_or_abort(
+        formatter,
+        yes,
+        f"Rotate token '{token_id}' in project {project}? The current value becomes invalid.",
+    )
     service = get_service(ctx, "token_service")
     try:
         result = service.refresh_token(alias=project, token_id=token_id)

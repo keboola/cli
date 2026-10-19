@@ -100,10 +100,22 @@ SHORT_FLAGS: dict[str, str] = {
 # either meaning; each existing use is an `exceptions` entry in the baseline.
 RESERVED_SHORT_FLAGS: frozenset[str] = frozenset({"-c", "-n", "-r"})
 
-# S3: what `--force` overrides, per command. Empty until the registry is
-# reviewed; until then every `--force` is in the baseline of the blocking rule
-# safety.force-meaning-registered, and a new `--force` fails.
-FORCE_MEANINGS: dict[str, str] = {}
+# S3: what `--force` overrides, per command (the guards it names in its help).
+# A new `--force` fails the blocking rule safety.force-meaning-registered until
+# it has an entry here.
+FORCE_MEANINGS: dict[str, str] = {
+    "project refresh": "legacy meaning: refresh tokens that are still valid too",
+    "storage delete-bucket": "the guard for a non-empty bucket (deletes its tables), "
+    "never a shared bucket",
+    "storage delete-column": "the guard for a column that table aliases reference",
+    "storage delete-table": "the guard for a table with aliases in other projects "
+    "(deletes the aliases)",
+    "stream delete": "none: hidden deprecated alias of --yes until its DEPRECATIONS "
+    "remove_after date (C3)",
+    "sync pull": "legacy meaning: pull again, keep local changes, abort on a conflict",
+    "sync push": "the guard that holds back remote deletions of configs and rows",
+    "workspace load": "the size guard that asks before a COPY larger than 1 GB",
+}
 
 # N4: hidden alias path -> canonical path. No hidden leaf exists yet.
 COMMAND_ALIASES: dict[str, str] = {}
@@ -761,7 +773,7 @@ def r_confirm_via_helper(c: Context) -> Violations:
         site.subject: "direct confirmation prompt"
         for site in c.command_calls
         if dotted(site.call.func) in ("typer.confirm", "click.confirm")
-        and not site.function.endswith("_confirm_or_abort")
+        and site.subject != "commands/_helpers.py:_confirm_or_abort"
     }
 
 
@@ -1049,7 +1061,7 @@ RULES: tuple[Rule, ...] = (
     Rule(
         "safety.confirm-via-helper",
         "ast",
-        "no direct typer.confirm in commands/ outside _confirm_or_abort",
+        "no direct typer.confirm in commands/ outside _helpers._confirm_or_abort",
         r_confirm_via_helper,
     ),
     Rule("lists.list-has-limit", "tree", "a list leaf has --limit", r_list_limit),
@@ -1119,6 +1131,7 @@ CONTRACT_RULES: dict[str, str] = {
     "output.human-snapshots": "tests/test_cli_human_snapshots.py",
     "serve.route-permission": "tests/test_cli_contract.py",
     "serve.undeclared-dry-run-rejected": "tests/test_server_dry_run_guard.py",
+    "safety.no-tty-confirmation": "tests/test_cli_contract.py",
 }
 DEFERRED_RULES: dict[str, str] = {
     "args.global-option-one-shape": "the GLOBAL_OPTIONS registry is not reviewed yet (A1)",
@@ -1137,10 +1150,10 @@ DEFERRED_RULES: dict[str, str] = {
     "help.context-from-manifest": "kbagent context is generated from the manifest in 1.0.0 (AG1)",
     "help.dash-h": "contract; -h lands with the 1.0.0 root command class",
     "env.registry-complete": "the environment variable registry does not exist yet",
-    "change.expired-deprecation": "the DEPRECATIONS registry does not exist yet",
+    "change.expired-deprecation": "no DEPRECATIONS entry has a remove_after date yet: "
+    "the window of the 1.0.0 hidden aliases starts at M",
     "change.breaking-bullet-on-removal": "release kind; lands with the release mechanics",
     "target.targets-reported": "contract; lands with project_source in 1.0.0",
-    "safety.no-tty-confirmation": "contract; the no-terminal refusal is 1.0.0 (D6)",
     "args.repeated-single-value": "contract; 1.0.0 command class",
     "serve.targets-reported": "contract; the Kbagent-Targets header lands in 1.0.0 (V3)",
 }

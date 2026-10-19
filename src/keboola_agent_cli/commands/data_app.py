@@ -36,6 +36,7 @@ from ._data_app_password import (
 )
 from ._data_app_runtime import register_secrets_commands
 from ._helpers import (
+    _confirm_or_abort,
     check_cli_permission,
     emit_api_error,
     emit_project_warnings,
@@ -645,16 +646,12 @@ def data_app_delete(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "data_app_service")
 
-    if (
-        not yes
-        and not formatter.json_mode
-        and not typer.confirm(
-            f"Delete data app {app_id} in '{project}'? "
-            "This deletes the deployment AND the Storage config (irreversible)."
-        )
-    ):
-        formatter.console.print("Aborted.")
-        raise typer.Exit(code=0)
+    _confirm_or_abort(
+        formatter,
+        yes,
+        f"Delete data app {app_id} in '{project}'? "
+        "This deletes the deployment AND the Storage config (irreversible).",
+    )
 
     try:
         result = service.delete_data_app(alias=project, app_id=app_id)

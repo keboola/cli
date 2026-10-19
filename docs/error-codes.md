@@ -42,6 +42,7 @@ of `ErrorCode` in `src/keboola_agent_cli/errors.py`.
 | `INVALID_ARGUMENT` | Caller supplied an invalid argument value |
 | `INVALID_FORMAT` | Input is not in the expected format |
 | `USAGE_ERROR` | Incorrect CLI flag combination or missing required argument |
+| `CONFIRMATION_REQUIRED` | A command that asks for confirmation ran in human mode without a terminal and without `--yes`. Nothing was changed. Exit 2. Run the command again with `--yes`. An AI agent asks the user first (since vNEXT) |
 | `MISSING_PARAMETER` | A required parameter was not supplied |
 | `UNKNOWN_ERROR` | Catch-all for unclassified errors |
 | `UNEXPECTED_ERROR` | Per-project fallback in a multi-project command: that project raised an error carrying no code of its own. Other projects in the same run still report their own outcome |

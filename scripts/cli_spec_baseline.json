@@ -25,7 +25,7 @@
     "safety.destructive-verb-category": false,
     "safety.force-meaning-registered": true,
     "safety.yes-has-short-y": true,
-    "safety.confirm-via-helper": false,
+    "safety.confirm-via-helper": true,
     "lists.list-has-limit": false,
     "help.command-has-help": true,
     "help.param-has-help": true,
@@ -365,7 +365,6 @@
     ],
     "safety.destructive-has-dry-run": [
       "agent delete",
-      "branch delete",
       "branch metadata-delete",
       "config delete-metadata",
       "config row-delete",
@@ -384,12 +383,9 @@
       "semantic-layer remove relationship",
       "token delete",
       "token refresh",
-      "workspace delete",
       "workspace password"
     ],
     "safety.destructive-has-yes": [
-      "branch delete",
-      "workspace delete",
       "workspace password"
     ],
     "safety.write-has-dry-run": [
@@ -485,56 +481,6 @@
       "sharing unlink",
       "sharing unshare",
       "sync branch-unlink"
-    ],
-    "safety.force-meaning-registered": [
-      "project refresh --force",
-      "storage delete-bucket --force",
-      "storage delete-column --force",
-      "storage delete-table --force",
-      "stream delete --force",
-      "sync pull --force",
-      "sync push --force",
-      "workspace load --force"
-    ],
-    "safety.confirm-via-helper": [
-      "commands/_data_app_git.py:register_git_commands.data_app_git_credentials_create",
-      "commands/_data_app_runtime.py:data_app_secrets_remove",
-      "commands/_semantic_layer_crud.py:_run_remove",
-      "commands/_semantic_layer_crud.py:edit_glossary",
-      "commands/_semantic_layer_reference_data.py:reference_data_delete",
-      "commands/_semantic_layer_scope.py:scope_set",
-      "commands/_storage_describe.py:register.storage_describe_migrate",
-      "commands/_storage_snapshots.py:register.storage_snapshot_delete",
-      "commands/agent.py:agent_delete",
-      "commands/auth.py:auth_logout",
-      "commands/branch.py:branch_metadata_delete",
-      "commands/config.py:config_delete_metadata",
-      "commands/config.py:config_row_delete",
-      "commands/config.py:config_variables_clear",
-      "commands/config_state.py:config_state_set",
-      "commands/data_app.py:data_app_delete",
-      "commands/feature.py:feature_project_add",
-      "commands/feature.py:feature_project_remove",
-      "commands/feature.py:feature_user_add",
-      "commands/feature.py:feature_user_remove",
-      "commands/flow.py:flow_delete",
-      "commands/flow.py:flow_schedule_remove",
-      "commands/job.py:job_terminate",
-      "commands/notification.py:notification_delete",
-      "commands/notification.py:notification_replace_recipient",
-      "commands/project.py:project_invitation_cancel",
-      "commands/project.py:project_member_remove",
-      "commands/semantic_layer.py:model_delete",
-      "commands/semantic_layer.py:semantic_layer_promote",
-      "commands/storage.py:storage_delete_column",
-      "commands/storage.py:storage_delete_table",
-      "commands/storage.py:storage_swap_tables",
-      "commands/storage.py:storage_truncate_table",
-      "commands/stream.py:stream_delete",
-      "commands/token.py:token_delete",
-      "commands/token.py:token_refresh",
-      "commands/workspace.py:_CopyGuardPrompt.__call__",
-      "commands/workspace.py:workspace_gc"
     ],
     "lists.list-has-limit": [
       "agent list",
@@ -673,8 +619,7 @@
       "commands/_auth_picker.py:run_project_picker": "non-safety question: choose and register local aliases after auth login (S4)",
       "commands/auth.py:_run_post_login_hook": "non-safety question: register the projects of the new session as local aliases (S4)",
       "commands/init.py:init_command": "non-safety question: copy the global projects into the new local workspace (S4)",
-      "commands/org.py:org_setup": "preview-then-confirm flow: shows the projects to add, then asks (S4)",
-      "commands/project.py:project_refresh": "preview-then-confirm flow: shows the tokens to refresh, then asks (S4)"
+      "commands/workspace.py:_CopyGuardPrompt.__call__": "size guard of workspace load: asks on a terminal only, --force answers it (S3, S4)"
     },
     "safety.destructive-has-dry-run": {
       "http delete": "raw client of kbagent serve; the http permission check applies (S2)",

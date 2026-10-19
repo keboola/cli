@@ -4,17 +4,41 @@ Contains factory functions for creating mock clients and pre-configured
 ConfigStore instances. Used across multiple test files to avoid duplication.
 """
 
-from collections.abc import Mapping, Sequence
+import contextlib
+import sys
+from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 from urllib.parse import parse_qsl, urlencode
 
 import httpx
+from typer.testing import CliRunner
 
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.errors import KeboolaApiError
 from keboola_agent_cli.models import ProjectConfig, TokenVerifyResponse
+
+
+class TerminalRunner(CliRunner):
+    """CliRunner whose stdin and stderr report a terminal, as an interactive
+    shell does. A plain CliRunner has no terminal, so a safety prompt refuses
+    there with CONFIRMATION_REQUIRED (spec S4). Uses only the public
+    ``CliRunner.isolation`` hook: the streams it installs get an
+    instance-level ``isatty``."""
+
+    def __init__(self, stdin_tty: bool = True, stderr_tty: bool = True) -> None:
+        super().__init__()
+        self.stdin_tty = stdin_tty
+        self.stderr_tty = stderr_tty
+
+    @contextlib.contextmanager
+    def isolation(self, *args: Any, **kwargs: Any) -> Iterator[Any]:
+        with super().isolation(*args, **kwargs) as streams:
+            stdin_tty, stderr_tty = self.stdin_tty, self.stderr_tty
+            setattr(sys.stdin, "isatty", lambda: stdin_tty)  # noqa: B010
+            setattr(sys.stderr, "isatty", lambda: stderr_tty)  # noqa: B010
+            yield streams
 
 
 def metastore_scope_available(url: str, token: str) -> bool:

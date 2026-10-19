@@ -584,6 +584,7 @@ class TestSnapshotCLI:
 
         assert result.exit_code == 1, result.output
 
+    @pytest.mark.usefixtures("interactive_terminal")
     def test_snapshot_delete_confirm_abort(self, tmp_path: Path) -> None:
         """Human mode without --yes prompts; answering 'n' aborts with exit 0."""
         store = _make_store(tmp_path)

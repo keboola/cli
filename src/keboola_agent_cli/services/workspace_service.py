@@ -917,21 +917,45 @@ class WorkspaceService(BaseService):
             "config_id": ws_data.get("configurationId", "") or "",
         }
 
-    def delete_workspace(self, alias: str, workspace_id: int) -> dict[str, Any]:
+    def delete_workspace(
+        self, alias: str, workspace_id: int, dry_run: bool = False
+    ) -> dict[str, Any]:
         """Delete a workspace and its associated sandboxes config (if any).
 
         Args:
             alias: Project alias.
             workspace_id: Workspace ID.
+            dry_run: Read the workspace (one GET) and change nothing.
 
         Returns:
-            Dict confirming the deletion.
+            Dict confirming the deletion, or the preview with ``dry_run: true``.
+
+        Raises:
+            KeboolaApiError: If an API call fails; in a dry run also when the
+                workspace does not exist (NOT_FOUND).
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
         branch_id = self._resolve_branch_id(alias, project)
 
         client = self._client_factory(project.stack_url, project.token)
+        if dry_run:
+            try:
+                ws_data = client.get_workspace(workspace_id, branch_id=branch_id)
+            finally:
+                client.close()
+            # Only identifying fields: the workspace detail carries connection data.
+            config_id = ws_data.get("configurationId")
+            sandbox_config = config_id if ws_data.get("component") == "keboola.sandboxes" else None
+            return {
+                "project_alias": alias,
+                "workspace_id": workspace_id,
+                "component": ws_data.get("component"),
+                "configuration_id": config_id,
+                "would_delete_sandbox_config": sandbox_config,
+                "dry_run": True,
+                "message": f"Would delete workspace {workspace_id} from project '{alias}'.",
+            }
         try:
             # Get workspace details to find associated config
             config_id = None

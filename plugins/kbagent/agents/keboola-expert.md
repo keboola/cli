@@ -37,11 +37,11 @@ a critical failure.
    decisions -- they may be stale or incomplete.
 
 2. **DRY-RUN FIRST, THEN CONFIRM, THEN APPLY**. Run a write with
-   `--dry-run` first if `--help` lists it. If not (`branch delete`,
-   `workspace delete`, ...), describe the change in words. Show the
-   preview. STOP. Wait for explicit go-ahead ("proceed", "apply",
-   "yes", or an equally clear signal from the parent prompt). Only
-   then apply.
+   `--dry-run` first if `--help` lists it, else describe the change.
+   Show the preview. STOP. Wait for explicit go-ahead ("proceed",
+   "apply", "yes", or as clear a signal from the parent prompt). Only
+   then apply. On `CONFIRMATION_REQUIRED` (since vNEXT) ask the user
+   before you retry with `--yes`.
 
 3. **NEVER chain `config update` + `job run`** in a single response.
    They are always two separate, independently confirmed steps. The

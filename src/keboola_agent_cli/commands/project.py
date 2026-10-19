@@ -29,6 +29,7 @@ from ._helpers import (
     TOKEN_ENV_OPTION,
     TOKEN_FILE_OPTION,
     TOKEN_STDIN_OPTION,
+    _confirm_or_abort,
     check_cli_permission,
     discard_token_file,
     emit_api_error,
@@ -660,9 +661,7 @@ def project_refresh(
                 raise typer.Exit(code=code)
             return
 
-        if not typer.confirm(f"\nProceed to refresh {would_refresh} token(s)?"):
-            formatter.console.print("Aborted.")
-            raise typer.Exit(code=0)
+        _confirm_or_abort(formatter, yes, f"Proceed to refresh {would_refresh} token(s)?")
 
     # Execute the actual refresh
     try:
@@ -1176,13 +1175,7 @@ def project_invitation_cancel(
     """Cancel a pending invitation."""
     formatter = get_formatter(ctx)
 
-    if (
-        not formatter.json_mode
-        and not yes
-        and not typer.confirm(f"Cancel pending invitation for {email} on {project}?")
-    ):
-        formatter.console.print("Aborted.")
-        raise typer.Exit(code=0)
+    _confirm_or_abort(formatter, yes, f"Cancel pending invitation for {email} on {project}?")
 
     manage_token = resolve_manage_token(allow_env=ctx.obj["allow_env_manage_token"])
     service = get_service(ctx, "member_service")
@@ -1220,13 +1213,9 @@ def project_member_remove(
     """Remove an active member from a project (destructive)."""
     formatter = get_formatter(ctx)
 
-    if (
-        not formatter.json_mode
-        and not yes
-        and not typer.confirm(f"Remove member {email} from project {project}? This is destructive.")
-    ):
-        formatter.console.print("Aborted.")
-        raise typer.Exit(code=0)
+    _confirm_or_abort(
+        formatter, yes, f"Remove member {email} from project {project}? This is destructive."
+    )
 
     manage_token = resolve_manage_token(allow_env=ctx.obj["allow_env_manage_token"])
     service = get_service(ctx, "member_service")

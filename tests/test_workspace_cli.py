@@ -958,6 +958,7 @@ class TestWorkspaceLoad:
         assert json.loads(result.output)["error"]["code"] == "INVALID_ARGUMENT"
         mock_ws.load_tables.assert_not_called()
 
+    @pytest.mark.usefixtures("interactive_terminal")
     def test_workspace_load_guard_confirmed_proceeds(self, tmp_path: Path) -> None:
         """Human mode: answering the large-COPY prompt with 'y' runs the load."""
         config_dir = tmp_path / "config"
@@ -987,6 +988,7 @@ class TestWorkspaceLoad:
         assert "Large COPY" in result.output
         assert "Success" in result.output
 
+    @pytest.mark.usefixtures("interactive_terminal")
     def test_workspace_load_guard_declined_aborts_cleanly(self, tmp_path: Path) -> None:
         """Answering 'n' is a completed interaction: 'Aborted.' and exit 0."""
         config_dir = tmp_path / "config"

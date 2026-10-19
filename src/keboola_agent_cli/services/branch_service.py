@@ -254,7 +254,7 @@ class BranchService(BaseService):
             "message": (f"Active branch reset to main for project '{alias}'."),
         }
 
-    def delete_branch(self, alias: str, branch_id: int) -> dict[str, Any]:
+    def delete_branch(self, alias: str, branch_id: int, dry_run: bool = False) -> dict[str, Any]:
         """Delete a development branch via API. Auto-resets if it was active.
 
         Also cleans up any matching entry in the nearest enclosing sync
@@ -265,13 +265,15 @@ class BranchService(BaseService):
         Args:
             alias: Project alias.
             branch_id: Branch ID to delete.
+            dry_run: Read the branch (one GET) and change nothing.
 
         Returns:
-            Dict confirming the deletion.
+            Dict confirming the deletion, or the preview with ``dry_run: true``.
 
         Raises:
             ConfigError: If the project alias is not found.
-            KeboolaApiError: If the API call fails.
+            KeboolaApiError: If the API call fails; NOT_FOUND in a dry run
+                when the project has no such branch.
         """
         from ..sync.branch_mapping import cleanup_branch_id_from_mapping
 
@@ -280,6 +282,13 @@ class BranchService(BaseService):
         resolve_branch(self._config_store, alias, branch_id)
 
         client = self._client_factory(project.stack_url, project.token)
+        if dry_run:
+            try:
+                branches = client.list_dev_branches()
+            finally:
+                client.close()
+            was_active = project.active_branch_id == branch_id
+            return self._delete_branch_preview(alias, branch_id, branches, was_active)
         try:
             client.delete_dev_branch(branch_id)
         finally:
@@ -308,6 +317,34 @@ class BranchService(BaseService):
         if cleanup:
             result["mapping_cleanup"] = cleanup
         return result
+
+    @staticmethod
+    def _delete_branch_preview(
+        alias: str, branch_id: int, branches: list[dict[str, Any]], was_active: bool
+    ) -> dict[str, Any]:
+        """The ``branch delete --dry-run`` result: the branch the real run would delete."""
+        branch = next((b for b in branches if b.get("id") == branch_id), None)
+        if branch is None:
+            raise KeboolaApiError(
+                message=(
+                    f"Branch ID {branch_id} not found in project '{alias}'; "
+                    f"run kbagent branch list --project {alias}"
+                ),
+                status_code=404,
+                error_code=ErrorCode.NOT_FOUND,
+            )
+        message = f"Would delete branch ID {branch_id} ('{branch.get('name', '')}') from project '{alias}'."
+        if was_active:
+            message += " Active branch would reset to main."
+        return {
+            "project_alias": alias,
+            "branch_id": branch_id,
+            "branch_name": branch.get("name", ""),
+            "is_default": bool(branch.get("isDefault", False)),
+            "was_active": was_active,
+            "dry_run": True,
+            "message": message,
+        }
 
     def get_merge_url(self, alias: str, branch_id: int | None = None) -> dict[str, Any]:
         """Generate KBC UI merge URL for a development branch.

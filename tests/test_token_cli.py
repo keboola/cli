@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
 from typer.testing import CliRunner
 
 from keboola_agent_cli.cli import app
@@ -141,6 +142,7 @@ class TestDelete:
         assert "Revoked" in result.output
         svc.delete_token.assert_called_once_with(alias=ALIAS, token_id="999")
 
+    @pytest.mark.usefixtures("interactive_terminal")
     def test_delete_confirm_abort(self, tmp_path: Path) -> None:
         config_dir = tmp_path / "c"
         config_dir.mkdir()

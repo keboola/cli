@@ -39,6 +39,9 @@ class ErrorCode(StrEnum):
     INVALID_ARGUMENT = "INVALID_ARGUMENT"
     INVALID_FORMAT = "INVALID_FORMAT"
     USAGE_ERROR = "USAGE_ERROR"
+    # A safety prompt in human mode without a terminal and without --yes
+    # (spec S4, decision D6). Exit 2; the hint names --yes.
+    CONFIRMATION_REQUIRED = "CONFIRMATION_REQUIRED"
     MISSING_PARAMETER = "MISSING_PARAMETER"
     UNKNOWN_ERROR = "UNKNOWN_ERROR"
     # Per-project envelope fallback in multi-project commands: the operation
@@ -392,6 +395,8 @@ _ERROR_CODE_TO_TYPE: dict[str, str] = {
     # A refused-by-us safety guard, not an upstream fault: nothing was sent to
     # the API, and the caller fixes it by re-issuing the request with --force.
     ErrorCode.WORKSPACE_LOAD_COPY_TOO_LARGE: "validation",
+    # Refused by us before any API call: the caller confirms with --yes.
+    ErrorCode.CONFIRMATION_REQUIRED: "validation",
     ErrorCode.MR_NOT_READY_TO_MERGE: "conflict",
     ErrorCode.MR_MERGE_CONFLICT: "conflict",
 }

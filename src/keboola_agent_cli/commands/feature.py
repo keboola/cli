@@ -19,6 +19,7 @@ from rich.table import Table
 
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._helpers import (
+    _confirm_or_abort,
     check_cli_permission,
     emit_api_error,
     get_formatter,
@@ -176,14 +177,8 @@ def feature_project_add(
 ) -> None:
     """Enable a feature flag on a project."""
     formatter = get_formatter(ctx)
-    if (
-        not dry_run
-        and not formatter.json_mode
-        and not yes
-        and not typer.confirm(f"Add feature '{feature}' to project {project}?")
-    ):
-        formatter.console.print("Aborted.")
-        raise typer.Exit(code=0)
+    if not dry_run:
+        _confirm_or_abort(formatter, yes, f"Add feature '{feature}' to project {project}?")
     manage_token = resolve_manage_token(allow_env=ctx.obj["allow_env_manage_token"])
     service = get_service(ctx, "feature_service")
     try:
@@ -205,16 +200,12 @@ def feature_project_remove(
 ) -> None:
     """Disable a feature flag on a project (destructive)."""
     formatter = get_formatter(ctx)
-    if (
-        not dry_run
-        and not formatter.json_mode
-        and not yes
-        and not typer.confirm(
-            f"Remove feature '{feature}' from project {project}? This is destructive."
+    if not dry_run:
+        _confirm_or_abort(
+            formatter,
+            yes,
+            f"Remove feature '{feature}' from project {project}? This is destructive.",
         )
-    ):
-        formatter.console.print("Aborted.")
-        raise typer.Exit(code=0)
     manage_token = resolve_manage_token(allow_env=ctx.obj["allow_env_manage_token"])
     service = get_service(ctx, "feature_service")
     try:
@@ -261,14 +252,8 @@ def feature_user_add(
 ) -> None:
     """Enable a feature flag on a user."""
     formatter = get_formatter(ctx)
-    if (
-        not dry_run
-        and not formatter.json_mode
-        and not yes
-        and not typer.confirm(f"Add feature '{feature}' to user {email}?")
-    ):
-        formatter.console.print("Aborted.")
-        raise typer.Exit(code=0)
+    if not dry_run:
+        _confirm_or_abort(formatter, yes, f"Add feature '{feature}' to user {email}?")
     manage_token = resolve_manage_token(allow_env=ctx.obj["allow_env_manage_token"])
     service = get_service(ctx, "feature_service")
     try:
@@ -293,14 +278,10 @@ def feature_user_remove(
 ) -> None:
     """Disable a feature flag on a user (destructive)."""
     formatter = get_formatter(ctx)
-    if (
-        not dry_run
-        and not formatter.json_mode
-        and not yes
-        and not typer.confirm(f"Remove feature '{feature}' from user {email}? This is destructive.")
-    ):
-        formatter.console.print("Aborted.")
-        raise typer.Exit(code=0)
+    if not dry_run:
+        _confirm_or_abort(
+            formatter, yes, f"Remove feature '{feature}' from user {email}? This is destructive."
+        )
     manage_token = resolve_manage_token(allow_env=ctx.obj["allow_env_manage_token"])
     service = get_service(ctx, "feature_service")
     try:
