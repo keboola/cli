@@ -26,6 +26,74 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.100.0": [
+        "BREAKING (#852): `--deny-writes`, `--deny-destructive` and a saved permission policy "
+        "now also apply to `kbagent http` and `kbagent search`. `http delete` is destructive, "
+        "`http post` and `http patch` are writes. `token refresh`, `workspace password` and "
+        "`config variables-set --replace` are now destructive too. A blocked command exits 6. "
+        'Migration: add the operation to the policy, for example `--allow "config.variables-set '
+        '--replace"`.',
+        "BREAKING (#853): `workspace gc` now needs `--project` or the new `--all-projects` option. "
+        "Without them it exits 2. Before, a bare `workspace gc` deleted orphaned workspaces in "
+        "every registered project. gc also deletes nothing in a project whose sandbox "
+        "configurations it cannot list. Migration: add `--all-projects` to keep the old scope.",
+        "BREAKING (#859): `storage delete-bucket --force` no longer deletes a shared bucket. "
+        "The command reports the bucket as failed, deletes the other buckets and exits 1. "
+        "`delete-bucket` and `file-delete` now also ask before they delete when you run them in "
+        "a terminal without `--yes`. Scripts and agents get no prompt. Migration: unshare a "
+        "shared bucket with `kbagent sharing unshare` before you delete it.",
+        "New (#863): 18 commands that read all projects now take `--all-projects`, so one script "
+        "can work with both 0.x and 1.x. In 1.0.0, these commands will read only the default "
+        "project when `--project` is not given. Until then, `--all-projects` does the same as "
+        "no `--project`. The `--json` output also has a new optional top-level `warnings` list.",
+        "Change (#865, #864): `kbagent update` and the startup update now stay on the running "
+        "major version, so 0.x does not jump to 1.0.0 on its release day. Nothing changes until "
+        "kbagent 1.0.0 is published. After that, a 0.x install stays on 0.x for 28 days with a "
+        "notice, then updates itself, or earlier with the new `kbagent update --major`. To stay "
+        "on 0.x, set `KBAGENT_AUTO_UPDATE=false`, and in CI also pin `keboola-cli<1`. The new "
+        "page `docs/migrate-to-1.0.md` says what changes in 1.0.0.",
+        "Change (#856): `project remove` now clears the active project when it removes it. "
+        "Before, it made the next alias active and did not say so. A later command without "
+        "`--project` then uses the only registered project, or exits 5 and names `kbagent "
+        "project use`. `auth` commands without `--stack` now take the stack of "
+        "`KBAGENT_PROJECT` before the active project.",
+        "Fix (#855): `sync pull`, `sync diff` and `sync push` now refuse a directory that "
+        "belongs to another project. Before, `sync push --project B` in a tree of project A "
+        "created the configs of project A in project B. The commands now exit 5 with "
+        "`CONFIG_ERROR`. Use `sync clone` to copy configs to another project.",
+        "Fix (#854): a repeated `flow delete`, `job run --idempotency-key` or merge-request call "
+        "no longer does damage after a lost response. A second `flow delete` no longer removes "
+        "a flow in the trash permanently. A repeated `job run` with the same key no longer "
+        "starts a second job when the first result is not known. kbagent no longer repeats "
+        "merge-request state changes after a server error or a timeout.",
+        "Fix (#857): `kbagent serve` now refuses a `dry_run` parameter on a write route that "
+        "has no dry run, instead of running the real write. Before, `DELETE "
+        "/flows/{project}/{config_id}?dry_run=true` deleted the flow. Such a request now "
+        "answers HTTP 422.",
+        "Fix (#860): `kbagent serve` now runs `POST /data-apps/validate-repo` and `GET "
+        "/schedules/find/query`. Before, an earlier route took these requests.",
+        "Fix (#861): `--json` errors from API calls now always carry the real `retryable` value "
+        "and the `details` of the error. Before, 24 commands, among them `kai`, most of "
+        "`dev-portal` and `search`, reported `retryable: false` for an error that can be "
+        "retried.",
+        "Fix (#867): `--branch 0` now means production in `job run`, `component sync-action`, "
+        "`data-app create` and the `stream` commands. Before, these commands sent branch `0` "
+        "to the API as a branch ID. The production view of the web UI now always shows "
+        "production, also when an active branch is set with `kbagent branch use`.",
+        "Fix (#868): `--branch 0` now also means production in `job terminate`, `storage "
+        "swap-tables` and `storage create-table --source-branch-id`. Before, `job terminate "
+        "--branch 0` matched no job, and `swap-tables --branch 0` failed with exit 5. "
+        "`create-table --source-branch-id 0` now reads the source table from production, also "
+        "in a dev-branch request. `storage clone-table --branch 0` exits 2, because its target "
+        "must be a dev branch.",
+        "Note (#866, #869): `install.sh` now takes the version to install from PyPI, and every "
+        "install instruction that builds kbagent from Git names a release tag. The install "
+        "commands that kbagent prints also name an exact version. Before, some of them built "
+        "the newest code from `main`.",
+        "Note (#858, #862, #866): housekeeping with no user-facing change. Corrected help texts "
+        "and agent documents, a written CLI interface specification with an automatic check "
+        "and a command manifest, and release workflow changes for 1.0.0.",
+    ],
     "0.99.1": [
         "Fix (#846, #849): `lineage build --ai` now writes the real path of each code file into "
         "`.lineage_ai_tasks.json`. In a single-project sync every path pointed at a file that "

@@ -37,6 +37,18 @@ export interface WhatsNewRelease {
 
 export const WHATS_NEW: WhatsNewRelease[] = [
   {
+    version: "0.100.0",
+    items: [
+      {
+        title: "Production means production",
+        body:
+          "With no branch selected, the Configs, Flows and Schedules pages now show " +
+          "production. Before, when you had set an active branch with kbagent branch use, " +
+          "they showed that branch instead.",
+      },
+    ],
+  },
+  {
     version: "0.92.0",
     items: [
       {

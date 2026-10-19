@@ -101,7 +101,7 @@ Use `kbagent <command> --help` for full flag details and examples.
     via X-KBC-ProjectId. --stack accepts a stack URL or an existing project
     alias (its stack is used). Without --stack, every `auth` command takes
     the stack of KBAGENT_PROJECT, then of the active project, then of the
-    sole registered project (since vNEXT; before, only the active project).
+    sole registered project (since 0.100.0; before, only the active project).
     A KBAGENT_PROJECT that names no registered project is CONFIG_ERROR in
     `auth status` / `auth logout`, and is skipped with a `warnings` entry in
     `auth login`, `login-password` and `register-projects`. --device-code forces the device flow even on
@@ -344,7 +344,7 @@ Use `kbagent <command> --help` for full flag details and examples.
 
   kbagent project remove --project NAME
     Remove a project connection. Removing the active project clears it; it
-    is not moved to another alias (since vNEXT). The result carries
+    is not moved to another alias (since 0.100.0). The result carries
     `active_project_cleared` (the alias, or null). Commands without
     --project then resolve KBAGENT_PROJECT > active project > sole project,
     and with 2+ projects left fail with CONFIG_ERROR naming `project use`.
@@ -401,7 +401,7 @@ Use `kbagent <command> --help` for full flag details and examples.
     Resolution order for single-project operations: --project > KBAGENT_PROJECT > pin
     > sole project. `resolved_alias` / `resolved_source` (env / active_project /
     sole / none) name the project a command without --project would use
-    (since vNEXT).
+    (since 0.100.0).
 
   kbagent project info --project NAME
     Return full project details: ID, name, stack URL, default backend, enabled features,
@@ -1763,7 +1763,7 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     component newly ignored has its manifest entry dropped and local dir removed on the next
     pull, reported with details[].action "ignored" -- distinct from "removed", which means
     the config was genuinely deleted on the remote.
-    One project per directory (since vNEXT, CLI-31): sync pull, diff and push (also
+    One project per directory (since 0.100.0, CLI-31): sync pull, diff and push (also
     --all-projects) refuse a directory whose manifest project.id or apiHost differs from
     the --project project -- CONFIG_ERROR (exit 5) naming both project IDs, before any API
     call. A project registered without project_id costs one token verification call. To
@@ -2357,7 +2357,7 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
     Create local .kbagent/ workspace. --from-global copies existing projects;
     --project ALIAS (repeatable) copies only the named project(s) and implies
     --from-global. When the global active project is not copied, the
-    workspace has no active project (`active_project_cleared`, since vNEXT).
+    workspace has no active project (`active_project_cleared`, since 0.100.0).
 
   kbagent context
     Show this reference text.
@@ -2431,7 +2431,7 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
     pre-release -- stable users never silently land on a beta. Set
     KBAGENT_INCLUDE_PRERELEASE=1 in env to make every update in the session
     treat betas as installable without re-typing --beta.
-    Major versions (since vNEXT): the updater stays on the running major.
+    Major versions (since 0.100.0): the updater stays on the running major.
     It installs the next major (0.x -> 1.x) only 28 days after the GitHub
     release v1.0.0 is published, or with `update --major`; --beta alone
     never does. The new major is installed after the command ends and all
@@ -2499,7 +2499,7 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
    production as "target".
    No "targets" key = the command chose no branch (it does NOT mean production).
    A command that gave a warning also carries a top-level "warnings" list
-   (success AND error, since vNEXT): [{{"code": "WARNING", "message": "..."}}];
+   (success AND error, since 0.100.0): [{{"code": "WARNING", "message": "..."}}];
    an entry may also carry "hint" and further fields.
    Read it: before, these warnings went only to stderr in human mode. No
    "warnings" key = no warning. It is not the "warnings" key some commands put
@@ -2508,7 +2508,7 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
 
 3. Multi-project: most read commands accept repeatable --project flag.
    Omit --project to query ALL connected projects in parallel.
-   --all-projects (since vNEXT) says the same explicitly on search, billing
+   --all-projects (since 0.100.0) says the same explicitly on search, billing
    credits, component list, config list/search, data-app list, job list,
    storage buckets/tables, sharing list/edges, flow list, schedule list/find,
    notification list, branch list, workspace list and project status. Use it

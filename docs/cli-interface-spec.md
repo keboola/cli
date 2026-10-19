@@ -37,7 +37,7 @@ Each rule has an ID (`A1`, `T5`, …), a level, the version from which it applie
   - **now**: the code on `main` follows the rule, and new code must follow it.
   - **now for new commands** (or new options, new routes, new text): new code must follow the rule now; existing code changes in the version that the rule names.
   - **0.x**: the change ships in a 0.x release and is not on `main` yet.
-  - **0.N.x patch**: the change ships in the updater patch of the last 0.x minor, at least 14 days before T0.
+  - **0.100.0**: the change ships in kbagent 0.100.0, the 0.x release with the major gate, at least 14 days before T0.
   - **before T0**: the change ships before the GitHub release `v1.0.0` is published.
   - **1.0.0**: the change ships in 1.0.0.
 
@@ -147,7 +147,7 @@ Every rule with its level, the version from which it applies, and how it is chec
 | [C6](#C6) | MUST | now | review |
 | [C7](#C7) | MUST | now | `tests/test_check_cli_spec.py` |
 | [C8](#C8) | MUST | now | review |
-| [C9](#C9) | MUST | 0.N.x patch | updater contract tests |
+| [C9](#C9) | MUST | 0.100.0 | updater contract tests |
 | [HO1](#HO1) | MUST | now | `output.no-direct-print` |
 | [HO2](#HO2) | MUST | now for new commands; 1.0.0 for existing ones | `output.multi-item-headline`, review |
 | [HO3](#HO3) | MUST | now | review |
@@ -170,10 +170,10 @@ Every rule with its level, the version from which it applies, and how it is chec
 | [EV2](#EV2) | MUST | now | review |
 | [EV3](#EV3) | MUST | now | review |
 | [EV4](#EV4) | SHOULD | 1.0.0 | `output.root-flags-anywhere` |
-| [UP1](#UP1) | MUST | 0.N.x patch | updater contract tests |
-| [UP2](#UP2) | MUST | 0.N.x patch | updater contract tests |
-| [UP3](#UP3) | MUST | 0.N.x patch | updater contract tests |
-| [UP4](#UP4) | MUST | 0.N.x patch | unit tests |
+| [UP1](#UP1) | MUST | 0.100.0 | updater contract tests |
+| [UP2](#UP2) | MUST | 0.100.0 | updater contract tests |
+| [UP3](#UP3) | MUST | 0.100.0 | updater contract tests |
+| [UP4](#UP4) | MUST | 0.100.0 | unit tests |
 | [UP5](#UP5) | MUST | before T0 | review |
 
 ## 1. Terms and invariants
@@ -724,7 +724,7 @@ A flag that raises the class is in `FLAG_ESCALATIONS` and is checked where the f
 
 ## 13. Change and deprecation policy
 
-The 0.x line, until T0, ships only bug, security and data-loss fixes (C4), the updater patch (section 19), and additive forms that let one script work on 0.x and on 1.0 (`warnings[]`, `--all-projects`). Every other interface change waits for 1.0.0. After M, `release/0.N` ships no more fixes.
+The 0.x line, until T0, ships only bug, security and data-loss fixes (C4), the major gate of the updater in 0.100.0 (section 19), and additive forms that let one script work on 0.x and on 1.0 (`warnings[]`, `--all-projects`). Every other interface change waits for 1.0.0. After M, `release/0.N` ships no more fixes.
 
 <a id="C1"></a>
 **C1 · MUST · now.** A change is **breaking** when it removes or renames a command, an option, a short flag, a positional form or an environment variable; adds a required option; changes a default; changes an exit code, an error code or an `error_type`; removes or renames a JSON key or an enum value; adds a refusal or a prompt; adds a denial under a permission policy; or changes a target (project or branch). A change is **additive** when it adds a command, an option or a JSON key, a value of an open enum (`project_source`, `branch_source`, `warnings[].code`), or a warning.
@@ -767,9 +767,9 @@ The 0.x line, until T0, ships only bug, security and data-loss fixes (C4), the u
 - Checked by: review.
 
 <a id="C9"></a>
-**C9 · MUST · 0.N.x patch.** An installed client of major N moves to major N+1 by itself 28 days after the `published_at` of the GitHub release `vN+1.0.0`. The client reads the date from GitHub and never hardcodes it. New installs get the newest major at once. Tags keep the `v` prefix. Until the 0.N.x patch ships, the updater installs any newer version.
+**C9 · MUST · 0.100.0.** An installed client of major N moves to major N+1 by itself 28 days after the `published_at` of the GitHub release `vN+1.0.0`. The client reads the date from GitHub and never hardcodes it. New installs get the newest major at once. Tags keep the `v` prefix. Before 0.100.0, the updater installs any newer version.
 
-- Checked by: updater contract tests (with the patch).
+- Checked by: updater contract tests.
 
 ## 14. Human output
 
@@ -894,24 +894,24 @@ The 0.x line, until T0, ships only bug, security and data-loss fixes (C4), the u
 ## 19. Versions and updates
 
 <a id="UP1"></a>
-**UP1 · MUST · 0.N.x patch.** The updater stays on the running major. It crosses to a higher major only at M (C9) or with `kbagent update --major`, which the patch adds. Until the patch, the updater installs any newer version.
+**UP1 · MUST · 0.100.0.** The updater stays on the running major. It crosses to a higher major only at M (C9) or with `kbagent update --major`, which 0.100.0 adds. Before 0.100.0, the updater installs any newer version.
 
-- Checked by: updater contract tests (with the patch).
+- Checked by: updater contract tests.
 
 <a id="UP2"></a>
-**UP2 · MUST · 0.N.x patch.** A crossing to a higher major is installed for the next run. No command line runs again under a different major.
+**UP2 · MUST · 0.100.0.** A crossing to a higher major is installed for the next run. No command line runs again under a different major.
 
-- Checked by: updater contract tests (with the patch).
+- Checked by: updater contract tests.
 
 <a id="UP3"></a>
-**UP3 · MUST · 0.N.x patch.** Update and deprecation notices go to stderr in human mode and to `warnings[]` under `--json`.
+**UP3 · MUST · 0.100.0.** Update and deprecation notices go to stderr in human mode and to `warnings[]` under `--json`.
 
-- Checked by: updater contract tests (with the patch).
+- Checked by: updater contract tests.
 
 <a id="UP4"></a>
-**UP4 · MUST · 0.N.x patch.** `kbagent version --beta` and `kbagent update --beta` never write the startup cache.
+**UP4 · MUST · 0.100.0.** `kbagent version --beta` and `kbagent update --beta` never write the startup cache.
 
-- Checked by: unit tests (with the patch).
+- Checked by: unit tests.
 
 <a id="UP5"></a>
 **UP5 · MUST · before T0.** `install.sh` and the PowerShell block of `README.md` install the highest stable version on PyPI (`info.version` of `https://pypi.org/pypi/keboola-cli/json`), not the release that GitHub marks as latest and not the GitHub release list.

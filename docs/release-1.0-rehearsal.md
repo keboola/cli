@@ -62,7 +62,7 @@ Do these in the same fork, with `gh` by hand.
 
 - The Storage API answer when a shared bucket is deleted (proposal decision D9): a Storage API check, owned by the ticket of that change.
 - The moderation time of Chocolatey and the merge time of a winget pull request: read them from the history of earlier releases for the T0 announcement.
-- How fast active installs pick up the 0.N.x patch: measure it after the patch is released.
+- How fast active installs pick up 0.100.0, the 0.x release with the major gate: measure it after 0.100.0 is released.
 
 ## 6. After the rehearsal
 

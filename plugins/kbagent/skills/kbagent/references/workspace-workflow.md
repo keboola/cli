@@ -327,10 +327,10 @@ Behavior:
 - **`--dry-run`** surfaces the would-be-deleted list via `data.would_delete[]`
   in JSON mode and a Rich table in human mode.
 - Multi-project: `workspace list --orphaned` accepts repeatable `--project`
-  or reads all connected projects when omitted. *(since vNEXT)* `workspace gc`
+  or reads all connected projects when omitted. *(since 0.100.0)* `workspace gc`
   needs repeatable `--project` or `--all-projects`; a bare `workspace gc`
   exits 2 with `USAGE_ERROR`.
-- *(since vNEXT)* A project whose `keboola.sandboxes` configs cannot be
+- *(since 0.100.0)* A project whose `keboola.sandboxes` configs cannot be
   listed goes to `errors[]`; gc deletes nothing there and `list --orphaned`
   lists no orphans for it. Before, a failed listing made every sandbox
   workspace of that project an orphan. A `NOT_FOUND` listing counts as

@@ -124,7 +124,7 @@ has an account and should create the project in the Keboola UI instead.
 1. Resolves the target **stack** (not project) -- `--stack` accepts a bare
    stack URL (`connection.keboola.com`) or an existing project alias (its
    stack is used); omitted, it uses the stack of `KBAGENT_PROJECT`, then of
-   the active project, then of the sole registered project *(since vNEXT;
+   the active project, then of the sole registered project *(since 0.100.0;
    before, only the active project)*. A `KBAGENT_PROJECT` that names no
    registered project is skipped with a warning here, and is `CONFIG_ERROR`
    in `auth status` and `auth logout`.
