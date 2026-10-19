@@ -3269,7 +3269,7 @@
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "required": true, "default": null, "help": "Project alias"},
         {"kind": "option", "name": "table_id", "opts": ["--table-id"], "type": "text", "required": true, "default": null, "help": "Table ID to pull into the branch (e.g. 'in.c-bucket.table')"},
-        {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Target dev branch ID. Required; defaults to the active branch set via 'kbagent branch use'. The pull is one-way: default -> branch."},
+        {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Target dev branch ID. Required; defaults to the active branch set via 'kbagent branch use'. The pull is one-way: default -> branch. 0 (production) is refused: the target must be a dev branch."},
         {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Show what would be pulled without executing"}
       ]
     },
@@ -3303,7 +3303,7 @@
         {"kind": "option", "name": "not_null", "opts": ["--not-null"], "type": "text", "multiple": true, "default": null, "help": "Column name to mark NOT NULL. Can be repeated. Must match a --column name."},
         {"kind": "option", "name": "default", "opts": ["--default"], "type": "text", "multiple": true, "default": null, "help": "Column default as 'name=value'. Can be repeated. Boolean values must be lowercase ('true'/'false') per Keboola API validation."},
         {"kind": "option", "name": "source_table_id", "opts": ["--source-table-id"], "type": "text", "default": null, "help": "Create the table by copying an existing table's data into the requested partition/clustering layout (BigQuery only). The column definition is derived from the source, so --column must not be used. Pair with 'swap-tables' to repartition a populated table in place."},
-        {"kind": "option", "name": "source_branch_id", "opts": ["--source-branch-id"], "type": "integer", "default": null, "help": "Branch ID the source table is resolved in (defaults to the request branch)."},
+        {"kind": "option", "name": "source_branch_id", "opts": ["--source-branch-id"], "type": "integer", "default": null, "help": "Branch ID the source table is resolved in (defaults to the request branch). 0 means production."},
         {"kind": "option", "name": "time_partitioning_type", "opts": ["--time-partitioning-type"], "type": "text", "default": null, "help": "BigQuery time partitioning type, e.g. DAY, HOUR, MONTH, YEAR."},
         {"kind": "option", "name": "time_partitioning_field", "opts": ["--time-partitioning-field"], "type": "text", "default": null, "help": "Column used for time partitioning (defaults to ingestion time if omitted)."},
         {"kind": "option", "name": "time_partitioning_expiration_ms", "opts": ["--time-partitioning-expiration-ms"], "type": "text", "default": null, "help": "Milliseconds to keep storage for a partition (BigQuery)."},

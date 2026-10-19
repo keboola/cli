@@ -621,6 +621,8 @@ kbagent job list [--project NAME | --all-projects] [--component-id ID] [--config
 kbagent job detail --project NAME --job-id ID [--log-tail-lines N]
 kbagent job run --project NAME --component-id ID --config-id ID [--row-id ID ...] [--wait] [--timeout N] [--branch ID] [--mode run|debug] [--variable-values-id ID] [--no-variables] [--poll-strategy exponential|fixed] [--log-tail-lines N] [--idempotency-key KEY] [--force-rerun]
 kbagent job terminate --project NAME (--job-id ID [--job-id ID ...] | --status any|created|waiting|processing [--component-id ID] [--config-id ID] [--branch ID] [--limit N]) [--dry-run] [--yes]
+# job terminate --status --branch 0 (CLI-21): matches only jobs whose branchId is the default branch
+#   ID (read from GET /v2/storage/dev-branches). Before, it matched no job. Version gate in gotchas.md.
 # job run --idempotency-key: a pending entry is recorded BEFORE the create. A definite failure (4xx,
 #   refused connection, connect timeout) removes it; an unknown outcome (read timeout, 5xx, exhausted
 #   retries) keeps it, because the job may exist. A replay that finds the pending entry exits 1 (INVALID_ARGUMENT, HTTP 400 over serve) and
@@ -706,6 +708,11 @@ kbagent storage swap-tables --project NAME --table-id ID --target-table-id ID --
     #   `storage table-detail`). Never re-run: a repeated swap swaps the tables back,
     #   a repeated --source-table-id create starts a second copy.
 kbagent storage clone-table --project NAME --table-id ID --branch ID [--dry-run]
+# --branch 0 / --source-branch-id 0 (CLI-21): swap-tables --branch 0 swaps on the default branch ID it
+#   reads first (was: exit 5 "requires a branch"); clone-table --branch 0 is INVALID_ARGUMENT, exit 2, no
+#   API call (HTTP 400 over serve; the target must be a dev branch); create-table --source-branch-id 0
+#   omits source.branchId in a production request and sends the default branch ID in a dev-branch
+#   request (was: source.branchId 0). Version gate in gotchas.md.
 kbagent storage snapshot-create --project NAME --table-id ID [--description D] [--branch ID]
 kbagent storage snapshots --project NAME --table-id ID [--limit N] [--branch ID]
 kbagent storage snapshot-detail --project NAME --snapshot-id ID

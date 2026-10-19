@@ -11,6 +11,16 @@ Versioning convention:
   behavior; the inline `(updated vX.Y.Z)` records when the refinement landed.
 -->
 
+## `--branch 0` is production in `job terminate`, `swap-tables`, `clone-table` and `create-table --source-branch-id`
+
+*(since vNEXT)* (CLI-21, #791)
+
+- **`job terminate --status ... --branch 0` terminates production jobs.** A production job carries the numeric ID of the default branch, so kbagent reads that ID (one `GET /v2/storage/dev-branches`) and matches only it. A job without a `branchId` is not matched. Before, the filter compared `branchId` with `"0"`, matched no job, and terminated nothing. `filter.branch_id` in the result stays `0`; `targets` names production with the default branch ID.
+- **`storage swap-tables --branch 0` swaps in production.** The swap endpoint needs a branch ID in its path, so kbagent reads the default branch ID first and swaps on it; `branch_id` in the result is that ID (`--dry-run` reports `0` and makes no call). Before, the command refused with `CONFIG_ERROR` "requires a branch" (exit 5), and `POST /storage/tables/{project}/{table_id}/swap` with `branch_id: 0` called `/v2/storage/branch/0/...`.
+- **`storage clone-table --branch 0` is a usage error.** The clone copies a production table into a dev branch, so production as the target has no meaning: `INVALID_ARGUMENT`, exit 2, before any API call, also with an active branch set. Over `kbagent serve`, `POST /storage/tables/{project}/{table_id}/pull` with `branch_id: 0` answers HTTP 400 `INVALID_ARGUMENT`. Before, the CLI exited 5 with `CONFIG_ERROR` asking for `--branch`, and the REST route called `/v2/storage/branch/0/.../pull`.
+- **`storage create-table --source-branch-id 0` reads the source table from production.** In a production request kbagent leaves `source.branchId` out (the API then uses the request branch, which is production). In a dev-branch request (`--branch ID` or an active branch) it sends the default branch ID. Before, it sent `source.branchId: 0`. Both cases rely on an omitted `source.branchId` meaning the request branch, as kbagent's create-table code already assumed; the dev-branch case is not verified against a live BigQuery project. The `Source:` line and the `source` record in `targets` now name production.
+- A project that reports no default branch fails `job terminate --branch 0`, `swap-tables --branch 0` and a dev-branch `create-table --source-branch-id 0` with `CONFIG_ERROR` (exit 5, HTTP 400 over `kbagent serve`) that names `kbagent branch list`.
+
 ## The updater stays on the running major version; `kbagent update --major`
 
 *(since vNEXT)* (CLI-40, #791)
