@@ -14,7 +14,8 @@ Ratchet (per rule; the baseline holds a `blocking` flag for every rule):
     more `violations` entries than the base (counted per rule, so a renamed
     command or a moved function is no growth), a subject added to `exceptions`
     (unless --allow-new-exceptions), a rule changed from blocking to
-    non-blocking, or a rule of the base that is missing: FAIL.
+    non-blocking, or a rule of the base that is missing: FAIL. A rule that is
+    not in the base baseline records its first entries without a growth FAIL.
   A non-blocking rule prints the same lines as NOTE and never fails.
 
 `help.manifest-fresh` takes no baseline: `docs/cli-manifest.json` must always
@@ -1384,6 +1385,9 @@ def _growth(
     keeping the old name as a hidden alias (C3) or moving a function to another
     module renames its subject, and that is no growth. Known limit: a fixed
     entry can be swapped for a new violation of the same rule elsewhere.
+    A rule that the base baseline does not know (no `blocking` flag there) is
+    new: its first baseline is recorded here, and growth counts from the next
+    pull request on. New exceptions are still checked for it.
     """
     old_listed: dict[str, list[str]] = base.get("violations", {})
     old_excepted: dict[str, dict[str, str]] = base.get("exceptions", {})
@@ -1393,7 +1397,7 @@ def _growth(
         if not blocking.get(rid, True):
             continue
         old_count, count = len(old_listed.get(rid, [])), len(listed.get(rid, []))
-        if count > old_count:
+        if rid in old_blocking and count > old_count:
             fails.append(
                 f"FAIL grown    {rid}: {old_count} -> {count} entries -- the baseline "
                 "gained entries"

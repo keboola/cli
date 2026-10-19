@@ -335,6 +335,8 @@ class TestRefuseAtFile:
         assert refusal.callback(MagicMock(), param, missing) == missing
         assert refusal.callback(MagicMock(), param, "@team") == "@team"
         assert refusal.callback(MagicMock(), param, None) is None
+        long_text = "@team " + "x" * 300  # longer than a file name may be (ENAMETOOLONG)
+        assert refusal.callback(MagicMock(), param, long_text) == long_text
 
 
 # --------------------------------------------------------------------------
@@ -364,6 +366,10 @@ def _bad_input_cases(tmp_path: Path) -> list[tuple[list[str], str]]:
         (["http", "post", "/x", "--body", "{not json"], "--body"),
         (["http", "post", "/x", "--body", f"@{tmp_path / 'missing.json'}"], "--body"),
         (["project", "description-set", "--project", "prod", "--file", binary], "--file"),
+        (
+            ["project", "description-set", "--project", "prod", "--file", "x" * 300],
+            "--file",
+        ),
         (
             ["transformation", "create", "--project", "prod", "--name", "T", "--sql-file", binary],
             "--sql-file",

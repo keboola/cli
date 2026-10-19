@@ -142,6 +142,14 @@ def read_text_arg(formatter: OutputFormatter, path: Path, *, label: str) -> str:
         raise typer.Exit(code=2) from None
 
 
+def _is_file(path: str) -> bool:
+    """``Path.is_file`` that answers False where it would raise (a name too long)."""
+    try:
+        return Path(path).is_file()
+    except (OSError, ValueError):
+        return False
+
+
 class RefuseAtFile:
     """Option callback for free text that refuses ``@<existing file>`` (spec rule I3).
 
@@ -160,7 +168,7 @@ class RefuseAtFile:
     def callback(
         self, ctx: typer.Context, param: typer.CallbackParam, value: str | None
     ) -> str | None:
-        if value is not None and value.startswith("@") and Path(value[1:]).is_file():
+        if value is not None and value.startswith("@") and _is_file(value[1:]):
             get_formatter(ctx).error(
                 message=(
                     f"{param.opts[0]} got {value!r}, the name of an existing file (relative "
