@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ssePost, type SsePostHandle } from "../api/client";
+import { branchParam } from "../lib/branch";
 import { ErrorBox, PageTitle } from "../components/Empty";
 import { useUIState } from "../state";
 
@@ -131,7 +132,7 @@ export function LocalAiPage() {
         cli,
         message,
         project: project ?? null,
-        branch_id: branchId,
+        branch_id: branchParam(branchId),
       },
       {
         init: (d) => {

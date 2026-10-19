@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FileCode, Layers, PlayCircle, RotateCcw, SlidersHorizontal, Trash2 } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
+import { branchParam } from "../lib/branch";
 import { ConfirmModal } from "../components/ConfirmModal";
 import { Drawer } from "../components/Drawer";
 import { Empty, ErrorBox, Loading, PageTitle } from "../components/Empty";
@@ -82,7 +83,7 @@ export function ConfigsPage() {
     queryKey: ["configs", project, branchId],
     queryFn: () =>
       api.get("/configs", {
-        query: { project: project ?? undefined, branch_id: branchId ?? undefined },
+        query: { project: project ?? undefined, branch_id: branchParam(branchId) },
       }),
     enabled: !!project && tab === "configs",
   });
@@ -237,7 +238,7 @@ function TrashTab() {
     queryKey: ["config-trash", project, branchId],
     queryFn: () =>
       api.get(`/configs/trash/${encodeURIComponent(project!)}`, {
-        query: { branch_id: branchId ?? undefined },
+        query: { branch_id: branchParam(branchId) },
       }),
     enabled: !!project,
   });
@@ -247,7 +248,7 @@ function TrashTab() {
       api.post(
         `/configs/${encodeURIComponent(project!)}/${encodeURIComponent(entry.component_id)}/${encodeURIComponent(entry.config_id)}/restore`,
         undefined,
-        { query: { branch_id: branchId ?? undefined } },
+        { query: { branch_id: branchParam(branchId) } },
       ),
     onMutate: (entry) => {
       setError(null);
@@ -339,7 +340,7 @@ function ConfigDetail({
     queryFn: () =>
       api.get(
         `/configs/${encodeURIComponent(alias)}/${encodeURIComponent(componentId)}/${encodeURIComponent(configId)}`,
-        { query: { branch_id: branchId ?? undefined } },
+        { query: { branch_id: branchParam(branchId) } },
       ),
   });
 
@@ -350,7 +351,7 @@ function ConfigDetail({
       api.post(`/jobs/${encodeURIComponent(alias)}/run`, {
         component_id: componentId,
         config_id: configId,
-        branch_id: branchId ?? undefined,
+        branch_id: branchParam(branchId),
       }),
     onError: (e) => setActionError((e as Error).message),
     onSuccess: (data) => {
@@ -365,7 +366,7 @@ function ConfigDetail({
     mutationFn: () =>
       api.delete(
         `/configs/${encodeURIComponent(alias)}/${encodeURIComponent(componentId)}/${encodeURIComponent(configId)}`,
-        { query: { branch_id: branchId ?? undefined, dry_run: false } },
+        { query: { branch_id: branchParam(branchId), dry_run: false } },
       ),
     onError: (e) => {
       setActionError((e as Error).message);
@@ -512,7 +513,8 @@ function ConfigOverview({
     },
     {
       label: "Branch",
-      value: detail.branch_id != null ? `#${detail.branch_id}` : "production",
+      // 0 is production too: the page asks for it with branch_id=0.
+      value: detail.branch_id ? `#${detail.branch_id}` : "production",
       mono: true,
     },
   ];

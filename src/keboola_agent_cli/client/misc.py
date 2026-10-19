@@ -123,7 +123,8 @@ class _MiscMixin(_CoreClient):
                 ``{"parameters": ..., "storage": ...}``). May carry secrets --
                 never log it.
             branch_id: If set, sent as ``branchId``; omitted entirely for the
-                production branch (the API treats an absent key as default).
+                production branch, ``None`` or ``0`` (``--branch 0``). The API
+                treats an absent key as default.
             timeout: Optional per-request timeout in seconds (sync actions can
                 run long, e.g. ``getTables`` against a large database).
 
@@ -136,7 +137,7 @@ class _MiscMixin(_CoreClient):
             "componentId": component_id,
             "action": action,
         }
-        if branch_id is not None:
+        if branch_id:
             body["branchId"] = branch_id
         request_kwargs: dict[str, Any] = {"json": body}
         if timeout is not None:

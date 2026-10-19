@@ -22,6 +22,18 @@ Versioning convention:
 - **A warning after the envelope is written is dropped**, so stdout stays one JSON document. Some commands warn only after their output (for example the `merge-request` group); their warnings stay in `data.warnings`.
 - **Top-level `warnings` is not `data.warnings`.** Some commands return their own `warnings` inside `data` (`data-app deploy`, `sync clone`, `sync push`, `merge-request`, `flow new/update`, `project edit`, `lineage show`). That key is part of the command result and does not change. The top-level key is set by the output layer and has the same entry shape for every command. A command can fill both, or only one of them: read both.
 
+## The web UI production view sends `branch_id: 0`, and `0` means production on every route it calls
+
+*(since vNEXT)* (CLI-43, #791)
+
+- **In its production view (no branch selected), the web UI now sends `branch_id: 0` to each branch-aware route.** Before, it sent no `branch_id`. Some routes (configs, flows, schedules) then used the active branch saved by `kbagent branch use`, so a page that said "production" could show or change the active branch. From 1.0.0 the routes listed in spec rule V2 use the active branch when `branch_id` is omitted, and "Run job" in the production view would have run on the active branch. A REST client that wants production must send `branch_id: 0` too.
+- **Re-run of a job without a branch** sends `branch_id: 0`. The Data Streams page sends `branch=0` / `branch_id: "0"`. The Local AI chat sends `branch_id: 0`, and its prompt then tells the AI to pass `--branch 0`, so the `kbagent` commands it runs do not use the active branch.
+- **`job run --branch 0` (and `POST /jobs/{project}/run` with `branch_id: 0`) runs on production.** Before, kbagent sent `branchId: "0"` to the Queue API.
+- **The `stream` commands and routes read `--branch 0` / `branch=0` as the default branch.** Before, kbagent sent the ref `0` to the Stream API.
+- **`component sync-action --branch 0` (and `POST /components/{component_id}/actions/{action}` with `branch_id: 0`) runs on production.** Before, kbagent sent `branchId: 0` to the Sync Actions API.
+- **`data-app create --branch 0` creates the app on production** (`branchId: null`, also in the `--dry-run` payload). Before, kbagent sent `branchId: 0`.
+- **Not covered:** the workspace routes `POST /workspaces/{project}` (create), `DELETE`, `password` and `load` take no branch parameter and always use the active branch. So the Workspaces page still sends no branch: it shows and changes the workspaces of the active branch.
+
 ## `kbagent serve` refuses a `dry_run` that a write route does not declare
 
 *(since vNEXT)* (CLI-33)

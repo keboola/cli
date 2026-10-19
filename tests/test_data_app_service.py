@@ -407,6 +407,13 @@ class TestDataAppCreateAuthBlock:
         assert post["config"]["authorization"] == self.PUBLIC_BLOCK
         assert put["authorization"] == self.PUBLIC_BLOCK
 
+    def test_dry_run_branch_0_is_production(self, tmp_path: Path) -> None:
+        """`--branch 0` renders branchId null, like production (CLI-43)."""
+        store = _make_store(tmp_path)
+        service, *_ = _make_service(store)
+        result = service.create_data_app(**self._create_kwargs(dry_run=True, branch_id=0))
+        assert result["requests"]["post_apps"]["branchId"] is None
+
     def test_invalid_auth_value_rejected(self, tmp_path: Path) -> None:
         # Use a clearly-invalid sentinel (NOT a future-supported provider
         # like 'oidc' / 'github' / 'gitlab' / 'jumpcloud') so this test
@@ -2320,6 +2327,26 @@ class TestTailAppLogsClient:
 # ---------------------------------------------------------------------------
 # data-app list pagination (client HTTP layer via httpx_mock) -- issue #798
 # ---------------------------------------------------------------------------
+
+
+class TestCreateAppClient:
+    def test_branch_0_posts_branch_id_null(self, httpx_mock) -> None:
+        """branch_id=0 (`--branch 0`) is production: branchId null, never 0 (CLI-43)."""
+        from keboola_agent_cli.data_science_client import DataScienceClient
+
+        httpx_mock.add_response(
+            url="https://data-science.keboola.com/apps",
+            method="POST",
+            json={"id": "10", "configId": "01CFG"},
+        )
+
+        with DataScienceClient(
+            stack_url="https://connection.keboola.com", token="901-test-token"
+        ) as client:
+            client.create_app(type_="streamlit", name="app", description="", config={}, branch_id=0)
+
+        body = json.loads(httpx_mock.get_requests()[0].content)
+        assert body["branchId"] is None
 
 
 class TestListAppsPaginationClient:

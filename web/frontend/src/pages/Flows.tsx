@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import mermaid from "mermaid";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
+import { branchParam } from "../lib/branch";
 import { Drawer } from "../components/Drawer";
 import { Empty, ErrorBox, Loading, PageTitle } from "../components/Empty";
 import { JsonView } from "../components/JsonView";
@@ -70,7 +71,7 @@ export function FlowsPage() {
     queryKey: ["flows", project, branchId],
     queryFn: () =>
       api.get("/flows", {
-        query: { project: project ?? undefined, branch_id: branchId ?? undefined, with_schedules: true },
+        query: { project: project ?? undefined, branch_id: branchParam(branchId), with_schedules: true },
       }),
     enabled: !!project,
   });
@@ -150,7 +151,7 @@ function FlowDrawer({ flow, onClose }: { flow: Flow; onClose: () => void }) {
     queryFn: () =>
       api.get(
         `/flows/${encodeURIComponent(flow.project_alias)}/${encodeURIComponent(flow.config_id)}`,
-        { query: { component_id: flow.component_id, branch_id: branchId ?? undefined } },
+        { query: { component_id: flow.component_id, branch_id: branchParam(branchId) } },
       ),
   });
   return (

@@ -169,8 +169,12 @@ def warn_on_backend_size_change(
 
 
 def _session_branch_id(client: Any, branch_id: int | None) -> int:
-    """The branch id SQL editor sessions carry; production is its numeric id."""
-    if branch_id is not None:
+    """The branch id SQL editor sessions carry; production is its numeric id.
+
+    ``None`` and ``0`` (``--branch 0``) are production: the Editor API has no
+    branch ``0``, so its numeric id is looked up.
+    """
+    if branch_id:
         return branch_id
     default_branch_id = find_default_branch_id(client.list_dev_branches())
     if default_branch_id is None:
