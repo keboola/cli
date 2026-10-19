@@ -183,6 +183,9 @@ class TestDetectFrozenDistribution:
         assert dist is not None
         assert dist.channel is FrozenChannel.ARCHIVE
         assert dist.upgrade_command is None
+        assert dist.upgrade_hint == (
+            "re-download the signed archive from https://github.com/keboola/cli/releases"
+        )
         assert NATIVE_RELEASES_URL in dist.upgrade_hint
 
     def test_unidentified_system_package_hint_names_the_package(self, monkeypatch):

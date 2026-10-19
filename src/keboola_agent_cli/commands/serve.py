@@ -18,7 +18,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import typer
+from packaging.version import InvalidVersion, Version
 
+from .. import __version__
 from ..constants import ENV_CONVERSATION_ID
 from ..errors import ConfigError
 
@@ -166,6 +168,22 @@ def _effective_config_dir(serve_config_dir: str | None, ctx: typer.Context) -> s
     return None
 
 
+def _server_extras_spec(version: str) -> str:
+    """Return the install spec for the reinstall hint of the [server] extras.
+
+    Pins the running version only when it can be a PyPI release: a dev build
+    (``0.0.0-dev``) or a version with a local part is not on PyPI, so the hint
+    then names the newest stable release instead.
+    """
+    try:
+        parsed = Version(version)
+    except InvalidVersion:
+        return "keboola-cli[server]"
+    if parsed.is_devrelease or parsed.local is not None:
+        return "keboola-cli[server]"
+    return f"keboola-cli[server]=={version}"
+
+
 def serve_command(
     ctx: typer.Context,
     host: str = typer.Option(
@@ -251,8 +269,7 @@ def serve_command(
             f"(missing: {missing}).\n\n"
             "Reinstall with the [server] extras:\n\n"
             "  # If you installed via uv tool install (recommended for end users):\n"
-            "  uv tool install --force --with 'keboola-cli[server]' \\\n"
-            "    git+https://github.com/keboola/cli\n\n"
+            f"  uv tool install --force '{_server_extras_spec(__version__)}'\n\n"
             "  # If you have a local checkout (development):\n"
             "  uv pip install -e '.[server]'\n",
             err=True,

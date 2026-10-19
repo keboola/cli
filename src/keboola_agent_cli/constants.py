@@ -452,6 +452,8 @@ AI_CHAT_HELPER_TIMEOUT: float = 300.0
 # --- Version Check ---
 VERSION_CHECK_TIMEOUT: float = 4.0  # seconds for fetching latest version from remote
 KBAGENT_GITHUB_REPO: str = "keboola/cli"
+# Base of the git source install. Always used with "@v<version>": without a tag uv
+# builds `main`, which can carry the next major before it is released (#791).
 KBAGENT_INSTALL_SOURCE: str = "git+https://github.com/keboola/cli"
 
 # --- Auto-Update ---
@@ -552,8 +554,10 @@ NATIVE_PACKAGE_NAME: str = "keboola-cli2"
 NATIVE_WINGET_PACKAGE_ID: str = "Keboola.KeboolaCLI2"
 # Every per-OS archive (.zip + .sha256) and the .deb / .rpm are attached to the
 # GitHub Release, so the releases page is a always-valid, browsable fallback for
-# a hand-unpacked install whose channel we cannot identify.
-NATIVE_RELEASES_URL: str = f"https://github.com/{KBAGENT_GITHUB_REPO}/releases/latest"
+# a hand-unpacked install whose channel we cannot identify. The list page, not
+# /releases/latest: during the migration window of a new major, "latest" still
+# names the previous major (#791), and the list shows the newest release of both.
+NATIVE_RELEASES_URL: str = f"https://github.com/{KBAGENT_GITHUB_REPO}/releases"
 
 # Path markers used to identify which channel placed the running binary. Matched
 # as substrings against the binary's own path, lower-cased and with backslashes

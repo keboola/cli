@@ -14,6 +14,8 @@ from keboola_agent_cli.services.version_service import (
     VersionService,
     _is_up_to_date,
     _recovery_command,
+    _render_command,
+    _uv_link_mode_args,
     build_hardlink_retry_command,
     build_kbagent_upgrade_command,
     fetch_gated_release,
@@ -85,6 +87,44 @@ class TestVersionService:
         assert result["kbagent"]["latest_version"] == "9.9.9"
         assert result["kbagent"]["up_to_date"] is False
         assert result["kbagent"]["upgrade_command"]
+
+    @patch("keboola_agent_cli.auto_update._write_cache")
+    @patch("keboola_agent_cli.services.version_service.has_server_extras", return_value=False)
+    @patch(
+        "keboola_agent_cli.services.version_service.resolve_kbagent_wheel_url", return_value=None
+    )
+    @patch("keboola_agent_cli.services.version_service.shutil.which", return_value=None)
+    @patch("keboola_agent_cli.services.version_service.fetch_gated_release")
+    def test_upgrade_command_without_uv_or_pip_is_pinned_to_the_tag(
+        self,
+        mock_kbagent_latest: MagicMock,
+        mock_which: MagicMock,
+        mock_wheel: MagicMock,
+        mock_has_server: MagicMock,
+        mock_write_cache: MagicMock,
+    ) -> None:
+        """With neither uv nor pip on PATH, the printed command names the release tag.
+
+        Before, it was an untagged git+ install, which builds ``main``; ``main``
+        can carry the code of the next major before it is released (#791).
+        """
+        mock_kbagent_latest.return_value = _gated("9.9.9")
+
+        result = VersionService().get_versions()
+
+        # Quoting is per platform (shlex on POSIX, list2cmdline on Windows),
+        # so the expected text is rendered the same way.
+        assert result["kbagent"]["upgrade_command"] == _render_command(
+            (
+                "uv",
+                "tool",
+                "install",
+                "--force",
+                "--reinstall",
+                *_uv_link_mode_args(),
+                "keboola-cli @ git+https://github.com/keboola/cli@v9.9.9",
+            )
+        )
 
     @patch("keboola_agent_cli.auto_update._write_cache")
     @patch("keboola_agent_cli.services.version_service.fetch_gated_release")
@@ -520,13 +560,14 @@ class TestBuildKbagentWheelInstall:
         self, mock_which: MagicMock, mock_has_server: MagicMock
     ) -> None:
         mock_which.side_effect = lambda x: "/usr/bin/uv" if x == "uv" else None
-        cmd = build_kbagent_upgrade_command(wheel_url=self.WHEEL)
+        cmd = build_kbagent_upgrade_command(target_version="1.2.3", wheel_url=self.WHEEL)
         assert cmd is not None
         assert cmd == [
             "/usr/bin/uv",
             "tool",
             "install",
             "--force",
+            "--reinstall",
             f"keboola-cli[server] @ {self.WHEEL}",
         ]
         # The wheel path uses a PEP 508 direct ref -- no git+ source, no --with.
@@ -539,12 +580,13 @@ class TestBuildKbagentWheelInstall:
         self, mock_which: MagicMock, mock_has_server: MagicMock
     ) -> None:
         mock_which.side_effect = lambda x: "/usr/bin/uv" if x == "uv" else None
-        cmd = build_kbagent_upgrade_command(wheel_url=self.WHEEL)
+        cmd = build_kbagent_upgrade_command(target_version="1.2.3", wheel_url=self.WHEEL)
         assert cmd == [
             "/usr/bin/uv",
             "tool",
             "install",
             "--force",
+            "--reinstall",
             f"keboola-cli @ {self.WHEEL}",
         ]
 
@@ -552,7 +594,7 @@ class TestBuildKbagentWheelInstall:
     @patch("keboola_agent_cli.services.version_service.shutil.which")
     def test_pip_fallback_wheel(self, mock_which: MagicMock, mock_has_server: MagicMock) -> None:
         mock_which.side_effect = lambda x: "/usr/bin/pip" if x == "pip" else None
-        cmd = build_kbagent_upgrade_command(wheel_url=self.WHEEL)
+        cmd = build_kbagent_upgrade_command(target_version="1.2.3", wheel_url=self.WHEEL)
         assert cmd == [
             "/usr/bin/pip",
             "install",
@@ -565,7 +607,7 @@ class TestBuildKbagentWheelInstall:
     def test_wheel_no_tools_returns_none(
         self, mock_which: MagicMock, mock_has_server: MagicMock
     ) -> None:
-        assert build_kbagent_upgrade_command(wheel_url=self.WHEEL) is None
+        assert build_kbagent_upgrade_command(target_version="1.2.3", wheel_url=self.WHEEL) is None
 
     @patch("keboola_agent_cli.services.version_service.has_server_extras", return_value=True)
     @patch("keboola_agent_cli.services.version_service.shutil.which")
@@ -595,11 +637,11 @@ class TestBuildKbagentUpgradeCommand:
         mock_which.side_effect = lambda x: "/usr/bin/uv" if x == "uv" else None
         mock_has_server.return_value = False
 
-        cmd = build_kbagent_upgrade_command()
+        cmd = build_kbagent_upgrade_command(target_version="1.2.3")
 
         assert cmd is not None
         assert "--prerelease=allow" not in cmd
-        assert "--upgrade" in cmd
+        assert cmd[-1] == "keboola-cli @ git+https://github.com/keboola/cli@v1.2.3"
 
     @patch("keboola_agent_cli.services.version_service.has_server_extras")
     @patch("keboola_agent_cli.services.version_service.shutil.which")
@@ -609,7 +651,7 @@ class TestBuildKbagentUpgradeCommand:
         mock_which.side_effect = lambda x: "/usr/bin/uv" if x == "uv" else None
         mock_has_server.return_value = False
 
-        cmd = build_kbagent_upgrade_command(prerelease=True)
+        cmd = build_kbagent_upgrade_command(prerelease=True, target_version="1.2.3")
 
         assert cmd is not None
         assert "--prerelease=allow" in cmd
@@ -624,13 +666,12 @@ class TestBuildKbagentUpgradeCommand:
         mock_which.side_effect = lambda x: "/usr/bin/uv" if x == "uv" else None
         mock_has_server.return_value = True
 
-        cmd = build_kbagent_upgrade_command(prerelease=True)
+        cmd = build_kbagent_upgrade_command(prerelease=True, target_version="1.2.3")
 
         assert cmd is not None
         assert "--prerelease=allow" in cmd
-        # Extras flag preserved
-        assert "--with" in cmd
-        assert "keboola-cli[server]" in cmd
+        # Extras preserved in the pinned PEP 508 requirement
+        assert cmd[-1] == "keboola-cli[server] @ git+https://github.com/keboola/cli@v1.2.3"
 
     @patch("keboola_agent_cli.services.version_service.has_server_extras")
     @patch("keboola_agent_cli.services.version_service.shutil.which")
@@ -640,13 +681,13 @@ class TestBuildKbagentUpgradeCommand:
         mock_which.side_effect = lambda x: "/usr/bin/pip" if x == "pip" else None
         mock_has_server.return_value = False
 
-        cmd = build_kbagent_upgrade_command(prerelease=True)
+        cmd = build_kbagent_upgrade_command(prerelease=True, target_version="1.2.3")
 
         assert cmd is not None
         # pip uses --pre, not --prerelease=allow
         assert "--pre" in cmd
-        # Must sit after the `install` verb, before `--upgrade`
-        assert cmd.index("--pre") == cmd.index("install") + 1
+        # Must sit after `--upgrade`, before the install spec
+        assert cmd.index("--pre") == cmd.index("--upgrade") + 1
 
     @patch("keboola_agent_cli.services.version_service.has_server_extras")
     @patch("keboola_agent_cli.services.version_service.shutil.which")
@@ -752,11 +793,11 @@ class TestWindowsUvLinkMode:
             f"keboola-cli @ {self.WHEEL}",
         ]
 
-    def test_legacy_install_command_keeps_uv_default_link_mode(
+    def test_git_source_install_command_keeps_uv_default_link_mode(
         self, windows: None, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         self._uv_only(monkeypatch)
-        cmd = build_kbagent_upgrade_command(prerelease=True)
+        cmd = build_kbagent_upgrade_command(prerelease=True, target_version="1.2.3")
         assert cmd is not None
         assert "--link-mode" not in cmd
 
@@ -1222,4 +1263,4 @@ class TestUnknownLatestVersionIsNotAFailure:
         result = VersionService._update_kbagent(plan)
 
         assert "Recover with: None" not in result["message"]
-        assert "releases/latest" in result["message"]
+        assert "https://github.com/keboola/cli/releases/tag/v0.80.4" in result["message"]
