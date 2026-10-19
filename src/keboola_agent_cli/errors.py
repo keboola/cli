@@ -48,6 +48,8 @@ class ErrorCode(StrEnum):
     # `kbagent serve` HTTP envelope (0.40.0+)
     HTTP_ERROR = "HTTP_ERROR"  # Generic HTTP-layer error (Starlette HTTPException passthrough)
     INTERNAL_ERROR = "INTERNAL_ERROR"  # Uncaught exception inside a route handler
+    # Ctrl+C or an aborted prompt under --json (exit 130 for Ctrl+C), #791 O1.
+    INTERRUPTED = "INTERRUPTED"
 
     # Configuration
     CONFIG_ERROR = "CONFIG_ERROR"
@@ -394,6 +396,7 @@ _ERROR_CODE_TO_TYPE: dict[str, str] = {
     ErrorCode.WORKSPACE_LOAD_COPY_TOO_LARGE: "validation",
     ErrorCode.MR_NOT_READY_TO_MERGE: "conflict",
     ErrorCode.MR_MERGE_CONFLICT: "conflict",
+    ErrorCode.INTERRUPTED: "unknown",
 }
 
 

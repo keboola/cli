@@ -2505,6 +2505,17 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
    "warnings" key = no warning. It is not the "warnings" key some commands put
    inside "data" (data-app deploy, sync clone, merge-request, ...): that one is
    part of the result and stays where it was; read both.
+   Since vNEXT: the success envelope also has "schema_version" ("1.0") and
+   "exit_code" (the process exit code). "status": "ok" with a non-zero
+   "exit_code" is a negative answer (flow validate, auth status, permissions
+   check, data-app validate-repo) or a failed item. The error envelope has
+   "schema_version" and no "exit_code". Every exit under --json writes one
+   JSON document: a parse error or a bare group is USAGE_ERROR (exit 2, help
+   on stderr), a crash is INTERNAL_ERROR (exit 1, traceback on stderr).
+   --json/-j, --deny-writes and --deny-destructive also work after the
+   subcommand, and -h works as --help (since vNEXT). A single-value option
+   given twice is USAGE_ERROR on a write, destructive or admin command, and
+   a REPEATED_OPTION entry in "warnings" on a read command (since vNEXT).
 
 3. Multi-project: most read commands accept repeatable --project flag.
    Omit --project to query ALL connected projects in parallel.

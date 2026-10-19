@@ -384,10 +384,19 @@ class ErrorResponse(BaseModel):
     )
 
 
+# `schema_version` of the --json envelope (O2): an added key raises the minor,
+# a removed or renamed key raises the major.
+ENVELOPE_SCHEMA_VERSION = "1.0"
+
+
 class SuccessResponse(BaseModel):
     """Structured success response for JSON output mode."""
 
     status: str = Field(default="ok", description="Always 'ok' for success responses")
+    schema_version: str = Field(
+        default=ENVELOPE_SCHEMA_VERSION, description="Envelope version '<major>.<minor>' (O2, #791)"
+    )
+    exit_code: int = Field(default=0, description="The process exit code (O4, #791)")
     targets: list[dict[str, Any]] | None = Field(
         default=None, description="Projects and branches the command used (issue #766)"
     )

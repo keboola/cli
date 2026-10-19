@@ -672,10 +672,10 @@ def project_refresh(
         emit_api_error(formatter, exc)
         raise typer.Exit(code=exit_code) from None
 
-    formatter.output(result, _format_refresh_result)
-
     # A project whose token check or refresh failed is collected, not raised (#745).
-    if code := item_failure_exit_code(len(result.get("projects_failed", []))):
+    code = item_failure_exit_code(len(result.get("projects_failed", [])))
+    formatter.output(result, _format_refresh_result, exit_code=code or 0)
+    if code:
         raise typer.Exit(code=code)
 
 
@@ -1072,10 +1072,11 @@ def project_invite(
                 dry_run=dry_run,
             )
             payload = result.model_dump()
-            formatter.output(payload, _format_bulk_invite_result)
             # A CSV where every row failed still printed "failed=N" and exit 0,
             # so a CI step could not tell a clean run from a total one (#745).
-            if code := item_failure_exit_code(payload.get("failed", 0)):
+            code = item_failure_exit_code(payload.get("failed", 0))
+            formatter.output(payload, _format_bulk_invite_result, exit_code=code or 0)
+            if code:
                 raise typer.Exit(code=code)
             return
 

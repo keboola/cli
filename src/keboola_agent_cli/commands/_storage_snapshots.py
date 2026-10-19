@@ -221,8 +221,9 @@ def register(app: typer.Typer) -> None:
         except (ConfigError, KeboolaApiError) as exc:
             _handle_errors(formatter, exc)
 
+        exit_code = 1 if result["failed"] else 0
         if formatter.json_mode:
-            formatter.output(result)
+            formatter.output(result, exit_code=exit_code)
         else:
             if dry_run:
                 for sid in result.get("would_delete", []):
@@ -235,8 +236,8 @@ def register(app: typer.Typer) -> None:
                     f"[bold red]Failed:[/bold red] snapshot {s_err['id']}: {s_err['error']}"
                 )
 
-        if result["failed"]:
-            raise typer.Exit(code=1)
+        if exit_code:
+            raise typer.Exit(code=exit_code)
 
     @app.command("table-from-snapshot", rich_help_panel=_SNAPSHOTS)
     def storage_table_from_snapshot(

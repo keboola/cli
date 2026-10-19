@@ -46,7 +46,8 @@ of `ErrorCode` in `src/keboola_agent_cli/errors.py`.
 | `UNKNOWN_ERROR` | Catch-all for unclassified errors |
 | `UNEXPECTED_ERROR` | Per-project fallback in a multi-project command: that project raised an error carrying no code of its own. Other projects in the same run still report their own outcome |
 | `HTTP_ERROR` | Generic HTTP-layer error in the `kbagent serve` envelope (HTTPException passthrough) |
-| `INTERNAL_ERROR` | Uncaught exception inside a `kbagent serve` route handler (HTTP 500) |
+| `INTERNAL_ERROR` | Uncaught exception inside a `kbagent serve` route handler (HTTP 500), or a crash of a CLI command under `--json` (exit 1) |
+| `INTERRUPTED` | The command was interrupted under `--json`: Ctrl+C (exit 130) or an aborted prompt (exit 1) |
 
 ### Configuration
 

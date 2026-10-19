@@ -761,7 +761,7 @@ class TestEnvelopePlacement:
         envelope = json.loads(capsys.readouterr().out)
         assert envelope["status"] == "error"
         assert [w["code"] for w in envelope["warnings"]] == ["DEPRECATED_VERSION", "WARNING"]
-        assert list(envelope) == ["status", "warnings", "error"]
+        assert list(envelope) == ["status", "schema_version", "warnings", "error"]
 
     def test_every_envelope_of_a_repl_session_carries_it(self, capsys) -> None:
         # The REPL runs each line with a new formatter in the same process; the

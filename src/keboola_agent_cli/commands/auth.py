@@ -566,9 +566,10 @@ def auth_status(
         result = service.status(stack=stack)
     except (ConfigError, KeboolaApiError) as exc:
         _handle_errors(formatter, exc)
-    formatter.output(result, _format_status_result)
-    if result.status in _STATUS_EXIT_3:
-        raise typer.Exit(code=3)
+    exit_code = 3 if result.status in _STATUS_EXIT_3 else 0
+    formatter.output(result, _format_status_result, exit_code=exit_code)
+    if exit_code:
+        raise typer.Exit(code=exit_code)
 
 
 @auth_app.command("logout")

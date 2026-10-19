@@ -85,6 +85,7 @@ stage: str = typer.Option(..., click_type=click.Choice(["in", "out"]))
 
 - `--json` mode: structured JSON via `formatter.output(data)`
 - Human mode: Rich-formatted tables/text via `formatter.console.print()`
+- A command that exits non-zero after its output computes the code first and passes it: `formatter.output(data, exit_code=code)`, then `raise typer.Exit(code=code)`. The envelope's `exit_code` must equal the process exit code (spec O4, blocking rule `output.ok-then-exit-declares-exit-code`).
 
 Never print raw text that breaks JSON parsing. Always check `formatter.json_mode`.
 

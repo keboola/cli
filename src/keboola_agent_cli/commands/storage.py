@@ -1096,8 +1096,9 @@ def storage_delete_table(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
+    exit_code = 1 if result["failed"] else 0
     if formatter.json_mode:
-        formatter.output(result)
+        formatter.output(result, exit_code=exit_code)
     else:
         for tid in result["deleted"]:
             formatter.console.print(f"[bold green]Deleted:[/bold green] {tid}")
@@ -1106,8 +1107,8 @@ def storage_delete_table(
                 f"[bold red]Failed:[/bold red] {f_item['id']}: {f_item['error']}"
             )
 
-    if result["failed"]:
-        raise typer.Exit(code=1)
+    if exit_code:
+        raise typer.Exit(code=exit_code)
 
 
 @storage_app.command("truncate-table", rich_help_panel=_TABLES)
@@ -1200,8 +1201,9 @@ def storage_truncate_table(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
+    exit_code = 1 if result["failed"] else 0
     if formatter.json_mode:
-        formatter.output(result)
+        formatter.output(result, exit_code=exit_code)
     else:
         for entry in result["truncated"]:
             formatter.console.print(
@@ -1213,8 +1215,8 @@ def storage_truncate_table(
                 f"[bold red]Failed:[/bold red] {f_item['id']}: {f_item['error']}"
             )
 
-    if result["failed"]:
-        raise typer.Exit(code=1)
+    if exit_code:
+        raise typer.Exit(code=exit_code)
 
 
 @storage_app.command("add-column", rich_help_panel=_TABLES)
@@ -1388,8 +1390,9 @@ def storage_delete_column(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
+    exit_code = 1 if result["failed"] else 0
     if formatter.json_mode:
-        formatter.output(result)
+        formatter.output(result, exit_code=exit_code)
     else:
         for col in result["deleted"]:
             formatter.console.print(f"[bold green]Deleted:[/bold green] {col} from {table_id}")
@@ -1398,8 +1401,8 @@ def storage_delete_column(
                 f"[bold red]Failed:[/bold red] {f_item['column']}: {f_item['error']}"
             )
 
-    if result["failed"]:
-        raise typer.Exit(code=1)
+    if exit_code:
+        raise typer.Exit(code=exit_code)
 
 
 @storage_app.command("swap-tables", rich_help_panel=_TABLES)
@@ -2019,8 +2022,9 @@ def storage_file_tag(
         emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
+    exit_code = 1 if result["errors"] else 0
     if formatter.json_mode:
-        formatter.output(result)
+        formatter.output(result, exit_code=exit_code)
     else:
         for tag_name in result["added"]:
             formatter.console.print(f"[bold green]Added tag:[/bold green] {tag_name}")
@@ -2031,8 +2035,8 @@ def storage_file_tag(
                 f"[bold red]Failed:[/bold red] {err['action']} tag '{err['tag']}': {err['error']}"
             )
 
-    if result["errors"]:
-        raise typer.Exit(code=1)
+    if exit_code:
+        raise typer.Exit(code=exit_code)
 
 
 @storage_app.command("load-file", rich_help_panel=_FILES)

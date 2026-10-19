@@ -11,6 +11,17 @@ Versioning convention:
   behavior; the inline `(updated vX.Y.Z)` records when the refinement landed.
 -->
 
+## One JSON document for every exit, root flags after the subcommand, `-h`, repeated options
+
+*(since vNEXT)* (CLI-44, #791)
+
+- **The `--json` envelope has `schema_version` and, on success, `exit_code`.** Success: `{"status": "ok", "schema_version": "1.0", "exit_code": N, "targets"?, "warnings"?, "data"}`. Error: `{"status": "error", "schema_version": "1.0", "targets"?, "warnings"?, "error"}`, with no `exit_code`. `exit_code` equals the process exit code. `status: "ok"` with a non-zero `exit_code` is a negative answer (`flow validate`, `auth status`, `permissions check`, `data-app validate-repo`) or a failed item of a command that processes several items.
+- **stdout holds one JSON document for every exit code under `--json`.** A parse error (unknown option, missing option, bad value) and a bare group (`kbagent --json storage`) give `USAGE_ERROR`, exit 2. A crash gives `INTERNAL_ERROR`, exit 1, with the traceback on stderr. Ctrl+C gives `INTERRUPTED` (exit 130). A crash after the success envelope is written leaves that envelope as the only document. Before, stdout was empty or held help text.
+- **A bare group exits 2 with its help on stderr**, also in human mode (before: exit 0 and no output). `kbagent --json` without a command does the same. A command that needs arguments and gets none (`kbagent search`) prints its help on stderr, not on stdout.
+- **`--json`/`-j`, `--deny-writes` and `--deny-destructive` also work after the subcommand:** `kbagent project list --json`. Before, that was a usage error (`kbagent version --json` exited 2). kbagent does not rewrite the command line, so an option value `--json` (`--description --json`) stays a value. For 0.x installs, keep these flags before the subcommand.
+- **`-h` works as `--help`.**
+- **A single-value option given twice:** a write, destructive or admin command refuses it with `USAGE_ERROR` (exit 2) that names the option, so `storage delete-bucket --project x ... --project test` no longer acts on `test`. Read commands use the last value and add a `REPEATED_OPTION` entry (with `options`) to `warnings[]` (stderr in human mode). A flag without a `--no-` form (`--yes`) given twice is not reported.
+
 ## `--branch 0` is production in `job terminate`, `swap-tables`, `clone-table` and `create-table --source-branch-id`
 
 *(since 0.100.0)* (CLI-21, #791)

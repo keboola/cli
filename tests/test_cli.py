@@ -6408,7 +6408,7 @@ class TestSharingEdgesIntegration:
         assert output["error"]["code"] == "CONFIG_ERROR"
 
     def test_lineage_no_subcommand_shows_help(self, tmp_path: Path) -> None:
-        """lineage without subcommand shows help text."""
+        """lineage without subcommand shows help text. Exit 2, help on stderr (#791 O1)."""
         config_dir = tmp_path / "config"
         config_dir.mkdir()
 
@@ -6416,9 +6416,10 @@ class TestSharingEdgesIntegration:
             MockStore.return_value = ConfigStore(config_dir=config_dir)
             result = runner.invoke(app, ["lineage"])
 
-        assert result.exit_code == 0
-        assert "build" in result.output
-        assert "show" in result.output
+        assert result.exit_code == 2
+        assert result.stdout == ""
+        assert "build" in result.stderr
+        assert "show" in result.stderr
 
 
 class TestOrgSetupBasic:
@@ -6910,7 +6911,7 @@ class TestSharingEdges:
         assert "organization" in result.output
 
     def test_lineage_no_subcommand_shows_help(self, tmp_path: Path) -> None:
-        """kbagent lineage (without subcommand) shows help with build/show."""
+        """kbagent lineage (without subcommand) shows help with build/show. Exit 2, help on stderr (#791 O1)."""
         config_dir = tmp_path / "config"
         config_dir.mkdir()
 
@@ -6918,9 +6919,10 @@ class TestSharingEdges:
             MockStore.return_value = ConfigStore(config_dir=config_dir)
             result = runner.invoke(app, ["lineage"])
 
-        assert result.exit_code == 0
-        assert "build" in result.output
-        assert "show" in result.output
+        assert result.exit_code == 2
+        assert result.stdout == ""
+        assert "build" in result.stderr
+        assert "show" in result.stderr
 
     def test_lineage_config_error_exit_code_5(self, tmp_path: Path) -> None:
         """lineage with nonexistent project alias returns exit code 5."""

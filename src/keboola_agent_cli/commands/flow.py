@@ -582,8 +582,12 @@ def flow_validate(
     ]
     valid = not errors
 
+    exit_code = 0 if valid else 2
     if formatter.json_mode:
-        formatter.output({"valid": valid, "errors": errors, "warnings": warnings, "notes": notes})
+        formatter.output(
+            {"valid": valid, "errors": errors, "warnings": warnings, "notes": notes},
+            exit_code=exit_code,
+        )
     else:
         for note in notes:
             formatter.console.print(f"[dim]note: {escape(note)}[/dim]")
@@ -594,8 +598,8 @@ def flow_validate(
         else:
             for e in errors:
                 formatter.console.print(f"[red]✗[/red] {escape(e)}")
-    if not valid:
-        raise typer.Exit(code=2)
+    if exit_code:
+        raise typer.Exit(code=exit_code)
 
 
 # ---------------------------------------------------------------------------
@@ -1037,8 +1041,10 @@ def flow_schedule_remove(
         emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
+    # A schedule whose config could not be deleted is collected, not raised (#745).
+    code = item_failure_exit_code(len(result.get("errors", [])))
     if formatter.json_mode:
-        formatter.output(result)
+        formatter.output(result, exit_code=code or 0)
     else:
         count = result.get("deleted_count", 0)
         errors = result.get("errors", [])
@@ -1056,8 +1062,7 @@ def flow_schedule_remove(
         for warning in result.get("warnings", []):
             formatter.warning(warning)
 
-    # A schedule whose config could not be deleted is collected, not raised (#745).
-    if code := item_failure_exit_code(len(result.get("errors", []))):
+    if code:
         raise typer.Exit(code=code)
 
 

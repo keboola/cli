@@ -282,10 +282,10 @@ What stays as it is:
 - Checked by: `args.no-dead-parameter`.
 
 <a id="A6"></a><a id="args.repeated-single-value"></a>
-**A6 · MUST · 1.0.0.** A single-value option given twice is reported: a usage error (exit 2) on `write` and `destructive` commands, and a warning on the other commands. Until 1.0.0, the last value wins without a message.
+**A6 · MUST · 1.0.0.** A single-value option given twice is reported: a usage error (exit 2) on `write`, `destructive` and `admin` commands, and a warning on `read` commands. The warning is a `REPEATED_OPTION` entry in `warnings[]`. A flag without a `--no-` form, such as `--yes`, given twice is not reported, because the repeat cannot change its value. Until 1.0.0, the last value wins without a message.
 
 - Why: on a write, the dropped value can be the intended target (`--project x … --project test` acts on `test`).
-- Checked by: `args.repeated-single-value` (deferred: lands with the 1.0.0 command class).
+- Checked by: `args.repeated-single-value`.
 
 <a id="A7"></a>
 **A7 · SHOULD for new options · now.** Durations are seconds and data sizes are bytes, both integers without a unit suffix. Points in time are ISO 8601 with a time zone. Booleans are `--x/--no-x`. A fixed set of values, named sizes included, is a `click.Choice`. A fixed threshold in code (such as the 1 GB guard of `workspace load`) names its unit in the help and in the message.
@@ -314,7 +314,7 @@ What stays as it is:
 <a id="I4"></a>
 **I4 · MUST · 1.0.0.** A bad input value is a usage error (exit 2, `INVALID_ARGUMENT`) that names the option, never a traceback. Until 1.0.0, some bad values end in a traceback with exit 1.
 
-- Checked by: `output.one-json-document` (crash case, deferred) and review.
+- Checked by: `output.one-json-document` (crash case) and review.
 
 <a id="I5"></a>
 **I5 · SHOULD for new options · now.** A secret comes from a prompt, a `--*-stdin` flag, a file or an environment variable, never from an inline value.
@@ -413,22 +413,22 @@ What stays as it is:
 <a id="O1"></a><a id="output.one-json-document"></a><a id="output.bare-group-exits-2"></a>
 **O1 · MUST · 1.0.0.** With `--json`, stdout holds exactly one JSON document for every exit code, parse errors, bare groups and crashes included. `--stream` commands write NDJSON. Everything else goes to stderr. An explicit `--help` (and `-h`, H5) prints help on stdout with exit 0 in both modes. A bare group, and `--json` without a command, exit 2 with a `USAGE_ERROR` envelope. Until 1.0.0, a parse error, a crash or a bare group under `--json` gives an empty stdout.
 
-- Checked by: `output.one-json-document`, `output.bare-group-exits-2` (both deferred: land with the 1.0.0 root command class).
+- Checked by: `output.one-json-document`, `output.bare-group-exits-2`.
 
 <a id="O2"></a><a id="output.envelope-schema"></a>
 **O2 · MUST · `warnings` 0.x; `exit_code` and `schema_version` 1.0.0.** The success envelope has `status: "ok"`, `data`, `exit_code`, `schema_version`, and `targets` and `warnings` when they are not empty. The error envelope has `status: "error"`, `error`, `schema_version`, and `targets` and `warnings` when they are not empty. `schema_version` is `"<major>.<minor>"`: an added key raises the minor; a removed or renamed key raises the major and follows C3. Today the envelope is `{status, data}` or `{status, error}`, plus `targets`.
 
-- Checked by: `output.envelope-schema` (deferred: lands with the envelope).
+- Checked by: `output.envelope-schema`.
 
 <a id="O3"></a><a id="output.no-warning-after-output"></a>
 **O3 · MUST · 0.x.** In JSON mode a warning is an entry `{code, message, hint?}` in `warnings[]`, emitted before the output. A `warning()` call after `output()` has written the document does nothing in JSON mode, so O1 holds. A deprecation uses `code: "DEPRECATED"` with `replacement` and `remove_after` (a date). Until `warnings[]` lands, `OutputFormatter.warning()` does nothing in JSON mode, and a command puts its warnings into `data`.
 
-- Checked by: `output.envelope-schema`, `output.no-warning-after-output` (both deferred).
+- Checked by: `output.envelope-schema`; `output.no-warning-after-output` (deferred).
 
 <a id="O4"></a><a id="output.ok-then-exit-declares-exit-code"></a>
-**O4 · MUST · 1.0.0.** `exit_code` in the success envelope equals the process exit code. `status: "ok"` with a non-zero `exit_code` means a negative answer (`flow validate`, `auth status`, `permissions check`, `data-app validate-repo`), or a failed item or project of a command that processes several of them, reads included (E4). The error envelope has no `exit_code`; the process exit code and the exit-code table give it. Until 1.0.0, the envelope has no `exit_code`, and the process exit code is the only signal.
+**O4 · MUST · 1.0.0.** `exit_code` in the success envelope equals the process exit code. `status: "ok"` with a non-zero `exit_code` means a negative answer (`flow validate`, `auth status`, `permissions check`, `data-app validate-repo`), or a failed item or project of a command that processes several of them, reads included (E4). The error envelope has no `exit_code`; the process exit code and the exit-code table give it. Known limit: a crash after the command wrote its success envelope leaves that envelope (with `exit_code: 0`) as the only document, and the process exits 1. Until 1.0.0, the envelope has no `exit_code`, and the process exit code is the only signal.
 
-- Checked by: `output.ok-then-exit-declares-exit-code` (deferred: lands with the 1.0.0 envelope).
+- Checked by: `output.ok-then-exit-declares-exit-code`.
 
 <a id="O5"></a>
 **O5 · MUST · now.** Keys that kbagent adds are snake_case. Raw API objects pass through unchanged. The existing camelCase derived keys (`logTail`, `lastUsed*`) and the three project keys in `data` (`project_alias`, `alias`, `project`) are frozen; new payloads use `project_alias`.
@@ -443,7 +443,7 @@ What stays as it is:
 <a id="O7"></a><a id="output.root-flags-anywhere"></a>
 **O7 · SHOULD · 1.0.0.** The root flags `--json`/`-j`, `--deny-writes` and `--deny-destructive` are also accepted after the subcommand. argv is not rewritten, because a token equal to `--json` can be the value of another option. Until 1.0.0, the root flags go before the subcommand.
 
-- Checked by: `output.root-flags-anywhere` (deferred: lands with the 1.0.0 command class).
+- Checked by: `output.root-flags-anywhere`.
 
 <a id="O8"></a>
 **O8 · MUST · now.** A command that reads an existing secret that the user can also see in another place (a data app password, the secret in a stream endpoint) does not print it by default, in human mode or under `--json`. It shows a masked value, or it says where the secret went and where the user can see it (`data-app password`: `password_delivered_to` and `ui_url`). `--reveal` prints the secret. `--copy` puts it into the clipboard; `--copy` with `--reveal` is `INVALID_ARGUMENT`. A REST route returns the secret only with `reveal=true`. Reading the secret SHOULD be an operation of its own in `OPERATION_REGISTRY` (as `data-app.password`), so that a deny policy refuses it before any API call. The rule does not cover a command whose result is a new credential.
@@ -663,7 +663,7 @@ A flag that raises the class is in `FLAG_ESCALATIONS` and is checked where the f
 <a id="H5"></a><a id="help.dash-h"></a>
 **H5 · MUST · 1.0.0.** `-h` works as `--help`. Until 1.0.0, only `--help` works.
 
-- Checked by: `help.dash-h` (deferred: lands with the 1.0.0 root command class).
+- Checked by: `help.dash-h`.
 
 <a id="H6"></a><a id="help.manifest-fresh"></a>
 **H6 · MUST · now.** The command manifest `docs/cli-manifest.json` (commands, options, kinds, help texts) is generated from the Typer tree (`make cli-manifest`) and committed, so that every option or help change shows in the pull-request diff. From 1.0.0, the command reference and the command part of `kbagent context` are generated from it (AG1).
@@ -889,7 +889,7 @@ The 0.x line, until T0, ships only bug, security and data-loss fixes (C4), the m
 <a id="EV4"></a>
 **EV4 · SHOULD · 1.0.0.** Global options are accepted before and after the subcommand (O7).
 
-- Checked by: `output.root-flags-anywhere` (deferred).
+- Checked by: `output.root-flags-anywhere`.
 
 ## 19. Versions and updates
 

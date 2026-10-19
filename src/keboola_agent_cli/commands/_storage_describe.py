@@ -402,8 +402,10 @@ def register(app: typer.Typer) -> None:
                 # .stop() is idempotent; safe for both happy and error paths.
                 progress_cm.stop()
 
+        # Also under --json: the exit used to be raised in human mode only (#745).
+        exit_code = 1 if result.get("errors") else 0
         if formatter.json_mode:
-            formatter.output(result)
+            formatter.output(result, exit_code=exit_code)
         else:
             applied = result["applied_count"]
             errors = result["error_count"]
@@ -426,9 +428,8 @@ def register(app: typer.Typer) -> None:
                 formatter.console.print(
                     f"  [red]✗[/red] {item['type']} {item['id']}: {item['error']}"
                 )
-        # Also under --json: the exit used to be raised in human mode only (#745).
-        if result.get("errors"):
-            raise typer.Exit(code=1) from None
+        if exit_code:
+            raise typer.Exit(code=exit_code) from None
 
     @app.command("describe-migrate", rich_help_panel=_DESCRIBE)
     def storage_describe_migrate(
@@ -533,8 +534,9 @@ def register(app: typer.Typer) -> None:
 
         result = _migrate(dry_run)
 
+        exit_code = 1 if result["errors"] else 0
         if formatter.json_mode:
-            formatter.output(result)
+            formatter.output(result, exit_code=exit_code)
         else:
             verb = "Would migrate" if result["dry_run"] else "Migrated"
             # Never a green headline when tables failed (#745).
@@ -562,5 +564,5 @@ def register(app: typer.Typer) -> None:
             for item in result["errors"]:
                 formatter.console.print(f"  [red]✗[/red] {item['table_id']}: {item['error']}")
 
-        if result["errors"]:
-            raise typer.Exit(code=1) from None
+        if exit_code:
+            raise typer.Exit(code=exit_code) from None

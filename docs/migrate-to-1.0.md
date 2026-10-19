@@ -139,9 +139,9 @@ Every change below has a `BREAKING:` bullet in the 1.0.0 changelog. The number i
 |---|---|---|---|---|
 | 27 | An omitted `--project` on the 18 fan-out reads reads all registered projects | An omitted `--project` uses the default-project chain (`KBAGENT_PROJECT` > active project > sole project); all projects need `--all-projects` | `targets[].project_source`; `CONFIG_ERROR` (exit 5) when no project resolves | scripts, agents |
 | 15 | A fan-out read exits 0 when one project failed; the failure is only in `data.errors` | Exits 1 when a project failed; exits 5 when no project is registered | exit code; `exit_code` in the envelope | scripts, agents |
-| 12 | A bare group (`kbagent storage`) exits 0 and prints nothing; `kbagent --json` without a command prints help on stdout and exits 0 | Exit 2, help on stderr | `USAGE_ERROR` envelope | scripts, agents |
+| 12 | A bare group (`kbagent storage`) exits 0 and prints nothing; `kbagent --json` without a command prints help on stdout and exits 0 | Exit 2, help on stderr. A command that needs arguments (`kbagent search`) and gets none also prints its help on stderr, not on stdout | `USAGE_ERROR` envelope | scripts, agents |
 | 25 | A bad input value can end in a Python traceback with exit 1 | Usage error with exit 2 that names the option | `INVALID_ARGUMENT` | scripts, agents |
-| 19 | A single-value option given twice: the last value wins, with no message | Usage error (exit 2) on write and destructive commands; a warning on the other commands | `USAGE_ERROR` naming the option | scripts, agents |
+| 19 | A single-value option given twice: the last value wins, with no message (`storage delete-bucket --project x ... --project test` acts on `test`) | Usage error (exit 2) on write, destructive and admin commands (`project remove --project a --project b` no longer removes `b`); on read commands the last value still wins, with a warning. A flag without a `--no-` form (`--yes`) is not reported | `USAGE_ERROR` naming the option; a `REPEATED_OPTION` entry in `warnings[]` | scripts, agents |
 | 23 | 9 list options take only one comma-separated value (`org setup --project-ids`, `sharing share --target-project-ids`, `sharing share --target-users`, 6 `semantic-layer` options); a repeated option keeps only the last value | The options are repeatable and still accept a comma list | the target list in `data` | scripts, agents |
 | 24 | A free-text option stores a literal `@<existing file>` (`--text` of `project description-set`, `storage describe-bucket`, `storage describe-table`, `branch metadata-set`; `transformation create --sql`) | Refused with exit 2 and a hint that names the file option | `INVALID_ARGUMENT` | scripts, agents |
 | 16 | Human mode without a terminal: a confirmation reads the answer from stdin (`echo y \| kbagent ...`) | Refused unless `--yes`; no change under `--json` | `CONFIRMATION_REQUIRED` (exit 2) naming `--yes` | scripts |
@@ -185,12 +185,13 @@ These changes fixed a bug, a security gap or a data-loss path, so they shipped i
 
 Under `--json`, 1.0.0 keeps every key of the 0.x envelope and adds keys. No key is removed or renamed.
 
-- stdout holds exactly one JSON document for every exit code, also for a parse error, a bare group and a crash. An explicit `--help` or `-h` still prints help on stdout with exit 0.
+- stdout holds exactly one JSON document for every exit code, also for a parse error, a bare group and a crash. An explicit `--help` or `-h` still prints help on stdout with exit 0. A parse error and a bare group give `USAGE_ERROR` with exit 2. A crash gives `INTERNAL_ERROR` with exit 1 and the traceback on stderr. Ctrl+C gives `INTERRUPTED` with exit 130. Any other non-zero exit that wrote no document gives `UNKNOWN_ERROR` with that exit code.
 - The success envelope adds `exit_code` (the process exit code) and `schema_version` (`"1.0"`; an added key raises the minor number). The error envelope adds `schema_version`; it has no `exit_code`.
 - `warnings[]` holds `{code, message, hint}` entries. It is present only when it is not empty. Treat `code` as an open list: new codes can appear in a minor release.
 - Each record in `targets` adds `project_source` next to `branch_source`. Values: `explicit`, `env`, `active_project`, `sole`, `all`. Treat an unknown value like `active_project`.
 - A destructive command whose project or branch comes from the active choice (`project use`, `branch use`) adds the warning `TARGET_FROM_ACTIVE_CHOICE` with the explicit flag as the hint.
-- Planned, not settled yet: `--json`, `--deny-writes` and `--deny-destructive` are also accepted after the subcommand. Planned 1.0.0 form: `kbagent config list --project prod --json`. Until this page confirms it, put these flags before the subcommand.
+- `--json` (`-j`), `--deny-writes` and `--deny-destructive` are also accepted after the subcommand: `kbagent config list --project prod --json`. kbagent does not rewrite the command line, so `--description --json` still sets the description to `--json`. On 0.x, put these flags before the subcommand.
+- `-h` works as `--help`.
 - `status: "ok"` with a non-zero `exit_code` means a negative answer (`flow validate`, `auth status`, `permissions check`, `data-app validate-repo`) or a failed item or project.
 
 Example: `storage delete-table` under `--json` in 1.0.0, with `--project prod` and active branch 456:

@@ -343,6 +343,8 @@ class TestOutput:
     def test_success_envelope_without_a_target_is_unchanged(self) -> None:
         assert json.loads(success_json({"value": None})) == {
             "status": "ok",
+            "schema_version": "1.0",
+            "exit_code": 0,
             "data": {"value": None},
         }
 

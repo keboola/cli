@@ -558,9 +558,10 @@ def semantic_layer_build(
         types_workspace_id=types_workspace,
         auto_resolve_types=auto_types_workspace,
     )
-    formatter.output(result, _print_build_result)
     # A table whose schema fetch failed is left out of the model (#745).
-    if code := item_failure_exit_code(len(result.get("fetch_errors") or [])):
+    code = item_failure_exit_code(len(result.get("fetch_errors") or []))
+    formatter.output(result, _print_build_result, exit_code=code or 0)
+    if code:
         raise typer.Exit(code=code)
 
 
@@ -633,10 +634,11 @@ def semantic_layer_promote(
         scope=scope,
         target_projects=target_projects,
     )
-    formatter.output(result, _print_promote_result)
     # Per-item failures are collected per type, not raised (#745).
     failed = sum(len((result.get(plural) or {}).get("failed", [])) for plural, _ in PUSH_ORDER)
-    if code := item_failure_exit_code(failed):
+    code = item_failure_exit_code(failed)
+    formatter.output(result, _print_promote_result, exit_code=code or 0)
+    if code:
         raise typer.Exit(code=code)
 
 
@@ -698,10 +700,11 @@ def semantic_layer_import(
         scope=scope,
         target_projects=target_projects,
     )
-    formatter.output(result, _print_import_result)
     # Per-item failures are collected per type, not raised (#745).
     failed = sum(len(per.get("failed", [])) for per in (result.get("imported") or {}).values())
-    if code := item_failure_exit_code(failed):
+    code = item_failure_exit_code(failed)
+    formatter.output(result, _print_import_result, exit_code=code or 0)
+    if code:
         raise typer.Exit(code=code)
 
 

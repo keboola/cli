@@ -15,7 +15,7 @@ from rich.table import Table
 from rich.text import Text
 
 from .effective_branch import BranchTarget, recorded_targets
-from .models import ErrorResponse, SuccessResponse
+from .models import ENVELOPE_SCHEMA_VERSION, ErrorResponse, SuccessResponse
 from .update_notice import pending_warnings
 
 
@@ -80,12 +80,18 @@ def _envelope_warnings(warnings: list[dict[str, Any]] | None) -> list[dict[str, 
     return [*pending_warnings(), *(warnings or [])]
 
 
-def success_json(data: Any, warnings: list[dict[str, Any]] | None = None) -> str:
+def success_json(
+    data: Any, warnings: list[dict[str, Any]] | None = None, exit_code: int = 0
+) -> str:
     """The ``--json`` success envelope; ``targets`` and ``warnings`` only when not empty."""
     targets = [target.to_dict() for target in recorded_targets()]
     warnings = _envelope_warnings(warnings)
     response = SuccessResponse(
-        status="ok", targets=targets or None, warnings=warnings or None, data=data
+        schema_version=ENVELOPE_SCHEMA_VERSION,
+        exit_code=exit_code,
+        targets=targets or None,
+        warnings=warnings or None,
+        data=data,
     )
     empty = {key for key, value in (("targets", targets), ("warnings", warnings)) if not value}
     return response.model_dump_json(indent=2, exclude=empty or None)
@@ -238,8 +244,16 @@ class OutputFormatter:
         self.warnings: list[dict[str, Any]] = []
         self._document_written = False
 
+    @property
+    def document_written(self) -> bool:
+        """True once the JSON envelope is on stdout; stdout then holds no second document."""
+        return self._document_written
+
     def output(
-        self, data: Any, human_formatter: Callable[[Console, Any], object] | None = None
+        self,
+        data: Any,
+        human_formatter: Callable[[Console, Any], object] | None = None,
+        exit_code: int = 0,
     ) -> None:
         """Output data in the appropriate format.
 
@@ -248,9 +262,12 @@ class OutputFormatter:
                   In human mode, it's passed to human_formatter.
             human_formatter: A callable that takes (Console, data) and prints
                            human-friendly output. If None in human mode, prints repr.
+            exit_code: The process exit code that follows this output (O4). A
+                caller that exits non-zero after the output passes it, so the
+                envelope's ``exit_code`` equals the process exit code.
         """
         if self.json_mode:
-            write_machine_output(success_json(data, self.warnings))
+            write_machine_output(success_json(data, self.warnings, exit_code))
             self._document_written = True
         else:
             if human_formatter is not None:
@@ -292,7 +309,10 @@ class OutputFormatter:
                 retryable=retryable,
                 details=details if details else None,
             )
-            error_envelope: dict[str, Any] = {"status": "error"}
+            error_envelope: dict[str, Any] = {
+                "status": "error",
+                "schema_version": ENVELOPE_SCHEMA_VERSION,
+            }
             targets = [target.to_dict() for target in recorded_targets()]
             if targets:
                 error_envelope["targets"] = targets
