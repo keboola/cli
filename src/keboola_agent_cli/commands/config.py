@@ -18,7 +18,7 @@ from rich.syntax import Syntax
 from ..config_store import ConfigStore
 from ..constants import KEBOOLA_DIR_NAME, MANIFEST_FILENAME, VALID_COMPONENT_TYPES
 from ..effective_branch import resolve_branch
-from ..errors import ConfigError, ErrorCode, KeboolaApiError
+from ..errors import ConfigError, ErrorCode, FeatureNotEnabledError, KeboolaApiError
 from ..output import format_config_detail, format_configs_table, format_search_results
 from ..services.component_service import (
     materialize_pushed_config,
@@ -1778,6 +1778,10 @@ def config_set_folder(
             folder_name=name,
             branch_id=effective_branch,
         )
+    except FeatureNotEnabledError as exc:
+        # The stack ignored the folder field: never print a success.
+        formatter.error(message=exc.message, error_code=ErrorCode.FEATURE_NOT_ENABLED)
+        raise typer.Exit(code=5) from None
     except (ConfigError, KeboolaApiError) as exc:
         _handle_config_service_error(formatter, exc)
     formatter.output(

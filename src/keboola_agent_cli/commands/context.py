@@ -617,7 +617,9 @@ Use `kbagent <command> --help` for full flag details and examples.
   kbagent config set-folder --project NAME --component-id ID --config-id ID --name "FolderName" [--branch ID]
     Sets the configuration's `folder` field (no new version). Groups the config in the Keboola UI.
     Pass --name "" to remove the folder assignment. Do not write the KBC.configuration.folderName
-    metadata key with set-metadata: the folder is a configuration field now.
+    metadata key with set-metadata: the folder is a configuration field now. A stack without
+    the field: set-folder exits 5 FEATURE_NOT_ENABLED; sync push/clone add a
+    `folder_not_supported` entry to warnings[].
 
   kbagent config row-create --project NAME --component-id ID --config-id ID --name ROW_NAME [--description D] [--configuration JSON|@file|-] [--is-disabled] [--branch ID] [--allow-plaintext-on-encrypt-failure]
     Create a new configuration row. Returns the new row ID. Optional --configuration accepts JSON inline, @file, or stdin. #-prefixed secrets auto-encrypt before write (fail-closed; since 0.54.0).

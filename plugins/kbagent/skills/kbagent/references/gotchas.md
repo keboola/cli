@@ -35,8 +35,18 @@ Versioning convention:
   push does not change the folder of an existing config, and `config clone` (server-side
   copy) does not copy it -- use `config set-folder` for both.
 - Do not write `KBC.configuration.folderName` with `config set-metadata` any more. The
-  metadata API still serves that key from the same column, but first-party clients no
-  longer use it.
+  metadata API keeps working for that key server-side (the `folder` column mirrors it),
+  but first-party clients no longer read or write it.
+- **Stack requirement:** the field comes with keboola/connection DMD-2347. A stack
+  without it accepts and ignores the `folder` param, so kbagent checks the response:
+  `config set-folder` fails with `FEATURE_NOT_ENABLED` (exit 5; HTTP 400 over
+  `kbagent serve`) and changes nothing, `sync push` / `sync clone` still create the
+  config but add a `folder_not_supported` entry to `warnings[]` (with `config_id` and
+  `folder`), `sync pull` keeps the previous folders (`folder_lookup_failed: true`), and
+  `config list` shows every folder as `""`. kbagent never falls back to the metadata key.
+- The `result` of `config set-folder --json` changed shape: it was the metadata POST
+  response (a list of `{id, key, value, ...}`), it is now the object `{id, name, folder}`.
+  A consumer reading `result[0]["id"]` (the metadata id) must stop.
 
 ## `--branch 0` is production in `job terminate`, `swap-tables`, `clone-table` and `create-table --source-branch-id`
 

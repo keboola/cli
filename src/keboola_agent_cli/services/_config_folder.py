@@ -10,6 +10,14 @@ from __future__ import annotations
 from typing import Any
 
 from ..constants import FOLDER_METADATA_KEY
+from ..errors import FeatureNotEnabledError
+
+# Shared by set-folder and the sync push warning: a stack without the field
+# accepts and ignores the ``folder`` param, so the response is the only probe.
+FOLDER_NOT_SUPPORTED_MESSAGE = (
+    "The Storage API on this stack does not support the configuration folder field "
+    "yet (its response carries no 'folder'), so the folder was not changed."
+)
 
 
 def set_config_folder_method(
@@ -27,6 +35,12 @@ def set_config_folder_method(
     result keeps the keys it had when it wrote that key: ``key`` is frozen,
     ``value`` is the folder as stored ('' when cleared), ``result`` is a
     subset of the PUT response.
+
+    Raises:
+        FeatureNotEnabledError: the PUT response has no ``folder`` key. A stack
+            without the field ignores the param, so reporting success there
+            would be false. No metadata fallback: that is the write of the
+            key this command exists to stop.
     """
     project = self.resolve_projects([alias])[alias]
     client = self._client_factory(project.stack_url, project.token)
@@ -40,8 +54,13 @@ def set_config_folder_method(
         )
     finally:
         client.close()
+    if "folder" not in response:
+        raise FeatureNotEnabledError(
+            f"{FOLDER_NOT_SUPPORTED_MESSAGE} Config '{component_id}/{config_id}' in project "
+            f"'{alias}' is unchanged."
+        )
     # The API trims the name and stores an empty one as "no folder" (null).
-    folder = response.get("folder", folder_name.strip()) or ""
+    folder = response["folder"] or ""
     target = f"config '{component_id}/{config_id}' in project '{alias}'"
     return {
         "project_alias": alias,

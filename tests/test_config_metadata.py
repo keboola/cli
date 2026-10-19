@@ -16,7 +16,7 @@ from typer.testing import CliRunner
 
 from keboola_agent_cli.cli import app
 from keboola_agent_cli.config_store import ConfigStore
-from keboola_agent_cli.errors import ConfigError, KeboolaApiError
+from keboola_agent_cli.errors import ConfigError, FeatureNotEnabledError, KeboolaApiError
 from keboola_agent_cli.models import ProjectConfig
 from keboola_agent_cli.services.config_service import ConfigService
 from keboola_agent_cli.services.job_service import JobService
@@ -274,6 +274,30 @@ class TestConfigGetMetadata:
         assert result.exit_code == 5
         data = json.loads(result.output)
         assert data["error"]["code"] == "CONFIG_ERROR"
+
+    def test_set_folder_unsupported_stack_exits_5_feature_not_enabled(self, tmp_path: Path) -> None:
+        """A stack without the folder field is an error, never a success line."""
+        store = _setup_store(tmp_path)
+        mock_svc = MagicMock()
+        mock_svc.set_config_folder.side_effect = FeatureNotEnabledError("no folder field")
+        result = _invoke(
+            store,
+            mock_svc,
+            "--json",
+            "config",
+            "set-folder",
+            "--project",
+            "prod",
+            "--component-id",
+            COMP_ID,
+            "--config-id",
+            CFG_ID,
+            "--name",
+            "Folder",
+        )
+        assert result.exit_code == 5
+        data = json.loads(result.output)
+        assert data["error"]["code"] == "FEATURE_NOT_ENABLED"
 
 
 # ── set-metadata ───────────────────────────────────────────────────────
@@ -679,3 +703,11 @@ class TestConfigServiceMetadata:
         assert result["folder"] == ""
         assert result["value"] == ""
         assert "cleared" in result["message"]
+
+    def test_set_config_folder_fails_when_response_has_no_folder(self, tmp_path: Path) -> None:
+        """A stack without the field ignores the param: no false success, no metadata write."""
+        svc, mock_client = self._make_service(tmp_path)
+        mock_client.update_config.return_value = {"id": CFG_ID, "name": "Cfg"}
+        with pytest.raises(FeatureNotEnabledError, match="folder field"):
+            svc.set_config_folder("prod", COMP_ID, CFG_ID, folder_name="My Group")
+        mock_client.set_config_metadata.assert_not_called()

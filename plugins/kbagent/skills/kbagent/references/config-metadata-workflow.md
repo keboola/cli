@@ -93,7 +93,10 @@ Guidelines:
   sorts alphabetically.
 - Use `set-folder`, never `set-metadata --key KBC.configuration.folderName`:
   the folder is a configuration field, and no first-party client writes the
-  key any more.
+  key any more (the metadata API keeps accepting it server-side, the column
+  mirrors it).
+- On a stack without the field (before keboola/connection DMD-2347),
+  `set-folder` fails with `FEATURE_NOT_ENABLED` (exit 5) and changes nothing.
 - `config list` shows each config's `folder`; `config detail` returns it as
   the `folder` field (`null` = no folder).
 - Folders are **per component**. Two configs under different components with

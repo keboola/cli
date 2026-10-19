@@ -512,7 +512,7 @@ class TestCloneProjectOrchestration:
         # TARGET default branch, resolved like `sync init` (CLI-5).
         client.list_dev_branches.return_value = [{"id": 555, "isDefault": True}]
         client.list_components_with_configs.return_value = []  # fresh target
-        client.create_config.return_value = {"id": "NEW-ULID-1"}
+        client.create_config.return_value = {"id": "NEW-ULID-1", "folder": "Extractors"}
         svc = _service(tmp_config_dir, client)
 
         result = svc.clone_project(
@@ -525,6 +525,65 @@ class TestCloneProjectOrchestration:
         # never through the metadata API (DMD-2348).
         assert client.create_config.call_args.kwargs["folder"] == "Extractors"
         client.set_config_metadata.assert_not_called()
+        assert not [w for w in result["warnings"] if w["change_type"] == "folder_not_supported"]
+
+    def test_clone_warns_when_target_stack_ignores_the_folder(
+        self, tmp_path: Path, tmp_config_dir: Path
+    ) -> None:
+        # A stack without the folder field ignores the param: its create
+        # response has no ``folder``. The clone succeeds and says the folder
+        # was not set; it never falls back to the metadata key (DMD-2348).
+        from keboola_agent_cli.sync.manifest import save_manifest
+
+        source = tmp_path / "golden"
+        _write_config(
+            source,
+            "extractor/keboola.ex-db/source",
+            {
+                "version": 3,
+                "name": "Source",
+                "parameters": {},
+                "_keboola": {"component_id": "keboola.ex-db", "config_id": "ext-golden"},
+            },
+        )
+        (source / ".keboola").mkdir(parents=True, exist_ok=True)
+        save_manifest(
+            source,
+            Manifest(
+                project=ManifestProject(id=1, apiHost="source.keboola.com"),
+                naming=ManifestNaming(),
+                branches=[ManifestBranch(id=12345, path="main")],
+                configurations=[
+                    ManifestConfiguration(
+                        branchId=12345,
+                        componentId="keboola.ex-db",
+                        id="ext-golden",
+                        path="extractor/keboola.ex-db/source",
+                        metadata={"KBC.configuration.folderName": "Extractors"},
+                    )
+                ],
+            ),
+        )
+
+        client = MagicMock()
+        client.list_dev_branches.return_value = [{"id": 555, "isDefault": True}]
+        client.list_components_with_configs.return_value = []
+        client.create_config.return_value = {"id": "NEW-ULID-1"}  # no "folder" key
+        svc = _service(tmp_config_dir, client)
+
+        result = svc.clone_project(
+            source=source, target_alias="target", target_dir=tmp_path / "clone"
+        )
+
+        assert result["status"] == "cloned"
+        assert result["created"] == 1
+        client.set_config_metadata.assert_not_called()
+        folder_warnings = [
+            w for w in result["warnings"] if w["change_type"] == "folder_not_supported"
+        ]
+        assert len(folder_warnings) == 1
+        assert folder_warnings[0]["config_id"] == "NEW-ULID-1"
+        assert folder_warnings[0]["folder"] == "Extractors"
 
     def test_clone_propagates_folder_git_branching(
         self, tmp_path: Path, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
