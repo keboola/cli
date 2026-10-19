@@ -1,13 +1,15 @@
 name: CI
 
-# `release/**` is the maintenance branch of the previous major version
-# (`release/0.N`) once main holds the next one. It gets the same checks as
-# main: CONTRIBUTING.md > "Releasing a new major version".
+# `release/<major>.<minor>` is the maintenance branch of the previous major
+# version (`release/0.100`) once main holds the next one. It gets the same
+# checks as main: CONTRIBUTING.md > "Releasing a new major version". The
+# pattern does not match the branches of release PRs (`release/0.100.0`):
+# a push there is not a post-merge run, and its PR run already checks it.
 on:
   push:
-    branches: [main, "release/**"]
+    branches: [main, "release/[0-9]+.[0-9]+"]
   pull_request:
-    branches: [main, "release/**"]
+    branches: [main, "release/[0-9]+.[0-9]+"]
 
 # One in-flight run per PR. Pushing again to an open PR supersedes the previous
 # run, which used to keep burning a full ~39 billed minutes (a Windows job bills
@@ -15,7 +17,7 @@ on:
 # 219 PR runs (13%) were still executing when the next push landed, and a single
 # iterating branch racked up 23 runs.
 #
-# A push to main (or to a release/** branch) is the post-merge verification of
+# A push to main (or to a maintenance branch) is the post-merge verification of
 # a commit that is already shipped, so it must never be dropped: losing the
 # signal for the commit in between two merges is exactly when you want it.
 #
