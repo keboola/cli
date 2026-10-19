@@ -28,6 +28,7 @@ from ..constants import (
 )
 from ..errors import ErrorCode, KeboolaApiError, PermissionDeniedError
 from ..output import OutputFormatter
+from ..update_crossing import print_held_warning, refusal_for
 
 
 def resolve_manage_token(*, allow_env: bool = False) -> str:
@@ -537,15 +538,40 @@ def check_cli_permission(ctx: typer.Context, group_name: str) -> None:
     if _is_help_request(ctx):
         return
 
-    engine = ctx.obj.get("permission_engine")
-    if engine is None or not engine.active:
-        return
-
     subcommand = ctx.invoked_subcommand
     if subcommand is None:
         return
 
-    check_cli_operation(ctx, f"{group_name}.{subcommand}")
+    operation = f"{group_name}.{subcommand}"
+    # The policy first: a write that it denies must not use up the one
+    # refusal after a major update.
+    engine = ctx.obj.get("permission_engine")
+    if engine is not None and engine.active:
+        check_cli_operation(ctx, operation)
+
+    refuse_first_write_after_major_update(ctx, operation)
+
+
+def refuse_first_write_after_major_update(ctx: typer.Context, operation: str) -> None:
+    """Refuse the first write or destructive command after a major update (#791 row 28).
+
+    The startup check records an update to a higher major that the user did
+    not start with ``kbagent update --major`` in a state file
+    (:mod:`..update_crossing`). The first write or destructive command that
+    claims the file exits 6 with ``UPDATED_ACROSS_MAJOR``. Every later
+    command runs.
+    """
+    refusal = refusal_for(operation)
+    if refusal is None:
+        print_held_warning()
+        return
+    get_formatter(ctx).error(
+        message=refusal["message"],
+        error_code=ErrorCode.UPDATED_ACROSS_MAJOR,
+        retryable=True,
+        details=refusal["details"],
+    )
+    raise typer.Exit(code=EXIT_PERMISSION_DENIED)
 
 
 def check_cli_operation(ctx: typer.Context, operation: str) -> None:

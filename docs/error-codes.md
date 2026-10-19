@@ -196,3 +196,10 @@ of `ErrorCode` in `src/keboola_agent_cli/errors.py`.
 |---|---|
 | `MR_NOT_READY_TO_MERGE` | Merge answered 409 with `storage.mergeRequests.notReadyToMerge`: a project merge lock is held, the MR is in a state that cannot merge, or another MR in the project is already processing. Transient -- retryable |
 | `MR_MERGE_CONFLICT` | Merge answered 409 with `storage.mergeRequests.validation` (or, on older stacks, no code): configurations changed on both branches; `details.api_error_params.errors` lists them. Not retryable -- resolve the conflicts and merge again |
+
+### Updates
+
+| Code | Description |
+|---|---|
+| `UPDATED_ACROSS_MAJOR` | After an automatic update to a higher major version (for example from 0.x to 1.x), the first write or destructive command was refused once, with exit code 6. Every later command runs. Reads before that command run and get the same code as a `warnings[]` entry. Admin commands and an update started with `kbagent update --major` do not refuse. See [migrate-to-1.0.md](migrate-to-1.0.md) |
+| `UPDATED_ACROSS_BREAKING` | Only a `warnings[]` entry, in the first command after an update: the update crossed versions with `BREAKING:` changelog notes. `versions` lists them. `kbagent changelog --full` shows the notes |
