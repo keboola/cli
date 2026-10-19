@@ -433,6 +433,11 @@ def flow_schema(
             raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
         schema, reason = fetch.schema, fetch.reason
+        if fetch.error is not None:
+            # The request failed (network, auth, HTTP status): keep its code,
+            # exit code and `retryable`, so a timeout still exits 4.
+            emit_api_error(formatter, fetch.error)
+            raise typer.Exit(code=map_error_to_exit_code(fetch.error))
         if schema is None:
             formatter.error(
                 message=f"Could not fetch the conditional-flow schema: {reason}",

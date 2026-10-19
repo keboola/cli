@@ -12,11 +12,12 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+import pytest
 from typer.testing import CliRunner
 
 from keboola_agent_cli.cli import app
 from keboola_agent_cli.config_store import ConfigStore
-from keboola_agent_cli.errors import ConfigError, KeboolaApiError
+from keboola_agent_cli.errors import ConfigError, ErrorCode, KeboolaApiError
 from keboola_agent_cli.models import ProjectConfig
 from keboola_agent_cli.services.flow_service import FlowSchemaFetch
 
@@ -311,16 +312,43 @@ class TestFlowSchema:
         payload = json.loads(result.output)
         assert payload["data"]["schema"]["required"] == ["phases", "tasks"]
 
-    def test_schema_full_fetch_failure_errors(self, tmp_path: Path) -> None:
+    def test_schema_full_missing_schema_is_not_found(self, tmp_path: Path) -> None:
+        """The stack answered, but without a usable schema: NOT_FOUND, exit 1 (spec E1)."""
         store = _setup_config(tmp_path, {"prod": {}})
         mock_flow = MagicMock()
         mock_flow.fetch_flow_schema.return_value = FlowSchemaFetch(
-            schema=None, reason="network down"
+            schema=None, reason="AI Service returned no configurationSchema for keboola.flow"
         )
-        result = _invoke(store, mock_flow, ["flow", "schema", "--full", "--project", "prod"])
-        # NOT_FOUND exits 1 (spec E1). This path exited 4 before 1.0.0.
+        result = _invoke(
+            store, mock_flow, ["--json", "flow", "schema", "--full", "--project", "prod"]
+        )
         assert result.exit_code == 1
-        assert "network down" in result.output
+        error = json.loads(result.output)["error"]
+        assert error["code"] == "NOT_FOUND"
+        assert "no configurationSchema" in error["message"]
+
+    @pytest.mark.parametrize(
+        ("code", "exit_code"),
+        [(ErrorCode.TIMEOUT, 4), (ErrorCode.CONNECTION_ERROR, 4), (ErrorCode.RETRY_EXHAUSTED, 4)],
+    )
+    def test_schema_full_network_failure_keeps_network_code(
+        self, tmp_path: Path, code: ErrorCode, exit_code: int
+    ) -> None:
+        """A failed request keeps its own code, exit 4 and `retryable`."""
+        store = _setup_config(tmp_path, {"prod": {}})
+        mock_flow = MagicMock()
+        exc = KeboolaApiError("network down", error_code=code, retryable=True)
+        mock_flow.fetch_flow_schema.return_value = FlowSchemaFetch(
+            schema=None, reason=exc.message, error=exc
+        )
+        result = _invoke(
+            store, mock_flow, ["--json", "flow", "schema", "--full", "--project", "prod"]
+        )
+        assert result.exit_code == exit_code
+        error = json.loads(result.output)["error"]
+        assert error["code"] == code
+        assert error["retryable"] is True
+        assert error["error_type"] == "network"
 
 
 # ---------------------------------------------------------------------------
