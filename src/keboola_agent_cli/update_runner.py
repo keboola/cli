@@ -778,8 +778,11 @@ def claim_file(path: Path) -> ClaimResult:
     """Move ``path`` to a name of this process, so at most one process owns it.
 
     ``os.replace`` is atomic within one directory: of several processes that
-    try at the same time, exactly one succeeds and the others find the file
-    gone. The moved copy keeps the content for the winner to read and delete.
+    try at the same time, at most one succeeds. On POSIX exactly one succeeds
+    and the others find the file gone. On Windows a move or a read that runs at
+    the same time as another process can fail with a sharing violation; then
+    nobody is refused (fail open).
+    The moved copy keeps the content for the winner to read and delete.
     """
     try:
         os.replace(path, path.with_name(_claimed_name(path)))
