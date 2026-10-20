@@ -399,7 +399,9 @@ def test_stale_context_commands_are_a_violation(
 ) -> None:
     module = tmp_path / "_context_commands.py"
     text = spec_check.CONTEXT_COMMANDS_PATH.read_text(encoding="utf-8")
-    module.write_text(text.replace("kbagent storage buckets", "kbagent storage bucketz"))
+    module.write_text(
+        text.replace("kbagent storage buckets", "kbagent storage bucketz"), encoding="utf-8"
+    )
     monkeypatch.setattr(spec_check, "CONTEXT_COMMANDS_PATH", module)
     assert spec_check.r_context_from_manifest(spec_check.Context(tree)) == {
         spec_check.CONTEXT_COMMANDS_REL: "differs from the text generated from "
