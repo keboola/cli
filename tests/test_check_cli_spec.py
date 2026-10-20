@@ -518,3 +518,14 @@ def test_short_flag_registry_is_pinned(tree: Any) -> None:
     """Every short flag in the tree is in SHORT_FLAGS (a new one needs an entry)."""
     found = spec_check.r_short_one_meaning(spec_check.Context(tree))
     assert not [s for s, why in found.items() if "not in SHORT_FLAGS" in why]
+
+
+def test_fanout_reads_are_the_reads_with_all_projects(tree: Any) -> None:
+    """FANOUT_READS lists every read command that has --all-projects (T2), and no other."""
+    reads = {
+        lf.name
+        for lf in tree.leaves
+        if lf.category == "read" and "--all-projects" in spec_check.opt_names(lf)
+    }
+    # `sync diff` and `sync pull` have their own --all-projects (one tree per project).
+    assert reads - {"sync diff", "sync pull"} == spec_check.FANOUT_READS

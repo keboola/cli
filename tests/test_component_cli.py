@@ -97,7 +97,7 @@ class TestComponentList:
         assert output["data"]["components"][0]["component_id"] == "keboola.ex-http"
         assert output["data"]["errors"] == []
         mock_svc.list_components.assert_called_once_with(
-            aliases=None,
+            aliases=["prod"],
             component_type=None,
             query=None,
         )
@@ -145,7 +145,7 @@ class TestComponentList:
         assert len(output["data"]["components"]) == 1
         assert output["data"]["components"][0]["component_id"] == "keboola.ex-aws-s3"
         mock_svc.list_components.assert_called_once_with(
-            aliases=None,
+            aliases=["prod"],
             component_type=None,
             query="s3 extractor",
         )

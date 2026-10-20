@@ -392,15 +392,15 @@ Use `kbagent <command> --help` for full flag details and examples.
     --file, or --stdin. Writes KBC.projectDescription to the default branch.
 
   kbagent project use ALIAS
-    Pin ALIAS as the default project. Persists to config.json. A registered
-    project ID pins that project's alias (since 0.96.1; see Tips 3).
-    Env var KBAGENT_PROJECT=ALIAS overrides the pin for a single shell/session;
-    an explicit --project flag overrides both.
+    Set ALIAS as the active project. Persists to config.json. A registered
+    project ID sets that project's alias (since 0.96.1; see Tips 3).
+    Env var KBAGENT_PROJECT=ALIAS overrides the active project for a single
+    shell/session. An explicit --project flag overrides both.
 
   kbagent project current
-    Print the effective default project and its source (env / pin / none).
-    Resolution order for single-project operations: --project > KBAGENT_PROJECT > pin
-    > sole project. `resolved_alias` / `resolved_source` (env / active_project /
+    Print the active project and its source (env / pin / none, where "pin"
+    is the saved active project). Resolution order: --project > KBAGENT_PROJECT >
+    active project > sole project. `resolved_alias` / `resolved_source` (env / active_project /
     sole / none) name the project a command without --project would use
     (since 0.100.0).
 
@@ -667,7 +667,7 @@ Use `kbagent <command> --help` for full flag details and examples.
 
   kbagent job list [--project NAME | --all-projects] [--component-id ID] [--config-id ID] [--status STATUS] [--limit N] [--offset N] [--sort-by FIELD] [--sort-order asc|desc]
     List jobs from Queue API. --status: processing, terminated, cancelled, success, error.
-    Without --project the fan-out over every registered project is merged GLOBALLY by
+    With --all-projects the fan-out over every registered project is merged GLOBALLY by
     --sort-by/--sort-order (default startTime desc), missing values last, deterministic
     (project_alias, id) tiebreak -- since 0.90.1 it is one chronological feed, NOT rows
     grouped per project. Group them yourself if you need per-project blocks.
@@ -1145,9 +1145,9 @@ remain branch-aware because modifying a dev branch is the expected intent.
 ### Billing / PAYG Credits (since v0.84.2)
 
   kbagent billing credits [--project ALIAS ... | --all-projects]
-    Read-only PAYG (pay-as-you-go) credit balance. Fans out across all
-    registered projects in parallel by default; --project (repeatable)
-    narrows to specific aliases. Per-project failures degrade individually
+    Read-only PAYG (pay-as-you-go) credit balance of the active project.
+    --project (repeatable) names projects, --all-projects reads all of them
+    in parallel (since vNEXT, before that an omitted --project read all). Per-project failures degrade individually
     and never abort the run -- check the "errors" array in --json output.
     A project without the `pay-as-you-go` owner.features flag never touches
     the billing host (it can be NXDOMAIN on non-PAYG stacks) -- it gets a
@@ -1250,7 +1250,8 @@ remain branch-aware because modifying a dev branch is the expected intent.
 
   kbagent schedule list [--project NAME ... | --all-projects] [--enabled-only] [--branch ID]
     Fleet-wide list of every keboola.scheduler config across one, many, or all
-    projects (multi-project fan-out; no --project means all). Each row shows
+    projects (no --project means the active project, --all-projects means all,
+    since vNEXT). Each row shows
     project_alias, schedule_id, schedule_name, parent_component_id, parent_config_id,
     parent_name, cron, timezone, and enabled. Use --enabled-only to hide disabled
     schedules. Answers issue #195: "which flows are on cron triggers across N projects?".
@@ -2541,13 +2542,20 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
    a REPEATED_OPTION entry in "warnings" on a read command (since vNEXT).
 
 3. Multi-project: most read commands accept repeatable --project flag.
-   Omit --project to query ALL connected projects in parallel.
-   --all-projects (since 0.100.0) says the same explicitly on search, billing
-   credits, component list, config list/search, data-app list, job list,
-   storage buckets/tables, sharing list/edges, flow list, schedule list/find,
-   notification list, branch list, workspace list and project status. Use it
-   in scripts: from 1.0.0 an omitted --project reads only the default project.
-   --all-projects with --project is USAGE_ERROR (exit 2).
+   An omitted --project uses the active project, like every other command:
+   KBAGENT_PROJECT > `project use` > the only registered project, else
+   CONFIG_ERROR (exit 5). --all-projects reads ALL registered projects in
+   parallel on search, billing credits, component list, config list/search,
+   data-app list, job list, storage buckets/tables, sharing list/edges, flow
+   list, schedule list/find, notification list, branch list, workspace list
+   and project status (since vNEXT, on 0.x an omitted --project read all
+   projects, and --all-projects exists since 0.100.0). --all-projects with
+   --project is USAGE_ERROR (exit 2). Every record in "targets" carries
+   "project_source" (explicit / env / active_project / sole / all) next to
+   "branch_source". A record without a branch has "branch_source": "none"
+   (since vNEXT). A destructive command whose project or branch comes from
+   `project use` or `branch use` adds a TARGET_FROM_ACTIVE_CHOICE entry to
+   "warnings" whose "hint" is the explicit flag (since vNEXT).
    --project takes an alias or a registered project's numeric ID (since 0.96.1).
    An alias wins over an ID. An ID registered under several aliases fails with
    CONFIG_ERROR (exit 5) and lists them -- unless all are on one stack and
@@ -2592,7 +2600,7 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
      KBC_MASTER_TOKEN         Master token for sharing ops (global fallback)
      KBC_MASTER_TOKEN_*       Per-project master token (e.g. KBC_MASTER_TOKEN_PROD)
      KBAGENT_CONFIG_DIR       Override config directory
-     KBAGENT_PROJECT          Override the pinned default project for this shell/session (alias or project ID; beats pin, loses to --project)
+     KBAGENT_PROJECT          Override the active project for this shell/session (alias or project ID, beats `project use`, loses to --project)
      KBAGENT_PROJECT_FROM_ENV Set to "1" (or true/yes/on) to synthesize an in-memory project under the
                               reserved alias __env__ from KBC_TOKEN + KBC_STORAGE_API_URL.
                               Headless / token-only mode: no `project add`, no config.json on disk. Use
@@ -2685,10 +2693,11 @@ items that succeeded stay written, so read the payload before you run the
 command again. A --dry-run of these commands exits 1 when it reports a failed
 item, like the real run. sync diff --all-projects also exits 1 when a project
 failed.
-Other read-only multi-project fan-outs (billing credits, job list, schedule
-list, notification list, ...) are the deliberate exception: a per-project
-failure there degrades that project only and still exits 0, so check their
-errors array rather than the exit code.
+The 18 fan-out reads (billing credits, job list, schedule list, notification
+list, ...) exit 1 too when a project failed, after the full payload with its
+"errors" array, and exit 5 when no project is registered (since vNEXT, before
+that they exited 0). PAYG_NOT_AVAILABLE in billing credits is an answer, not a
+failure.
 
 ## Claude Code Plugin
 

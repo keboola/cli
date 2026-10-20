@@ -16,7 +16,12 @@ from ..effective_branch import record_branch, resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..services._storage_jobs import validate_wait_timeout
 from ..services._storage_tables import CLONE_TABLE_PRODUCTION_MESSAGE
-from ._all_projects import AllProjectsOption, reject_project_with_all_projects
+from ._all_projects import (
+    FANOUT_PROJECT_HELP,
+    AllProjectsOption,
+    fanout_exit_code,
+    fanout_projects,
+)
 from ._helpers import (
     _confirm_or_abort,
     check_cli_permission,
@@ -74,7 +79,7 @@ def storage_buckets(
     project: list[str] | None = typer.Option(
         None,
         "--project",
-        help="Project alias (can be repeated for multiple projects)",
+        help=FANOUT_PROJECT_HELP,
     ),
     all_projects: AllProjectsOption = False,
     branch: int | None = typer.Option(
@@ -95,17 +100,18 @@ def storage_buckets(
     a dev branch explicitly.
     """
     formatter = get_formatter(ctx)
-    reject_project_with_all_projects(formatter, project, all_projects)
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
 
     # --branch requires exactly one --project
-    if branch is not None and (not project or len(project) != 1):
+    if branch is not None and (all_projects or len(project or []) > 1):
         formatter.error(
             message="--branch requires exactly one --project (branch ID is per-project)",
             error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2)
+
+    project = fanout_projects(ctx, formatter, project, all_projects)
 
     # Resolve active branch for single-project queries.
     # Storage read commands ignore the implicit active dev branch: the
@@ -124,15 +130,16 @@ def storage_buckets(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
+    code = fanout_exit_code(result.get("errors", []))
     if formatter.json_mode:
-        formatter.output(result)
+        formatter.output(result, exit_code=code)
+    elif not result["buckets"]:
+        formatter.console.print("[dim]No buckets found.[/dim]")
+        emit_project_warnings(formatter, result)
     else:
         from rich.table import Table
 
         buckets = result["buckets"]
-        if not buckets:
-            formatter.console.print("[dim]No buckets found.[/dim]")
-            return
 
         # Group by project
         by_project: dict[str, list[dict]] = {}
@@ -162,6 +169,8 @@ def storage_buckets(
             formatter.console.print()
 
         emit_project_warnings(formatter, result)
+    if code:
+        raise typer.Exit(code=code)
 
 
 @storage_app.command("bucket-detail", rich_help_panel=_BUCKETS)
@@ -276,8 +285,7 @@ def storage_tables(
     project: list[str] | None = typer.Option(
         None,
         "--project",
-        help="Project alias (can be repeated for multiple projects). "
-        "Omit to query all connected projects in parallel.",
+        help=FANOUT_PROJECT_HELP,
     ),
     all_projects: AllProjectsOption = False,
     bucket_id: str | None = typer.Option(
@@ -303,10 +311,10 @@ def storage_tables(
 ) -> None:
     """List storage tables from one or more projects.
 
-    Queries all connected projects in parallel by default, matching the
-    behaviour of ``storage buckets``, ``config list``, ``job list``, and other
-    read commands. Each row in the output is tagged with ``project_alias``
-    so results from multiple projects can be distinguished.
+    Without --project it reads the active project; --all-projects reads every
+    registered project in parallel, like ``storage buckets``, ``config list``,
+    ``job list`` and the other fan-out reads. Each row in the output is tagged
+    with ``project_alias`` so results from multiple projects can be distinguished.
 
     Branch handling: this read command uses the production endpoint by
     default, even when a dev branch is active via `branch use`. The
@@ -315,18 +323,19 @@ def storage_tables(
     nothing. Pass --branch to query a dev branch explicitly.
     """
     formatter = get_formatter(ctx)
-    reject_project_with_all_projects(formatter, project, all_projects)
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
 
     # --branch requires exactly one --project (branch ID is per-project).
     # Mirrors the validation used by `storage buckets` and `config list`.
-    if branch is not None and (not project or len(project) != 1):
+    if branch is not None and (all_projects or len(project or []) > 1):
         formatter.error(
             message="--branch requires exactly one --project (branch ID is per-project)",
             error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2)
+
+    project = fanout_projects(ctx, formatter, project, all_projects)
 
     # Resolve active branch only for single-project queries; multi-project
     # listing intentionally skips active-branch resolution because branches
@@ -353,8 +362,9 @@ def storage_tables(
         emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
+    code = fanout_exit_code(result.get("errors", []))
     if formatter.json_mode:
-        formatter.output(result)
+        formatter.output(result, exit_code=code)
     else:
         tables = result["tables"]
         if not tables:
@@ -362,6 +372,8 @@ def storage_tables(
         else:
             render_tables(formatter.console, tables, include_usage)
         emit_project_warnings(formatter, result)
+    if code:
+        raise typer.Exit(code=code)
 
 
 @storage_app.command("table-detail", rich_help_panel=_TABLES)

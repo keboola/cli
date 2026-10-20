@@ -621,10 +621,19 @@ kbagent config clone --project P --component-id ID --config-id ID --name NAME [-
 #   how you discover what to gather. Storage bucket/table IDs are copied VERBATIM, never remapped
 #   (`sync clone` is the command that remaps).
 
-# --all-projects (CLI-36): on the 18 fan-out reads that read all projects without --project; until 1.0.0 the
-#   same as an omitted --project, with --project USAGE_ERROR (exit 2). --json envelopes gain an optional
-#   top-level `warnings` list ({code, message, ...}), not the same as `data.warnings`. Details and version
-#   gate in gotchas.md.
+# Target selection (CLI-45, spec T1/T2/T6/T12/E4): the 18 fan-out reads (search, billing credits, component
+#   list, config list/search, data-app list, job list, storage buckets/tables, sharing list/edges, flow list,
+#   schedule list/find, notification list, branch list, workspace list, project status) use the active
+#   project when --project is omitted (KBAGENT_PROJECT > `project use` > sole project > CONFIG_ERROR, exit 5,
+#   commands/_all_projects.fanout_projects). --all-projects reads all registered projects (with --project:
+#   USAGE_ERROR, exit 2). A read in which a project failed exits 1 after the full payload (fanout_exit_code,
+#   PAYG_NOT_AVAILABLE excluded). No registered project = exit 5. Every `targets` record has `project_source`
+#   (explicit|env|active_project|sole|all). effective_branch.record_project records it, called by the --project
+#   option callback, resolve_pinned_alias, resolve_projects and fanout_projects. A project without a branch record
+#   gets one record with branch_source "none". A destructive command under --json whose project or branch
+#   is the active choice adds a TARGET_FROM_ACTIVE_CHOICE warnings[] entry (OutputFormatter, category set by
+#   root_command.LeafCommand). REST routes are unchanged. --json envelopes have an optional top-level
+#   `warnings` list ({code, message, ...}), not the same as `data.warnings`. Version gate in gotchas.md.
 kbagent search QUERY [--project NAME | --all-projects] [--type table|bucket|config|flow|data-app|transformation] [--search-type textual|config-based] [--regex] [--scope PATH ...] [--limit N]
 # --regex (0.67.0+): opt-in regex mode (mode=regex). Case-insensitive whole-term match on ENTITY NAMES
 #   only ('report' != 'monthly_report'; use '.*report.*'). Textual only -- error with --search-type
@@ -636,7 +645,7 @@ kbagent search QUERY [--project NAME | --all-projects] [--type table|bucket|conf
 #   another). `kbagent config search --query` stays case-sensitive by default (it has --ignore-case).
 
 kbagent job list [--project NAME | --all-projects] [--component-id ID] [--config-id ID] [--status STATUS] [--limit N] [--offset N] [--sort-by startTime|endTime|createdTime|durationSeconds|id] [--sort-order asc|desc]
-# job list (0.90.1+, #675): without --project the multi-project fan-out is merged GLOBALLY by
+# job list (0.90.1+, #675): a multi-project fan-out (--all-projects) is merged GLOBALLY by
 #   --sort-by/--sort-order (default startTime desc), missing values last in both directions,
 #   deterministic (project_alias, id) tiebreak. Before 0.90.1 rows came back grouped alias-then-id,
 #   which destroyed the chronological order the fan-out exists to produce. Same change applies to
@@ -816,7 +825,7 @@ kbagent org setup --project-ids 1,2,3 --url URL [--dry-run] [--yes] [--token-des
 
 kbagent billing credits [--project ALIAS ... | --all-projects]
 # billing credits (0.84.2+, issue #594 secondary ask): read-only PAYG credit balance, fanned out
-#   across all registered projects in parallel by default (--project repeatable narrows). A project
+#   across the --project projects or, with --all-projects, all registered projects in parallel. A project
 #   without the `pay-as-you-go` owner.features flag never touches the billing host (NXDOMAIN on some
 #   non-PAYG stacks) -- it gets a per-project error_code PAYG_NOT_AVAILABLE instead; per-project
 #   failures degrade individually, the run never aborts. Rows report the API's native unit (credits)
@@ -925,7 +934,8 @@ kbagent branch list [--project NAME | --all-projects]
 kbagent branch create --project ALIAS --name "..." [--description "..."]
 kbagent branch use --project ALIAS --branch ID
 # branch use: every command that then picks a branch names it -- `Target:` on stderr, `targets` in
-#   --json (branch_source explicit|active_branch|git_mapping|manifest|merge_request|production). Version gate in gotchas.md (#766).
+#   --json (branch_source explicit|active_branch|git_mapping|manifest|merge_request|production|none, plus
+#   project_source since CLI-45). Version gate in gotchas.md (#766).
 kbagent branch reset --project ALIAS
 kbagent branch delete --project ALIAS --branch ID [--dry-run] [--yes]
 kbagent branch merge --project ALIAS [--branch ID]
@@ -1188,8 +1198,8 @@ kbagent sync push --project ALIAS [--all-projects] [--dry-run] [--force] [--allo
 #   whose push returned `errors[]` in `summary.failed`. The --json payload is emitted
 #   BEFORE the exit; the items that succeeded stay written. A `--dry-run` of these
 #   exits 1 when it reports a failed item, like the real run. `sync diff --all-projects`
-#   exits 1 when a project failed. Other read-only fan-outs (`billing credits`, `job list`,
-#   `schedule list`, ...) still exit 0. The helper is `item_failure_exit_code()` in
+#   exits 1 when a project failed. The 18 fan-out reads (`billing credits`, `job list`,
+#   `schedule list`, ...) exit 1 too (CLI-45). The helper is `item_failure_exit_code()` in
 #   commands/_helpers.py (returns the code, the caller raises). Version gate for this
 #   entry lives in gotchas.md -- the placeholder cannot be written on these `# ` comment
 #   lines (check_version_gates.py parses them as ATX markdown headings).

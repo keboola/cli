@@ -22,7 +22,12 @@ from typing import Any
 import typer
 from rich.table import Table
 
-from ..commands._all_projects import AllProjectsOption, reject_project_with_all_projects
+from ..commands._all_projects import (
+    FANOUT_PROJECT_HELP,
+    AllProjectsOption,
+    fanout_exit_code,
+    fanout_projects,
+)
 from ..commands._helpers import (
     emit_api_error,
     emit_project_warnings,
@@ -46,7 +51,7 @@ def search_command(
         None,
         "--project",
         "-p",
-        help="Project alias to search (repeatable; defaults to all projects).",
+        help=FANOUT_PROJECT_HELP,
     ),
     all_projects: AllProjectsOption = False,
     item_type: list[str] | None = typer.Option(
@@ -119,7 +124,6 @@ def search_command(
       kbagent --json search revenue --type config --type flow
     """
     formatter = get_formatter(ctx)
-    reject_project_with_all_projects(formatter, project, all_projects)
     service = get_service(ctx, "search_service")
 
     # Validate --type values.
@@ -159,6 +163,8 @@ def search_command(
         )
         raise typer.Exit(code=2)
 
+    project = fanout_projects(ctx, formatter, project, all_projects)
+
     try:
         result = service.search(
             query=query,
@@ -178,11 +184,14 @@ def search_command(
         emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
+    code = fanout_exit_code(result.get("errors", []))
     if formatter.json_mode:
-        formatter.output(result)
+        formatter.output(result, exit_code=code)
     else:
         _format_search_results(formatter.console, result, query, search_type, regex)
         emit_project_warnings(formatter, result)
+    if code:
+        raise typer.Exit(code=code)
 
 
 # ── Human-readable output ──────────────────────────────────────────────────

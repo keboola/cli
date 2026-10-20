@@ -100,11 +100,19 @@ class TestBillingCreditsCli:
         assert result.exit_code == 0, result.output
         mock_service.get_credits.assert_called_once_with(aliases=["a", "b"])
 
-    def test_no_project_flag_forwards_none(self, tmp_path: Path) -> None:
+    def test_no_project_flag_uses_the_active_project(self, tmp_path: Path) -> None:
         store = _setup_config(tmp_path / "cfg", {"a": {}})
         mock_service = MagicMock()
         mock_service.get_credits.return_value = {"credits": [], "errors": []}
         result = _run(["--json", "billing", "credits"], store, mock_service)
+        assert result.exit_code == 0, result.output
+        mock_service.get_credits.assert_called_once_with(aliases=["a"])
+
+    def test_all_projects_forwards_none(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"a": {}})
+        mock_service = MagicMock()
+        mock_service.get_credits.return_value = {"credits": [], "errors": []}
+        result = _run(["--json", "billing", "credits", "--all-projects"], store, mock_service)
         assert result.exit_code == 0, result.output
         mock_service.get_credits.assert_called_once_with(aliases=None)
 

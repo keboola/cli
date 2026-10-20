@@ -154,6 +154,31 @@ _PROJECT_DEFAULT_WORDS = re.compile(
     re.IGNORECASE,
 )
 _COMMA_LIST = re.compile(r"comma[- ]separated|comma-delimited", re.IGNORECASE)
+# T2, T11: the 18 fan-out reads (spec "Fan-out reads"). Their `--project` help
+# must name the active project as the omitted default and `--all-projects`.
+FANOUT_READS: frozenset[str] = frozenset(
+    {
+        "search",
+        "billing credits",
+        "component list",
+        "config list",
+        "config search",
+        "data-app list",
+        "job list",
+        "storage buckets",
+        "storage tables",
+        "sharing list",
+        "sharing edges",
+        "flow list",
+        "schedule list",
+        "schedule find",
+        "notification list",
+        "branch list",
+        "workspace list",
+        "project status",
+    }
+)
+_FANOUT_DEFAULT_WORDS = ("active project", "--all-projects")
 
 # --------------------------------------------------------------------------- #
 # Tree model
@@ -695,8 +720,13 @@ def r_project_help_default(c: Context) -> Violations:
         p = param_with(lf, "--project")
         if p is None or (p.required and not getattr(p, "multiple", False)):
             continue
-        if not _PROJECT_DEFAULT_WORDS.search(getattr(p, "help", None) or ""):
+        text = getattr(p, "help", None) or ""
+        if not _PROJECT_DEFAULT_WORDS.search(text):
             found[f"{lf.name} --project"] = "help does not say what an omitted --project does"
+        elif lf.name in FANOUT_READS and not all(w in text for w in _FANOUT_DEFAULT_WORDS):
+            found[f"{lf.name} --project"] = (
+                "fan-out read: help must name the active project and --all-projects (T2)"
+            )
     return found
 
 
@@ -1252,6 +1282,8 @@ CONTRACT_RULES: dict[str, str] = {
     "args.repeated-single-value": "tests/test_cli_contract.py",
     "serve.undeclared-dry-run-rejected": "tests/test_server_dry_run_guard.py",
     "safety.no-tty-confirmation": "tests/test_cli_contract.py",
+    "errors.fanout-exit": "tests/test_target_selection.py",
+    "target.targets-reported": "tests/test_target_selection.py",
 }
 DEFERRED_RULES: dict[str, str] = {
     "args.global-option-one-shape": "the GLOBAL_OPTIONS registry is not reviewed yet (A1)",
@@ -1259,13 +1291,11 @@ DEFERRED_RULES: dict[str, str] = {
     "input.content-option-refuses-at-file": "the @file refusal lands in 1.0.0 (Input)",
     "output.no-warning-after-output": "lands with warnings[] in the --json envelope",
     "output.multi-item-headline": "contract; lands with HO2",
-    "errors.fanout-exit": "contract; the default-project change for fan-out reads is 1.0.0",
     "help.context-from-manifest": "kbagent context is generated from the manifest in 1.0.0 (AG1)",
     "env.registry-complete": "the environment variable registry does not exist yet",
     "change.expired-deprecation": "no DEPRECATIONS entry has a remove_after date yet: "
     "the window of the 1.0.0 hidden aliases starts at M",
     "change.breaking-bullet-on-removal": "release kind; lands with the release mechanics",
-    "target.targets-reported": "contract; lands with project_source in 1.0.0",
     "serve.targets-reported": "contract; the Kbagent-Targets header lands in 1.0.0 (V3)",
 }
 

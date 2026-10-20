@@ -32,7 +32,12 @@ from rich.table import Table
 from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..services.notification_service import KNOWN_EVENTS, SCOPE_PROJECT_WIDE, VALID_CHANNELS
-from ._all_projects import AllProjectsOption, reject_project_with_all_projects
+from ._all_projects import (
+    FANOUT_PROJECT_HELP,
+    AllProjectsOption,
+    fanout_exit_code,
+    fanout_projects,
+)
 from ._helpers import (
     _confirm_or_abort,
     check_cli_permission,
@@ -181,7 +186,7 @@ def notification_list(
     project: list[str] | None = typer.Option(
         None,
         "--project",
-        help="Project alias (repeatable; omit for all registered projects)",
+        help=FANOUT_PROJECT_HELP,
     ),
     all_projects: AllProjectsOption = False,
     event: str | None = typer.Option(None, "--event", help=_EVENT_HELP),
@@ -209,8 +214,9 @@ def notification_list(
     notification *tasks* -- a different mechanism from these subscriptions.
     """
     formatter = get_formatter(ctx)
-    reject_project_with_all_projects(formatter, project, all_projects)
     service = get_service(ctx, "notification_service")
+
+    project = fanout_projects(ctx, formatter, project, all_projects)
 
     try:
         result = service.list_subscriptions(
@@ -223,25 +229,27 @@ def notification_list(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
+    code = fanout_exit_code(result.get("errors", []))
     if formatter.json_mode:
-        formatter.output(result)
-        return
-
-    subscriptions = result.get("subscriptions", [])
-    if not subscriptions:
-        formatter.console.print("[dim]No notification subscriptions found.[/dim]")
+        formatter.output(result, exit_code=code)
     else:
-        _format_subscription_table(formatter, subscriptions)
+        subscriptions = result.get("subscriptions", [])
+        if not subscriptions:
+            formatter.console.print("[dim]No notification subscriptions found.[/dim]")
+        else:
+            _format_subscription_table(formatter, subscriptions)
 
-    excluded = result.get("project_wide_excluded", 0)
-    if excluded:
-        formatter.warning(
-            f"{excluded} project-wide subscription(s) hidden by --component-id/--config-id. "
-            "They have no configuration filter, so they also fire for this one -- "
-            "re-run without the filter to see who else gets paged."
-        )
+        excluded = result.get("project_wide_excluded", 0)
+        if excluded:
+            formatter.warning(
+                f"{excluded} project-wide subscription(s) hidden by --component-id/--config-id. "
+                "They have no configuration filter, so they also fire for this one -- "
+                "re-run without the filter to see who else gets paged."
+            )
 
-    _emit_errors(formatter, result.get("errors", []))
+        _emit_errors(formatter, result.get("errors", []))
+    if code:
+        raise typer.Exit(code=code)
 
 
 # ---------------------------------------------------------------------------

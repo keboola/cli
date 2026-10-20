@@ -58,7 +58,7 @@ def docs_query(
     project: str | None = typer.Option(
         None,
         "--project",
-        help="Project alias (defaults to the pinned default project)",
+        help="Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)",
     ),
 ) -> None:
     """Ask the Keboola documentation a natural language question."""
