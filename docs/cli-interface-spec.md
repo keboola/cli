@@ -312,7 +312,7 @@ What stays as it is:
 - Checked by: `input.content-option-refuses-at-file` (the options without the refusal are in the baseline).
 
 <a id="I4"></a>
-**I4 · MUST · 1.0.0.** A bad input value is a usage error (exit 2, `INVALID_ARGUMENT`) that names the option, never a traceback. In 0.x, some bad values end in a traceback with exit 1. Known gaps in 1.0.0: the structured options that exited 2 before 1.0.0 keep their error code (`config` `--configuration`, `--state` and `--config-data`: `VALIDATION_ERROR`; `encrypt values --input`: `INPUT_ERROR`; `agent --from-file` and `--runtime-input`: `INVALID_FORMAT`; `flow --file`: `VALIDATION_ERROR`; `data-app create --description-file`: `READ_ERROR`, exit 1; `data-app secrets-set --secrets-file`: `DATA_APP_INVALID_SECRET`; `semantic-layer reference-data set --members-file`: `VALIDATION_ERROR`), and a value refused by Click or by `typer.BadParameter` is `USAGE_ERROR`.
+**I4 · MUST · 1.0.0.** A bad input value is a usage error (exit 2, `INVALID_ARGUMENT`) that names the option, never a traceback. In 0.x, some bad values end in a traceback with exit 1. Known gaps in 1.0.0: the structured options that exited 2 before 1.0.0 keep their error code (`config` `--configuration`, `--state` and `--config-data`: `VALIDATION_ERROR`; `encrypt values --input`: `INPUT_ERROR`; `agent --from-file` and `--runtime-input`: `INVALID_FORMAT`; `flow --file`: `VALIDATION_ERROR`; `data-app create --description-file`: `READ_ERROR`, exit 1; `data-app secrets-set --secrets-file`: `DATA_APP_INVALID_SECRET`; `semantic-layer reference-data set --members-file`: `VALIDATION_ERROR`). A value refused by Click's type check or by `typer.BadParameter` is `INVALID_ARGUMENT` too (the root command class maps `BadParameter`); a missing required option stays `USAGE_ERROR`.
 
 - Checked by: `output.one-json-document` (crash case) and review.
 
@@ -412,7 +412,7 @@ What stays as it is:
 ## 6. Machine output
 
 <a id="O1"></a><a id="output.one-json-document"></a><a id="output.bare-group-exits-2"></a>
-**O1 · MUST · 1.0.0.** With `--json`, stdout holds exactly one JSON document for every exit code, parse errors, bare groups and crashes included. `--stream` commands write NDJSON. Everything else goes to stderr. An explicit `--help` (and `-h`, H5) prints help on stdout with exit 0 in both modes. A bare group, and `--json` without a command, exit 2 with a `USAGE_ERROR` envelope. Until 1.0.0, a parse error, a crash or a bare group under `--json` gives an empty stdout.
+**O1 · MUST · 1.0.0.** With `--json`, stdout holds exactly one JSON document for every exit code, parse errors, bare groups and crashes included. `--stream` commands write NDJSON. Everything else goes to stderr. An explicit `--help` (and `-h`, H5) prints help on stdout with exit 0 in both modes. A bare group, `--json` without a command, and a malformed command line exit 2 with a `USAGE_ERROR` envelope. A bad option value exits 2 with `INVALID_ARGUMENT` (I4). Until 1.0.0, a parse error, a crash or a bare group under `--json` gives an empty stdout.
 
 - Checked by: `output.one-json-document`, `output.bare-group-exits-2`.
 
@@ -612,7 +612,7 @@ A flag that raises the class is in `FLAG_ESCALATIONS` and is checked where the f
 ## 10. Lists
 
 <a id="L1"></a>
-**L1 · note.** A Typer `min`/`max` bound on `--limit` is acceptable. From 1.0.0 a rejected value gives a `USAGE_ERROR` envelope with exit 2 (O1). No new bound is added to a limit that is unbounded today.
+**L1 · note.** A Typer `min`/`max` bound on `--limit` is acceptable. From 1.0.0 a rejected value gives an `INVALID_ARGUMENT` envelope with exit 2 (O1, I4). No new bound is added to a limit that is unbounded today.
 
 <a id="L2"></a>
 **L2 · MUST · now for new commands; existing lists after 1.0.0.** A limited list reports `limit`, `offset` when it has one, and `has_more`.
