@@ -44,7 +44,8 @@ def version_command(
     beta: bool = typer.Option(
         False,
         "--beta",
-        help="Report the latest pre-release (beta / rc) instead of the latest stable.",
+        help="Report the latest pre-release (beta / rc) instead of the latest stable. "
+        "KBAGENT_INCLUDE_PRERELEASE=1 has the same effect.",
     ),
 ) -> None:
     """Show the kbagent version and check for updates."""

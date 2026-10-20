@@ -25,6 +25,7 @@ from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._helpers import (
     _confirm_or_abort,
     emit_api_error,
+    finish_bulk,
     get_formatter,
     get_service,
     map_error_to_exit_code,
@@ -218,10 +219,7 @@ def register(app: typer.Typer) -> None:
         except (ConfigError, KeboolaApiError) as exc:
             _handle_errors(formatter, exc)
 
-        exit_code = 1 if result["failed"] else 0
-        if formatter.json_mode:
-            formatter.output(result, exit_code=exit_code)
-        else:
+        def render() -> None:
             if dry_run:
                 for sid in result.get("would_delete", []):
                     formatter.console.print(f"[bold blue]Would delete:[/bold blue] snapshot {sid}")
@@ -229,12 +227,11 @@ def register(app: typer.Typer) -> None:
                 for sid in result["deleted"]:
                     formatter.console.print(f"[bold green]Deleted:[/bold green] snapshot {sid}")
             for s_err in result["failed"]:
-                formatter.console.print(
-                    f"[bold red]Failed:[/bold red] snapshot {s_err['id']}: {s_err['error']}"
-                )
+                formatter.item_error(f"snapshot {s_err['id']}", s_err["error"])
 
-        if exit_code:
-            raise typer.Exit(code=exit_code)
+        done = result.get("would_delete", []) if dry_run else result["deleted"]
+        done_as = "would be deleted" if dry_run else "deleted"
+        finish_bulk(formatter, result, done, "snapshot", done_as, render)
 
     @app.command("table-from-snapshot", rich_help_panel=_SNAPSHOTS)
     def storage_table_from_snapshot(

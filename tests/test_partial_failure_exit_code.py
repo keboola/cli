@@ -98,7 +98,7 @@ class TestSyncPush:
         )
         assert result.exit_code == 1
         assert "Success:" not in result.output
-        assert "2 failed" in result.output
+        assert "Failed: 2 of 2 configs." in result.output
 
     def test_partial_failure_exits_1_and_states_the_failed_count(self, tmp_path: Path) -> None:
         mock_sync = MagicMock()
@@ -117,7 +117,7 @@ class TestSyncPush:
         )
         assert result.exit_code == 1
         assert "3 created" in result.output
-        assert "1 failed" in result.output
+        assert "Failed: 1 of 4 configs." in result.output
 
     def test_clean_push_still_succeeds(self, tmp_path: Path) -> None:
         mock_sync = MagicMock()
@@ -347,7 +347,7 @@ class TestSyncPullAndDiffFanOut:
             mock_sync,
         )
         assert result.exit_code == 1
-        assert "1 failed" in result.output
+        assert "Failed: 1 of 2 projects." in result.output
 
     def test_pull_all_clean_dry_run_exits_0(self, tmp_path: Path) -> None:
         mock_sync = MagicMock()
@@ -375,7 +375,7 @@ class TestSyncPullAndDiffFanOut:
             mock_sync,
         )
         assert result.exit_code == 1
-        assert "1 failed" in result.output
+        assert "Failed: 1 of 2 projects." in result.output
 
     def test_diff_all_clean_exits_0(self, tmp_path: Path) -> None:
         mock_sync = MagicMock()
@@ -427,7 +427,7 @@ class TestSyncClone:
         )
         assert result.exit_code == 1
         assert "Success:" not in result.output
-        assert "3 failed" in result.output
+        assert "Failed: 3 of 3 items." in result.output
 
     def _invoke_clone(self, tmp_path: Path, clone_result: dict[str, Any]) -> Any:
         mock_sync = MagicMock()
@@ -453,8 +453,8 @@ class TestSyncClone:
         result = self._invoke_clone(tmp_path, clone_result)
         assert result.exit_code == 1
         assert "Success:" not in result.output
-        assert "4 created" in result.output
-        assert "1 failed" in result.output
+        assert "4 config(s) cloned into prod" in result.output
+        assert "Failed: 1 of 5 items." in result.output
 
     def test_rerun_with_bucket_error_exits_1(self, tmp_path: Path) -> None:
         # A re-run has no configs to push, but it tries the buckets again.
@@ -466,7 +466,9 @@ class TestSyncClone:
         }
         result = self._invoke_clone(tmp_path, clone_result)
         assert result.exit_code == 1
-        assert "Already cloned into prod, 1 failed" in result.output
+        assert (
+            "Failed: 1 of 1 items. 0 config(s) cloned into prod, already cloned." in result.output
+        )
 
     def test_clean_clone_succeeds(self, tmp_path: Path) -> None:
         mock_sync = MagicMock()
@@ -565,7 +567,7 @@ class TestOrgSetup:
         # No --yes in a human run: the preview has nothing to add, so it is the whole run.
         result = self._invoke(tmp_path, {**ORG_SETUP_FAILED, "dry_run": True}, [], json_mode=False)
         assert result.exit_code == 1
-        assert "No new projects to add." in result.output
+        assert "Failed: 1 of 1 projects. 0 project(s) added, 0 skipped." in result.output
 
     def test_failed_projects_exit_1(self, tmp_path: Path) -> None:
         result = self._invoke(tmp_path, ORG_SETUP_FAILED)
@@ -631,7 +633,7 @@ class TestOrgSetup:
         assert data["projects_refresh_failed"] == [REFRESH_FAILED_ENTRY]
         assert data["projects_failed"] == []
         assert human.exit_code == 1
-        assert "Token Refresh Failed" in human.output
+        assert "Error: project 'prod' token refresh: Error checking token" in human.output
         assert "Error checking token" in human.output
 
 
@@ -753,7 +755,7 @@ class TestProjectRefresh:
         # refresh; the failed projects in that preview are the run's result.
         result = self._invoke(tmp_path, {"projects_failed": [REFRESH_FAILED_ENTRY]}, [])
         assert result.exit_code == 1
-        assert "No token to refresh." in result.output
+        assert "Failed: 1 of 1 projects. 0 token(s) refreshed." in result.output
         assert "All tokens are valid." not in result.output
 
 
@@ -1014,7 +1016,8 @@ class TestSemanticLayerBuild:
         missing = [{"table_id": "in.c-a.t2", "error": "not found"}]
         result = self._invoke(tmp_path, self._result(missing, dry_run=False), [])
         assert result.exit_code == 1
-        assert "Failed: 1 table(s) left out of the model" in result.output
+        assert "Fetch failed: 1 table(s) left out of the model" in result.output
+        assert "Failed: 1 of 1 tables." in result.output
         assert "in.c-a.t2" in result.output
 
     def test_dry_run_with_table_left_out_exits_1(self, tmp_path: Path) -> None:
@@ -1098,7 +1101,7 @@ class TestStorageDescribeBatchAndMigrate:
         result = self._batch(tmp_path, [BATCH_ERROR], json_mode=False)
         assert result.exit_code == 1
         assert "Batch complete" not in result.output
-        assert "Failed: 0 applied, 1 error(s)" in result.output
+        assert "Failed: 1 of 1 descriptions. 0 description(s) applied." in result.output
 
     def test_clean_batch_json_exits_0(self, tmp_path: Path) -> None:
         assert self._batch(tmp_path, [], json_mode=True).exit_code == 0
@@ -1116,7 +1119,7 @@ class TestStorageDescribeBatchAndMigrate:
         args = ["storage", "describe-migrate", "--project", "prod", "--yes"]
         result = _invoke_with(tmp_path, "StorageService", mock, args)
         assert result.exit_code == 1
-        assert "Failed: Migrated 1 table(s) of 2 scanned, 1 failed" in result.output
+        assert "Failed: 1 of 2 tables. 1 table(s) migrated, 2 scanned." in result.output
 
 
 class TestFlowScheduleRemove:
@@ -1135,7 +1138,7 @@ class TestFlowScheduleRemove:
         result = _invoke_with(tmp_path, "FlowService", mock, args)
         assert result.exit_code == 1
         assert "Success:" not in result.output
-        assert "Failed: Removed 1 schedule(s) from flow 42, 1 failed" in result.output
+        assert "Failed: 1 of 2 schedules. 1 schedule(s) removed from flow 42." in result.output
         assert "schedule s2: HTTP 500" in result.output
 
     def test_clean_remove_exits_0(self, tmp_path: Path) -> None:

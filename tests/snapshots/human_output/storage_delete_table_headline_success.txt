@@ -1,0 +1,7 @@
+exit: 0
+--- stdout ---
+Deleted: in.c-main.orders
+Deleted: in.c-main.items
+Success: 2 table(s) deleted.
+--- stderr ---
+Target: project 'prod', production

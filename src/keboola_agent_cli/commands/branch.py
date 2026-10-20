@@ -16,15 +16,14 @@ from ..output import format_branch_metadata_table, format_branches_table
 from ._all_projects import (
     FANOUT_PROJECT_HELP,
     AllProjectsOption,
-    fanout_exit_code,
     fanout_projects,
+    finish_fanout,
 )
 from ._helpers import (
     RefuseAtFile,
     _confirm_or_abort,
     check_cli_permission,
     emit_api_error,
-    emit_project_warnings,
     get_formatter,
     get_service,
     map_error_to_exit_code,
@@ -67,14 +66,10 @@ def branch_list(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
-    code = fanout_exit_code(result.get("errors", []))
-    if formatter.json_mode:
-        formatter.output(result, exit_code=code)
-    else:
+    def render() -> None:
         format_branches_table(formatter.console, result)
-        emit_project_warnings(formatter, result)
-    if code:
-        raise typer.Exit(code=code)
+
+    finish_fanout(formatter, result, result.get("errors", []), render)
 
 
 @branch_app.command("create")

@@ -25,12 +25,11 @@ from rich.table import Table
 from ..commands._all_projects import (
     FANOUT_PROJECT_HELP,
     AllProjectsOption,
-    fanout_exit_code,
     fanout_projects,
+    finish_fanout,
 )
 from ..commands._helpers import (
     emit_api_error,
-    emit_project_warnings,
     get_formatter,
     get_service,
     map_error_to_exit_code,
@@ -184,14 +183,10 @@ def search_command(
         emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
-    code = fanout_exit_code(result.get("errors", []))
-    if formatter.json_mode:
-        formatter.output(result, exit_code=code)
-    else:
+    def render() -> None:
         _format_search_results(formatter.console, result, query, search_type, regex)
-        emit_project_warnings(formatter, result)
-    if code:
-        raise typer.Exit(code=code)
+
+    finish_fanout(formatter, result, result.get("errors", []), render)
 
 
 # ── Human-readable output ──────────────────────────────────────────────────

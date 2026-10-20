@@ -28,16 +28,16 @@ from ..services.flow_validation import find_unreachable_phases, validate_conditi
 from ._all_projects import (
     FANOUT_PROJECT_HELP,
     AllProjectsOption,
-    fanout_exit_code,
     fanout_projects,
+    finish_fanout,
 )
 from ._helpers import (
     _confirm_or_abort,
     check_cli_permission,
     emit_api_error,
+    finish_items,
     get_formatter,
     get_service,
-    item_failure_exit_code,
     map_error_to_exit_code,
     parse_json_arg,
 )
@@ -202,20 +202,16 @@ def flow_list(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
-    code = fanout_exit_code(result.get("errors", []))
-    if formatter.json_mode:
-        formatter.output(result, exit_code=code)
-    else:
+    def render() -> None:
         _format_flows_table(formatter, result, with_schedules=with_schedules)
-    if code:
-        raise typer.Exit(code=code)
+
+    finish_fanout(formatter, result, result.get("errors", []), render)
 
 
 def _format_flows_table(
     formatter: Any, result: dict[str, Any], *, with_schedules: bool = False
 ) -> None:
     flows = result.get("flows", [])
-    errors = result.get("errors", [])
 
     if not flows:
         formatter.console.print("[dim]No flows found.[/dim]")
@@ -250,11 +246,6 @@ def _format_flows_table(
                     row.append("\n".join(lines))
             tbl.add_row(*row)
         formatter.console.print(tbl)
-
-    for err in errors:
-        formatter.warning(
-            f"Project '{err.get('project_alias', '?')}': {err.get('message', 'error')}"
-        )
 
     legacy = result.get("legacy_orchestrator_count", 0)
     if legacy:
@@ -1038,28 +1029,24 @@ def flow_schedule_remove(
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
     # A schedule whose config could not be deleted is collected, not raised (#745).
-    code = item_failure_exit_code(len(result.get("errors", [])))
-    if formatter.json_mode:
-        formatter.output(result, exit_code=code or 0)
-    else:
-        count = result.get("deleted_count", 0)
-        errors = result.get("errors", [])
-        headline = f"Removed {count} schedule(s) from flow {escape(flow_id)}"
-        if errors:
-            formatter.console.print(
-                f"[bold red]Failed:[/bold red] {headline}, {len(errors)} failed"
-            )
-        elif count == 0:
-            formatter.console.print("[dim]No schedules found — nothing removed.[/dim]")
-        else:
-            formatter.success(headline)
+    count = result.get("deleted_count", 0)
+    errors = result.get("errors", [])
+
+    def render() -> None:
         for err in errors:
-            formatter.warning(f"  Error: schedule {err['schedule_id']}: {escape(err['error'])}")
+            formatter.item_error(f"schedule {err['schedule_id']}", err["error"])
         for warning in result.get("warnings", []):
             formatter.warning(warning)
 
-    if code:
-        raise typer.Exit(code=code)
+    finish_items(
+        formatter,
+        result,
+        failed=len(errors),
+        total=count + len(errors),
+        noun="schedules",
+        summary=f"{count} schedule(s) removed from flow {escape(flow_id)}.",
+        render=render,
+    )
 
 
 # Mounted from a private module: `commands/flow.py` is exactly at the

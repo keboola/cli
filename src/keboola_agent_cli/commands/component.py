@@ -20,13 +20,12 @@ from ..services.component_service import DOCUMENTATION_SOURCE_STORAGE_CATALOG
 from ._all_projects import (
     ALL_PROJECTS_HELP,
     FANOUT_PROJECT_HELP,
-    fanout_exit_code,
     fanout_projects,
+    finish_fanout,
 )
 from ._helpers import (
     check_cli_permission,
     emit_api_error,
-    emit_project_warnings,
     get_formatter,
     get_service,
     map_error_to_exit_code,
@@ -51,12 +50,6 @@ def _format_components_table(console: Console, data: dict) -> None:
     components = data.get("components", [])
     errors = data.get("errors", [])
     is_search = data.get("query") is not None
-
-    for err in errors:
-        console.print(
-            f"[bold yellow]Warning:[/bold yellow] Project [bold]{err['project_alias']}[/bold]: "
-            f"{err['message']}"
-        )
 
     if not components:
         if not errors:
@@ -207,14 +200,10 @@ def component_list(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
-    code = fanout_exit_code(result.get("errors", []))
-    if formatter.json_mode:
-        formatter.output(result, exit_code=code)
-    else:
+    def render() -> None:
         _format_components_table(formatter.console, result)
-        emit_project_warnings(formatter, result)
-    if code:
-        raise typer.Exit(code=code)
+
+    finish_fanout(formatter, result, result.get("errors", []), render)
 
 
 @component_app.command("detail")

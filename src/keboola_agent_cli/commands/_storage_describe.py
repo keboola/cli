@@ -24,6 +24,7 @@ from ._helpers import (
     RefuseAtFile,
     _confirm_or_abort,
     emit_api_error,
+    finish_items,
     get_formatter,
     get_service,
     map_error_to_exit_code,
@@ -407,19 +408,7 @@ def register(app: typer.Typer) -> None:
                 progress_cm.stop()
 
         # Also under --json: the exit used to be raised in human mode only (#745).
-        exit_code = 1 if result.get("errors") else 0
-        if formatter.json_mode:
-            formatter.output(result, exit_code=exit_code)
-        else:
-            applied = result["applied_count"]
-            errors = result["error_count"]
-            # Never a green headline when items failed (#745).
-            label = (
-                "[bold red]Failed:[/bold red]"
-                if errors
-                else "[bold green]Batch complete:[/bold green]"
-            )
-            formatter.console.print(f"{label} {applied} applied, {errors} error(s)")
+        def render() -> None:
             for item in result["applied"]:
                 obj_type = item["type"]
                 obj_id = item["id"]
@@ -429,11 +418,19 @@ def register(app: typer.Typer) -> None:
                 else:
                     formatter.console.print(f"  [green]✓[/green] {obj_type} {obj_id}")
             for item in result["errors"]:
-                formatter.console.print(
-                    f"  [red]✗[/red] {item['type']} {item['id']}: {item['error']}"
-                )
-        if exit_code:
-            raise typer.Exit(code=exit_code) from None
+                formatter.item_error(f"{item['type']} {item['id']}", item["error"])
+
+        applied = result.get("applied_count", 0)
+        failed = len(result.get("errors") or [])
+        finish_items(
+            formatter,
+            result,
+            failed=failed,
+            total=applied + failed,
+            noun="descriptions",
+            summary=f"{applied} description(s) applied.",
+            render=render,
+        )
 
     @app.command("describe-migrate", rich_help_panel=_DESCRIBE)
     def storage_describe_migrate(
@@ -536,22 +533,7 @@ def register(app: typer.Typer) -> None:
 
         result = _migrate(dry_run)
 
-        exit_code = 1 if result["errors"] else 0
-        if formatter.json_mode:
-            formatter.output(result, exit_code=exit_code)
-        else:
-            verb = "Would migrate" if result["dry_run"] else "Migrated"
-            # Never a green headline when tables failed (#745).
-            failed = len(result["errors"])
-            label = (
-                f"[bold red]Failed:[/bold red] {verb}"
-                if failed
-                else f"[bold green]{verb}:[/bold green]"
-            )
-            formatter.console.print(
-                f"{label} {len(result['migrated'])} table(s) of "
-                f"{result['tables_scanned']} scanned" + (f", {failed} failed" if failed else "")
-            )
+        def render() -> None:
             for item in result["migrated"]:
                 cols = ", ".join(sorted(item["columns"]))
                 formatter.console.print(f"  [green]✓[/green] {item['table_id']}: {escape(cols)}")
@@ -564,7 +546,16 @@ def register(app: typer.Typer) -> None:
                     f"  [dim]Pruned orphan {item['table_id']}.{item['column']}[/dim]"
                 )
             for item in result["errors"]:
-                formatter.console.print(f"  [red]✗[/red] {item['table_id']}: {item['error']}")
+                formatter.item_error(item["table_id"], item["error"])
 
-        if exit_code:
-            raise typer.Exit(code=exit_code) from None
+        done_as = "would be migrated" if result["dry_run"] else "migrated"
+        migrated, failed = len(result["migrated"]), len(result["errors"])
+        finish_items(
+            formatter,
+            result,
+            failed=failed,
+            total=migrated + failed,
+            noun="tables",
+            summary=f"{migrated} table(s) {done_as}, {result['tables_scanned']} scanned.",
+            render=render,
+        )

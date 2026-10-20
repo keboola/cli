@@ -13,13 +13,12 @@ from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._all_projects import (
     FANOUT_PROJECT_HELP,
     AllProjectsOption,
-    fanout_exit_code,
     fanout_projects,
+    finish_fanout,
 )
 from ._helpers import (
     check_cli_permission,
     emit_api_error,
-    emit_project_warnings,
     get_formatter,
     get_service,
     map_error_to_exit_code,
@@ -68,38 +67,34 @@ def sharing_list(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
-    code = fanout_exit_code(result.get("errors", []))
-    if formatter.json_mode:
-        formatter.output(result, exit_code=code)
-    elif not result["shared_buckets"]:
-        formatter.console.print("[dim]No shared buckets found.[/dim]")
-        emit_project_warnings(formatter, result)
-    else:
-        from rich.table import Table
+    def render() -> None:
+        if not result["shared_buckets"]:
+            formatter.console.print("[dim]No shared buckets found.[/dim]")
+        else:
+            from rich.table import Table
 
-        buckets = result["shared_buckets"]
-        table = Table(title="Shared Buckets")
-        table.add_column("Source Project", style="bold")
-        table.add_column("Bucket ID", style="cyan")
-        table.add_column("Sharing Type", style="dim")
-        table.add_column("Backend", style="dim")
-        table.add_column("Tables", justify="right")
-        table.add_column("Rows", justify="right")
+            buckets = result["shared_buckets"]
+            table = Table(title="Shared Buckets")
+            table.add_column("Source Project", style="bold")
+            table.add_column("Bucket ID", style="cyan")
+            table.add_column("Sharing Type", style="dim")
+            table.add_column("Backend", style="dim")
+            table.add_column("Tables", justify="right")
+            table.add_column("Rows", justify="right")
 
-        for b in buckets:
-            table.add_row(
-                f"{b['source_project_name']} (#{b['source_project_id']})",
-                b["source_bucket_id"],
-                b["sharing"],
-                b["backend"],
-                str(len(b.get("tables", []))),
-                str(b["rows_count"]),
-            )
+            for b in buckets:
+                table.add_row(
+                    f"{b['source_project_name']} (#{b['source_project_id']})",
+                    b["source_bucket_id"],
+                    b["sharing"],
+                    b["backend"],
+                    str(len(b.get("tables", []))),
+                    str(b["rows_count"]),
+                )
 
-        formatter.console.print(table)
-        emit_project_warnings(formatter, result)
-    if code:
-        raise typer.Exit(code=code)
+            formatter.console.print(table)
+
+    finish_fanout(formatter, result, result.get("errors", []), render)
 
 
 @sharing_app.command("share")
@@ -370,13 +365,9 @@ def sharing_edges(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
-    code = fanout_exit_code(result.get("errors", []))
-    if formatter.json_mode:
-        formatter.output(result, exit_code=code)
-    else:
+    def render() -> None:
         from ..output import format_lineage_table
 
         format_lineage_table(formatter.console, result)
-        emit_project_warnings(formatter, result)
-    if code:
-        raise typer.Exit(code=code)
+
+    finish_fanout(formatter, result, result.get("errors", []), render)

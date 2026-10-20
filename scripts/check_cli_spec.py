@@ -905,6 +905,187 @@ def r_no_direct_print(c: Context) -> Violations:
     return found
 
 
+# `env.registry-complete` (EV1): reads of the environment in src/.
+_ENV_GETTERS = frozenset({"environ.get", "environ.pop", "os.getenv", "getenv"})
+_ENV_READ_HELPERS = frozenset({"_env_flag_set", "_env_truthy"})
+
+
+def _env_constants() -> dict[str, str]:
+    """``ENV_*`` names bound to a string literal at module level in src/, with import aliases."""
+    found: dict[str, str] = {}
+    aliases: dict[str, str] = {}
+    for _, mod in modules(PKG_ROOT):
+        for node in mod.body:
+            target = value = None
+            if isinstance(node, ast.Assign) and len(node.targets) == 1:
+                target, value = node.targets[0], node.value
+            elif isinstance(node, ast.AnnAssign):
+                target, value = node.target, node.value
+            if (
+                isinstance(target, ast.Name)
+                and "ENV" in target.id
+                and isinstance(value, ast.Constant)
+                and isinstance(value.value, str)
+            ):
+                found[target.id] = value.value
+        for node in ast.walk(mod):
+            if isinstance(node, ast.ImportFrom):
+                aliases.update({a.asname: a.name for a in node.names if a.asname})
+    for alias, name in aliases.items():
+        if name in found:
+            found.setdefault(alias, found[name])
+    return found
+
+
+def _env_name(
+    node: ast.expr | None, constants: dict[str, str], local: dict[str, ast.expr]
+) -> str | None:
+    """The variable name an expression stands for, or None when it is computed at run time.
+
+    An f-string that starts with a known name gives a family: ``f"{ENV_X}_{alias}"``
+    is ``"X_<"``, which matches a registry entry ``X_<ALIAS>``. A local name is
+    followed to its assignment in the same function.
+    """
+    if isinstance(node, ast.Name) and node.id in local:
+        node = local[node.id]
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.Name):
+        return constants.get(node.id)
+    if isinstance(node, ast.JoinedStr):
+        prefix = ""
+        for part in node.values:
+            if isinstance(part, ast.Constant) and isinstance(part.value, str):
+                prefix += part.value
+            elif isinstance(part, ast.FormattedValue) and isinstance(part.value, ast.Name):
+                known = constants.get(part.value.id)
+                if known is None:
+                    break
+                prefix += known
+            else:
+                break
+        else:
+            return prefix
+        return f"{prefix}<" if prefix else None
+    return None
+
+
+def _scoped_nodes(tree: ast.AST) -> Iterator[tuple[str, dict[str, ast.expr], ast.AST]]:
+    """Every node with its enclosing function and the local assignments of that function."""
+
+    def visit(
+        node: ast.AST, scope: tuple[str, ...], local: dict[str, ast.expr]
+    ) -> Iterator[tuple[str, dict[str, ast.expr], ast.AST]]:
+        for child in ast.iter_child_nodes(node):
+            inner_scope, inner_local = scope, local
+            if isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+                inner_scope = (*scope, child.name)
+                inner_local = {
+                    n.targets[0].id: n.value
+                    for n in ast.walk(child)
+                    if isinstance(n, ast.Assign)
+                    and len(n.targets) == 1
+                    and isinstance(n.targets[0], ast.Name)
+                }
+            yield ".".join(scope) or "<module>", local, child
+            yield from visit(child, inner_scope, inner_local)
+
+    yield from visit(tree, (), {})
+
+
+def _is_environ(node: ast.AST) -> bool:
+    return dotted(node).split(".")[-1] == "environ"
+
+
+def _env_read_arg(node: ast.AST) -> tuple[str, ast.expr | None] | None:
+    """(kind, name expression) when ``node`` reads the environment, else None.
+
+    Reads: ``os.environ.get``/``pop``, ``os.getenv``, an ``envvar=`` keyword,
+    a call of an ``_ENV_READ_HELPERS`` function, ``os.environ[X]`` (not as an
+    assignment target) and ``X in os.environ`` / ``X not in os.environ``.
+    """
+    if isinstance(node, ast.Call):
+        func = dotted(node.func)
+        if any(func == g or func.endswith(f".{g}") for g in _ENV_GETTERS) or (
+            func in _ENV_READ_HELPERS
+        ):
+            return func, node.args[0] if node.args else None
+        if keyword(node, "envvar") is not None:
+            return "envvar=", keyword(node, "envvar")
+    if (
+        isinstance(node, ast.Subscript)
+        and isinstance(node.ctx, ast.Load)
+        and _is_environ(node.value)
+    ):
+        return "os.environ[]", node.slice
+    if (
+        isinstance(node, ast.Compare)
+        and len(node.ops) == 1
+        and isinstance(node.ops[0], ast.In | ast.NotIn)
+        and _is_environ(node.comparators[0])
+    ):
+        return "in os.environ", node.left
+    return None
+
+
+def _env_reads(c: Context) -> tuple[dict[str, str], dict[str, str]]:
+    """(variable name -> first reader, reader subject -> what) for every read in src/.
+
+    See :func:`_env_read_arg` for what counts as a read. The body of an
+    ``_ENV_READ_HELPERS`` function is skipped: its callers name the variable.
+    A read whose name is computed at run time goes to the second map under its
+    function.
+    """
+    constants = c.cached("env_constants", _env_constants)
+    named: dict[str, str] = {}
+    dynamic: dict[str, str] = {}
+    for module, mod in c.cached("package_modules", lambda: modules(PKG_ROOT)):
+        for function, local, node in _scoped_nodes(mod):
+            read = _env_read_arg(node)
+            if read is None:
+                continue
+            kind, arg = read
+            subject = f"{module}:{function}"
+            name = _env_name(arg, constants, local)
+            if name is None and function.split(".")[-1] in _ENV_READ_HELPERS:
+                continue
+            if name is None:
+                dynamic[f"{subject} {kind}"] = "reads a variable named at run time"
+            else:
+                named.setdefault(name, subject)
+    return named, dynamic
+
+
+def _registered(name: str, registered: set[str]) -> bool:
+    """True for a registry name, or for a family read (``X_<``) of an entry ``X_<ALIAS>``."""
+    if name in registered:
+        return True
+    return name.endswith("<") and any(
+        "<" in entry and entry.startswith(name[:-1]) for entry in registered
+    )
+
+
+def r_env_registry_complete(c: Context) -> Violations:
+    from keboola_agent_cli.env_vars import ENV_VARS
+
+    named, dynamic = _env_reads(c)
+    registered = {var.name for var in ENV_VARS}
+    found = {
+        name: f"read in {where} but not in env_vars.ENV_VARS"
+        for name, where in named.items()
+        if not _registered(name, registered)
+    }
+    found.update(dynamic)
+    families = {name[:-1] for name in named if name.endswith("<")}
+    for var in ENV_VARS:
+        if var.library or var.name in named:
+            continue
+        if "<" in var.name and var.name.split("<")[0] in families:
+            continue
+        found[f"{var.name} (registered)"] = "in env_vars.ENV_VARS but nothing in src/ reads it"
+    return found
+
+
 def _is_nonzero_exit(node: ast.AST) -> bool:
     """`typer.Exit(code)` or `sys.exit(code)` whose code is not absent or a literal 0."""
     if not isinstance(node, ast.Call) or dotted(node.func) not in ("typer.Exit", "sys.exit"):
@@ -1210,6 +1391,12 @@ RULES: tuple[Rule, ...] = (
         r_no_direct_print,
     ),
     Rule(
+        "env.registry-complete",
+        "ast",
+        "every environment variable read in src/ is in env_vars.ENV_VARS, and every entry is read",
+        r_env_registry_complete,
+    ),
+    Rule(
         "output.ok-then-exit-declares-exit-code",
         "ast",
         "formatter.output followed by a non-zero exit passes exit_code=",
@@ -1348,14 +1535,13 @@ CONTRACT_RULES: dict[str, str] = {
     "errors.fanout-exit": "tests/test_target_selection.py",
     "target.targets-reported": "tests/test_target_selection.py",
     "serve.targets-reported": "tests/test_server_response_meta.py",
+    "output.multi-item-headline": "tests/test_cli_contract.py",
 }
 DEFERRED_RULES: dict[str, str] = {
     "args.global-option-one-shape": "the GLOBAL_OPTIONS registry is not reviewed yet (A1)",
     "naming.verb-vocabulary": "the verb vocabulary file is not reviewed yet",
     "output.no-warning-after-output": "lands with warnings[] in the --json envelope",
-    "output.multi-item-headline": "contract; lands with HO2",
     "help.context-from-manifest": "kbagent context is generated from the manifest in 1.0.0 (AG1)",
-    "env.registry-complete": "the environment variable registry does not exist yet",
     "change.expired-deprecation": "no DEPRECATIONS entry has a remove_after date yet: "
     "the window of the 1.0.0 hidden aliases starts at M",
     "change.breaking-bullet-on-removal": "release kind; lands with the release mechanics",

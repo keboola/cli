@@ -15,12 +15,12 @@ from ._helpers import (
     check_cli_operation,
     check_cli_permission,
     emit_api_error,
+    finish_items,
     get_formatter,
     get_service,
-    item_failure_exit_code,
     map_error_to_exit_code,
 )
-from ._sync_clone_render import print_clone_result
+from ._sync_clone_render import clone_summary, print_clone_result
 from ._sync_push_render import REMOTE_CHANGE_LABELS, print_push_skips, push_skips_one_liner
 
 sync_app = typer.Typer(help="Sync project configurations with local filesystem")
@@ -392,9 +392,8 @@ def _format_push_result(formatter: Any, result: dict) -> None:
         f"{result.get('deleted', 0)} deleted{failed}"
     )
     for err in errors:
-        formatter.warning(
-            f"  Error: {err['change_type']} {err['component_id']}/{err['config_id']}: "
-            f"{err['message']}"
+        formatter.item_error(
+            f"{err['change_type']} {err['component_id']}/{err['config_id']}", err["message"]
         )
     print_push_skips(formatter, result)
     _format_never_fetched(formatter, result.get("never_fetched", []))
@@ -498,9 +497,8 @@ def _format_all_results(
 
     In default mode: one line per project (compact summary).
     With --verbose: full detail per project.
-    Errors always shown.
+    Errors always shown. The headline follows (``_finish_all_projects``).
     """
-    summary = data["summary"]
     projects = data["projects"]
     skipped = data.get("skipped", [])
     verbose = getattr(formatter, "verbose", False)
@@ -510,7 +508,7 @@ def _format_all_results(
         # A push with per-config errors[] is a failed project, not "OK" (#745).
         mark = "[red]x[/red]" if proj_result.get("errors") else "[green]OK[/green]"
         if "error" in proj_result:
-            formatter.console.print(f"  [red]x[/red] {alias}: [red]{proj_result['error']}[/red]")
+            formatter.item_error(f"project '{alias}'", proj_result["error"])
         elif verbose and per_project_formatter:
             formatter.console.print(f"\n[bold]{alias}:[/bold]")
             per_project_formatter(formatter, proj_result)
@@ -522,11 +520,21 @@ def _format_all_results(
     if skipped:
         formatter.console.print(f"\n[dim]Skipped (no manifest): {', '.join(skipped)}[/dim]")
 
-    formatter.console.print(
-        f"\n{summary['total']} projects: "
-        f"[green]{summary['success']} OK[/green], "
-        f"[red]{summary['failed']} failed[/red]"
-        + (f", {summary.get('skipped', 0)} skipped" if summary.get("skipped") else "")
+
+def _finish_all_projects(
+    formatter: Any, data: dict, per_project_formatter: Any, one_liner: Any, done_as: str
+) -> None:
+    """End an ``--all-projects`` run: per-project lines, then one headline (HO2)."""
+    summary = data["summary"]
+    finish_items(
+        formatter,
+        data,
+        failed=summary["failed"],
+        total=summary["total"],
+        noun="projects",
+        summary=f"{summary['success']} project(s) {done_as}"
+        + (f", {summary['skipped']} skipped." if summary.get("skipped") else "."),
+        render=lambda: _format_all_results(formatter, data, per_project_formatter, one_liner),
     )
 
 
@@ -660,13 +668,8 @@ def sync_pull(
             formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
             raise typer.Exit(code=5) from None
 
-        code = item_failure_exit_code(data["summary"]["failed"])
-        if formatter.json_mode:
-            formatter.output(data, exit_code=code or 0)
-        else:
-            _format_all_results(formatter, data, _format_pull_result, _pull_one_liner)
-        if code:
-            raise typer.Exit(code=code)
+        done_as = "would be pulled" if dry_run else "pulled"
+        _finish_all_projects(formatter, data, _format_pull_result, _pull_one_liner, done_as)
         return
 
     project_root = _resolve_project_root(directory, project)
@@ -864,13 +867,7 @@ def sync_diff(
             formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
             raise typer.Exit(code=5) from None
 
-        code = item_failure_exit_code(data["summary"]["failed"])
-        if formatter.json_mode:
-            formatter.output(data, exit_code=code or 0)
-        else:
-            _format_all_results(formatter, data, _format_diff_result, _diff_one_liner)
-        if code:
-            raise typer.Exit(code=code)
+        _finish_all_projects(formatter, data, _format_diff_result, _diff_one_liner, "compared")
         return
 
     project_root = _resolve_project_root(directory, project)
@@ -1089,13 +1086,8 @@ def sync_push(
             formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
             raise typer.Exit(code=5) from None
 
-        code = item_failure_exit_code(data["summary"]["failed"])
-        if formatter.json_mode:
-            formatter.output(data, exit_code=code or 0)
-        else:
-            _format_all_results(formatter, data, _format_push_result, _push_one_liner)
-        if code:
-            raise typer.Exit(code=code)
+        done_as = "would be pushed" if dry_run else "pushed"
+        _finish_all_projects(formatter, data, _format_push_result, _push_one_liner, done_as)
         return
 
     project_root = _resolve_project_root(directory, project)
@@ -1122,13 +1114,45 @@ def sync_push(
 
     # A per-config failure is collected, not raised -- without this the command
     # reported a green "Pushed" and exit 0 even when every config failed (#745).
-    code = item_failure_exit_code(len(result.get("errors", [])))
-    if formatter.json_mode:
-        formatter.output(result, exit_code=code or 0)
-    else:
-        _render_push_result(formatter, result)
-    if code:
-        raise typer.Exit(code=code)
+    finish_items(
+        formatter,
+        result,
+        failed=len(result.get("errors", [])),
+        total=_push_total(result),
+        noun="configs",
+        summary=_push_summary(result),
+        render=lambda: _render_push_result(formatter, result),
+    )
+
+
+def _push_total(result: dict[str, Any]) -> int:
+    """Every config change that a single-project ``sync push`` tried or would try."""
+    if result.get("status") == "dry_run":
+        summary = result.get("summary", {})
+        return sum(summary.get(key, 0) for key in ("added", "modified", "deleted"))
+    created = result.get("created", 0) + result.get("updated", 0) + result.get("deleted", 0)
+    return created + len(result.get("errors", []))
+
+
+def _push_summary(result: dict[str, Any]) -> str:
+    """The headline text of a single-project ``sync push``."""
+    status = result.get("status", "")
+    if status == "no_changes":
+        return "0 config(s) pushed, no changes."
+    if status == "dry_run":
+        summary = result.get("summary", {})
+        added, modified = summary.get("added", 0), summary.get("modified", 0)
+        deleted = summary.get("deleted", 0)
+        return (
+            f"{added + modified + deleted} config(s) would be pushed: {added} created, "
+            f"{modified} updated, {deleted} deleted."
+        )
+    created, updated = result.get("created", 0), result.get("updated", 0)
+    deleted = result.get("deleted", 0)
+    return (
+        f"{created + updated + deleted} config(s) pushed: {created} created, "
+        f"{updated} updated, {deleted} deleted."
+    )
 
 
 def _render_push_result(formatter: Any, result: dict[str, Any]) -> None:
@@ -1136,7 +1160,6 @@ def _render_push_result(formatter: Any, result: dict[str, Any]) -> None:
     status = result.get("status", "")
 
     if status == "no_changes":
-        formatter.console.print("[green]No changes to push.[/green]")
         print_push_skips(formatter, result)
         _format_never_fetched(formatter, result.get("never_fetched", []))
         _format_orphaned(formatter, result.get("orphaned", []))
@@ -1147,28 +1170,13 @@ def _render_push_result(formatter: Any, result: dict[str, Any]) -> None:
         for change in result.get("changes", []):
             label = _change_label(change)
             formatter.console.print(f"  {change['change_type'].upper()} {label}")
-        summary = result["summary"]
-        formatter.console.print(
-            f"\nWould create {summary['added']}, update {summary['modified']}, "
-            f"delete {summary['deleted']}"
-        )
         print_push_skips(formatter, result)
         _format_never_fetched(formatter, result.get("never_fetched", []))
         _format_orphaned(formatter, result.get("orphaned", []))
         return
 
+    # The headline (`Success:` or `Failed: N of M`) follows these lines (HO2).
     errors = result.get("errors", [])
-    headline = (
-        f"Pushed: {result['created']} created, "
-        f"{result['updated']} updated, "
-        f"{result['deleted']} deleted"
-    )
-    if errors:
-        # Never a green "Success" line when configs failed: the failed count
-        # belongs in the headline, not only in the warnings below it (#745).
-        formatter.console.print(f"[bold red]Failed:[/bold red] {headline}, {len(errors)} failed")
-    else:
-        formatter.success(headline)
     print_push_skips(formatter, result)
     _format_never_fetched(formatter, result.get("never_fetched", []))
     _format_orphaned(formatter, result.get("orphaned", []))
@@ -1177,9 +1185,8 @@ def _render_push_result(formatter: Any, result: dict[str, Any]) -> None:
         action = change["change_type"].upper()
         formatter.console.print(f"  {action} {label}")
     for err in errors:
-        formatter.warning(
-            f"  Error: {err['change_type']} {err['component_id']}/{err['config_id']}: "
-            f"{err['message']}"
+        formatter.item_error(
+            f"{err['change_type']} {err['component_id']}/{err['config_id']}", err["message"]
         )
 
 
@@ -1283,13 +1290,15 @@ def sync_clone(
     # and exit 0 -- the failures were warnings under a green line (#745). A
     # bucket the clone could not create or link is a failed item too.
     failed = len(result.get("errors", [])) + len(result.get("bucket_errors", []))
-    code = item_failure_exit_code(failed)
-    if formatter.json_mode:
-        formatter.output(result, exit_code=code or 0)
-    else:
-        print_clone_result(formatter, result)
-    if code:
-        raise typer.Exit(code=code)
+    finish_items(
+        formatter,
+        result,
+        failed=failed,
+        total=result.get("created", 0) + failed,
+        noun="items",
+        summary=clone_summary(result),
+        render=lambda: print_clone_result(formatter, result),
+    )
 
 
 @sync_app.command("branch-link")

@@ -31,8 +31,8 @@ from ..sync.branch_registry import default_branch_prefix
 from ._all_projects import (
     FANOUT_PROJECT_HELP,
     AllProjectsOption,
-    fanout_exit_code,
     fanout_projects,
+    finish_fanout,
 )
 from ._config_variables_render import (
     format_variables_clear,
@@ -45,7 +45,6 @@ from ._helpers import (
     check_cli_operation,
     check_cli_permission,
     emit_api_error,
-    emit_project_warnings,
     get_formatter,
     get_service,
     map_error_to_exit_code,
@@ -149,15 +148,11 @@ def config_list(
         raise typer.Exit(code=5) from None
 
     # In JSON mode, include both configs and errors in the response
-    code = fanout_exit_code(result.get("errors", []))
-    if formatter.json_mode:
-        formatter.output(result, exit_code=code)
-    else:
+    def render() -> None:
         # In human mode, show per-project errors as warnings and configs as table
         format_configs_table(formatter.console, result)
-        emit_project_warnings(formatter, result)
-    if code:
-        raise typer.Exit(code=code)
+
+    finish_fanout(formatter, result, result.get("errors", []), render)
 
 
 @config_app.command("detail", rich_help_panel="Browse")
@@ -307,12 +302,11 @@ def config_detail(
         # Single-config mode: emit unchanged shape
         formatter.output(result, format_config_detail)
     else:
-        # Bulk mode: emit {configs: [...], errors: [...]}
-        if formatter.json_mode:
-            formatter.output(result)
-        else:
+        # Bulk mode: emit {configs: [...], errors: [...]}; a failed project exits 1 (E4).
+        def render() -> None:
             _format_config_detail_bulk(formatter.console, result, component_id, with_state)
-            emit_project_warnings(formatter, result)
+
+        finish_fanout(formatter, result, result.get("errors", []), render)
 
 
 def _format_config_detail_bulk(
@@ -555,14 +549,10 @@ def config_search(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
-    code = fanout_exit_code(result.get("errors", []))
-    if formatter.json_mode:
-        formatter.output(result, exit_code=code)
-    else:
+    def render() -> None:
         format_search_results(formatter.console, result)
-        emit_project_warnings(formatter, result)
-    if code:
-        raise typer.Exit(code=code)
+
+    finish_fanout(formatter, result, result.get("errors", []), render)
 
 
 def _parse_json_input(raw: str, *, label: str) -> dict:

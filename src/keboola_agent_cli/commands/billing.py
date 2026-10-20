@@ -26,8 +26,8 @@ from ..errors import ConfigError, ErrorCode
 from ._all_projects import (
     FANOUT_PROJECT_HELP,
     AllProjectsOption,
-    fanout_exit_code,
     fanout_projects,
+    finish_fanout,
 )
 from ._helpers import check_cli_permission, get_formatter, get_service
 
@@ -62,14 +62,6 @@ def _format_credits_table(formatter: Any, credits: list[dict[str, Any]]) -> None
             f"{row.get('remaining_minutes', 0.0):.0f}",
         )
     formatter.console.print(tbl)
-
-
-def _emit_errors(formatter: Any, errors: list[dict[str, Any]]) -> None:
-    for err in errors:
-        formatter.warning(
-            f"Project '{escape(str(err.get('project_alias', '?')))}': "
-            f"{escape(str(err.get('message', 'error')))}"
-        )
 
 
 @billing_app.command("credits")
@@ -107,15 +99,11 @@ def billing_credits(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
-    code = fanout_exit_code(result.get("errors", []))
-    if formatter.json_mode:
-        formatter.output(result, exit_code=code)
-    else:
+    def render() -> None:
         credits = result.get("credits", [])
         if not credits:
             formatter.console.print("[dim]No PAYG projects found.[/dim]")
         else:
             _format_credits_table(formatter, credits)
-        _emit_errors(formatter, result.get("errors", []))
-    if code:
-        raise typer.Exit(code=code)
+
+    finish_fanout(formatter, result, result.get("errors", []), render)

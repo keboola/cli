@@ -12,7 +12,7 @@ import json
 import os
 import secrets
 import sys
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sized
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -504,18 +504,6 @@ def emit_api_error(formatter: OutputFormatter, exc: KeboolaApiError, *, project:
     )
 
 
-def emit_project_warnings(formatter: OutputFormatter, result: dict) -> None:
-    """Emit warnings from multi-project operation results.
-
-    Iterates the 'errors' list in the result dict (if present) and prints
-    each entry as a warning via the formatter.
-    """
-    for err in result.get("errors", []):
-        alias = err.get("project_alias", "unknown")
-        message = err.get("message", "Unknown error")
-        formatter.warning(f"Project '{alias}': {message}")
-
-
 def item_failure_exit_code(failed: int) -> int | None:
     """Map the number of failed items of a multi-item operation to a CLI exit code.
 
@@ -536,6 +524,68 @@ def item_failure_exit_code(failed: int) -> int | None:
         return None
     telemetry.note_command_error(f"{failed} item(s) failed")
     return 1
+
+
+def finish_items(
+    formatter: OutputFormatter,
+    result: Any,
+    *,
+    failed: int,
+    total: int,
+    noun: str,
+    summary: str,
+    render: Callable[[], object] | None = None,
+) -> None:
+    """End a command that processes several items: output, one headline, exit code.
+
+    The one way to end such a command (HO2, E4): ``--json`` gets the envelope
+    with ``exit_code``; human mode gets ``render()`` (the per-item lines) and
+    then one headline, ``Success: <summary>`` or ``Failed: N of M <noun>.``
+    The command exits 1 when an item failed. ``noun`` is plural ("tables").
+
+    One wording for every summary (HO2): ``<N> <noun>(s) <what happened>``,
+    with details after a comma and a closing period, for example
+    ``2 table(s) deleted.`` or ``3 config(s) pushed: 1 created, 2 updated, 0 deleted.``
+    A dry run says ``would be <...>``.
+    The fan-out reads end through ``_all_projects.finish_fanout``, which
+    counts failed projects (E4: ``PAYG_NOT_AVAILABLE`` is not a failure).
+    """
+    code = item_failure_exit_code(failed)
+    if formatter.json_mode:
+        formatter.output(result, exit_code=code or 0)
+    else:
+        if render is not None:
+            render()
+        formatter.item_headline(failed=failed, total=total, noun=noun, summary=summary)
+    if code:
+        raise typer.Exit(code=code)
+
+
+def finish_bulk(
+    formatter: OutputFormatter,
+    result: dict[str, Any],
+    done: Sized,
+    noun: str,
+    done_as: str,
+    render: Callable[[], object],
+) -> None:
+    """:func:`finish_items` for a bulk command whose result lists its failures in ``failed``.
+
+    ``done`` holds the items that succeeded; ``noun`` is singular ("table"),
+    ``done_as`` what happened to them ("deleted", "would be deleted"), so the
+    headline reads ``Success: 2 table(s) deleted.`` or
+    ``Failed: 1 of 3 tables. 2 table(s) deleted.``
+    """
+    failed = len(result["failed"])
+    finish_items(
+        formatter,
+        result,
+        failed=failed,
+        total=len(done) + failed,
+        noun=f"{noun}s",
+        summary=f"{len(done)} {noun}(s) {done_as}.",
+        render=render,
+    )
 
 
 def _is_help_request(ctx: typer.Context) -> bool:

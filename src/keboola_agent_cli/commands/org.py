@@ -10,13 +10,14 @@ from rich.table import Table
 
 from ..constants import DEFAULT_TOKEN_DESCRIPTION, ENV_KBC_STORAGE_API_URL
 from ..errors import ErrorCode, KeboolaApiError
+from ..output import format_item_error
 from ._helpers import (
     _confirm_or_abort,
     check_cli_permission,
     emit_api_error,
+    finish_items,
     get_formatter,
     get_service,
-    item_failure_exit_code,
     map_error_to_exit_code,
     resolve_manage_token,
     split_int_multi,
@@ -108,31 +109,13 @@ def _format_setup_result(console: Console, data: dict) -> None:
         console.print(table)
         console.print()
 
-    # Failed table
-    if failed:
-        table = Table(title="Projects Failed")
-        table.add_column("Project ID", justify="right")
-        table.add_column("Project Name")
-        table.add_column("Error", style="bold red")
-
-        for p in failed:
-            table.add_row(str(p["project_id"]), p["project_name"], p["error"])
-
-        console.print(table)
-        console.print()
-
-    # Token refresh failures of already-registered projects: keyed by alias.
-    if refresh_failed:
-        table = Table(title="Token Refresh Failed")
-        table.add_column("Alias", style="bold cyan")
-        table.add_column("Project Name")
-        table.add_column("Error", style="bold red")
-
-        for p in refresh_failed:
-            table.add_row(p["alias"], p["project_name"], p["error"])
-
-        console.print(table)
-        console.print()
+    # A failed project is one `Error:` line (HO2); token refresh failures are keyed by alias.
+    for p in failed:
+        item = f"project {p['project_id']} '{p['project_name']}'"
+        console.print(format_item_error(item, p["error"]), soft_wrap=True)
+    for p in refresh_failed:
+        item = f"project '{p['alias']}' token refresh"
+        console.print(format_item_error(item, p["error"]), soft_wrap=True)
 
     # Summary line
     summary_parts = []
@@ -256,10 +239,17 @@ def org_setup(
         would_add = len(preview.get("projects_added", []))
         would_skip = len(preview.get("projects_skipped", []))
         if would_add == 0 and not (refresh and would_skip > 0):
-            formatter.console.print("\nNo new projects to add.")
             # The preview is the whole run here: its failed projects are real (#745).
-            if code := item_failure_exit_code(len(preview.get("projects_failed", []))):
-                raise typer.Exit(code=code)
+            finish_items(
+                formatter,
+                preview,
+                failed=len(preview.get("projects_failed", [])),
+                total=max(
+                    preview.get("projects_found", 0), len(preview.get("projects_failed", []))
+                ),
+                noun="projects",
+                summary=f"0 project(s) added, {would_skip} skipped.",
+            )
             return
 
         if would_add > 0:
@@ -299,10 +289,17 @@ def org_setup(
     # Per-project failures are accumulated so one bad project does not abort the
     # run -- but the run itself is not a success, and exit 0 hid that (#745).
     failed = len(result.get("projects_failed", [])) + len(result.get("projects_refresh_failed", []))
-    code = item_failure_exit_code(failed)
-    formatter.output(result, _format_setup_result, exit_code=code or 0)
-    if code:
-        raise typer.Exit(code=code)
+    done_as = "would be added" if result.get("dry_run") else "added"
+    finish_items(
+        formatter,
+        result,
+        failed=failed,
+        total=max(result.get("projects_found", 0), failed),
+        noun="projects",
+        summary=f"{len(result.get('projects_added', []))} project(s) {done_as}, "
+        f"{len(result.get('projects_skipped', []))} skipped.",
+        render=lambda: _format_setup_result(formatter.console, result),
+    )
 
 
 def _handle_api_error(formatter, exc: KeboolaApiError) -> None:

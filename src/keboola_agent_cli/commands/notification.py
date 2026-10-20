@@ -35,8 +35,8 @@ from ..services.notification_service import KNOWN_EVENTS, SCOPE_PROJECT_WIDE, VA
 from ._all_projects import (
     FANOUT_PROJECT_HELP,
     AllProjectsOption,
-    fanout_exit_code,
     fanout_projects,
+    finish_fanout,
 )
 from ._helpers import (
     _confirm_or_abort,
@@ -121,13 +121,6 @@ def _format_subscription_table(formatter: Any, subscriptions: list[dict[str, Any
             escape(sub.get("expires_at", "") or ""),
         )
     formatter.console.print(tbl)
-
-
-def _emit_errors(formatter: Any, errors: list[dict[str, Any]]) -> None:
-    for err in errors:
-        formatter.warning(
-            f"Project '{err.get('project_alias', '?')}': {err.get('message', 'error')}"
-        )
 
 
 def _print_subscription(formatter: Any, row: dict[str, Any]) -> None:
@@ -229,10 +222,7 @@ def notification_list(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
-    code = fanout_exit_code(result.get("errors", []))
-    if formatter.json_mode:
-        formatter.output(result, exit_code=code)
-    else:
+    def render() -> None:
         subscriptions = result.get("subscriptions", [])
         if not subscriptions:
             formatter.console.print("[dim]No notification subscriptions found.[/dim]")
@@ -247,9 +237,7 @@ def notification_list(
                 "re-run without the filter to see who else gets paged."
             )
 
-        _emit_errors(formatter, result.get("errors", []))
-    if code:
-        raise typer.Exit(code=code)
+    finish_fanout(formatter, result, result.get("errors", []), render)
 
 
 # ---------------------------------------------------------------------------

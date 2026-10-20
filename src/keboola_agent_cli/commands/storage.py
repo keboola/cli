@@ -19,14 +19,15 @@ from ..services._storage_tables import CLONE_TABLE_PRODUCTION_MESSAGE
 from ._all_projects import (
     FANOUT_PROJECT_HELP,
     AllProjectsOption,
-    fanout_exit_code,
     fanout_projects,
+    finish_fanout,
 )
 from ._helpers import (
     _confirm_or_abort,
     check_cli_permission,
     emit_api_error,
-    emit_project_warnings,
+    finish_bulk,
+    finish_items,
     get_formatter,
     get_service,
     map_error_to_exit_code,
@@ -130,47 +131,42 @@ def storage_buckets(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
-    code = fanout_exit_code(result.get("errors", []))
-    if formatter.json_mode:
-        formatter.output(result, exit_code=code)
-    elif not result["buckets"]:
-        formatter.console.print("[dim]No buckets found.[/dim]")
-        emit_project_warnings(formatter, result)
-    else:
-        from rich.table import Table
+    def render() -> None:
+        if not result["buckets"]:
+            formatter.console.print("[dim]No buckets found.[/dim]")
+        else:
+            from rich.table import Table
 
-        buckets = result["buckets"]
+            buckets = result["buckets"]
 
-        # Group by project
-        by_project: dict[str, list[dict]] = {}
-        for b in buckets:
-            alias = b["project_alias"]
-            by_project.setdefault(alias, []).append(b)
+            # Group by project
+            by_project: dict[str, list[dict]] = {}
+            for b in buckets:
+                alias = b["project_alias"]
+                by_project.setdefault(alias, []).append(b)
 
-        for alias, proj_buckets in by_project.items():
-            table = Table(title=f"Buckets - {alias}")
-            table.add_column("Bucket ID", style="bold cyan")
-            table.add_column("Stage", style="dim")
-            table.add_column("Rows", justify="right")
-            table.add_column("Linked From", style="yellow")
+            for alias, proj_buckets in by_project.items():
+                table = Table(title=f"Buckets - {alias}")
+                table.add_column("Bucket ID", style="bold cyan")
+                table.add_column("Stage", style="dim")
+                table.add_column("Rows", justify="right")
+                table.add_column("Linked From", style="yellow")
 
-            for b in proj_buckets:
-                linked = ""
-                if b["is_linked"]:
-                    linked = f"{escape(b['source_project_name'])} (#{b['source_project_id']})"
-                table.add_row(
-                    b["id"],
-                    b["stage"],
-                    str(b["rows_count"]),
-                    linked,
-                )
+                for b in proj_buckets:
+                    linked = ""
+                    if b["is_linked"]:
+                        linked = f"{escape(b['source_project_name'])} (#{b['source_project_id']})"
+                    table.add_row(
+                        b["id"],
+                        b["stage"],
+                        str(b["rows_count"]),
+                        linked,
+                    )
 
-            formatter.console.print(table)
-            formatter.console.print()
+                formatter.console.print(table)
+                formatter.console.print()
 
-        emit_project_warnings(formatter, result)
-    if code:
-        raise typer.Exit(code=code)
+    finish_fanout(formatter, result, result.get("errors", []), render)
 
 
 @storage_app.command("bucket-detail", rich_help_panel=_BUCKETS)
@@ -362,18 +358,14 @@ def storage_tables(
         emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
-    code = fanout_exit_code(result.get("errors", []))
-    if formatter.json_mode:
-        formatter.output(result, exit_code=code)
-    else:
+    def render() -> None:
         tables = result["tables"]
         if not tables:
             formatter.console.print("[dim]No tables found.[/dim]")
         else:
             render_tables(formatter.console, tables, include_usage)
-        emit_project_warnings(formatter, result)
-    if code:
-        raise typer.Exit(code=code)
+
+    finish_fanout(formatter, result, result.get("errors", []), render)
 
 
 @storage_app.command("table-detail", rich_help_panel=_TABLES)
@@ -1107,19 +1099,13 @@ def storage_delete_table(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
-    exit_code = 1 if result["failed"] else 0
-    if formatter.json_mode:
-        formatter.output(result, exit_code=exit_code)
-    else:
+    def render() -> None:
         for tid in result["deleted"]:
             formatter.console.print(f"[bold green]Deleted:[/bold green] {tid}")
         for f_item in result["failed"]:
-            formatter.console.print(
-                f"[bold red]Failed:[/bold red] {f_item['id']}: {f_item['error']}"
-            )
+            formatter.item_error(f_item["id"], f_item["error"])
 
-    if exit_code:
-        raise typer.Exit(code=exit_code)
+    finish_bulk(formatter, result, result["deleted"], "table", "deleted", render)
 
 
 @storage_app.command("truncate-table", rich_help_panel=_TABLES)
@@ -1210,22 +1196,16 @@ def storage_truncate_table(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
-    exit_code = 1 if result["failed"] else 0
-    if formatter.json_mode:
-        formatter.output(result, exit_code=exit_code)
-    else:
+    def render() -> None:
         for entry in result["truncated"]:
             formatter.console.print(
                 f"[bold green]Truncated:[/bold green] {entry['table_id']} "
                 f"({entry['rows_before']} -> 0 rows)"
             )
         for f_item in result["failed"]:
-            formatter.console.print(
-                f"[bold red]Failed:[/bold red] {f_item['id']}: {f_item['error']}"
-            )
+            formatter.item_error(f_item["id"], f_item["error"])
 
-    if exit_code:
-        raise typer.Exit(code=exit_code)
+    finish_bulk(formatter, result, result["truncated"], "table", "truncated", render)
 
 
 @storage_app.command("add-column", rich_help_panel=_TABLES)
@@ -1395,19 +1375,13 @@ def storage_delete_column(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
-    exit_code = 1 if result["failed"] else 0
-    if formatter.json_mode:
-        formatter.output(result, exit_code=exit_code)
-    else:
+    def render() -> None:
         for col in result["deleted"]:
             formatter.console.print(f"[bold green]Deleted:[/bold green] {col} from {table_id}")
         for f_item in result["failed"]:
-            formatter.console.print(
-                f"[bold red]Failed:[/bold red] {f_item['column']}: {f_item['error']}"
-            )
+            formatter.item_error(f_item["column"], f_item["error"])
 
-    if exit_code:
-        raise typer.Exit(code=exit_code)
+    finish_bulk(formatter, result, result["deleted"], "column", "deleted", render)
 
 
 @storage_app.command("swap-tables", rich_help_panel=_TABLES)
@@ -2025,21 +1999,25 @@ def storage_file_tag(
         emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
-    exit_code = 1 if result["errors"] else 0
-    if formatter.json_mode:
-        formatter.output(result, exit_code=exit_code)
-    else:
+    def render() -> None:
         for tag_name in result["added"]:
             formatter.console.print(f"[bold green]Added tag:[/bold green] {tag_name}")
         for tag_name in result["removed"]:
             formatter.console.print(f"[bold yellow]Removed tag:[/bold yellow] {tag_name}")
         for err in result["errors"]:
-            formatter.console.print(
-                f"[bold red]Failed:[/bold red] {err['action']} tag '{err['tag']}': {err['error']}"
-            )
+            formatter.item_error(f"{err['action']} tag '{err['tag']}'", err["error"])
 
-    if exit_code:
-        raise typer.Exit(code=exit_code)
+    added, removed = len(result["added"]), len(result["removed"])
+    failed = len(result["errors"])
+    finish_items(
+        formatter,
+        result,
+        failed=failed,
+        total=added + removed + failed,
+        noun="tag changes",
+        summary=f"{added} tag(s) added, {removed} removed.",
+        render=render,
+    )
 
 
 @storage_app.command("load-file", rich_help_panel=_FILES)

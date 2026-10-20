@@ -1265,7 +1265,7 @@ class TestSyncPushCli:
             )
 
         assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
-        assert "No changes to push" in result.output
+        assert "0 config(s) pushed, no changes." in result.output
 
     def test_sync_push_lists_deletions_held_back_without_force_human(self, tmp_path: Path) -> None:
         """Human mode names each deletion push skipped without --force, and the fix (#792 G)."""
@@ -1522,7 +1522,7 @@ class TestSyncPushCli:
 
         assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
         text = _strip_ansi(result.output)
-        assert "Pushed: 1 created, 1 updated" in text
+        assert "2 config(s) pushed: 1 created, 1 updated" in text
         assert "ADDED keboola.variables/values/new" in text
         assert "MODIFIED keboola.variables/values/main" in text
 

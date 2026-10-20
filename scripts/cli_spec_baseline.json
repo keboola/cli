@@ -18,6 +18,7 @@
     "target.project-help-states-default": true,
     "target.no-write-fanout": true,
     "output.no-direct-print": true,
+    "env.registry-complete": true,
     "output.ok-then-exit-declares-exit-code": true,
     "errors.forward-retryable": true,
     "errors.config-error-keeps-code": true,
@@ -623,6 +624,11 @@
       "permissions reset": "permissions.* are always allowed to prevent lockout (permissions.py)",
       "permissions set": "permissions.* are always allowed to prevent lockout (permissions.py)",
       "permissions show": "permissions.* are always allowed to prevent lockout (permissions.py)"
+    },
+    "env.registry-complete": {
+      "commands/_helpers.py:resolve_storage_token_input os.environ.get": "the variable name is the value of the user option --token-env; a name the user chooses cannot be registered",
+      "commands/data_app.py:_read_pat_from_env os.environ.get": "the variable name is the value of the user option --git-pat-env; a name the user chooses cannot be registered",
+      "server/routers/data_apps.py:_resolve_git_pat os.environ.get": "the variable name is the value of the git_pat_env request field; a name the caller chooses cannot be registered"
     },
     "safety.confirm-via-helper": {
       "commands/_auth_picker.py:run_project_picker": "non-safety question: choose and register local aliases after auth login (S4)",

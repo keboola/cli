@@ -47,7 +47,7 @@ from .commands.transformation import transformation_app
 from .commands.version import update_command, version_command
 from .commands.workspace import workspace_app
 from .config_store import ConfigStore, resolve_config_dir
-from .constants import EXIT_PERMISSION_DENIED
+from .constants import ENV_CONFIG_DIR, ENV_CONVERSATION_ID, EXIT_PERMISSION_DENIED
 from .effective_branch import record_targets
 from .errors import ErrorCode, PermissionDeniedError
 from .output import OutputFormatter, force_utf8_when_redirected
@@ -180,6 +180,12 @@ def _version_callback(value: bool) -> None:
         raise typer.Exit()
 
 
+def _from_environment(ctx: typer.Context, name: str) -> bool:
+    """True when Click took the value of option ``name`` from its ``envvar``."""
+    source = ctx.get_parameter_source(name)
+    return source is not None and source.name == "ENVIRONMENT"
+
+
 @app.callback()
 def main(
     ctx: typer.Context,
@@ -211,6 +217,7 @@ def main(
     config_dir: str | None = typer.Option(
         None,
         "--config-dir",
+        envvar=ENV_CONFIG_DIR,
         help="Override config directory path.",
     ),
     deny_writes: bool = typer.Option(
@@ -231,6 +238,7 @@ def main(
     conversation_id: str | None = typer.Option(
         None,
         "--conversation-id",
+        envvar=ENV_CONVERSATION_ID,
         help="Conversation/session ID sent as the X-Conversation-ID header on "
         "every API request (platform observability). Equivalent to setting "
         "KBAGENT_CONVERSATION_ID, and takes precedence over it. Exists because "
@@ -252,7 +260,15 @@ def main(
     import os
 
     from .auto_update import maybe_auto_update, show_post_update_changelog
-    from .constants import ENV_CONVERSATION_ID
+
+    # `envvar=` on these two options names the variable in --help (EV1). A value
+    # that Click took from the environment counts as no flag, so the code below
+    # reads the variable itself as before: same precedence, and the config
+    # directory keeps its "env-var" source label.
+    if _from_environment(ctx, "config_dir"):
+        config_dir = None
+    if _from_environment(ctx, "conversation_id"):
+        conversation_id = None
 
     # Published into the environment rather than threaded through the Typer
     # context because that is where every consumer already reads it:

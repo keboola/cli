@@ -7,10 +7,10 @@
       {"kind": "option", "name": "json_output", "opts": ["--json", "-j"], "type": "boolean", "is_flag": true, "default": false, "help": "Output in JSON format (for machine consumption)"},
       {"kind": "option", "name": "verbose", "opts": ["--verbose", "-v"], "type": "boolean", "is_flag": true, "default": false, "help": "Enable verbose output"},
       {"kind": "option", "name": "no_color", "opts": ["--no-color"], "type": "boolean", "is_flag": true, "default": false, "help": "Disable colored output"},
-      {"kind": "option", "name": "config_dir", "opts": ["--config-dir"], "type": "text", "default": null, "help": "Override config directory path."},
+      {"kind": "option", "name": "config_dir", "opts": ["--config-dir"], "type": "text", "envvar": "KBAGENT_CONFIG_DIR", "default": null, "help": "Override config directory path."},
       {"kind": "option", "name": "deny_writes", "opts": ["--deny-writes"], "type": "boolean", "is_flag": true, "default": false, "help": "Session-only firewall: block write, destructive, AND admin operations (the wide net -- project add/remove/edit, org setup, storage writes and deletes, etc.). Merges with any persisted policy."},
       {"kind": "option", "name": "deny_destructive", "opts": ["--deny-destructive"], "type": "boolean", "is_flag": true, "default": false, "help": "Session-only firewall: block ONLY data-destructive operations (storage delete-table/delete-bucket/delete-column, job terminate, branch delete, etc.). Admin ops like 'project remove' and 'org setup' are NOT blocked -- use --deny-writes for the wide net."},
-      {"kind": "option", "name": "conversation_id", "opts": ["--conversation-id"], "type": "text", "default": null, "help": "Conversation/session ID sent as the X-Conversation-ID header on every API request (platform observability). Equivalent to setting KBAGENT_CONVERSATION_ID, and takes precedence over it. Exists because agent harnesses do not persist shell state between tool calls, so a standalone `export` cannot set it -- and prefixing every command with `export ...` stops the command matching a `Bash(kbagent ...)` permission allow-rule."},
+      {"kind": "option", "name": "conversation_id", "opts": ["--conversation-id"], "type": "text", "envvar": "KBAGENT_CONVERSATION_ID", "default": null, "help": "Conversation/session ID sent as the X-Conversation-ID header on every API request (platform observability). Equivalent to setting KBAGENT_CONVERSATION_ID, and takes precedence over it. Exists because agent harnesses do not persist shell state between tool calls, so a standalone `export` cannot set it -- and prefixing every command with `export ...` stops the command matching a `Bash(kbagent ...)` permission allow-rule."},
       {"kind": "option", "name": "allow_env_manage_token", "opts": ["--allow-env-manage-token"], "type": "boolean", "is_flag": true, "default": false, "help": "Read KBC_MANAGE_API_TOKEN from the environment. Without this flag the env var is ignored (with a warning) and an interactive TTY prompt is required. Default-deny since 0.29.0; closes the AI-exfiltration risk where subprocesses inherit the manage token."},
       {"kind": "option", "name": "install_completion", "opts": ["--install-completion"], "type": "boolean", "is_flag": true, "default": null, "help": "Install completion for the current shell."},
       {"kind": "option", "name": "show_completion", "opts": ["--show-completion"], "type": "boolean", "is_flag": true, "default": null, "help": "Show completion for the current shell, to copy it or customize the installation."}
@@ -207,11 +207,12 @@
       "kind": "command",
       "hidden": false,
       "category": "write",
-      "help": "Sign in to a Keboola stack via browser login (PKCE) or device code.\n\nA human must approve in a browser. In an attended session an AI agent\nshould drive `--device-code` from a BACKGROUND shell -- never a\nforeground one, and never unattended -- relaying the verification URL\nand code, then confirming with `auth status`. The verification URL and\ncode are always printed (to stderr in --json mode); session tokens\nthemselves are never printed.\n\nWhen `--register-projects` is NOT passed and the session can see at\nleast one project, a post-login hook offers to run the interactive\npicker right away (TTY + human mode) or otherwise prints a one-line\nhint -- see `kbagent auth register-projects --help`.",
+      "help": "Sign in to a Keboola stack via browser login (PKCE) or device code.\n\nA human must approve in a browser. In an attended session an AI agent\nshould drive `--device-code` from a BACKGROUND shell -- never a\nforeground one, and never unattended -- relaying the verification URL\nand code, then confirming with `auth status`. The verification URL and\ncode are always printed to stderr; session tokens themselves are never\nprinted. Notices, hints and prompts go to stderr, the result to stdout.\n\nThe browser opens wherever the environment allows it, also under\n`--json` and without a terminal: PKCE first, the device-code flow only\nwith `--device-code`, over SSH, in a container, in WSL without `wslview`,\nor after a failed browser step. This is an exception to the rule that a\ncommand opens no browser under `--json` or without a terminal. With\n`--no-open` the command uses the device-code flow and opens nothing.\n\nWhen `--register-projects` is NOT passed and the session can see at\nleast one project, a post-login hook offers to run the interactive\npicker right away (TTY + human mode) or otherwise prints a one-line\nhint -- see `kbagent auth register-projects --help`.",
       "params": [
         {"kind": "option", "name": "stack", "opts": ["--stack"], "type": "text", "default": null, "help": "Stack URL or a registered project alias to log into"},
         {"kind": "option", "name": "device_code", "opts": ["--device-code"], "type": "boolean", "is_flag": true, "default": false, "help": "Force the device-authorization flow (skip the browser loopback)"},
-        {"kind": "option", "name": "register_projects", "opts": ["--register-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Register every project this session can access under a local alias"}
+        {"kind": "option", "name": "register_projects", "opts": ["--register-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Register every project this session can access under a local alias"},
+        {"kind": "option", "name": "no_open", "opts": ["--no-open"], "type": "boolean", "is_flag": true, "default": false, "help": "Do not open a browser: use the device-code flow and only print the verification URL and code"}
       ]
     },
     {
@@ -924,8 +925,8 @@
         {"kind": "option", "name": "workspace", "opts": ["--workspace"], "secondary_opts": ["--no-workspace"], "type": "boolean", "is_flag": true, "default": true, "help": "Grant the app Storage access by writing runtime.workspace.enabled=true (default). This is what makes the platform inject WORKSPACE_ID / QUERY_SERVICE_URL / KBC_WORKSPACE_MANIFEST_PATH -- without it an app that reads Storage deploys and reports running while serving no data. Pass --no-workspace only for an app that never touches Storage."},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Keboola dev branch ID (defaults to production)."},
         {"kind": "option", "name": "no_deploy", "opts": ["--no-deploy"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip the deploy step; create the shell + Storage config only."},
-        {"kind": "option", "name": "wait", "opts": ["--wait"], "type": "boolean", "is_flag": true, "default": false, "help": "Block until state == running (or error). Respects pitfall #1: stopped is not terminal."},
-        {"kind": "option", "name": "timeout", "opts": ["--timeout"], "type": "float", "default": 300.0, "help": "Maximum seconds to wait for state == running (default 300)."},
+        {"kind": "option", "name": "wait", "opts": ["--wait"], "type": "boolean", "is_flag": true, "default": false, "help": "Block until state == running (or error). Respects pitfall #1: stopped is not terminal. Default: no wait."},
+        {"kind": "option", "name": "timeout", "opts": ["--timeout"], "type": "float", "default": 300.0, "help": "Maximum seconds to wait for state == running, with --wait. Default: 300."},
         {"kind": "option", "name": "keep_on_failure", "opts": ["--keep-on-failure"], "type": "boolean", "is_flag": true, "default": false, "help": "Keep the orphan deployment shell if PUT or initial deploy fails (forensics)."},
         {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Print the three request bodies without making any API call."},
         {"kind": "option", "name": "copy", "opts": ["--copy"], "type": "boolean", "is_flag": true, "default": false, "help": "Copy the data-app password to the clipboard at once, without the terminal prompt. The only way to copy it when there is no terminal (an AI agent, CI) or with --json. On create / deploy it needs --wait."},
@@ -954,8 +955,8 @@
         {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "required": true, "default": null, "help": "Project alias"},
         {"kind": "option", "name": "app_id", "opts": ["--app-id"], "type": "text", "required": true, "default": null, "help": "Data Science numeric app id"},
         {"kind": "option", "name": "config_version", "opts": ["--config-version"], "type": "text", "default": null, "help": "Pin a specific Storage config version (defaults to latest)."},
-        {"kind": "option", "name": "wait", "opts": ["--wait"], "type": "boolean", "is_flag": true, "default": false, "help": "Block until running or error."},
-        {"kind": "option", "name": "timeout", "opts": ["--timeout"], "type": "float", "default": 300.0, "help": "Max seconds to wait."},
+        {"kind": "option", "name": "wait", "opts": ["--wait"], "type": "boolean", "is_flag": true, "default": false, "help": "Block until running or error. Default: no wait."},
+        {"kind": "option", "name": "timeout", "opts": ["--timeout"], "type": "float", "default": 300.0, "help": "Max seconds to wait, with --wait. Default: 300."},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Storage branch for reading the latest version (defaults to production)."},
         {"kind": "option", "name": "git_branch", "opts": ["--git-branch"], "type": "text", "default": null, "help": "Git branch to clone. Used only when deploy writes the git block of a pure managed repo; otherwise it has no effect. Without it, deploy writes main for a never-deployed app and stops with an error for a deployed one."},
         {"kind": "option", "name": "copy", "opts": ["--copy"], "type": "boolean", "is_flag": true, "default": false, "help": "Copy the data-app password to the clipboard at once, without the terminal prompt. The only way to copy it when there is no terminal (an AI agent, CI) or with --json. On create / deploy it needs --wait."},
@@ -1131,8 +1132,8 @@
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "required": true, "default": null, "help": "Project alias"},
         {"kind": "option", "name": "app_id", "opts": ["--app-id"], "type": "text", "required": true, "default": null, "help": "Data Science numeric app id"},
-        {"kind": "option", "name": "wait", "opts": ["--wait"], "type": "boolean", "is_flag": true, "default": false, "help": "Block until running or error."},
-        {"kind": "option", "name": "timeout", "opts": ["--timeout"], "type": "float", "default": 300.0, "help": "Max seconds to wait."}
+        {"kind": "option", "name": "wait", "opts": ["--wait"], "type": "boolean", "is_flag": true, "default": false, "help": "Block until running or error. Default: no wait."},
+        {"kind": "option", "name": "timeout", "opts": ["--timeout"], "type": "float", "default": 300.0, "help": "Max seconds to wait, with --wait. Default: 300."}
       ]
     },
     {
@@ -1144,8 +1145,8 @@
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "required": true, "default": null, "help": "Project alias"},
         {"kind": "option", "name": "app_id", "opts": ["--app-id"], "type": "text", "required": true, "default": null, "help": "Data Science numeric app id"},
-        {"kind": "option", "name": "wait", "opts": ["--wait"], "type": "boolean", "is_flag": true, "default": false, "help": "Block until stopped."},
-        {"kind": "option", "name": "timeout", "opts": ["--timeout"], "type": "float", "default": 300.0, "help": "Max seconds to wait."}
+        {"kind": "option", "name": "wait", "opts": ["--wait"], "type": "boolean", "is_flag": true, "default": false, "help": "Block until stopped. Default: no wait."},
+        {"kind": "option", "name": "timeout", "opts": ["--timeout"], "type": "float", "default": 300.0, "help": "Max seconds to wait, with --wait. Default: 300."}
       ]
     },
     {
@@ -1736,8 +1737,8 @@
         {"kind": "option", "name": "component_id", "opts": ["--component-id"], "type": "text", "required": true, "default": null, "help": "Component ID (e.g. keboola.snowflake-transformation)"},
         {"kind": "option", "name": "config_id", "opts": ["--config-id"], "type": "text", "required": true, "default": null, "help": "Configuration ID"},
         {"kind": "option", "name": "row_id", "opts": ["--row-id"], "type": "text", "multiple": true, "default": null, "help": "Config row ID(s) to run (repeat for multiple; omit to run entire config)"},
-        {"kind": "option", "name": "wait", "opts": ["--wait"], "type": "boolean", "is_flag": true, "default": false, "help": "Wait for job to finish (poll until terminal state)"},
-        {"kind": "option", "name": "timeout", "opts": ["--timeout"], "type": "float", "default": 300.0, "help": "Max seconds to wait when --wait is set"},
+        {"kind": "option", "name": "wait", "opts": ["--wait"], "type": "boolean", "is_flag": true, "default": false, "help": "Wait for job to finish (poll until terminal state). Default: no wait."},
+        {"kind": "option", "name": "timeout", "opts": ["--timeout"], "type": "float", "default": 300.0, "help": "Max seconds to wait when --wait is set. Default: 300."},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID (overrides active branch)"},
         {"kind": "option", "name": "mode", "opts": ["--mode"], "type": "choice", "choices": ["run", "debug"], "default": "run", "help": "Queue API job mode. 'run' (default) executes the component normally and writes to mapped output tables. 'debug' executes the component but redirects its output to a Storage File tagged 'debug-<jobId>' instead of the destination buckets -- safe for dry-runs and for reproducing a failing run on production configuration without touching production data."},
         {"kind": "option", "name": "variable_values_id", "opts": ["--variable-values-id"], "type": "text", "default": null, "help": "Explicit keboola.variables values-row ID to bind. Use when the linked variables config has multiple rows and auto-resolution (first row) picks the wrong one. Mutually exclusive with --no-variables."},
@@ -3549,8 +3550,8 @@
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "required": true, "default": null, "help": "Project alias"},
         {"kind": "option", "name": "job_id", "opts": ["--job-id"], "type": "integer", "required": true, "default": null, "help": "Storage job ID (e.g. from `upload-table --no-wait`)"},
-        {"kind": "option", "name": "wait", "opts": ["--wait"], "type": "boolean", "is_flag": true, "default": false, "help": "Poll until the job finishes (success or error)"},
-        {"kind": "option", "name": "timeout", "opts": ["--timeout"], "type": "float", "default": null, "help": "Seconds to wait; requires --wait (default: 600)"}
+        {"kind": "option", "name": "wait", "opts": ["--wait"], "type": "boolean", "is_flag": true, "default": false, "help": "Poll until the job finishes (success or error). Default: no wait."},
+        {"kind": "option", "name": "timeout", "opts": ["--timeout"], "type": "float", "default": null, "help": "Seconds to wait; requires --wait. Default: 600."}
       ]
     },
     {
@@ -3567,8 +3568,8 @@
         {"kind": "option", "name": "delimiter", "opts": ["--delimiter"], "type": "text", "default": ",", "help": "CSV column delimiter"},
         {"kind": "option", "name": "enclosure", "opts": ["--enclosure"], "type": "text", "default": "\"", "help": "CSV value enclosure character"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID (defaults to active branch if set via 'branch use')"},
-        {"kind": "option", "name": "wait", "opts": ["--wait"], "secondary_opts": ["--no-wait"], "type": "boolean", "is_flag": true, "default": true, "help": "Wait for the Storage import job to finish (default). --no-wait returns as soon as the job is queued and prints its job ID; follow it with `storage job-detail --wait`. The upload of the file itself is always awaited."},
-        {"kind": "option", "name": "timeout", "opts": ["--timeout"], "type": "float", "default": null, "help": "Seconds to wait for the import job (default: 600). On timeout the import keeps running server-side; the error names its job ID."}
+        {"kind": "option", "name": "wait", "opts": ["--wait"], "secondary_opts": ["--no-wait"], "type": "boolean", "is_flag": true, "default": true, "help": "Wait for the Storage import job to finish. Default: wait. --no-wait returns as soon as the job is queued and prints its job ID; follow it with `storage job-detail --wait`. The upload of the file itself is always awaited."},
+        {"kind": "option", "name": "timeout", "opts": ["--timeout"], "type": "float", "default": null, "help": "Seconds to wait for the import job. Default: 600. On timeout the import keeps running server-side; the error names its job ID."}
       ]
     },
     {
@@ -3727,8 +3728,8 @@
         {"kind": "option", "name": "enclosure", "opts": ["--enclosure"], "type": "text", "default": "\"", "help": "CSV value enclosure character (default: '\"')'"},
         {"kind": "option", "name": "auto_create", "opts": ["--auto-create"], "secondary_opts": ["--no-auto-create"], "type": "boolean", "is_flag": true, "default": true, "help": "Auto-create bucket and table if they don't exist (default: on). Columns are inferred as STRING from the CSV header row."},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID (defaults to active branch if set via 'branch use')"},
-        {"kind": "option", "name": "wait", "opts": ["--wait"], "secondary_opts": ["--no-wait"], "type": "boolean", "is_flag": true, "default": true, "help": "Wait for the Storage import job to finish (default). --no-wait returns as soon as the job is queued and prints its job ID; follow it with `storage job-detail --wait`. The upload of the file itself is always awaited."},
-        {"kind": "option", "name": "timeout", "opts": ["--timeout"], "type": "float", "default": null, "help": "Seconds to wait for the import job (default: 600). On timeout the import keeps running server-side; the error names its job ID."},
+        {"kind": "option", "name": "wait", "opts": ["--wait"], "secondary_opts": ["--no-wait"], "type": "boolean", "is_flag": true, "default": true, "help": "Wait for the Storage import job to finish. Default: wait. --no-wait returns as soon as the job is queued and prints its job ID; follow it with `storage job-detail --wait`. The upload of the file itself is always awaited."},
+        {"kind": "option", "name": "timeout", "opts": ["--timeout"], "type": "float", "default": null, "help": "Seconds to wait for the import job. Default: 600. On timeout the import keeps running server-side; the error names its job ID."},
         {"kind": "option", "name": "progress", "opts": ["--progress"], "type": "boolean", "is_flag": true, "default": false, "help": "Always report transfer progress on stderr (percent, speed, elapsed, ETA), also with --json and without a terminal: a bar on a terminal, otherwise one line every 10s. stdout is untouched."}
       ]
     },
@@ -4058,7 +4059,7 @@
       "category": "read",
       "help": "Show the kbagent version and check for updates.",
       "params": [
-        {"kind": "option", "name": "beta", "opts": ["--beta"], "type": "boolean", "is_flag": true, "default": false, "help": "Report the latest pre-release (beta / rc) instead of the latest stable."}
+        {"kind": "option", "name": "beta", "opts": ["--beta"], "type": "boolean", "is_flag": true, "default": false, "help": "Report the latest pre-release (beta / rc) instead of the latest stable. KBAGENT_INCLUDE_PRERELEASE=1 has the same effect."}
       ]
     },
     {

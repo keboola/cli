@@ -31,14 +31,14 @@ from ..output import OutputFormatter, format_job_detail, format_jobs_table
 from ._all_projects import (
     FANOUT_PROJECT_HELP,
     AllProjectsOption,
-    fanout_exit_code,
     fanout_projects,
+    finish_fanout,
 )
 from ._helpers import (
     _confirm_or_abort,
     check_cli_permission,
     emit_api_error,
-    emit_project_warnings,
+    finish_items,
     get_formatter,
     get_service,
     map_error_to_exit_code,
@@ -198,14 +198,10 @@ def job_list(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
-    code = fanout_exit_code(result.get("errors", []))
-    if formatter.json_mode:
-        formatter.output(result, exit_code=code)
-    else:
+    def render() -> None:
         format_jobs_table(formatter.console, result)
-        emit_project_warnings(formatter, result)
-    if code:
-        raise typer.Exit(code=code)
+
+    finish_fanout(formatter, result, result.get("errors", []), render)
 
 
 @job_app.command("detail")
@@ -272,12 +268,12 @@ def job_run(
     wait: bool = typer.Option(
         False,
         "--wait",
-        help="Wait for job to finish (poll until terminal state)",
+        help="Wait for job to finish (poll until terminal state). Default: no wait.",
     ),
     timeout: float = typer.Option(
         DEFAULT_JOB_RUN_TIMEOUT,
         "--timeout",
-        help="Max seconds to wait when --wait is set",
+        help=f"Max seconds to wait when --wait is set. Default: {DEFAULT_JOB_RUN_TIMEOUT:g}.",
     ),
     branch: int | None = typer.Option(
         None,
@@ -700,10 +696,7 @@ def job_terminate(
     if filter_context is not None:
         result["filter"] = filter_context
 
-    exit_code = 1 if result["failed"] else 0
-    if formatter.json_mode:
-        formatter.output(result, exit_code=exit_code)
-    else:
+    def render() -> None:
         for entry in result["killed"]:
             formatter.console.print(
                 f"[bold green]Killed:[/bold green] {entry['id']} "
@@ -716,9 +709,16 @@ def job_terminate(
         for jid in result["not_found"]:
             formatter.console.print(f"[bold red]Not found:[/bold red] {jid}")
         for f_item in result["failed"]:
-            formatter.console.print(
-                f"[bold red]Failed:[/bold red] {f_item['id']}: {f_item['error']}"
-            )
+            formatter.item_error(f_item["id"], f_item["error"])
 
-    if exit_code:
-        raise typer.Exit(code=exit_code)
+    killed, failed = len(result["killed"]), len(result["failed"])
+    finished, not_found = len(result["already_finished"]), len(result["not_found"])
+    finish_items(
+        formatter,
+        result,
+        failed=failed,
+        total=killed + finished + not_found + failed,
+        noun="jobs",
+        summary=f"{killed} job(s) killed, {finished} already finished, {not_found} not found.",
+        render=render,
+    )

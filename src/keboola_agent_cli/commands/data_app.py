@@ -25,8 +25,8 @@ from ..errors import ConfigError, ErrorCode, KeboolaApiError, exit_code_for
 from ._all_projects import (
     FANOUT_PROJECT_HELP,
     AllProjectsOption,
-    fanout_exit_code,
     fanout_projects,
+    finish_fanout,
 )
 from ._data_app_git import register_git_commands
 from ._data_app_password import (
@@ -44,7 +44,6 @@ from ._helpers import (
     _confirm_or_abort,
     check_cli_permission,
     emit_api_error,
-    emit_project_warnings,
     get_formatter,
     get_service,
     map_error_to_exit_code,
@@ -147,14 +146,10 @@ def data_app_list(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
-    code = fanout_exit_code(result.get("errors", []))
-    if formatter.json_mode:
-        formatter.output(result, exit_code=code)
-    else:
+    def render() -> None:
         _print_data_app_table(formatter, result)
-        emit_project_warnings(formatter, result)
-    if code:
-        raise typer.Exit(code=code)
+
+    finish_fanout(formatter, result, result.get("errors", []), render)
 
 
 # ---------------------------------------------------------------------------
@@ -369,12 +364,14 @@ def data_app_create(
     wait: bool = typer.Option(
         False,
         "--wait",
-        help="Block until state == running (or error). Respects pitfall #1: stopped is not terminal.",
+        help="Block until state == running (or error). Respects pitfall #1: stopped is not "
+        "terminal. Default: no wait.",
     ),
     timeout: float = typer.Option(
         DEFAULT_JOB_RUN_TIMEOUT,
         "--timeout",
-        help="Maximum seconds to wait for state == running (default 300).",
+        help=f"Maximum seconds to wait for state == running, with --wait. "
+        f"Default: {DEFAULT_JOB_RUN_TIMEOUT:g}.",
     ),
     keep_on_failure: bool = typer.Option(
         False,
@@ -551,9 +548,13 @@ def data_app_deploy(
         "--config-version",
         help="Pin a specific Storage config version (defaults to latest).",
     ),
-    wait: bool = typer.Option(False, "--wait", help="Block until running or error."),
+    wait: bool = typer.Option(
+        False, "--wait", help="Block until running or error. Default: no wait."
+    ),
     timeout: float = typer.Option(
-        DEFAULT_JOB_RUN_TIMEOUT, "--timeout", help="Max seconds to wait."
+        DEFAULT_JOB_RUN_TIMEOUT,
+        "--timeout",
+        help=f"Max seconds to wait, with --wait. Default: {DEFAULT_JOB_RUN_TIMEOUT:g}.",
     ),
     branch: int | None = typer.Option(
         None,
@@ -598,9 +599,13 @@ def data_app_start(
     ctx: typer.Context,
     project: str = typer.Option(..., "--project", help="Project alias"),
     app_id: str = typer.Option(..., "--app-id", help="Data Science numeric app id"),
-    wait: bool = typer.Option(False, "--wait", help="Block until running or error."),
+    wait: bool = typer.Option(
+        False, "--wait", help="Block until running or error. Default: no wait."
+    ),
     timeout: float = typer.Option(
-        DEFAULT_JOB_RUN_TIMEOUT, "--timeout", help="Max seconds to wait."
+        DEFAULT_JOB_RUN_TIMEOUT,
+        "--timeout",
+        help=f"Max seconds to wait, with --wait. Default: {DEFAULT_JOB_RUN_TIMEOUT:g}.",
     ),
 ) -> None:
     """Wake an auto-suspended data app at its currently-pinned configVersion."""
@@ -619,9 +624,11 @@ def data_app_stop(
     ctx: typer.Context,
     project: str = typer.Option(..., "--project", help="Project alias"),
     app_id: str = typer.Option(..., "--app-id", help="Data Science numeric app id"),
-    wait: bool = typer.Option(False, "--wait", help="Block until stopped."),
+    wait: bool = typer.Option(False, "--wait", help="Block until stopped. Default: no wait."),
     timeout: float = typer.Option(
-        DEFAULT_JOB_RUN_TIMEOUT, "--timeout", help="Max seconds to wait."
+        DEFAULT_JOB_RUN_TIMEOUT,
+        "--timeout",
+        help=f"Max seconds to wait, with --wait. Default: {DEFAULT_JOB_RUN_TIMEOUT:g}.",
     ),
 ) -> None:
     """Stop a running data app (preserves the URL and Storage config)."""

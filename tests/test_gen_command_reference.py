@@ -66,6 +66,15 @@ class TestGenCommandReference:
     def test_help_option_excluded(self, reference: str) -> None:
         assert "`--help`" not in reference
 
+    def test_environment_variables_listed(self, reference: str) -> None:
+        """EV1: the reference carries the whole registry, with the secret flag."""
+        from keboola_agent_cli.env_vars import ENV_VARS
+
+        section = reference.split("## Environment variables", 1)[1]
+        for var in ENV_VARS:
+            row = next(line for line in section.splitlines() if f"| `{var.name}` |" in line)
+            assert f"| {'yes' if var.secret else 'no'} | {var.added_in} |" in row
+
     def test_header_carries_version(self, reference: str) -> None:
         from keboola_agent_cli import __version__
 

@@ -378,6 +378,11 @@ plugins/kbagent/
 
 ```
 # Global options: --json, --verbose, --no-color, --config-dir, --conversation-id, --deny-writes, --deny-destructive, --allow-env-manage-token
+# Environment variables (CLI-50, spec EV1): every variable kbagent reads is in ENV_VARS in
+#   src/keboola_agent_cli/env_vars.py (name, purpose, secret, added in, option); a new read needs an
+#   entry there (blocking rule env.registry-complete). An option that a variable sets declares it with
+#   envvar= (--config-dir: KBAGENT_CONFIG_DIR, --conversation-id: KBAGENT_CONVERSATION_ID, ...), so
+#   --help names it; precedence stays flag > variable > saved choice > default.
 # Root command class (CLI-44, #791; root_command.py): --json/-j, --deny-writes and --deny-destructive are
 #   also accepted after the subcommand (hidden copies on every group and command, argv not rewritten);
 #   -h = --help. Under --json every exit writes one JSON document: a malformed command line or a bare
@@ -418,7 +423,11 @@ plugins/kbagent/
 #   gotchas.md.
 # Headless / token-only (0.50.0+): export KBAGENT_PROJECT_FROM_ENV=1 + KBC_TOKEN + KBC_STORAGE_API_URL to synthesize an in-memory `__env__` project (no `project add`, no config.json on disk; token never persisted). Use `--project __env__`. Same env setup also powers `kbagent serve`.
 
-kbagent auth login [--stack URL|alias] [--device-code] [--register-projects]
+kbagent auth login [--stack URL|alias] [--device-code] [--register-projects] [--no-open]
+# auth login (CLI-50): notices, the device panel, hints and the picker question go to stderr in
+#   every mode; the result stays on stdout. The browser opens as before, also under --json and
+#   without a terminal (the auth login exception to spec HO5); --no-open uses the device flow and
+#   opens nothing. Version gate lives in gotchas.md.
 kbagent auth login-password --email EMAIL (--password PASSWORD | --password-stdin) [--totp-secret SECRET] [--stack URL|alias] [--register-projects]
 kbagent auth status [--stack URL|alias]
 kbagent auth logout [--stack URL|alias] [--remove-projects] [--yes]
@@ -627,8 +636,9 @@ kbagent config clone --project P --component-id ID --config-id ID --name NAME [-
 #   schedule list/find, notification list, branch list, workspace list, project status) use the active
 #   project when --project is omitted (KBAGENT_PROJECT > `project use` > sole project > CONFIG_ERROR, exit 5,
 #   commands/_all_projects.fanout_projects). --all-projects reads all registered projects (with --project:
-#   USAGE_ERROR, exit 2). A read in which a project failed exits 1 after the full payload (fanout_exit_code,
-#   PAYG_NOT_AVAILABLE excluded). No registered project = exit 5. Every `targets` record has `project_source`
+#   USAGE_ERROR, exit 2). A read in which a project failed exits 1 after the full payload (finish_fanout,
+#   PAYG_NOT_AVAILABLE counts as read; headline `Success: N project(s) read.`). No registered project = exit 5.
+#   Every `targets` record has `project_source`
 #   (explicit|env|active_project|sole|all). effective_branch.record_project records it, called by the --project
 #   option callback, resolve_pinned_alias, resolve_projects and fanout_projects. A project without a branch record
 #   gets one record with branch_source "none". A destructive command under --json whose project or branch
@@ -1199,17 +1209,23 @@ kbagent sync push --project ALIAS [--all-projects] [--dry-run] [--force] [--allo
 #   `semantic-layer import/promote/build/edit metric`, `storage describe-batch --json`,
 #   `flow schedule-remove` (new `errors[]` key, always present, empty when nothing
 #   failed; a partial failure fills it and exits 1; when every schedule delete
-#   fails it still raises `SCHEDULE_DELETE_FAILED`). Only `sync push`, `sync clone`,
-#   `storage describe-batch`, `storage describe-migrate` and `flow schedule-remove` print
-#   a `Failed:` headline instead of a green `Success:`; the others list the failed items
-#   in a table or in summary lines, and the `--all-projects` variants state the count in
-#   their summary line. `sync push --all-projects` counts a project
+#   fails it still raises `SCHEDULE_DELETE_FAILED`). Each of these, and the bulk
+#   `storage` deletes, `storage file-tag`, `job terminate`, `auth register-projects`,
+#   `token list --with-last-used`, `config detail` with several --project (now exit 1 on a failed
+#   project) and the 18 fan-out reads, ends its human output with one headline on stdout (CLI-50,
+#   spec HO2), one form for all: `Success: 2 table(s) deleted.` /
+#   `Failed: 1 of 3 projects. 2 project(s) read.` Every failed item is one `Error: <item>: <message>`
+#   line on stdout before it (OutputFormatter.item_error / output.format_item_error), never a stderr
+#   warning; contract cases in tests/test_cli_contract.py refuse any other form.
+#   `sync push --all-projects` counts a project
 #   whose push returned `errors[]` in `summary.failed`. The --json payload is emitted
 #   BEFORE the exit; the items that succeeded stay written. A `--dry-run` of these
 #   exits 1 when it reports a failed item, like the real run. `sync diff --all-projects`
 #   exits 1 when a project failed. The 18 fan-out reads (`billing credits`, `job list`,
-#   `schedule list`, ...) exit 1 too (CLI-45). The helper is `item_failure_exit_code()` in
-#   commands/_helpers.py (returns the code, the caller raises). Version gate for this
+#   `schedule list`, ...) exit 1 too (CLI-45). The helper is `finish_items()` in
+#   commands/_helpers.py: it emits the envelope or the per-item lines plus the headline,
+#   then exits 1 when an item failed. The contract case output.multi-item-headline
+#   allows `item_failure_exit_code()` only there. Version gate for this
 #   entry lives in gotchas.md -- the placeholder cannot be written on these `# ` comment
 #   lines (check_version_gates.py parses them as ATX markdown headings).
 # sync push (since 0.91.0, #686): the manifest baseline `pull_config_hash` is stamped from the API

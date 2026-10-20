@@ -152,7 +152,7 @@ Every rule with its level, the version from which it applies, and how it is chec
 | [HO2](#HO2) | MUST | now for new commands; 1.0.0 for existing ones | `output.multi-item-headline`, review |
 | [HO3](#HO3) | MUST | now | review |
 | [HO4](#HO4) | SHOULD | now | `output.no-direct-print` |
-| [HO5](#HO5) | MUST | now for `config oauth-url`; `auth login` when `--no-open` is added | review |
+| [HO5](#HO5) | MUST | now | review |
 | [HO6](#HO6) | MUST | now | `output.no-direct-print` |
 | [HO7](#HO7) | MUST | now | `output.human-snapshots`, `tests/test_cli_human_snapshots.py` |
 | [SEC1](#SEC1) | MUST | now | review |
@@ -514,7 +514,7 @@ Shape of the success envelope in 1.0.0 (`storage delete-table --project prod`, a
 - Checked by: `errors.forward-retryable`, `errors.config-error-keeps-code`, `tests/test_error_forwarding.py`.
 
 <a id="E4"></a><a id="errors.fanout-exit"></a>
-**E4 · MUST · now for writes; 1.0.0 for fan-out reads.** A command that processes several items or projects exits 1 when at least one of them failed, reads included. It prints the full payload before it exits, and the items that succeeded stay written. A `--dry-run` that reports a failed item exits 1 like the real run. A run with no failed item exits 0. A fan-out read with no registered project exits 5. An answer that is not a failure (`PAYG_NOT_AVAILABLE` in `billing credits`) does not count as failed. Use `item_failure_exit_code()` in `commands/_helpers.py`. Until 1.0.0, a fan-out read exits 0 when a project failed and lists the failure in `data.errors`.
+**E4 · MUST · now for writes; 1.0.0 for fan-out reads.** A command that processes several items or projects exits 1 when at least one of them failed, reads included. It prints the full payload before it exits, and the items that succeeded stay written. A `--dry-run` that reports a failed item exits 1 like the real run. A run with no failed item exits 0. A fan-out read with no registered project exits 5. An answer that is not a failure (`PAYG_NOT_AVAILABLE` in `billing credits`) does not count as failed. Use `finish_items()` in `commands/_helpers.py`, which also prints the headline (HO2). Until 1.0.0, a fan-out read exits 0 when a project failed and lists the failure in `data.errors`.
 
 - Checked by: `errors.fanout-exit` (contract, `tests/test_target_selection.py`) and unit tests.
 
@@ -778,14 +778,14 @@ The 0.x line, until T0, ships only bug, security and data-loss fixes (C4), the m
 ## 14. Human output
 
 <a id="HO1"></a><a id="output.no-direct-print"></a>
-**HO1 · MUST · now.** Results go to stdout. Headlines, notices, hints, progress, prompts and panels go to stderr, also in human mode (O6). A command prints only through `OutputFormatter` and the shared renderers in `output.py`, not through `print`, `typer.echo`, `click.echo` or a new `rich` console. `auth login` prints its notices to stdout in human mode until 1.0.0.
+**HO1 · MUST · now.** Results go to stdout. A failed item of a multi-item command is part of the result: one `Error: <item>: <message>` line on stdout. The final summary line of a human-mode result (`Success:` or `Failed:`) goes to stdout after the result. Notices, hints, progress, prompts and panels go to stderr, also in human mode (O6). A command prints only through `OutputFormatter` and the shared renderers in `output.py`, not through `print`, `typer.echo`, `click.echo` or a new `rich` console. Before 1.0.0, `auth login` printed its notices to stdout in human mode.
 
 - Checked by: `output.no-direct-print`.
 
 <a id="HO2"></a><a id="output.multi-item-headline"></a>
-**HO2 · MUST · now for new commands; 1.0.0 for existing ones.** A command that processes several items ends its human output with one headline: `Success:` when nothing failed, `Failed: N of M` when an item failed.
+**HO2 · MUST · now for new commands; 1.0.0 for existing ones.** Every command that processes several items (projects, tables, buckets, files, configs, schedules, ...) ends its human output with one headline on stdout (HO1): `Success:` when nothing failed, `Failed: N of M <items>.` when an item failed. This includes the fan-out reads, for which the items are projects. The text after the label has one form: `<N> <item>(s) <what happened>`, details after a comma, a closing period, and `would be <...>` for a dry run (`Success: 2 table(s) deleted.`, `Failed: 1 of 3 projects. 2 project(s) read.`). Every failed item is one line `Error: <item>: <message>` on stdout before the headline, never a warning on stderr, so `Failed:` appears only in the headline. The fan-out reads print `Error: project '<alias>': <message>`. The line comes from one renderer, `OutputFormatter.item_error()` / `output.format_item_error()`. The headline comes from `finish_items()` in `commands/_helpers.py` (the fan-out reads call it through `finish_fanout()`), the only source of the per-item exit code (E4).
 
-- Checked by: review today; `output.multi-item-headline` (deferred: lands with the headline renderer).
+- Checked by: `output.multi-item-headline` (`tests/test_cli_contract.py`) and the headline snapshots of HO7.
 
 <a id="HO3"></a>
 **HO3 · MUST · now.** No ANSI color when the stream is not a terminal, with `--no-color`, or with `NO_COLOR` set.
@@ -798,7 +798,7 @@ The 0.x line, until T0, ships only bug, security and data-loss fixes (C4), the m
 - Checked by: `output.no-direct-print`.
 
 <a id="HO5"></a>
-**HO5 · MUST · now for `config oauth-url`; `auth login` when `--no-open` is added.** A command whose purpose is a browser step (`auth login`, `config oauth-url`) opens the browser on a terminal, unless `--no-open` is given. Every other command opens a link only with `--open` (for example `data-app password --open`). No command opens a browser with `--json`, without a terminal, over SSH or in a container. Until `auth login` gets `--no-open`, it opens the browser where the environment allows, and `--device-code` avoids the browser.
+**HO5 · MUST · now.** A command whose purpose is a browser step (`auth login`, `config oauth-url`) opens the browser on a terminal, unless `--no-open` is given. Every other command opens a link only with `--open` (for example `data-app password --open`). No command opens a browser with `--json`, without a terminal, over SSH or in a container. Exception: `auth login` opens the browser also with `--json` and without a terminal, wherever the environment allows it. It tries PKCE first and uses the device-code flow only with `--device-code`, over SSH, in a container, in WSL without `wslview`, or after a failed browser step. `auth login --no-open` uses the device-code flow, opens nothing, and prints the URL and the code.
 
 - Checked by: review.
 
@@ -876,9 +876,9 @@ The 0.x line, until T0, ships only bug, security and data-loss fixes (C4), the m
 ## 18. Environment variables and global options
 
 <a id="EV1"></a><a id="env.registry-complete"></a>
-**EV1 · MUST · now.** Every environment variable that kbagent reads is in one registry (name, purpose, secret or not, added in) and in the generated reference. An option that a variable sets declares it with `envvar=`, so that `--help` shows it. The registry does not exist yet; until it lands, a new variable is named in the pull request and documented in `CLAUDE.md`.
+**EV1 · MUST · now.** Every environment variable that kbagent reads is in one registry (name, purpose, secret or not, added in) and in the generated reference. An option that a variable sets declares it with `envvar=`, so that `--help` shows it. `--help` never shows the value of a variable. The registry is `ENV_VARS` in `src/keboola_agent_cli/env_vars.py`, and the command reference of `scripts/gen_command_reference.py` prints it.
 
-- Checked by: `env.registry-complete` (deferred: lands with the registry) and review.
+- Checked by: `env.registry-complete` and review.
 
 <a id="EV2"></a>
 **EV2 · MUST · now.** A new variable uses the prefix `KBAGENT_`. `KBC_` stays for values that other Keboola tools share (`KBC_TOKEN`, `KBC_STORAGE_API_URL`).

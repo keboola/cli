@@ -558,6 +558,67 @@ def test_short_flag_registry_is_pinned(tree: Any) -> None:
     assert not [s for s, why in found.items() if "not in SHORT_FLAGS" in why]
 
 
+def _env_context(tree: Any, source: str, constants: dict[str, str]) -> Any:
+    ctx = spec_check.Context(tree)
+    ctx._cache["package_modules"] = [("commands/demo.py", ast.parse(source))]
+    ctx._cache["env_constants"] = constants
+    return ctx
+
+
+def test_env_registry_complete(tree: Any) -> None:
+    """EV1: an unregistered or computed read fails, and so does an entry nothing reads."""
+    source = (
+        "import os, typer\n"
+        "ENV_DIR = 'KBAGENT_CONFIG_DIR'\n"
+        "def cmd(name):\n"
+        "    os.environ.get(ENV_DIR)\n"
+        "    os.getenv('KBAGENT_NOT_REGISTERED')\n"
+        "    os.environ.get(name)\n"
+        "    _env_flag_set('SSH_TTY')\n"
+        "    typer.Option(None, envvar='KBC_TOKEN')\n"
+        "def _env_flag_set(name):\n"
+        "    return bool(os.environ.get(name))\n"
+    )
+    found = spec_check.r_env_registry_complete(
+        _env_context(tree, source, {"ENV_DIR": "KBAGENT_CONFIG_DIR"})
+    )
+    assert "KBAGENT_NOT_REGISTERED" in found
+    assert "commands/demo.py:cmd os.environ.get" in found
+    # A read helper's own body is skipped: its callers name the variable.
+    assert not any(s.startswith("commands/demo.py:_env_flag_set") for s in found)
+    for name in ("KBAGENT_CONFIG_DIR", "SSH_TTY", "KBC_TOKEN"):
+        assert name not in found and f"{name} (registered)" not in found
+    assert "KBAGENT_PROJECT (registered)" in found
+    # A variable that a dependency reads needs no reader in src/.
+    assert "NO_COLOR (registered)" not in found
+    # Nothing reads the family here, so its entry is reported.
+    assert "KBC_MASTER_TOKEN_<ALIAS> (registered)" in found
+
+
+def test_env_registry_reads_subscripts_membership_and_families(tree: Any) -> None:
+    source = (
+        "import os\n"
+        "def cmd(alias):\n"
+        "    os.environ['KBAGENT_PROJECT']\n"
+        "    os.environ['KBAGENT_SUBSCRIPT_UNKNOWN']\n"
+        "    os.environ['KBAGENT_WRITTEN'] = '1'\n"
+        "    if 'KBAGENT_IN_UNKNOWN' in os.environ: pass\n"
+        "    if 'KBAGENT_SKIP_UPDATE' not in os.environ: pass\n"
+        "    key = f'{ENV_MASTER}_{alias.upper()}'\n"
+        "    os.environ.get(key)\n"
+        "    os.environ.get(f'{ENV_OTHER}_{alias}')\n"
+    )
+    constants = {"ENV_MASTER": "KBC_MASTER_TOKEN", "ENV_OTHER": "KBAGENT_UNKNOWN_FAMILY"}
+    found = spec_check.r_env_registry_complete(_env_context(tree, source, constants))
+    assert "KBAGENT_SUBSCRIPT_UNKNOWN" in found
+    assert "KBAGENT_IN_UNKNOWN" in found
+    assert "KBAGENT_WRITTEN" not in found  # an assignment is not a read
+    for name in ("KBAGENT_PROJECT", "KBAGENT_SKIP_UPDATE", "KBC_MASTER_TOKEN_<ALIAS>"):
+        assert name not in found and f"{name} (registered)" not in found
+    assert "KBAGENT_UNKNOWN_FAMILY_<" in found
+    assert not any("os.environ.get" in s for s in found)
+
+
 def test_fanout_reads_are_the_reads_with_all_projects(tree: Any) -> None:
     """FANOUT_READS lists every read command that has --all-projects (T2), and no other."""
     reads = {

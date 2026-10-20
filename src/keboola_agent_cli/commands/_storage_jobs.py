@@ -32,7 +32,7 @@ ImportWaitOption = Annotated[
     typer.Option(
         "--wait/--no-wait",
         help=(
-            "Wait for the Storage import job to finish (default). --no-wait returns as "
+            "Wait for the Storage import job to finish. Default: wait. --no-wait returns as "
             "soon as the job is queued and prints its job ID; follow it with "
             "`storage job-detail --wait`. The upload of the file itself is always awaited."
         ),
@@ -44,7 +44,7 @@ ImportTimeoutOption = Annotated[
     typer.Option(
         "--timeout",
         help=(
-            f"Seconds to wait for the import job (default: {IMPORT_JOB_MAX_WAIT:g}). "
+            f"Seconds to wait for the import job. Default: {IMPORT_JOB_MAX_WAIT:g}. "
             "On timeout the import keeps running server-side; the error names its job ID."
         ),
     ),
@@ -104,12 +104,14 @@ def register(app: typer.Typer) -> None:
             ..., "--job-id", help="Storage job ID (e.g. from `upload-table --no-wait`)"
         ),
         wait: bool = typer.Option(
-            False, "--wait", help="Poll until the job finishes (success or error)"
+            False,
+            "--wait",
+            help="Poll until the job finishes (success or error). Default: no wait.",
         ),
         timeout: float | None = typer.Option(
             None,
             "--timeout",
-            help=f"Seconds to wait; requires --wait (default: {IMPORT_JOB_MAX_WAIT:g})",
+            help=f"Seconds to wait; requires --wait. Default: {IMPORT_JOB_MAX_WAIT:g}.",
         ),
     ) -> None:
         """Show a Storage job -- status, table, rows imported, timing, error.

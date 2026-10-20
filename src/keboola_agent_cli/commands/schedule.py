@@ -23,8 +23,8 @@ from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._all_projects import (
     FANOUT_PROJECT_HELP,
     AllProjectsOption,
-    fanout_exit_code,
     fanout_projects,
+    finish_fanout,
 )
 from ._helpers import (
     check_cli_permission,
@@ -121,13 +121,6 @@ def _format_schedule_table(
     formatter.console.print(tbl)
 
 
-def _emit_errors(formatter: Any, errors: list[dict[str, Any]]) -> None:
-    for err in errors:
-        formatter.warning(
-            f"Project '{err.get('project_alias', '?')}': {err.get('message', 'error')}"
-        )
-
-
 # ---------------------------------------------------------------------------
 # schedule list
 # ---------------------------------------------------------------------------
@@ -178,18 +171,14 @@ def schedule_list(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
-    code = fanout_exit_code(result.get("errors", []))
-    if formatter.json_mode:
-        formatter.output(result, exit_code=code)
-    else:
+    def render() -> None:
         schedules = result.get("schedules", [])
         if not schedules:
             formatter.console.print(f"[dim]{_NO_CRON_SCHEDULES}[/dim]")
         else:
             _format_schedule_table(formatter, schedules)
-        _emit_errors(formatter, result.get("errors", []))
-    if code:
-        raise typer.Exit(code=code)
+
+    finish_fanout(formatter, result, result.get("errors", []), render)
 
 
 # ---------------------------------------------------------------------------
@@ -341,10 +330,7 @@ def schedule_find(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
-    code = fanout_exit_code(result.get("errors", []))
-    if formatter.json_mode:
-        formatter.output(result, exit_code=code)
-    else:
+    def render() -> None:
         schedules = result.get("schedules", [])
         if not schedules:
             formatter.console.print(
@@ -357,6 +343,5 @@ def schedule_find(
             if not_run_since is not None:
                 extras.append("Last run")
             _format_schedule_table(formatter, schedules, extra_columns=extras)
-        _emit_errors(formatter, result.get("errors", []))
-    if code:
-        raise typer.Exit(code=code)
+
+    finish_fanout(formatter, result, result.get("errors", []), render)
