@@ -73,6 +73,8 @@ src/keboola_agent_cli/
   project_ref.py        # resolve_project_ref(): a project ID given where an alias is expected -> the
                         #   alias (CLI-22); applied by commands/_project_ref.py and serve's dependency
   output.py             # OutputFormatter: JSON vs Rich dual-mode output
+  root_command.py       # RootGroup: one --json document per exit, root flags after the subcommand,
+                        #   -h, the repeated-option check (#791 O1/O7/A6/H5)
   errors.py             # KeboolaApiError, ConfigError, ErrorCode enum, mask_token()
   config_store.py       # JSON persistence for config.json (0600 permissions)
   permissions.py        # PermissionEngine (--deny-writes / --deny-destructive session firewall)
@@ -376,6 +378,15 @@ plugins/kbagent/
 
 ```
 # Global options: --json, --verbose, --no-color, --config-dir, --conversation-id, --deny-writes, --deny-destructive, --allow-env-manage-token
+# Root command class (CLI-44, #791; root_command.py): --json/-j, --deny-writes and --deny-destructive are
+#   also accepted after the subcommand (hidden copies on every group and command, argv not rewritten);
+#   -h = --help. Under --json every exit writes one JSON document: a parse error or a bare group is
+#   USAGE_ERROR (exit 2, help on stderr), a crash INTERNAL_ERROR (exit 1). A bare group exits 2 with
+#   its help on stderr in human mode too. Success envelope adds schema_version ("1.0") and exit_code;
+#   error envelope adds schema_version only. A site that exits non-zero after formatter.output() passes
+#   exit_code= (blocking rule output.ok-then-exit-declares-exit-code). A single-value option given twice
+#   is USAGE_ERROR on write/destructive/admin commands, a REPEATED_OPTION warnings[] entry on reads.
+#   Version gate in gotchas.md.
 # Confirmations (CLI-46, spec S4): the safety prompts go through `_confirm_or_abort` in commands/_helpers.py
 #   (also the preview-then-confirm of `org setup` and `project refresh`). --yes and --json skip it. On a
 #   terminal it asks on stderr. In human mode without a terminal (stdin or stderr not a TTY) it refuses with

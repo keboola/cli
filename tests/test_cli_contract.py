@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import typer
 from typer.testing import CliRunner
 
 from keboola_agent_cli.cli import app
@@ -115,6 +116,473 @@ def test_destructive_route_is_denied_under_deny_destructive(
     assert response.status_code == 403, response.text
     assert response.json()["error"]["code"] == "PERMISSION_DENIED"
     assert httpx_mock.get_requests() == []
+
+
+# --------------------------------------------------------------------------- #
+# The 1.0.0 root command class (CLI-44): O1, O2, O4, O7, A6, H5
+#
+# One Click tree is built for the module and reused by every invocation, so a
+# case over all commands stays fast. No case runs a command body: each one
+# stops at a parse error, a permission denial, or a patched command class.
+# --------------------------------------------------------------------------- #
+
+BAD_FLAG = "--no-such-option-cli-44"
+
+
+@pytest.fixture(scope="module")
+def root() -> Any:
+    import typer.main
+
+    return typer.main.get_command(app)
+
+
+@pytest.fixture(autouse=True)
+def _reuse_root(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    if "root" in request.fixturenames:
+        import typer.testing
+
+        built = request.getfixturevalue("root")
+        monkeypatch.setattr(typer.testing, "_get_command", lambda _app: built)
+
+
+def _canonical_tree() -> tuple[list[tuple[str, ...]], list[tuple[str, ...]]]:
+    """(group paths, command paths) of the visible tree; alias groups (mr, sl) are skipped."""
+    import typer.main
+    from typer.core import TyperGroup
+
+    groups: list[tuple[str, ...]] = []
+    leaves: list[tuple[str, ...]] = []
+
+    def walk(node: Any, prefix: tuple[str, ...]) -> None:
+        for name, sub in node.commands.items():
+            if getattr(sub, "hidden", False):
+                continue
+            path = (*prefix, name)
+            if isinstance(sub, TyperGroup):
+                groups.append(path)
+                walk(sub, path)
+            else:
+                leaves.append(path)
+
+    walk(typer.main.get_command(app), ())
+    return groups, leaves
+
+
+GROUPS, LEAVES = _canonical_tree()
+
+
+def _ids(paths: list[tuple[str, ...]]) -> list[str]:
+    return [" ".join(p) for p in paths]
+
+
+def _category(path: tuple[str, ...]) -> str:
+    return OPERATION_REGISTRY.get(".".join(path), "write")
+
+
+def _command(root: Any, path: tuple[str, ...]) -> Any:
+    node = root
+    for name in path:
+        node = node.commands[name]
+    return node
+
+
+_ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+_BOX = re.compile(r"[\u2500-\u257f]")
+
+
+def _plain(text: str) -> str:
+    """stderr without color codes, Rich box lines and line wrapping, for substring checks."""
+    return " ".join(_BOX.sub(" ", _ANSI.sub("", text)).split())
+
+
+def test_the_tree_has_commands_and_groups_to_check() -> None:
+    assert len(LEAVES) > 250
+    assert len(GROUPS) > 25
+
+
+def _usage_error_document(result: Any) -> dict[str, Any]:
+    assert result.exit_code == 2, result.output
+    document = _json_document(result.stdout)
+    assert document["status"] == "error"
+    assert document["error"]["code"] == "USAGE_ERROR"
+    return document
+
+
+# -- output.one-json-document ------------------------------------------------
+
+
+@pytest.mark.parametrize("path", LEAVES, ids=_ids(LEAVES))
+def test_one_json_document_for_a_parse_error(
+    root: Any, tmp_path: Path, httpx_mock: Any, path: tuple[str, ...]
+) -> None:
+    result = runner.invoke(app, ["--config-dir", str(tmp_path), "--json", *path, BAD_FLAG])
+    document = _usage_error_document(result)
+    assert BAD_FLAG in document["error"]["message"]
+
+
+@pytest.mark.parametrize("path", LEAVES, ids=_ids(LEAVES))
+def test_one_json_document_for_a_crash(
+    root: Any,
+    tmp_path: Path,
+    httpx_mock: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    path: tuple[str, ...],
+) -> None:
+    from keboola_agent_cli.root_command import LeafCommand
+
+    def crash(self: Any, ctx: Any, args: list[str]) -> list[str]:
+        raise RuntimeError("simulated crash")
+
+    monkeypatch.setattr(LeafCommand, "parse_args", crash)
+    result = runner.invoke(app, ["--config-dir", str(tmp_path), "--json", *path])
+    assert result.exit_code == 1, result.output
+    document = _json_document(result.stdout)
+    assert document["status"] == "error"
+    assert document["error"]["code"] == "INTERNAL_ERROR"
+    assert "simulated crash" in document["error"]["message"]
+    assert "Traceback" in _plain(result.stderr)
+
+
+def _exit_with_code(code: int) -> Any:
+    def stop(self: Any, ctx: Any, args: list[str]) -> list[str]:
+        raise typer.Exit(code=code)
+
+    return stop
+
+
+def _sys_exit(self: Any, ctx: Any, args: list[str]) -> list[str]:
+    raise SystemExit(3)
+
+
+def _ctx_exit(self: Any, ctx: Any, args: list[str]) -> list[str]:
+    ctx.exit(4)
+    return args
+
+
+def _abort(self: Any, ctx: Any, args: list[str]) -> list[str]:
+    raise typer.Abort()
+
+
+def _interrupt(self: Any, ctx: Any, args: list[str]) -> list[str]:
+    raise KeyboardInterrupt
+
+
+@pytest.mark.parametrize(
+    ("stop", "exit_code", "error_code"),
+    [
+        (_exit_with_code(1), 1, "UNKNOWN_ERROR"),
+        (_sys_exit, 3, "UNKNOWN_ERROR"),
+        (_ctx_exit, 4, "UNKNOWN_ERROR"),
+        (_abort, 1, "INTERRUPTED"),
+        (_interrupt, 130, "INTERRUPTED"),
+    ],
+    ids=["typer-exit", "sys-exit", "ctx-exit", "abort", "keyboard-interrupt"],
+)
+def test_an_exit_without_a_document_writes_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stop: Any, exit_code: int, error_code: str
+) -> None:
+    from keboola_agent_cli.root_command import LeafCommand
+
+    monkeypatch.setattr(LeafCommand, "parse_args", stop)
+    result = runner.invoke(app, ["--config-dir", str(tmp_path), "--json", "project", "list"])
+    assert result.exit_code == exit_code, result.output
+    document = _json_document(result.stdout)
+    assert document["status"] == "error"
+    assert document["error"]["code"] == error_code
+
+
+def test_an_exit_zero_writes_no_document(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from keboola_agent_cli.root_command import LeafCommand
+
+    monkeypatch.setattr(LeafCommand, "parse_args", _exit_with_code(0))
+    result = runner.invoke(app, ["--config-dir", str(tmp_path), "--json", "project", "list"])
+    assert (result.exit_code, result.stdout) == (0, "")
+
+
+@pytest.mark.parametrize("attribute", ["_protected_args", "protected_args"])
+def test_protected_args_are_read_on_click_8_1_and_8_2(attribute: str) -> None:
+    """Click >= 8.2 has `ctx._protected_args`, Click 8.1 `ctx.protected_args`."""
+    from types import SimpleNamespace
+
+    from keboola_agent_cli.root_command import protected_args
+
+    ctx = SimpleNamespace(**{attribute: ["storage"]})
+    assert protected_args(ctx) == ["storage"]
+
+
+def test_a_custom_command_class_is_not_replaced() -> None:
+    """The tree walk refuses a command whose class it would silently drop."""
+    from typer.core import TyperCommand, TyperGroup
+
+    from keboola_agent_cli.root_command import apply_command_classes
+
+    class CustomCommand(TyperCommand):
+        pass
+
+    group = TyperGroup(name="demo")
+    group.add_command(CustomCommand(name="leaf"))
+    root = TyperGroup(name="kbagent", commands={"demo": group})
+    with pytest.raises(TypeError, match="demo leaf"):
+        apply_command_classes(root)
+
+
+def test_a_bad_root_option_under_json_is_one_document(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["--config-dir", str(tmp_path), "--json", BAD_FLAG])
+    _usage_error_document(result)
+
+
+def test_human_mode_parse_error_keeps_stdout_empty(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["--config-dir", str(tmp_path), "project", "list", BAD_FLAG])
+    assert result.exit_code == 2
+    assert result.stdout == ""
+    assert BAD_FLAG in _plain(result.stderr)
+
+
+# -- output.bare-group-exits-2 -----------------------------------------------
+
+
+@pytest.mark.parametrize("path", GROUPS, ids=_ids(GROUPS))
+def test_bare_group_exits_2_with_help_on_stderr(
+    root: Any, tmp_path: Path, path: tuple[str, ...]
+) -> None:
+    for args in (["--json", *path], [*path, "--json"]):
+        result = runner.invoke(app, ["--config-dir", str(tmp_path), *args])
+        document = _usage_error_document(result)
+        assert "Missing command" in document["error"]["message"]
+        assert "Usage" in _plain(result.stderr)
+
+    human = runner.invoke(app, ["--config-dir", str(tmp_path), *path])
+    assert human.exit_code == 2
+    assert human.stdout == ""
+    assert "Usage" in _plain(human.stderr)
+
+
+def test_json_without_a_command_exits_2(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["--config-dir", str(tmp_path), "--json"])
+    document = _usage_error_document(result)
+    assert "Missing command" in document["error"]["message"]
+    assert "Usage" in _plain(result.stderr)
+
+
+# -- output.root-flags-anywhere ----------------------------------------------
+
+
+@pytest.mark.parametrize("path", LEAVES, ids=_ids(LEAVES))
+def test_json_after_the_command_gives_the_same_document(
+    root: Any, tmp_path: Path, httpx_mock: Any, path: tuple[str, ...]
+) -> None:
+    before = runner.invoke(app, ["--config-dir", str(tmp_path), "--json", *path, BAD_FLAG])
+    after = runner.invoke(app, ["--config-dir", str(tmp_path), *path, BAD_FLAG, "--json"])
+    assert (after.exit_code, after.stdout) == (before.exit_code, before.stdout)
+
+
+DENIABLE = [p for p in LEAVES if _category(p) != "read" and p[0] != "permissions"]
+
+
+@pytest.mark.parametrize("path", DENIABLE, ids=_ids(DENIABLE))
+@pytest.mark.parametrize("flag", ["--deny-writes", "--deny-destructive"])
+def test_deny_flags_after_the_command_apply(
+    root: Any, tmp_path: Path, httpx_mock: Any, flag: str, path: tuple[str, ...]
+) -> None:
+    """A write command after `--deny-writes` is refused before it runs, in either position."""
+    if flag == "--deny-destructive" and _category(path) != "destructive":
+        pytest.skip("--deny-destructive refuses destructive commands only")
+    before = runner.invoke(app, ["--config-dir", str(tmp_path), "--json", flag, *path])
+    after = runner.invoke(app, ["--config-dir", str(tmp_path), *path, flag, "--json"])
+    assert before.exit_code == 6, before.output
+    assert (after.exit_code, after.stdout) == (before.exit_code, before.stdout)
+    assert _json_document(after.stdout)["error"]["code"] == "PERMISSION_DENIED"
+
+
+def test_json_after_the_command_runs_it_in_json_mode(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["--config-dir", str(tmp_path), "project", "list", "-j"])
+    assert result.exit_code == 0, result.output
+    assert _json_document(result.stdout)["status"] == "ok"
+
+
+def test_an_option_value_equal_to_json_stays_a_value(tmp_path: Path) -> None:
+    """argv is not rewritten: `--description --json` sets the description (O7)."""
+    args = ["config", "update", "--project", "missing", "--component-id", "c"]
+    args += ["--config-id", "1", "--description", "--json"]
+    result = runner.invoke(app, ["--config-dir", str(tmp_path), *args])
+    assert result.exit_code == 5, result.output
+    assert result.stdout == ""
+    assert "Error" in _plain(result.stderr)
+
+
+# -- output.envelope-schema --------------------------------------------------
+
+SUCCESS_KEYS = {"status", "schema_version", "exit_code", "targets", "warnings", "data"}
+ERROR_KEYS = {"status", "schema_version", "targets", "warnings", "error"}
+
+
+def test_success_envelope_schema(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["--config-dir", str(tmp_path), "--json", "project", "list"])
+    document = _json_document(result.stdout)
+    assert set(document) <= SUCCESS_KEYS
+    assert {"status", "schema_version", "exit_code", "data"} <= set(document)
+    assert document["status"] == "ok"
+    assert re.fullmatch(r"\d+\.\d+", document["schema_version"])
+    assert document["exit_code"] == result.exit_code == 0
+
+
+def test_error_envelope_schema(tmp_path: Path) -> None:
+    args = ["--config-dir", str(tmp_path), "--json", "config", "list", "--project", "missing"]
+    result = runner.invoke(app, args)
+    document = _json_document(result.stdout)
+    assert set(document) <= ERROR_KEYS
+    assert {"status", "schema_version", "error"} <= set(document)
+    assert "exit_code" not in document
+    assert {"code", "message"} <= set(document["error"])
+
+
+def test_ok_with_a_non_zero_exit_declares_it(tmp_path: Path) -> None:
+    """O4: `status: ok` and the process exit code are both in the envelope."""
+    args = ["permissions", "check", "storage.delete-bucket", "--deny-destructive", "--json"]
+    result = runner.invoke(app, ["--config-dir", str(tmp_path), *args])
+    document = _json_document(result.stdout)
+    assert document["status"] == "ok"
+    assert document["exit_code"] == result.exit_code == 6
+
+
+def test_warning_entries_have_code_and_message(tmp_path: Path) -> None:
+    args = ["permissions", "list", "--category", "read", "--category", "write", "--json"]
+    result = runner.invoke(app, ["--config-dir", str(tmp_path), *args])
+    assert result.exit_code == 0, result.output
+    document = _json_document(result.stdout)
+    assert set(document) <= SUCCESS_KEYS
+    for entry in document["warnings"]:
+        assert {"code", "message"} <= set(entry)
+        assert isinstance(entry.get("hint", ""), str)
+
+
+# -- help.dash-h -------------------------------------------------------------
+
+
+@pytest.mark.parametrize("path", [(), *GROUPS, *LEAVES], ids=["root", *_ids(GROUPS + LEAVES)])
+def test_dash_h_prints_the_help(root: Any, path: tuple[str, ...]) -> None:
+    long_form = runner.invoke(app, [*path, "--help"])
+    for args in ([*path, "-h"], ["--json", *path, "-h"]):
+        result = runner.invoke(app, args)
+        assert result.exit_code == 0, result.output
+        assert result.stdout == long_form.stdout
+        assert "Usage" in result.stdout
+
+
+# -- args.repeated-single-value ----------------------------------------------
+
+
+def _repeatable_case(root: Any, path: tuple[str, ...]) -> tuple[str, list[str]] | None:
+    """A single-value option of the command and two occurrences of it, or None."""
+    from keboola_agent_cli.root_command import _single_value
+
+    for param in _command(root, path).params:
+        if not _single_value(param):
+            continue
+        name = next((o for o in param.opts if o.startswith("--")), param.opts[0])
+        if getattr(param, "is_flag", False):
+            return name, [param.opts[0], param.secondary_opts[0]]
+        choices = getattr(param.type, "choices", None)
+        value = str(getattr(choices[0], "value", choices[0])) if choices else "1"
+        values = [value] * max(int(getattr(param, "nargs", 1) or 1), 1)
+        return name, [param.opts[0], *values, param.opts[0], *values]
+    return None
+
+
+@pytest.mark.parametrize("path", LEAVES, ids=_ids(LEAVES))
+def test_repeated_single_value_option(
+    root: Any,
+    tmp_path: Path,
+    httpx_mock: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    path: tuple[str, ...],
+) -> None:
+    """Refused on write, destructive and admin commands, a warning on read commands (A6)."""
+    case = _repeatable_case(root, path)
+    if case is None:
+        pytest.skip("the command has no single-value option")
+    name, args = case
+    from keboola_agent_cli.root_command import REPEAT_REFUSED_CATEGORIES
+
+    if _category(path) in REPEAT_REFUSED_CATEGORIES:
+        result = runner.invoke(app, ["--config-dir", str(tmp_path), "--json", *path, *args])
+        document = _usage_error_document(result)
+        assert name in document["error"]["message"]
+        return
+
+    from keboola_agent_cli.root_command import LeafCommand
+
+    # The command body must not run: only the parse is under test.
+    monkeypatch.setattr(LeafCommand, "invoke", lambda self, ctx: None)
+    once = args[: len(args) // 2]
+    single = runner.invoke(app, ["--config-dir", str(tmp_path), *path, *once])
+    twice = runner.invoke(app, ["--config-dir", str(tmp_path), *path, *args])
+    assert twice.exit_code == single.exit_code
+    assert f"{name} given more than once" in _plain(twice.stderr)
+    assert "given more than once" not in _plain(single.stderr)
+
+
+def test_most_commands_have_a_single_value_option(root: Any) -> None:
+    assert sum(_repeatable_case(root, p) is not None for p in LEAVES) > 200
+
+
+def test_repeated_project_on_a_destructive_command_names_the_option(tmp_path: Path) -> None:
+    args = ["storage", "delete-bucket", "--project", "x", "--bucket-id", "in.c-a"]
+    result = runner.invoke(app, ["--config-dir", str(tmp_path), *args, "--project", "test"])
+    assert result.exit_code == 2
+    assert "--project given more than once" in _plain(result.stderr)
+
+
+def test_repeated_project_on_an_admin_command_is_refused(tmp_path: Path) -> None:
+    args = ["project", "remove", "--project", "a", "--project", "b", "--json"]
+    result = runner.invoke(app, ["--config-dir", str(tmp_path), *args])
+    document = _usage_error_document(result)
+    assert "--project given more than once" in document["error"]["message"]
+
+
+def test_repeated_option_on_a_read_command_is_a_warning_entry(tmp_path: Path) -> None:
+    args = ["permissions", "list", "--category", "read", "--category", "write", "--json"]
+    result = runner.invoke(app, ["--config-dir", str(tmp_path), *args])
+    assert result.exit_code == 0, result.output
+    [entry] = [w for w in _json_document(result.stdout)["warnings"] if w["code"] != "WARNING"]
+    assert entry["code"] == "REPEATED_OPTION"
+    assert entry["options"] == ["--category"]
+
+
+# -- output.one-json-document: a --stream command keeps stdout NDJSON --------
+
+
+def _stream_then(failure: BaseException) -> Any:
+    async def stream_run(self: Any, task_id: str, runtime_input: Any = None) -> Any:
+        yield {"event": "init", "data": {"task_id": task_id}}
+        yield {"event": "stdout", "data": {"line": "working"}}
+        raise failure
+
+    return stream_run
+
+
+@pytest.mark.parametrize(
+    ("failure", "exit_code", "error_code"),
+    [(KeyboardInterrupt(), 130, "INTERRUPTED"), (RuntimeError("boom"), 1, "INTERNAL_ERROR")],
+    ids=["interrupt", "crash"],
+)
+def test_a_stream_that_fails_stays_ndjson(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: BaseException,
+    exit_code: int,
+    error_code: str,
+) -> None:
+    """After the first NDJSON line the error is one more line, not a JSON document."""
+    from keboola_agent_cli.services.agent_service import AgentService
+
+    monkeypatch.setattr(AgentService, "stream_run", _stream_then(failure))
+    args = ["--config-dir", str(tmp_path), "--json", "agent", "run", "abc123", "--stream"]
+    result = runner.invoke(app, args)
+    assert result.exit_code == exit_code, result.output
+    events = [json.loads(line) for line in result.stdout.splitlines()]
+    assert [e["event"] for e in events] == ["init", "stdout", "error"]
+    assert events[-1]["data"]["code"] == error_code
 
 
 # --------------------------------------------------------------------------- #

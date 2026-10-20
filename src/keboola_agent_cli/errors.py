@@ -54,6 +54,8 @@ class ErrorCode(StrEnum):
     # `kbagent serve` HTTP envelope (0.40.0+)
     HTTP_ERROR = "HTTP_ERROR"  # Generic HTTP-layer error (Starlette HTTPException passthrough)
     INTERNAL_ERROR = "INTERNAL_ERROR"  # Uncaught exception inside a route handler
+    # Ctrl+C or an aborted prompt under --json (exit 130 for Ctrl+C), #791 O1.
+    INTERRUPTED = "INTERRUPTED"
 
     # Configuration
     CONFIG_ERROR = "CONFIG_ERROR"
@@ -515,6 +517,8 @@ ERROR_CODE_TABLE: dict[str, ErrorClass] = {
     # Merge requests
     ErrorCode.MR_NOT_READY_TO_MERGE: ErrorClass("conflict", 1),
     ErrorCode.MR_MERGE_CONFLICT: ErrorClass("conflict", 1),
+    # Interrupted under --json: Ctrl+C exits 130 (an aborted prompt keeps Typer's exit 1).
+    ErrorCode.INTERRUPTED: ErrorClass("api", 130),
 }
 
 

@@ -302,12 +302,12 @@ def org_setup(
                 _handle_api_error(formatter, exc)
                 return
 
-    formatter.output(result, _format_setup_result)
-
     # Per-project failures are accumulated so one bad project does not abort the
     # run -- but the run itself is not a success, and exit 0 hid that (#745).
     failed = len(result.get("projects_failed", [])) + len(result.get("projects_refresh_failed", []))
-    if code := item_failure_exit_code(failed):
+    code = item_failure_exit_code(failed)
+    formatter.output(result, _format_setup_result, exit_code=code or 0)
+    if code:
         raise typer.Exit(code=code)
 
 

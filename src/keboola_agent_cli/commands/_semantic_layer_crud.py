@@ -410,10 +410,11 @@ def edit_metric(
         is_tty=_is_stdin_tty(),
         confirm_cb=typer.confirm,
     )
-    formatter.output(result, _print_edit_result("metric"))
     # A constraint the rename could not repoint is a failed cascade item (#745).
     cascaded = result.get("cascaded_constraints") or []
-    if code := item_failure_exit_code(sum(1 for c in cascaded if c.get("status") == "failed")):
+    code = item_failure_exit_code(sum(1 for c in cascaded if c.get("status") == "failed"))
+    formatter.output(result, _print_edit_result("metric"), exit_code=code or 0)
+    if code:
         raise typer.Exit(code=code)
 
 

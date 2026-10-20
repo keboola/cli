@@ -432,6 +432,48 @@ def test_config_error_keeps_code(tree: Any) -> None:
     assert set(found) == {"commands/demo.py:replaces"}
 
 
+def test_ok_then_exit_declares_exit_code(tree: Any) -> None:
+    source = (
+        "import typer\n"
+        "def exits_after_output(formatter, failed):\n"
+        "    formatter.output({})\n"
+        "    if failed:\n"
+        "        raise typer.Exit(code=1)\n"
+        "def declares(formatter, code):\n"
+        "    formatter.output({}, exit_code=code)\n"
+        "    if code:\n"
+        "        raise typer.Exit(code=code)\n"
+        "def returns_before_exit(formatter, dry_run):\n"
+        "    if dry_run:\n"
+        "        formatter.output({})\n"
+        "        return\n"
+        "    raise typer.Exit(code=5)\n"
+        "def exits_zero(formatter):\n"
+        "    formatter.output({})\n"
+        "    raise typer.Exit(code=0)\n"
+        "def exit_before_output(formatter, bad):\n"
+        "    if bad:\n"
+        "        raise typer.Exit(code=2)\n"
+        "    formatter.output({})\n"
+        "def other_receiver(fmt):\n"
+        "    fmt.output({})\n"
+        "    raise typer.Exit(code=1)\n"
+        "def exit_in_json_branch(formatter):\n"
+        "    if formatter.json_mode:\n"
+        "        formatter.output({})\n"
+        "    else:\n"
+        "        pass\n"
+        "    raise typer.Exit(1)\n"
+    )
+    ctx = spec_check.Context(tree)
+    ctx._cache["command_modules"] = [("commands/demo.py", ast.parse(source))]
+    assert set(spec_check.r_ok_then_exit(ctx)) == {
+        "commands/demo.py:exits_after_output",
+        "commands/demo.py:other_receiver",
+        "commands/demo.py:exit_in_json_branch",
+    }
+
+
 def _demo_command(used: str, unused: str) -> None:
     print(used)
 

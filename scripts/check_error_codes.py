@@ -35,8 +35,10 @@ ERRORS_PATH = SRC_ROOT / "keboola_agent_cli" / "errors.py"
 DOC_PATH = REPO_ROOT / "docs" / "error-codes.md"
 SKIP_FILES = {"errors.py"}
 # The exit codes of docs/cli-interface-spec.md#exit-codes that an error can
-# have: 0 is success and 130 is an interrupt, neither is an error code's exit.
+# have: 0 is success, so it is never an error code's exit. 130 is an interrupt
+# and belongs to INTERRUPTED only.
 ERROR_EXIT_CODES = frozenset({1, 2, 3, 4, 5, 6, 7})
+INTERRUPT_EXIT_CODE = 130
 _DOC_ROW = re.compile(r"^\| `([A-Z][A-Z0-9_]*)` \| (\d+) \| `([a-z_]+)` \|", re.MULTILINE)
 
 
@@ -96,7 +98,9 @@ def code_table_violations() -> dict[str, str]:
     for code, entry in sorted(ERROR_CODE_TABLE.items()):
         if entry.error_type not in ERROR_TYPES:
             found[code] = f"error_type {entry.error_type!r} is not in ERROR_TYPES"
-        elif entry.exit_code not in ERROR_EXIT_CODES:
+        elif entry.exit_code not in ERROR_EXIT_CODES and (
+            code != "INTERRUPTED" or entry.exit_code != INTERRUPT_EXIT_CODE
+        ):
             found[code] = f"exit code {entry.exit_code} is not an error exit code of the spec"
         elif code in _enum_members() and documented.get(code) != (
             entry.exit_code,

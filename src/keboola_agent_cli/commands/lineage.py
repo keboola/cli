@@ -45,11 +45,6 @@ lineage_app = typer.Typer(
 @lineage_app.callback(invoke_without_command=True)
 def _lineage_callback(ctx: typer.Context) -> None:
     check_cli_permission(ctx, "lineage")
-    if ctx.invoked_subcommand is None:
-        # No subcommand -> show help
-        click_cmd = typer.main.get_command(lineage_app)
-        ctx_help = click_cmd.make_context("lineage", [])
-        typer.echo(click_cmd.get_help(ctx_help))
 
 
 # -- lineage build ---------------------------------------------------------

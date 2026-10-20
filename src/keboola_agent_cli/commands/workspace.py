@@ -661,8 +661,11 @@ def workspace_gc(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
+    # A workspace that could not be deleted, or a project that could not be
+    # listed, is collected in errors[]; the run is then not a success (#745).
+    code = item_failure_exit_code(len(result.get("errors", [])))
     if formatter.json_mode:
-        formatter.output(result)
+        formatter.output(result, exit_code=code or 0)
     else:
         formatter.console.print(result.get("message", ""))
         if dry_run:
@@ -687,9 +690,7 @@ def workspace_gc(
             text = escape(str(err.get("error") or err.get("message") or ""))
             formatter.console.print(f"  [red]error[/red] {target}: {text}")
 
-    # A workspace that could not be deleted, or a project that could not be
-    # listed, is collected in errors[]; the run is then not a success (#745).
-    if code := item_failure_exit_code(len(result.get("errors", []))):
+    if code:
         raise typer.Exit(code=code)
 
 

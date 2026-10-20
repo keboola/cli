@@ -70,7 +70,8 @@ A command that fails with an error code exits with the code's `Exit` value below
 | `UNKNOWN_ERROR` | 1 | `api` | Catch-all for unclassified errors |
 | `UNEXPECTED_ERROR` | 1 | `api` | Per-project fallback in a multi-project command: that project raised an error carrying no code of its own. Other projects in the same run still report their own outcome |
 | `HTTP_ERROR` | 1 | `api` | Generic HTTP-layer error in the `kbagent serve` envelope (HTTPException passthrough) |
-| `INTERNAL_ERROR` | 1 | `api` | Uncaught exception inside a `kbagent serve` route handler (HTTP 500) |
+| `INTERNAL_ERROR` | 1 | `api` | Uncaught exception inside a `kbagent serve` route handler (HTTP 500), or a crash of a CLI command under `--json` (exit 1) |
+| `INTERRUPTED` | 130 | `api` | The command was interrupted under `--json`: Ctrl+C (exit 130) or an aborted prompt (exit 1) |
 
 ### Configuration
 

@@ -691,8 +691,9 @@ def job_terminate(
     if filter_context is not None:
         result["filter"] = filter_context
 
+    exit_code = 1 if result["failed"] else 0
     if formatter.json_mode:
-        formatter.output(result)
+        formatter.output(result, exit_code=exit_code)
     else:
         for entry in result["killed"]:
             formatter.console.print(
@@ -710,5 +711,5 @@ def job_terminate(
                 f"[bold red]Failed:[/bold red] {f_item['id']}: {f_item['error']}"
             )
 
-    if result["failed"]:
-        raise typer.Exit(code=1)
+    if exit_code:
+        raise typer.Exit(code=exit_code)

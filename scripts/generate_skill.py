@@ -21,6 +21,7 @@ import typer.main
 
 from keboola_agent_cli.cli import app
 from keboola_agent_cli.commands.repl import _is_group
+from keboola_agent_cli.root_command import is_root_flag_copy
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -120,6 +121,8 @@ def _collect_commands(
                     for p in cmd.params
                     if p.name not in ("help", "ctx")
                     and not (p.param_type_name == "option" and p.name == "help")
+                    # The hidden copies of the root flags (#791 O7) are not group options.
+                    and not is_root_flag_copy(p)
                 ]
                 if own_params:
                     help_text = cmd.help or ""

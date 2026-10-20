@@ -947,8 +947,10 @@ def data_app_validate_repo(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
+    # validate-repo's own exit code: BLOCKING (or strict-WARN) -> 1.
+    exit_code = 1 if result.get("is_failure") else 0
     if formatter.json_mode:
-        formatter.output(result)
+        formatter.output(result, exit_code=exit_code)
     else:
         verdict_colour = (
             "red"
@@ -971,15 +973,10 @@ def data_app_validate_repo(
             formatter.console.print(line)
         formatter.console.print(f"\n[dim]{result['message']}[/dim]")
 
-    if result.get("is_failure"):
-        # validate-repo's own exit code: BLOCKING (or strict-WARN) -> 1.
-        # We bypass the structured-error formatter because validate-repo
-        # output is itself the structured error envelope.
-        if formatter.json_mode:
-            # JSON envelope is already printed; just exit non-zero.
-            raise typer.Exit(code=1)
-        # Human mode: the verdict line above conveyed the failure.
-        raise typer.Exit(code=1)
+    if exit_code:
+        # No structured error after the output: the validate-repo result is
+        # itself the answer, and the verdict line conveyed it in human mode.
+        raise typer.Exit(code=exit_code)
 
 
 # Attach the data-app git-*, secrets-* and password commands. They live in
