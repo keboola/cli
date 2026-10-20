@@ -87,6 +87,18 @@ def _root_flag_copies() -> list[Any]:
     ]
 
 
+def protected_args(ctx: Any) -> list[str]:
+    """The subcommand name and its arguments that a group parse keeps for its command.
+
+    Click >= 8.2 (the one Typer >= 0.25 vendors) stores them as the private
+    ``ctx._protected_args``; Click 8.1, which older Typer releases allowed by
+    ``typer>=0.12`` run on, as ``ctx.protected_args``.
+    """
+    if hasattr(ctx, "_protected_args"):
+        return list(ctx._protected_args)
+    return list(ctx.protected_args)
+
+
 class LeafCommand(TyperCommand):
     """The class of every command: reports a repeated single-value option (A6)."""
 
@@ -106,7 +118,7 @@ class CommandGroup(TyperGroup):
 
     def parse_args(self, ctx: Any, args: list[str]) -> list[str]:
         rest = super().parse_args(ctx, args) if args else []
-        if not ctx._protected_args and not ctx.resilient_parsing:
+        if not protected_args(ctx) and not ctx.resilient_parsing:
             raise MissingCommandError("Missing command.", ctx)
         return rest
 
@@ -242,7 +254,7 @@ def _root_flags_after_command(root: Any, ctx: Any) -> set[str]:
     ``-j`` among the remaining tokens still selects the JSON error envelope.
     """
     found: set[str] = set()
-    node, parent, args = root, ctx, [*ctx._protected_args, *ctx.args]
+    node, parent, args = root, ctx, [*protected_args(ctx), *ctx.args]
     while isinstance(node, TyperGroup) and args:
         name, *args = args
         sub = node.get_command(parent, name)

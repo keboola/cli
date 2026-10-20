@@ -299,6 +299,17 @@ def test_an_exit_zero_writes_no_document(tmp_path: Path, monkeypatch: pytest.Mon
     assert (result.exit_code, result.stdout) == (0, "")
 
 
+@pytest.mark.parametrize("attribute", ["_protected_args", "protected_args"])
+def test_protected_args_are_read_on_click_8_1_and_8_2(attribute: str) -> None:
+    """Click >= 8.2 has `ctx._protected_args`, Click 8.1 `ctx.protected_args`."""
+    from types import SimpleNamespace
+
+    from keboola_agent_cli.root_command import protected_args
+
+    ctx = SimpleNamespace(**{attribute: ["storage"]})
+    assert protected_args(ctx) == ["storage"]
+
+
 def test_a_custom_command_class_is_not_replaced() -> None:
     """The tree walk refuses a command whose class it would silently drop."""
     from typer.core import TyperCommand, TyperGroup
