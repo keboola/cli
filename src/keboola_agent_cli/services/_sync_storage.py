@@ -32,6 +32,7 @@ from ..constants import (
 from ..errors import ConfigError, KeboolaApiError
 from ..sync.manifest import ManifestConfiguration
 from ..sync.naming import sanitize_path_segment
+from .base import item_failure
 
 if TYPE_CHECKING:
     from ..client import KeboolaClient
@@ -476,7 +477,9 @@ def create_buckets_from_export(
     try:
         existing = {str(b.get("id")) for b in storage_client.list_buckets()}
     except KeboolaApiError as exc:
-        result.errors.append({"bucket_id": "", "error": f"Cannot list buckets: {exc.message}"})
+        result.errors.append(
+            item_failure(exc, bucket_id="", error=f"Cannot list buckets: {exc.message}")
+        )
         return result
     for record in records:
         if not isinstance(record, dict):
@@ -516,7 +519,7 @@ def create_buckets_from_export(
                     backend=record.get("backend") or None,
                 )
         except KeboolaApiError as exc:
-            result.errors.append({"bucket_id": target_id, "error": exc.message})
+            result.errors.append(item_failure(exc, bucket_id=target_id, error=exc.message))
             continue
         if link:
             result.linked.append(link)

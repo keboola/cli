@@ -17,7 +17,7 @@ from ..constants import ENV_KBAGENT_PROJECT
 from ..errors import ConfigError, KeboolaApiError, mask_token
 from ..models import ProjectConfig, normalize_stack_url
 from ..project_ref import resolve_project_ref
-from .base import BaseService
+from .base import BaseService, item_failure
 
 # Credential type of a config.json project entry, surfaced as ``auth_mode`` in
 # every query result. Both modes coexist per project, and which one applies
@@ -163,7 +163,7 @@ class ProjectService(BaseService):
                         active_project_cleared = alias
                     removed.append(alias)
             except ConfigError as exc:
-                failed.append({"alias": alias, "error": exc.message})
+                failed.append(item_failure(exc, alias=alias, error=exc.message))
 
         return {
             "removed": removed,

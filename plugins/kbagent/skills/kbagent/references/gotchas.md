@@ -27,7 +27,7 @@ Versioning convention:
 
 - **Nine list options are repeatable and still take a comma list:** `org setup --project-ids`, `sharing share --target-project-ids` and `--target-users`, `semantic-layer add constraint --metrics`, `edit constraint --new-metrics`, `build --tables`, `import --types`, `promote --types` and `schema --type`. `--target-project-ids 11 --target-project-ids 22,33` shares with 11, 22 and 33. Before, the option kept only its last value (22,33). A value given twice is used once. `sharing share` adds `target_project_ids` or `target_users` to `data`.
 - **`--text` of `project description-set`, `storage describe-bucket`, `storage describe-table` and `branch metadata-set`, and `transformation create --sql`, refuse `@` followed by the path of an existing file** (a relative path is relative to the current directory): `INVALID_ARGUMENT`, exit 2, and the message names the file option (`--file`, `--sql-file`). Before, kbagent stored the text `@notes.md`. Pass the file with the file option. To store text that starts with `@` while a file of that name exists, write the text to a file and pass that file with the file option. `@` followed by anything that is not a file is still stored as text. Only these 5 options refuse `@<file>`; every other free-text option (`--description`, `--change-description`, `--prompt`, ...) still stores it as text.
-- **A bad input value is `INVALID_ARGUMENT`, exit 2, and the message names the option, never a traceback:** a non-integer in `org setup --project-ids` or `sharing share --target-project-ids` (before: a traceback with exit 1, or a usage error without `--json` output), a missing or bad `http post/patch --body` file, a binary or unreadable file in `--file`, `--sql-file`, `--configuration-file`, `workspace query --file`, `data-app git-credentials-create --public-key-file`, `lineage server --load` (a missing `--load` file stays `FILE_NOT_FOUND`), `dev-portal patch --value-file`, and a bad `dev-portal create/patch --data` file. A JSON option that already failed with exit 2 keeps its error code (`--configuration`, `--state`, `--config-data`: `VALIDATION_ERROR`; `encrypt values --input`: `INPUT_ERROR`; `agent --from-file` / `--runtime-input`: `INVALID_FORMAT`) and no longer crashes on a binary or unreadable file; so do `data-app create --description-file` (`READ_ERROR`), `data-app secrets-set --secrets-file` (`DATA_APP_INVALID_SECRET`) and `semantic-layer reference-data set --members-file` (`VALIDATION_ERROR`).
+- **A bad input value is `INVALID_ARGUMENT`, exit 2, and the message names the option, never a traceback:** a non-integer in `org setup --project-ids` or `sharing share --target-project-ids` (before: a traceback with exit 1, or a usage error without `--json` output), a missing or bad `http post/patch --body` file, a binary or unreadable file in `--file`, `--sql-file`, `--configuration-file`, `workspace query --file`, `data-app git-credentials-create --public-key-file`, `lineage server --load` (a missing `--load` file stays `FILE_NOT_FOUND`), `dev-portal patch --value-file`, and a bad `dev-portal create/patch --data` file. A JSON option that already failed with exit 2 keeps its error code (`--configuration`, `--state`, `--config-data`: `VALIDATION_ERROR`; `encrypt values --input`: `INPUT_ERROR`; `agent --from-file` / `--runtime-input`: `INVALID_FORMAT`) and no longer crashes on a binary or unreadable file; so do `data-app create --description-file` (`READ_ERROR`, exit 1), `data-app secrets-set --secrets-file` (`DATA_APP_INVALID_SECRET`) and `semantic-layer reference-data set --members-file` (`VALIDATION_ERROR`).
 - **`config update/new --configuration` and `--configuration-file`, `config row-create/row-update --configuration`, `config state-set --state` and `component sync-action --config-data` refuse JSON that is not an object** (for example `[1]`): `VALIDATION_ERROR`, exit 2. Before, the value went to the API.
 
 ## The updater stays on the running major version; `kbagent update --major`
@@ -699,7 +699,7 @@ Versioning convention:
   (`STACK_FEATURES__AGENT_PROVISIONING`), which is off on most stacks, so
   `kbagent project create --help` working tells you nothing about whether the
   stack will accept it. A stack without the feature answers 404, mapped to
-  `AUTH_NOT_SUPPORTED_ON_STACK` (exit 1); the message names the missing
+  `AUTH_NOT_SUPPORTED_ON_STACK` (exit 5 since vNEXT, exit 1 before); the message names the missing
   feature, the flag an operator flips to enable it, and how to connect an
   existing project instead. That is a stack capability, not a broken URL and
   not a credential problem -- do not retry it, do not go looking for a token,
@@ -2327,7 +2327,7 @@ response. Now:
   failed `--force-rerun`. An unknown outcome (a read timeout, a 5xx,
   exhausted retries, an expired login) keeps it, because the job may exist.
   A replay with the same key that
-  finds the pending entry exits 1 with `INVALID_ARGUMENT` (HTTP 400 over
+  finds the pending entry exits 2 *(since vNEXT, exit 1 before)* with `INVALID_ARGUMENT` (HTTP 400 over
   `kbagent serve`) and creates nothing. Check with `kbagent job list
   --component-id C --config-id ID`. If no job started, run again with
   `--force-rerun`. `POST /jobs/{project}/run` now accepts `idempotency_key`
@@ -3165,12 +3165,15 @@ unknown -- do not try to parse a fallback message.
 |------|---------|
 | 0 | Success |
 | 1 | General error |
-| 2 | Usage error (invalid arguments) |
+| 2 | Usage or validation error (invalid arguments: `VALIDATION_ERROR`, `INVALID_ARGUMENT`, `FILE_NOT_FOUND`, ...) |
 | 3 | Authentication error (invalid or expired token) -- includes `SESSION_EXPIRED` / `SESSION_NOT_FOUND` / `AUTH_FLOW_DENIED`, whose remedy is `kbagent auth login` (since v0.80.0), and `AUTH_MFA_INVALID` -- `auth login-password` cannot resolve this account's MFA type (WebAuthn/passkey-only), whose remedy is `kbagent auth login` instead (since v0.84.0) |
 | 4 | Network error (timeout, unreachable) -- includes `QUEUE_JOB_TIMEOUT` (local gave up AND the remote-kill attempt failed; the remote job may still be running), `AUTH_FLOW_TIMEOUT`, and a session refresh that timed out or could not reach the auth service (`TIMEOUT` / `CONNECTION_ERROR`; a slow auth service is NOT a dead login -- re-run, do not re-login) (since v0.80.0) |
-| 5 | Configuration error (corrupt config, missing alias) |
+| 5 | Configuration error (corrupt config, missing alias) -- includes `AUTH_NOT_SUPPORTED_ON_STACK` and `FEATURE_NOT_ENABLED` |
 | 6 | Permission denied (blocked by firewall / `--deny-writes` / `--deny-destructive`) |
 | 7 | `JOB_TIMEOUT_TERMINATED` -- `job run --timeout` elapsed AND the remote job was successfully cancelled. Scripts can distinguish "we killed it" from "it failed on its own" (exit 1) from "it's still running" (exit 4). |
+| 130 | Interrupted (Ctrl-C) |
+
+Every error code has exactly one exit code and one `error.error_type` (since vNEXT). [docs/error-codes.md](https://github.com/keboola/cli/blob/main/docs/error-codes.md) lists them per code. Before vNEXT, an error code that reached `map_error_to_exit_code` without a dedicated mapping exited 1, so these codes exited 1 on some paths: `VALIDATION_ERROR`, `INVALID_ARGUMENT`, `INVALID_FORMAT`, `MISSING_PARAMETER`, `FILE_NOT_FOUND`, `DATA_APP_INVALID_SECRET` (now 2), `AUTH_MFA_INVALID` (now 3), `AUTH_NOT_SUPPORTED_ON_STACK` (now 5). Four command paths changed too: `transformation create` and `transformation edit` `VALIDATION_ERROR` (1, now 2), `lineage` `FILE_NOT_FOUND` for a missing cache file (1, now 2), `flow schema --full --project` (every failed fetch was `NOT_FOUND`, exit 4. Now a failed request keeps its own code, so a network failure is still exit 4, and only an answer without a usable schema is `NOT_FOUND`, exit 1), `http` `CONFIG_ERROR` (2, now 5; an invalid `--body` is now `INVALID_ARGUMENT`, still exit 2). `kai` and `semantic-layer` commands report the typed code of a configuration error (`AUTH_NOT_SUPPORTED_ON_STACK`, `FEATURE_NOT_ENABLED`) instead of `CONFIG_ERROR`, still exit 5.
 
 ## `job run --wait` polling + log tail
 

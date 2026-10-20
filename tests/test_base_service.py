@@ -418,6 +418,7 @@ class TestProjectErrorEntry:
             "project_alias": "prod",
             "error_code": "ACCESS_DENIED",
             "message": "Forbidden",
+            "retryable": False,
         }
 
     def test_session_guard_code_survives(self) -> None:

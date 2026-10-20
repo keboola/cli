@@ -17,7 +17,12 @@ from typer.testing import CliRunner
 from keboola_agent_cli.cli import app
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.constants import EXIT_PERMISSION_DENIED
-from keboola_agent_cli.errors import ConfigError, ErrorCode, KeboolaApiError
+from keboola_agent_cli.errors import (
+    ConfigError,
+    ErrorCode,
+    KeboolaApiError,
+    SessionAuthUnsupportedError,
+)
 from keboola_agent_cli.models import ProjectConfig
 from keboola_agent_cli.services.config_service import ConfigService
 from keboola_agent_cli.services.job_service import JobService
@@ -531,7 +536,7 @@ class TestAddMetric:
         )
         assert result.exit_code == 0, result.output
 
-    def test_validation_error_exit_1(self, store: ConfigStore) -> None:
+    def test_validation_error_exit_2(self, store: ConfigStore) -> None:
         mock = MagicMock()
         mock.add_metric.side_effect = KeboolaApiError(
             message="bad", status_code=400, error_code=ErrorCode.VALIDATION_ERROR
@@ -554,7 +559,7 @@ class TestAddMetric:
             store=store,
             sl_mock=mock,
         )
-        assert result.exit_code == 1
+        assert result.exit_code == 2
 
 
 class TestAddDataset:
@@ -1110,7 +1115,7 @@ class TestEditRelationship:
             store=store,
             sl_mock=mock,
         )
-        assert result.exit_code == 1
+        assert result.exit_code == 2
         assert "VALIDATION_ERROR" in result.output
 
 
@@ -1430,6 +1435,51 @@ class TestToken:
         body = json.loads(result.output)
         assert body["data"]["encrypted"]["#metastore_token"].startswith("KBC::")
 
+    def test_session_project_keeps_the_typed_code(self, store: ConfigStore) -> None:
+        """A browser-login project gets AUTH_NOT_SUPPORTED_ON_STACK, not CONFIG_ERROR (spec E3)."""
+        mock = MagicMock()
+        mock.encrypt_token.side_effect = SessionAuthUnsupportedError(
+            "`semantic-layer token --encrypt`"
+        )
+        result = _invoke(
+            [
+                "--json",
+                "semantic-layer",
+                "token",
+                "--encrypt",
+                "--project",
+                "prod",
+                "--component-id",
+                "keboola.ex-db-snowflake",
+            ],
+            store=store,
+            sl_mock=mock,
+        )
+        assert result.exit_code == 5, result.output
+        error = json.loads(result.output)["error"]
+        assert error["code"] == "AUTH_NOT_SUPPORTED_ON_STACK"
+        assert error["error_type"] == "configuration"
+
+    def test_plain_config_error_stays_config_error(self, store: ConfigStore) -> None:
+        mock = MagicMock()
+        mock.encrypt_token.side_effect = ConfigError("Project 'prod' not found.")
+        result = _invoke(
+            [
+                "--json",
+                "semantic-layer",
+                "token",
+                "--encrypt",
+                "--project",
+                "prod",
+                "--component-id",
+                "keboola.ex-db-snowflake",
+            ],
+            store=store,
+            sl_mock=mock,
+        )
+        assert result.exit_code == 5, result.output
+        assert json.loads(result.output)["error"]["code"] == "CONFIG_ERROR"
+
 
 # ---------------------------------------------------------------------------
 # Permission gating: --deny-writes blocks write subcommands
@@ -1744,7 +1794,7 @@ class TestSearchContext:
         assert result.exit_code == 0
         assert "revenue" in result.output
 
-    def test_service_error_maps_to_exit_1(self, store: ConfigStore) -> None:
+    def test_service_error_maps_to_exit_2(self, store: ConfigStore) -> None:
         from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 
         mock = MagicMock()
@@ -1764,7 +1814,7 @@ class TestSearchContext:
             store=store,
             sl_mock=mock,
         )
-        assert result.exit_code == 1, result.output
+        assert result.exit_code == 2, result.output
 
 
 class TestGetContext:

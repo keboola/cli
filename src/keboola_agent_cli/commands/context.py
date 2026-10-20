@@ -250,7 +250,8 @@ Use `kbagent <command> --help` for full flag details and examples.
   AUTH_FLOW_DENIED, AUTH_FLOW_EXPIRED, AUTH_BROWSER_UNAVAILABLE,
   AUTH_STATE_MISMATCH, SESSION_EXPIRED, SESSION_NOT_FOUND. Exit codes:
   SESSION_EXPIRED / SESSION_NOT_FOUND / AUTH_FLOW_DENIED -> 3 (auth error);
-  AUTH_FLOW_TIMEOUT -> 4 (network error); others -> 1. A session refresh that
+  AUTH_FLOW_TIMEOUT -> 4 (network error); AUTH_NOT_SUPPORTED_ON_STACK -> 5
+  (config error since vNEXT, before: 1 from `auth login`); others -> 1. A session refresh that
   times out or cannot reach the auth service reports TIMEOUT /
   CONNECTION_ERROR -> 4, never a session/config error: a slow auth service is
   a network problem, so do NOT treat it as "log in again". The refresh is a
@@ -276,7 +277,7 @@ Use `kbagent <command> --help` for full flag details and examples.
     (STACK_FEATURES__AGENT_PROVISIONING), which is OFF on most stacks. The
     command is always registered, so its presence in --help proves nothing
     about the stack; without the feature the stack answers 404 and the command
-    exits 1 with AUTH_NOT_SUPPORTED_ON_STACK, naming the flag an operator
+    exits 5 (since vNEXT, 1 before) with AUTH_NOT_SUPPORTED_ON_STACK, naming the flag an operator
     flips and how to connect an existing project instead.
     What it does in one call: provisions the project, stores the returned
     project-pinned session in auth.json, and registers the project in
@@ -2632,22 +2633,27 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
      (relative to the current directory); use --file / --sql-file. Only these
      5 options refuse it: other free-text options still store `@file` as text.
    - A bad input value (not an integer, bad JSON, a missing or unreadable
-     file) exits 2 with an error that names the option, never a traceback.
-     Most are INVALID_ARGUMENT; some JSON and file options keep an older code
-     (VALIDATION_ERROR, INPUT_ERROR, INVALID_FORMAT, READ_ERROR).
+     file) is an error that names the option, never a traceback. Most are
+     INVALID_ARGUMENT (exit 2); some JSON and file options keep an older code
+     (VALIDATION_ERROR, INPUT_ERROR, INVALID_FORMAT: exit 2; READ_ERROR: exit 1).
 
 ## Exit Codes
 
-  0  Success
-  1  General error
-  2  Usage error (invalid arguments)
-  3  Authentication error (invalid or expired token)
-  4  Network error (timeout, unreachable server)
-  5  Configuration error (corrupt config, missing alias)
-  6  Permission denied (operation blocked by policy)
-  7  Job timed out and was cancelled (JOB_TIMEOUT_TERMINATED)
+  0    Success
+  1    General error
+  2    Usage or validation error (invalid arguments)
+  3    Authentication error (invalid or expired token)
+  4    Network error (timeout, unreachable server), or a local wait that timed
+       out while the server job keeps running
+  5    Configuration error (corrupt config, missing alias)
+  6    Permission denied (operation blocked by policy)
+  7    Job timed out and was cancelled (JOB_TIMEOUT_TERMINATED)
+  130  Interrupted (Ctrl-C)
 
 When you receive a non-zero exit code, use --json to get structured error details.
+Each error code has one exit code and one error.error_type (since vNEXT). The
+list of codes with both is docs/error-codes.md:
+https://github.com/keboola/cli/blob/main/docs/error-codes.md
 
 Exit 1 also covers a PARTIAL failure (#745). Commands that keep going after one
 item fails exit 1 when at least one item failed: sync push, sync

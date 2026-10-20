@@ -32,11 +32,12 @@ SERVE_TOKEN = "test-bearer-fixture"
 
 
 class TestEnvEnforcement:
-    def test_missing_env_vars_exits_2(self, monkeypatch) -> None:
+    def test_missing_env_vars_exits_5(self, monkeypatch) -> None:
+        """CONFIG_ERROR exits 5 like everywhere else. It exited 2 before 1.0.0."""
         monkeypatch.delenv(ENV_KBAGENT_SERVE_URL, raising=False)
         monkeypatch.delenv(ENV_KBAGENT_SERVE_TOKEN, raising=False)
         result = runner.invoke(app, ["http", "get", "/projects"])
-        assert result.exit_code == 2
+        assert result.exit_code == 5
         assert "KBAGENT_SERVE_URL" in result.output
         assert "KBAGENT_SERVE_TOKEN" in result.output
 

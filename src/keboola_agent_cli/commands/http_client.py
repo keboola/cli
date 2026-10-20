@@ -21,7 +21,7 @@ from typing import Any
 import typer
 
 from ..constants import HTTP_DEFAULT_TIMEOUT
-from ..errors import ErrorCode
+from ..errors import ErrorCode, exit_code_for
 from ..output import write_machine_output
 from ..services.http_forwarder_service import (
     ForwardedResponse,
@@ -95,7 +95,7 @@ def _do_request(
             payload = parse_json_arg(body, label="--body")
         except ValueError as exc:
             formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
-            raise typer.Exit(code=2) from None
+            raise typer.Exit(code=exit_code_for(ErrorCode.INVALID_ARGUMENT)) from None
     try:
         result: ForwardedResponse = service.request(
             method,

@@ -28,7 +28,7 @@ from keboola_agent_cli.commands._helpers import (
 )
 from keboola_agent_cli.commands.dev_portal import _load_payload
 from keboola_agent_cli.config_store import ConfigStore
-from keboola_agent_cli.errors import ErrorCode
+from keboola_agent_cli.errors import ErrorCode, exit_code_for
 from keboola_agent_cli.models import ProjectConfig
 from keboola_agent_cli.services.sharing_service import SharingService
 
@@ -436,7 +436,7 @@ class TestBadInputValue:
     def test_binary_files_that_keep_their_code_do_not_crash(
         self, config_dir: Path, tmp_path: Path
     ) -> None:
-        """--description-file, --secrets-file and --members-file keep their code, exit 2."""
+        """--description-file, --secrets-file and --members-file keep their code and its exit code."""
         binary = str(_binary_file(tmp_path))
         cases = [
             [
@@ -454,8 +454,9 @@ class TestBadInputValue:
         ]
         for args in cases:
             result = _invoke(config_dir, *args)
-            assert result.exit_code == 2, (args, result.output)
-            assert json.loads(result.output)["status"] == "error"
+            error = json.loads(result.output)["error"]
+            assert isinstance(result.exception, SystemExit), (args, result.output)
+            assert result.exit_code == exit_code_for(error["code"]), (args, result.output)
 
     def test_dev_portal_data(self, tmp_path: Path) -> None:
         bad = tmp_path / "bad.json"

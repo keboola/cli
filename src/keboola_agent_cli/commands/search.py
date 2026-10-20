@@ -28,6 +28,7 @@ from ..commands._helpers import (
     emit_project_warnings,
     get_formatter,
     get_service,
+    map_error_to_exit_code,
 )
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 
@@ -169,11 +170,13 @@ def search_command(
             scopes=scope or [],
         )
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        formatter.error(
+            message=exc.message, error_code=getattr(exc, "error_code", ErrorCode.CONFIG_ERROR)
+        )
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         emit_api_error(formatter, exc)
-        raise typer.Exit(code=1) from None
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
     if formatter.json_mode:
         formatter.output(result)
