@@ -88,7 +88,7 @@ Guidelines:
 
 - `set-folder --name ""` removes the grouping (the API stores an empty or
   whitespace-only name as "no folder", `folder: null`).
-- Folder names are free-form strings, trimmed, case-sensitive, at most 255
+- Folder names are free-form strings, trimmed, case-sensitive, at most 400
   characters (longer is an HTTP 400); keep them short and stable -- the UI
   sorts alphabetically.
 - Use `set-folder`, never `set-metadata --key KBC.configuration.folderName`:

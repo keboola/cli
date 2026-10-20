@@ -17,7 +17,7 @@ Versioning convention:
 
 - **`config set-folder`** (and `POST /configs/{project}/{component_id}/{config_id}/folder`
   over `kbagent serve`) writes the configuration's `folder` field with a config PUT. The
-  Storage API trims the name, rejects one over 255 characters (HTTP 400), stores an empty one
+  Storage API trims the name, rejects one over 400 characters (HTTP 400), stores an empty one
   as "no folder", and creates no configuration version. The `--json` result keeps its keys:
   `folder`, `value` (the folder as stored, `""` when cleared), `key` (frozen at
   `"KBC.configuration.folderName"`), and `result` (now `{id, name, folder}` from the PUT
