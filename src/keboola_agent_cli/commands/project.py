@@ -30,6 +30,7 @@ from ._helpers import (
     TOKEN_FILE_OPTION,
     TOKEN_STDIN_OPTION,
     RefuseAtFile,
+    _confirm_or_abort,
     check_cli_permission,
     discard_token_file,
     emit_api_error,
@@ -661,9 +662,7 @@ def project_refresh(
                 raise typer.Exit(code=code)
             return
 
-        if not typer.confirm(f"\nProceed to refresh {would_refresh} token(s)?"):
-            formatter.console.print("Aborted.")
-            raise typer.Exit(code=0)
+        _confirm_or_abort(formatter, yes, f"Proceed to refresh {would_refresh} token(s)?")
 
     # Execute the actual refresh
     try:
@@ -673,10 +672,10 @@ def project_refresh(
         emit_api_error(formatter, exc)
         raise typer.Exit(code=exit_code) from None
 
-    formatter.output(result, _format_refresh_result)
-
     # A project whose token check or refresh failed is collected, not raised (#745).
-    if code := item_failure_exit_code(len(result.get("projects_failed", []))):
+    code = item_failure_exit_code(len(result.get("projects_failed", [])))
+    formatter.output(result, _format_refresh_result, exit_code=code or 0)
+    if code:
         raise typer.Exit(code=code)
 
 
@@ -1075,10 +1074,11 @@ def project_invite(
                 dry_run=dry_run,
             )
             payload = result.model_dump()
-            formatter.output(payload, _format_bulk_invite_result)
             # A CSV where every row failed still printed "failed=N" and exit 0,
             # so a CI step could not tell a clean run from a total one (#745).
-            if code := item_failure_exit_code(payload.get("failed", 0)):
+            code = item_failure_exit_code(payload.get("failed", 0))
+            formatter.output(payload, _format_bulk_invite_result, exit_code=code or 0)
+            if code:
                 raise typer.Exit(code=code)
             return
 
@@ -1179,13 +1179,7 @@ def project_invitation_cancel(
     """Cancel a pending invitation."""
     formatter = get_formatter(ctx)
 
-    if (
-        not formatter.json_mode
-        and not yes
-        and not typer.confirm(f"Cancel pending invitation for {email} on {project}?")
-    ):
-        formatter.console.print("Aborted.")
-        raise typer.Exit(code=0)
+    _confirm_or_abort(formatter, yes, f"Cancel pending invitation for {email} on {project}?")
 
     manage_token = resolve_manage_token(allow_env=ctx.obj["allow_env_manage_token"])
     service = get_service(ctx, "member_service")
@@ -1223,13 +1217,9 @@ def project_member_remove(
     """Remove an active member from a project (destructive)."""
     formatter = get_formatter(ctx)
 
-    if (
-        not formatter.json_mode
-        and not yes
-        and not typer.confirm(f"Remove member {email} from project {project}? This is destructive.")
-    ):
-        formatter.console.print("Aborted.")
-        raise typer.Exit(code=0)
+    _confirm_or_abort(
+        formatter, yes, f"Remove member {email} from project {project}? This is destructive."
+    )
 
     manage_token = resolve_manage_token(allow_env=ctx.obj["allow_env_manage_token"])
     service = get_service(ctx, "member_service")

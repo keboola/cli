@@ -146,7 +146,7 @@ class TestWarningsInEnvelope:
             {"code": "WARNING", "message": "Project 'prod': token [expired]"}
         ]
         assert document["data"] == {"value": 1}
-        assert list(document) == ["status", "warnings", "data"]
+        assert list(document) == ["status", "schema_version", "exit_code", "warnings", "data"]
 
     def test_error_envelope_carries_warnings(self, capsys: pytest.CaptureFixture[str]) -> None:
         formatter = OutputFormatter(json_mode=True)
@@ -160,7 +160,7 @@ class TestWarningsInEnvelope:
             {"code": "WARNING", "message": "second"},
         ]
         assert document["error"]["message"] == "it failed"
-        assert list(document) == ["status", "warnings", "error"]
+        assert list(document) == ["status", "schema_version", "warnings", "error"]
 
     def test_success_message_carries_warnings(self, capsys: pytest.CaptureFixture[str]) -> None:
         formatter = OutputFormatter(json_mode=True)
@@ -185,7 +185,12 @@ class TestWarningsInEnvelope:
 
         captured = capsys.readouterr()
         assert captured.err == ""
-        assert json.loads(captured.out) == {"status": "ok", "data": {"value": 1}}
+        assert json.loads(captured.out) == {
+            "status": "ok",
+            "schema_version": "1.0",
+            "exit_code": 0,
+            "data": {"value": 1},
+        }
 
     def test_unbalanced_markup_is_kept_as_text(self, capsys: pytest.CaptureFixture[str]) -> None:
         formatter = OutputFormatter(json_mode=True)

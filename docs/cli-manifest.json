@@ -308,7 +308,9 @@
       "help": "Delete a development branch.\n\nIf the deleted branch was the active branch, it is automatically\nreset to main/production.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "required": true, "default": null, "help": "Project alias to delete the branch from"},
-        {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "required": true, "default": null, "help": "Branch ID to delete"}
+        {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "required": true, "default": null, "help": "Branch ID to delete"},
+        {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Read the branch and show what would be deleted; change nothing"},
+        {"kind": "option", "name": "yes", "opts": ["--yes", "-y"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip the confirmation prompt"}
       ]
     },
     {
@@ -2767,7 +2769,7 @@
         {"kind": "option", "name": "types", "opts": ["--types"], "type": "text", "multiple": true, "default": null, "help": "Item type to import (repeatable or comma-separated): datasets, metrics, relationships, glossary, constraints"},
         {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Plan the import without calling any write API"},
         {"kind": "option", "name": "overwrite", "opts": ["--overwrite"], "type": "boolean", "is_flag": true, "default": false, "help": "Update conflicting items in place (default: skip)"},
-        {"kind": "option", "name": "yes", "opts": ["--yes", "-y"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip confirmation (alias for default SKIP behavior)"},
+        {"kind": "option", "name": "yes", "opts": ["--yes", "-y"], "type": "boolean", "is_flag": true, "hidden": true, "default": false},
         {"kind": "option", "name": "scope", "opts": ["--scope"], "type": "choice", "choices": ["project", "organization", "targeted"], "default": null, "help": "Visibility of the NEW items: 'project', 'organization' or 'targeted'. Omitted: the target model's own scope, as with `add <kind>`."},
         {"kind": "option", "name": "target_project", "opts": ["--target-project"], "type": "text", "multiple": true, "default": [], "help": "Project alias or ID that can see the new items (repeatable or comma-separated; --scope targeted only)."}
       ]
@@ -3762,7 +3764,7 @@
         {"kind": "argument", "name": "source_id", "opts": ["source_id"], "type": "text", "required": true, "default": null, "help": "Source id to delete"},
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "required": true, "default": null, "help": "Project alias"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "text", "default": null, "help": "Branch ref (default branch if unset)"},
-        {"kind": "option", "name": "force", "opts": ["--force"], "type": "boolean", "is_flag": true, "default": false, "help": "Alias for --yes (skip confirmation)"},
+        {"kind": "option", "name": "force", "opts": ["--force"], "type": "boolean", "is_flag": true, "hidden": true, "default": false},
         {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Preview without deleting"},
         {"kind": "option", "name": "yes", "opts": ["--yes", "-y"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip confirmation prompt"}
       ]
@@ -4087,7 +4089,9 @@
       "help": "Delete a workspace.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "required": true, "default": null, "help": "Project alias"},
-        {"kind": "option", "name": "workspace_id", "opts": ["--workspace-id"], "type": "integer", "required": true, "default": null, "help": "Workspace ID to delete"}
+        {"kind": "option", "name": "workspace_id", "opts": ["--workspace-id"], "type": "integer", "required": true, "default": null, "help": "Workspace ID to delete"},
+        {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Read the workspace and show what would be deleted; change nothing"},
+        {"kind": "option", "name": "yes", "opts": ["--yes", "-y"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip the confirmation prompt"}
       ]
     },
     {

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+import pytest
 from typer.testing import CliRunner
 
 from keboola_agent_cli.cli import app
@@ -464,6 +465,7 @@ class TestNotificationDeleteCli:
         assert result.exit_code == 0, result.output
         service.delete_subscription.assert_called_once_with(alias="prod", subscription_id="1234")
 
+    @pytest.mark.usefixtures("interactive_terminal")
     def test_human_mode_without_yes_aborts_on_no(self, tmp_path: Path) -> None:
         store = _setup_config(tmp_path / "cfg", {"prod": {}})
         service = MagicMock()
@@ -605,6 +607,7 @@ class TestNotificationReplaceRecipientCli:
         assert "5678" in result.output
         assert "was not deleted" in result.output
 
+    @pytest.mark.usefixtures("interactive_terminal")
     def test_confirm_behavior_same_as_delete(self, tmp_path: Path) -> None:
         store = _setup_config(tmp_path / "cfg", {"prod": {}})
         service = MagicMock()

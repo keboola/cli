@@ -22,6 +22,7 @@ from rich.console import Console
 
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._helpers import (
+    _confirm_or_abort,
     emit_api_error,
     get_formatter,
     get_service,
@@ -200,16 +201,12 @@ def register_git_commands(app: typer.Typer) -> None:
                 param_hint="--public-key",
             )
 
-        if (
-            not yes
-            and not formatter.json_mode
-            and not typer.confirm(
-                f"Create a {cred_type} credential ({permissions}) for data app "
-                f"{app_id} in '{project}'?"
-            )
-        ):
-            formatter.console.print("Aborted.")
-            raise typer.Exit(code=0)
+        _confirm_or_abort(
+            formatter,
+            yes,
+            f"Create a {cred_type} credential ({permissions}) for data app "
+            f"{app_id} in '{project}'?",
+        )
 
         try:
             result = service.create_data_app_git_credential(

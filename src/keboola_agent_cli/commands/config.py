@@ -35,6 +35,7 @@ from ._config_variables_render import (
     format_variables_set,
 )
 from ._helpers import (
+    _confirm_or_abort,
     check_cli_operation,
     check_cli_permission,
     emit_api_error,
@@ -1736,13 +1737,9 @@ def config_delete_metadata(
     config_store: ConfigStore = ctx.obj["config_store"]
     effective_branch = resolve_branch(config_store, project, branch)
 
-    if (
-        not yes
-        and not formatter.json_mode
-        and not typer.confirm(f"Delete metadata ID {metadata_id} from {component_id}/{config_id}?")
-    ):
-        formatter.console.print("Aborted.")
-        raise typer.Exit(code=0)
+    _confirm_or_abort(
+        formatter, yes, f"Delete metadata ID {metadata_id} from {component_id}/{config_id}?"
+    )
 
     service = get_service(ctx, "config_service")
     try:
@@ -2006,14 +2003,12 @@ def config_variables_clear(
     config_store: ConfigStore = ctx.obj["config_store"]
     effective_branch = resolve_branch(config_store, project, branch)
 
-    if not yes and not formatter.json_mode:
-        confirmed = typer.confirm(
-            f"Unlink variables from {component_id}/{config_id}? "
-            "(The underlying variables config will NOT be deleted.)"
-        )
-        if not confirmed:
-            formatter.console.print("[yellow]Aborted.[/yellow]")
-            raise typer.Exit(code=0)
+    _confirm_or_abort(
+        formatter,
+        yes,
+        f"Unlink variables from {component_id}/{config_id}? "
+        "(The underlying variables config will NOT be deleted.)",
+    )
 
     service = get_service(ctx, "variables_service")
     try:
@@ -2382,13 +2377,7 @@ def config_row_delete(
     config_store = ctx.obj["config_store"]
     branch = resolve_branch(config_store, project, branch)
 
-    if (
-        not yes
-        and not formatter.json_mode
-        and not typer.confirm(f"Delete row [{row_id}] from {component_id}/{config_id}?")
-    ):
-        formatter.console.print("Aborted.")
-        raise typer.Exit(code=0)
+    _confirm_or_abort(formatter, yes, f"Delete row [{row_id}] from {component_id}/{config_id}?")
 
     service = get_service(ctx, "config_service")
 

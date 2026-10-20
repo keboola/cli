@@ -65,11 +65,13 @@ A command that fails with an error code exits with the code's `Exit` value below
 | `INVALID_ARGUMENT` | 2 | `validation` | Caller supplied an invalid argument value |
 | `INVALID_FORMAT` | 2 | `api` | Input is not in the expected format |
 | `USAGE_ERROR` | 2 | `validation` | Incorrect CLI flag combination or missing required argument |
+| `CONFIRMATION_REQUIRED` | 2 | `validation` | A command that asks for confirmation ran in human mode without a terminal and without `--yes`. Nothing was changed. Run the command again with `--yes`. An AI agent asks the user first (since vNEXT) |
 | `MISSING_PARAMETER` | 2 | `validation` | A required parameter was not supplied |
 | `UNKNOWN_ERROR` | 1 | `api` | Catch-all for unclassified errors |
 | `UNEXPECTED_ERROR` | 1 | `api` | Per-project fallback in a multi-project command: that project raised an error carrying no code of its own. Other projects in the same run still report their own outcome |
 | `HTTP_ERROR` | 1 | `api` | Generic HTTP-layer error in the `kbagent serve` envelope (HTTPException passthrough) |
-| `INTERNAL_ERROR` | 1 | `api` | Uncaught exception inside a `kbagent serve` route handler (HTTP 500) |
+| `INTERNAL_ERROR` | 1 | `api` | Uncaught exception inside a `kbagent serve` route handler (HTTP 500), or a crash of a CLI command under `--json` (exit 1) |
+| `INTERRUPTED` | 130 | `api` | The command was interrupted under `--json`: Ctrl+C (exit 130) or an aborted prompt (exit 1) |
 
 ### Configuration
 

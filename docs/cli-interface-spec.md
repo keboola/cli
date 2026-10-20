@@ -282,10 +282,10 @@ What stays as it is:
 - Checked by: `args.no-dead-parameter`.
 
 <a id="A6"></a><a id="args.repeated-single-value"></a>
-**A6 · MUST · 1.0.0.** A single-value option given twice is reported: a usage error (exit 2) on `write` and `destructive` commands, and a warning on the other commands. Until 1.0.0, the last value wins without a message.
+**A6 · MUST · 1.0.0.** A single-value option given twice is reported: a usage error (exit 2) on `write`, `destructive` and `admin` commands, and a warning on `read` commands. The warning is a `REPEATED_OPTION` entry in `warnings[]`. A flag without a `--no-` form, such as `--yes`, given twice is not reported, because the repeat cannot change its value. Until 1.0.0, the last value wins without a message.
 
 - Why: on a write, the dropped value can be the intended target (`--project x … --project test` acts on `test`).
-- Checked by: `args.repeated-single-value` (deferred: lands with the 1.0.0 command class).
+- Checked by: `args.repeated-single-value`.
 
 <a id="A7"></a>
 **A7 · SHOULD for new options · now.** Durations are seconds and data sizes are bytes, both integers without a unit suffix. Points in time are ISO 8601 with a time zone. Booleans are `--x/--no-x`. A fixed set of values, named sizes included, is a `click.Choice`. A fixed threshold in code (such as the 1 GB guard of `workspace load`) names its unit in the help and in the message.
@@ -314,7 +314,7 @@ What stays as it is:
 <a id="I4"></a>
 **I4 · MUST · 1.0.0.** A bad input value is a usage error (exit 2, `INVALID_ARGUMENT`) that names the option, never a traceback. In 0.x, some bad values end in a traceback with exit 1. Known gaps in 1.0.0: the structured options that exited 2 before 1.0.0 keep their error code (`config` `--configuration`, `--state` and `--config-data`: `VALIDATION_ERROR`; `encrypt values --input`: `INPUT_ERROR`; `agent --from-file` and `--runtime-input`: `INVALID_FORMAT`; `flow --file`: `VALIDATION_ERROR`; `data-app create --description-file`: `READ_ERROR`, exit 1; `data-app secrets-set --secrets-file`: `DATA_APP_INVALID_SECRET`; `semantic-layer reference-data set --members-file`: `VALIDATION_ERROR`), and a value refused by Click or by `typer.BadParameter` is `USAGE_ERROR`.
 
-- Checked by: `output.one-json-document` (crash case, deferred) and review.
+- Checked by: `output.one-json-document` (crash case) and review.
 
 <a id="I5"></a>
 **I5 · SHOULD for new options · now.** A secret comes from a prompt, a `--*-stdin` flag, a file or an environment variable, never from an inline value.
@@ -413,22 +413,22 @@ What stays as it is:
 <a id="O1"></a><a id="output.one-json-document"></a><a id="output.bare-group-exits-2"></a>
 **O1 · MUST · 1.0.0.** With `--json`, stdout holds exactly one JSON document for every exit code, parse errors, bare groups and crashes included. `--stream` commands write NDJSON. Everything else goes to stderr. An explicit `--help` (and `-h`, H5) prints help on stdout with exit 0 in both modes. A bare group, and `--json` without a command, exit 2 with a `USAGE_ERROR` envelope. Until 1.0.0, a parse error, a crash or a bare group under `--json` gives an empty stdout.
 
-- Checked by: `output.one-json-document`, `output.bare-group-exits-2` (both deferred: land with the 1.0.0 root command class).
+- Checked by: `output.one-json-document`, `output.bare-group-exits-2`.
 
 <a id="O2"></a><a id="output.envelope-schema"></a>
 **O2 · MUST · `warnings` 0.x; `exit_code` and `schema_version` 1.0.0.** The success envelope has `status: "ok"`, `data`, `exit_code`, `schema_version`, and `targets` and `warnings` when they are not empty. The error envelope has `status: "error"`, `error`, `schema_version`, and `targets` and `warnings` when they are not empty. `schema_version` is `"<major>.<minor>"`: an added key raises the minor; a removed or renamed key raises the major and follows C3. Today the envelope is `{status, data}` or `{status, error}`, plus `targets`.
 
-- Checked by: `output.envelope-schema` (deferred: lands with the envelope).
+- Checked by: `output.envelope-schema`.
 
 <a id="O3"></a><a id="output.no-warning-after-output"></a>
 **O3 · MUST · 0.x.** In JSON mode a warning is an entry `{code, message, hint?}` in `warnings[]`, emitted before the output. A `warning()` call after `output()` has written the document does nothing in JSON mode, so O1 holds. A deprecation uses `code: "DEPRECATED"` with `replacement` and `remove_after` (a date). Until `warnings[]` lands, `OutputFormatter.warning()` does nothing in JSON mode, and a command puts its warnings into `data`.
 
-- Checked by: `output.envelope-schema`, `output.no-warning-after-output` (both deferred).
+- Checked by: `output.envelope-schema`; `output.no-warning-after-output` (deferred).
 
 <a id="O4"></a><a id="output.ok-then-exit-declares-exit-code"></a>
-**O4 · MUST · 1.0.0.** `exit_code` in the success envelope equals the process exit code. `status: "ok"` with a non-zero `exit_code` means a negative answer (`flow validate`, `auth status`, `permissions check`, `data-app validate-repo`), or a failed item or project of a command that processes several of them, reads included (E4). The error envelope has no `exit_code`; the process exit code and the exit-code table give it. Until 1.0.0, the envelope has no `exit_code`, and the process exit code is the only signal.
+**O4 · MUST · 1.0.0.** `exit_code` in the success envelope equals the process exit code. `status: "ok"` with a non-zero `exit_code` means a negative answer (`flow validate`, `auth status`, `permissions check`, `data-app validate-repo`), or a failed item or project of a command that processes several of them, reads included (E4). The error envelope has no `exit_code`; the process exit code and the exit-code table give it. Known limit: a crash after the command wrote its success envelope leaves that envelope (with `exit_code: 0`) as the only document, and the process exits 1. Until 1.0.0, the envelope has no `exit_code`, and the process exit code is the only signal.
 
-- Checked by: `output.ok-then-exit-declares-exit-code` (deferred: lands with the 1.0.0 envelope).
+- Checked by: `output.ok-then-exit-declares-exit-code`.
 
 <a id="O5"></a>
 **O5 · MUST · now.** Keys that kbagent adds are snake_case. Raw API objects pass through unchanged. The existing camelCase derived keys (`logTail`, `lastUsed*`) and the three project keys in `data` (`project_alias`, `alias`, `project`) are frozen; new payloads use `project_alias`.
@@ -443,7 +443,7 @@ What stays as it is:
 <a id="O7"></a><a id="output.root-flags-anywhere"></a>
 **O7 · SHOULD · 1.0.0.** The root flags `--json`/`-j`, `--deny-writes` and `--deny-destructive` are also accepted after the subcommand. argv is not rewritten, because a token equal to `--json` can be the value of another option. Until 1.0.0, the root flags go before the subcommand.
 
-- Checked by: `output.root-flags-anywhere` (deferred: lands with the 1.0.0 command class).
+- Checked by: `output.root-flags-anywhere`.
 
 <a id="O8"></a>
 **O8 · MUST · now.** A command that reads an existing secret that the user can also see in another place (a data app password, the secret in a stream endpoint) does not print it by default, in human mode or under `--json`. It shows a masked value, or it says where the secret went and where the user can see it (`data-app password`: `password_delivered_to` and `ui_url`). `--reveal` prints the secret. `--copy` puts it into the clipboard; `--copy` with `--reveal` is `INVALID_ARGUMENT`. A REST route returns the secret only with `reveal=true`. Reading the secret SHOULD be an operation of its own in `OPERATION_REGISTRY` (as `data-app.password`), so that a deny policy refuses it before any API call. The rule does not cover a command whose result is a new credential.
@@ -551,14 +551,14 @@ A flag that raises the class is in `FLAG_ESCALATIONS` and is checked where the f
 - Checked by: `safety.destructive-has-dry-run`, `safety.destructive-has-yes`.
 
 <a id="S3"></a><a id="safety.force-meaning-registered"></a><a id="safety.yes-has-short-y"></a>
-**S3 · MUST · now; the flag changes in 1.0.0.** `--yes` only skips a confirmation, and it has `-y`. `--force` only overrides a named guard, and its help names every guard that it overrides. A new `--force` needs a `FORCE_MEANINGS` entry in `scripts/check_cli_spec.py` that names its guards; the existing `--force` options are in the baseline until they get one. A guard may ask on a terminal (the size guard of `workspace load`); `--force` then answers that guard only. `storage delete-bucket --force` overrides only the guard for a non-empty bucket and never deletes a shared bucket. In 1.0.0, `stream delete --force` (which skips the general confirmation today) becomes a hidden alias of `--yes`, and `semantic-layer import --yes` (no effect today) becomes hidden; both keep working with a `DEPRECATED` warning until M + 28 days. `sync pull --force` (pull again) and `project refresh --force` (refresh valid tokens too) stay as registered legacy meanings.
+**S3 · MUST · now; the flag changes in 1.0.0.** `--yes` only skips a confirmation, and it has `-y`. `--force` only overrides a named guard, and its help names every guard that it overrides. Every `--force` has a `FORCE_MEANINGS` entry in `scripts/check_cli_spec.py` that names its guards, and a new `--force` needs one. A guard may ask on a terminal (the size guard of `workspace load`); `--force` then answers that guard only. `storage delete-bucket --force` overrides only the guard for a non-empty bucket and never deletes a shared bucket. From 1.0.0, `stream delete --force` is a hidden alias of `--yes` (in 0.x it skips the general confirmation), and `semantic-layer import --yes` is hidden (it has no effect in any version). Both keep working with a `DEPRECATED` warning until at least M + 28 days (C3). `sync pull --force` (pull again) and `project refresh --force` (refresh valid tokens too) stay as registered legacy meanings.
 
 - Checked by: `safety.force-meaning-registered`, `safety.yes-has-short-y`.
 
 <a id="S4"></a><a id="safety.confirm-via-helper"></a><a id="safety.no-tty-confirmation"></a>
-**S4 · MUST · now; the no-terminal refusal from 1.0.0.** With `--yes` or `--json` there is no prompt. In human mode on a terminal, the prompt goes to stderr. A safety prompt goes through the shared confirmation helper (`_confirm_or_abort`, which `--yes` and `--json` skip), not through a direct `typer.confirm`. From 1.0.0, in human mode without a terminal, the command refuses with `CONFIRMATION_REQUIRED` (exit 2); the hint names `--yes` and adds "AI agents: ask the user before you retry with `--yes`". Until 1.0.0, a prompt without a terminal reads its answer from stdin, as today. The helper moves to `commands/_helpers.py` with the 1.0.0 change; until then it lives in `commands/_storage_delete.py` and `commands/_merge_request_writes.py`. The non-safety questions (`init` copies the global projects, `auth login` registers projects) and the preview-then-confirm flows of `org setup` and `project refresh` keep their own prompts; they are `exceptions` in the baseline.
+**S4 · MUST · now; the no-terminal refusal from 1.0.0.** With `--yes` or `--json` there is no prompt. In human mode on a terminal, the prompt goes to stderr. A safety prompt goes through the shared confirmation helper `_confirm_or_abort` in `commands/_helpers.py` (which `--yes` and `--json` skip), not through a direct `typer.confirm`. In human mode without a terminal (stdin or stderr is not a terminal), the command refuses with `CONFIRMATION_REQUIRED` (exit 2). The message names `--yes` and adds "AI agents: ask the user before you retry with `--yes`". 0.x releases read the answer from stdin instead. The preview-then-confirm flows of `org setup` and `project refresh` show their preview and then call the helper. The `exceptions` in the baseline are the two non-safety questions (`init` copies the global projects, `auth login` registers projects) and the size guard of `workspace load` (S3), which asks on a terminal only and refuses without one. Two guards in the service layer still ask through a `typer.confirm` that the command passes in: `semantic-layer add metric` (a dataset that is not in the model) and `semantic-layer edit metric` (a rename that changes constraints). They refuse without a terminal with `VALIDATION_ERROR` (exit 2), and on a terminal they ask also under `--json`. The check does not find them, because the command does not call `typer.confirm` itself.
 
-- Checked by: `safety.confirm-via-helper` (not blocking until the helper moves to `commands/_helpers.py`: today the check accepts any function named `*_confirm_or_abort`, so a copy of the helper passes); `safety.no-tty-confirmation` (deferred: lands with the refusal).
+- Checked by: `safety.confirm-via-helper` (only `_confirm_or_abort` in `commands/_helpers.py` calls `typer.confirm`) and `safety.no-tty-confirmation` (contract case in `tests/test_cli_contract.py`).
 
 <a id="S5"></a>
 **S5 · MUST · now.** `--dry-run` makes no mutating call, returns `dry_run: true` and reports the target in `targets`. It SHOULD read the affected resources when one GET is enough. The eight existing echo-only destructive previews stay as they are, because a read would turn the preview of a missing object into a failure.
@@ -663,7 +663,7 @@ A flag that raises the class is in `FLAG_ESCALATIONS` and is checked where the f
 <a id="H5"></a><a id="help.dash-h"></a>
 **H5 · MUST · 1.0.0.** `-h` works as `--help`. Until 1.0.0, only `--help` works.
 
-- Checked by: `help.dash-h` (deferred: lands with the 1.0.0 root command class).
+- Checked by: `help.dash-h`.
 
 <a id="H6"></a><a id="help.manifest-fresh"></a>
 **H6 · MUST · now.** The command manifest `docs/cli-manifest.json` (commands, options, kinds, help texts) is generated from the Typer tree (`make cli-manifest`) and committed, so that every option or help change shows in the pull-request diff. From 1.0.0, the command reference and the command part of `kbagent context` are generated from it (AG1).
@@ -739,7 +739,7 @@ The 0.x line, until T0, ships only bug, security and data-loss fixes (C4), the m
 <a id="C3"></a><a id="change.expired-deprecation"></a>
 **C3 · MUST · now.** Inside a major version, a deprecated form keeps working for at least 28 days. It prints one stderr line in human mode and adds a `DEPRECATED` entry with `replacement` and `remove_after` (a date) to `warnings[]`. After that date, a minor release removes it. Until `warnings[]` is on `main`, the stderr line in human mode and a note in `data` are enough. A removed form stays in the `DEPRECATIONS` registry, so that its error names the replacement. For a behavior change, the final state is the new behavior or a refusal with a hint. The window is a date, not a number of releases.
 
-- Checked by: `change.expired-deprecation` (deferred: the `DEPRECATIONS` registry does not exist yet).
+- Checked by: `change.expired-deprecation` (deferred: the `DEPRECATIONS` registry in `commands/_helpers.py` has no `remove_after` date yet, because the window of the 1.0.0 hidden aliases starts at M).
 
 <a id="C4"></a>
 **C4 · MUST · now.** A change ships at once, with a `BREAKING:` bullet and no window, when it restores a documented contract (help, docstring, `CLAUDE.md`, `kbagent context`), fails closed on a severity-5 path ("a silent write or delete on an unexpected target, or data loss", as the proposal of #791 rates it), makes a deny policy hold, changes only a result that is already wrong, or removes a secret from the default output.
@@ -889,7 +889,7 @@ The 0.x line, until T0, ships only bug, security and data-loss fixes (C4), the m
 <a id="EV4"></a>
 **EV4 · SHOULD · 1.0.0.** Global options are accepted before and after the subcommand (O7).
 
-- Checked by: `output.root-flags-anywhere` (deferred).
+- Checked by: `output.root-flags-anywhere`.
 
 ## 19. Versions and updates
 

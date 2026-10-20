@@ -470,6 +470,48 @@ def test_config_error_keeps_code(tree: Any) -> None:
     assert set(found) == {"commands/demo.py:replaces"}
 
 
+def test_ok_then_exit_declares_exit_code(tree: Any) -> None:
+    source = (
+        "import typer\n"
+        "def exits_after_output(formatter, failed):\n"
+        "    formatter.output({})\n"
+        "    if failed:\n"
+        "        raise typer.Exit(code=1)\n"
+        "def declares(formatter, code):\n"
+        "    formatter.output({}, exit_code=code)\n"
+        "    if code:\n"
+        "        raise typer.Exit(code=code)\n"
+        "def returns_before_exit(formatter, dry_run):\n"
+        "    if dry_run:\n"
+        "        formatter.output({})\n"
+        "        return\n"
+        "    raise typer.Exit(code=5)\n"
+        "def exits_zero(formatter):\n"
+        "    formatter.output({})\n"
+        "    raise typer.Exit(code=0)\n"
+        "def exit_before_output(formatter, bad):\n"
+        "    if bad:\n"
+        "        raise typer.Exit(code=2)\n"
+        "    formatter.output({})\n"
+        "def other_receiver(fmt):\n"
+        "    fmt.output({})\n"
+        "    raise typer.Exit(code=1)\n"
+        "def exit_in_json_branch(formatter):\n"
+        "    if formatter.json_mode:\n"
+        "        formatter.output({})\n"
+        "    else:\n"
+        "        pass\n"
+        "    raise typer.Exit(1)\n"
+    )
+    ctx = spec_check.Context(tree)
+    ctx._cache["command_modules"] = [("commands/demo.py", ast.parse(source))]
+    assert set(spec_check.r_ok_then_exit(ctx)) == {
+        "commands/demo.py:exits_after_output",
+        "commands/demo.py:other_receiver",
+        "commands/demo.py:exit_in_json_branch",
+    }
+
+
 def _demo_command(used: str, unused: str) -> None:
     print(used)
 
@@ -500,7 +542,14 @@ def test_confirm_via_helper(tree: Any) -> None:
         "    typer.confirm('sure?')\n"
     )
     found = spec_check.r_confirm_via_helper(_context_with_source(tree, source))
-    assert set(found) == {"commands/demo.py:cmd"}
+    # Only the shared helper in commands/_helpers.py may ask: a copy of it is flagged too.
+    assert set(found) == {"commands/demo.py:cmd", "commands/demo.py:_confirm_or_abort"}
+
+
+def test_force_meanings_name_live_force_options(tree: Any) -> None:
+    """Every FORCE_MEANINGS entry names a live command that has --force (no stale entry)."""
+    with_force = {lf.name for lf in tree.leaves if "--force" in spec_check.opt_names(lf)}
+    assert set(spec_check.FORCE_MEANINGS) == with_force
 
 
 def test_short_flag_registry_is_pinned(tree: Any) -> None:

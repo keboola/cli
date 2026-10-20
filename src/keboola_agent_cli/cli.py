@@ -8,7 +8,6 @@ from pathlib import Path
 import typer
 
 from . import telemetry
-from .commands._project_ref import ProjectRefGroup
 from .commands.agent import agent_app
 from .commands.auth import auth_app
 from .commands.billing import billing_app
@@ -57,6 +56,7 @@ from .output import OutputFormatter, force_utf8_when_redirected
 # very same policy for the REST surface; re-exported here because callers (and
 # tests) have imported it from `cli` since 0.22.0.
 from .permissions import PermissionEngine, apply_firewall_flags
+from .root_command import MissingCommandError, RootGroup
 from .services.agent_service import AgentService
 from .services.auth_service import AuthService
 from .services.billing_service import BillingService
@@ -102,8 +102,11 @@ app = typer.Typer(
     name="kbagent",
     help="Keboola Agent CLI -- AI-friendly interface to Keboola projects",
     invoke_without_command=True,
-    # Translates a project ID given as --project to its alias (CLI-22).
-    cls=ProjectRefGroup,
+    # Translates a project ID given as --project to its alias (CLI-22); one JSON
+    # document for every exit code, the root flags after the subcommand, and the
+    # repeated-option check (#791, root_command.py).
+    cls=RootGroup,
+    context_settings={"help_option_names": ["-h", "--help"]},
 )
 
 # -- Setup & Info --
@@ -277,8 +280,11 @@ def main(
 
     # If no subcommand given, launch REPL on TTY or show help otherwise
     if ctx.invoked_subcommand is None:
+        if json_output:
+            # O1: exit 2, help on stderr, a USAGE_ERROR envelope on stdout.
+            raise MissingCommandError("Missing command.", ctx)
         is_interactive = hasattr(sys.stdin, "isatty") and sys.stdin.isatty()
-        if is_interactive and not json_output:
+        if is_interactive:
             # Defer REPL launch until after context setup (below)
             ctx.ensure_object(dict)
             ctx.obj["_launch_repl"] = True

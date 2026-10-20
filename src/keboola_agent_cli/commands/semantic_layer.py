@@ -20,7 +20,9 @@ from ..errors import ErrorCode
 from ..services._semantic_layer_internals import PUSH_ORDER
 from ..services.semantic_layer_service import SCHEMA_TYPE_ALIAS
 from ._helpers import (
+    _confirm_or_abort,
     check_cli_permission,
+    deprecated_option,
     get_formatter,
     get_service,
     item_failure_exit_code,
@@ -202,18 +204,14 @@ def model_delete(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
 
-    if (
-        not yes
-        and not formatter.json_mode
-        and not typer.confirm(
-            f"Delete model '{model}' in project '{project}'? "
-            "This cascade-deletes ALL child entities (datasets, metrics, "
-            "relationships, constraints, glossary terms) belonging to the model. "
-            "This is irreversible."
-        )
-    ):
-        formatter.console.print("Aborted.")
-        raise typer.Exit(code=0)
+    _confirm_or_abort(
+        formatter,
+        yes,
+        f"Delete model '{model}' in project '{project}'? "
+        "This cascade-deletes ALL child entities (datasets, metrics, "
+        "relationships, constraints, glossary terms) belonging to the model. "
+        "This is irreversible.",
+    )
 
     result = _handle_service_call(
         ctx,
@@ -559,9 +557,10 @@ def semantic_layer_build(
         types_workspace_id=types_workspace,
         auto_resolve_types=auto_types_workspace,
     )
-    formatter.output(result, _print_build_result)
     # A table whose schema fetch failed is left out of the model (#745).
-    if code := item_failure_exit_code(len(result.get("fetch_errors") or [])):
+    code = item_failure_exit_code(len(result.get("fetch_errors") or []))
+    formatter.output(result, _print_build_result, exit_code=code or 0)
+    if code:
         raise typer.Exit(code=code)
 
 
@@ -603,17 +602,13 @@ def semantic_layer_promote(
     service = get_service(ctx, "semantic_layer_service")
     type_list = split_multi(types) if types else None
 
-    if (
-        not yes
-        and not dry_run
-        and not formatter.json_mode
-        and not typer.confirm(
+    if not dry_run:
+        _confirm_or_abort(
+            formatter,
+            yes,
             f"Promote model from '{from_project}' to '{to_project}'? "
-            "This will overwrite CHANGED items in the target."
+            "This will overwrite CHANGED items in the target.",
         )
-    ):
-        formatter.console.print("Aborted.")
-        raise typer.Exit(code=0)
     target_projects = resolve_scope_targets(
         ctx,
         operation="semantic-layer.promote",
@@ -635,10 +630,11 @@ def semantic_layer_promote(
         scope=scope,
         target_projects=target_projects,
     )
-    formatter.output(result, _print_promote_result)
     # Per-item failures are collected per type, not raised (#745).
     failed = sum(len((result.get(plural) or {}).get("failed", [])) for plural, _ in PUSH_ORDER)
-    if code := item_failure_exit_code(failed):
+    code = item_failure_exit_code(failed)
+    formatter.output(result, _print_promote_result, exit_code=code or 0)
+    if code:
         raise typer.Exit(code=code)
 
 
@@ -664,9 +660,7 @@ def semantic_layer_import(
     overwrite: bool = typer.Option(
         False, "--overwrite", help="Update conflicting items in place (default: skip)"
     ),
-    yes: bool = typer.Option(
-        False, "--yes", "-y", help="Skip confirmation (alias for default SKIP behavior)"
-    ),
+    yes: bool = deprecated_option("semantic-layer import --yes", "--yes", "-y"),
     scope: ScopeChoice | None = typer.Option(None, "--scope", help=_COPY_SCOPE_HELP),
     target_project: list[str] = typer.Option(
         [], "--target-project", help=_COPY_TARGET_PROJECT_HELP
@@ -675,9 +669,8 @@ def semantic_layer_import(
     """Replay a snapshot into a project. Default: skip on conflict (no surprise overwrites)."""
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
-    # --yes is the alias for the default skip-on-conflict mode; users can
-    # still opt into destructive overwrite via --overwrite.
-    _ = yes  # explicit (no behavioural effect when --overwrite is False)
+    # The deprecated --yes has no effect; its callback adds the DEPRECATED warning (C3).
+    _ = yes
     type_list = split_multi(types) if types else None
     target_projects = resolve_scope_targets(
         ctx,
@@ -699,10 +692,11 @@ def semantic_layer_import(
         scope=scope,
         target_projects=target_projects,
     )
-    formatter.output(result, _print_import_result)
     # Per-item failures are collected per type, not raised (#745).
     failed = sum(len(per.get("failed", [])) for per in (result.get("imported") or {}).values())
-    if code := item_failure_exit_code(failed):
+    code = item_failure_exit_code(failed)
+    formatter.output(result, _print_import_result, exit_code=code or 0)
+    if code:
         raise typer.Exit(code=code)
 
 

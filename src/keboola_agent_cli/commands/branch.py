@@ -5,8 +5,10 @@ No business logic belongs here.
 """
 
 from pathlib import Path
+from typing import Any
 
 import typer
+from rich.console import Console
 
 from ..effective_branch import report_branch_ref
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
@@ -14,6 +16,7 @@ from ..output import format_branch_metadata_table, format_branches_table
 from ._all_projects import AllProjectsOption, reject_project_with_all_projects
 from ._helpers import (
     RefuseAtFile,
+    _confirm_or_abort,
     check_cli_permission,
     emit_api_error,
     emit_project_warnings,
@@ -172,6 +175,16 @@ def branch_reset(
         raise typer.Exit(code=5) from None
 
 
+def _print_delete_result(console: Console, data: dict[str, Any]) -> None:
+    """Human output of `branch delete`, also for `--dry-run`."""
+    label = (
+        "[bold blue]Dry run:[/bold blue]"
+        if data.get("dry_run")
+        else "[bold green]Success:[/bold green]"
+    )
+    console.print(f"{label} {data['message']}")
+
+
 @branch_app.command("delete")
 def branch_delete(
     ctx: typer.Context,
@@ -185,6 +198,10 @@ def branch_delete(
         "--branch",
         help="Branch ID to delete",
     ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Read the branch and show what would be deleted; change nothing"
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt"),
 ) -> None:
     """Delete a development branch.
 
@@ -194,12 +211,16 @@ def branch_delete(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "branch_service")
 
-    try:
-        result = service.delete_branch(alias=project, branch_id=branch)
-        formatter.output(
-            result,
-            lambda c, d: c.print(f"[bold green]Success:[/bold green] {d['message']}"),
+    if not dry_run:
+        _confirm_or_abort(
+            formatter,
+            yes,
+            f"Delete branch ID {branch} from project '{project}'? This cannot be undone.",
         )
+
+    try:
+        result = service.delete_branch(alias=project, branch_id=branch, dry_run=dry_run)
+        formatter.output(result, _print_delete_result)
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
         emit_api_error(formatter, exc)
@@ -414,13 +435,9 @@ def branch_metadata_delete(
     report_branch_ref(ctx.obj["config_store"], project, branch)
     service = get_service(ctx, "branch_service")
 
-    if (
-        not yes
-        and not formatter.json_mode
-        and not typer.confirm(f"Delete metadata entry {metadata_id} from project '{project}'?")
-    ):
-        formatter.console.print("Aborted.")
-        raise typer.Exit(code=0)
+    _confirm_or_abort(
+        formatter, yes, f"Delete metadata entry {metadata_id} from project '{project}'?"
+    )
 
     try:
         result = service.delete_branch_metadata(

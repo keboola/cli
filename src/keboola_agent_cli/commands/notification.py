@@ -34,6 +34,7 @@ from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..services.notification_service import KNOWN_EVENTS, SCOPE_PROJECT_WIDE, VALID_CHANNELS
 from ._all_projects import AllProjectsOption, reject_project_with_all_projects
 from ._helpers import (
+    _confirm_or_abort,
     check_cli_permission,
     emit_api_error,
     get_formatter,
@@ -374,11 +375,7 @@ def notification_delete(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "notification_service")
 
-    if not yes and not formatter.json_mode:
-        confirmed = typer.confirm(f"Delete notification subscription {subscription_id}?")
-        if not confirmed:
-            formatter.console.print("[yellow]Aborted.[/yellow]")
-            raise typer.Exit(code=0)
+    _confirm_or_abort(formatter, yes, f"Delete notification subscription {subscription_id}?")
 
     try:
         result = service.delete_subscription(alias=project, subscription_id=subscription_id)
@@ -440,13 +437,9 @@ def notification_replace_recipient(
     # Name the branch the config names are read from before the prompt.
     resolve_branch(ctx.obj["config_store"], project, None, role="source")
 
-    if not yes and not formatter.json_mode:
-        confirmed = typer.confirm(
-            f"Replace the recipient of notification subscription {subscription_id}?"
-        )
-        if not confirmed:
-            formatter.console.print("[yellow]Aborted.[/yellow]")
-            raise typer.Exit(code=0)
+    _confirm_or_abort(
+        formatter, yes, f"Replace the recipient of notification subscription {subscription_id}?"
+    )
 
     try:
         result = service.replace_subscription_recipient(

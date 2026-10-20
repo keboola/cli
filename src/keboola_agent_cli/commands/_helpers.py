@@ -13,6 +13,7 @@ import os
 import secrets
 import sys
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -675,6 +676,120 @@ def validate_branch_requires_project(
             error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2) from None
+
+
+def is_interactive_terminal() -> bool:
+    """True when a person can see a prompt on stderr and answer it on stdin."""
+    return bool(
+        hasattr(sys.stdin, "isatty")
+        and sys.stdin.isatty()
+        and hasattr(sys.stderr, "isatty")
+        and sys.stderr.isatty()
+    )
+
+
+CONFIRMATION_HINT = (
+    "Run the command again with --yes to confirm. "
+    "AI agents: ask the user before you retry with --yes."
+)
+
+
+def _confirm_or_abort(formatter: OutputFormatter, yes: bool, question: str) -> None:
+    """The shared safety prompt (spec S4).
+
+    ``--yes`` and ``--json`` skip it: both mean consent. On a terminal the
+    question goes to stderr, and a declined prompt prints ``Aborted.`` and
+    exits 0 (E6). Without a terminal nobody can answer, and an open stdin
+    pipe must not answer for the user (D6): the command refuses with
+    ``CONFIRMATION_REQUIRED`` and exit 2, and the message names ``--yes``.
+    """
+    if yes or formatter.json_mode:
+        return
+    if not is_interactive_terminal():
+        formatter.error(
+            message=f"{ErrorCode.CONFIRMATION_REQUIRED.value}: {question} "
+            f"There is no terminal to answer it. {CONFIRMATION_HINT}",
+            error_code=ErrorCode.CONFIRMATION_REQUIRED,
+        )
+        raise typer.Exit(code=2)
+    if not typer.confirm(question, err=True):
+        formatter.console.print("Aborted.")
+        raise typer.Exit(code=0)
+
+
+# The ``code`` of a ``warnings[]`` entry for a deprecated form (spec C3, O3).
+DEPRECATED_CODE = "DEPRECATED"
+
+
+@dataclass(frozen=True)
+class Deprecation:
+    """One deprecated command-line form (spec C3).
+
+    ``replacement`` is the form to use instead, or None when the old form
+    has no effect and the caller only drops it. ``remove_after`` is the ISO
+    date after which a minor release may remove the old form. It is None
+    while that date is unknown: the window of a form that 1.0.0 hides
+    starts at the migration time M, which exists only once v1.0.0 is
+    published.
+    """
+
+    message: str
+    hint: str
+    replacement: str | None
+    remove_after: str | None = None
+
+
+# C3: every deprecated form, keyed by its command path and option. A removed
+# form stays here, so that its error can name the replacement.
+DEPRECATIONS: dict[str, Deprecation] = {
+    "stream delete --force": Deprecation(
+        message="stream delete --force is deprecated. Use --yes to skip the confirmation.",
+        hint="--yes",
+        replacement="--yes",
+    ),
+    "semantic-layer import --yes": Deprecation(
+        message="semantic-layer import --yes is deprecated and has no effect. Omit it.",
+        hint="omit --yes (skip on conflict is the default)",
+        replacement=None,
+    ),
+}
+
+
+def warn_deprecated(formatter: OutputFormatter, form: str) -> None:
+    """Add the ``DEPRECATED`` warning of a ``DEPRECATIONS`` entry (one stderr line in human mode)."""
+    entry = DEPRECATIONS[form]
+    when = (
+        f"It can be removed after {entry.remove_after}."
+        if entry.remove_after
+        else "It keeps working until at least 28 days after the 1.0 migration date."
+    )
+    formatter.warning(
+        f"{entry.message} {when}",
+        code=DEPRECATED_CODE,
+        hint=entry.hint,
+        replacement=entry.replacement,
+        remove_after=entry.remove_after,
+    )
+
+
+def deprecated_option(form: str, *param_decls: str) -> Any:
+    """A hidden flag for a deprecated form in ``DEPRECATIONS`` (spec C3).
+
+    The vendored click has no option-level ``deprecated``. The flag keeps
+    working: the command reads its value (for an alias, ``yes = yes or
+    force``), and the callback adds the ``DEPRECATED`` warning when the
+    caller gives the flag.
+    """
+    if form not in DEPRECATIONS:
+        raise KeyError(f"{form!r} has no DEPRECATIONS entry")
+
+    def _warn(ctx: typer.Context, value: bool) -> bool:
+        formatter = (ctx.obj or {}).get("formatter")
+        if value and formatter is not None and not ctx.resilient_parsing:
+            warn_deprecated(formatter, form)
+        return value
+
+    return typer.Option(False, *param_decls, hidden=True, callback=_warn)
 
 
 _CONFIRM_CODE_LENGTH = 4

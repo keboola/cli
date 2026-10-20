@@ -47,6 +47,7 @@ from ..services.auth_service import (
 )
 from ._auth_picker import parse_alias_overrides, run_project_picker
 from ._helpers import (
+    _confirm_or_abort,
     check_cli_operation,
     check_cli_permission,
     emit_api_error,
@@ -566,9 +567,10 @@ def auth_status(
         result = service.status(stack=stack)
     except (ConfigError, KeboolaApiError) as exc:
         _handle_errors(formatter, exc)
-    formatter.output(result, _format_status_result)
-    if result.status in _STATUS_EXIT_3:
-        raise typer.Exit(code=3)
+    exit_code = 3 if result.status in _STATUS_EXIT_3 else 0
+    formatter.output(result, _format_status_result, exit_code=exit_code)
+    if exit_code:
+        raise typer.Exit(code=exit_code)
 
 
 @auth_app.command("logout")
@@ -596,15 +598,11 @@ def auth_logout(
     formatter = get_formatter(ctx)
     if remove_projects:
         check_cli_operation(ctx, "auth.logout --remove-projects")
-    if (
-        not formatter.json_mode
-        and not yes
-        and not typer.confirm(
-            "Log out of the current Keboola session? Local credentials will be cleared."
-        )
-    ):
-        formatter.console.print("Aborted.")
-        raise typer.Exit(code=0)
+    _confirm_or_abort(
+        formatter,
+        yes,
+        "Log out of the current Keboola session? Local credentials will be cleared.",
+    )
     service: AuthService = get_service(ctx, "auth_service")
     try:
         result = service.logout(stack=stack, remove_projects=remove_projects)

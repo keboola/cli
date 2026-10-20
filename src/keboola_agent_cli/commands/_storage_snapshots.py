@@ -23,6 +23,7 @@ from ..config_store import ConfigStore
 from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._helpers import (
+    _confirm_or_abort,
     emit_api_error,
     get_formatter,
     get_service,
@@ -200,17 +201,13 @@ def register(app: typer.Typer) -> None:
         formatter = get_formatter(ctx)
         service = get_service(ctx, "snapshot_service")
 
-        if (
-            not dry_run
-            and not yes
-            and not formatter.json_mode
-            and not typer.confirm(
+        if not dry_run:
+            _confirm_or_abort(
+                formatter,
+                yes,
                 f"Delete {len(snapshot_id)} snapshot(s) in project '{project}'? "
-                "Restoring from them will no longer be possible."
+                "Restoring from them will no longer be possible.",
             )
-        ):
-            formatter.console.print("Aborted.")
-            raise typer.Exit(code=0)
 
         try:
             result = service.delete_snapshots(
@@ -221,8 +218,9 @@ def register(app: typer.Typer) -> None:
         except (ConfigError, KeboolaApiError) as exc:
             _handle_errors(formatter, exc)
 
+        exit_code = 1 if result["failed"] else 0
         if formatter.json_mode:
-            formatter.output(result)
+            formatter.output(result, exit_code=exit_code)
         else:
             if dry_run:
                 for sid in result.get("would_delete", []):
@@ -235,8 +233,8 @@ def register(app: typer.Typer) -> None:
                     f"[bold red]Failed:[/bold red] snapshot {s_err['id']}: {s_err['error']}"
                 )
 
-        if result["failed"]:
-            raise typer.Exit(code=1)
+        if exit_code:
+            raise typer.Exit(code=exit_code)
 
     @app.command("table-from-snapshot", rich_help_panel=_SNAPSHOTS)
     def storage_table_from_snapshot(

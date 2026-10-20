@@ -424,18 +424,14 @@ def permissions_check(
     engine = PermissionEngine(effective_policy)
     allowed = engine.is_allowed(operation)
 
+    exit_code = 0 if allowed else EXIT_PERMISSION_DENIED
     if formatter.json_mode:
-        formatter.output(
-            {
-                "operation": operation,
-                "allowed": allowed,
-            }
-        )
+        formatter.output({"operation": operation, "allowed": allowed}, exit_code=exit_code)
     else:
         if allowed:
             formatter.console.print(f"[green]ALLOWED[/green] {operation}")
         else:
             formatter.console.print(f"[red]DENIED[/red] {operation}")
 
-    if not allowed:
-        raise typer.Exit(code=EXIT_PERMISSION_DENIED) from None
+    if exit_code:
+        raise typer.Exit(code=exit_code) from None

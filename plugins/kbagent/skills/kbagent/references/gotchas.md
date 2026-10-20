@@ -11,6 +11,29 @@ Versioning convention:
   behavior; the inline `(updated vX.Y.Z)` records when the refinement landed.
 -->
 
+## One JSON document for every exit, root flags after the subcommand, `-h`, repeated options
+
+*(since vNEXT)* (CLI-44, #791)
+
+- **The `--json` envelope has `schema_version` and, on success, `exit_code`.** Success: `{"status": "ok", "schema_version": "1.0", "exit_code": N, "targets"?, "warnings"?, "data"}`. Error: `{"status": "error", "schema_version": "1.0", "targets"?, "warnings"?, "error"}`, with no `exit_code`. `exit_code` equals the process exit code. `status: "ok"` with a non-zero `exit_code` is a negative answer (`flow validate`, `auth status`, `permissions check`, `data-app validate-repo`) or a failed item of a command that processes several items.
+- **stdout holds one JSON document for every exit code under `--json`.** A parse error (unknown option, missing option, bad value) and a bare group (`kbagent --json storage`) give `USAGE_ERROR`, exit 2. A crash gives `INTERNAL_ERROR`, exit 1, with the traceback on stderr. Ctrl+C gives `INTERRUPTED` (exit 130). A crash after the success envelope is written leaves that envelope as the only document. A `--stream` command (`agent run --stream`, `agent test --stream`) keeps stdout NDJSON: an interrupt or crash after its first line adds one line `{"event": "error", "data": {"code": "INTERRUPTED"|"INTERNAL_ERROR", "message"}}`. Before, stdout was empty or held help text.
+- **A bare group exits 2 with its help on stderr**, also in human mode (before: exit 0 and no output). `kbagent --json` without a command does the same. A command that needs arguments and gets none (`kbagent search`) prints its help on stderr, not on stdout.
+- **`--json`/`-j`, `--deny-writes` and `--deny-destructive` also work after the subcommand:** `kbagent project list --json`. Before, that was a usage error (`kbagent version --json` exited 2). kbagent does not rewrite the command line, so an option value `--json` (`--description --json`) stays a value. For 0.x installs, keep these flags before the subcommand.
+- **`-h` works as `--help`.**
+- **A single-value option given twice:** a write, destructive or admin command refuses it with `USAGE_ERROR` (exit 2) that names the option, so `storage delete-bucket --project x ... --project test` no longer acts on `test`. Read commands use the last value and add a `REPEATED_OPTION` entry (with `options`) to `warnings[]` (stderr in human mode). A flag without a `--no-` form (`--yes`) given twice is not reported.
+
+## A confirmation without a terminal refuses, and `branch delete` and `workspace delete` ask
+
+*(since vNEXT)* (CLI-46, #791)
+
+- **Human mode without a terminal: a confirmation refuses unless `--yes`.** A command that asks before it changes something (the deletes, `token delete/refresh`, `job terminate`, `merge-request merge`, `auth logout`, `org setup`, `project refresh`, ...) now exits 2 with `CONFIRMATION_REQUIRED` when stdin or stderr is not a terminal and `--yes` is not given. The message names `--yes` and says "AI agents: ask the user before you retry with --yes." Before, the prompt read its answer from stdin, so a harness with an open stdin pipe (or `echo y |`) could answer it. Nothing changes under `--json`: `--json` is consent and there is no prompt. On a terminal the prompt now goes to stderr. A declined prompt still prints `Aborted.` and exits 0.
+- **Exceptions that keep their own prompt.** The non-safety questions of `init` (copy the global projects) and of the `auth login` / `auth register-projects` project picker. The guards of `semantic-layer add metric` (a dataset that is not in the model) and `semantic-layer edit metric` (a rename that changes constraints) are in the service: without a terminal they refuse with `VALIDATION_ERROR` (exit 2) unless `--yes`, and on a terminal they ask also under `--json`.
+- **`semantic-layer edit glossary --new-term`, `semantic-layer remove *` and `semantic-layer reference-data delete` refuse under `--json` too.** For these `--json` is no consent: without a terminal and without `--yes` they refuse with `VALIDATION_ERROR` under `--json` (as before) and with `CONFIRMATION_REQUIRED` in human mode. Both exit 2.
+- **`storage delete-bucket` and `storage file-delete` without a terminal now refuse too.** Before, they deleted without asking when no terminal was attached. Give `--yes` (or `--json`).
+- **`branch delete` and `workspace delete` ask for confirmation and take `--yes` / `-y` and `--dry-run`.** `--dry-run` reads the branch (`GET /v2/storage/dev-branches`) or the workspace (one `GET`) and deletes nothing. A missing branch or workspace is `NOT_FOUND`. Over `kbagent serve`, `DELETE /branches/{project}/{branch_id}` and `DELETE /workspaces/{project}/{workspace_id}` accept `dry_run=true` and never prompt. On older versions these two commands deleted without a prompt and had neither flag: on both, `kbagent --json branch delete ...` works without a prompt.
+- **`stream delete --force` is a hidden deprecated alias of `--yes`, and `semantic-layer import --yes` is hidden and has no effect.** Both still work and add a `warnings[]` entry `{"code": "DEPRECATED", "replacement": "--yes" | null, "remove_after": null, "hint": ...}` (one stderr line in human mode). `remove_after` stays null until the removal date is known: at least 28 days after the 1.0 migration date. Use `stream delete --yes`, and drop `--yes` from `semantic-layer import`.
+- **`workspace load` without a terminal does not ask about a large COPY.** It refuses with `WORKSPACE_LOAD_COPY_TOO_LARGE` and names `--force`, as under `--json`.
+
 ## `--branch 0` is production in `job terminate`, `swap-tables`, `clone-table` and `create-table --source-branch-id`
 
 *(since 0.100.0)* (CLI-21, #791)

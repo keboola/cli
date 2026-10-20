@@ -55,7 +55,9 @@ class TestTable:
     def test_entries_use_known_types_and_error_exit_codes(self) -> None:
         for code, entry in ERROR_CODE_TABLE.items():
             assert entry.error_type in ERROR_TYPES, code
-            assert entry.exit_code in {1, 2, 3, 4, 5, 6, 7}, code
+            # 130 (interrupt) belongs to INTERRUPTED only.
+            allowed = {130} if code == ErrorCode.INTERRUPTED else {1, 2, 3, 4, 5, 6, 7}
+            assert entry.exit_code in allowed, code
 
     @pytest.mark.parametrize("code", list(ErrorCode))
     def test_map_error_to_exit_code_reads_the_table(self, code: ErrorCode) -> None:

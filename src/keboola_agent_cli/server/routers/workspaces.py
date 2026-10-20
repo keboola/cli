@@ -179,10 +179,18 @@ def detail(
 
 @router.delete("/{project}/{workspace_id}", summary="Delete a workspace")
 def delete(
-    project: str, workspace_id: int, registry: ServiceRegistry = Depends(get_registry)
+    project: str,
+    workspace_id: int,
+    dry_run: bool = False,
+    registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
-    """Delete a workspace by id. Mirrors `kbagent workspace delete`."""
-    return registry.workspace.delete_workspace(alias=project, workspace_id=workspace_id)
+    """Delete a workspace by id. Mirrors `kbagent workspace delete`.
+
+    No confirmation over REST: the request is the consent, as with `--yes`.
+    """
+    return registry.workspace.delete_workspace(
+        alias=project, workspace_id=workspace_id, dry_run=dry_run
+    )
 
 
 @router.post("/{project}/{workspace_id}/password", summary="Reset workspace password")
