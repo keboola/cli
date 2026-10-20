@@ -48,11 +48,11 @@ from ._checkbox_select import CheckboxItem, CheckboxUnavailable, _stdio_is_tty, 
 from ._helpers import (
     check_cli_operation,
     check_cli_permission,
-    service_error_exit_code,
     get_formatter,
     get_service,
     handle_service_call,
     parse_json_arg,
+    service_error_exit_code,
 )
 
 rls_app = typer.Typer(
