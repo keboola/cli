@@ -294,6 +294,21 @@ def test_fetch_flow_schema_error_returns_reason():
     fetch = svc.fetch_flow_schema("prod")
     assert fetch.schema is None
     assert fetch.reason == "nope"
+    assert fetch.error is not None and fetch.error.error_code == "NOT_FOUND"
+
+
+def test_fetch_flow_schema_timeout_keeps_the_api_error():
+    """A network failure stays a network error for the caller, never NOT_FOUND."""
+    timeout = KeboolaApiError("timed out", error_code=ErrorCode.TIMEOUT, retryable=True)
+    svc = _make_flow_service(MagicMock(), ai_client=_make_ai_client(raise_exc=timeout))
+    fetch = svc.fetch_flow_schema("prod")
+    assert fetch.schema is None
+    assert fetch.error is timeout
+
+
+def test_fetch_flow_schema_empty_has_no_api_error():
+    svc = _make_flow_service(MagicMock(), ai_client=_make_ai_client(schema={}))
+    assert svc.fetch_flow_schema("prod").error is None
 
 
 # ---------------------------------------------------------------------------

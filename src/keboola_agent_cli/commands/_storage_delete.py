@@ -6,25 +6,18 @@ commands-file ceiling (CONTRIBUTING.md). Mounted onto ``storage_app`` via
 ``storage.file-delete`` and the commands keep their help panels.
 """
 
-import sys
-
 import typer
 
 from ..config_store import ConfigStore
 from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
-from ..output import OutputFormatter
-from ._helpers import emit_api_error, get_formatter, get_service, map_error_to_exit_code
-
-
-def _confirm_or_abort(formatter: OutputFormatter, yes: bool, question: str) -> None:
-    """Ask only in an interactive session: --yes, --json, or stdin or stderr
-    that is not a terminal skip the prompt. A declined prompt exits 0."""
-    if yes or formatter.json_mode or not (sys.stdin.isatty() and sys.stderr.isatty()):
-        return
-    if not typer.confirm(question, err=True):
-        formatter.console.print("Aborted.")
-        raise typer.Exit(code=0)
+from ._helpers import (
+    _confirm_or_abort,
+    emit_api_error,
+    get_formatter,
+    get_service,
+    map_error_to_exit_code,
+)
 
 
 def register(app: typer.Typer) -> None:
@@ -102,8 +95,9 @@ def register(app: typer.Typer) -> None:
             formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
             raise typer.Exit(code=5) from None
 
+        exit_code = 1 if result["failed"] else 0
         if formatter.json_mode:
-            formatter.output(result)
+            formatter.output(result, exit_code=exit_code)
         else:
             if dry_run:
                 for bid in result.get("would_delete", []):
@@ -119,8 +113,8 @@ def register(app: typer.Typer) -> None:
                     f"[bold red]Failed:[/bold red] {f_item['id']}: {f_item['error']}"
                 )
 
-        if result["failed"]:
-            raise typer.Exit(code=1)
+        if exit_code:
+            raise typer.Exit(code=exit_code)
 
     @app.command("file-delete", rich_help_panel="Files")
     def storage_file_delete(
@@ -169,8 +163,9 @@ def register(app: typer.Typer) -> None:
             emit_api_error(formatter, exc)
             raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
+        exit_code = 1 if result["failed"] else 0
         if formatter.json_mode:
-            formatter.output(result)
+            formatter.output(result, exit_code=exit_code)
         else:
             if dry_run:
                 for fid in result.get("would_delete", []):
@@ -183,5 +178,5 @@ def register(app: typer.Typer) -> None:
                     f"[bold red]Failed:[/bold red] file ID {f_err['id']}: {f_err['error']}"
                 )
 
-        if result["failed"]:
-            raise typer.Exit(code=1)
+        if exit_code:
+            raise typer.Exit(code=exit_code)

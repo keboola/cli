@@ -22,7 +22,13 @@ import typer
 
 from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
-from ._helpers import emit_api_error, get_formatter, get_service, map_error_to_exit_code
+from ._helpers import (
+    _confirm_or_abort,
+    emit_api_error,
+    get_formatter,
+    get_service,
+    map_error_to_exit_code,
+)
 
 # Canonical Keboola help-doc reference (mirrors data_app.py).
 _REF_STORAGE_ACCESS = "https://help.keboola.com/data-apps/storage-access/"
@@ -388,17 +394,13 @@ def data_app_secrets_remove(
     branch = resolve_branch(ctx.obj["config_store"], project, branch, ignore_active_branch=True)
     service = get_service(ctx, "data_app_service")
 
-    if (
-        not yes
-        and not formatter.json_mode
-        and not dry_run
-        and not typer.confirm(
+    if not dry_run:
+        _confirm_or_abort(
+            formatter,
+            yes,
             f"Remove {len(key)} secret(s) from data app {app_id} in '{project}'? "
-            "This may break the app at next deploy if it depends on these values."
+            "This may break the app at next deploy if it depends on these values.",
         )
-    ):
-        formatter.console.print("Aborted.")
-        raise typer.Exit(code=0)
 
     try:
         result = service.remove_data_app_secrets(

@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import re
 
+from packaging.version import InvalidVersion, Version
+
 from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
@@ -3670,16 +3672,56 @@ def headline(note: str, max_chars: int = CHANGELOG_HEADLINE_MAX_CHARS) -> str:
     return _truncate_headline(first, max_chars)
 
 
-def format_whats_new(old_version: str, new_version: str) -> str:
-    """Format a brief 'What's new' message for display after auto-update.
+# A ``BREAKING:`` or ``BREAKING (#852):`` note.
+_BREAKING_PREFIX = re.compile(r"^BREAKING(\s*\([^)]*\))?:\s", re.IGNORECASE)
 
-    Shows a one-line headline per entry for the new version only (not
-    intermediate versions); run ``kbagent changelog --full`` for the detail.
+
+def is_breaking(note: str) -> bool:
+    """Whether ``note`` starts with the ``BREAKING:`` prefix."""
+    return _BREAKING_PREFIX.match(note) is not None
+
+
+def crossed_breaking_notes(old_version: str, new_version: str) -> dict[str, list[str]]:
+    """The ``BREAKING:`` notes of every version an update from ``old_version`` to ``new_version`` crossed.
+
+    A version is crossed when it is newer than ``old_version`` and not newer
+    than ``new_version`` (#791 C5). Newest first, like :data:`CHANGELOG`.
+    Versions without a ``BREAKING:`` note are left out. Empty when either
+    version is not PEP 440.
     """
+    try:
+        old, new = Version(old_version), Version(new_version)
+    except InvalidVersion:
+        return {}
+    crossed: dict[str, list[str]] = {}
+    for version, notes in CHANGELOG.items():
+        try:
+            parsed = Version(version)
+        except InvalidVersion:
+            continue
+        breaking = [note for note in notes if is_breaking(note)]
+        if old < parsed <= new and breaking:
+            crossed[version] = breaking
+    return crossed
+
+
+def format_whats_new(old_version: str, new_version: str) -> str:
+    """Format a brief 'What's new' message for display after an update.
+
+    A one-line headline per note of the new version, then the ``BREAKING:``
+    notes of every older version the update crossed (#791 C5), so an update
+    across several versions hides none of them. Run ``kbagent changelog
+    --full`` for the detail.
+    """
+    lines: list[str] = []
     notes = get_version_notes(new_version)
-    if not notes:
-        return ""
-    lines = [f"  What's new in v{new_version}:"]
-    for note in notes:
-        lines.append(f"    - {headline(note)}")
-    return "\n".join(lines) + "\n"
+    if notes:
+        lines.append(f"  What's new in v{new_version}:")
+        lines.extend(f"    - {headline(note)}" for note in notes)
+    crossed = crossed_breaking_notes(old_version, new_version)
+    crossed.pop(new_version, None)
+    if crossed:
+        lines.append(f"  Breaking changes since v{old_version}:")
+        for version, breaking in crossed.items():
+            lines.extend(f"    - v{version}: {headline(note)}" for note in breaking)
+    return "\n".join(lines) + "\n" if lines else ""

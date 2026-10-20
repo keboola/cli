@@ -759,7 +759,7 @@ class TestDataAppPassword:
         assert result.exit_code == 0, result.output
         assert json.loads(result.output)["data"]["app_opened"] is False
 
-    def test_validation_error_maps_to_exit_1(self, tmp_path: Path) -> None:
+    def test_validation_error_maps_to_exit_2(self, tmp_path: Path) -> None:
         mock = MagicMock()
         mock.get_data_app_password.side_effect = KeboolaApiError(
             error_code=ErrorCode.VALIDATION_ERROR,
@@ -770,7 +770,7 @@ class TestDataAppPassword:
             store=self._store(tmp_path),
             data_app_mock=mock,
         )
-        assert result.exit_code == 1
+        assert result.exit_code == 2
         assert json.loads(result.output)["error"]["code"] == "VALIDATION_ERROR"
 
 

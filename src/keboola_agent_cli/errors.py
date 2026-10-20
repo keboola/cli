@@ -1,6 +1,9 @@
 """Error types and helpers for Keboola Agent CLI."""
 
+from dataclasses import dataclass
 from enum import StrEnum, unique
+
+from .constants import EXIT_JOB_TIMEOUT_TERMINATED, EXIT_PERMISSION_DENIED
 
 
 @unique
@@ -39,6 +42,9 @@ class ErrorCode(StrEnum):
     INVALID_ARGUMENT = "INVALID_ARGUMENT"
     INVALID_FORMAT = "INVALID_FORMAT"
     USAGE_ERROR = "USAGE_ERROR"
+    # A safety prompt in human mode without a terminal and without --yes
+    # (spec S4, decision D6). Exit 2; the hint names --yes.
+    CONFIRMATION_REQUIRED = "CONFIRMATION_REQUIRED"
     MISSING_PARAMETER = "MISSING_PARAMETER"
     UNKNOWN_ERROR = "UNKNOWN_ERROR"
     # Per-project envelope fallback in multi-project commands: the operation
@@ -48,6 +54,8 @@ class ErrorCode(StrEnum):
     # `kbagent serve` HTTP envelope (0.40.0+)
     HTTP_ERROR = "HTTP_ERROR"  # Generic HTTP-layer error (Starlette HTTPException passthrough)
     INTERNAL_ERROR = "INTERNAL_ERROR"  # Uncaught exception inside a route handler
+    # Ctrl+C or an aborted prompt under --json (exit 130 for Ctrl+C), #791 O1.
+    INTERRUPTED = "INTERRUPTED"
 
     # Configuration
     CONFIG_ERROR = "CONFIG_ERROR"
@@ -163,6 +171,13 @@ class ErrorCode(StrEnum):
     # knows the 409 came from the merge endpoint.
     MR_NOT_READY_TO_MERGE = "MR_NOT_READY_TO_MERGE"
     MR_MERGE_CONFLICT = "MR_MERGE_CONFLICT"
+
+    # Updates (#791, CLI-51). After an automatic update to a higher major the
+    # first write or destructive command is refused once (exit 6). Reads before
+    # it get the same code as a `warnings[]` entry. UPDATED_ACROSS_BREAKING is only a
+    # `warnings[]` entry: the update crossed versions with `BREAKING:` notes.
+    UPDATED_ACROSS_MAJOR = "UPDATED_ACROSS_MAJOR"
+    UPDATED_ACROSS_BREAKING = "UPDATED_ACROSS_BREAKING"
 
 
 def mask_token(token: str) -> str:
@@ -349,54 +364,174 @@ class SessionAuthUnsupportedError(ConfigError):
         self.error_code = ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK
 
 
-# Sparse by design: only codes whose broad type differs from the ``"api"``
-# default `map_error_code_to_type` returns. Catch-alls (`UNKNOWN_ERROR`,
-# `INTERNAL_ERROR`, `UNEXPECTED_ERROR`, ...) and the API/job/storage
-# families are deliberately absent -- a new ErrorCode member needs an entry here
-# only when "api" would be wrong for it.
-_ERROR_CODE_TO_TYPE: dict[str, str] = {
-    ErrorCode.INVALID_TOKEN: "authentication",
-    ErrorCode.AUTH_REJECTED: "authentication",
-    ErrorCode.MISSING_MASTER_TOKEN: "authentication",
-    ErrorCode.TIMEOUT: "network",
-    ErrorCode.CONNECTION_ERROR: "network",
-    ErrorCode.RETRY_EXHAUSTED: "network",
-    ErrorCode.NOT_FOUND: "not_found",
-    ErrorCode.CONFIG_ERROR: "configuration",
-    ErrorCode.VALIDATION_ERROR: "validation",
-    ErrorCode.SYNC_CONFLICT: "conflict",
-    ErrorCode.SYNC_LEGACY_BOUNDARY: "conflict",
-    ErrorCode.PERMISSION_DENIED: "authorization",
-    ErrorCode.DP_LOGIN_FAILED: "authentication",
-    ErrorCode.DP_MFA_REQUIRED: "authentication",
-    ErrorCode.DP_APP_NOT_FOUND: "not_found",
-    ErrorCode.DP_PUBLISH_REQUIREMENTS_MISSING: "validation",
-    ErrorCode.DP_ICON_UPLOAD_FAILED: "api",
-    ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK: "configuration",
-    ErrorCode.AUTH_FLOW_TIMEOUT: "authentication",
-    ErrorCode.AUTH_FLOW_DENIED: "authentication",
-    ErrorCode.AUTH_FLOW_EXPIRED: "authentication",
-    ErrorCode.AUTH_BROWSER_UNAVAILABLE: "authentication",
-    ErrorCode.AUTH_STATE_MISMATCH: "authentication",
-    ErrorCode.SESSION_EXPIRED: "authentication",
-    ErrorCode.SESSION_NOT_FOUND: "authentication",
-    ErrorCode.AUTH_MFA_INVALID: "authentication",
-    # Not reachable from today's only emitter: `BillingService` puts
-    # PAYG_NOT_AVAILABLE in its per-project `errors` list, which renders via
-    # `formatter.warning()` and never passes through `formatter.error()`.
-    # Classified anyway so the first single-project billing command to raise
-    # it inherits the right category instead of silently taking the "api"
-    # default -- a missing project feature is a configuration problem.
-    ErrorCode.PAYG_NOT_AVAILABLE: "configuration",
-    ErrorCode.FEATURE_NOT_ENABLED: "configuration",
+@dataclass(frozen=True)
+class ErrorClass:
+    """The broad ``error_type`` and the process exit code of one :class:`ErrorCode`."""
+
+    error_type: str
+    exit_code: int
+
+
+# The values `ErrorClass.error_type` may take. `error.error_type` in the
+# `--json` envelope is one of them.
+ERROR_TYPES: frozenset[str] = frozenset(
+    {
+        "api",
+        "authentication",
+        "authorization",
+        "configuration",
+        "conflict",
+        "network",
+        "not_found",
+        "validation",
+    }
+)
+
+# Spec rule E1 (docs/cli-interface-spec.md#E1): every ErrorCode has one entry,
+# and `map_error_to_exit_code` reads the exit code from here. The exit codes
+# follow the table in docs/cli-interface-spec.md#exit-codes: 1 general, 2 usage
+# or validation, 3 authentication, 4 network or a local wait that timed out, 5
+# configuration, 6 permission policy, 7 job terminated after its timeout.
+# docs/error-codes.md lists the same pairs, and `scripts/check_error_codes.py`
+# fails when a code has no entry or the doc disagrees with this table.
+# An entry's exit keeps the code's existing behavior, and its type is the
+# category. So a few entries do not follow the type-to-exit pattern
+# (WORKSPACE_LOAD_COPY_TOO_LARGE validation/1, INVALID_FORMAT api/2,
+# FILE_NOT_FOUND not_found/2).
+ERROR_CODE_TABLE: dict[str, ErrorClass] = {
+    # Auth / access
+    ErrorCode.INVALID_TOKEN: ErrorClass("authentication", 3),
+    ErrorCode.ACCESS_DENIED: ErrorClass("api", 1),
+    ErrorCode.PERMISSION_DENIED: ErrorClass("authorization", EXIT_PERMISSION_DENIED),
+    ErrorCode.MISSING_MASTER_TOKEN: ErrorClass("authentication", 3),
+    ErrorCode.UNAUTHORIZED: ErrorClass("api", 1),
+    ErrorCode.AUTH_REJECTED: ErrorClass("authentication", 3),
+    # Network / transport
+    ErrorCode.TIMEOUT: ErrorClass("network", 4),
+    ErrorCode.CONNECTION_ERROR: ErrorClass("network", 4),
+    ErrorCode.RETRY_EXHAUSTED: ErrorClass("network", 4),
+    # API / generic
+    ErrorCode.API_ERROR: ErrorClass("api", 1),
+    ErrorCode.NOT_FOUND: ErrorClass("not_found", 1),
+    ErrorCode.ALREADY_EXISTS: ErrorClass("api", 1),
+    ErrorCode.VALIDATION_ERROR: ErrorClass("validation", 2),
+    ErrorCode.INVALID_ARGUMENT: ErrorClass("validation", 2),
+    ErrorCode.INVALID_FORMAT: ErrorClass("api", 2),
+    ErrorCode.USAGE_ERROR: ErrorClass("validation", 2),
+    # A safety prompt nobody can answer: refused by us before any API call (S4).
+    ErrorCode.CONFIRMATION_REQUIRED: ErrorClass("validation", 2),
+    ErrorCode.MISSING_PARAMETER: ErrorClass("validation", 2),
+    ErrorCode.UNKNOWN_ERROR: ErrorClass("api", 1),
+    ErrorCode.UNEXPECTED_ERROR: ErrorClass("api", 1),
+    ErrorCode.HTTP_ERROR: ErrorClass("api", 1),
+    ErrorCode.INTERNAL_ERROR: ErrorClass("api", 1),
+    # Configuration
+    ErrorCode.CONFIG_ERROR: ErrorClass("configuration", 5),
+    ErrorCode.NOT_INITIALIZED: ErrorClass("api", 1),
+    ErrorCode.INIT_ERROR: ErrorClass("api", 1),
+    ErrorCode.FEATURE_NOT_ENABLED: ErrorClass("configuration", 5),
+    # Jobs
+    ErrorCode.QUEUE_JOB_FAILED: ErrorClass("api", 1),
+    # The local wait gave up and the remote job may still be running.
+    ErrorCode.QUEUE_JOB_TIMEOUT: ErrorClass("api", 4),
+    ErrorCode.STORAGE_JOB_FAILED: ErrorClass("api", 1),
+    # The Storage API has no cancel, so the job is still running server-side.
+    ErrorCode.STORAGE_JOB_TIMEOUT: ErrorClass("api", 4),
+    ErrorCode.QUERY_JOB_FAILED: ErrorClass("api", 1),
+    ErrorCode.QUERY_JOB_TIMEOUT: ErrorClass("api", 1),
+    # Variables
+    ErrorCode.NO_VARIABLE_ROWS: ErrorClass("api", 1),
+    ErrorCode.MALFORMED_VARIABLES_ROW: ErrorClass("api", 1),
+    # Storage
+    ErrorCode.UPLOAD_FAILED: ErrorClass("api", 1),
+    ErrorCode.EXPORT_EMPTY_MANIFEST: ErrorClass("api", 1),
+    ErrorCode.EXPORT_NO_FILE: ErrorClass("api", 1),
+    ErrorCode.EXPORT_NO_URL: ErrorClass("api", 1),
+    ErrorCode.NOT_SLICED: ErrorClass("api", 1),
+    ErrorCode.FILE_NO_URL: ErrorClass("api", 1),
+    # I/O
+    ErrorCode.FILE_NOT_FOUND: ErrorClass("not_found", 2),
+    ErrorCode.DIR_NOT_FOUND: ErrorClass("api", 1),
+    ErrorCode.READ_ERROR: ErrorClass("api", 1),
+    ErrorCode.WRITE_ERROR: ErrorClass("api", 1),
+    ErrorCode.INPUT_ERROR: ErrorClass("api", 2),
+    # Lineage
+    ErrorCode.NODE_NOT_FOUND: ErrorClass("api", 1),
+    # Sharing
+    ErrorCode.INVALID_SHARING_TYPE: ErrorClass("api", 1),
+    ErrorCode.NOT_LINKED_BUCKET: ErrorClass("api", 1),
+    # KAI (AI Service)
+    ErrorCode.KAI_ERROR: ErrorClass("api", 1),
+    ErrorCode.KAI_NOT_ENABLED: ErrorClass("api", 1),
+    # Workspace / Query
+    ErrorCode.MISSING_QUERY: ErrorClass("api", 2),
+    ErrorCode.WORKSPACE_NOT_FOUND: ErrorClass("api", 1),
+    # Updates (CLI-51). A refusal by kbagent itself, with the same exit code 6 as
+    # a policy denial.
+    ErrorCode.UPDATED_ACROSS_MAJOR: ErrorClass("authorization", EXIT_PERMISSION_DENIED),
+    # Only a `warnings[]` entry, never an error exit.
+    ErrorCode.UPDATED_ACROSS_BREAKING: ErrorClass("api", 1),
     # A refused-by-us safety guard, not an upstream fault: nothing was sent to
     # the API, and the caller fixes it by re-issuing the request with --force.
-    ErrorCode.WORKSPACE_LOAD_COPY_TOO_LARGE: "validation",
-    ErrorCode.MR_NOT_READY_TO_MERGE: "conflict",
-    ErrorCode.MR_MERGE_CONFLICT: "conflict",
+    ErrorCode.WORKSPACE_LOAD_COPY_TOO_LARGE: ErrorClass("validation", 1),
+    # Sync
+    ErrorCode.PARENT_CONFIG_NOT_TRACKED: ErrorClass("api", 1),
+    ErrorCode.VARIABLE_LINK_UNRESOLVED: ErrorClass("api", 1),
+    ErrorCode.LINK_UNRESOLVED: ErrorClass("api", 1),
+    ErrorCode.SYNC_CONFLICT: ErrorClass("conflict", 1),
+    ErrorCode.SYNC_LEGACY_BOUNDARY: ErrorClass("conflict", 1),
+    # Encryption
+    ErrorCode.ENCRYPTION_FAILED: ErrorClass("api", 1),
+    # Job / queue: local --timeout elapsed and the remote job was cancelled.
+    ErrorCode.JOB_TIMEOUT_TERMINATED: ErrorClass("api", EXIT_JOB_TIMEOUT_TERMINATED),
+    # Flow
+    ErrorCode.SCHEDULE_DELETE_FAILED: ErrorClass("api", 1),
+    ErrorCode.INVALID_FLOW_DEFINITION: ErrorClass("api", 1),
+    # Data apps
+    ErrorCode.DATA_APP_BUILD_FAILED: ErrorClass("api", 1),
+    ErrorCode.DATA_APP_DEPLOY_TIMEOUT: ErrorClass("api", 1),
+    ErrorCode.DATA_APP_INVALID_GIT: ErrorClass("api", 1),
+    ErrorCode.DATA_APP_INVALID_SECRET: ErrorClass("api", 2),
+    ErrorCode.DATA_APP_INVALID_REPO: ErrorClass("api", 1),
+    ErrorCode.DATA_APP_REPO_VALIDATION_BLOCKING: ErrorClass("api", 1),
+    # Developer Portal
+    ErrorCode.DP_LOGIN_FAILED: ErrorClass("authentication", 1),
+    ErrorCode.DP_MFA_REQUIRED: ErrorClass("authentication", 1),
+    ErrorCode.DP_APP_NOT_FOUND: ErrorClass("not_found", 1),
+    ErrorCode.DP_PUBLISH_REQUIREMENTS_MISSING: ErrorClass("validation", 1),
+    ErrorCode.DP_ICON_UPLOAD_FAILED: ErrorClass("api", 1),
+    # Programmatic auth / browser login. `kbagent auth login` is the remedy for
+    # the session codes that exit 3.
+    ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK: ErrorClass("configuration", 5),
+    ErrorCode.AUTH_FLOW_TIMEOUT: ErrorClass("authentication", 4),
+    ErrorCode.AUTH_FLOW_DENIED: ErrorClass("authentication", 3),
+    ErrorCode.AUTH_FLOW_EXPIRED: ErrorClass("authentication", 1),
+    ErrorCode.AUTH_BROWSER_UNAVAILABLE: ErrorClass("authentication", 1),
+    ErrorCode.AUTH_STATE_MISMATCH: ErrorClass("authentication", 1),
+    ErrorCode.SESSION_EXPIRED: ErrorClass("authentication", 3),
+    ErrorCode.SESSION_NOT_FOUND: ErrorClass("authentication", 3),
+    ErrorCode.AUTH_MFA_INVALID: ErrorClass("authentication", 3),
+    # Billing. Today's only emitter puts PAYG_NOT_AVAILABLE in a per-project
+    # `errors` list, which never passes through `formatter.error()`.
+    ErrorCode.PAYG_NOT_AVAILABLE: ErrorClass("configuration", 1),
+    # Merge requests
+    ErrorCode.MR_NOT_READY_TO_MERGE: ErrorClass("conflict", 1),
+    ErrorCode.MR_MERGE_CONFLICT: ErrorClass("conflict", 1),
+    # Interrupted under --json: Ctrl+C exits 130 (an aborted prompt keeps Typer's exit 1).
+    ErrorCode.INTERRUPTED: ErrorClass("api", 130),
 }
+
+
+def classify_error_code(error_code: str) -> ErrorClass:
+    """The table entry of ``error_code``. A string that is no ErrorCode gets UNKNOWN_ERROR's."""
+    return ERROR_CODE_TABLE.get(error_code, ERROR_CODE_TABLE[ErrorCode.UNKNOWN_ERROR])
 
 
 def map_error_code_to_type(error_code: str) -> str:
     """Map a machine-readable error code to a broad error type category."""
-    return _ERROR_CODE_TO_TYPE.get(error_code, "api")
+    return classify_error_code(error_code).error_type
+
+
+def exit_code_for(error_code: str) -> int:
+    """The process exit code for ``error_code`` (spec rule E1)."""
+    return classify_error_code(error_code).exit_code

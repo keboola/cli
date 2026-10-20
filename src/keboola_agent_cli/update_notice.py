@@ -6,7 +6,9 @@ The notice starts when the client first sees a published, stable release
 
 The startup auto-update runs before the ``OutputFormatter`` exists, so the
 notice is kept here, at module level, and the envelope builders in
-:mod:`keboola_agent_cli.output` read it from :func:`pending_warnings`. This
+:mod:`keboola_agent_cli.output` read it from :func:`pending_warnings`. The
+entries of the first run after an update (:mod:`.update_crossing`) are kept
+here too, with :func:`add_entry`. This
 module imports nothing from the rest of the package except constants, so the
 updater and the output layer can both import it.
 """
@@ -41,6 +43,11 @@ class DeprecationNotice:
 
 _current: DeprecationNotice | None = None
 _printed = False
+# Other ``warnings[]`` entries of the startup check, one per code: the first
+# run after an update (``UPDATED_ACROSS_MAJOR``, ``UPDATED_ACROSS_BREAKING``).
+_entries: dict[str, dict[str, Any]] = {}
+# A human warning line held back until the command is known not to be refused.
+_held_text: str | None = None
 
 
 def _iso(ts: float | None) -> str | None:
@@ -138,9 +145,33 @@ def current() -> DeprecationNotice | None:
     return _current
 
 
+def add_entry(entry: dict[str, Any]) -> None:
+    """Keep a ``warnings[]`` entry for the envelope. It replaces one with the same code."""
+    _entries[entry["code"]] = entry
+
+
+def take_entry(code: str) -> dict[str, Any] | None:
+    """Remove the entry with ``code`` and return it, or None."""
+    return _entries.pop(code, None)
+
+
+def hold_text(text: str | None) -> None:
+    """Keep a human warning line to print later (see :func:`take_held_text`)."""
+    global _held_text
+    _held_text = text
+
+
+def take_held_text() -> str | None:
+    """The held line, once per process. None when there is none."""
+    global _held_text
+    text, _held_text = _held_text, None
+    return text
+
+
 def pending_warnings() -> list[dict[str, Any]]:
     """The ``warnings[]`` entries the startup check left for the ``--json`` envelope."""
-    return [dict(_current.entry)] if _current is not None else []
+    notice = [dict(_current.entry)] if _current is not None else []
+    return [*notice, *(dict(entry) for entry in _entries.values())]
 
 
 def print_once() -> bool:
@@ -175,7 +206,9 @@ def take_unprinted_text() -> str | None:
 
 
 def reset() -> None:
-    """Forget the notice and whether it was printed (for tests)."""
-    global _current, _printed
+    """Forget the notice, the other entries and whether it was printed (for tests)."""
+    global _current, _printed, _held_text
     _current = None
     _printed = False
+    _held_text = None
+    _entries.clear()

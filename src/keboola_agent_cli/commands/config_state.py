@@ -24,7 +24,11 @@ from rich.syntax import Syntax
 from ..config_store import ConfigStore
 from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
-from ._helpers import get_formatter, get_service
+from ._helpers import (
+    _confirm_or_abort,
+    get_formatter,
+    get_service,
+)
 from .config import _handle_config_service_error, _parse_json_input, config_app
 
 
@@ -122,11 +126,9 @@ def config_state_set(
 
     effective_branch = resolve_branch(config_store, project, branch)
 
-    if not dry_run and not yes and not formatter.json_mode:
+    if not dry_run:
         target = f"{component_id}/{config_id}" + (f" row [{row_id}]" if row_id else "")
-        if not typer.confirm(f"Overwrite state for {target}?"):
-            formatter.console.print("Aborted.")
-            raise typer.Exit(code=0)
+        _confirm_or_abort(formatter, yes, f"Overwrite state for {target}?")
 
     service = get_service(ctx, "config_service")
 

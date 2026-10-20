@@ -360,6 +360,7 @@ class TestScopeSet:
         )
         assert result.exit_code == 2
 
+    @pytest.mark.usefixtures("interactive_terminal")
     def test_human_mode_declining_the_prompt_aborts_without_calling(
         self, store: ConfigStore
     ) -> None:

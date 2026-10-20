@@ -16,7 +16,7 @@ from ..constants import DEFAULT_TOKEN_DESCRIPTION
 from ..errors import KeboolaApiError, mask_token
 from ..manage_client import ManageClient
 from ..models import ProjectConfig
-from .base import default_client_factory, make_client_factory
+from .base import default_client_factory, item_failure, make_client_factory
 
 logger = logging.getLogger(__name__)
 
@@ -235,21 +235,23 @@ class OrgService:
                 )
             except KeboolaApiError as exc:
                 failed.append(
-                    {
-                        "project_id": project_id,
-                        "project_name": project_name,
-                        "alias": alias,
-                        "error": str(exc),
-                    }
+                    item_failure(
+                        exc,
+                        project_id=project_id,
+                        project_name=project_name,
+                        alias=alias,
+                        error=str(exc),
+                    )
                 )
             except Exception as exc:
                 failed.append(
-                    {
-                        "project_id": project_id,
-                        "project_name": project_name,
-                        "alias": alias,
-                        "error": str(exc),
-                    }
+                    item_failure(
+                        exc,
+                        project_id=project_id,
+                        project_name=project_name,
+                        alias=alias,
+                        error=str(exc),
+                    )
                 )
 
         return {
@@ -396,11 +398,12 @@ class OrgService:
                 token_valid = False
             except Exception as exc:
                 failed.append(
-                    {
-                        "alias": alias,
-                        "project_name": project.project_name,
-                        "error": f"Error checking token: {exc}",
-                    }
+                    item_failure(
+                        exc,
+                        alias=alias,
+                        project_name=project.project_name,
+                        error=f"Error checking token: {exc}",
+                    )
                 )
                 continue
 
@@ -448,11 +451,9 @@ class OrgService:
                 )
             except Exception as exc:
                 failed.append(
-                    {
-                        "alias": alias,
-                        "project_name": project.project_name,
-                        "error": str(exc),
-                    }
+                    item_failure(
+                        exc, alias=alias, project_name=project.project_name, error=str(exc)
+                    )
                 )
 
         total_count = len(projects_to_check)
@@ -553,21 +554,23 @@ class OrgService:
                 projects.append(project)
             except KeboolaApiError as exc:
                 failed.append(
-                    {
-                        "project_id": pid,
-                        "project_name": f"project-{pid}",
-                        "alias": f"project-{pid}",
-                        "error": str(exc),
-                    }
+                    item_failure(
+                        exc,
+                        project_id=pid,
+                        project_name=f"project-{pid}",
+                        alias=f"project-{pid}",
+                        error=str(exc),
+                    )
                 )
             except Exception as exc:
                 failed.append(
-                    {
-                        "project_id": pid,
-                        "project_name": f"project-{pid}",
-                        "alias": f"project-{pid}",
-                        "error": str(exc),
-                    }
+                    item_failure(
+                        exc,
+                        project_id=pid,
+                        project_name=f"project-{pid}",
+                        alias=f"project-{pid}",
+                        error=str(exc),
+                    )
                 )
         return projects, failed
 

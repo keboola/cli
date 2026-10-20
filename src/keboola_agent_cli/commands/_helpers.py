@@ -12,6 +12,7 @@ import json
 import os
 import secrets
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -22,11 +23,11 @@ from ..config_store import ConfigStore
 from ..constants import (
     ENV_KBC_MANAGE_API_TOKEN,
     ENV_KBC_TOKEN,
-    EXIT_JOB_TIMEOUT_TERMINATED,
     EXIT_PERMISSION_DENIED,
 )
-from ..errors import ErrorCode, KeboolaApiError, PermissionDeniedError
+from ..errors import ErrorCode, KeboolaApiError, PermissionDeniedError, exit_code_for
 from ..output import OutputFormatter
+from ..update_crossing import print_held_warning, refusal_for
 
 
 def resolve_manage_token(*, allow_env: bool = False) -> str:
@@ -402,53 +403,12 @@ def get_service(ctx: typer.Context, key: str) -> Any:
 def map_error_to_exit_code(exc: KeboolaApiError) -> int:
     """Map a KeboolaApiError to a CLI exit code.
 
-    - INVALID_TOKEN -> 3 (authentication error)
-    - AUTH_REJECTED -> 3 (an upstream 401 that did not blame the credential;
-      still an authentication-class failure, so the exit code is unchanged
-      from what the same response produced before issue #711 -- only the
-      code and the message text got more honest)
-    - TIMEOUT / CONNECTION_ERROR / RETRY_EXHAUSTED / QUEUE_JOB_TIMEOUT /
-      STORAGE_JOB_TIMEOUT -> 4
-      (network/retryable; QUEUE_JOB_TIMEOUT means local gave up AND the
-      remote-kill attempt also failed, so the job may still be running.
-      STORAGE_JOB_TIMEOUT is the same shape -- the Storage API has no
-      cancel, so the job is definitely still running server-side -- and it
-      used to fall through to the generic exit 1, which scripts could not
-      tell apart from a real failure.)
-    - JOB_TIMEOUT_TERMINATED -> EXIT_JOB_TIMEOUT_TERMINATED (7)
-      (local --timeout elapsed and we successfully cancelled the remote
-      job; scripts can distinguish "we killed it" from "it failed on its own")
-    - SESSION_EXPIRED / SESSION_NOT_FOUND / AUTH_FLOW_DENIED -> 3
-      (programmatic-auth session problems are authentication errors too --
-      `kbagent auth login` is the remedy in every case)
-    - AUTH_FLOW_TIMEOUT -> 4 (the login flow itself timed out; retryable)
-    - Everything else -> 1 (general error)
+    The exit code comes from ``ERROR_CODE_TABLE`` in ``errors.py`` (spec rule
+    E1), and ``docs/error-codes.md`` lists it per code. A code that is not an
+    ``ErrorCode`` member exits 1, like ``UNKNOWN_ERROR``.
     """
     telemetry.note_command_error(str(exc))
-
-    if exc.error_code in ("INVALID_TOKEN", "MISSING_MASTER_TOKEN"):
-        return 3
-    if exc.error_code == ErrorCode.AUTH_REJECTED:
-        return 3
-    if exc.error_code in (
-        ErrorCode.SESSION_EXPIRED,
-        ErrorCode.SESSION_NOT_FOUND,
-        ErrorCode.AUTH_FLOW_DENIED,
-    ):
-        return 3
-    if exc.error_code in (
-        "TIMEOUT",
-        "CONNECTION_ERROR",
-        "RETRY_EXHAUSTED",
-        "QUEUE_JOB_TIMEOUT",
-        ErrorCode.STORAGE_JOB_TIMEOUT,
-    ):
-        return 4
-    if exc.error_code == ErrorCode.AUTH_FLOW_TIMEOUT:
-        return 4
-    if exc.error_code == "JOB_TIMEOUT_TERMINATED":
-        return EXIT_JOB_TIMEOUT_TERMINATED
-    return 1
+    return exit_code_for(exc.error_code)
 
 
 def emit_api_error(formatter: OutputFormatter, exc: KeboolaApiError, *, project: str = "") -> None:
@@ -532,15 +492,40 @@ def check_cli_permission(ctx: typer.Context, group_name: str) -> None:
     if _is_help_request(ctx):
         return
 
-    engine = ctx.obj.get("permission_engine")
-    if engine is None or not engine.active:
-        return
-
     subcommand = ctx.invoked_subcommand
     if subcommand is None:
         return
 
-    check_cli_operation(ctx, f"{group_name}.{subcommand}")
+    operation = f"{group_name}.{subcommand}"
+    # The policy first: a write that it denies must not use up the one
+    # refusal after a major update.
+    engine = ctx.obj.get("permission_engine")
+    if engine is not None and engine.active:
+        check_cli_operation(ctx, operation)
+
+    refuse_first_write_after_major_update(ctx, operation)
+
+
+def refuse_first_write_after_major_update(ctx: typer.Context, operation: str) -> None:
+    """Refuse the first write or destructive command after a major update (#791 row 28).
+
+    The startup check records an update to a higher major that the user did
+    not start with ``kbagent update --major`` in a state file
+    (:mod:`..update_crossing`). The first write or destructive command that
+    claims the file exits 6 with ``UPDATED_ACROSS_MAJOR``. Every later
+    command runs.
+    """
+    refusal = refusal_for(operation)
+    if refusal is None:
+        print_held_warning()
+        return
+    get_formatter(ctx).error(
+        message=refusal["message"],
+        error_code=ErrorCode.UPDATED_ACROSS_MAJOR,
+        retryable=True,
+        details=refusal["details"],
+    )
+    raise typer.Exit(code=EXIT_PERMISSION_DENIED)
 
 
 def check_cli_operation(ctx: typer.Context, operation: str) -> None:
@@ -616,6 +601,120 @@ def validate_branch_requires_project(
             error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2) from None
+
+
+def is_interactive_terminal() -> bool:
+    """True when a person can see a prompt on stderr and answer it on stdin."""
+    return bool(
+        hasattr(sys.stdin, "isatty")
+        and sys.stdin.isatty()
+        and hasattr(sys.stderr, "isatty")
+        and sys.stderr.isatty()
+    )
+
+
+CONFIRMATION_HINT = (
+    "Run the command again with --yes to confirm. "
+    "AI agents: ask the user before you retry with --yes."
+)
+
+
+def _confirm_or_abort(formatter: OutputFormatter, yes: bool, question: str) -> None:
+    """The shared safety prompt (spec S4).
+
+    ``--yes`` and ``--json`` skip it: both mean consent. On a terminal the
+    question goes to stderr, and a declined prompt prints ``Aborted.`` and
+    exits 0 (E6). Without a terminal nobody can answer, and an open stdin
+    pipe must not answer for the user (D6): the command refuses with
+    ``CONFIRMATION_REQUIRED`` and exit 2, and the message names ``--yes``.
+    """
+    if yes or formatter.json_mode:
+        return
+    if not is_interactive_terminal():
+        formatter.error(
+            message=f"{ErrorCode.CONFIRMATION_REQUIRED.value}: {question} "
+            f"There is no terminal to answer it. {CONFIRMATION_HINT}",
+            error_code=ErrorCode.CONFIRMATION_REQUIRED,
+        )
+        raise typer.Exit(code=2)
+    if not typer.confirm(question, err=True):
+        formatter.console.print("Aborted.")
+        raise typer.Exit(code=0)
+
+
+# The ``code`` of a ``warnings[]`` entry for a deprecated form (spec C3, O3).
+DEPRECATED_CODE = "DEPRECATED"
+
+
+@dataclass(frozen=True)
+class Deprecation:
+    """One deprecated command-line form (spec C3).
+
+    ``replacement`` is the form to use instead, or None when the old form
+    has no effect and the caller only drops it. ``remove_after`` is the ISO
+    date after which a minor release may remove the old form. It is None
+    while that date is unknown: the window of a form that 1.0.0 hides
+    starts at the migration time M, which exists only once v1.0.0 is
+    published.
+    """
+
+    message: str
+    hint: str
+    replacement: str | None
+    remove_after: str | None = None
+
+
+# C3: every deprecated form, keyed by its command path and option. A removed
+# form stays here, so that its error can name the replacement.
+DEPRECATIONS: dict[str, Deprecation] = {
+    "stream delete --force": Deprecation(
+        message="stream delete --force is deprecated. Use --yes to skip the confirmation.",
+        hint="--yes",
+        replacement="--yes",
+    ),
+    "semantic-layer import --yes": Deprecation(
+        message="semantic-layer import --yes is deprecated and has no effect. Omit it.",
+        hint="omit --yes (skip on conflict is the default)",
+        replacement=None,
+    ),
+}
+
+
+def warn_deprecated(formatter: OutputFormatter, form: str) -> None:
+    """Add the ``DEPRECATED`` warning of a ``DEPRECATIONS`` entry (one stderr line in human mode)."""
+    entry = DEPRECATIONS[form]
+    when = (
+        f"It can be removed after {entry.remove_after}."
+        if entry.remove_after
+        else "It keeps working until at least 28 days after the 1.0 migration date."
+    )
+    formatter.warning(
+        f"{entry.message} {when}",
+        code=DEPRECATED_CODE,
+        hint=entry.hint,
+        replacement=entry.replacement,
+        remove_after=entry.remove_after,
+    )
+
+
+def deprecated_option(form: str, *param_decls: str) -> Any:
+    """A hidden flag for a deprecated form in ``DEPRECATIONS`` (spec C3).
+
+    The vendored click has no option-level ``deprecated``. The flag keeps
+    working: the command reads its value (for an alias, ``yes = yes or
+    force``), and the callback adds the ``DEPRECATED`` warning when the
+    caller gives the flag.
+    """
+    if form not in DEPRECATIONS:
+        raise KeyError(f"{form!r} has no DEPRECATIONS entry")
+
+    def _warn(ctx: typer.Context, value: bool) -> bool:
+        formatter = (ctx.obj or {}).get("formatter")
+        if value and formatter is not None and not ctx.resilient_parsing:
+            warn_deprecated(formatter, form)
+        return value
+
+    return typer.Option(False, *param_decls, hidden=True, callback=_warn)
 
 
 _CONFIRM_CODE_LENGTH = 4

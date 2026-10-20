@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import importlib.util
 import inspect
 import json
 import re
@@ -60,6 +61,7 @@ import typer.main
 
 from keboola_agent_cli.cli import app
 from keboola_agent_cli.permissions import OPERATION_REGISTRY
+from keboola_agent_cli.root_command import is_root_flag_copy
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PKG_ROOT = REPO_ROOT / "src" / "keboola_agent_cli"
@@ -100,10 +102,22 @@ SHORT_FLAGS: dict[str, str] = {
 # either meaning; each existing use is an `exceptions` entry in the baseline.
 RESERVED_SHORT_FLAGS: frozenset[str] = frozenset({"-c", "-n", "-r"})
 
-# S3: what `--force` overrides, per command. Empty until the registry is
-# reviewed; until then every `--force` is in the baseline of the blocking rule
-# safety.force-meaning-registered, and a new `--force` fails.
-FORCE_MEANINGS: dict[str, str] = {}
+# S3: what `--force` overrides, per command (the guards it names in its help).
+# A new `--force` fails the blocking rule safety.force-meaning-registered until
+# it has an entry here.
+FORCE_MEANINGS: dict[str, str] = {
+    "project refresh": "legacy meaning: refresh tokens that are still valid too",
+    "storage delete-bucket": "the guard for a non-empty bucket (deletes its tables), "
+    "never a shared bucket",
+    "storage delete-column": "the guard for a column that table aliases reference",
+    "storage delete-table": "the guard for a table with aliases in other projects "
+    "(deletes the aliases)",
+    "stream delete": "none: hidden deprecated alias of --yes until its DEPRECATIONS "
+    "remove_after date (C3)",
+    "sync pull": "legacy meaning: pull again, keep local changes, abort on a conflict",
+    "sync push": "the guard that holds back remote deletions of configs and rows",
+    "workspace load": "the size guard that asks before a COPY larger than 1 GB",
+}
 
 # N4: hidden alias path -> canonical path. No hidden leaf exists yet.
 COMMAND_ALIASES: dict[str, str] = {}
@@ -212,7 +226,8 @@ def _walk(tree: Tree, node: Any, prefix: tuple[str, ...]) -> None:
                 Leaf(
                     path=path,
                     category=OPERATION_REGISTRY.get(".".join(path)),
-                    params=tuple(sub.params),
+                    # The hidden copies of the root flags (O7) are not options of the command.
+                    params=tuple(p for p in sub.params if not is_root_flag_copy(p)),
                     callback=_unwrap(sub.callback),
                     help=(sub.help or "").strip(),
                     hidden=bool(getattr(sub, "hidden", False)),
@@ -325,6 +340,14 @@ def _calls(module: str, tree: ast.AST) -> Iterator[CallSite]:
     yield from visit(tree, (), ())
 
 
+def modules(root: Path) -> list[tuple[str, ast.Module]]:
+    """Every module under ``root``: its path relative to the package and its AST."""
+    return [
+        (path.relative_to(PKG_ROOT).as_posix(), ast.parse(path.read_text(encoding="utf-8")))
+        for path in sorted(root.rglob("*.py"))
+    ]
+
+
 def call_sites(root: Path) -> list[CallSite]:
     sites: list[CallSite] = []
     for path in sorted(root.rglob("*.py")):
@@ -367,6 +390,10 @@ class Context:
     @property
     def command_calls(self) -> list[CallSite]:
         return self.cached("command_calls", lambda: call_sites(COMMANDS_DIR))
+
+    @property
+    def command_modules(self) -> list[tuple[str, ast.Module]]:
+        return self.cached("command_modules", lambda: modules(COMMANDS_DIR))
 
     @property
     def package_calls(self) -> list[CallSite]:
@@ -756,12 +783,22 @@ def r_config_error_keeps_code(c: Context) -> Violations:
     return found
 
 
+def r_code_has_type_and_exit(c: Context) -> Violations:
+    """`scripts/check_error_codes.py` owns the rule. This reports it in the spec check too."""
+    path = Path(__file__).with_name("check_error_codes.py")
+    spec = importlib.util.spec_from_file_location("_check_error_codes_for_spec", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.code_table_violations()
+
+
 def r_confirm_via_helper(c: Context) -> Violations:
     return {
         site.subject: "direct confirmation prompt"
         for site in c.command_calls
         if dotted(site.call.func) in ("typer.confirm", "click.confirm")
-        and not site.function.endswith("_confirm_or_abort")
+        and site.subject != "commands/_helpers.py:_confirm_or_abort"
     }
 
 
@@ -784,6 +821,82 @@ def r_no_direct_print(c: Context) -> Violations:
         kind = _DIRECT_PRINT.get(dotted(site.call.func))
         if kind is not None:
             found[f"{site.subject} {kind}"] = f"{kind} in commands/ bypasses OutputFormatter"
+    return found
+
+
+def _is_nonzero_exit(node: ast.AST) -> bool:
+    """`typer.Exit(code)` or `sys.exit(code)` whose code is not absent or a literal 0."""
+    if not isinstance(node, ast.Call) or dotted(node.func) not in ("typer.Exit", "sys.exit"):
+        return False
+    code = node.args[0] if node.args else keyword(node, "code")
+    return not (code is None or (isinstance(code, ast.Constant) and code.value in (0, None)))
+
+
+def _nodes(stmt: ast.AST) -> Iterator[ast.AST]:
+    """Every node of ``stmt`` outside nested functions and classes."""
+    yield stmt
+    for child in ast.iter_child_nodes(stmt):
+        if not isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            yield from _nodes(child)
+
+
+def _exit_follows(chain: list[tuple[list[ast.stmt], int]]) -> bool:
+    """True when a non-zero exit can run after the statement at the end of ``chain``.
+
+    ``chain`` holds, from the function body down, each statement list and the
+    index of the statement that contains the output call. At each level the
+    later statements of the list are scanned; a direct `return` or `raise`
+    there ends the scan, because control does not reach what follows it.
+    """
+    for stmts, index in reversed(chain):
+        for stmt in stmts[index + 1 :]:
+            if any(_is_nonzero_exit(n) for n in _nodes(stmt)):
+                return True
+            if isinstance(stmt, ast.Return | ast.Raise):
+                return False
+    return False
+
+
+def _output_sites(
+    stmts: list[ast.stmt], chain: list[tuple[list[ast.stmt], int]]
+) -> Iterator[tuple[ast.Call, list[tuple[list[ast.stmt], int]]]]:
+    """Each `<formatter>.output(...)` call under ``stmts`` with its statement chain."""
+    for index, stmt in enumerate(stmts):
+        here = [*chain, (stmts, index)]
+        if isinstance(stmt, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            continue
+        blocks = [
+            getattr(stmt, name)
+            for name in ("body", "orelse", "finalbody")
+            if isinstance(getattr(stmt, name, None), list)
+        ]
+        blocks += [h.body for h in getattr(stmt, "handlers", [])]
+        blocks += [case.body for case in getattr(stmt, "cases", [])]
+        if blocks:
+            for block in blocks:
+                yield from _output_sites(block, here)
+            # The test of an `if`/`while`, the items of a `with`: calls outside the blocks.
+            headers = [n for n in ast.iter_child_nodes(stmt) if isinstance(n, ast.expr)]
+        else:
+            headers = [stmt]
+        for header in headers:
+            for node in _nodes(header):
+                # Any receiver (`formatter`, `fmt`, `self.formatter`): the method name decides.
+                if isinstance(node, ast.Call) and dotted(node.func).endswith(".output"):
+                    yield node, here
+
+
+def r_ok_then_exit(c: Context) -> Violations:
+    found = {}
+    for module, tree in c.command_modules:
+        for func in ast.walk(tree):
+            if not isinstance(func, ast.FunctionDef | ast.AsyncFunctionDef):
+                continue
+            for call, chain in _output_sites(func.body, []):
+                if keyword(call, "exit_code") is None and _exit_follows(chain):
+                    found[f"{module}:{func.name}"] = (
+                        "formatter.output() is followed by a non-zero exit; pass exit_code="
+                    )
     return found
 
 
@@ -1004,6 +1117,12 @@ RULES: tuple[Rule, ...] = (
         r_no_direct_print,
     ),
     Rule(
+        "output.ok-then-exit-declares-exit-code",
+        "ast",
+        "formatter.output followed by a non-zero exit passes exit_code=",
+        r_ok_then_exit,
+    ),
+    Rule(
         "errors.forward-retryable",
         "ast",
         "formatter.error(error_code=exc.error_code, ...) passes retryable=",
@@ -1014,6 +1133,13 @@ RULES: tuple[Rule, ...] = (
         "ast",
         "a ConfigError handler keeps the subclass code",
         r_config_error_keeps_code,
+    ),
+    Rule(
+        "errors.code-has-type-and-exit",
+        "ast",
+        "every ErrorCode has an explicit (error_type, exit_code) entry that docs/error-codes.md repeats",
+        r_code_has_type_and_exit,
+        baseline=False,
     ),
     Rule(
         "safety.destructive-has-dry-run",
@@ -1049,7 +1175,7 @@ RULES: tuple[Rule, ...] = (
     Rule(
         "safety.confirm-via-helper",
         "ast",
-        "no direct typer.confirm in commands/ outside _confirm_or_abort",
+        "no direct typer.confirm in commands/ outside _helpers._confirm_or_abort",
         r_confirm_via_helper,
     ),
     Rule("lists.list-has-limit", "tree", "a list leaf has --limit", r_list_limit),
@@ -1118,30 +1244,28 @@ CONTRACT_RULES: dict[str, str] = {
     "help.doc-examples-parse": "tests/test_doc_examples.py",
     "output.human-snapshots": "tests/test_cli_human_snapshots.py",
     "serve.route-permission": "tests/test_cli_contract.py",
+    "output.one-json-document": "tests/test_cli_contract.py",
+    "output.bare-group-exits-2": "tests/test_cli_contract.py",
+    "output.root-flags-anywhere": "tests/test_cli_contract.py",
+    "output.envelope-schema": "tests/test_cli_contract.py",
+    "help.dash-h": "tests/test_cli_contract.py",
+    "args.repeated-single-value": "tests/test_cli_contract.py",
     "serve.undeclared-dry-run-rejected": "tests/test_server_dry_run_guard.py",
+    "safety.no-tty-confirmation": "tests/test_cli_contract.py",
 }
 DEFERRED_RULES: dict[str, str] = {
     "args.global-option-one-shape": "the GLOBAL_OPTIONS registry is not reviewed yet (A1)",
     "naming.verb-vocabulary": "the verb vocabulary file is not reviewed yet",
     "input.content-option-refuses-at-file": "the @file refusal lands in 1.0.0 (Input)",
-    "output.ok-then-exit-declares-exit-code": "OutputFormatter.output() has no exit_code yet; "
-    "it lands with the 1.0.0 envelope",
     "output.no-warning-after-output": "lands with warnings[] in the --json envelope",
     "output.multi-item-headline": "contract; lands with HO2",
-    "output.one-json-document": "contract; a bad flag under --json prints no JSON today (1.0.0)",
-    "output.bare-group-exits-2": "contract; 1.0.0 root command class",
-    "output.root-flags-anywhere": "contract; 1.0.0 root command class",
-    "output.envelope-schema": "contract; lands with the O2/O3 envelope (1.0.0)",
-    "errors.code-has-type-and-exit": "the error code table lands in 1.0.0 (Errors)",
     "errors.fanout-exit": "contract; the default-project change for fan-out reads is 1.0.0",
     "help.context-from-manifest": "kbagent context is generated from the manifest in 1.0.0 (AG1)",
-    "help.dash-h": "contract; -h lands with the 1.0.0 root command class",
     "env.registry-complete": "the environment variable registry does not exist yet",
-    "change.expired-deprecation": "the DEPRECATIONS registry does not exist yet",
+    "change.expired-deprecation": "no DEPRECATIONS entry has a remove_after date yet: "
+    "the window of the 1.0.0 hidden aliases starts at M",
     "change.breaking-bullet-on-removal": "release kind; lands with the release mechanics",
     "target.targets-reported": "contract; lands with project_source in 1.0.0",
-    "safety.no-tty-confirmation": "contract; the no-terminal refusal is 1.0.0 (D6)",
-    "args.repeated-single-value": "contract; 1.0.0 command class",
     "serve.targets-reported": "contract; the Kbagent-Targets header lands in 1.0.0 (V3)",
 }
 

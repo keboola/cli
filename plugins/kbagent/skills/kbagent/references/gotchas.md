@@ -48,6 +48,29 @@ Versioning convention:
   response (a list of `{id, key, value, ...}`), it is now the object `{id, name, folder}`.
   A consumer reading `result[0]["id"]` (the metadata id) must stop.
 
+## One JSON document for every exit, root flags after the subcommand, `-h`, repeated options
+
+*(since vNEXT)* (CLI-44, #791)
+
+- **The `--json` envelope has `schema_version` and, on success, `exit_code`.** Success: `{"status": "ok", "schema_version": "1.0", "exit_code": N, "targets"?, "warnings"?, "data"}`. Error: `{"status": "error", "schema_version": "1.0", "targets"?, "warnings"?, "error"}`, with no `exit_code`. `exit_code` equals the process exit code. `status: "ok"` with a non-zero `exit_code` is a negative answer (`flow validate`, `auth status`, `permissions check`, `data-app validate-repo`) or a failed item of a command that processes several items.
+- **stdout holds one JSON document for every exit code under `--json`.** A parse error (unknown option, missing option, bad value) and a bare group (`kbagent --json storage`) give `USAGE_ERROR`, exit 2. A crash gives `INTERNAL_ERROR`, exit 1, with the traceback on stderr. Ctrl+C gives `INTERRUPTED` (exit 130). A crash after the success envelope is written leaves that envelope as the only document. A `--stream` command (`agent run --stream`, `agent test --stream`) keeps stdout NDJSON: an interrupt or crash after its first line adds one line `{"event": "error", "data": {"code": "INTERRUPTED"|"INTERNAL_ERROR", "message"}}`. Before, stdout was empty or held help text.
+- **A bare group exits 2 with its help on stderr**, also in human mode (before: exit 0 and no output). `kbagent --json` without a command does the same. A command that needs arguments and gets none (`kbagent search`) prints its help on stderr, not on stdout.
+- **`--json`/`-j`, `--deny-writes` and `--deny-destructive` also work after the subcommand:** `kbagent project list --json`. Before, that was a usage error (`kbagent version --json` exited 2). kbagent does not rewrite the command line, so an option value `--json` (`--description --json`) stays a value. For 0.x installs, keep these flags before the subcommand.
+- **`-h` works as `--help`.**
+- **A single-value option given twice:** a write, destructive or admin command refuses it with `USAGE_ERROR` (exit 2) that names the option, so `storage delete-bucket --project x ... --project test` no longer acts on `test`. Read commands use the last value and add a `REPEATED_OPTION` entry (with `options`) to `warnings[]` (stderr in human mode). A flag without a `--no-` form (`--yes`) given twice is not reported.
+
+## A confirmation without a terminal refuses, and `branch delete` and `workspace delete` ask
+
+*(since vNEXT)* (CLI-46, #791)
+
+- **Human mode without a terminal: a confirmation refuses unless `--yes`.** A command that asks before it changes something (the deletes, `token delete/refresh`, `job terminate`, `merge-request merge`, `auth logout`, `org setup`, `project refresh`, ...) now exits 2 with `CONFIRMATION_REQUIRED` when stdin or stderr is not a terminal and `--yes` is not given. The message names `--yes` and says "AI agents: ask the user before you retry with --yes." Before, the prompt read its answer from stdin, so a harness with an open stdin pipe (or `echo y |`) could answer it. Nothing changes under `--json`: `--json` is consent and there is no prompt. On a terminal the prompt now goes to stderr. A declined prompt still prints `Aborted.` and exits 0.
+- **Exceptions that keep their own prompt.** The non-safety questions of `init` (copy the global projects) and of the `auth login` / `auth register-projects` project picker. The guards of `semantic-layer add metric` (a dataset that is not in the model) and `semantic-layer edit metric` (a rename that changes constraints) are in the service: without a terminal they refuse with `VALIDATION_ERROR` (exit 2) unless `--yes`, and on a terminal they ask also under `--json`.
+- **`semantic-layer edit glossary --new-term`, `semantic-layer remove *` and `semantic-layer reference-data delete` refuse under `--json` too.** For these `--json` is no consent: without a terminal and without `--yes` they refuse with `VALIDATION_ERROR` under `--json` (as before) and with `CONFIRMATION_REQUIRED` in human mode. Both exit 2.
+- **`storage delete-bucket` and `storage file-delete` without a terminal now refuse too.** Before, they deleted without asking when no terminal was attached. Give `--yes` (or `--json`).
+- **`branch delete` and `workspace delete` ask for confirmation and take `--yes` / `-y` and `--dry-run`.** `--dry-run` reads the branch (`GET /v2/storage/dev-branches`) or the workspace (one `GET`) and deletes nothing. A missing branch or workspace is `NOT_FOUND`. Over `kbagent serve`, `DELETE /branches/{project}/{branch_id}` and `DELETE /workspaces/{project}/{workspace_id}` accept `dry_run=true` and never prompt. On older versions these two commands deleted without a prompt and had neither flag: on both, `kbagent --json branch delete ...` works without a prompt.
+- **`stream delete --force` is a hidden deprecated alias of `--yes`, and `semantic-layer import --yes` is hidden and has no effect.** Both still work and add a `warnings[]` entry `{"code": "DEPRECATED", "replacement": "--yes" | null, "remove_after": null, "hint": ...}` (one stderr line in human mode). `remove_after` stays null until the removal date is known: at least 28 days after the 1.0 migration date. Use `stream delete --yes`, and drop `--yes` from `semantic-layer import`.
+- **`workspace load` without a terminal does not ask about a large COPY.** It refuses with `WORKSPACE_LOAD_COPY_TOO_LARGE` and names `--force`, as under `--json`.
+
 ## `--branch 0` is production in `job terminate`, `swap-tables`, `clone-table` and `create-table --source-branch-id`
 
 *(since 0.100.0)* (CLI-21, #791)
@@ -72,6 +95,16 @@ Versioning convention:
 - **Release changes after publication:** if `v1.0.0` answers 404 after the client saw it, the client holds the migration and the notice says the release date is unknown. A release with a new ID and a later `published_at` starts the 28 days again.
 - **Version cache (`version_cache.json`):** new keys `next_major_version`, `next_major_release_id`, `next_major_published_at`, `checked_at` (the release is read again at most once per 24 hours before M, and once more right before the install) and `notice_shown_at`. `latest_version` there is always a version of the running major, and a cached `latest_version` of a higher major (written by an older kbagent) is ignored. `kbagent version --beta` no longer writes the cache.
 - **For agents:** when `kbagent --version` shows 0.x and the `DEPRECATED_VERSION` notice appears, ask the user before you run `kbagent update --major`. Do not run it on your own. To stay on 0.x, set `KBAGENT_AUTO_UPDATE=false`; in CI also pin `keboola-cli<1` for the install. A `keboola-cli<1` pin alone does not keep a self-updating install on 0.x: the updater reinstalls from an exact wheel URL and `uv tool` keeps no pin, and the startup check also runs in CI.
+
+## The 1.x updater, and the first write after a major update
+
+*(since vNEXT)* (CLI-51, #791)
+
+- **A 1.x client reads the release list filtered by its own major.** Until M, `/releases/latest` names the newest 0.x release. When it names a lower major than the running one, the updater reads the first page of `/releases?per_page=100` and takes the highest stable release of the running major. Without `--beta` it never takes a pre-release: a 1.x pre-release client without `--beta` stays where it is until a stable 1.x release exists. With `--beta` it finds newer 1.x pre-releases and stable 1.x releases. A 0.x client still reads only `/releases/latest`.
+- **Own version cache per major.** A 1.x client keeps its version check in `version_cache_v1.json` (major N: `version_cache_v<N>.json`). 0.x keeps `version_cache.json`. A 0.x client older than 0.100.0 never reads a 1.x version there and installs it.
+- **After an automatic update to a higher major, the first write or destructive command is refused once.** Error `UPDATED_ACROSS_MAJOR`, exit 6, `retryable: true`, `details` with `from_version`, `to_version` and `url` (the migration page). Nothing ran. Run the same command again: from then on every command runs. Until that command, every read (also in later runs, with no time limit) runs and gets a top-level `warnings[]` entry with the same code. kbagent records the update in `crossing_pending.json` in its config directory. It detects the update from `KBAGENT_UPDATED_FROM` with a lower major (set by a 0.x client before it runs the command again, and also by hand) and from the marker of a finished deferred update. Of several kbagent processes that start at once, at most one is refused. If kbagent cannot write, read or move that file, nothing is refused. An update started with `kbagent update --major` does not refuse. The refusal uses the risk class in `kbagent permissions list`: write and destructive only. Admin commands (`project add`, `init`, `serve`, `update`, ...) are not refused. The REST routes of `kbagent serve` are not covered. The check runs before the command reads its options.
+- **The post-update banner lists the `BREAKING:` notes of every crossed version**, not only the notes of the target version. Under `--json`, the first command after any update that crossed versions with `BREAKING:` notes adds a `warnings[]` entry `{"code": "UPDATED_ACROSS_BREAKING", "message", "hint": "kbagent changelog --full", "from_version", "to_version", "versions"}`.
+- **For agents:** on `UPDATED_ACROSS_MAJOR`, read the migration page in `url` and check the command against the changed defaults before you run it again. Do not retry blindly.
 
 ## Install kbagent from `install.sh` or a release tag, never from `main`
 
@@ -717,7 +750,7 @@ Versioning convention:
   (`STACK_FEATURES__AGENT_PROVISIONING`), which is off on most stacks, so
   `kbagent project create --help` working tells you nothing about whether the
   stack will accept it. A stack without the feature answers 404, mapped to
-  `AUTH_NOT_SUPPORTED_ON_STACK` (exit 1); the message names the missing
+  `AUTH_NOT_SUPPORTED_ON_STACK` (exit 5 since vNEXT, exit 1 before); the message names the missing
   feature, the flag an operator flips to enable it, and how to connect an
   existing project instead. That is a stack capability, not a broken URL and
   not a credential problem -- do not retry it, do not go looking for a token,
@@ -2352,7 +2385,7 @@ response. Now:
   failed `--force-rerun`. An unknown outcome (a read timeout, a 5xx,
   exhausted retries, an expired login) keeps it, because the job may exist.
   A replay with the same key that
-  finds the pending entry exits 1 with `INVALID_ARGUMENT` (HTTP 400 over
+  finds the pending entry exits 2 *(since vNEXT, exit 1 before)* with `INVALID_ARGUMENT` (HTTP 400 over
   `kbagent serve`) and creates nothing. Check with `kbagent job list
   --component-id C --config-id ID`. If no job started, run again with
   `--force-rerun`. `POST /jobs/{project}/run` now accepts `idempotency_key`
@@ -3190,12 +3223,15 @@ unknown -- do not try to parse a fallback message.
 |------|---------|
 | 0 | Success |
 | 1 | General error |
-| 2 | Usage error (invalid arguments) |
+| 2 | Usage or validation error (invalid arguments: `VALIDATION_ERROR`, `INVALID_ARGUMENT`, `FILE_NOT_FOUND`, ...) |
 | 3 | Authentication error (invalid or expired token) -- includes `SESSION_EXPIRED` / `SESSION_NOT_FOUND` / `AUTH_FLOW_DENIED`, whose remedy is `kbagent auth login` (since v0.80.0), and `AUTH_MFA_INVALID` -- `auth login-password` cannot resolve this account's MFA type (WebAuthn/passkey-only), whose remedy is `kbagent auth login` instead (since v0.84.0) |
 | 4 | Network error (timeout, unreachable) -- includes `QUEUE_JOB_TIMEOUT` (local gave up AND the remote-kill attempt failed; the remote job may still be running), `AUTH_FLOW_TIMEOUT`, and a session refresh that timed out or could not reach the auth service (`TIMEOUT` / `CONNECTION_ERROR`; a slow auth service is NOT a dead login -- re-run, do not re-login) (since v0.80.0) |
-| 5 | Configuration error (corrupt config, missing alias) |
+| 5 | Configuration error (corrupt config, missing alias) -- includes `AUTH_NOT_SUPPORTED_ON_STACK` and `FEATURE_NOT_ENABLED` |
 | 6 | Permission denied (blocked by firewall / `--deny-writes` / `--deny-destructive`) |
 | 7 | `JOB_TIMEOUT_TERMINATED` -- `job run --timeout` elapsed AND the remote job was successfully cancelled. Scripts can distinguish "we killed it" from "it failed on its own" (exit 1) from "it's still running" (exit 4). |
+| 130 | Interrupted (Ctrl-C) |
+
+Every error code has exactly one exit code and one `error.error_type` (since vNEXT). [docs/error-codes.md](https://github.com/keboola/cli/blob/main/docs/error-codes.md) lists them per code. Before vNEXT, an error code that reached `map_error_to_exit_code` without a dedicated mapping exited 1, so these codes exited 1 on some paths: `VALIDATION_ERROR`, `INVALID_ARGUMENT`, `INVALID_FORMAT`, `MISSING_PARAMETER`, `FILE_NOT_FOUND`, `DATA_APP_INVALID_SECRET` (now 2), `AUTH_MFA_INVALID` (now 3), `AUTH_NOT_SUPPORTED_ON_STACK` (now 5). Four command paths changed too: `transformation create` and `transformation edit` `VALIDATION_ERROR` (1, now 2), `lineage` `FILE_NOT_FOUND` for a missing cache file (1, now 2), `flow schema --full --project` (every failed fetch was `NOT_FOUND`, exit 4. Now a failed request keeps its own code, so a network failure is still exit 4, and only an answer without a usable schema is `NOT_FOUND`, exit 1), `http` `CONFIG_ERROR` (2, now 5; an invalid `--body` is now `INVALID_ARGUMENT`, still exit 2). `kai` and `semantic-layer` commands report the typed code of a configuration error (`AUTH_NOT_SUPPORTED_ON_STACK`, `FEATURE_NOT_ENABLED`) instead of `CONFIG_ERROR`, still exit 5.
 
 ## `job run --wait` polling + log tail
 

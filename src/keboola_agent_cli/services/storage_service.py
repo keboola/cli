@@ -33,6 +33,7 @@ from ._storage_jobs import (
 )
 from ._storage_tables import build_table_source, normalize_table_rows, refuse_production_clone
 from ._table_detail import build_table_detail
+from .base import item_failure
 from .table_usage import collect_table_usage, fetch_usage_components
 
 logger = logging.getLogger(__name__)
@@ -1327,7 +1328,7 @@ class StorageService(ColumnDescriptionsMixin):
                     client.delete_table(tid, branch_id=branch_id, force=force)
                     deleted.append(tid)
                 except KeboolaApiError as exc:
-                    failed.append({"id": tid, "error": exc.message})
+                    failed.append(item_failure(exc, id=tid, error=exc.message))
         finally:
             client.close()
 
@@ -1384,7 +1385,7 @@ class StorageService(ColumnDescriptionsMixin):
                 try:
                     table = client.get_table_detail(tid, branch_id=branch_id)
                 except KeboolaApiError as exc:
-                    failed.append({"id": tid, "error": exc.message})
+                    failed.append(item_failure(exc, id=tid, error=exc.message))
                     continue
 
                 # rowsCount is a Storage API integer field but the API does
@@ -1411,7 +1412,7 @@ class StorageService(ColumnDescriptionsMixin):
                 try:
                     client.truncate_table(tid, branch_id=branch_id)
                 except KeboolaApiError as exc:
-                    failed.append({"id": tid, "error": exc.message})
+                    failed.append(item_failure(exc, id=tid, error=exc.message))
                     continue
 
                 truncated.append(
@@ -1539,7 +1540,7 @@ class StorageService(ColumnDescriptionsMixin):
                     client.delete_column(table_id, col, branch_id=branch_id, force=force)
                     deleted.append(col)
                 except KeboolaApiError as exc:
-                    failed.append({"column": col, "error": exc.message})
+                    failed.append(item_failure(exc, column=col, error=exc.message))
         finally:
             client.close()
 
@@ -1765,7 +1766,7 @@ class StorageService(ColumnDescriptionsMixin):
                 try:
                     bucket = client.get_bucket_detail(bid, branch_id=branch_id)
                 except KeboolaApiError as exc:
-                    failed.append({"id": bid, "error": exc.message})
+                    failed.append(item_failure(exc, id=bid, error=exc.message))
                     continue
 
                 # Linked bucket protection
@@ -1802,7 +1803,7 @@ class StorageService(ColumnDescriptionsMixin):
                     client.delete_bucket(bid, force=force, branch_id=branch_id)
                     deleted.append(bid)
                 except KeboolaApiError as exc:
-                    failed.append({"id": bid, "error": exc.message})
+                    failed.append(item_failure(exc, id=bid, error=exc.message))
         finally:
             client.close()
 
@@ -2081,7 +2082,7 @@ class StorageService(ColumnDescriptionsMixin):
                     client.delete_file(fid)
                     deleted.append(fid)
                 except KeboolaApiError as exc:
-                    failed.append({"id": fid, "error": exc.message})
+                    failed.append(item_failure(exc, id=fid, error=exc.message))
         finally:
             client.close()
 
@@ -2129,14 +2130,14 @@ class StorageService(ColumnDescriptionsMixin):
                     client.tag_file(file_id, tag)
                     added.append(tag)
                 except KeboolaApiError as exc:
-                    errors.append({"tag": tag, "action": "add", "error": exc.message})
+                    errors.append(item_failure(exc, tag=tag, action="add", error=exc.message))
 
             for tag in remove_tags or []:
                 try:
                     client.untag_file(file_id, tag)
                     removed.append(tag)
                 except KeboolaApiError as exc:
-                    errors.append({"tag": tag, "action": "remove", "error": exc.message})
+                    errors.append(item_failure(exc, tag=tag, action="remove", error=exc.message))
         finally:
             client.close()
 
@@ -2559,7 +2560,7 @@ class StorageService(ColumnDescriptionsMixin):
                 logger.debug("describe_batch bucket %s: ok", bucket_id)
             except Exception as exc:
                 msg = exc.message if isinstance(exc, KeboolaApiError) else str(exc)
-                errors.append({"type": "bucket", "id": bucket_id, "error": msg})
+                errors.append(item_failure(exc, type="bucket", id=bucket_id, error=msg))
 
         for table_id, desc in parsed.tables.items():
             current += 1
@@ -2570,7 +2571,7 @@ class StorageService(ColumnDescriptionsMixin):
                 applied.append({"type": "table", "id": table_id, "description": desc})
             except Exception as exc:
                 msg = exc.message if isinstance(exc, KeboolaApiError) else str(exc)
-                errors.append({"type": "table", "id": table_id, "error": msg})
+                errors.append(item_failure(exc, type="table", id=table_id, error=msg))
 
         for table_id, col_map in parsed.columns.items():
             current += 1
@@ -2581,7 +2582,7 @@ class StorageService(ColumnDescriptionsMixin):
                 applied.append({"type": "columns", "id": table_id, "columns": col_map})
             except Exception as exc:
                 msg = exc.message if isinstance(exc, KeboolaApiError) else str(exc)
-                errors.append({"type": "columns", "id": table_id, "error": msg})
+                errors.append(item_failure(exc, type="columns", id=table_id, error=msg))
 
         return {
             "project_alias": alias,

@@ -85,13 +85,14 @@ stage: str = typer.Option(..., click_type=click.Choice(["in", "out"]))
 
 - `--json` mode: structured JSON via `formatter.output(data)`
 - Human mode: Rich-formatted tables/text via `formatter.console.print()`
+- A command that exits non-zero after its output computes the code first and passes it: `formatter.output(data, exit_code=code)`, then `raise typer.Exit(code=code)`. The envelope's `exit_code` must equal the process exit code (spec O4, blocking rule `output.ok-then-exit-declares-exit-code`).
 
 Never print raw text that breaks JSON parsing. Always check `formatter.json_mode`.
 
 ### Error handling
 
 - Commands catch `KeboolaApiError` and `ConfigError`, map to exit codes
-- Exit codes: 0=success, 1=general, 2=usage, 3=auth, 4=network, 5=config, 6=permission denied, 7=job timed out and cancelled, 130=interrupted
+- Exit codes: 0=success, 1=general, 2=usage, 3=auth, 4=network, 5=config, 6=permission denied, 7=job timed out and cancelled, 130=interrupted. [`docs/error-codes.md`](docs/error-codes.md) is the one list of error codes with their exit code and type. `map_error_to_exit_code` reads `ERROR_CODE_TABLE` in `errors.py`. An error you emit by hand exits with the code's `Exit` value
 - Multi-project operations accumulate errors -- one project failing doesn't stop others
 - Use `raise typer.Exit(code=N) from None` to suppress traceback in CLI
 
@@ -183,7 +184,7 @@ from .errors import ErrorCode
 raise KeboolaApiError(error_code=ErrorCode.NOT_FOUND, message="...")
 ```
 
-If a new category appears, **add it to `ErrorCode`** and `_ERROR_CODE_TO_TYPE` in the same PR. Do not introduce ad-hoc strings.
+If a new category appears, **add it to `ErrorCode`**, give it an `(error_type, exit_code)` entry in `ERROR_CODE_TABLE` (`errors.py`) and a row with `Exit` and `Type` in [`docs/error-codes.md`](docs/error-codes.md) in the same PR. `make check-error-codes` fails on a missing entry. Do not introduce ad-hoc strings.
 
 ### File-size budgets -- split when concerns drift
 
@@ -931,6 +932,9 @@ is the `Date` header of the GitHub response, the same clock the clients use.
       from `main` first (a normal release PR) and use its tag.
    3. Create `release/0.N` from the commit of that tag:
       `git push origin 'v0.N.x^{commit}:refs/heads/release/0.N'`.
+      CI runs on `release/0.N` only when its `ci.yml` and `frontend.yml` have
+      the `release/[0-9]+.[0-9]+` triggers. If that tag is older than the
+      triggers, the first PR into `release/0.N` adds them.
    4. Pin the deprecated marketplace shim in a PR to `main`, and merge it
       before the first 1.0.0 change. Its relative `source` follows the
       default branch, so it would serve 1.x plugin documents to 0.x installs.

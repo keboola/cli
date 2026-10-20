@@ -899,3 +899,38 @@ class TestKaiConfigError:
         output = json.loads(result.output)
         assert output["status"] == "error"
         assert "CONFIG_ERROR" in output["error"]["code"]
+
+    @pytest.mark.parametrize("command", ["ping", "preflight"])
+    def test_kai_keeps_the_typed_code_of_a_config_error(
+        self, tmp_config_dir: Path, command: str
+    ) -> None:
+        """A browser-login project gets AUTH_NOT_SUPPORTED_ON_STACK, not CONFIG_ERROR (spec E3)."""
+        from keboola_agent_cli.errors import SessionAuthUnsupportedError
+
+        setup_single_project(tmp_config_dir)
+        mock_service = MagicMock(spec=KaiService)
+        mock_service.resolve_alias.return_value = "prod"
+        getattr(mock_service, command).side_effect = SessionAuthUnsupportedError("kbagent kai")
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "keboola_agent_cli.commands.kai.get_service",
+                lambda ctx, name: mock_service,
+            )
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "--config-dir",
+                    str(tmp_config_dir),
+                    "kai",
+                    command,
+                    "--project",
+                    "prod",
+                ],
+            )
+
+        assert result.exit_code == 5
+        error = json.loads(result.output)["error"]
+        assert error["code"] == "AUTH_NOT_SUPPORTED_ON_STACK"
+        assert error["error_type"] == "configuration"

@@ -314,7 +314,15 @@ class TestSnapshotService:
         result = service.delete_snapshots(alias="test", snapshot_ids=["1", "2"])
 
         assert result["deleted"] == ["2"]
-        assert result["failed"] == [{"id": "1", "error": "Snapshot 1 not found."}]
+        assert result["failed"] == [
+            {
+                "id": "1",
+                "error": "Snapshot 1 not found.",
+                "error_code": "UNKNOWN_ERROR",
+                "retryable": False,
+                "message": "Snapshot 1 not found.",
+            }
+        ]
         mock_client.close.assert_called_once()
 
     def test_delete_snapshots_dry_run_makes_no_calls(self, tmp_path: Path) -> None:
@@ -584,6 +592,7 @@ class TestSnapshotCLI:
 
         assert result.exit_code == 1, result.output
 
+    @pytest.mark.usefixtures("interactive_terminal")
     def test_snapshot_delete_confirm_abort(self, tmp_path: Path) -> None:
         """Human mode without --yes prompts; answering 'n' aborts with exit 0."""
         store = _make_store(tmp_path)

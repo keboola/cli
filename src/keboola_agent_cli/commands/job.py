@@ -30,6 +30,7 @@ from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..output import OutputFormatter, format_job_detail, format_jobs_table
 from ._all_projects import AllProjectsOption, reject_project_with_all_projects
 from ._helpers import (
+    _confirm_or_abort,
     check_cli_permission,
     emit_api_error,
     emit_project_warnings,
@@ -673,9 +674,7 @@ def job_terminate(
 
     # Confirmation prompt (interactive only)
     confirm_msg = f"Terminate {len(resolved_ids)} job(s) in project '{project}'?"
-    if not yes and not formatter.json_mode and not typer.confirm(confirm_msg):
-        formatter.console.print("Aborted.")
-        raise typer.Exit(code=0)
+    _confirm_or_abort(formatter, yes, confirm_msg)
 
     try:
         result = service.terminate_jobs(
@@ -692,8 +691,9 @@ def job_terminate(
     if filter_context is not None:
         result["filter"] = filter_context
 
+    exit_code = 1 if result["failed"] else 0
     if formatter.json_mode:
-        formatter.output(result)
+        formatter.output(result, exit_code=exit_code)
     else:
         for entry in result["killed"]:
             formatter.console.print(
@@ -711,5 +711,5 @@ def job_terminate(
                 f"[bold red]Failed:[/bold red] {f_item['id']}: {f_item['error']}"
             )
 
-    if result["failed"]:
-        raise typer.Exit(code=1)
+    if exit_code:
+        raise typer.Exit(code=exit_code)

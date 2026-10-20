@@ -11,6 +11,7 @@ from rich.table import Table
 from ..constants import DEFAULT_TOKEN_DESCRIPTION, ENV_KBC_STORAGE_API_URL
 from ..errors import ErrorCode, KeboolaApiError
 from ._helpers import (
+    _confirm_or_abort,
     check_cli_permission,
     emit_api_error,
     get_formatter,
@@ -267,9 +268,8 @@ def org_setup(
                 raise typer.Exit(code=code)
             return
 
-        if would_add > 0 and not typer.confirm(f"\nProceed to add {would_add} project(s)?"):
-            formatter.console.print("Aborted.")
-            raise typer.Exit(code=0)
+        if would_add > 0:
+            _confirm_or_abort(formatter, yes, f"Proceed to add {would_add} project(s)?")
 
     # Execute the actual setup
     try:
@@ -302,12 +302,12 @@ def org_setup(
                 _handle_api_error(formatter, exc)
                 return
 
-    formatter.output(result, _format_setup_result)
-
     # Per-project failures are accumulated so one bad project does not abort the
     # run -- but the run itself is not a success, and exit 0 hid that (#745).
     failed = len(result.get("projects_failed", [])) + len(result.get("projects_refresh_failed", []))
-    if code := item_failure_exit_code(failed):
+    code = item_failure_exit_code(failed)
+    formatter.output(result, _format_setup_result, exit_code=code or 0)
+    if code:
         raise typer.Exit(code=code)
 
 

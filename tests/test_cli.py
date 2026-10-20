@@ -3724,7 +3724,8 @@ class TestJobRun:
             replay = runner.invoke(app, args)
 
         assert first.exit_code == 4, first.output
-        assert replay.exit_code == 1, replay.output
+        # INVALID_ARGUMENT exits 2 (spec E1: the error code table).
+        assert replay.exit_code == 2, replay.output
         error = json.loads(replay.output)["error"]
         assert error["code"] == "INVALID_ARGUMENT"
         assert "kbagent job list" in error["message"]
@@ -6408,7 +6409,7 @@ class TestSharingEdgesIntegration:
         assert output["error"]["code"] == "CONFIG_ERROR"
 
     def test_lineage_no_subcommand_shows_help(self, tmp_path: Path) -> None:
-        """lineage without subcommand shows help text."""
+        """lineage without subcommand shows help text. Exit 2, help on stderr (#791 O1)."""
         config_dir = tmp_path / "config"
         config_dir.mkdir()
 
@@ -6416,9 +6417,10 @@ class TestSharingEdgesIntegration:
             MockStore.return_value = ConfigStore(config_dir=config_dir)
             result = runner.invoke(app, ["lineage"])
 
-        assert result.exit_code == 0
-        assert "build" in result.output
-        assert "show" in result.output
+        assert result.exit_code == 2
+        assert result.stdout == ""
+        assert "build" in result.stderr
+        assert "show" in result.stderr
 
 
 class TestOrgSetupBasic:
@@ -6910,7 +6912,7 @@ class TestSharingEdges:
         assert "organization" in result.output
 
     def test_lineage_no_subcommand_shows_help(self, tmp_path: Path) -> None:
-        """kbagent lineage (without subcommand) shows help with build/show."""
+        """kbagent lineage (without subcommand) shows help with build/show. Exit 2, help on stderr (#791 O1)."""
         config_dir = tmp_path / "config"
         config_dir.mkdir()
 
@@ -6918,9 +6920,10 @@ class TestSharingEdges:
             MockStore.return_value = ConfigStore(config_dir=config_dir)
             result = runner.invoke(app, ["lineage"])
 
-        assert result.exit_code == 0
-        assert "build" in result.output
-        assert "show" in result.output
+        assert result.exit_code == 2
+        assert result.stdout == ""
+        assert "build" in result.stderr
+        assert "show" in result.stderr
 
     def test_lineage_config_error_exit_code_5(self, tmp_path: Path) -> None:
         """lineage with nonexistent project alias returns exit code 5."""
@@ -7142,6 +7145,7 @@ class TestOrgSetup:
         output = json.loads(result.output)
         assert output["status"] == "ok"
 
+    @pytest.mark.usefixtures("interactive_terminal")
     def test_org_setup_confirmation_declined(self, tmp_path: Path) -> None:
         """org setup exits cleanly when user declines confirmation."""
         config_dir = tmp_path / "config"
@@ -7778,7 +7782,9 @@ class TestBranchDelete:
         assert output["data"]["was_active"] is True
         assert output["data"]["project_alias"] == "prod"
         assert "deleted" in output["data"]["message"]
-        mock_branch.delete_branch.assert_called_once_with(alias="prod", branch_id=456)
+        mock_branch.delete_branch.assert_called_once_with(
+            alias="prod", branch_id=456, dry_run=False
+        )
 
 
 class TestBranchMerge:

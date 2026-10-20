@@ -23,7 +23,7 @@ from typing import Any
 import typer
 
 from ..errors import ConfigError, ErrorCode
-from ..output import OutputFormatter, write_machine_output
+from ..output import OutputFormatter
 from ..server.agents_store import (
     REMOVED_ACTION_MESSAGE,
     REMOVED_ACTION_TYPES,
@@ -32,7 +32,12 @@ from ..server.agents_store import (
     annotate_removed_action,
 )
 from ..services.agent_service import AgentService
-from ._helpers import check_cli_permission, get_formatter, get_service
+from ._helpers import (
+    _confirm_or_abort,
+    check_cli_permission,
+    get_formatter,
+    get_service,
+)
 
 agent_app = typer.Typer(help="Scheduled agent tasks (cron / manual / chained)")
 
@@ -397,11 +402,7 @@ def _render_stream_event(formatter: OutputFormatter, evt: dict[str, Any]) -> Non
     multi-line summary with exit code, elapsed time, response preview.
     """
     if formatter.json_mode:
-        # `ensure_ascii=False` keeps the event text readable, which means raw
-        # non-ASCII reaches stdout -- so it must not go through the console's
-        # encoder (issue #546). `write_machine_output` also flushes, which a
-        # stream consumer depends on.
-        write_machine_output(json.dumps(evt, ensure_ascii=False))
+        formatter.stream_line(evt)
         return
     event = evt.get("event", "?")
     data = evt.get("data") or {}
@@ -689,11 +690,7 @@ def agent_delete(
     formatter = get_formatter(ctx)
     service: AgentService = get_service(ctx, "agent_service")
     task_id = _resolve_id(formatter, task_id, task_id_opt, label="Task ID", flag="--id/--task-id")
-    if not yes and not formatter.json_mode:
-        confirm = typer.confirm(f"Delete task '{task_id}'?")
-        if not confirm:
-            formatter.console.print("[yellow]Aborted.[/yellow]")
-            raise typer.Exit(code=0)
+    _confirm_or_abort(formatter, yes, f"Delete task '{task_id}'?")
     try:
         service.delete_task(task_id)
     except ConfigError as exc:

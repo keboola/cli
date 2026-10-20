@@ -131,7 +131,9 @@ def test_agent_facing_examples_parse() -> None:
 
 def test_checker_finds_a_wrong_example() -> None:
     root = typer.main.get_command(app)
-    assert _problem("kbagent project list --json", root) == "project list has no option --json"
+    assert _problem("kbagent project list --bogus", root) == "project list has no option --bogus"
+    # The root flags are accepted after the subcommand too (O7).
+    assert _problem("kbagent project list --json", root) is None
     assert _problem("kbagent no-such-group list", root) == "no command 'no-such-group'"
     assert _problem("kbagent --json project list", root) is None
     assert _problem("kbagent config <cmd> --project P", root) is None

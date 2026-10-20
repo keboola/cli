@@ -250,7 +250,8 @@ Use `kbagent <command> --help` for full flag details and examples.
   AUTH_FLOW_DENIED, AUTH_FLOW_EXPIRED, AUTH_BROWSER_UNAVAILABLE,
   AUTH_STATE_MISMATCH, SESSION_EXPIRED, SESSION_NOT_FOUND. Exit codes:
   SESSION_EXPIRED / SESSION_NOT_FOUND / AUTH_FLOW_DENIED -> 3 (auth error);
-  AUTH_FLOW_TIMEOUT -> 4 (network error); others -> 1. A session refresh that
+  AUTH_FLOW_TIMEOUT -> 4 (network error); AUTH_NOT_SUPPORTED_ON_STACK -> 5
+  (config error since vNEXT, before: 1 from `auth login`); others -> 1. A session refresh that
   times out or cannot reach the auth service reports TIMEOUT /
   CONNECTION_ERROR -> 4, never a session/config error: a slow auth service is
   a network problem, so do NOT treat it as "log in again". The refresh is a
@@ -276,7 +277,7 @@ Use `kbagent <command> --help` for full flag details and examples.
     (STACK_FEATURES__AGENT_PROVISIONING), which is OFF on most stacks. The
     command is always registered, so its presence in --help proves nothing
     about the stack; without the feature the stack answers 404 and the command
-    exits 1 with AUTH_NOT_SUPPORTED_ON_STACK, naming the flag an operator
+    exits 5 (since vNEXT, 1 before) with AUTH_NOT_SUPPORTED_ON_STACK, naming the flag an operator
     flips and how to connect an existing project instead.
     What it does in one call: provisions the project, stores the returned
     project-pinned session in auth.json, and registers the project in
@@ -1018,8 +1019,10 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Show base + per-signal endpoints (/v1/logs|/v1/traces|/v1/metrics), protocol http/protobuf,
     and destination bucket/tables (from sinks). The secret embedded in the OTLP URL is MASKED
     by default; pass --reveal to print it (e.g. to wire OTEL_EXPORTER_OTLP_ENDPOINT).
-  kbagent stream delete SOURCE_ID --project NAME [--branch ID] [--dry-run] [--yes|--force]
-    Delete a source (destructive; async task polled to completion).
+  kbagent stream delete SOURCE_ID --project NAME [--branch ID] [--dry-run] [--yes]
+    Delete a source (destructive, async task polled to completion). --force is a
+    hidden deprecated alias of --yes since vNEXT: it still works and adds a
+    DEPRECATED warning. Use --yes.
   Notes: uses the per-project Storage token (no manage token). Control plane = stream.<region>
   derived from connection.<region>. The OTLP ingest host is stream-in.<region>, returned in
   source.otlp.url -- never derived. The raw Stream API does not auto-create sinks, so kbagent
@@ -1358,8 +1361,10 @@ remain branch-aware because modifying a dev branch is the expected intent.
   kbagent branch reset --project ALIAS
     Reset to main/production branch.
 
-  kbagent branch delete --project ALIAS --branch ID
-    Delete branch (async). Auto-resets to main if it was active.
+  kbagent branch delete --project ALIAS --branch ID [--dry-run] [--yes]
+    Delete branch (async). Auto-resets to main if it was active. Since vNEXT it
+    asks for confirmation unless --yes or --json. --dry-run reads the branch and
+    deletes nothing.
 
   kbagent branch merge --project ALIAS [--branch ID]
     DEPRECATED (since 0.94.0): builds a KBC UI merge URL (does NOT merge via API) and
@@ -1466,8 +1471,10 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Workspace connection details (no password). Includes login_type, read_only, qs_compatible.
     Without --branch uses the alias's active branch (`branch use`), else production.
 
-  kbagent workspace delete --project ALIAS --workspace-id ID
-    Delete workspace. They also expire automatically.
+  kbagent workspace delete --project ALIAS --workspace-id ID [--dry-run] [--yes]
+    Delete workspace. They also expire automatically. Since vNEXT it asks for
+    confirmation unless --yes or --json. --dry-run reads the workspace and
+    deletes nothing.
 
   kbagent workspace password --project ALIAS --workspace-id ID
     Reset and return new workspace password.
@@ -2024,8 +2031,9 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
     removes -- no orphan-check (those entities aren't referenced by others).
     `remove glossary` identifies the entity by --term, not --name.
 
-  kbagent semantic-layer import --project P --file PATH [--model M] [--types T,T,...] [--dry-run] [--yes] [--overwrite]
-    Replay a snapshot. Default: skip on conflict. --overwrite opts into
+  kbagent semantic-layer import --project P --file PATH [--model M] [--types T,T,...] [--dry-run] [--overwrite]
+    Replay a snapshot. Default: skip on conflict. --yes never had an effect here.
+    Since vNEXT it is hidden and adds a DEPRECATED warning. --overwrite opts into
     an in-place update (keeps the existing item's scope). Dependency-ordered push (datasets -> metrics -> relationships
     -> glossary -> constraints).
 
@@ -2444,6 +2452,15 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
     hint, current_version, next_version, released_at, migration_at, url).
     AGENTS: when `kbagent --version` is 0.x and this notice appears, ASK THE
     USER before you run `kbagent update --major`. Never run it on your own.
+    After an automatic update to a higher major (since vNEXT): the first
+    write or destructive command is refused once with UPDATED_ACROSS_MAJOR
+    (exit 6, details.url = migration page). Reads before it get a warnings[]
+    entry with that code. Then every command runs. Not after `update --major`,
+    not for admin commands, not for `serve` REST routes. The first command
+    after an update across BREAKING changelog notes adds a warnings[] entry
+    UPDATED_ACROSS_BREAKING (versions = the versions with such notes).
+    AGENTS: on UPDATED_ACROSS_MAJOR read the migration page before you run the
+    command again.
 
   kbagent changelog [--limit N] [--full]
     Show recent changelog (what changed in each version). Default: last 5
@@ -2486,6 +2503,12 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
 
 1. ALWAYS use --json flag for reliable, parseable output:
      kbagent --json project list
+   Confirmations (since vNEXT): --yes and --json mean consent, so a command
+   that asks for confirmation does not ask under them. In human mode without a
+   terminal it refuses with CONFIRMATION_REQUIRED (exit 2) and names --yes. A
+   piped "y" does not confirm. Ask the user before you retry with --yes.
+   A DEPRECATED entry in "warnings" names the replacement of an old flag
+   ("replacement"). Its "remove_after" is null until the removal date is known.
 
 2. JSON response format:
      Success: {{"status": "ok", "data": ...}}
@@ -2508,6 +2531,17 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
    "warnings" key = no warning. It is not the "warnings" key some commands put
    inside "data" (data-app deploy, sync clone, merge-request, ...): that one is
    part of the result and stays where it was; read both.
+   Since vNEXT: the success envelope also has "schema_version" ("1.0") and
+   "exit_code" (the process exit code). "status": "ok" with a non-zero
+   "exit_code" is a negative answer (flow validate, auth status, permissions
+   check, data-app validate-repo) or a failed item. The error envelope has
+   "schema_version" and no "exit_code". Every exit under --json writes one
+   JSON document: a parse error or a bare group is USAGE_ERROR (exit 2, help
+   on stderr), a crash is INTERNAL_ERROR (exit 1, traceback on stderr).
+   --json/-j, --deny-writes and --deny-destructive also work after the
+   subcommand, and -h works as --help (since vNEXT). A single-value option
+   given twice is USAGE_ERROR on a write, destructive or admin command, and
+   a REPEATED_OPTION entry in "warnings" on a read command (since vNEXT).
 
 3. Multi-project: most read commands accept repeatable --project flag.
    Omit --project to query ALL connected projects in parallel.
@@ -2616,16 +2650,22 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
 
 ## Exit Codes
 
-  0  Success
-  1  General error
-  2  Usage error (invalid arguments)
-  3  Authentication error (invalid or expired token)
-  4  Network error (timeout, unreachable server)
-  5  Configuration error (corrupt config, missing alias)
-  6  Permission denied (operation blocked by policy)
-  7  Job timed out and was cancelled (JOB_TIMEOUT_TERMINATED)
+  0    Success
+  1    General error
+  2    Usage or validation error (invalid arguments), or a confirmation refused
+       without a terminal (CONFIRMATION_REQUIRED, since vNEXT)
+  3    Authentication error (invalid or expired token)
+  4    Network error (timeout, unreachable server), or a local wait that timed
+       out while the server job keeps running
+  5    Configuration error (corrupt config, missing alias)
+  6    Permission denied (operation blocked by policy)
+  7    Job timed out and was cancelled (JOB_TIMEOUT_TERMINATED)
+  130  Interrupted (Ctrl-C)
 
 When you receive a non-zero exit code, use --json to get structured error details.
+Each error code has one exit code and one error.error_type (since vNEXT). The
+list of codes with both is docs/error-codes.md:
+https://github.com/keboola/cli/blob/main/docs/error-codes.md
 
 Exit 1 also covers a PARTIAL failure (#745). Commands that keep going after one
 item fails exit 1 when at least one item failed: sync push, sync

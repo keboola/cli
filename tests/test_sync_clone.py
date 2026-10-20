@@ -1269,7 +1269,15 @@ class TestCreateBucketsFromExport:
         result = create_buckets_from_export(client, tmp_path, {})
 
         assert result.created == ["in.c-ok"]
-        assert result.errors == [{"bucket_id": "in.c-bad", "error": "boom"}]
+        assert result.errors == [
+            {
+                "bucket_id": "in.c-bad",
+                "error": "boom",
+                "error_code": "API_ERROR",
+                "retryable": False,
+                "message": "boom",
+            }
+        ]
 
     def test_linked_bucket_is_linked_to_its_source(self, tmp_path: Path) -> None:
         _write_buckets_export(
@@ -1325,7 +1333,15 @@ class TestCreateBucketsFromExport:
 
         client.create_bucket.assert_not_called()
         assert result.linked == []
-        assert result.errors == [{"bucket_id": "in.c-shared", "error": "not shared"}]
+        assert result.errors == [
+            {
+                "bucket_id": "in.c-shared",
+                "error": "not shared",
+                "error_code": "STORAGE_JOB_FAILED",
+                "retryable": False,
+                "message": "not shared",
+            }
+        ]
 
     def test_list_failure_is_collected_not_raised(self, tmp_path: Path) -> None:
         _write_buckets_export(
@@ -1339,7 +1355,15 @@ class TestCreateBucketsFromExport:
         result = create_buckets_from_export(client, tmp_path, {})
 
         client.create_bucket.assert_not_called()
-        assert result.errors == [{"bucket_id": "", "error": "Cannot list buckets: denied"}]
+        assert result.errors == [
+            {
+                "bucket_id": "",
+                "error": "Cannot list buckets: denied",
+                "error_code": "API_ERROR",
+                "retryable": False,
+                "message": "denied",
+            }
+        ]
 
     def test_legacy_export_creates_nothing(self, tmp_path: Path) -> None:
         # An older pull wrote no source_bucket key: a linked bucket would be

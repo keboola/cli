@@ -60,13 +60,13 @@ def _handle_service_call(ctx: typer.Context, func, *args, **kwargs):  # type: ig
     try:
         return func(*args, **kwargs)
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        formatter.error(
+            message=exc.message, error_code=getattr(exc, "error_code", ErrorCode.CONFIG_ERROR)
+        )
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         emit_api_error(formatter, exc)
-        # A bad option value is a usage error (exit 2), not a general failure.
-        is_usage_error = exc.error_code == ErrorCode.INVALID_ARGUMENT
-        raise typer.Exit(code=2 if is_usage_error else map_error_to_exit_code(exc)) from None
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
 
 def _is_stdin_tty() -> bool:

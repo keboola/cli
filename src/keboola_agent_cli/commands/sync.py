@@ -660,11 +660,12 @@ def sync_pull(
             formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
             raise typer.Exit(code=5) from None
 
+        code = item_failure_exit_code(data["summary"]["failed"])
         if formatter.json_mode:
-            formatter.output(data)
+            formatter.output(data, exit_code=code or 0)
         else:
             _format_all_results(formatter, data, _format_pull_result, _pull_one_liner)
-        if code := item_failure_exit_code(data["summary"]["failed"]):
+        if code:
             raise typer.Exit(code=code)
         return
 
@@ -863,11 +864,12 @@ def sync_diff(
             formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
             raise typer.Exit(code=5) from None
 
+        code = item_failure_exit_code(data["summary"]["failed"])
         if formatter.json_mode:
-            formatter.output(data)
+            formatter.output(data, exit_code=code or 0)
         else:
             _format_all_results(formatter, data, _format_diff_result, _diff_one_liner)
-        if code := item_failure_exit_code(data["summary"]["failed"]):
+        if code:
             raise typer.Exit(code=code)
         return
 
@@ -1087,11 +1089,12 @@ def sync_push(
             formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
             raise typer.Exit(code=5) from None
 
+        code = item_failure_exit_code(data["summary"]["failed"])
         if formatter.json_mode:
-            formatter.output(data)
+            formatter.output(data, exit_code=code or 0)
         else:
             _format_all_results(formatter, data, _format_push_result, _push_one_liner)
-        if code := item_failure_exit_code(data["summary"]["failed"]):
+        if code:
             raise typer.Exit(code=code)
         return
 
@@ -1117,14 +1120,14 @@ def sync_push(
         emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
-    if formatter.json_mode:
-        formatter.output(result)
-    else:
-        _render_push_result(formatter, result)
-
     # A per-config failure is collected, not raised -- without this the command
     # reported a green "Pushed" and exit 0 even when every config failed (#745).
-    if code := item_failure_exit_code(len(result.get("errors", []))):
+    code = item_failure_exit_code(len(result.get("errors", [])))
+    if formatter.json_mode:
+        formatter.output(result, exit_code=code or 0)
+    else:
+        _render_push_result(formatter, result)
+    if code:
         raise typer.Exit(code=code)
 
 
@@ -1276,16 +1279,16 @@ def sync_clone(
         emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
-    if formatter.json_mode:
-        formatter.output(result)
-    else:
-        print_clone_result(formatter, result)
-
     # A clone where every config failed used to print "Success ... 0 created"
     # and exit 0 -- the failures were warnings under a green line (#745). A
     # bucket the clone could not create or link is a failed item too.
     failed = len(result.get("errors", [])) + len(result.get("bucket_errors", []))
-    if code := item_failure_exit_code(failed):
+    code = item_failure_exit_code(failed)
+    if formatter.json_mode:
+        formatter.output(result, exit_code=code or 0)
+    else:
+        print_clone_result(formatter, result)
+    if code:
         raise typer.Exit(code=code)
 
 

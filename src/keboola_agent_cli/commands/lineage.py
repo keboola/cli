@@ -45,11 +45,6 @@ lineage_app = typer.Typer(
 @lineage_app.callback(invoke_without_command=True)
 def _lineage_callback(ctx: typer.Context) -> None:
     check_cli_permission(ctx, "lineage")
-    if ctx.invoked_subcommand is None:
-        # No subcommand -> show help
-        click_cmd = typer.main.get_command(lineage_app)
-        ctx_help = click_cmd.make_context("lineage", [])
-        typer.echo(click_cmd.get_help(ctx_help))
 
 
 # -- lineage build ---------------------------------------------------------
@@ -179,7 +174,7 @@ def lineage_info(
         formatter.error(
             message=f"Cache file not found: {load}", error_code=ErrorCode.FILE_NOT_FOUND
         )
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=2)
 
     graph = service.load_from_cache(load)
 
@@ -329,7 +324,7 @@ def lineage_show(
         formatter.error(
             message=f"Cache file not found: {load}", error_code=ErrorCode.FILE_NOT_FOUND
         )
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=2)
 
     graph = service.load_from_cache(load)
 
@@ -1181,7 +1176,7 @@ def lineage_serve(
         formatter.error(
             message=f"Cache file not found: {load}", error_code=ErrorCode.FILE_NOT_FOUND
         )
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=2)
 
     try:
         raw_data = json.loads(load.read_text(encoding="utf-8"))

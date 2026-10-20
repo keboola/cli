@@ -90,13 +90,44 @@ def sanitize_unexpected_error(exc: BaseException) -> str:
     return raw
 
 
+def item_failure(
+    exc: BaseException, /, *, fallback_code: str | ErrorCode = UNEXPECTED_ERROR_CODE, **keys: Any
+) -> dict[str, Any]:
+    """One failed item of a command that processes several items or projects (spec E5).
+
+    ``keys`` are the entry's identity and the keys it always had (``error``,
+    ``reason``). ``error_code``, ``retryable`` and ``message`` are added, so a
+    ``--json`` consumer reads one shape. A code the exception carries is kept.
+    A plain ``ConfigError`` gets ``CONFIG_ERROR``. Any other exception gets
+    ``fallback_code``, and its message is truncated
+    (:func:`sanitize_unexpected_error`, CWE-209) because its content is unknown.
+
+    ``message`` is the field to show or log. The old ``error`` and ``reason``
+    keys keep their previous raw text for compatibility.
+    """
+    code = getattr(exc, "error_code", None)
+    if code is None and isinstance(exc, ConfigError):
+        code = ErrorCode.CONFIG_ERROR
+    if code:
+        message = getattr(exc, "message", None) or str(exc)
+    else:
+        code = fallback_code
+        message = sanitize_unexpected_error(exc)
+    return {
+        **keys,
+        "error_code": str(code),
+        "retryable": bool(getattr(exc, "retryable", False)),
+        "message": message,
+    }
+
+
 def project_error_entry(
     alias: str,
     exc: BaseException,
     *,
     fallback_code: str | ErrorCode = UNEXPECTED_ERROR_CODE,
     message: str | None = None,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     """Build one per-project error entry, keeping a typed ``error_code`` intact.
 
     A `--json` consumer branches on ``error_code``, so a code the exception
@@ -109,19 +140,22 @@ def project_error_entry(
     ``fallback_code`` applies only to an exception without a code. Such a
     message is truncated (:func:`sanitize_unexpected_error`, CWE-209) because
     its content is unknown; a typed error's message is curated and passes
-    through whole.
+    through whole. ``retryable`` comes from the exception (spec E5).
     """
     code = getattr(exc, "error_code", None)
+    retryable = bool(getattr(exc, "retryable", False))
     if code:
         return {
             "project_alias": alias,
             "error_code": str(code),
             "message": message if message is not None else str(exc),
+            "retryable": retryable,
         }
     return {
         "project_alias": alias,
         "error_code": str(fallback_code),
         "message": message if message is not None else sanitize_unexpected_error(exc),
+        "retryable": retryable,
     }
 
 

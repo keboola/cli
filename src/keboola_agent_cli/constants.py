@@ -506,6 +506,9 @@ ENV_DEFER_UPDATE: str = "KBAGENT_DEFER_UPDATE"
 DEFERRED_UPDATE_MARKER_FILENAME: str = "pending_update.json"
 DEFERRED_UPDATE_EXIT_FILENAME: str = "pending_update.exit"
 DEFERRED_UPDATE_LOG_FILENAME: str = "pending_update.log"
+# Written after an automatic update to a higher major. The first write or
+# destructive command claims it and is refused once (#791 row 28, CLI-51).
+CROSSING_PENDING_FILENAME: str = "crossing_pending.json"
 # The install log is appended to by every update (inline and deferred), so it
 # is rolled once it passes this size rather than growing for the life of the
 # install.

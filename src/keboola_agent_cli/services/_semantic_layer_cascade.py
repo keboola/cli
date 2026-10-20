@@ -23,6 +23,7 @@ from typing import Any
 from ..errors import ErrorCode, KeboolaApiError
 from ..metastore_client import MetastoreClient, SemanticType
 from ._semantic_layer_internals import PUSH_ORDER
+from .base import item_failure
 
 logger = logging.getLogger(__name__)
 
@@ -81,12 +82,7 @@ def cascade_delete_model(
                     else str(exc) or type(exc).__name__
                 )
                 failures.append(
-                    {
-                        "type": type_slug,
-                        "id": child_id,
-                        "name": child_name,
-                        "error": err,
-                    }
+                    item_failure(exc, type=type_slug, id=child_id, name=child_name, error=err)
                 )
                 logger.warning(
                     "Cascade DELETE failed for %s id=%s name=%s: %s",

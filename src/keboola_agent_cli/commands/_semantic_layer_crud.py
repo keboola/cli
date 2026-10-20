@@ -14,6 +14,7 @@ from rich.console import Console
 
 from ..errors import ErrorCode
 from ._helpers import (
+    _confirm_or_abort,
     check_cli_permission,
     get_formatter,
     get_service,
@@ -409,10 +410,11 @@ def edit_metric(
         is_tty=_is_stdin_tty(),
         confirm_cb=typer.confirm,
     )
-    formatter.output(result, _print_edit_result("metric"))
     # A constraint the rename could not repoint is a failed cascade item (#745).
     cascaded = result.get("cascaded_constraints") or []
-    if code := item_failure_exit_code(sum(1 for c in cascaded if c.get("status") == "failed")):
+    code = item_failure_exit_code(sum(1 for c in cascaded if c.get("status") == "failed"))
+    formatter.output(result, _print_edit_result("metric"), exit_code=code or 0)
+    if code:
         raise typer.Exit(code=code)
 
 
@@ -545,7 +547,8 @@ def edit_glossary(
     service = get_service(ctx, "semantic_layer_service")
 
     if new_term is not None and new_term != term and not yes:
-        if not _is_stdin_tty():
+        # --json without a terminal still refuses: here --json is no consent.
+        if formatter.json_mode and not _is_stdin_tty():
             formatter.error(
                 message=(
                     f"Refusing to rename glossary term {term!r} -> {new_term!r} "
@@ -555,12 +558,12 @@ def edit_glossary(
                 error_code=ErrorCode.VALIDATION_ERROR,
             )
             raise typer.Exit(code=2)
-        if not formatter.json_mode and not typer.confirm(
+        _confirm_or_abort(
+            formatter,
+            yes,
             f"Rename glossary term '{term}' to '{new_term}'? "
-            "Downstream consumers joining on the term will break."
-        ):
-            formatter.console.print("Aborted.")
-            raise typer.Exit(code=0)
+            "Downstream consumers joining on the term will break.",
+        )
 
     result = _handle_service_call(
         ctx,
@@ -634,16 +637,14 @@ def _run_remove(
         )
 
     # Non-TTY without --yes: refuse with exit 2 (warning above already shown).
-    if not yes:
-        if not is_tty:
-            formatter.error(
-                message=(f"Refusing to remove {kind} {name!r} non-interactively without --yes."),
-                error_code=ErrorCode.VALIDATION_ERROR,
-            )
-            raise typer.Exit(code=2)
-        if not formatter.json_mode and not typer.confirm(f"Delete {kind} '{name}' anyway?"):
-            formatter.console.print("Aborted.")
-            raise typer.Exit(code=0)
+    # --json without a terminal refuses too: here --json is no consent.
+    if not yes and formatter.json_mode and not is_tty:
+        formatter.error(
+            message=(f"Refusing to remove {kind} {name!r} non-interactively without --yes."),
+            error_code=ErrorCode.VALIDATION_ERROR,
+        )
+        raise typer.Exit(code=2)
+    _confirm_or_abort(formatter, yes, f"Delete {kind} '{name}' anyway?")
 
     result = _handle_service_call(
         ctx,

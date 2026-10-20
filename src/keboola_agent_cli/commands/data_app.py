@@ -21,7 +21,7 @@ from rich.markup import escape
 
 from ..constants import DEFAULT_JOB_RUN_TIMEOUT
 from ..effective_branch import resolve_branch
-from ..errors import ConfigError, ErrorCode, KeboolaApiError
+from ..errors import ConfigError, ErrorCode, KeboolaApiError, exit_code_for
 from ._all_projects import AllProjectsOption, reject_project_with_all_projects
 from ._data_app_git import register_git_commands
 from ._data_app_password import (
@@ -36,6 +36,7 @@ from ._data_app_password import (
 )
 from ._data_app_runtime import register_secrets_commands
 from ._helpers import (
+    _confirm_or_abort,
     check_cli_permission,
     emit_api_error,
     emit_project_warnings,
@@ -410,7 +411,7 @@ def data_app_create(
                 message=f"Cannot read --description-file {description_file}: {exc}",
                 error_code=ErrorCode.READ_ERROR,
             )
-            raise typer.Exit(code=2) from None
+            raise typer.Exit(code=exit_code_for(ErrorCode.READ_ERROR)) from None
 
     # Source-of-code selection: exactly one of an external --git-repo or a
     # Keboola --use-managed-git-repo. Catch the two obvious mistakes at the CLI
@@ -645,16 +646,12 @@ def data_app_delete(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "data_app_service")
 
-    if (
-        not yes
-        and not formatter.json_mode
-        and not typer.confirm(
-            f"Delete data app {app_id} in '{project}'? "
-            "This deletes the deployment AND the Storage config (irreversible)."
-        )
-    ):
-        formatter.console.print("Aborted.")
-        raise typer.Exit(code=0)
+    _confirm_or_abort(
+        formatter,
+        yes,
+        f"Delete data app {app_id} in '{project}'? "
+        "This deletes the deployment AND the Storage config (irreversible).",
+    )
 
     try:
         result = service.delete_data_app(alias=project, app_id=app_id)
@@ -950,8 +947,10 @@ def data_app_validate_repo(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
+    # validate-repo's own exit code: BLOCKING (or strict-WARN) -> 1.
+    exit_code = 1 if result.get("is_failure") else 0
     if formatter.json_mode:
-        formatter.output(result)
+        formatter.output(result, exit_code=exit_code)
     else:
         verdict_colour = (
             "red"
@@ -974,15 +973,10 @@ def data_app_validate_repo(
             formatter.console.print(line)
         formatter.console.print(f"\n[dim]{result['message']}[/dim]")
 
-    if result.get("is_failure"):
-        # validate-repo's own exit code: BLOCKING (or strict-WARN) -> 1.
-        # We bypass the structured-error formatter because validate-repo
-        # output is itself the structured error envelope.
-        if formatter.json_mode:
-            # JSON envelope is already printed; just exit non-zero.
-            raise typer.Exit(code=1)
-        # Human mode: the verdict line above conveyed the failure.
-        raise typer.Exit(code=1)
+    if exit_code:
+        # No structured error after the output: the validate-repo result is
+        # itself the answer, and the verdict line conveyed it in human mode.
+        raise typer.Exit(code=exit_code)
 
 
 # Attach the data-app git-*, secrets-* and password commands. They live in

@@ -18,6 +18,7 @@ from ..services._storage_jobs import validate_wait_timeout
 from ..services._storage_tables import CLONE_TABLE_PRODUCTION_MESSAGE
 from ._all_projects import AllProjectsOption, reject_project_with_all_projects
 from ._helpers import (
+    _confirm_or_abort,
     check_cli_permission,
     emit_api_error,
     emit_project_warnings,
@@ -1081,9 +1082,7 @@ def storage_delete_table(
             f"FORCE-delete {len(table_id)} table(s) from project '{project}'?"
             " This will also delete all aliases in downstream projects."
         )
-    if not yes and not formatter.json_mode and not typer.confirm(confirm_msg):
-        formatter.console.print("Aborted.")
-        raise typer.Exit(code=0)
+    _confirm_or_abort(formatter, yes, confirm_msg)
 
     try:
         result = service.delete_tables(
@@ -1096,8 +1095,9 @@ def storage_delete_table(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
+    exit_code = 1 if result["failed"] else 0
     if formatter.json_mode:
-        formatter.output(result)
+        formatter.output(result, exit_code=exit_code)
     else:
         for tid in result["deleted"]:
             formatter.console.print(f"[bold green]Deleted:[/bold green] {tid}")
@@ -1106,8 +1106,8 @@ def storage_delete_table(
                 f"[bold red]Failed:[/bold red] {f_item['id']}: {f_item['error']}"
             )
 
-    if result["failed"]:
-        raise typer.Exit(code=1)
+    if exit_code:
+        raise typer.Exit(code=exit_code)
 
 
 @storage_app.command("truncate-table", rich_help_panel=_TABLES)
@@ -1186,9 +1186,7 @@ def storage_truncate_table(
         f"Truncate {len(table_id)} table(s) in project '{project}'? "
         "All rows will be deleted; schema and dependents are preserved."
     )
-    if not yes and not formatter.json_mode and not typer.confirm(confirm_msg):
-        formatter.console.print("Aborted.")
-        raise typer.Exit(code=0)
+    _confirm_or_abort(formatter, yes, confirm_msg)
 
     try:
         result = service.truncate_tables(
@@ -1200,8 +1198,9 @@ def storage_truncate_table(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
+    exit_code = 1 if result["failed"] else 0
     if formatter.json_mode:
-        formatter.output(result)
+        formatter.output(result, exit_code=exit_code)
     else:
         for entry in result["truncated"]:
             formatter.console.print(
@@ -1213,8 +1212,8 @@ def storage_truncate_table(
                 f"[bold red]Failed:[/bold red] {f_item['id']}: {f_item['error']}"
             )
 
-    if result["failed"]:
-        raise typer.Exit(code=1)
+    if exit_code:
+        raise typer.Exit(code=exit_code)
 
 
 @storage_app.command("add-column", rich_help_panel=_TABLES)
@@ -1366,15 +1365,11 @@ def storage_delete_column(
                 )
         return
 
-    if (
-        not yes
-        and not formatter.json_mode
-        and not typer.confirm(
-            f"Delete {len(column)} column(s) from table '{table_id}' in project '{project}'?"
-        )
-    ):
-        formatter.console.print("Aborted.")
-        raise typer.Exit(code=0)
+    _confirm_or_abort(
+        formatter,
+        yes,
+        f"Delete {len(column)} column(s) from table '{table_id}' in project '{project}'?",
+    )
 
     try:
         result = service.delete_columns(
@@ -1388,8 +1383,9 @@ def storage_delete_column(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
+    exit_code = 1 if result["failed"] else 0
     if formatter.json_mode:
-        formatter.output(result)
+        formatter.output(result, exit_code=exit_code)
     else:
         for col in result["deleted"]:
             formatter.console.print(f"[bold green]Deleted:[/bold green] {col} from {table_id}")
@@ -1398,8 +1394,8 @@ def storage_delete_column(
                 f"[bold red]Failed:[/bold red] {f_item['column']}: {f_item['error']}"
             )
 
-    if result["failed"]:
-        raise typer.Exit(code=1)
+    if exit_code:
+        raise typer.Exit(code=exit_code)
 
 
 @storage_app.command("swap-tables", rich_help_panel=_TABLES)
@@ -1515,9 +1511,7 @@ def storage_swap_tables(
         "same physical position (i.e. they will expose the OTHER table's data "
         "after the swap)."
     )
-    if not yes and not formatter.json_mode and not typer.confirm(confirm_msg):
-        formatter.console.print("Aborted.")
-        raise typer.Exit(code=0)
+    _confirm_or_abort(formatter, yes, confirm_msg)
 
     try:
         result = service.swap_tables(
@@ -2019,8 +2013,9 @@ def storage_file_tag(
         emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
+    exit_code = 1 if result["errors"] else 0
     if formatter.json_mode:
-        formatter.output(result)
+        formatter.output(result, exit_code=exit_code)
     else:
         for tag_name in result["added"]:
             formatter.console.print(f"[bold green]Added tag:[/bold green] {tag_name}")
@@ -2031,8 +2026,8 @@ def storage_file_tag(
                 f"[bold red]Failed:[/bold red] {err['action']} tag '{err['tag']}': {err['error']}"
             )
 
-    if result["errors"]:
-        raise typer.Exit(code=1)
+    if exit_code:
+        raise typer.Exit(code=exit_code)
 
 
 @storage_app.command("load-file", rich_help_panel=_FILES)

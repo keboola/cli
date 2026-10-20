@@ -73,6 +73,8 @@ src/keboola_agent_cli/
   project_ref.py        # resolve_project_ref(): a project ID given where an alias is expected -> the
                         #   alias (CLI-22); applied by commands/_project_ref.py and serve's dependency
   output.py             # OutputFormatter: JSON vs Rich dual-mode output
+  root_command.py       # RootGroup: one --json document per exit, root flags after the subcommand,
+                        #   -h, the repeated-option check (#791 O1/O7/A6/H5)
   errors.py             # KeboolaApiError, ConfigError, ErrorCode enum, mask_token()
   config_store.py       # JSON persistence for config.json (0600 permissions)
   permissions.py        # PermissionEngine (--deny-writes / --deny-destructive session firewall)
@@ -255,7 +257,7 @@ Full author checklist: see `CONTRIBUTING.md` > "Releasing a beta (pre-release) v
 
 5. **Error handling**: commands catch `KeboolaApiError` and `ConfigError`, map them to the appropriate exit code, and output structured errors in JSON mode. Report a `KeboolaApiError` with `emit_api_error(formatter, exc)` (`commands/_helpers.py`), which keeps its `retryable` and `details`. `tests/test_error_forwarding.py` fails on a handler that drops them.
 
-6. **Exit codes**: 0=success, 1=general error, 2=usage error, 3=auth error, 4=network error, 5=config error, 6=permission denied, 7=job timed out and cancelled (`JOB_TIMEOUT_TERMINATED`), 130=interrupted.
+6. **Exit codes**: 0=success, 1=general error, 2=usage error, 3=auth error, 4=network error, 5=config error, 6=permission denied, 7=job timed out and cancelled (`JOB_TIMEOUT_TERMINATED`), 130=interrupted. [`docs/error-codes.md`](docs/error-codes.md) is the one list of error codes with their exit code and error type. `ERROR_CODE_TABLE` in `errors.py` holds the same pairs and `map_error_to_exit_code` reads it. `make check-error-codes` keeps the two equal.
 
 7. **Token masking**: tokens are never printed in full. Use `mask_token()` from `errors.py`.
 
@@ -376,6 +378,27 @@ plugins/kbagent/
 
 ```
 # Global options: --json, --verbose, --no-color, --config-dir, --conversation-id, --deny-writes, --deny-destructive, --allow-env-manage-token
+# Root command class (CLI-44, #791; root_command.py): --json/-j, --deny-writes and --deny-destructive are
+#   also accepted after the subcommand (hidden copies on every group and command, argv not rewritten);
+#   -h = --help. Under --json every exit writes one JSON document: a parse error or a bare group is
+#   USAGE_ERROR (exit 2, help on stderr), a crash INTERNAL_ERROR (exit 1). A bare group exits 2 with
+#   its help on stderr in human mode too. Success envelope adds schema_version ("1.0") and exit_code;
+#   error envelope adds schema_version only. A site that exits non-zero after formatter.output() passes
+#   exit_code= (blocking rule output.ok-then-exit-declares-exit-code). A single-value option given twice
+#   is USAGE_ERROR on write/destructive/admin commands, a REPEATED_OPTION warnings[] entry on reads.
+#   Version gate in gotchas.md.
+# Confirmations (CLI-46, spec S4): the safety prompts go through `_confirm_or_abort` in commands/_helpers.py
+#   (also the preview-then-confirm of `org setup` and `project refresh`). --yes and --json skip it. On a
+#   terminal it asks on stderr. In human mode without a terminal (stdin or stderr not a TTY) it refuses with
+#   CONFIRMATION_REQUIRED, exit 2, naming --yes -- a piped "y" no longer confirms. Not through the helper:
+#   the non-safety questions of `init` and of the `auth login` / `auth register-projects` project picker;
+#   the `workspace load` size guard (asks on a terminal only, refuses without one); and the service guards
+#   of `semantic-layer add metric` / `edit metric` (VALIDATION_ERROR without a terminal, and they still ask
+#   on a terminal under --json). `branch delete` and `workspace delete` now ask too, and take --yes and a read-only --dry-run
+#   (REST: `dry_run` query parameter, no prompt). Deprecated flags (spec C3) are hidden options from
+#   `deprecated_option()` with a `DEPRECATIONS` entry. They add a DEPRECATED warning (`replacement`,
+#   `remove_after`): `stream delete --force` (use --yes) and `semantic-layer import --yes` (no effect).
+#   Version gate lives in gotchas.md.
 # --conversation-id ID (#716): sets the X-Conversation-ID observability header for the
 #   invocation; equivalent to KBAGENT_CONVERSATION_ID and takes precedence over it. Exists because an
 #   agent harness does not persist shell state between tool calls, so the documented one-time `export`
@@ -496,7 +519,7 @@ kbagent project create --url URL [--project ALIAS] [--name NAME] [--backend snow
 #   (`/manage/programmatic-projects`, gated by the `agent-provisioning` stack feature
 #   / `STACK_FEATURES__AGENT_PROVISIONING`, off on most stacks -- the COMMAND is always
 #   registered, so `--help` proves nothing about the stack; without the feature the stack 404s
-#   and this exits 1 with AUTH_NOT_SUPPORTED_ON_STACK, naming the flag and the browser path),
+#   and this exits 5 (1 before 1.0.0) with AUTH_NOT_SUPPORTED_ON_STACK, naming the flag and the browser path),
 #   stores the returned project-pinned session in auth.json, and registers the project in
 #   config.json under the `kbc-session://` sentinel -- becoming the default project when nothing
 #   else was registered. THE PROJECT IT CREATES IS OWNED BY NOBODY: the result's `confirm_url` is a
@@ -634,7 +657,7 @@ kbagent job terminate --project NAME (--job-id ID [--job-id ID ...] | --status a
 #   ID (read from GET /v2/storage/dev-branches). Before, it matched no job. Version gate in gotchas.md.
 # job run --idempotency-key: a pending entry is recorded BEFORE the create. A definite failure (4xx,
 #   refused connection, connect timeout) removes it; an unknown outcome (read timeout, 5xx, exhausted
-#   retries) keeps it, because the job may exist. A replay that finds the pending entry exits 1 (INVALID_ARGUMENT, HTTP 400 over serve) and
+#   retries) keeps it, because the job may exist. A replay that finds the pending entry exits with INVALID_ARGUMENT (1 before 1.0.0, 2 from 1.0.0, HTTP 400 over serve) and
 #   creates nothing; check `job list`, then `--force-rerun`. Version gate lives in gotchas.md.
 
 kbagent storage buckets [--project NAME | --all-projects] [--branch ID]
@@ -783,7 +806,7 @@ kbagent storage unload-table --project NAME --table-id ID [--columns COL ...] [-
 kbagent stream list --project NAME [--branch ID]
 kbagent stream create-source --project NAME --name NAME [--type otlp|http] [--branch ID] [--if-not-exists] [--no-sinks] [--reveal]
 kbagent stream detail [SOURCE_ID | --name NAME] --project NAME [--branch ID] [--reveal]
-kbagent stream delete SOURCE_ID --project NAME [--branch ID] [--dry-run] [--yes|--force]
+kbagent stream delete SOURCE_ID --project NAME [--branch ID] [--dry-run] [--yes]
 
 kbagent lineage build --directory PATH --output PATH [--ai] [--refresh]
 kbagent lineage show --load PATH [--upstream NODE] [--downstream NODE] [--column COL] [--columns] [--project ALIAS] [--depth N] [--format text|mermaid|html|er]
@@ -913,7 +936,7 @@ kbagent branch use --project ALIAS --branch ID
 # branch use: every command that then picks a branch names it -- `Target:` on stderr, `targets` in
 #   --json (branch_source explicit|active_branch|git_mapping|manifest|merge_request|production). Version gate in gotchas.md (#766).
 kbagent branch reset --project ALIAS
-kbagent branch delete --project ALIAS --branch ID
+kbagent branch delete --project ALIAS --branch ID [--dry-run] [--yes]
 kbagent branch merge --project ALIAS [--branch ID]
 kbagent branch metadata-list --project NAME [--branch ID|default]
 kbagent branch metadata-get --project NAME --key KEY [--branch ID|default]
@@ -998,7 +1021,7 @@ kbagent workspace create --project ALIAS [--name NAME] [--backend TYPE] [--ui] [
 #   gate for this entry lives in gotchas.md (these `# ` lines parse as ATX headings).
 kbagent workspace list [--project NAME ... | --all-projects] [--orphaned] [--branch ID] [--qs-compatible]
 kbagent workspace detail --project ALIAS --workspace-id ID [--branch ID]
-kbagent workspace delete --project ALIAS --workspace-id ID
+kbagent workspace delete --project ALIAS --workspace-id ID [--dry-run] [--yes]
 kbagent workspace password --project ALIAS --workspace-id ID
 kbagent workspace load --project ALIAS --workspace-id ID --tables TABLE_ID [--tables ...] [--preserve] [--load-type clone|copy|view] [--force] [--timeout SECONDS]
 # workspace load (since 0.91.0, #687): DEFAULT is now per-table AUTO-DECIDE, mirroring the
@@ -1264,7 +1287,7 @@ kbagent semantic-layer remove dataset --project P [--model M] --name N [--yes]
 kbagent semantic-layer remove constraint --project P [--model M] --name N [--yes]
 kbagent semantic-layer remove relationship --project P [--model M] --name N [--yes]
 kbagent semantic-layer remove glossary --project P [--model M] --term TERM [--yes]
-kbagent semantic-layer import --project P --file PATH [--model M] [--types T,T,...] [--dry-run] [--yes] [--overwrite] [--scope project|organization|targeted] [--target-project ALIAS|ID ...]
+kbagent semantic-layer import --project P --file PATH [--model M] [--types T,T,...] [--dry-run] [--overwrite] [--scope project|organization|targeted] [--target-project ALIAS|ID ...]
 kbagent semantic-layer promote --from-project A --to-project B [--from-model M] [--to-model M] [--types T,T,...] [--dry-run] [--yes] [--scope project|organization|targeted] [--target-project ALIAS|ID ...]
 kbagent semantic-layer build --project P [--model M] --tables T,T,... [--name N] [--dry-run] [--keep-on-failure] [--output PATH]
 kbagent semantic-layer token --encrypt --project P --component-id C
@@ -1504,6 +1527,17 @@ kbagent update [--beta] [--major]
 #   envelopes). Cache keys next_major_version/_release_id/_published_at, checked_at,
 #   notice_shown_at; a cached latest_version of a higher major is ignored; `version --beta` no
 #   longer writes the cache. Version gate lives in gotchas.md.
+# 1.x updater and the crossing (CLI-51, #791 section 4.4): when /releases/latest names a LOWER
+#   major (a 1.x client before M), the updater reads the first page of the release list and takes
+#   the highest stable release of its own major (pre-releases only with --beta). The cache file is
+#   per major: version_cache.json (0.x), version_cache_v<N>.json (N >= 1). An automatic update
+#   to a higher major (KBAGENT_UPDATED_FROM, or the claimed marker of a finished deferred update
+#   with major_flag not true) writes crossing_pending.json in the state dir. Until the first
+#   write/destructive command (permissions.py class, not admin) every read gets a warnings[] entry
+#   UPDATED_ACROSS_MAJOR. That command claims the file with os.replace and exits 6 with
+#   UPDATED_ACROSS_MAJOR, from check_cli_permission() (update_crossing.py). Fail open on any I/O
+#   error. Not for serve REST routes. The banner lists the BREAKING: notes of every crossed version. Under --json
+#   the first command adds UPDATED_ACROSS_BREAKING. Version gate lives in gotchas.md.
 # `--beta` (or env `KBAGENT_INCLUDE_PRERELEASE=1`) opts into pre-release versions
 # (PEP 440 betas/rc, e.g. 0.43.0b1). Default (no flag) is stable-only -- auto-update
 # startup hook never silently lands on a beta.

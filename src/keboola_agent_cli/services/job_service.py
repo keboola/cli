@@ -26,7 +26,7 @@ from ..constants import (
 )
 from ..errors import ErrorCode, KeboolaApiError
 from ..models import ProjectConfig
-from .base import BaseService
+from .base import BaseService, item_failure
 from .job_idempotency_store import JobIdempotencyStore, run_idempotent_job
 
 logger = logging.getLogger(__name__)
@@ -941,7 +941,7 @@ class JobService(BaseService):
                     elif disposition["bucket"] == "not_found":
                         not_found.append(jid)
                     else:
-                        failed.append({"id": jid, "error": exc.message})
+                        failed.append(item_failure(exc, id=jid, error=exc.message))
         finally:
             client.close()
 
