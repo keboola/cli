@@ -117,11 +117,9 @@ def config_state_set(
     config_store: ConfigStore = ctx.obj["config_store"]
 
     try:
-        state_value = _parse_json_input(state)
-    except (json.JSONDecodeError, FileNotFoundError) as exc:
-        formatter.error(
-            message=f"Invalid --state input: {exc}", error_code=ErrorCode.VALIDATION_ERROR
-        )
+        state_value = _parse_json_input(state, label="--state")
+    except ValueError as exc:
+        formatter.error(message=str(exc), error_code=ErrorCode.VALIDATION_ERROR)
         raise typer.Exit(code=2) from None
 
     effective_branch = resolve_branch(config_store, project, branch)

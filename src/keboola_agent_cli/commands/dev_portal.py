@@ -25,7 +25,9 @@ from ._helpers import (
     get_dev_portal_service,
     get_formatter,
     map_error_to_exit_code,
+    parse_json_arg,
     read_password_stdin,
+    read_text_arg,
     resolve_identity_alias,
 )
 
@@ -301,12 +303,19 @@ def _assert_tty(action_description: str) -> None:
         raise typer.Exit(code=EXIT_PERMISSION_DENIED)
 
 
-def _load_payload(data: str | None) -> dict:
-    if data is None:
-        raise typer.BadParameter("--data is required")
-    if data == "-":
-        return json.loads(sys.stdin.read())
-    return json.loads(Path(data).read_text(encoding="utf-8"))
+def _load_payload(formatter: OutputFormatter, data: str) -> dict:
+    """Read the ``--data`` JSON object from a file path or ``-`` (stdin)."""
+    try:
+        payload = parse_json_arg(data if data == "-" else f"@{data}", label="--data")
+    except ValueError as exc:
+        formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
+        raise typer.Exit(code=2) from None
+    if not isinstance(payload, dict):
+        formatter.error(
+            message="--data must be a JSON object", error_code=ErrorCode.INVALID_ARGUMENT
+        )
+        raise typer.Exit(code=2) from None
+    return payload
 
 
 def _render_pending(formatter: OutputFormatter, pending: PendingWrite) -> None:
@@ -372,8 +381,9 @@ def create_cmd(
     formatter = get_formatter(ctx)
     svc = get_dev_portal_service(ctx)
     alias = resolve_identity_alias(ctx, identity)
+    payload = _load_payload(formatter, data)
     try:
-        pending = svc.prepare_create(alias, vendor, _load_payload(data))
+        pending = svc.prepare_create(alias, vendor, payload)
     except KeboolaApiError as exc:
         emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
@@ -421,10 +431,10 @@ def patch_cmd(
     vendor, app_id = _split_app(app)
 
     if data:
-        payload = _load_payload(data)
+        payload = _load_payload(formatter, data)
     elif property_:
         if value_file:
-            raw = Path(value_file).read_text(encoding="utf-8")
+            raw = read_text_arg(formatter, Path(value_file), label="--value-file")
         elif value is not None:
             raw = value
         else:

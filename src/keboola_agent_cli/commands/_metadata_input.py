@@ -43,7 +43,10 @@ def resolve_text_input(
     if text is not None:
         return text
     if file is not None:
-        if not file.is_file():
-            raise ConfigError(f"Input file not found: {file}")
-        return file.read_text(encoding="utf-8")
+        try:
+            if not file.is_file():
+                raise ConfigError(f"--file: file not found: {file}")
+            return file.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            raise ConfigError(f"--file: cannot read file {file}: {exc}") from None
     return sys.stdin.read()

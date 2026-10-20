@@ -15,9 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sys
 from collections.abc import AsyncIterator
-from pathlib import Path
 from typing import Any
 
 import typer
@@ -37,6 +35,7 @@ from ._helpers import (
     check_cli_permission,
     get_formatter,
     get_service,
+    parse_json_arg,
 )
 
 agent_app = typer.Typer(help="Scheduled agent tasks (cron / manual / chained)")
@@ -55,31 +54,12 @@ def _agent_permission_check(ctx: typer.Context) -> None:
 # ── Shared parsing helpers ────────────────────────────────────────────
 
 
-def _read_payload(value: str, formatter: OutputFormatter) -> str:
-    """Resolve --input style strings: inline JSON, ``@file``, or ``-`` (stdin)."""
-    if value == "-":
-        return sys.stdin.read()
-    if value.startswith("@"):
-        path = Path(value[1:])
-        if not path.is_file():
-            formatter.error(
-                message=f"Input file not found: {path}",
-                error_code=ErrorCode.INVALID_ARGUMENT,
-            )
-            raise typer.Exit(code=2) from None
-        return path.read_text(encoding="utf-8")
-    return value
-
-
 def _parse_json(value: str, formatter: OutputFormatter, *, label: str) -> dict[str, Any]:
-    """Decode a JSON string into a dict, exiting cleanly on bad JSON."""
+    """Parse inline JSON, ``@file`` or ``-`` (stdin) into a dict, exiting cleanly on bad input."""
     try:
-        parsed = json.loads(value)
-    except json.JSONDecodeError as exc:
-        formatter.error(
-            message=f"Invalid JSON in {label}: {exc}",
-            error_code=ErrorCode.INVALID_FORMAT,
-        )
+        parsed = parse_json_arg(value, label=label)
+    except ValueError as exc:
+        formatter.error(message=str(exc), error_code=ErrorCode.INVALID_FORMAT)
         raise typer.Exit(code=2) from None
     if not isinstance(parsed, dict):
         formatter.error(
@@ -112,8 +92,7 @@ def _action_from_flags(
     paths (exit 2) -- they no longer execute anywhere.
     """
     if from_file is not None:
-        raw = _read_payload(from_file, formatter)
-        payload = _parse_json(raw, formatter, label="--from-file")
+        payload = _parse_json(from_file, formatter, label="--from-file")
         try:
             action = AgentAction.model_validate(payload)
         except Exception as exc:
@@ -737,8 +716,7 @@ def agent_run(
     task_id = _resolve_id(formatter, task_id, task_id_opt, label="Task ID", flag="--id/--task-id")
     runtime: dict[str, Any] | None = None
     if runtime_input:
-        raw = _read_payload(runtime_input, formatter)
-        runtime = _parse_json(raw, formatter, label="--runtime-input")
+        runtime = _parse_json(runtime_input, formatter, label="--runtime-input")
     if runtime_prompt:
         runtime = dict(runtime or {})
         runtime["prompt"] = runtime_prompt

@@ -6,7 +6,6 @@ No business logic belongs here.
 
 import json
 import os
-import sys
 from pathlib import Path
 
 import typer
@@ -18,6 +17,7 @@ from ._helpers import (
     get_formatter,
     get_service,
     map_error_to_exit_code,
+    parse_json_arg,
 )
 
 encrypt_app = typer.Typer(
@@ -72,8 +72,8 @@ def encrypt_values(
 
     # Parse input
     try:
-        parsed = _parse_input(input_data)
-    except (json.JSONDecodeError, FileNotFoundError, ValueError) as exc:
+        parsed = parse_json_arg(input_data, label="--input")
+    except ValueError as exc:
         formatter.error(message=str(exc), error_code=ErrorCode.INPUT_ERROR)
         raise typer.Exit(code=2) from None
 
@@ -114,29 +114,3 @@ def encrypt_values(
             formatter.console.print(f"Encrypted values written to {output_file}")
 
     formatter.output(result, lambda c, d: c.print_json(json.dumps(d, indent=2)))
-
-
-def _parse_input(raw: str) -> dict:
-    """Parse input from inline JSON, @file, or stdin.
-
-    Args:
-        raw: One of:
-            - "-" to read from stdin
-            - "@path/to/file.json" to read from a file
-            - Inline JSON string
-
-    Returns:
-        Parsed JSON as a dict.
-
-    Raises:
-        json.JSONDecodeError: If JSON parsing fails.
-        FileNotFoundError: If @file does not exist.
-    """
-    if raw == "-":
-        return json.loads(sys.stdin.read())
-    if raw.startswith("@"):
-        file_path = Path(raw[1:])
-        if not file_path.is_file():
-            raise FileNotFoundError(f"Input file not found: {file_path}")
-        return json.loads(file_path.read_text(encoding="utf-8"))
-    return json.loads(raw)

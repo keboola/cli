@@ -12,11 +12,13 @@ import json
 import os
 import secrets
 import sys
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import typer
+import yaml
 
 from .. import telemetry
 from ..config_store import ConfigStore
@@ -79,34 +81,107 @@ def resolve_manage_token(*, allow_env: bool = False) -> str:
     raise typer.Exit(code=2)
 
 
-def parse_json_arg(raw: str, *, label: str) -> Any:
+def parse_json_arg(raw: str, *, label: str, allow_yaml: bool = False) -> Any:
     """Parse a ``JSON|@file|-`` argument: inline JSON, ``@path``, or ``-`` for stdin.
 
-    The house input contract for structured flags (``config update
-    --configuration``, ``transformation edit --op``, ``merge-request resolve
-    --resolved``). Hoisted from ``transformation.py``'s private copy so the
-    merge-request group did not add another; ``config.py`` still carries an
-    older dict-only variant (``_parse_json_input``) -- folding it in is a
-    follow-up, not this PR.
+    The house input contract for structured flags (spec rule I1): ``config
+    update --configuration``, ``transformation edit --op``, ``merge-request
+    resolve --resolved``, ``encrypt values --input``, ``http post --body`` and
+    the others. ``allow_yaml`` parses the text as YAML, a superset of JSON
+    (``flow new/update/validate --file``).
 
     Raises:
         ValueError: On a missing/unreadable file or malformed JSON -- the message
             names ``label`` (the flag) so the caller can print it at exit 2 as-is.
     """
+    loads: Callable[[str], Any] = yaml.safe_load if allow_yaml else json.loads
     try:
         if raw == "-":
-            return json.loads(sys.stdin.read())
+            return loads(sys.stdin.read())
         if raw.startswith("@"):
             file_path = Path(raw[1:])
             if not file_path.is_file():
                 raise ValueError(f"{label}: file not found: {file_path}")
-            return json.loads(file_path.read_text(encoding="utf-8"))
-        return json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"{label}: invalid JSON: {exc}") from exc
-    except OSError as exc:
-        # a directory, a permission problem -- a usage error, not a crash
-        raise ValueError(f"{label}: cannot read file: {exc}") from exc
+            return loads(file_path.read_text(encoding="utf-8"))
+        return loads(raw)
+    except (json.JSONDecodeError, yaml.YAMLError) as exc:
+        raise ValueError(f"{label}: invalid {'YAML' if allow_yaml else 'JSON'}: {exc}") from exc
+    except (OSError, UnicodeDecodeError) as exc:
+        # a directory, a permission problem, a binary file -- a usage error, not a crash
+        raise ValueError(f"{label}: cannot read input: {exc}") from exc
+
+
+def split_multi(values: Iterable[str] | None) -> list[str]:
+    """Flatten a repeatable option that also takes a comma list (spec rule A4).
+
+    ``--x a --x b,c`` gives ``["a", "b", "c"]``. Empty parts are dropped, and a
+    value given twice is kept once, in first-seen order. Use it only for IDs
+    and fixed values: a free-form value (JSON, ``KEY=VALUE``, SQL, text) can
+    contain a comma, so those options are repeat-only and stay unsplit.
+    """
+    parts = (part.strip() for value in values or () for part in value.split(","))
+    return list(dict.fromkeys(part for part in parts if part))
+
+
+def split_int_multi(values: Iterable[str] | None, *, label: str) -> list[int]:
+    """``split_multi`` for integer IDs; a part that is not an integer raises ``ValueError``."""
+    parts = split_multi(values)
+    bad = [part for part in parts if not (part.isascii() and part.isdigit())]
+    if bad:
+        raise ValueError(f"{label} takes integer IDs, got: {', '.join(bad)}")
+    return [int(part) for part in parts]
+
+
+def read_text_arg(formatter: OutputFormatter, path: Path, *, label: str) -> str:
+    """Read a UTF-8 file option; an unreadable file is ``INVALID_ARGUMENT`` naming ``label``."""
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        formatter.error(
+            message=f"{label}: cannot read file {path}: {exc}",
+            error_code=ErrorCode.INVALID_ARGUMENT,
+        )
+        raise typer.Exit(code=2) from None
+
+
+def _is_file(path: str) -> bool:
+    """``Path.is_file`` that answers False where it would raise (a name too long)."""
+    try:
+        return Path(path).is_file()
+    except (OSError, ValueError):
+        return False
+
+
+class RefuseAtFile:
+    """Option callback for free text that refuses ``@<existing file>`` (spec rule I3).
+
+    Without it, ``--text @notes.md`` stores the literal text ``@notes.md``.
+    The refusal is ``INVALID_ARGUMENT`` (exit 2) with a hint that names the
+    file option of the command, also for the case where the text itself starts
+    with ``@``. ``@`` followed by anything that is not a file (a relative path
+    is relative to the current directory) stays text. Use it as
+    ``typer.Option(..., callback=RefuseAtFile("--file").callback)``;
+    ``scripts/check_cli_spec.py`` finds the free-text options without it.
+    """
+
+    def __init__(self, file_option: str) -> None:
+        self.file_option = file_option
+
+    def callback(
+        self, ctx: typer.Context, param: typer.CallbackParam, value: str | None
+    ) -> str | None:
+        if value is not None and value.startswith("@") and _is_file(value[1:]):
+            get_formatter(ctx).error(
+                message=(
+                    f"{param.opts[0]} got {value!r}, the name of an existing file (relative "
+                    f"to the current directory). Use {self.file_option} {value[1:]} to read "
+                    f"the file. To store the text {value!r} itself, write it to a file and "
+                    f"pass that file with {self.file_option}."
+                ),
+                error_code=ErrorCode.INVALID_ARGUMENT,
+            )
+            raise typer.Exit(code=2)
+        return value
 
 
 def read_password_stdin(label: str = "Password: ") -> str:

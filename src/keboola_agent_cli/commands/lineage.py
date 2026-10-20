@@ -26,6 +26,7 @@ from ._helpers import (
     check_cli_permission,
     get_formatter,
     get_service,
+    read_text_arg,
 )
 from ._lineage_build_output import print_ai_status
 from ._lineage_tree import (
@@ -1179,8 +1180,8 @@ def lineage_serve(
         raise typer.Exit(code=2)
 
     try:
-        raw_data = json.loads(load.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError) as exc:
+        raw_data = json.loads(read_text_arg(formatter, load, label="--load"))
+    except json.JSONDecodeError as exc:
         formatter.error(message=f"Cannot read lineage file: {exc}", error_code=ErrorCode.READ_ERROR)
         raise typer.Exit(code=1) from None
 

@@ -497,7 +497,12 @@ class TestStateFile:
         assert not (tmp_path / "crossing_pending.json").exists()
 
     def test_concurrent_claims_refuse_at_most_once(self, tmp_path: Path) -> None:
-        """Eight processes claim one state file at the same moment. One wins."""
+        """Eight processes claim one state file at the same moment. At most one wins.
+
+        On POSIX exactly one wins. On Windows a concurrent move or the read of
+        the moved copy can fail with a sharing violation: then nobody is
+        refused (fail open).
+        """
         state = tmp_path / "crossing_pending.json"
         state.write_text(json.dumps({"from_version": "0.105.2", "to_version": "1.0.0"}))
         script = (
@@ -520,8 +525,12 @@ class TestStateFile:
         ]
         answers = [process.communicate(timeout=60)[0].strip() for process in processes]
 
-        assert answers.count("True") == 1, answers
-        assert not state.exists()
+        winners = answers.count("True")
+        if sys.platform == "win32":
+            assert winners <= 1, answers
+        else:
+            assert winners == 1, answers
+            assert not state.exists()
 
     def test_old_claimed_copies_are_removed(self, first_run, tmp_path: Path) -> None:
         """A crash between claim and delete leaves a copy. Startup removes it after a day."""
