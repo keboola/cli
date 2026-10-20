@@ -117,7 +117,7 @@ def _load_members(formatter: Any, members_file: str) -> list[dict]:
             if members_file == "-"
             else Path(members_file).read_text(encoding="utf-8")
         )
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         formatter.error(
             message=f"Could not read members file {members_file!r}: {exc}",
             error_code=ErrorCode.VALIDATION_ERROR,

@@ -1085,7 +1085,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
   kbagent sharing list [--project NAME | --all-projects]
     List shared buckets available for linking. Multi-project, uses regular token.
 
-  kbagent sharing share --project ALIAS --bucket-id ID --type TYPE [--target-project-ids IDs] [--target-users EMAILS]
+  kbagent sharing share --project ALIAS --bucket-id ID --type TYPE [--target-project-ids ID ...] [--target-users EMAIL ...]
     Enable sharing on a bucket. Requires master token (KBC_MASTER_TOKEN_{{ALIAS}} or KBC_MASTER_TOKEN).
     Types: organization, organization-project, selected-projects, selected-users.
 
@@ -2661,6 +2661,22 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
      - Parquet output is ALWAYS sliced -> directory, never a single file.
      - Default download path: ./{{project_alias}}/{{table_id}}.parquet/ -- override with --output.
      - CSV concat logic is never used for parquet; slices have their own footers.
+
+11. Input values (since vNEXT):
+   - A list option is repeatable, and an option of IDs or fixed values also
+     takes a comma list: `--target-project-ids 11 --target-project-ids 22,33`
+     gives 11, 22 and 33. This now also holds for org setup --project-ids,
+     sharing share --target-project-ids/--target-users and the semantic-layer
+     options --metrics, --new-metrics, --tables, --types and schema --type.
+   - `--text @notes.md` (project description-set, storage
+     describe-bucket/describe-table, branch metadata-set) and `transformation
+     create --sql @q.sql` exit 2 with INVALID_ARGUMENT when the file exists
+     (relative to the current directory); use --file / --sql-file. Only these
+     5 options refuse it: other free-text options still store `@file` as text.
+   - A bad input value (not an integer, bad JSON, a missing or unreadable
+     file) is an error that names the option, never a traceback. Most are
+     INVALID_ARGUMENT (exit 2); some JSON and file options keep an older code
+     (VALIDATION_ERROR, INPUT_ERROR, INVALID_FORMAT: exit 2; READ_ERROR: exit 1).
 
 ## Exit Codes
 

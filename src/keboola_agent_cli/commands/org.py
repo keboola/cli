@@ -20,6 +20,7 @@ from ._helpers import (
     get_service,
     map_error_to_exit_code,
     resolve_manage_token,
+    split_int_multi,
 )
 from ._project_pin import print_active_project_change
 
@@ -29,17 +30,6 @@ org_app = typer.Typer(help="Organization management")
 @org_app.callback(invoke_without_command=True)
 def _org_permission_check(ctx: typer.Context) -> None:
     check_cli_permission(ctx, "org")
-
-
-def _parse_project_ids(value: str | None) -> list[int] | None:
-    """Parse comma-separated project IDs string into a list of ints."""
-    if not value:
-        return None
-    try:
-        return [int(pid.strip()) for pid in value.split(",") if pid.strip()]
-    except ValueError as exc:
-        msg = f"Invalid project ID (must be integers): {exc}"
-        raise typer.BadParameter(msg) from exc
 
 
 def _format_setup_result(console: Console, data: dict) -> None:
@@ -152,10 +142,10 @@ def org_setup(
         "--org-id",
         help="Organization ID (requires org-admin manage token)",
     ),
-    project_ids_raw: str | None = typer.Option(
+    project_ids_raw: list[str] | None = typer.Option(
         None,
         "--project-ids",
-        help="Comma-separated project IDs (works with Personal Access Token)",
+        help="Project ID (repeatable or comma-separated; works with Personal Access Token)",
     ),
     url: str = typer.Option(
         ...,
@@ -211,7 +201,11 @@ def org_setup(
     service = get_service(ctx, "org_service")
 
     # Validate: need at least one of --org-id or --project-ids
-    project_ids = _parse_project_ids(project_ids_raw)
+    try:
+        project_ids = split_int_multi(project_ids_raw, label="--project-ids") or None
+    except ValueError as exc:
+        formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
+        raise typer.Exit(code=2) from None
     if not org_id and not project_ids:
         formatter.error(
             message="Provide --org-id (org admin) or --project-ids (project member)",

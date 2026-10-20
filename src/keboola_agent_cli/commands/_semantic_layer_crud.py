@@ -20,6 +20,7 @@ from ._helpers import (
     finish_items,
     get_formatter,
     get_service,
+    split_multi,
 )
 from ._semantic_layer_helpers import (
     ScopeChoice,
@@ -239,10 +240,10 @@ def add_constraint(
         "--rule",
         help='Rule expression STRING (e.g. "value >= 0"). NOT an object.',
     ),
-    metrics: str = typer.Option(
+    metrics: list[str] = typer.Option(
         ...,
         "--metrics",
-        help="Comma-separated list of metric names this constraint applies to.",
+        help="Metric name this constraint applies to (repeatable or comma-separated).",
     ),
     severity: str = typer.Option(
         "warning", "--severity", help="One of: error|warning|info (the 3-level API enum)."
@@ -253,7 +254,7 @@ def add_constraint(
     """Add a constraint."""
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
-    metrics_list = [m.strip() for m in metrics.split(",") if m.strip()]
+    metrics_list = split_multi(metrics)
     if not metrics_list:
         formatter.error(
             message="--metrics must contain at least one metric name.",
@@ -470,18 +471,14 @@ def edit_constraint(
     new_severity: str | None = typer.Option(
         None, "--new-severity", help="Replace severity (error|warning|info)"
     ),
-    new_metrics: str | None = typer.Option(
-        None, "--new-metrics", help="Comma-separated list of metric names"
+    new_metrics: list[str] | None = typer.Option(
+        None, "--new-metrics", help="Replace metric names (repeatable or comma-separated)"
     ),
 ) -> None:
     """Edit a constraint (in-place update, with local validators)."""
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
-    metrics_list = (
-        [m.strip() for m in new_metrics.split(",") if m.strip()]
-        if new_metrics is not None
-        else None
-    )
+    metrics_list = split_multi(new_metrics) if new_metrics else None
     result = _handle_service_call(
         ctx,
         service.edit_constraint,

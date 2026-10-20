@@ -45,7 +45,7 @@ Each rule has an ID (`A1`, `T5`, …), a level, the version from which it applie
 - **Checked by**: a rule id of `make cli-spec-check` (for example `output.no-direct-print`), a named test, or **review**. A rule id is **report only** when the check prints its count but never fails. A rule id is **deferred** when the check does not run yet; `python scripts/check_cli_spec.py --list-rules` prints each rule id, its kind and what checks it.
 - **Anchors**: every spec ID and every rule id of the check has an anchor, so `docs/cli-interface-spec.md#A1` and `docs/cli-interface-spec.md#output.no-direct-print` both work. The failure lines of the check link to these anchors.
 
-The baseline `scripts/cli_spec_baseline.json` lists the existing violations of each rule id and a `blocking` flag per rule id. A new violation of a blocking rule fails CI, whatever the level of the spec rule behind it: a check that serves a SHOULD rule fails the same way as one that serves a MUST rule. A fix removes its line from the baseline (`make cli-spec-baseline`). On a pull request the number of entries per blocking rule can only shrink against the base branch; a rename keeps the count. A reviewed deviation goes into `exceptions` with a reason, where the diff shows it; CI accepts a new exception only when a reviewer has added the label `cli-spec-exception` to the pull request.
+The baseline `scripts/cli_spec_baseline.json` lists the existing violations of each rule id and a `blocking` flag per rule id. A new violation of a blocking rule fails CI, whatever the level of the spec rule behind it: a check that serves a SHOULD rule fails the same way as one that serves a MUST rule. A fix removes its line from the baseline (`make cli-spec-baseline`). On a pull request the number of entries per blocking rule can only shrink against the base branch; a rename keeps the count. A rule id that the base branch's baseline does not have yet starts its baseline in the pull request that adds it; from then on its count can only shrink. A reviewed deviation goes into `exceptions` with a reason, where the diff shows it; CI accepts a new exception only when a reviewer has added the label `cli-spec-exception` to the pull request.
 
 A rule changes only through a pull request that changes this document. When a new rule id lands in the check, its spec rule names it in the same pull request.
 
@@ -272,7 +272,7 @@ What stays as it is:
 - Checked by: `args.no-positional-arguments`, `args.no-bare-id-option` (both report only).
 
 <a id="A4"></a><a id="args.list-option-repeatable"></a>
-**A4 · MUST · now for new options; 1.0.0 for existing ones.** A list-valued option is repeatable. An option whose values are IDs or fixed values (project IDs, table IDs, types) also accepts a comma list in one occurrence. An option with free-form values (JSON, `KEY=VALUE`, `PATH=VALUE`, SQL, text; for example `transformation edit --op`, `config update --set`, `config variables-set --var`) is repeat-only, because a comma can be part of the value. Until 1.0.0, the nine existing comma-only options (`org setup --project-ids`, `sharing share --target-project-ids` and `--target-users`, and six `semantic-layer` options) take one comma string.
+**A4 · MUST · now for new options; 1.0.0 for existing ones.** A list-valued option is repeatable. An option whose values are IDs or fixed values (project IDs, table IDs, types) also accepts a comma list in one occurrence. An option with free-form values (JSON, `KEY=VALUE`, `PATH=VALUE`, SQL, text; for example `transformation edit --op`, `config update --set`, `config variables-set --var`) is repeat-only, because a comma can be part of the value. `split_multi()` in `commands/_helpers.py` flattens the values of an ID or fixed-value option. From 1.0.0 this covers the nine options that took one comma string before (`org setup --project-ids`, `sharing share --target-project-ids` and `--target-users`, and six `semantic-layer` options); in 0.x they take one comma string.
 
 - Checked by: `args.list-option-repeatable`.
 
@@ -295,7 +295,7 @@ What stays as it is:
 ## 4. Input
 
 <a id="I1"></a><a id="input.single-parser"></a>
-**I1 · MUST · now.** A structured value (JSON or YAML) accepts inline text, `@path`, and `-` for stdin, with the behavior of `parse_json_arg` in `commands/_helpers.py`. New code calls it. The other copies of this parsing move to it when their command is changed.
+**I1 · MUST · now.** A structured value (JSON or YAML) accepts inline text, `@path`, and `-` for stdin, with the behavior of `parse_json_arg` in `commands/_helpers.py`, and every structured option calls it (`allow_yaml=True` for YAML). The only other code that reads an `@` value is the refusal of I3.
 
 - Checked by: `input.single-parser`.
 
@@ -306,13 +306,13 @@ What stays as it is:
 - Checked by: `input.file-option-vocabulary` (report only).
 
 <a id="I3"></a><a id="input.content-option-refuses-at-file"></a>
-**I3 · MUST · 1.0.0.** A free-text content option refuses a value that is `@` followed by the path of an existing file, with exit 2 and a hint that names the file option. In 1.0.0 this covers the four commands that use `resolve_text_input` and `transformation create/edit --sql`; the other free-text options follow after 1.0.0. Until then, such a value is stored as text.
+**I3 · MUST · 1.0.0.** A free-text content option refuses a value that is `@` followed by the path of an existing file (a relative path is relative to the current directory), with exit 2 and a hint that names the file option. The hint also says how to store text that starts with `@`: write it to a file and pass that file with the file option. The option declares `callback=RefuseAtFile("--file").callback` (`commands/_helpers.py`); `@` followed by anything that is not a file stays text. In 1.0.0 this covers only five options: `--text` of the four commands that use `resolve_text_input` and `transformation create --sql` (`transformation edit` has no `--sql`). The other free-text options follow after 1.0.0 and store `@<file>` as text until then. In 0.x, such a value is stored as text. A free-text content option is an option of a write, destructive or admin command whose name is in `CONTENT_OPTIONS` in `scripts/check_cli_spec.py`.
 
 - Why: project and branch metadata keep no old value, so a wrong guess cannot be undone.
-- Checked by: `input.content-option-refuses-at-file` (deferred: lands in 1.0.0).
+- Checked by: `input.content-option-refuses-at-file` (the options without the refusal are in the baseline).
 
 <a id="I4"></a>
-**I4 · MUST · 1.0.0.** A bad input value is a usage error (exit 2, `INVALID_ARGUMENT`) that names the option, never a traceback. Until 1.0.0, some bad values end in a traceback with exit 1.
+**I4 · MUST · 1.0.0.** A bad input value is a usage error (exit 2, `INVALID_ARGUMENT`) that names the option, never a traceback. In 0.x, some bad values end in a traceback with exit 1. Known gaps in 1.0.0: the structured options that exited 2 before 1.0.0 keep their error code (`config` `--configuration`, `--state` and `--config-data`: `VALIDATION_ERROR`; `encrypt values --input`: `INPUT_ERROR`; `agent --from-file` and `--runtime-input`: `INVALID_FORMAT`; `flow --file`: `VALIDATION_ERROR`; `data-app create --description-file`: `READ_ERROR`, exit 1; `data-app secrets-set --secrets-file`: `DATA_APP_INVALID_SECRET`; `semantic-layer reference-data set --members-file`: `VALIDATION_ERROR`), and a value refused by Click or by `typer.BadParameter` is `USAGE_ERROR`.
 
 - Checked by: `output.one-json-document` (crash case) and review.
 

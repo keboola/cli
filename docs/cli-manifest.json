@@ -2155,7 +2155,7 @@
       "help": "Set up projects and register them in the kbagent config.\n\nTwo modes:\n\n\b\n1. Org admin:    --org-id 123          (lists all projects in the org)\n2. Project member: --project-ids 1,2,3 (fetches specific projects)\n\nCreates Storage API tokens and registers projects. Safe to re-run --\nalready registered projects are skipped.\n\nThe Manage API token is read from an interactive hidden prompt by\ndefault (since 0.28.0). Pass the top-level --allow-env-manage-token\nflag to read KBC_MANAGE_API_TOKEN from env (CI/CD). Never passed as\na CLI argument.",
       "params": [
         {"kind": "option", "name": "org_id", "opts": ["--org-id"], "type": "integer", "default": null, "help": "Organization ID (requires org-admin manage token)"},
-        {"kind": "option", "name": "project_ids_raw", "opts": ["--project-ids"], "type": "text", "default": null, "help": "Comma-separated project IDs (works with Personal Access Token)"},
+        {"kind": "option", "name": "project_ids_raw", "opts": ["--project-ids"], "type": "text", "multiple": true, "default": null, "help": "Project ID (repeatable or comma-separated; works with Personal Access Token)"},
         {"kind": "option", "name": "url", "opts": ["--url"], "type": "text", "required": true, "envvar": "KBC_STORAGE_API_URL", "default": null, "help": "Keboola stack URL (e.g. https://connection.keboola.com)"},
         {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Preview what would happen without making changes"},
         {"kind": "option", "name": "yes", "opts": ["--yes", "-y"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip confirmation prompt"},
@@ -2537,7 +2537,7 @@
         {"kind": "option", "name": "name", "opts": ["--name"], "type": "text", "required": true, "default": null, "help": "Constraint name (regex ^[a-z][a-z0-9_]*$). For the 4-band health convention end with _critical / _warning / _healthy / _review."},
         {"kind": "option", "name": "constraint_type", "opts": ["--constraint-type"], "type": "text", "required": true, "default": null, "help": "One of: inequality|equality|range|composition|exclusion|temporal|conditional."},
         {"kind": "option", "name": "rule", "opts": ["--rule"], "type": "text", "required": true, "default": null, "help": "Rule expression STRING (e.g. \"value >= 0\"). NOT an object."},
-        {"kind": "option", "name": "metrics", "opts": ["--metrics"], "type": "text", "required": true, "default": null, "help": "Comma-separated list of metric names this constraint applies to."},
+        {"kind": "option", "name": "metrics", "opts": ["--metrics"], "type": "text", "required": true, "multiple": true, "default": null, "help": "Metric name this constraint applies to (repeatable or comma-separated)."},
         {"kind": "option", "name": "severity", "opts": ["--severity"], "type": "text", "default": "warning", "help": "One of: error|warning|info (the 3-level API enum)."},
         {"kind": "option", "name": "scope", "opts": ["--scope"], "type": "choice", "choices": ["project", "organization", "targeted"], "default": null, "help": "Visibility: 'project' (owner only), 'organization' (every project in the org), or 'targeted' (owner + --target-project grants). Default: the model's own scope."},
         {"kind": "option", "name": "target_project", "opts": ["--target-project"], "type": "text", "multiple": true, "default": [], "help": "Project alias or ID to grant visibility to (repeatable or comma-separated; --scope targeted only)."}
@@ -2623,7 +2623,7 @@
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "required": true, "default": null, "help": "Target project alias"},
         {"kind": "option", "name": "model", "opts": ["--model"], "type": "text", "default": null, "help": "Update this existing model (name or UUID). If omitted, a new model is created."},
-        {"kind": "option", "name": "tables", "opts": ["--tables"], "type": "text", "default": null, "help": "Comma-separated tableIds to base the model on (required)."},
+        {"kind": "option", "name": "tables", "opts": ["--tables"], "type": "text", "multiple": true, "default": null, "help": "Table ID to base the model on (repeatable or comma-separated; required)."},
         {"kind": "option", "name": "name", "opts": ["--name"], "type": "text", "default": null, "help": "Model name when creating (default: kbagent_build_model)."},
         {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Print the generated JSON + validation, no POST."},
         {"kind": "option", "name": "keep_on_failure", "opts": ["--keep-on-failure"], "type": "boolean", "is_flag": true, "default": false, "help": "Keep partially-pushed model + children on failure (forensics). Default: rollback in reverse PUSH_ORDER + delete the model if we created it."},
@@ -2667,7 +2667,7 @@
         {"kind": "option", "name": "new_rule", "opts": ["--new-rule"], "type": "text", "default": null, "help": "Replace rule (STRING)"},
         {"kind": "option", "name": "new_constraint_type", "opts": ["--new-constraint-type"], "type": "text", "default": null, "help": "Replace constraintType (closed enum)"},
         {"kind": "option", "name": "new_severity", "opts": ["--new-severity"], "type": "text", "default": null, "help": "Replace severity (error|warning|info)"},
-        {"kind": "option", "name": "new_metrics", "opts": ["--new-metrics"], "type": "text", "default": null, "help": "Comma-separated list of metric names"}
+        {"kind": "option", "name": "new_metrics", "opts": ["--new-metrics"], "type": "text", "multiple": true, "default": null, "help": "Replace metric names (repeatable or comma-separated)"}
       ]
     },
     {
@@ -2767,7 +2767,7 @@
         {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "required": true, "default": null, "help": "Target project alias"},
         {"kind": "option", "name": "file", "opts": ["--file"], "type": "path", "required": true, "default": null, "help": "Snapshot JSON file (output of `semantic-layer export`)"},
         {"kind": "option", "name": "model", "opts": ["--model"], "type": "text", "default": null, "help": "Target model name or UUID (defaults to the sole model)"},
-        {"kind": "option", "name": "types", "opts": ["--types"], "type": "text", "default": null, "help": "Comma-separated subset to import: datasets,metrics,relationships,glossary,constraints"},
+        {"kind": "option", "name": "types", "opts": ["--types"], "type": "text", "multiple": true, "default": null, "help": "Item type to import (repeatable or comma-separated): datasets, metrics, relationships, glossary, constraints"},
         {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Plan the import without calling any write API"},
         {"kind": "option", "name": "overwrite", "opts": ["--overwrite"], "type": "boolean", "is_flag": true, "default": false, "help": "Update conflicting items in place (default: skip)"},
         {"kind": "option", "name": "yes", "opts": ["--yes", "-y"], "type": "boolean", "is_flag": true, "hidden": true, "default": false},
@@ -2829,7 +2829,7 @@
         {"kind": "option", "name": "to_project", "opts": ["--to-project"], "type": "text", "required": true, "default": null, "help": "Target project alias"},
         {"kind": "option", "name": "from_model", "opts": ["--from-model"], "type": "text", "default": null, "help": "Source model name or UUID (defaults to sole)"},
         {"kind": "option", "name": "to_model", "opts": ["--to-model"], "type": "text", "default": null, "help": "Target model name or UUID (defaults to sole)"},
-        {"kind": "option", "name": "types", "opts": ["--types"], "type": "text", "default": null, "help": "Comma-separated subset (datasets,metrics,relationships,glossary,constraints)"},
+        {"kind": "option", "name": "types", "opts": ["--types"], "type": "text", "multiple": true, "default": null, "help": "Item type to copy (repeatable or comma-separated): datasets, metrics, relationships, glossary, constraints"},
         {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Classify NEW/IDENTICAL/CHANGED without writing"},
         {"kind": "option", "name": "yes", "opts": ["--yes", "-y"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip the cross-project confirmation prompt"},
         {"kind": "option", "name": "scope", "opts": ["--scope"], "type": "choice", "choices": ["project", "organization", "targeted"], "default": null, "help": "Visibility of the NEW items: 'project', 'organization' or 'targeted'. Omitted: the target model's own scope, as with `add <kind>`."},
@@ -2968,10 +2968,10 @@
       "kind": "command",
       "hidden": false,
       "category": "read",
-      "help": "Fetch the server-side JSON Schema of semantic object types.\n\nSchemas are fetched live from the project's metastore (never bundled),\nso they always match the deployed metastore version. Pass exactly one\nof ``--type`` (comma-separated list) or ``--all``.",
+      "help": "Fetch the server-side JSON Schema of semantic object types.\n\nSchemas are fetched live from the project's metastore (never bundled),\nso they always match the deployed metastore version. Pass exactly one\nof ``--type`` (repeatable or comma-separated) or ``--all``.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "required": true, "default": null, "help": "Project alias"},
-        {"kind": "option", "name": "types", "opts": ["--type"], "type": "text", "default": null, "help": "Comma-separated semantic type(s): model | dataset | metric | relationship | constraint | glossary."},
+        {"kind": "option", "name": "types", "opts": ["--type"], "type": "text", "multiple": true, "default": null, "help": "Semantic type (repeatable or comma-separated): model | dataset | metric | relationship | constraint | glossary."},
         {"kind": "option", "name": "all_types", "opts": ["--all"], "type": "boolean", "is_flag": true, "default": false, "help": "Fetch the schema of every known semantic type."}
       ]
     },
@@ -3192,8 +3192,8 @@
         {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "required": true, "default": null, "help": "Project alias that owns the bucket to share."},
         {"kind": "option", "name": "bucket_id", "opts": ["--bucket-id"], "type": "text", "required": true, "default": null, "help": "Bucket ID to share (e.g. out.c-data)."},
         {"kind": "option", "name": "sharing_type", "opts": ["--type"], "type": "text", "required": true, "default": null, "help": "Sharing type: 'organization' (all org members), 'organization-project' (all project members in org), 'selected-projects' (specific projects, use --target-project-ids), 'selected-users' (specific users, use --target-users)."},
-        {"kind": "option", "name": "target_project_ids", "opts": ["--target-project-ids"], "type": "text", "default": null, "help": "Comma-separated project IDs (required for --type selected-projects)."},
-        {"kind": "option", "name": "target_users", "opts": ["--target-users"], "type": "text", "default": null, "help": "Comma-separated email addresses (required for --type selected-users)."}
+        {"kind": "option", "name": "target_project_ids", "opts": ["--target-project-ids"], "type": "text", "multiple": true, "default": null, "help": "Project ID (repeatable or comma-separated; required for --type selected-projects)."},
+        {"kind": "option", "name": "target_users", "opts": ["--target-users"], "type": "text", "multiple": true, "default": null, "help": "Email address (repeatable or comma-separated; required for --type selected-users)."}
       ]
     },
     {

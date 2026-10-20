@@ -22,6 +22,8 @@ from ._helpers import (
     get_formatter,
     get_service,
     map_error_to_exit_code,
+    split_int_multi,
+    split_multi,
 )
 
 sharing_app = typer.Typer(
@@ -118,15 +120,15 @@ def sharing_share(
             "'selected-users' (specific users, use --target-users)."
         ),
     ),
-    target_project_ids: str | None = typer.Option(
+    target_project_ids: list[str] | None = typer.Option(
         None,
         "--target-project-ids",
-        help="Comma-separated project IDs (required for --type selected-projects).",
+        help="Project ID (repeatable or comma-separated; required for --type selected-projects).",
     ),
-    target_users: str | None = typer.Option(
+    target_users: list[str] | None = typer.Option(
         None,
         "--target-users",
-        help="Comma-separated email addresses (required for --type selected-users).",
+        help="Email address (repeatable or comma-separated; required for --type selected-users).",
     ),
 ) -> None:
     """Enable sharing on a bucket.
@@ -146,22 +148,26 @@ def sharing_share(
     parsed_users: list[str] | None = None
 
     if sharing_type == "selected-projects":
-        if not target_project_ids:
+        try:
+            parsed_project_ids = split_int_multi(target_project_ids, label="--target-project-ids")
+        except ValueError as exc:
+            formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
+            raise typer.Exit(code=2) from None
+        if not parsed_project_ids:
             formatter.error(
                 message="--target-project-ids is required for --type selected-projects",
                 error_code=ErrorCode.USAGE_ERROR,
             )
             raise typer.Exit(code=2)
-        parsed_project_ids = [int(pid.strip()) for pid in target_project_ids.split(",")]
 
     if sharing_type == "selected-users":
-        if not target_users:
+        parsed_users = split_multi(target_users)
+        if not parsed_users:
             formatter.error(
                 message="--target-users is required for --type selected-users",
                 error_code=ErrorCode.USAGE_ERROR,
             )
             raise typer.Exit(code=2)
-        parsed_users = [u.strip() for u in target_users.split(",")]
 
     try:
         result = service.share(

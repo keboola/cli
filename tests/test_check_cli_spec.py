@@ -260,6 +260,44 @@ def test_growth_against_base_fails_for_blocking_rules_only() -> None:
     assert fails == [f"FAIL grown    {RULE}: 0 -> 1 entries -- the baseline gained entries"]
 
 
+def test_new_rule_starts_its_baseline_without_a_growth_failure() -> None:
+    """A rule that the base baseline does not know records its first entries."""
+    base = _small_baseline()
+    del base["blocking"][RULE]
+    del base["violations"][RULE]
+    del base["exceptions"][RULE]
+    head = _small_baseline()
+    head["exceptions"][RULE] = {}
+    found = _results(**{RULE: {"branch delete": "x", "config delete": "x"}})
+    head["violations"][RULE] = ["branch delete", "config delete"]
+    assert spec_check.ratchet(found, head, base) == []
+
+
+def test_new_rule_still_needs_the_label_for_an_exception() -> None:
+    base = _small_baseline()
+    del base["blocking"][RULE]
+    del base["violations"][RULE]
+    del base["exceptions"][RULE]
+    fails = spec_check.ratchet(_results(), _small_baseline(), base)
+    assert fails == [
+        (
+            f"FAIL exception {RULE}: config delete -- new exception; a reviewer adds the "
+            "'cli-spec-exception' label to the pull request to accept it"
+        )
+    ]
+
+
+def test_existing_rule_that_grows_still_fails() -> None:
+    head = _small_baseline()
+    head["violations"][RULE] = ["branch delete", "workspace delete"]
+    found = _results(
+        **{RULE: {"branch delete": "x", "config delete": "x", "workspace delete": "x"}}
+    )
+    assert spec_check.ratchet(found, head, _small_baseline()) == [
+        f"FAIL grown    {RULE}: 1 -> 2 entries -- the baseline gained entries"
+    ]
+
+
 def test_renamed_command_in_a_tree_rule_is_no_growth() -> None:
     """A rename (or a hidden alias that keeps the old name, C3) changes the subject only."""
     head = _small_baseline()

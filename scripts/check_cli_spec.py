@@ -14,7 +14,8 @@ Ratchet (per rule; the baseline holds a `blocking` flag for every rule):
     more `violations` entries than the base (counted per rule, so a renamed
     command or a moved function is no growth), a subject added to `exceptions`
     (unless --allow-new-exceptions), a rule changed from blocking to
-    non-blocking, or a rule of the base that is missing: FAIL.
+    non-blocking, or a rule of the base that is missing: FAIL. A rule that is
+    not in the base baseline records its first entries without a growth FAIL.
   A non-blocking rule prints the same lines as NOTE and never fails.
 
 `help.manifest-fresh` takes no baseline: `docs/cli-manifest.json` must always
@@ -132,6 +133,32 @@ PARTIAL_UPDATE_ROUTES: frozenset[str] = frozenset(
         "/data-apps/{project}/{app_id}/secrets",
     }
 )
+
+# I3: the option names that carry free text a write, destructive or admin
+# command stores. Such an option has the RefuseAtFile callback (commands/_helpers.py).
+CONTENT_OPTIONS: frozenset[str] = frozenset(
+    {
+        "--change-description",
+        "--definition",
+        "--description",
+        "--draft",
+        "--goal",
+        "--message",
+        "--new-definition",
+        "--new-description",
+        "--new-sql",
+        "--prompt",
+        "--public-key",
+        "--reason",
+        "--runtime-prompt",
+        "--sql",
+        "--text",
+        "--title",
+        "--value",
+    }
+)
+# I1/I3: the functions that may read an `@` value: the parser and the refusal.
+_AT_VALUE_READERS = ("parse_json_arg", "RefuseAtFile.callback")
 
 # I-rules: file input is `--file` or `--<field>-file` next to `--<field>`.
 _INPUT_EXTRA = frozenset({"--from-file", "--stdin", "--from-csv", "--input"})
@@ -771,8 +798,32 @@ def r_single_parser(c: Context) -> Violations:
         and site.call.args
         and isinstance(site.call.args[0], ast.Constant)
         and site.call.args[0].value == "@"
-        and not site.function.endswith("parse_json_arg")
+        and not site.function.endswith(_AT_VALUE_READERS)
     }
+
+
+def r_content_refuses_at_file(c: Context) -> Violations:
+    return {
+        f"{lf.name} {label(p)}": "free-text content option stores @<file> as text"
+        for lf in c.tree.leaves
+        if lf.category in ("write", "destructive", "admin")
+        for p in filter(is_option, lf.params)
+        if not getattr(p, "is_flag", False)
+        and label(p) in CONTENT_OPTIONS
+        and not _refuses_at_file(p)
+    }
+
+
+def _refuses_at_file(p: Any) -> bool:
+    """True when the option callback is ``RefuseAtFile(...).callback``.
+
+    Typer wraps a parameter callback in a closure, so the bound method is
+    looked up in the closure cells as well.
+    """
+    callback = getattr(p, "callback", None)
+    cells = getattr(callback, "__closure__", None) or ()
+    found = (callback, *(cell.cell_contents for cell in cells))
+    return any(hasattr(getattr(obj, "__self__", None), "file_option") for obj in found)
 
 
 def r_forward_retryable(c: Context) -> Violations:
@@ -1310,6 +1361,12 @@ RULES: tuple[Rule, ...] = (
         r_single_parser,
     ),
     Rule(
+        "input.content-option-refuses-at-file",
+        "tree",
+        "a free-text content option refuses @<existing file> (RefuseAtFile)",
+        r_content_refuses_at_file,
+    ),
+    Rule(
         "target.project-help-states-default",
         "tree",
         "an optional or repeatable --project help states the omitted default",
@@ -1476,7 +1533,6 @@ CONTRACT_RULES: dict[str, str] = {
 DEFERRED_RULES: dict[str, str] = {
     "args.global-option-one-shape": "the GLOBAL_OPTIONS registry is not reviewed yet (A1)",
     "naming.verb-vocabulary": "the verb vocabulary file is not reviewed yet",
-    "input.content-option-refuses-at-file": "the @file refusal lands in 1.0.0 (Input)",
     "output.no-warning-after-output": "lands with warnings[] in the --json envelope",
     "help.context-from-manifest": "kbagent context is generated from the manifest in 1.0.0 (AG1)",
     "change.expired-deprecation": "no DEPRECATIONS entry has a remove_after date yet: "
@@ -1669,6 +1725,9 @@ def _growth(
     keeping the old name as a hidden alias (C3) or moving a function to another
     module renames its subject, and that is no growth. Known limit: a fixed
     entry can be swapped for a new violation of the same rule elsewhere.
+    A rule that the base baseline does not know (no `blocking` flag there) is
+    new: its first baseline is recorded here, and growth counts from the next
+    pull request on. New exceptions are still checked for it.
     """
     old_listed: dict[str, list[str]] = base.get("violations", {})
     old_excepted: dict[str, dict[str, str]] = base.get("exceptions", {})
@@ -1678,7 +1737,7 @@ def _growth(
         if not blocking.get(rid, True):
             continue
         old_count, count = len(old_listed.get(rid, [])), len(listed.get(rid, []))
-        if count > old_count:
+        if rid in old_blocking and count > old_count:
             fails.append(
                 f"FAIL grown    {rid}: {old_count} -> {count} entries -- the baseline "
                 "gained entries"
