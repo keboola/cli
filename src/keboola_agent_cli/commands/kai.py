@@ -47,7 +47,9 @@ def kai_ping(
         alias = service.resolve_alias(project)
         result = service.ping(alias)
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        formatter.error(
+            message=exc.message, error_code=getattr(exc, "error_code", ErrorCode.CONFIG_ERROR)
+        )
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         emit_api_error(formatter, exc)
@@ -91,7 +93,9 @@ def kai_ask(
         alias = service.resolve_alias(project)
         result = service.ask(alias, message)
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        formatter.error(
+            message=exc.message, error_code=getattr(exc, "error_code", ErrorCode.CONFIG_ERROR)
+        )
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         emit_api_error(formatter, exc)
@@ -135,7 +139,9 @@ def kai_chat(
         alias = service.resolve_alias(project)
         result = service.chat_message(alias, message, chat_id=chat_id)
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        formatter.error(
+            message=exc.message, error_code=getattr(exc, "error_code", ErrorCode.CONFIG_ERROR)
+        )
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         emit_api_error(formatter, exc)
@@ -172,7 +178,9 @@ def kai_preflight(
         alias = service.resolve_alias(project)
         result = service.preflight(alias)
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        formatter.error(
+            message=exc.message, error_code=getattr(exc, "error_code", ErrorCode.CONFIG_ERROR)
+        )
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         emit_api_error(formatter, exc)
@@ -225,7 +233,9 @@ def kai_chat_detail(
         alias = service.resolve_alias(project)
         result = service.get_chat_detail(alias, chat_id)
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        formatter.error(
+            message=exc.message, error_code=getattr(exc, "error_code", ErrorCode.CONFIG_ERROR)
+        )
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         emit_api_error(formatter, exc)
@@ -272,7 +282,9 @@ def kai_history(
         alias = service.resolve_alias(project)
         result = service.get_history(alias, limit=limit)
     except ConfigError as exc:
-        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        formatter.error(
+            message=exc.message, error_code=getattr(exc, "error_code", ErrorCode.CONFIG_ERROR)
+        )
         raise typer.Exit(code=5) from None
     except KeboolaApiError as exc:
         emit_api_error(formatter, exc)

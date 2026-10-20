@@ -257,7 +257,7 @@ class TestProjectCreate:
 
         result = _invoke(config_dir, svc, ["--json", "project", "create", "--url", STACK_URL])
 
-        assert result.exit_code == 1
+        assert result.exit_code == 5  # AUTH_NOT_SUPPORTED_ON_STACK: configuration (spec E1)
         payload = json.loads(result.stdout)
         assert payload["error"]["code"] == ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK
         assert "not enabled on this stack" in payload["error"]["message"]
@@ -307,7 +307,7 @@ class TestFeatureOffEndToEnd:
             app, ["--config-dir", str(config_dir), "project", "create", "--url", STACK_URL]
         )
 
-        assert result.exit_code == 1, result.output
+        assert result.exit_code == 5, result.output
         flat = " ".join(result.output.split())
         assert "not available on" in flat
         assert "agent-provisioning" in flat
@@ -332,7 +332,7 @@ class TestFeatureOffEndToEnd:
             ["--json", "--config-dir", str(config_dir), "project", "create", "--url", STACK_URL],
         )
 
-        assert result.exit_code == 1, result.output
+        assert result.exit_code == 5, result.output
         error = json.loads(result.stdout)["error"]
         assert error["code"] == ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK
         assert "STACK_FEATURES__AGENT_PROVISIONING" in error["message"]

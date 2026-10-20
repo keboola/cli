@@ -179,7 +179,7 @@ def lineage_info(
         formatter.error(
             message=f"Cache file not found: {load}", error_code=ErrorCode.FILE_NOT_FOUND
         )
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=2)
 
     graph = service.load_from_cache(load)
 
@@ -329,7 +329,7 @@ def lineage_show(
         formatter.error(
             message=f"Cache file not found: {load}", error_code=ErrorCode.FILE_NOT_FOUND
         )
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=2)
 
     graph = service.load_from_cache(load)
 
@@ -1181,7 +1181,7 @@ def lineage_serve(
         formatter.error(
             message=f"Cache file not found: {load}", error_code=ErrorCode.FILE_NOT_FOUND
         )
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=2)
 
     try:
         raw_data = json.loads(load.read_text(encoding="utf-8"))

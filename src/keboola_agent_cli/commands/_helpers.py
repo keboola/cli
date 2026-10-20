@@ -22,10 +22,9 @@ from ..config_store import ConfigStore
 from ..constants import (
     ENV_KBC_MANAGE_API_TOKEN,
     ENV_KBC_TOKEN,
-    EXIT_JOB_TIMEOUT_TERMINATED,
     EXIT_PERMISSION_DENIED,
 )
-from ..errors import ErrorCode, KeboolaApiError, PermissionDeniedError
+from ..errors import ErrorCode, KeboolaApiError, PermissionDeniedError, exit_code_for
 from ..output import OutputFormatter
 from ..update_crossing import print_held_warning, refusal_for
 
@@ -403,53 +402,12 @@ def get_service(ctx: typer.Context, key: str) -> Any:
 def map_error_to_exit_code(exc: KeboolaApiError) -> int:
     """Map a KeboolaApiError to a CLI exit code.
 
-    - INVALID_TOKEN -> 3 (authentication error)
-    - AUTH_REJECTED -> 3 (an upstream 401 that did not blame the credential;
-      still an authentication-class failure, so the exit code is unchanged
-      from what the same response produced before issue #711 -- only the
-      code and the message text got more honest)
-    - TIMEOUT / CONNECTION_ERROR / RETRY_EXHAUSTED / QUEUE_JOB_TIMEOUT /
-      STORAGE_JOB_TIMEOUT -> 4
-      (network/retryable; QUEUE_JOB_TIMEOUT means local gave up AND the
-      remote-kill attempt also failed, so the job may still be running.
-      STORAGE_JOB_TIMEOUT is the same shape -- the Storage API has no
-      cancel, so the job is definitely still running server-side -- and it
-      used to fall through to the generic exit 1, which scripts could not
-      tell apart from a real failure.)
-    - JOB_TIMEOUT_TERMINATED -> EXIT_JOB_TIMEOUT_TERMINATED (7)
-      (local --timeout elapsed and we successfully cancelled the remote
-      job; scripts can distinguish "we killed it" from "it failed on its own")
-    - SESSION_EXPIRED / SESSION_NOT_FOUND / AUTH_FLOW_DENIED -> 3
-      (programmatic-auth session problems are authentication errors too --
-      `kbagent auth login` is the remedy in every case)
-    - AUTH_FLOW_TIMEOUT -> 4 (the login flow itself timed out; retryable)
-    - Everything else -> 1 (general error)
+    The exit code comes from ``ERROR_CODE_TABLE`` in ``errors.py`` (spec rule
+    E1), and ``docs/error-codes.md`` lists it per code. A code that is not an
+    ``ErrorCode`` member exits 1, like ``UNKNOWN_ERROR``.
     """
     telemetry.note_command_error(str(exc))
-
-    if exc.error_code in ("INVALID_TOKEN", "MISSING_MASTER_TOKEN"):
-        return 3
-    if exc.error_code == ErrorCode.AUTH_REJECTED:
-        return 3
-    if exc.error_code in (
-        ErrorCode.SESSION_EXPIRED,
-        ErrorCode.SESSION_NOT_FOUND,
-        ErrorCode.AUTH_FLOW_DENIED,
-    ):
-        return 3
-    if exc.error_code in (
-        "TIMEOUT",
-        "CONNECTION_ERROR",
-        "RETRY_EXHAUSTED",
-        "QUEUE_JOB_TIMEOUT",
-        ErrorCode.STORAGE_JOB_TIMEOUT,
-    ):
-        return 4
-    if exc.error_code == ErrorCode.AUTH_FLOW_TIMEOUT:
-        return 4
-    if exc.error_code == "JOB_TIMEOUT_TERMINATED":
-        return EXIT_JOB_TIMEOUT_TERMINATED
-    return 1
+    return exit_code_for(exc.error_code)
 
 
 def emit_api_error(formatter: OutputFormatter, exc: KeboolaApiError, *, project: str = "") -> None:

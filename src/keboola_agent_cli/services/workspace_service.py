@@ -40,7 +40,7 @@ from ._workspace_load_plan import (
     coerce_data_size_bytes,
     plan_auto_load_type,
 )
-from .base import BaseService, find_default_branch_id
+from .base import BaseService, find_default_branch_id, item_failure
 
 logger = logging.getLogger(__name__)
 
@@ -846,11 +846,12 @@ class WorkspaceService(BaseService):
                     ws["project_alias"],
                 )
                 delete_errors.append(
-                    {
-                        "workspace_id": ws["id"],
-                        "project_alias": ws["project_alias"],
-                        "error": str(exc),
-                    }
+                    item_failure(
+                        exc,
+                        workspace_id=ws["id"],
+                        project_alias=ws["project_alias"],
+                        error=str(exc),
+                    )
                 )
 
         all_errors = list_errors + delete_errors
