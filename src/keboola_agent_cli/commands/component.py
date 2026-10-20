@@ -17,7 +17,12 @@ from ..constants import VALID_COMPONENT_TYPES
 from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..services.component_service import DOCUMENTATION_SOURCE_STORAGE_CATALOG
-from ._all_projects import ALL_PROJECTS_HELP, reject_project_with_all_projects
+from ._all_projects import (
+    ALL_PROJECTS_HELP,
+    FANOUT_PROJECT_HELP,
+    fanout_exit_code,
+    fanout_projects,
+)
 from ._helpers import (
     check_cli_permission,
     emit_api_error,
@@ -153,12 +158,12 @@ def component_list(
     project: list[str] | None = typer.Option(
         None,
         "--project",
-        help="Project alias to query (can be repeated for multiple projects)",
+        help=FANOUT_PROJECT_HELP,
     ),
     all_projects: bool = typer.Option(
         False,
         "--all-projects",
-        help=f"{ALL_PROJECTS_HELP} No effect with --query: --query searches only the default project.",
+        help=f"{ALL_PROJECTS_HELP} No effect with --query: --query searches only one project.",
     ),
     component_type: str | None = typer.Option(
         None,
@@ -172,9 +177,8 @@ def component_list(
         help="Search query to filter components by name or description",
     ),
 ) -> None:
-    """List available components from connected projects."""
+    """List the components of the active project, the given projects, or all projects."""
     formatter = get_formatter(ctx)
-    reject_project_with_all_projects(formatter, project, all_projects)
     service = get_service(ctx, "component_service")
 
     # Validate component_type if provided
@@ -186,10 +190,12 @@ def component_list(
         )
         raise typer.Exit(code=2)
 
-    if all_projects and query:
+    if all_projects and query and not project:
         formatter.warning(
-            "--query searches only the default project; --all-projects has no effect with it."
+            "--query searches only the active project; --all-projects has no effect with it."
         )
+        all_projects = False
+    project = fanout_projects(ctx, formatter, project, all_projects)
 
     try:
         result = service.list_components(
@@ -201,11 +207,14 @@ def component_list(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
+    code = fanout_exit_code(result.get("errors", []))
     if formatter.json_mode:
-        formatter.output(result)
+        formatter.output(result, exit_code=code)
     else:
         _format_components_table(formatter.console, result)
         emit_project_warnings(formatter, result)
+    if code:
+        raise typer.Exit(code=code)
 
 
 @component_app.command("detail")
@@ -219,7 +228,7 @@ def component_detail(
     project: str | None = typer.Option(
         None,
         "--project",
-        help="Project alias (defaults to the pinned default project)",
+        help="Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)",
     ),
 ) -> None:
     """Show detailed information about a specific component."""

@@ -22,7 +22,12 @@ from rich.markup import escape
 from ..constants import DEFAULT_JOB_RUN_TIMEOUT
 from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError, exit_code_for
-from ._all_projects import AllProjectsOption, reject_project_with_all_projects
+from ._all_projects import (
+    FANOUT_PROJECT_HELP,
+    AllProjectsOption,
+    fanout_exit_code,
+    fanout_projects,
+)
 from ._data_app_git import register_git_commands
 from ._data_app_password import (
     CopyOption,
@@ -111,7 +116,7 @@ def data_app_list(
     project: list[str] | None = typer.Option(
         None,
         "--project",
-        help="Project alias to query (repeatable). None = all projects.",
+        help=FANOUT_PROJECT_HELP,
     ),
     all_projects: AllProjectsOption = False,
     branch: int | None = typer.Option(
@@ -122,8 +127,10 @@ def data_app_list(
 ) -> None:
     """List data apps across one or more registered projects."""
     formatter = get_formatter(ctx)
-    reject_project_with_all_projects(formatter, project, all_projects)
     service = get_service(ctx, "data_app_service")
+
+    project = fanout_projects(ctx, formatter, project, all_projects)
+
     try:
         if project and len(project) == 1:
             branch = resolve_branch(
@@ -140,11 +147,14 @@ def data_app_list(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
+    code = fanout_exit_code(result.get("errors", []))
     if formatter.json_mode:
-        formatter.output(result)
+        formatter.output(result, exit_code=code)
     else:
         _print_data_app_table(formatter, result)
         emit_project_warnings(formatter, result)
+    if code:
+        raise typer.Exit(code=code)
 
 
 # ---------------------------------------------------------------------------

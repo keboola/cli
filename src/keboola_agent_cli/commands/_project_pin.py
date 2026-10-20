@@ -33,33 +33,33 @@ def print_active_project_change(
 
 
 def format_use_result(c: Console, d: dict[str, Any]) -> None:
-    """Render `project use`: the new pin, the previous one, and an env override."""
+    """Render `project use`: the new active project, the previous one, and an env override."""
     previous = d.get("previous")
     if previous and previous != d["alias"]:
         c.print(
-            f"[bold green]Pinned:[/bold green] default project is now "
+            f"[bold green]Active project:[/bold green] "
             f"[bold]{d['alias']}[/bold] (was [dim]{previous}[/dim])"
         )
     else:
-        c.print(f"[bold green]Pinned:[/bold green] default project is [bold]{d['alias']}[/bold]")
+        c.print(f"[bold green]Active project:[/bold green] [bold]{d['alias']}[/bold]")
     env_override = d.get("env_override")
     if env_override and env_override != d["alias"]:
         c.print(
             f"[yellow]Note:[/yellow] KBAGENT_PROJECT='{env_override}' is set "
-            "and overrides this pin for the current shell."
+            "and overrides the active project for the current shell."
         )
 
 
 def format_current_result(c: Console, d: dict[str, Any]) -> None:
-    """Render `project current`: the effective default project and its source."""
+    """Render `project current`: the active project and its source."""
     alias = d.get("alias")
     source = d.get("source")
     if alias is None:
         c.print(
-            "[dim](no default project set)[/dim] -- pass --project, set "
+            "[dim](no active project set)[/dim] -- pass --project, set "
             "KBAGENT_PROJECT, or run 'kbagent project use <alias>'"
         )
-        # The pin is empty, but a sole registered project still answers a
+        # No active project is saved, but a sole registered project still answers a
         # command without --project; say so instead of implying a failure.
         if d.get("resolved_source") == "sole":
             c.print(
@@ -74,6 +74,6 @@ def format_current_result(c: Console, d: dict[str, Any]) -> None:
             c.print(f"[yellow]Warning:[/yellow] {escape(warning)}")
         pinned = d.get("pinned")
         if pinned:
-            c.print(f"[dim]  (pinned in config: {pinned}, overridden)[/dim]")
+            c.print(f"[dim]  (active project in config: {pinned}, overridden)[/dim]")
     else:
-        c.print(f"[bold cyan]{alias}[/bold cyan]  [dim](source: pinned default)[/dim]")
+        c.print(f"[bold cyan]{alias}[/bold cyan]  [dim](source: active project)[/dim]")

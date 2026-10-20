@@ -10,7 +10,12 @@ import typer
 
 from ..constants import BUCKET_STAGES, DEFAULT_LINK_STAGE
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
-from ._all_projects import AllProjectsOption, reject_project_with_all_projects
+from ._all_projects import (
+    FANOUT_PROJECT_HELP,
+    AllProjectsOption,
+    fanout_exit_code,
+    fanout_projects,
+)
 from ._helpers import (
     check_cli_permission,
     emit_api_error,
@@ -43,7 +48,7 @@ def sharing_list(
     project: list[str] | None = typer.Option(
         None,
         "--project",
-        help="Project alias (repeatable). Omit to query all projects.",
+        help=FANOUT_PROJECT_HELP,
     ),
     all_projects: AllProjectsOption = False,
 ) -> None:
@@ -53,8 +58,9 @@ def sharing_list(
     into your projects. Uses the regular project token.
     """
     formatter = get_formatter(ctx)
-    reject_project_with_all_projects(formatter, project, all_projects)
     service = get_service(ctx, "sharing_service")
+
+    project = fanout_projects(ctx, formatter, project, all_projects)
 
     try:
         result = service.list_shared(aliases=project)
@@ -62,16 +68,16 @@ def sharing_list(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
+    code = fanout_exit_code(result.get("errors", []))
     if formatter.json_mode:
-        formatter.output(result)
+        formatter.output(result, exit_code=code)
+    elif not result["shared_buckets"]:
+        formatter.console.print("[dim]No shared buckets found.[/dim]")
+        emit_project_warnings(formatter, result)
     else:
         from rich.table import Table
 
         buckets = result["shared_buckets"]
-        if not buckets:
-            formatter.console.print("[dim]No shared buckets found.[/dim]")
-            return
-
         table = Table(title="Shared Buckets")
         table.add_column("Source Project", style="bold")
         table.add_column("Bucket ID", style="cyan")
@@ -92,6 +98,8 @@ def sharing_list(
 
         formatter.console.print(table)
         emit_project_warnings(formatter, result)
+    if code:
+        raise typer.Exit(code=code)
 
 
 @sharing_app.command("share")
@@ -340,7 +348,7 @@ def sharing_edges(
     project: list[str] | None = typer.Option(
         None,
         "--project",
-        help="Project alias to query (can be repeated for multiple projects).",
+        help=FANOUT_PROJECT_HELP,
     ),
     all_projects: AllProjectsOption = False,
 ) -> None:
@@ -352,8 +360,9 @@ def sharing_edges(
     For column-level lineage, use `lineage build` + `lineage show`.
     """
     formatter = get_formatter(ctx)
-    reject_project_with_all_projects(formatter, project, all_projects)
     service = get_service(ctx, "lineage_service")
+
+    project = fanout_projects(ctx, formatter, project, all_projects)
 
     try:
         result = service.get_lineage(aliases=project)
@@ -361,10 +370,13 @@ def sharing_edges(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
+    code = fanout_exit_code(result.get("errors", []))
     if formatter.json_mode:
-        formatter.output(result)
+        formatter.output(result, exit_code=code)
     else:
         from ..output import format_lineage_table
 
         format_lineage_table(formatter.console, result)
         emit_project_warnings(formatter, result)
+    if code:
+        raise typer.Exit(code=code)

@@ -13,7 +13,12 @@ from rich.console import Console
 from ..effective_branch import report_branch_ref
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..output import format_branch_metadata_table, format_branches_table
-from ._all_projects import AllProjectsOption, reject_project_with_all_projects
+from ._all_projects import (
+    FANOUT_PROJECT_HELP,
+    AllProjectsOption,
+    fanout_exit_code,
+    fanout_projects,
+)
 from ._helpers import (
     RefuseAtFile,
     _confirm_or_abort,
@@ -46,14 +51,15 @@ def branch_list(
     project: list[str] | None = typer.Option(
         None,
         "--project",
-        help="Project alias to query (can be repeated for multiple projects)",
+        help=FANOUT_PROJECT_HELP,
     ),
     all_projects: AllProjectsOption = False,
 ) -> None:
-    """List development branches from connected projects."""
+    """List development branches of the active project, the given projects, or all projects."""
     formatter = get_formatter(ctx)
-    reject_project_with_all_projects(formatter, project, all_projects)
     service = get_service(ctx, "branch_service")
+
+    project = fanout_projects(ctx, formatter, project, all_projects)
 
     try:
         result = service.list_branches(aliases=project)
@@ -61,11 +67,14 @@ def branch_list(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
+    code = fanout_exit_code(result.get("errors", []))
     if formatter.json_mode:
-        formatter.output(result)
+        formatter.output(result, exit_code=code)
     else:
         format_branches_table(formatter.console, result)
         emit_project_warnings(formatter, result)
+    if code:
+        raise typer.Exit(code=code)
 
 
 @branch_app.command("create")

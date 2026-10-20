@@ -345,8 +345,8 @@ Dev branch lifecycle (create / use / reset / delete / merge) and branch metadata
 |---|---|---|
 | `GET` | `/branches` | List branches |
 | `POST` | `/branches/{project}` | Create a branch |
-| `POST` | `/branches/{project}/use` | Pin the active branch |
-| `POST` | `/branches/{project}/reset` | Reset to the default branch |
+| `POST` | `/branches/{project}/use` | Set the active branch |
+| `POST` | `/branches/{project}/reset` | Clear the active branch |
 | `DELETE` | `/branches/{project}/{branch_id}` | Delete a branch |
 | `GET` | `/branches/{project}/merge-url` | Get the branch merge URL |
 | `GET` | `/branches/{project}/metadata` | List branch metadata |

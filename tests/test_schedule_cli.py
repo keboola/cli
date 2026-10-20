@@ -96,20 +96,32 @@ class TestScheduleListCli:
             aliases=["prod"], enabled_only=True, branch_id=None
         )
 
-    def test_no_project_flag_means_all_projects(self, tmp_path: Path) -> None:
+    def test_no_project_flag_means_the_active_project(self, tmp_path: Path) -> None:
         store = _setup_config(tmp_path / "cfg", {"a": {}, "b": {}})
         mock_service = MagicMock()
         mock_service.list_schedules.return_value = {"schedules": [], "errors": []}
         result = _run(["--json", "schedule", "list"], store, mock_service)
         assert result.exit_code == 0
         mock_service.list_schedules.assert_called_once_with(
+            aliases=["a"], enabled_only=False, branch_id=None
+        )
+
+    def test_all_projects_flag_means_all_projects(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"a": {}, "b": {}})
+        mock_service = MagicMock()
+        mock_service.list_schedules.return_value = {"schedules": [], "errors": []}
+        result = _run(["--json", "schedule", "list", "--all-projects"], store, mock_service)
+        assert result.exit_code == 0
+        mock_service.list_schedules.assert_called_once_with(
             aliases=None, enabled_only=False, branch_id=None
         )
 
-    def test_branch_without_project_fails(self, tmp_path: Path) -> None:
+    def test_branch_with_all_projects_fails(self, tmp_path: Path) -> None:
         store = _setup_config(tmp_path / "cfg", {"prod": {}})
         mock_service = MagicMock()
-        result = _run(["--json", "schedule", "list", "--branch", "42"], store, mock_service)
+        result = _run(
+            ["--json", "schedule", "list", "--all-projects", "--branch", "42"], store, mock_service
+        )
         assert result.exit_code == 2
 
     def test_config_error_exits_5(self, tmp_path: Path) -> None:
@@ -292,7 +304,7 @@ class TestScheduleFindCli:
         )
         assert result.exit_code == 0
         mock_service.find_schedules.assert_called_once_with(
-            aliases=None,
+            aliases=["prod"],
             cron_window="02:00-04:00",
             not_run_since_days=30,
             branch_id=None,

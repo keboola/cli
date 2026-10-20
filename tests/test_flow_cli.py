@@ -137,7 +137,7 @@ class TestFlowList:
             "errors": [],
             "legacy_orchestrator_count": 0,
         }
-        result = _invoke(store, mock_flow, ["--json", "flow", "list"])
+        result = _invoke(store, mock_flow, ["--json", "flow", "list", "--all-projects"])
         assert result.exit_code == 0, result.output
         data = json.loads(result.output)
         assert len(data["data"]["flows"]) == 2
@@ -145,10 +145,12 @@ class TestFlowList:
             aliases=None, branch_id=None, with_schedules=False
         )
 
-    def test_branch_without_project_fails(self, tmp_path: Path) -> None:
+    def test_branch_with_all_projects_fails(self, tmp_path: Path) -> None:
         store = _setup_config(tmp_path / "cfg", {"prod": {}})
         mock_flow = MagicMock()
-        result = _invoke(store, mock_flow, ["--json", "flow", "list", "--branch", "42"])
+        result = _invoke(
+            store, mock_flow, ["--json", "flow", "list", "--all-projects", "--branch", "42"]
+        )
         assert result.exit_code == 2
 
 

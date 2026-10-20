@@ -29,6 +29,7 @@ from ..constants import (
 )
 from ..errors import ErrorCode, KeboolaApiError, PermissionDeniedError, exit_code_for
 from ..output import OutputFormatter
+from ..permissions import FLAG_ESCALATIONS
 from ..update_crossing import print_held_warning, refusal_for
 
 
@@ -610,7 +611,13 @@ def check_cli_operation(ctx: typer.Context, operation: str) -> None:
     higher risk class than its command (see `permissions.FLAG_ESCALATIONS`).
     The callback has already cleared the bare command by the time a command
     body runs, so this is an additional gate, not a replacement.
+
+    A command calls this exactly when the escalating flag (or an inherited
+    organization scope) applies, so it also raises the command category that
+    the ``TARGET_FROM_ACTIVE_CHOICE`` warning reads (spec T12).
     """
+    if FLAG_ESCALATIONS.get(operation) == "destructive":
+        get_formatter(ctx).command_category = "destructive"
     engine = ctx.obj.get("permission_engine")
     if engine is None or not engine.active:
         return

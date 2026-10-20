@@ -199,28 +199,20 @@
       "workspace query --sql"
     ],
     "target.project-help-states-default": [
-      "branch list --project",
-      "component list --project",
-      "config list --project",
       "config new --project",
-      "config search --project",
       "flow schema --project",
       "flow validate --project",
       "init --project",
-      "job list --project",
       "lineage show --project",
       "project invite --project",
       "project refresh --project",
-      "sharing edges --project",
-      "storage buckets --project",
       "sync diff --project",
       "sync pull --project",
       "sync push --project",
       "transformation create --project",
       "transformation edit --project",
       "transformation show --project",
-      "workspace gc --project",
-      "workspace list --project"
+      "workspace gc --project"
     ],
     "output.no-direct-print": [
       "commands/_helpers.py:_read_token_file typer.echo",

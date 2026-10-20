@@ -354,6 +354,7 @@ class TestOutput:
             {
                 "role": "target",
                 "project_alias": "prod",
+                "project_source": None,
                 "branch_id": 456,
                 "branch_name": "feature-x",
                 "branch_source": "active_branch",
