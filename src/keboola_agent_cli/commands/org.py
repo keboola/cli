@@ -11,6 +11,7 @@ from rich.table import Table
 from ..constants import DEFAULT_TOKEN_DESCRIPTION, ENV_KBC_STORAGE_API_URL
 from ..errors import ErrorCode, KeboolaApiError
 from ._helpers import (
+    _confirm_or_abort,
     check_cli_permission,
     emit_api_error,
     get_formatter,
@@ -267,9 +268,8 @@ def org_setup(
                 raise typer.Exit(code=code)
             return
 
-        if would_add > 0 and not typer.confirm(f"\nProceed to add {would_add} project(s)?"):
-            formatter.console.print("Aborted.")
-            raise typer.Exit(code=0)
+        if would_add > 0:
+            _confirm_or_abort(formatter, yes, f"Proceed to add {would_add} project(s)?")
 
     # Execute the actual setup
     try:

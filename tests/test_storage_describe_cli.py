@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
 from typer.testing import CliRunner
 
 from keboola_agent_cli.cli import app
@@ -1105,6 +1106,7 @@ class TestStorageDescribeMigrate:
         assert output["error"]["code"] == "INVALID_ARGUMENT"
         mock_storage.describe_migrate.assert_not_called()
 
+    @pytest.mark.usefixtures("interactive_terminal")
     def test_describe_migrate_confirm_abort_makes_no_writes(self, tmp_path: Path) -> None:
         """Answering 'n' at the confirm prompt leaves the scan as the only call."""
         mock_storage = MagicMock()

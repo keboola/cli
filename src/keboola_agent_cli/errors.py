@@ -42,6 +42,9 @@ class ErrorCode(StrEnum):
     INVALID_ARGUMENT = "INVALID_ARGUMENT"
     INVALID_FORMAT = "INVALID_FORMAT"
     USAGE_ERROR = "USAGE_ERROR"
+    # A safety prompt in human mode without a terminal and without --yes
+    # (spec S4, decision D6). Exit 2; the hint names --yes.
+    CONFIRMATION_REQUIRED = "CONFIRMATION_REQUIRED"
     MISSING_PARAMETER = "MISSING_PARAMETER"
     UNKNOWN_ERROR = "UNKNOWN_ERROR"
     # Per-project envelope fallback in multi-project commands: the operation
@@ -415,6 +418,8 @@ ERROR_CODE_TABLE: dict[str, ErrorClass] = {
     ErrorCode.INVALID_ARGUMENT: ErrorClass("validation", 2),
     ErrorCode.INVALID_FORMAT: ErrorClass("api", 2),
     ErrorCode.USAGE_ERROR: ErrorClass("validation", 2),
+    # A safety prompt nobody can answer: refused by us before any API call (S4).
+    ErrorCode.CONFIRMATION_REQUIRED: ErrorClass("validation", 2),
     ErrorCode.MISSING_PARAMETER: ErrorClass("validation", 2),
     ErrorCode.UNKNOWN_ERROR: ErrorClass("api", 1),
     ErrorCode.UNEXPECTED_ERROR: ErrorClass("api", 1),

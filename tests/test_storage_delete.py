@@ -1,9 +1,6 @@
 """Tests for storage delete-table, delete-bucket and file-delete commands and service methods."""
 
-import contextlib
 import json
-import sys
-from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -11,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from typer.testing import CliRunner
 
+from helpers import TerminalRunner
 from keboola_agent_cli.cli import app
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.errors import KeboolaApiError
@@ -1337,25 +1335,6 @@ _PROMPT_COMMANDS = {
 }
 
 
-class _TerminalRunner(CliRunner):
-    """CliRunner whose stdin and stderr report a terminal, as an interactive
-    shell does. Uses only the public ``CliRunner.isolation`` hook: the streams
-    it installs get an instance-level ``isatty``."""
-
-    def __init__(self, stdin_tty: bool = True, stderr_tty: bool = True) -> None:
-        super().__init__()
-        self.stdin_tty = stdin_tty
-        self.stderr_tty = stderr_tty
-
-    @contextlib.contextmanager
-    def isolation(self, *args: Any, **kwargs: Any) -> Iterator[Any]:
-        with super().isolation(*args, **kwargs) as streams:
-            stdin_tty, stderr_tty = self.stdin_tty, self.stderr_tty
-            setattr(sys.stdin, "isatty", lambda: stdin_tty)  # noqa: B010
-            setattr(sys.stderr, "isatty", lambda: stderr_tty)  # noqa: B010
-            yield streams
-
-
 def _invoke_delete(
     tmp_path: Path,
     command: str,
@@ -1374,7 +1353,7 @@ def _invoke_delete(
         getattr(svc, method).return_value = payload
         json_flag = ["--json"] if "--json" in extra else []
         rest = [a for a in extra if a != "--json"]
-        result = (cli_runner or _TerminalRunner()).invoke(
+        result = (cli_runner or TerminalRunner()).invoke(
             app, [*json_flag, *args, *rest], input=user_input
         )
     return result, getattr(svc, method)
@@ -1384,7 +1363,8 @@ def _invoke_delete(
 class TestDeletePromptOnTerminal:
     """`storage delete-bucket` and `file-delete` read --yes like delete-table,
     but ask only in an interactive session (stdin and stderr are a terminal,
-    --json is off). Non-interactive callers see no change."""
+    --json is off). Without a terminal and without --yes they refuse with
+    CONFIRMATION_REQUIRED (exit 2)."""
 
     def test_terminal_without_yes_asks_and_proceeds_on_yes(
         self, tmp_path: Path, command: str
@@ -1420,22 +1400,28 @@ class TestDeletePromptOnTerminal:
         assert "[y/N]" not in result.output
         assert method.call_args.kwargs["dry_run"] is True
 
-    def test_no_terminal_does_not_ask(self, tmp_path: Path, command: str) -> None:
-        result, method = _invoke_delete(tmp_path, command, [], cli_runner=runner)
-        assert result.exit_code == 0, result.output
+    def test_no_terminal_refuses_without_yes(self, tmp_path: Path, command: str) -> None:
+        result, method = _invoke_delete(tmp_path, command, [], cli_runner=runner, user_input="y\n")
+        assert result.exit_code == 2, result.output
         assert "[y/N]" not in result.output
+        assert "--yes" in result.stderr
+        method.assert_not_called()
+
+    def test_no_terminal_with_yes_deletes(self, tmp_path: Path, command: str) -> None:
+        result, method = _invoke_delete(tmp_path, command, ["--yes"], cli_runner=runner)
+        assert result.exit_code == 0, result.output
         method.assert_called_once()
 
     @pytest.mark.parametrize(("stdin_tty", "stderr_tty"), [(True, False), (False, True)])
-    def test_only_one_stream_on_terminal_does_not_ask(
+    def test_only_one_stream_on_terminal_refuses(
         self, tmp_path: Path, command: str, stdin_tty: bool, stderr_tty: bool
     ) -> None:
         result, method = _invoke_delete(
-            tmp_path, command, [], cli_runner=_TerminalRunner(stdin_tty, stderr_tty)
+            tmp_path, command, [], cli_runner=TerminalRunner(stdin_tty, stderr_tty)
         )
-        assert result.exit_code == 0, result.output
+        assert result.exit_code == 2, result.output
         assert "[y/N]" not in result.output
-        method.assert_called_once()
+        method.assert_not_called()
 
     def test_prompt_goes_to_stderr(self, tmp_path: Path, command: str) -> None:
         result, _ = _invoke_delete(tmp_path, command, [], user_input="n\n")

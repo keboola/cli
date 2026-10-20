@@ -504,7 +504,14 @@ def test_confirm_via_helper(tree: Any) -> None:
         "    typer.confirm('sure?')\n"
     )
     found = spec_check.r_confirm_via_helper(_context_with_source(tree, source))
-    assert set(found) == {"commands/demo.py:cmd"}
+    # Only the shared helper in commands/_helpers.py may ask: a copy of it is flagged too.
+    assert set(found) == {"commands/demo.py:cmd", "commands/demo.py:_confirm_or_abort"}
+
+
+def test_force_meanings_name_live_force_options(tree: Any) -> None:
+    """Every FORCE_MEANINGS entry names a live command that has --force (no stale entry)."""
+    with_force = {lf.name for lf in tree.leaves if "--force" in spec_check.opt_names(lf)}
+    assert set(spec_check.FORCE_MEANINGS) == with_force
 
 
 def test_short_flag_registry_is_pinned(tree: Any) -> None:

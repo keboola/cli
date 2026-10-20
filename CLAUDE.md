@@ -387,6 +387,18 @@ plugins/kbagent/
 #   exit_code= (blocking rule output.ok-then-exit-declares-exit-code). A single-value option given twice
 #   is USAGE_ERROR on write/destructive/admin commands, a REPEATED_OPTION warnings[] entry on reads.
 #   Version gate in gotchas.md.
+# Confirmations (CLI-46, spec S4): the safety prompts go through `_confirm_or_abort` in commands/_helpers.py
+#   (also the preview-then-confirm of `org setup` and `project refresh`). --yes and --json skip it. On a
+#   terminal it asks on stderr. In human mode without a terminal (stdin or stderr not a TTY) it refuses with
+#   CONFIRMATION_REQUIRED, exit 2, naming --yes -- a piped "y" no longer confirms. Not through the helper:
+#   the non-safety questions of `init` and of the `auth login` / `auth register-projects` project picker;
+#   the `workspace load` size guard (asks on a terminal only, refuses without one); and the service guards
+#   of `semantic-layer add metric` / `edit metric` (VALIDATION_ERROR without a terminal, and they still ask
+#   on a terminal under --json). `branch delete` and `workspace delete` now ask too, and take --yes and a read-only --dry-run
+#   (REST: `dry_run` query parameter, no prompt). Deprecated flags (spec C3) are hidden options from
+#   `deprecated_option()` with a `DEPRECATIONS` entry. They add a DEPRECATED warning (`replacement`,
+#   `remove_after`): `stream delete --force` (use --yes) and `semantic-layer import --yes` (no effect).
+#   Version gate lives in gotchas.md.
 # --conversation-id ID (#716): sets the X-Conversation-ID observability header for the
 #   invocation; equivalent to KBAGENT_CONVERSATION_ID and takes precedence over it. Exists because an
 #   agent harness does not persist shell state between tool calls, so the documented one-time `export`
@@ -785,7 +797,7 @@ kbagent storage unload-table --project NAME --table-id ID [--columns COL ...] [-
 kbagent stream list --project NAME [--branch ID]
 kbagent stream create-source --project NAME --name NAME [--type otlp|http] [--branch ID] [--if-not-exists] [--no-sinks] [--reveal]
 kbagent stream detail [SOURCE_ID | --name NAME] --project NAME [--branch ID] [--reveal]
-kbagent stream delete SOURCE_ID --project NAME [--branch ID] [--dry-run] [--yes|--force]
+kbagent stream delete SOURCE_ID --project NAME [--branch ID] [--dry-run] [--yes]
 
 kbagent lineage build --directory PATH --output PATH [--ai] [--refresh]
 kbagent lineage show --load PATH [--upstream NODE] [--downstream NODE] [--column COL] [--columns] [--project ALIAS] [--depth N] [--format text|mermaid|html|er]
@@ -915,7 +927,7 @@ kbagent branch use --project ALIAS --branch ID
 # branch use: every command that then picks a branch names it -- `Target:` on stderr, `targets` in
 #   --json (branch_source explicit|active_branch|git_mapping|manifest|merge_request|production). Version gate in gotchas.md (#766).
 kbagent branch reset --project ALIAS
-kbagent branch delete --project ALIAS --branch ID
+kbagent branch delete --project ALIAS --branch ID [--dry-run] [--yes]
 kbagent branch merge --project ALIAS [--branch ID]
 kbagent branch metadata-list --project NAME [--branch ID|default]
 kbagent branch metadata-get --project NAME --key KEY [--branch ID|default]
@@ -1000,7 +1012,7 @@ kbagent workspace create --project ALIAS [--name NAME] [--backend TYPE] [--ui] [
 #   gate for this entry lives in gotchas.md (these `# ` lines parse as ATX headings).
 kbagent workspace list [--project NAME ... | --all-projects] [--orphaned] [--branch ID] [--qs-compatible]
 kbagent workspace detail --project ALIAS --workspace-id ID [--branch ID]
-kbagent workspace delete --project ALIAS --workspace-id ID
+kbagent workspace delete --project ALIAS --workspace-id ID [--dry-run] [--yes]
 kbagent workspace password --project ALIAS --workspace-id ID
 kbagent workspace load --project ALIAS --workspace-id ID --tables TABLE_ID [--tables ...] [--preserve] [--load-type clone|copy|view] [--force] [--timeout SECONDS]
 # workspace load (since 0.91.0, #687): DEFAULT is now per-table AUTO-DECIDE, mirroring the
@@ -1266,7 +1278,7 @@ kbagent semantic-layer remove dataset --project P [--model M] --name N [--yes]
 kbagent semantic-layer remove constraint --project P [--model M] --name N [--yes]
 kbagent semantic-layer remove relationship --project P [--model M] --name N [--yes]
 kbagent semantic-layer remove glossary --project P [--model M] --term TERM [--yes]
-kbagent semantic-layer import --project P --file PATH [--model M] [--types T,T,...] [--dry-run] [--yes] [--overwrite] [--scope project|organization|targeted] [--target-project ALIAS|ID ...]
+kbagent semantic-layer import --project P --file PATH [--model M] [--types T,T,...] [--dry-run] [--overwrite] [--scope project|organization|targeted] [--target-project ALIAS|ID ...]
 kbagent semantic-layer promote --from-project A --to-project B [--from-model M] [--to-model M] [--types T,T,...] [--dry-run] [--yes] [--scope project|organization|targeted] [--target-project ALIAS|ID ...]
 kbagent semantic-layer build --project P [--model M] --tables T,T,... [--name N] [--dry-run] [--keep-on-failure] [--output PATH]
 kbagent semantic-layer token --encrypt --project P --component-id C

@@ -6,25 +6,18 @@ commands-file ceiling (CONTRIBUTING.md). Mounted onto ``storage_app`` via
 ``storage.file-delete`` and the commands keep their help panels.
 """
 
-import sys
-
 import typer
 
 from ..config_store import ConfigStore
 from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
-from ..output import OutputFormatter
-from ._helpers import emit_api_error, get_formatter, get_service, map_error_to_exit_code
-
-
-def _confirm_or_abort(formatter: OutputFormatter, yes: bool, question: str) -> None:
-    """Ask only in an interactive session: --yes, --json, or stdin or stderr
-    that is not a terminal skip the prompt. A declined prompt exits 0."""
-    if yes or formatter.json_mode or not (sys.stdin.isatty() and sys.stderr.isatty()):
-        return
-    if not typer.confirm(question, err=True):
-        formatter.console.print("Aborted.")
-        raise typer.Exit(code=0)
+from ._helpers import (
+    _confirm_or_abort,
+    emit_api_error,
+    get_formatter,
+    get_service,
+    map_error_to_exit_code,
+)
 
 
 def register(app: typer.Typer) -> None:

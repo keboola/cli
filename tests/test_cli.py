@@ -7145,6 +7145,7 @@ class TestOrgSetup:
         output = json.loads(result.output)
         assert output["status"] == "ok"
 
+    @pytest.mark.usefixtures("interactive_terminal")
     def test_org_setup_confirmation_declined(self, tmp_path: Path) -> None:
         """org setup exits cleanly when user declines confirmation."""
         config_dir = tmp_path / "config"
@@ -7781,7 +7782,9 @@ class TestBranchDelete:
         assert output["data"]["was_active"] is True
         assert output["data"]["project_alias"] == "prod"
         assert "deleted" in output["data"]["message"]
-        mock_branch.delete_branch.assert_called_once_with(alias="prod", branch_id=456)
+        mock_branch.delete_branch.assert_called_once_with(
+            alias="prod", branch_id=456, dry_run=False
+        )
 
 
 class TestBranchMerge:

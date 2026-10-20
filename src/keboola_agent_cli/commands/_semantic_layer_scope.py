@@ -19,7 +19,13 @@ from rich.table import Table
 
 from ..errors import ErrorCode
 from ..services._semantic_layer_scope import DEFAULT_REQUEST_LIST_LIMIT
-from ._helpers import check_cli_operation, check_cli_permission, get_formatter, get_service
+from ._helpers import (
+    _confirm_or_abort,
+    check_cli_operation,
+    check_cli_permission,
+    get_formatter,
+    get_service,
+)
 from ._semantic_layer_helpers import ElevationScope, ItemType, _handle_service_call
 
 scope_app = typer.Typer(
@@ -183,12 +189,13 @@ def scope_set(
     service = get_service(ctx, "semantic_layer_service")
     if scope == "organization":
         check_cli_operation(ctx, "semantic-layer.scope.set --scope organization")
-        if not (yes or dry_run or formatter.json_mode) and not typer.confirm(
-            f"Elevate {type_} {context_id!r} to organization scope? This is IRREVERSIBLE "
-            "and makes it visible to every project in the organization. Continue?"
-        ):
-            formatter.console.print("Aborted.")
-            raise typer.Exit(code=0)
+        if not dry_run:
+            _confirm_or_abort(
+                formatter,
+                yes,
+                f"Elevate {type_} {context_id!r} to organization scope? This is IRREVERSIBLE "
+                "and makes it visible to every project in the organization. Continue?",
+            )
     result = _handle_service_call(
         ctx,
         service.scope_set,

@@ -23,11 +23,13 @@ from ..services._storage_jobs import validate_wait_timeout
 from ..services._workspace_load_plan import LoadTablePlan
 from ._all_projects import AllProjectsOption, reject_project_with_all_projects
 from ._helpers import (
+    _confirm_or_abort,
     check_cli_permission,
     emit_api_error,
     emit_project_warnings,
     get_formatter,
     get_service,
+    is_interactive_terminal,
     item_failure_exit_code,
     map_error_to_exit_code,
 )
@@ -52,10 +54,10 @@ class _CopyGuardPrompt:
     def __call__(self, plans: list[LoadTablePlan]) -> bool:
         for plan in plans:
             size_gb = (plan.data_size_bytes or 0) / 1024**3
-            self.formatter.console.print(
+            self.formatter.err_console.print(
                 f"[bold yellow]Large COPY:[/bold yellow] {escape(plan.table_id)} ({size_gb:.1f} GB)"
             )
-        approved = typer.confirm("Start COPY anyway?")
+        approved = typer.confirm("Start COPY anyway?", err=True)
         self.declined = not approved
         return approved
 
@@ -291,6 +293,16 @@ def workspace_detail(
         raise typer.Exit(code=5) from None
 
 
+def _print_delete_result(console: Console, data: dict[str, Any]) -> None:
+    """Human output of `workspace delete`, also for `--dry-run`."""
+    label = (
+        "[bold blue]Dry run:[/bold blue]"
+        if data.get("dry_run")
+        else "[bold green]Success:[/bold green]"
+    )
+    console.print(f"{label} {data['message']}")
+
+
 @workspace_app.command("delete")
 def workspace_delete(
     ctx: typer.Context,
@@ -304,17 +316,25 @@ def workspace_delete(
         "--workspace-id",
         help="Workspace ID to delete",
     ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Read the workspace and show what would be deleted; change nothing"
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt"),
 ) -> None:
     """Delete a workspace."""
     formatter = get_formatter(ctx)
     service = get_service(ctx, "workspace_service")
 
-    try:
-        result = service.delete_workspace(alias=project, workspace_id=workspace_id)
-        formatter.output(
-            result,
-            lambda c, d: c.print(f"[bold green]Success:[/bold green] {d['message']}"),
+    if not dry_run:
+        _confirm_or_abort(
+            formatter,
+            yes,
+            f"Delete workspace {workspace_id} from project '{project}'? This cannot be undone.",
         )
+
+    try:
+        result = service.delete_workspace(alias=project, workspace_id=workspace_id, dry_run=dry_run)
+        formatter.output(result, _print_delete_result)
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
         emit_api_error(formatter, exc)
@@ -432,9 +452,11 @@ def workspace_load(
         formatter.error(error_code=ErrorCode.INVALID_ARGUMENT, message=str(exc))
         raise typer.Exit(code=2) from None
 
-    # No prompt in --json mode: there is nobody to answer it, and a machine
-    # caller must get the structured refusal instead of a silent large COPY.
-    guard_prompt = None if formatter.json_mode else _CopyGuardPrompt(formatter)
+    # No prompt in --json mode or without a terminal: there is nobody to answer
+    # it, and the caller must get the structured refusal (naming --force)
+    # instead of a silent large COPY or an answer read from a pipe (S3, S4).
+    interactive = not formatter.json_mode and is_interactive_terminal()
+    guard_prompt = _CopyGuardPrompt(formatter) if interactive else None
 
     try:
         result = service.load_tables(
@@ -624,14 +646,10 @@ def workspace_gc(
     for alias in selected:
         resolve_branch(ctx.obj["config_store"], alias, None)
 
-    if (
-        not dry_run
-        and not yes
-        and not formatter.json_mode
-        and not typer.confirm("Delete all orphaned workspaces in the selected project(s)?")
-    ):
-        formatter.console.print("Aborted.")
-        raise typer.Exit(code=0)
+    if not dry_run:
+        _confirm_or_abort(
+            formatter, yes, "Delete all orphaned workspaces in the selected project(s)?"
+        )
 
     try:
         result = service.gc_workspaces(aliases=project, dry_run=dry_run)

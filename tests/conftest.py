@@ -127,6 +127,19 @@ def _redirect_global_state_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 
 
 @pytest.fixture
+def interactive_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A safety prompt sees a terminal and asks (spec S4).
+
+    A CliRunner has no terminal, so without this fixture `_confirm_or_abort`
+    refuses with CONFIRMATION_REQUIRED instead of reading the test input.
+    """
+    from keboola_agent_cli.commands import _helpers, workspace
+
+    monkeypatch.setattr(_helpers, "is_interactive_terminal", lambda: True)
+    monkeypatch.setattr(workspace, "is_interactive_terminal", lambda: True)
+
+
+@pytest.fixture
 def tmp_config_dir(tmp_path: Path) -> Path:
     """Provide a temporary directory for configuration files."""
     config_dir = tmp_path / "config"
