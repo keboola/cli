@@ -413,7 +413,8 @@ ERROR_CODE_TABLE: dict[str, ErrorClass] = {
     # API / generic
     ErrorCode.API_ERROR: ErrorClass("api", 1),
     ErrorCode.NOT_FOUND: ErrorClass("not_found", 1),
-    ErrorCode.ALREADY_EXISTS: ErrorClass("api", 1),
+    # A conflict with an existing resource: REST answers 409.
+    ErrorCode.ALREADY_EXISTS: ErrorClass("conflict", 1),
     ErrorCode.VALIDATION_ERROR: ErrorClass("validation", 2),
     ErrorCode.INVALID_ARGUMENT: ErrorClass("validation", 2),
     ErrorCode.INVALID_FORMAT: ErrorClass("api", 2),

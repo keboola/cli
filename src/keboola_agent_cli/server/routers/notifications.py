@@ -7,7 +7,8 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
-from ..dependencies import ServiceRegistry, get_registry
+from ...services.base import resolve_fanout_aliases
+from ..dependencies import ALL_PROJECTS_HELP, ServiceRegistry, get_registry
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
 
@@ -33,6 +34,7 @@ def list_subscriptions(
     event: str | None = None,
     component_id: str | None = None,
     config_id: str | None = None,
+    all_projects: bool = Query(False, description=ALL_PROJECTS_HELP),
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
     """List Flow Notifications-tab recipients. Mirrors `kbagent notification list`.
@@ -42,8 +44,9 @@ def list_subscriptions(
     every job, so a caller answering "who gets paged" must not treat a
     filtered list as complete.
     """
+    aliases = resolve_fanout_aliases(registry.config_store, project, all_projects)
     return registry.notification.list_subscriptions(
-        aliases=project,
+        aliases=aliases,
         event=event,
         component_id=component_id,
         config_id=config_id,

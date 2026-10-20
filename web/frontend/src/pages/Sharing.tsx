@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
+import { projectScope } from "../lib/projectScope";
 import { ErrorBox, Loading, PageTitle } from "../components/Empty";
 import { DataTable } from "../components/Table";
 import type { ProjectError, SharedBucket } from "../types";
@@ -12,7 +13,7 @@ interface SharedResp {
 export function SharingPage() {
   const q = useQuery<SharedResp>({
     queryKey: ["sharing-all"],
-    queryFn: () => api.get("/sharing"),
+    queryFn: () => api.get("/sharing", { query: projectScope(null) }),
   });
   return (
     <div className="space-y-4">

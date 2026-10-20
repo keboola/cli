@@ -1,4 +1,4 @@
-"""Table helpers of `StorageService`: row shaping, the create-table source, branch checks.
+"""Table helpers of `StorageService`: row shaping, the create-table source and layout, branch checks.
 
 Lives outside ``storage_service.py`` because that module is over its
 file-size budget (CONTRIBUTING.md > "File-size budgets"): pure helpers carry
@@ -97,3 +97,85 @@ def normalize_table_rows(
             row["used_by"] = usage.get(table_id, [])
         rows.append(row)
     return rows
+
+
+def build_bigquery_layout(
+    time_partitioning_type: str | None,
+    time_partitioning_field: str | None,
+    time_partitioning_expiration_ms: str | None,
+    range_partitioning_field: str | None,
+    range_partitioning_start: str | None,
+    range_partitioning_end: str | None,
+    range_partitioning_interval: str | None,
+    clustering_fields: list[str] | None,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None]:
+    """Assemble the BigQuery partition/clustering objects from typed flags.
+
+    Mirrors the shapes the Storage API already expects (connection's
+    ``BigqueryCreateTableDefinitionRequest``):
+
+    - ``timePartitioning`` ``{"type", "field"?, "expirationMs"?}`` -- ``type`` required.
+    - ``rangePartitioning`` ``{"field", "range": {"start", "end", "interval"}}`` --
+      all four required together; range bounds are **strings** in the API.
+    - ``clustering`` ``{"fields": [...]}``.
+
+    ``timePartitioning`` and ``rangePartitioning`` are mutually exclusive
+    (BigQuery allows only one partitioning kind). Returns ``(None, None, None)``
+    when nothing is requested.
+
+    Raises:
+        ValueError: incomplete/conflicting partitioning flags.
+    """
+    has_time = any(
+        v is not None
+        for v in (time_partitioning_type, time_partitioning_field, time_partitioning_expiration_ms)
+    )
+    range_parts = (
+        range_partitioning_field,
+        range_partitioning_start,
+        range_partitioning_end,
+        range_partitioning_interval,
+    )
+    has_range = any(v is not None for v in range_parts)
+
+    if has_time and has_range:
+        raise ValueError(
+            "--time-partitioning-* and --range-partitioning-* are mutually exclusive; "
+            "BigQuery supports only one partitioning kind per table."
+        )
+
+    time_partitioning: dict[str, Any] | None = None
+    if has_time:
+        if not time_partitioning_type:
+            raise ValueError(
+                "--time-partitioning-type is required when any --time-partitioning-* "
+                "flag is set (e.g. DAY, HOUR, MONTH, YEAR)."
+            )
+        time_partitioning = {"type": time_partitioning_type}
+        if time_partitioning_field is not None:
+            time_partitioning["field"] = time_partitioning_field
+        if time_partitioning_expiration_ms is not None:
+            time_partitioning["expirationMs"] = time_partitioning_expiration_ms
+
+    range_partitioning: dict[str, Any] | None = None
+    if has_range:
+        if not all(v is not None for v in range_parts):
+            raise ValueError(
+                "--range-partitioning requires all of --range-partitioning-field, "
+                "--range-partitioning-start, --range-partitioning-end and "
+                "--range-partitioning-interval."
+            )
+        range_partitioning = {
+            "field": range_partitioning_field,
+            "range": {
+                "start": range_partitioning_start,
+                "end": range_partitioning_end,
+                "interval": range_partitioning_interval,
+            },
+        }
+
+    clustering: dict[str, Any] | None = None
+    if clustering_fields:
+        clustering = {"fields": list(clustering_fields)}
+
+    return time_partitioning, range_partitioning, clustering

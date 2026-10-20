@@ -18,6 +18,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
+from ..effective_branch import resolve_branch
 from ..errors import ConfigError, KeboolaApiError
 from ._encryption import encrypt_secrets_in_config, find_plaintext_secret_keys
 from .base import BaseService
@@ -55,6 +56,24 @@ class _UpdatedLinkedVariables:
     plaintext_written: list[str]
 
 
+def variables_preview(
+    current: dict[str, Any], variables: dict[str, str], *, replace: bool
+) -> dict[str, Any]:
+    """The dry-run result of a variables set, from ``current`` (a :meth:`get_variables` result)."""
+    would_write = dict(variables) if replace else {**current["values"], **variables}
+    return {
+        "dry_run": True,
+        "project_alias": current["project_alias"],
+        "parent_component_id": current["parent_component_id"],
+        "parent_config_id": current["parent_config_id"],
+        "was_linked": current["linked"],
+        "current_variables_id": current["variables_id"],
+        "current_values": current["values"],
+        "would_write": would_write,
+        "action": "would_create" if not current["linked"] else "would_update",
+    }
+
+
 class VariablesService(BaseService):
     """Assign, read, and detach variables on any Keboola config.
 
@@ -78,6 +97,7 @@ class VariablesService(BaseService):
         structure is flattened). ``linked=False`` means the parent config has no
         ``variables_id`` set -- no variables to report.
         """
+        branch_id = resolve_branch(self._config_store, alias, branch_id)
         projects = self.resolve_projects([alias])
         project = projects[alias]
         client = self._client_factory(project.stack_url, project.token)
@@ -121,6 +141,19 @@ class VariablesService(BaseService):
         finally:
             client.close()
 
+    def preview_set_variables(
+        self,
+        alias: str,
+        component_id: str,
+        config_id: str,
+        variables: dict[str, str],
+        replace: bool = False,
+        branch_id: int | None = None,
+    ) -> dict[str, Any]:
+        """The ``--dry-run`` result of :meth:`set_variables`: what it would write. Writes nothing."""
+        current = self.get_variables(alias, component_id, config_id, branch_id=branch_id)
+        return variables_preview(current, variables, replace=replace)
+
     def set_variables(
         self,
         alias: str,
@@ -148,6 +181,7 @@ class VariablesService(BaseService):
         ``variables_id`` / ``values_id`` override the auto-discovery path and
         can be used to attach the parent to a pre-existing variables config.
         """
+        branch_id = resolve_branch(self._config_store, alias, branch_id)
         if not variables:
             raise ConfigError(
                 "set_variables requires at least one variable. Use --var KEY=VALUE (repeatable)."
@@ -249,6 +283,7 @@ class VariablesService(BaseService):
         -- it may be shared across configs, and deletion is a destructive op
         the user should do explicitly via ``config delete``.
         """
+        branch_id = resolve_branch(self._config_store, alias, branch_id)
         projects = self.resolve_projects([alias])
         project = projects[alias]
         client = self._client_factory(project.stack_url, project.token)

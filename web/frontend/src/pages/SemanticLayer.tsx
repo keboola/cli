@@ -1287,10 +1287,11 @@ function EntityFormDrawer({
   const saveMu = useMutation({
     mutationFn: () => {
       const body: Record<string, unknown> = { project, model };
-      // Map UI keys → API keys (edit uses new_* variants).
+      // Map UI keys → API keys (edit uses new_* variants). An edit sends only
+      // the editable fields: the PATCH route refuses any other field.
       for (const f of schema.fields) {
-        if (mode === "edit" && f.editKey) {
-          if (values[f.key] !== undefined) body[f.editKey] = values[f.key];
+        if (mode === "edit") {
+          if (f.editKey && values[f.key] !== undefined) body[f.editKey] = values[f.key];
         } else {
           body[f.key] = values[f.key];
         }
@@ -1311,7 +1312,7 @@ function EntityFormDrawer({
         return api.post(`/semantic-layer/items/${kind}`, body);
       }
       const pk = initial?.[schema.pkField] as string;
-      return api.put(
+      return api.patch(
         `/semantic-layer/items/${kind}/${encodeURIComponent(pk)}`,
         body,
       );

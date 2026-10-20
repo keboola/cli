@@ -379,6 +379,7 @@ def _client_with_failing_job_service(tmp_path: Path, exc: Exception) -> TestClie
     job_service.list_jobs.side_effect = exc
     registry = ServiceRegistry.__new__(ServiceRegistry)
     registry.job = job_service  # type: ignore[attr-defined]
+    registry.config_store = MagicMock()  # type: ignore[attr-defined]
     app.dependency_overrides[get_registry] = lambda: registry
     return TestClient(app, raise_server_exceptions=False)
 
@@ -393,7 +394,7 @@ def test_expired_session_returns_401_session_expired(tmp_path: Path) -> None:
         retryable=False,
     )
     with _client_with_failing_job_service(tmp_path, exc) as test_client:
-        res = test_client.get("/jobs", headers={"Authorization": "Bearer test-token"})
+        res = test_client.get("/jobs?project=demo", headers={"Authorization": "Bearer test-token"})
 
     assert res.status_code == 401, res.text
     body = res.json()
@@ -415,7 +416,7 @@ def test_missing_session_returns_401_session_not_found(tmp_path: Path) -> None:
         retryable=False,
     )
     with _client_with_failing_job_service(tmp_path, exc) as test_client:
-        res = test_client.get("/jobs", headers={"Authorization": "Bearer test-token"})
+        res = test_client.get("/jobs?project=demo", headers={"Authorization": "Bearer test-token"})
 
     assert res.status_code == 401, res.text
     assert res.json()["error"]["code"] == "SESSION_NOT_FOUND"
@@ -436,7 +437,7 @@ def test_non_session_api_error_keeps_502(tmp_path: Path) -> None:
         retryable=True,
     )
     with _client_with_failing_job_service(tmp_path, exc) as test_client:
-        res = test_client.get("/jobs", headers={"Authorization": "Bearer test-token"})
+        res = test_client.get("/jobs?project=demo", headers={"Authorization": "Bearer test-token"})
 
     assert res.status_code == 502, res.text
     assert res.json()["error"]["code"] == "API_ERROR"
@@ -458,7 +459,7 @@ def test_not_found_api_error_maps_to_404(tmp_path: Path) -> None:
         retryable=False,
     )
     with _client_with_failing_job_service(tmp_path, exc) as test_client:
-        res = test_client.get("/jobs", headers={"Authorization": "Bearer test-token"})
+        res = test_client.get("/jobs?project=demo", headers={"Authorization": "Bearer test-token"})
 
     assert res.status_code == 404, res.text
     body = res.json()
@@ -473,7 +474,7 @@ def test_config_error_keeps_400(tmp_path: Path) -> None:
     from keboola_agent_cli.errors import ConfigError
 
     with _client_with_failing_job_service(tmp_path, ConfigError("no such project")) as test_client:
-        res = test_client.get("/jobs", headers={"Authorization": "Bearer test-token"})
+        res = test_client.get("/jobs?project=demo", headers={"Authorization": "Bearer test-token"})
 
     assert res.status_code == 400, res.text
     assert res.json()["error"]["code"] == "CONFIG_ERROR"
@@ -491,7 +492,7 @@ def test_sentinel_unsupported_path_keeps_its_error_code(tmp_path: Path) -> None:
 
     exc = SessionAuthUnsupportedError("The Keboola AI Service")
     with _client_with_failing_job_service(tmp_path, exc) as test_client:
-        res = test_client.get("/jobs", headers={"Authorization": "Bearer test-token"})
+        res = test_client.get("/jobs?project=demo", headers={"Authorization": "Bearer test-token"})
 
     assert res.status_code == 400, res.text
     assert res.json()["error"]["code"] == "AUTH_NOT_SUPPORTED_ON_STACK"

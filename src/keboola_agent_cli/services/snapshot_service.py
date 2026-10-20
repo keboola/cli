@@ -30,6 +30,7 @@ from typing import Any
 
 from ..client import KeboolaClient
 from ..config_store import ConfigStore
+from ..effective_branch import resolve_branch
 from ..errors import ConfigError, KeboolaApiError
 from .base import (
     ResolvedProjectCredentials,
@@ -80,6 +81,7 @@ class SnapshotService:
         Returns:
             Dict with 'project_alias', 'table_id', 'branch_id', 'snapshot_id'.
         """
+        branch_id = resolve_branch(self._config_store, alias, branch_id)
         creds = self._resolve_project(alias)
         client = self._client_factory(creds.stack_url, creds.token)
         try:
@@ -210,6 +212,7 @@ class SnapshotService:
             'branch_id', 'dry_run', and (when applied) 'table' (raw job
             results incl. the created table 'id') + 'table_id'.
         """
+        branch_id = resolve_branch(self._config_store, alias, branch_id)
         if not bucket_id.strip():
             raise ConfigError("table-from-snapshot requires a non-empty --bucket-id.")
         if not str(snapshot_id).strip():

@@ -23,7 +23,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 from urllib.parse import parse_qs
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -45,6 +45,13 @@ from .dependencies import (
     install_registry,
     reject_undeclared_dry_run,
     translate_project_refs,
+)
+from .response_meta import (
+    TARGETS_HEADER,
+    WARNINGS_HEADER,
+    ResponseMetaMiddleware,
+    error_response,
+    http_status_for,
 )
 from .route_permissions import enforce_route_permission
 from .routers import (
@@ -515,58 +522,13 @@ def _build_custom_openapi(app: FastAPI):
     return custom_openapi
 
 
-def _format_error(
-    message: str,
-    error_code: ErrorCode | str,
-    *,
-    http_status: int = 400,
-    details: dict[str, Any] | None = None,
-) -> JSONResponse:
-    """Render a kbagent-style error envelope at the given HTTP status.
-
-    ``error_code`` accepts both :class:`ErrorCode` enum members (the canonical
-    surface; matches CLI error envelopes byte-for-byte) and raw strings (for
-    forward compatibility when a router wraps a third-party exception whose
-    code is not yet in the enum). The :class:`ErrorCode` mixes in ``str``, so
-    both shapes serialise as plain strings in the JSON body.
-    """
-    error: dict[str, Any] = {"code": str(error_code), "message": message}
-    if details:
-        # Only when non-empty, matching the CLI envelope's presence contract.
-        error["details"] = details
-    return JSONResponse(status_code=http_status, content={"status": "error", "error": error})
-
-
 # A browser-login session backing a session-registered project is USER-scoped
 # and lives on the host, so its failures are the caller's authentication
-# problem rather than an upstream fault: they answer 401, not the 502 a
-# `KeboolaApiError` maps to by default (NOT_FOUND is the other exception --
-# it answers 404; an upstream "no such resource" is not a Bad Gateway). The
-# server cannot renew such a session itself -- a browser login only completes
-# where a human sits.
+# problem rather than an upstream fault: they answer 401 like every
+# `authentication` code of the error-code table (``response_meta.http_status_for``).
+# The server cannot renew such a session itself -- a browser login only
+# completes where a human sits, so the message names the remedy on the host.
 _SESSION_CREDENTIAL_CODES = frozenset({ErrorCode.SESSION_EXPIRED, ErrorCode.SESSION_NOT_FOUND})
-
-# Refusals raised by kbagent itself BEFORE anything is sent upstream. The
-# default 502 would tell the caller to retry a gateway that was never even
-# reached; these are the caller's request to fix (re-send with `force`, a
-# corrected argument, ...), so they answer 400. ``INVALID_ARGUMENT`` covers
-# every service-layer pre-flight validation (bad enum value, malformed
-# input, a locally-detected refusal like an SSRF/path-traversal guard on
-# data about to be acted on) -- audited across every raise site in
-# ``services/`` (issue #687 review): all of them fire before -- or instead
-# of -- a call reaching an upstream API, so none of them is a gateway fault.
-_CALLER_REFUSAL_CODES = frozenset(
-    {ErrorCode.WORKSPACE_LOAD_COPY_TOO_LARGE, ErrorCode.INVALID_ARGUMENT}
-)
-
-# The merge-request merge 409s: a statement about the merge request's state
-# (conflicts / lock / another merge running), not about the gateway -- and the
-# conflict list in `details.api_error_params` is the whole point of the
-# remapping, so it must survive into the REST envelope. 502 would drop it and
-# invite a retry of a request that cannot succeed until the conflicts clear.
-_MERGE_REQUEST_CONFLICT_CODES = frozenset(
-    {ErrorCode.MR_MERGE_CONFLICT, ErrorCode.MR_NOT_READY_TO_MERGE}
-)
 
 
 def _finite_or_text(value: float) -> float | str:
@@ -916,6 +878,8 @@ def create_app(
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        # Spec V3: a browser client on another origin may read them.
+        expose_headers=[TARGETS_HEADER, WARNINGS_HEADER],
     )
 
     install_auth(app, AuthSettings(token=resolved_token))
@@ -929,9 +893,13 @@ def create_app(
     )
     install_registry(app, registry)
 
-    # Outermost middleware: posts a best-effort per-request usage event
-    # (ext.keboola.cli.serve) after the response, off the event loop.
+    # Posts a best-effort per-request usage event (ext.keboola.cli.serve) after
+    # the response, off the event loop.
     app.add_middleware(_UsageTelemetryMiddleware, config_store=config_store, tasks=telemetry_tasks)
+    # The target record and the warnings of each request: the Kbagent-Targets and
+    # Kbagent-Warnings headers and the error body keys (spec V3). It wraps the
+    # routes and the error handlers, so both run inside its context.
+    app.add_middleware(ResponseMetaMiddleware)
 
     # The engine lives on app.state, NOT on the registry: server tests routinely
     # override `get_registry` with a hand-built mock, and an engine reachable
@@ -955,39 +923,45 @@ def create_app(
 
     install_broadcaster(app)
 
+    # The HTTP status of a kbagent error follows the error-code table
+    # (`response_meta.http_status_for`): validation and configuration 400,
+    # authentication 401, authorization 403, not_found 404, conflict 409, an
+    # `api` or `network` code 502, or 400 when it exits 2. So one code answers
+    # one status on every route, from a ConfigError or a KeboolaApiError.
     @app.exception_handler(ConfigError)
-    async def _config_error_handler(_request, exc: ConfigError):
+    async def _config_error_handler(request: Request, exc: ConfigError):
         # Subclasses carry a narrower code (`SessionAuthUnsupportedError` ->
         # AUTH_NOT_SUPPORTED_ON_STACK); a plain ConfigError has no `error_code`
-        # and stays CONFIG_ERROR. Both are configuration problems, so the 400
-        # is the same either way -- only the code distinguishes them.
+        # and stays CONFIG_ERROR.
         code = getattr(exc, "error_code", ErrorCode.CONFIG_ERROR)
-        return _format_error(str(exc), code, http_status=400)
+        return error_response(str(exc), code, http_status=http_status_for(code), request=request)
 
     @app.exception_handler(KeboolaApiError)
-    async def _api_error_handler(_request, exc: KeboolaApiError):
+    async def _api_error_handler(request: Request, exc: KeboolaApiError):
         code = getattr(exc, "error_code", ErrorCode.API_ERROR)
         msg = getattr(exc, "message", str(exc)) or str(exc)
         if code in _SESSION_CREDENTIAL_CODES:
-            return _format_error(f"{msg} {_SESSION_REMEDY_ON_HOST}", code, http_status=401)
-        if code in _CALLER_REFUSAL_CODES:
-            return _format_error(msg, code, http_status=400)
-        if code in _MERGE_REQUEST_CONFLICT_CODES:
-            return _format_error(msg, code, http_status=409, details=getattr(exc, "details", None))
-        if code == ErrorCode.NOT_FOUND:
-            # An upstream 404 is a statement about the requested resource, not
-            # about the gateway: reporting it as 502 made callers retry (and
-            # page on-call for) a request that can never succeed.
-            return _format_error(msg, code, http_status=404)
-        return _format_error(msg, code, http_status=502)
+            msg = f"{msg} {_SESSION_REMEDY_ON_HOST}"
+        # `details` (for example the merge-request conflict list in
+        # `api_error_params`) and `retryable` are kept, as in the CLI envelope.
+        return error_response(
+            msg,
+            code,
+            http_status=http_status_for(code),
+            request=request,
+            retryable=bool(getattr(exc, "retryable", False)),
+            details=getattr(exc, "details", None),
+        )
 
     @app.exception_handler(PermissionDeniedError)
-    async def _permission_denied_handler(_request, exc: PermissionDeniedError):
+    async def _permission_denied_handler(request: Request, exc: PermissionDeniedError):
         # 403, not 401: the caller authenticated fine (the bearer token was
         # accepted) -- the operation itself is what the active policy blocks.
         # Same `PERMISSION_DENIED` code the CLI prints for the same denial, so
         # a caller can branch on one value across both surfaces.
-        return _format_error(exc.message, ErrorCode.PERMISSION_DENIED, http_status=403)
+        return error_response(
+            exc.message, ErrorCode.PERMISSION_DENIED, http_status=403, request=request
+        )
 
     @app.exception_handler(RequestValidationError)
     async def _validation_error_handler(_request, exc: RequestValidationError):
@@ -999,15 +973,20 @@ def create_app(
         return JSONResponse(status_code=422, content={"detail": detail})
 
     @app.exception_handler(StarletteHTTPException)
-    async def _starlette_handler(_request, exc: StarletteHTTPException):
-        return _format_error(
-            exc.detail or "HTTP error", ErrorCode.HTTP_ERROR, http_status=exc.status_code
+    async def _starlette_handler(request: Request, exc: StarletteHTTPException):
+        return error_response(
+            exc.detail or "HTTP error",
+            ErrorCode.HTTP_ERROR,
+            http_status=exc.status_code,
+            request=request,
         )
 
     @app.exception_handler(Exception)
-    async def _generic_handler(_request, exc: Exception):
+    async def _generic_handler(request: Request, exc: Exception):
         logger.exception("Unhandled error: %s", exc)
-        return _format_error(str(exc) or repr(exc), ErrorCode.INTERNAL_ERROR, http_status=500)
+        return error_response(
+            str(exc) or repr(exc), ErrorCode.INTERNAL_ERROR, http_status=500, request=request
+        )
 
     app.include_router(health.router)
     app.include_router(permissions_router.router)

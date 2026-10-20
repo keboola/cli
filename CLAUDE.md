@@ -632,7 +632,7 @@ kbagent config clone --project P --component-id ID --config-id ID --name NAME [-
 #   option callback, resolve_pinned_alias, resolve_projects and fanout_projects. A project without a branch record
 #   gets one record with branch_source "none". A destructive command under --json whose project or branch
 #   is the active choice adds a TARGET_FROM_ACTIVE_CHOICE warnings[] entry (OutputFormatter, category set by
-#   root_command.LeafCommand). REST routes are unchanged. --json envelopes have an optional top-level
+#   root_command.LeafCommand). REST list routes follow the same chain since CLI-49. --json envelopes have an optional top-level
 #   `warnings` list ({code, message, ...}), not the same as `data.warnings`. Version gate in gotchas.md.
 kbagent search QUERY [--project NAME | --all-projects] [--type table|bucket|config|flow|data-app|transformation] [--search-type textual|config-based] [--regex] [--scope PATH ...] [--limit N]
 # --regex (0.67.0+): opt-in regex mode (mode=regex). Case-insensitive whole-term match on ENTITY NAMES
@@ -1562,6 +1562,20 @@ kbagent update [--beta] [--major]
 kbagent changelog [--limit N] [--full]
 # Default shows first sentences: every BREAKING note of a version, plus its first other notes until at least two show; --full / -v expands every note.
 kbagent serve [--host HOST] [--port PORT] [--ui] [--ui-dist PATH] [--reload] [--log-level LVL] [--cors-origin ORIGIN] [--config-dir DIR] [--no-banner]
+# serve REST parity (CLI-49, spec V2/V3/V4/V8/V9): the 26 routes whose command applies the active branch
+#   (storage writes + table-download, job run/terminate, transformation, config variables, component
+#   sync action) call resolve_branch in the service, so an omitted branch_id is the active branch.
+#   branch_id 0 is production. server/response_meta.py: one ASGI middleware opens a per-request target
+#   record (effective_branch ContextVar) and adds the Kbagent-Targets / Kbagent-Warnings JSON headers. The
+#   error body adds targets, warnings and error_type/project/retryable, and its HTTP status comes from
+#   ERROR_CODE_TABLE (http_status_for). project use / branch use / branch reset add active_project_set /
+#   active_branch_set / active_branch_cleared and an ACTIVE_CHOICE_SHARED warning. PATCH for semantic-layer
+#   items, merge-request update, data-app secrets and the variables merge (extra fields -> 422). The old
+#   PUT is a DEPRECATIONS form (DEPRECATED in Kbagent-Warnings). PUT .../variables with replace: true stays
+#   the full replace. List routes that read several projects take all_projects=true; without it and
+#   without project they use services/base.resolve_fanout_aliases (the T1 chain, shared with the CLI
+#   fanout_projects). A destructive route (route class or flag escalation, response_meta.note_operation)
+#   on the active branch adds TARGET_FROM_ACTIVE_CHOICE (hint branch_id=<id>). Version gate in gotchas.md.
 # serve dry_run (CLI-33): a POST/PUT/PATCH/DELETE route answers HTTP 422 (HTTP_ERROR) when the
 #   request sends `dry_run` in the query string or as a top-level JSON body key, and the route does
 #   not declare it there. Before, the route ignored it and ran the real write.

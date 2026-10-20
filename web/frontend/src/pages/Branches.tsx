@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { GitBranch, GitMerge, Plus, RotateCcw, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { api } from "../api/client";
+import { projectScope } from "../lib/projectScope";
 import { Empty, ErrorBox, Loading, PageTitle } from "../components/Empty";
 import { DataTable } from "../components/Table";
 import { useUIState } from "../state";
@@ -20,7 +21,7 @@ export function BranchesPage() {
 
   const q = useQuery<BranchesResp>({
     queryKey: ["branches", project],
-    queryFn: () => api.get("/branches", { query: { project: project ?? undefined } }),
+    queryFn: () => api.get("/branches", { query: projectScope(project) }),
     enabled: !!project,
   });
 

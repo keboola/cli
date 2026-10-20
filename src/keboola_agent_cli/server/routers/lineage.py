@@ -17,7 +17,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import HTMLResponse, PlainTextResponse
 from pydantic import BaseModel
 
-from ..dependencies import ServiceRegistry, get_registry
+from ...services.base import resolve_fanout_aliases
+from ..dependencies import ALL_PROJECTS_HELP, ServiceRegistry, get_registry
 
 router = APIRouter(prefix="/lineage", tags=["lineage"])
 
@@ -41,10 +42,12 @@ class LineageQuery(BaseModel):
 @router.get("/edges", summary="List cross-project lineage edges")
 def edges(
     project: list[str] | None = Query(None),
+    all_projects: bool = Query(False, description=ALL_PROJECTS_HELP),
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
     """Cross-project bucket-sharing edges (LineageService)."""
-    return registry.lineage.get_lineage(aliases=project)
+    aliases = resolve_fanout_aliases(registry.config_store, project, all_projects)
+    return registry.lineage.get_lineage(aliases=aliases)
 
 
 @router.post("/build", summary="Build deep column-level lineage")

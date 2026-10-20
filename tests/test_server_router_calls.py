@@ -33,7 +33,9 @@ if importlib.util.find_spec("fastapi") is None:  # pragma: no cover
 
 from fastapi.testclient import TestClient
 
+from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
+from keboola_agent_cli.models import AppConfig, ProjectConfig
 from keboola_agent_cli.server import create_app
 from keboola_agent_cli.server.dependencies import ServiceRegistry, get_manage_token, get_registry
 from keboola_agent_cli.services._data_app_password import DataAppPassword
@@ -50,7 +52,25 @@ FILE_ID = 999
 
 
 def _make_app_with_registry(tmp_path: Path, registry: ServiceRegistry) -> Any:
-    """Create the FastAPI app and override the registry dependency."""
+    """Create the FastAPI app and override the registry dependency.
+
+    A registry without a ``config_store`` gets a real one with ``PROJECT`` as
+    the only registered project: a list route without ``project`` reads it
+    (spec T1), and ``all_projects=true`` reads all.
+    """
+    if not hasattr(registry, "config_store"):
+        store = ConfigStore(config_dir=tmp_path)
+        store.save(
+            AppConfig(
+                projects={
+                    PROJECT: ProjectConfig(
+                        stack_url="https://connection.keboola.com",
+                        token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
+                    )
+                }
+            )
+        )
+        registry.config_store = store
     app = create_app(config_dir=str(tmp_path), auth_token="test-token")
     app.dependency_overrides[get_registry] = lambda: registry
     return app
@@ -1509,7 +1529,7 @@ def test_billing_credits_passes_none_aliases_when_no_project_given(tmp_path: Pat
     app = _make_app_with_registry(tmp_path, registry)
 
     with TestClient(app) as client:
-        res = client.get("/billing/credits", headers=AUTH)
+        res = client.get("/billing/credits", headers=AUTH, params={"all_projects": True})
 
     assert res.status_code == 200, res.text
     billing_svc.get_credits.assert_called_once_with(aliases=None)
@@ -1555,7 +1575,7 @@ def test_billing_credits_returns_service_envelope_unchanged(tmp_path: Path) -> N
     app = _make_app_with_registry(tmp_path, registry)
 
     with TestClient(app) as client:
-        res = client.get("/billing/credits", headers=AUTH)
+        res = client.get("/billing/credits", headers=AUTH, params={"all_projects": True})
 
     assert res.status_code == 200, res.text
     assert res.json() == envelope
@@ -2365,7 +2385,7 @@ def test_notifications_list_defaults_to_every_project(tmp_path: Path) -> None:
     app = _make_app_with_registry(tmp_path, _mock_registry(notification=notification_svc))
 
     with TestClient(app) as client:
-        res = client.get("/notifications", headers=AUTH)
+        res = client.get("/notifications", headers=AUTH, params={"all_projects": True})
 
     assert res.status_code == 200, res.text
     notification_svc.list_subscriptions.assert_called_once_with(
@@ -2583,7 +2603,7 @@ def test_token_list_all_defaults_to_none_aliases_and_false_last_used(tmp_path: P
     app = _make_app_with_registry(tmp_path, _mock_registry(token=token_svc))
 
     with TestClient(app) as client:
-        res = client.get("/token/list", headers=AUTH)
+        res = client.get("/token/list", headers=AUTH, params={"all_projects": True})
 
     assert res.status_code == 200, res.text
     token_svc.list_tokens_all.assert_called_once_with(aliases=None, with_last_used=False)

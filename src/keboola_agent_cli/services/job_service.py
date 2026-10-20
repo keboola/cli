@@ -24,6 +24,7 @@ from ..constants import (
     VALID_JOB_MODES,
     VALID_POLL_STRATEGIES,
 )
+from ..effective_branch import resolve_branch
 from ..errors import ErrorCode, KeboolaApiError
 from ..models import ProjectConfig
 from .base import BaseService, item_failure
@@ -575,6 +576,7 @@ class JobService(BaseService):
             completed job, optionally with ``logTail`` attached; otherwise
             returns the initial job response.
         """
+        branch_id = resolve_branch(self._config_store, alias, branch_id)
         if poll_strategy not in VALID_POLL_STRATEGIES:
             raise KeboolaApiError(
                 message=(
@@ -855,6 +857,7 @@ class JobService(BaseService):
         command terminates jobs, and no recorded Queue response shows such a
         job for production.
         """
+        branch_id = resolve_branch(self._config_store, alias, branch_id)
         projects = self.resolve_projects([alias])
         project = projects[alias]
 

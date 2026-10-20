@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { ApiError, api } from "../api/client";
+import { projectScope } from "../lib/projectScope";
 import { ConfirmModal } from "../components/ConfirmModal";
 import { Drawer } from "../components/Drawer";
 import { Empty, ErrorBox, Loading, PageTitle } from "../components/Empty";
@@ -70,7 +71,7 @@ export function ProjectsPage() {
   });
   const statusQ = useQuery<{ status: ProjectStatus[] }>({
     queryKey: ["projects-status"],
-    queryFn: () => api.get("/projects/status"),
+    queryFn: () => api.get("/projects/status", { query: projectScope(null) }),
   });
 
   // /projects/status performs an opportunistic backfill of org_id/org_name

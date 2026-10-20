@@ -1037,10 +1037,16 @@ def r_dry_run_parity(c: Context) -> Violations:
 
 
 def r_partial_update_patch(c: Context) -> Violations:
+    """A partial update has a PATCH route; its old PUT stays only as a DEPRECATIONS form (C3)."""
+    from keboola_agent_cli.commands._helpers import DEPRECATIONS
+
+    patched = {path for method, path, _ in c.routes if method == "PATCH"}
     return {
         f"{method} {path}": "partial update served with PUT; use PATCH"
         for method, path, _ in c.routes
-        if method == "PUT" and path in PARTIAL_UPDATE_ROUTES
+        if method == "PUT"
+        and path in PARTIAL_UPDATE_ROUTES
+        and (path not in patched or f"PUT {path}" not in DEPRECATIONS)
     }
 
 
@@ -1263,7 +1269,7 @@ RULES: tuple[Rule, ...] = (
     Rule(
         "serve.partial-update-uses-patch",
         "tree",
-        "a route in the reviewed list of partial updates uses PATCH",
+        "a route in the reviewed list of partial updates uses PATCH; a PUT there is deprecated",
         r_partial_update_patch,
     ),
 )
@@ -1284,6 +1290,7 @@ CONTRACT_RULES: dict[str, str] = {
     "safety.no-tty-confirmation": "tests/test_cli_contract.py",
     "errors.fanout-exit": "tests/test_target_selection.py",
     "target.targets-reported": "tests/test_target_selection.py",
+    "serve.targets-reported": "tests/test_server_response_meta.py",
 }
 DEFERRED_RULES: dict[str, str] = {
     "args.global-option-one-shape": "the GLOBAL_OPTIONS registry is not reviewed yet (A1)",
@@ -1296,7 +1303,6 @@ DEFERRED_RULES: dict[str, str] = {
     "change.expired-deprecation": "no DEPRECATIONS entry has a remove_after date yet: "
     "the window of the 1.0.0 hidden aliases starts at M",
     "change.breaking-bullet-on-removal": "release kind; lands with the release mechanics",
-    "serve.targets-reported": "contract; the Kbagent-Targets header lands in 1.0.0 (V3)",
 }
 
 # --------------------------------------------------------------------------- #

@@ -12,7 +12,8 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, model_validator
 
 from ...constants import FILE_DOWNLOAD_CHUNK_SIZE
-from ..dependencies import ServiceRegistry, get_registry, require_permission
+from ...services.base import resolve_fanout_aliases
+from ..dependencies import ALL_PROJECTS_HELP, ServiceRegistry, get_registry, require_permission
 
 router = APIRouter(prefix="/storage", tags=["storage"])
 
@@ -144,10 +145,13 @@ class TableFromSnapshot(BaseModel):
 def list_buckets(
     project: str | None = None,
     branch_id: int | None = None,
+    all_projects: bool = Query(False, description=ALL_PROJECTS_HELP),
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
     """List storage buckets in one or more projects. Mirrors `kbagent storage buckets`."""
-    aliases = [project] if project else None
+    aliases = resolve_fanout_aliases(
+        registry.config_store, [project] if project else None, all_projects
+    )
     return registry.storage.list_buckets(aliases=aliases, branch_id=branch_id)
 
 
@@ -220,6 +224,7 @@ def list_tables(
     bucket_id: str | None = None,
     branch_id: int | None = None,
     include_usage: bool = False,
+    all_projects: bool = Query(False, description=ALL_PROJECTS_HELP),
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
     """List tables across one or more projects. Mirrors `kbagent storage tables`.
@@ -228,7 +233,7 @@ def list_tables(
     CLI flag's help for the caveats.
     """
     return registry.storage.list_tables(
-        aliases=project,
+        aliases=resolve_fanout_aliases(registry.config_store, project, all_projects),
         bucket_id=bucket_id,
         branch_id=branch_id,
         include_usage=include_usage,

@@ -57,6 +57,7 @@ from fastapi import Depends, Request
 
 from ..permissions import OPERATION_REGISTRY, PermissionEngine
 from .dependencies import get_permission_engine
+from .response_meta import note_operation
 
 # Paths served without a permission check.
 #
@@ -165,6 +166,7 @@ ROUTE_OPERATIONS: dict[tuple[str, str], str] = {
     # Base key only. `replace: true` in the body escalates to the destructive-class
     # `config.variables-set --replace` inside the handler (server/routers/configs.py).
     ("PUT", "/configs/{project}/{component_id}/{config_id}/variables"): "config.variables-set",
+    ("PATCH", "/configs/{project}/{component_id}/{config_id}/variables"): "config.variables-set",
     (
         "DELETE",
         "/configs/{project}/{component_id}/{config_id}/variables",
@@ -312,6 +314,7 @@ ROUTE_OPERATIONS: dict[tuple[str, str], str] = {
     ("GET", "/data-apps/{project}/{app_id}/secrets"): "data-app.secrets-list",
     ("GET", "/data-apps/{project}/{app_id}/secrets/{key:path}"): "data-app.secrets-get",
     ("PUT", "/data-apps/{project}/{app_id}/secrets"): "data-app.secrets-set",
+    ("PATCH", "/data-apps/{project}/{app_id}/secrets"): "data-app.secrets-set",
     ("POST", "/data-apps/{project}/{app_id}/secrets/remove"): "data-app.secrets-remove",
     ("POST", "/data-apps/validate-repo"): "data-app.validate-repo",
     ("GET", "/data-apps/{project}/{app_id}/git-repo"): "data-app.git-repo",
@@ -349,6 +352,7 @@ ROUTE_OPERATIONS: dict[tuple[str, str], str] = {
     # Parent keys -- the leaf `<key>.<kind>` is checked too, see LEAF_PATH_PARAMS.
     ("POST", "/semantic-layer/items/{kind}"): "semantic-layer.add",
     ("PUT", "/semantic-layer/items/{kind}/{name}"): "semantic-layer.edit",
+    ("PATCH", "/semantic-layer/items/{kind}/{name}"): "semantic-layer.edit",
     ("DELETE", "/semantic-layer/items/{kind}/{name}"): "semantic-layer.remove",
     ("POST", "/semantic-layer/import"): "semantic-layer.import",
     ("POST", "/semantic-layer/promote"): "semantic-layer.promote",
@@ -414,6 +418,7 @@ ROUTE_OPERATIONS: dict[tuple[str, str], str] = {
 LEAF_PATH_PARAMS: dict[tuple[str, str], str] = {
     ("POST", "/semantic-layer/items/{kind}"): "kind",
     ("PUT", "/semantic-layer/items/{kind}/{name}"): "kind",
+    ("PATCH", "/semantic-layer/items/{kind}/{name}"): "kind",
     ("DELETE", "/semantic-layer/items/{kind}/{name}"): "kind",
 }
 
@@ -487,9 +492,12 @@ def enforce_route_permission(
         return
 
     engine.check_or_raise(operation)
+    note_operation(operation)
     leaf_param = LEAF_PATH_PARAMS.get(key)
     if leaf_param is not None:
-        engine.check_or_raise(f"{operation}.{request.path_params[leaf_param]}")
+        leaf = f"{operation}.{request.path_params[leaf_param]}"
+        engine.check_or_raise(leaf)
+        note_operation(leaf)
 
 
 def _declares_inline_permission(route: object) -> bool:
