@@ -130,7 +130,8 @@ jobs:
         #
         # On a pull request it also reads the base branch's baseline. For each
         # blocking rule it fails when the rule has more entries than on the base
-        # branch (counted per rule, so a rename is no growth), when the rule is
+        # branch (counted per rule, so a rename is no growth; a rule that is not
+        # in the base baseline yet starts its baseline here), when the rule is
         # missing or no longer blocking, and when a subject was added to
         # `exceptions`. A new exception passes only with the PR label
         # `cli-spec-exception`, which a reviewer adds after checking the

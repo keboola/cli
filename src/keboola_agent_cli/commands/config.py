@@ -48,6 +48,8 @@ from ._helpers import (
     get_formatter,
     get_service,
     map_error_to_exit_code,
+    parse_json_arg,
+    read_text_arg,
 )
 
 logger = logging.getLogger(__name__)
@@ -562,18 +564,27 @@ def config_search(
         raise typer.Exit(code=code)
 
 
-def _parse_json_input(raw: str) -> dict:
-    """Parse JSON from inline string, ``@file``, or ``-`` (stdin)."""
-    import sys
+def _parse_json_input(raw: str, *, label: str) -> dict:
+    """Parse a JSON object from inline text, ``@file`` or ``-`` (stdin).
 
-    if raw == "-":
-        return json.loads(sys.stdin.read())
-    if raw.startswith("@"):
-        file_path = Path(raw[1:])
-        if not file_path.is_file():
-            raise FileNotFoundError(f"Input file not found: {file_path}")
-        return json.loads(file_path.read_text(encoding="utf-8"))
-    return json.loads(raw)
+    Raises:
+        ValueError: On bad input or a value that is not a JSON object; the
+            message names ``label``.
+    """
+    parsed = parse_json_arg(raw, label=label)
+    if not isinstance(parsed, dict):
+        raise ValueError(f"{label} must be a JSON object, got {type(parsed).__name__}")
+    return parsed
+
+
+def _require_json_object(formatter: Any, value: object, *, label: str) -> None:
+    """Exit 2 (``VALIDATION_ERROR``) when a configuration body is not a JSON object."""
+    if not isinstance(value, dict):
+        formatter.error(
+            message=f"{label} must contain a JSON object, got {type(value).__name__}",
+            error_code=ErrorCode.VALIDATION_ERROR,
+        )
+        raise typer.Exit(code=2)
 
 
 def _parse_set_value(raw: str) -> object:
@@ -730,23 +741,23 @@ def config_update(
 
     if configuration:
         try:
-            config_dict = _parse_json_input(configuration)
-        except (json.JSONDecodeError, FileNotFoundError) as exc:
-            formatter.error(
-                message=f"Invalid --configuration input: {exc}",
-                error_code=ErrorCode.VALIDATION_ERROR,
-            )
+            config_dict = _parse_json_input(configuration, label="--configuration")
+        except ValueError as exc:
+            formatter.error(message=str(exc), error_code=ErrorCode.VALIDATION_ERROR)
             raise typer.Exit(code=2) from None
 
     if configuration_file:
         try:
-            config_dict = json.loads(configuration_file.read_text(encoding="utf-8"))
+            config_dict = json.loads(
+                read_text_arg(formatter, configuration_file, label="--configuration-file")
+            )
         except json.JSONDecodeError as exc:
             formatter.error(
                 message=f"Invalid JSON in {configuration_file}: {exc}",
                 error_code=ErrorCode.VALIDATION_ERROR,
             )
             raise typer.Exit(code=2) from None
+        _require_json_object(formatter, config_dict, label="--configuration-file")
 
     # --- Parse --set values ---------------------------------------------------
     parsed_sets: list[tuple[str, object]] | None = None
@@ -1332,22 +1343,22 @@ def config_new(
     if push:
         if configuration is not None:
             try:
-                config_body = _parse_json_input(configuration)
-            except (json.JSONDecodeError, FileNotFoundError) as exc:
-                formatter.error(
-                    message=f"Invalid --configuration input: {exc}",
-                    error_code=ErrorCode.VALIDATION_ERROR,
-                )
+                config_body = _parse_json_input(configuration, label="--configuration")
+            except ValueError as exc:
+                formatter.error(message=str(exc), error_code=ErrorCode.VALIDATION_ERROR)
                 raise typer.Exit(code=2) from None
         elif configuration_file is not None:
             try:
-                config_body = json.loads(configuration_file.read_text(encoding="utf-8"))
+                config_body = json.loads(
+                    read_text_arg(formatter, configuration_file, label="--configuration-file")
+                )
             except json.JSONDecodeError as exc:
                 formatter.error(
                     message=f"Invalid JSON in --configuration-file {configuration_file}: {exc}",
                     error_code=ErrorCode.VALIDATION_ERROR,
                 )
                 raise typer.Exit(code=2) from None
+            _require_json_object(formatter, config_body, label="--configuration-file")
 
     # ── Scaffold step (runs in scaffold-only mode and in push+files modes) ───
     scaffold: dict[str, Any] | None = None
@@ -2110,12 +2121,9 @@ def config_row_create(
     config_dict: dict | None = None
     if configuration:
         try:
-            config_dict = _parse_json_input(configuration)
-        except (json.JSONDecodeError, FileNotFoundError) as exc:
-            formatter.error(
-                message=f"Invalid --configuration input: {exc}",
-                error_code=ErrorCode.VALIDATION_ERROR,
-            )
+            config_dict = _parse_json_input(configuration, label="--configuration")
+        except ValueError as exc:
+            formatter.error(message=str(exc), error_code=ErrorCode.VALIDATION_ERROR)
             raise typer.Exit(code=2) from None
 
     try:
@@ -2283,12 +2291,9 @@ def config_row_update(
     config_dict: dict | None = None
     if configuration:
         try:
-            config_dict = _parse_json_input(configuration)
-        except (json.JSONDecodeError, FileNotFoundError) as exc:
-            formatter.error(
-                message=f"Invalid --configuration input: {exc}",
-                error_code=ErrorCode.VALIDATION_ERROR,
-            )
+            config_dict = _parse_json_input(configuration, label="--configuration")
+        except ValueError as exc:
+            formatter.error(message=str(exc), error_code=ErrorCode.VALIDATION_ERROR)
             raise typer.Exit(code=2) from None
 
     parsed_sets: list[tuple[str, object]] | None = None

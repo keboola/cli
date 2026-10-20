@@ -416,7 +416,7 @@ def data_app_create(
     if description_file is not None:
         try:
             effective_description = description_file.read_text(encoding="utf-8")
-        except OSError as exc:
+        except (OSError, UnicodeDecodeError) as exc:
             formatter.error(
                 message=f"Cannot read --description-file {description_file}: {exc}",
                 error_code=ErrorCode.READ_ERROR,

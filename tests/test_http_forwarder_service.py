@@ -8,9 +8,7 @@ retry path) get type-stable assertions without spinning up Typer.
 
 from __future__ import annotations
 
-import io
 import json
-from pathlib import Path
 
 import httpx
 import pytest
@@ -59,33 +57,6 @@ class TestResolveEndpoint:
             HttpForwarderService.resolve_endpoint()
 
 
-class TestResolveBody:
-    def test_none_returns_none(self) -> None:
-        assert HttpForwarderService.resolve_body(None) is None
-        assert HttpForwarderService.resolve_body("") is None
-
-    def test_inline_json(self) -> None:
-        assert HttpForwarderService.resolve_body('{"a": 1}') == {"a": 1}
-
-    def test_at_file_reads_disk(self, tmp_path: Path) -> None:
-        path = tmp_path / "body.json"
-        path.write_text('{"from_file": true}', encoding="utf-8")
-        assert HttpForwarderService.resolve_body(f"@{path}") == {"from_file": True}
-
-    def test_dash_reads_stdin(self, monkeypatch) -> None:
-        # Replace sys.stdin with a StringIO so .read() returns our payload
-        # without blocking on a real TTY.
-        monkeypatch.setattr("sys.stdin", io.StringIO('{"from_stdin": 1}'))
-        assert HttpForwarderService.resolve_body("-") == {"from_stdin": 1}
-
-    def test_invalid_json_raises_exit_2(self) -> None:
-        with pytest.raises(ForwarderError) as exc_info:
-            HttpForwarderService.resolve_body("{not json")
-        assert exc_info.value.exit_code == 2
-        assert exc_info.value.error_code == ErrorCode.INVALID_ARGUMENT
-        assert "valid JSON" in exc_info.value.message
-
-
 class TestRequest:
     def test_get_returns_forwarded_response_with_json(self, env_set, httpx_mock) -> None:
         httpx_mock.add_response(
@@ -94,7 +65,7 @@ class TestRequest:
             status_code=200,
         )
         svc = HttpForwarderService()
-        result = svc.request("GET", "/projects", body=None, timeout=5.0)
+        result = svc.request("GET", "/projects", payload=None, timeout=5.0)
         assert isinstance(result, ForwardedResponse)
         assert result.is_json is True
         assert result.decoded == {"projects": []}
@@ -106,7 +77,7 @@ class TestRequest:
             json={"ok": True},
             status_code=200,
         )
-        result = HttpForwarderService().request("GET", "projects", body=None, timeout=5.0)
+        result = HttpForwarderService().request("GET", "projects", payload=None, timeout=5.0)
         assert result.decoded == {"ok": True}
 
     def test_post_sends_json_body_and_content_type(self, env_set, httpx_mock) -> None:
@@ -118,7 +89,7 @@ class TestRequest:
         HttpForwarderService().request(
             "POST",
             "/agents",
-            body='{"name": "x"}',
+            payload={"name": "x"},
             timeout=5.0,
         )
         req = httpx_mock.get_requests()[0]
@@ -131,7 +102,7 @@ class TestRequest:
             json={},
             status_code=200,
         )
-        HttpForwarderService().request("GET", "/x", body=None, timeout=5.0)
+        HttpForwarderService().request("GET", "/x", payload=None, timeout=5.0)
         assert httpx_mock.get_requests()[0].headers["authorization"] == "Bearer svc-bearer-test"
 
     def test_4xx_raises_forwarder_error_exit_1(self, env_set, httpx_mock) -> None:
@@ -141,7 +112,7 @@ class TestRequest:
             status_code=403,
         )
         with pytest.raises(ForwarderError) as exc_info:
-            HttpForwarderService().request("GET", "/forbidden", body=None, timeout=5.0)
+            HttpForwarderService().request("GET", "/forbidden", payload=None, timeout=5.0)
         assert exc_info.value.exit_code == 1
         assert exc_info.value.error_code == ErrorCode.API_ERROR
         assert "403" in exc_info.value.message
@@ -149,7 +120,7 @@ class TestRequest:
     def test_transport_error_raises_exit_4(self, env_set, httpx_mock) -> None:
         httpx_mock.add_exception(httpx.ConnectError("conn refused"))
         with pytest.raises(ForwarderError) as exc_info:
-            HttpForwarderService().request("GET", "/x", body=None, timeout=5.0)
+            HttpForwarderService().request("GET", "/x", payload=None, timeout=5.0)
         assert exc_info.value.exit_code == 4
         assert exc_info.value.error_code == ErrorCode.CONNECTION_ERROR
 
@@ -160,7 +131,7 @@ class TestRequest:
             headers={"content-type": "text/plain"},
             status_code=200,
         )
-        result = HttpForwarderService().request("GET", "/text", body=None, timeout=5.0)
+        result = HttpForwarderService().request("GET", "/text", payload=None, timeout=5.0)
         assert result.is_json is False
         assert result.decoded == "plain body"
 
@@ -174,6 +145,6 @@ class TestRequest:
             headers={"content-type": "application/json"},
             status_code=200,
         )
-        result = HttpForwarderService().request("GET", "/lies", body=None, timeout=5.0)
+        result = HttpForwarderService().request("GET", "/lies", payload=None, timeout=5.0)
         assert result.is_json is False
         assert result.decoded == "not really json"

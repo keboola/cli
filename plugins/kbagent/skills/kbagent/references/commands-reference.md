@@ -241,7 +241,7 @@ Mint, revoke, and rotate scoped Storage API tokens (the Keboola single-bucket-wr
 ## Sharing (Cross-Project)
 Bucket sharing + linking across projects in the same organization. `sharing edges` (above, under Data Lineage) visualises the resulting data-flow graph.
 - `sharing list [--project NAME | --all-projects]` -- list shared buckets available for linking
-- `sharing share --project ALIAS --bucket-id ID --type TYPE [--target-project-ids IDs] [--target-users EMAILS]` -- enable sharing on a bucket
+- `sharing share --project ALIAS --bucket-id ID --type TYPE [--target-project-ids ID ...] [--target-users EMAIL ...]` -- enable sharing on a bucket
 - `sharing unshare --project ALIAS --bucket-id ID` -- disable sharing on a bucket
 - `sharing link --project ALIAS --source-project-id ID --bucket-id ID [--name NAME] [--stage in|out]` -- link a shared bucket into a project. `--stage` (0.88.0+) picks the stage in the TARGET project; default stays `in` and is **not** derived from the source bucket (MCP's `link_shared_bucket` derives it), so linking a shared `out.*` bucket into `out` needs `--stage out` explicitly
 - `sharing unlink --project ALIAS --bucket-id ID` -- remove a linked bucket from a project

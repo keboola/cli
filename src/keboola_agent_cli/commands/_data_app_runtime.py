@@ -56,7 +56,7 @@ def _parse_secret_arg(arg: str) -> tuple[str, str]:
 def _read_secrets_file(path: Path) -> dict[str, str]:
     try:
         text = path.read_text(encoding="utf-8")
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         raise typer.BadParameter(
             f"Cannot read secrets file {path}: {exc}",
             param_hint="--secrets-file",

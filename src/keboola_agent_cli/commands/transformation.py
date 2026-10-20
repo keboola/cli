@@ -21,11 +21,13 @@ from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..services.transformation_service import TransformationService
 from ._helpers import (
+    RefuseAtFile,
     check_cli_permission,
     emit_api_error,
     get_formatter,
     map_error_to_exit_code,
     parse_json_arg,
+    read_text_arg,
     resolve_project_alias,
 )
 
@@ -103,6 +105,7 @@ def transformation_create(
         None,
         "--sql",
         help="SQL text (semicolon-separated statements). Mutually exclusive with --sql-file.",
+        callback=RefuseAtFile("--sql-file").callback,
     ),
     sql_file: Path | None = typer.Option(
         None,
@@ -166,7 +169,7 @@ def transformation_create(
                 error_code=ErrorCode.FILE_NOT_FOUND,
             )
             raise typer.Exit(code=2) from None
-        sql = sql_file.read_text(encoding="utf-8")
+        sql = read_text_arg(formatter, sql_file, label="--sql-file")
 
     alias = resolve_project_alias(ctx, formatter, project)
     branch_id = resolve_branch(config_store, alias, branch)

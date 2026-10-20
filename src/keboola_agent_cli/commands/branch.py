@@ -20,6 +20,7 @@ from ._all_projects import (
     fanout_projects,
 )
 from ._helpers import (
+    RefuseAtFile,
     _confirm_or_abort,
     check_cli_permission,
     emit_api_error,
@@ -367,7 +368,9 @@ def branch_metadata_set(
     ctx: typer.Context,
     project: str = typer.Option(..., "--project", help="Project alias"),
     key: str = typer.Option(..., "--key", help="Metadata key to set"),
-    text: str | None = typer.Option(None, "--text", help="Inline string value"),
+    text: str | None = typer.Option(
+        None, "--text", help="Inline string value", callback=RefuseAtFile("--file").callback
+    ),
     file: Path | None = typer.Option(
         None,
         "--file",

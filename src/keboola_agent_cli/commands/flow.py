@@ -8,8 +8,6 @@ from __future__ import annotations
 
 import json
 import logging
-import sys
-from pathlib import Path
 from typing import Any
 
 import typer
@@ -41,6 +39,7 @@ from ._helpers import (
     get_service,
     item_failure_exit_code,
     map_error_to_exit_code,
+    parse_json_arg,
 )
 
 logger = logging.getLogger(__name__)
@@ -623,19 +622,8 @@ def flow_validate(
 
 
 def _load_flow_yaml(raw: str) -> dict[str, Any]:
-    """Load flow definition from inline JSON, @file, or - (stdin)."""
-    if raw == "-":
-        content = sys.stdin.read()
-    elif raw.startswith("@"):
-        file_path = Path(raw[1:])
-        if not file_path.is_file():
-            raise FileNotFoundError(f"File not found: {file_path}")
-        content = file_path.read_text(encoding="utf-8")
-    else:
-        content = raw
-
-    # Try YAML first (superset of JSON)
-    parsed = yaml.safe_load(content)
+    """Load flow definition from inline YAML/JSON, @file, or - (stdin)."""
+    parsed = parse_json_arg(raw, label="--file", allow_yaml=True)
     if parsed is None:
         return {}
     if not isinstance(parsed, dict):
