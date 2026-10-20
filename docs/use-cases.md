@@ -37,10 +37,10 @@ a specific database host, or check if anyone hardcoded credentials somewhere.
 
 ```bash
 # Search for a hostname across all projects
-kbagent config search --query "legacy-db.internal.company.com" --ignore-case
+kbagent config search --query "legacy-db.internal.company.com" --ignore-case --all-projects
 
 # Find configs that might have hardcoded passwords
-kbagent config search --query "password" --ignore-case
+kbagent config search --query "password" --ignore-case --all-projects
 
 # Pull everything for offline grep / deeper analysis
 kbagent sync pull --all-projects
@@ -52,7 +52,7 @@ which project, component, config, and JSON path matched -- no need to click
 through 40 project UIs.
 
 > **Prompt for Claude Code:**
-> Use `kbagent config search --query "password" --ignore-case` across all
+> Use `kbagent config search --query "password" --ignore-case --all-projects` across all
 > projects. For each match, check if it's a properly encrypted `#password`
 > field or a plaintext leak. Give me a report with project, component,
 > config name, and whether the credential is safe or needs rotation.
@@ -245,7 +245,7 @@ over the weekend across all projects.
 
 ```bash
 # Check failed jobs across all projects
-kbagent job list --status error --limit 5
+kbagent job list --status error --limit 5 --all-projects
 
 # Drill into a specific failure
 kbagent job detail --project marketing --job-id 987654321
@@ -303,7 +303,7 @@ commands, follow proper workflows, and avoid common pitfalls. Then just talk to 
 naturally:
 
 > **"Which projects had the most job failures this week?"**
-> The AI runs `kbagent job list --status error` across all projects and
+> The AI runs `kbagent job list --status error --all-projects` across all projects and
 > gives you a ranked summary.
 
 > **"Create a new Snowflake extractor that pulls the `users` table from our CRM database"**

@@ -27,7 +27,12 @@ from ..services.component_service import (
 )
 from ..services.config_service import validate_set_paths
 from ..sync.branch_registry import default_branch_prefix
-from ._all_projects import AllProjectsOption, reject_project_with_all_projects
+from ._all_projects import (
+    FANOUT_PROJECT_HELP,
+    AllProjectsOption,
+    fanout_exit_code,
+    fanout_projects,
+)
 from ._config_variables_render import (
     format_variables_clear,
     format_variables_dry_run,
@@ -72,7 +77,7 @@ def config_list(
     project: list[str] | None = typer.Option(
         None,
         "--project",
-        help="Project alias to query (can be repeated for multiple projects)",
+        help=FANOUT_PROJECT_HELP,
     ),
     all_projects: AllProjectsOption = False,
     component_type: str | None = typer.Option(
@@ -100,18 +105,17 @@ def config_list(
         ),
     ),
 ) -> None:
-    """List configurations from connected projects.
+    """List configurations of the active project, the given projects, or all projects.
 
     If a dev branch is active (via 'branch use'), configs from that branch
     are listed. Use --branch to override.
     """
     formatter = get_formatter(ctx)
-    reject_project_with_all_projects(formatter, project, all_projects)
     service = get_service(ctx, "config_service")
 
     # --branch requires --project (branch ID is per-project)
     # For list with multiple projects, only validate if explicit --branch given
-    if branch is not None and (not project or len(project) != 1):
+    if branch is not None and (all_projects or len(project or []) > 1):
         formatter.error(
             message="--branch requires exactly one --project (branch ID is per-project)",
             error_code=ErrorCode.INVALID_ARGUMENT,
@@ -127,6 +131,8 @@ def config_list(
         )
         raise typer.Exit(code=2)
 
+    project = fanout_projects(ctx, formatter, project, all_projects)
+
     try:
         result = service.list_configs(
             aliases=project,
@@ -140,12 +146,15 @@ def config_list(
         raise typer.Exit(code=5) from None
 
     # In JSON mode, include both configs and errors in the response
+    code = fanout_exit_code(result.get("errors", []))
     if formatter.json_mode:
-        formatter.output(result)
+        formatter.output(result, exit_code=code)
     else:
         # In human mode, show per-project errors as warnings and configs as table
         format_configs_table(formatter.console, result)
         emit_project_warnings(formatter, result)
+    if code:
+        raise typer.Exit(code=code)
 
 
 @config_app.command("detail", rich_help_panel="Browse")
@@ -413,7 +422,7 @@ def config_examples(
     project: str | None = typer.Option(
         None,
         "--project",
-        help="Project alias (defaults to the pinned default project)",
+        help="Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)",
     ),
     row: bool = typer.Option(
         False,
@@ -457,7 +466,7 @@ def config_search(
     project: list[str] | None = typer.Option(
         None,
         "--project",
-        help="Project alias to search (can be repeated for multiple projects)",
+        help=FANOUT_PROJECT_HELP,
     ),
     all_projects: AllProjectsOption = False,
     component_type: str | None = typer.Option(
@@ -497,11 +506,10 @@ def config_search(
     are searched. Use --branch to override.
     """
     formatter = get_formatter(ctx)
-    reject_project_with_all_projects(formatter, project, all_projects)
     service = get_service(ctx, "config_service")
 
     # --branch requires exactly one --project
-    if branch is not None and (not project or len(project) != 1):
+    if branch is not None and (all_projects or len(project or []) > 1):
         formatter.error(
             message="--branch requires exactly one --project (branch ID is per-project)",
             error_code=ErrorCode.INVALID_ARGUMENT,
@@ -528,6 +536,8 @@ def config_search(
             )
             raise typer.Exit(code=2) from None
 
+    project = fanout_projects(ctx, formatter, project, all_projects)
+
     try:
         result = service.search_configs(
             query=query,
@@ -542,11 +552,14 @@ def config_search(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
+    code = fanout_exit_code(result.get("errors", []))
     if formatter.json_mode:
-        formatter.output(result)
+        formatter.output(result, exit_code=code)
     else:
         format_search_results(formatter.console, result)
         emit_project_warnings(formatter, result)
+    if code:
+        raise typer.Exit(code=code)
 
 
 def _parse_json_input(raw: str) -> dict:

@@ -278,8 +278,8 @@
       "category": "read",
       "help": "Show the current PAYG credit balance for one or more projects.\n\nBalance only -- consumed, remaining, and total (a client-side\n`consumed + remaining`, NOT a purchase figure: credit purchases are\nexactly what this command cannot see), plus the balance expressed in\nminutes (the Keboola UI's unit: minutes = credits * 60). A project\nwithout the `pay-as-you-go` feature flag surfaces as a per-project\nwarning (`PAYG_NOT_AVAILABLE`), not a hard failure -- one non-PAYG\nproject in a multi-project run never blocks the others.\n\nPurchase history and Stripe invoice IDs are NOT available here: that\ndata lives on `connection.<stack>` `/pay-as-you-go/billing/*`, which\ndoes not accept a plain project Storage API token (issue #594).",
       "params": [
-        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias (repeatable; omit for all registered projects)"},
-        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Until 1.0.0 the same as omitting --project; from 1.0.0 an omitted --project reads only the default project. Cannot be used with --project."}
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias or ID, repeatable. Omitted: the active project (KBAGENT_PROJECT, then 'kbagent project use', then the only registered project). Use --all-projects for all projects."},
+        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Cannot be used with --project."}
       ]
     },
     {
@@ -318,10 +318,10 @@
       "kind": "command",
       "hidden": false,
       "category": "read",
-      "help": "List development branches from connected projects.",
+      "help": "List development branches of the active project, the given projects, or all projects.",
       "params": [
-        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias to query (can be repeated for multiple projects)"},
-        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Until 1.0.0 the same as omitting --project; from 1.0.0 an omitted --project reads only the default project. Cannot be used with --project."}
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias or ID, repeatable. Omitted: the active project (KBAGENT_PROJECT, then 'kbagent project use', then the only registered project). Use --all-projects for all projects."},
+        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Cannot be used with --project."}
       ]
     },
     {
@@ -432,7 +432,7 @@
       "help": "Show detailed information about a specific component.",
       "params": [
         {"kind": "option", "name": "component_id", "opts": ["--component-id"], "type": "text", "required": true, "default": null, "help": "Component ID (e.g. keboola.ex-db-snowflake)"},
-        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "default": null, "help": "Project alias (defaults to the pinned default project)"}
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"}
       ]
     },
     {
@@ -440,10 +440,10 @@
       "kind": "command",
       "hidden": false,
       "category": "read",
-      "help": "List available components from connected projects.",
+      "help": "List the components of the active project, the given projects, or all projects.",
       "params": [
-        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias to query (can be repeated for multiple projects)"},
-        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Until 1.0.0 the same as omitting --project; from 1.0.0 an omitted --project reads only the default project. Cannot be used with --project. No effect with --query: --query searches only the default project."},
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias or ID, repeatable. Omitted: the active project (KBAGENT_PROJECT, then 'kbagent project use', then the only registered project). Use --all-projects for all projects."},
+        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Cannot be used with --project. No effect with --query: --query searches only one project."},
         {"kind": "option", "name": "component_type", "opts": ["--type"], "type": "text", "default": null, "help": "Filter by component type: extractor, writer, transformation, application"},
         {"kind": "option", "name": "query", "opts": ["--query", "-q"], "type": "text", "default": null, "help": "Search query to filter components by name or description"}
       ]
@@ -543,7 +543,7 @@
       "help": "Show sample configuration JSON examples for a component.\n\nSurfaces the root and row configuration examples published in the\ncomponent documentation (the same bodies 'config new' seeds scaffolds\nfrom). Useful as a starting point before 'config update' or\n'config row-create'.",
       "params": [
         {"kind": "option", "name": "component_id", "opts": ["--component-id"], "type": "text", "required": true, "default": null, "help": "Component ID (e.g. keboola.ex-google-drive)"},
-        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "default": null, "help": "Project alias (defaults to the pinned default project)"},
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "row", "opts": ["--row"], "type": "boolean", "is_flag": true, "default": false, "help": "Show row configuration examples only"}
       ]
     },
@@ -566,10 +566,10 @@
       "kind": "command",
       "hidden": false,
       "category": "read",
-      "help": "List configurations from connected projects.\n\nIf a dev branch is active (via 'branch use'), configs from that branch\nare listed. Use --branch to override.",
+      "help": "List configurations of the active project, the given projects, or all projects.\n\nIf a dev branch is active (via 'branch use'), configs from that branch\nare listed. Use --branch to override.",
       "params": [
-        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias to query (can be repeated for multiple projects)"},
-        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Until 1.0.0 the same as omitting --project; from 1.0.0 an omitted --project reads only the default project. Cannot be used with --project."},
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias or ID, repeatable. Omitted: the active project (KBAGENT_PROJECT, then 'kbagent project use', then the only registered project). Use --all-projects for all projects."},
+        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Cannot be used with --project."},
         {"kind": "option", "name": "component_type", "opts": ["--component-type"], "type": "text", "default": null, "help": "Filter by component type: extractor, writer, transformation, application"},
         {"kind": "option", "name": "component_id", "opts": ["--component-id"], "type": "text", "default": null, "help": "Filter by specific component ID (e.g. keboola.ex-db-snowflake)"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "List configs from a specific dev branch ID (defaults to active branch)"},
@@ -718,8 +718,8 @@
       "help": "Search through configuration bodies for a string or pattern.\n\nSearches config names, descriptions, parameters, and row definitions.\nReports which configurations match and where in the JSON tree.\n\nIf a dev branch is active (via 'branch use'), configs from that branch\nare searched. Use --branch to override.",
       "params": [
         {"kind": "option", "name": "query", "opts": ["--query", "-q"], "type": "text", "required": true, "default": null, "help": "Search string or regex pattern"},
-        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias to search (can be repeated for multiple projects)"},
-        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Until 1.0.0 the same as omitting --project; from 1.0.0 an omitted --project reads only the default project. Cannot be used with --project."},
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias or ID, repeatable. Omitted: the active project (KBAGENT_PROJECT, then 'kbagent project use', then the only registered project). Use --all-projects for all projects."},
+        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Cannot be used with --project."},
         {"kind": "option", "name": "component_type", "opts": ["--component-type"], "type": "text", "default": null, "help": "Filter by component type: extractor, writer, transformation, application"},
         {"kind": "option", "name": "component_id", "opts": ["--component-id"], "type": "text", "default": null, "help": "Filter by specific component ID (e.g. keboola.ex-db-snowflake)"},
         {"kind": "option", "name": "ignore_case", "opts": ["--ignore-case", "-i"], "type": "boolean", "is_flag": true, "default": false, "help": "Case-insensitive matching"},
@@ -1020,8 +1020,8 @@
       "category": "read",
       "help": "List data apps across one or more registered projects.",
       "params": [
-        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias to query (repeatable). None = all projects."},
-        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Until 1.0.0 the same as omitting --project; from 1.0.0 an omitted --project reads only the default project. Cannot be used with --project."},
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias or ID, repeatable. Omitted: the active project (KBAGENT_PROJECT, then 'kbagent project use', then the only registered project). Use --all-projects for all projects."},
+        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Cannot be used with --project."},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Storage branch ID for the config-name lookup (defaults to production)."}
       ]
     },
@@ -1356,7 +1356,7 @@
       "help": "Ask the Keboola documentation a natural language question.",
       "params": [
         {"kind": "argument", "name": "question", "opts": ["question"], "type": "text", "required": true, "default": null, "help": "Natural language question about the Keboola platform"},
-        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "default": null, "help": "Project alias (defaults to the pinned default project)"}
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"}
       ]
     },
     {
@@ -1526,8 +1526,8 @@
       "category": "read",
       "help": "List conditional flows (keboola.flow) across projects.\n\nLegacy keboola.orchestrator flows are NOT listed (orchestrator support was\ndropped in 0.57.0); a count of any that exist is shown as a warning.\n\nWith ``--with-schedules`` each row includes a ``schedules`` list of\n``{schedule_id, cron, timezone, enabled}`` entries. Flows without\nany schedule get ``schedules=[]``.",
       "params": [
-        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias (repeatable for multiple projects; omit for all)"},
-        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Until 1.0.0 the same as omitting --project; from 1.0.0 an omitted --project reads only the default project. Cannot be used with --project."},
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias or ID, repeatable. Omitted: the active project (KBAGENT_PROJECT, then 'kbagent project use', then the only registered project). Use --all-projects for all projects."},
+        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Cannot be used with --project."},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID (per-project; requires single --project)"},
         {"kind": "option", "name": "with_schedules", "opts": ["--with-schedules"], "type": "boolean", "is_flag": true, "default": false, "help": "Enrich each flow row with the cron schedules that target it (one extra API call per project, NOT per flow)."}
       ]
@@ -1712,10 +1712,10 @@
       "kind": "command",
       "hidden": false,
       "category": "read",
-      "help": "List jobs from connected projects.",
+      "help": "List jobs of the active project, the given projects, or all projects.",
       "params": [
-        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias to query (can be repeated for multiple projects)"},
-        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Until 1.0.0 the same as omitting --project; from 1.0.0 an omitted --project reads only the default project. Cannot be used with --project."},
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias or ID, repeatable. Omitted: the active project (KBAGENT_PROJECT, then 'kbagent project use', then the only registered project). Use --all-projects for all projects."},
+        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Cannot be used with --project."},
         {"kind": "option", "name": "component_id", "opts": ["--component-id"], "type": "text", "default": null, "help": "Filter by component ID (e.g. keboola.ex-db-snowflake)"},
         {"kind": "option", "name": "config_id", "opts": ["--config-id"], "type": "text", "default": null, "help": "Filter by configuration ID (requires --component-id)"},
         {"kind": "option", "name": "status", "opts": ["--status"], "type": "text", "default": null, "help": "Filter by job status: processing, terminated, cancelled, success, error"},
@@ -1780,7 +1780,7 @@
       "help": "Ask Kai a one-shot question and get the full response.\n\nKai has access to your project's data, configurations, and lineage\nvia MCP tools. Use this for Keboola-specific questions that require\nproject context.",
       "params": [
         {"kind": "option", "name": "message", "opts": ["--message", "-m"], "type": "text", "required": true, "default": null, "help": "Question to ask Kai about your project."},
-        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "default": null, "help": "Project alias (uses default if omitted)."}
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)."}
       ]
     },
     {
@@ -1792,7 +1792,7 @@
       "params": [
         {"kind": "option", "name": "message", "opts": ["--message", "-m"], "type": "text", "required": true, "default": null, "help": "Message to send to Kai."},
         {"kind": "option", "name": "chat_id", "opts": ["--chat-id"], "type": "text", "default": null, "help": "Continue an existing chat session."},
-        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "default": null, "help": "Project alias (uses default if omitted)."}
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)."}
       ]
     },
     {
@@ -1803,7 +1803,7 @@
       "help": "Fetch the full message history of a single Kai chat.\n\nUse this to restore a previous conversation when continuing it with\n`kai chat --chat-id ID`, or to export a transcript for offline review.\nReturns a flat list of ``{role, content, created_at}`` records — tool\ncalls and other non-text parts are skipped (they are Kai's internal\nstreaming protocol, not user-facing content).",
       "params": [
         {"kind": "option", "name": "chat_id", "opts": ["--chat-id"], "type": "text", "required": true, "default": null, "help": "Kai chat ID (UUID, from `kai history` or `kai chat`)."},
-        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "default": null, "help": "Project alias (uses default if omitted)."}
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)."}
       ]
     },
     {
@@ -1813,7 +1813,7 @@
       "category": "read",
       "help": "List recent Kai chat sessions.",
       "params": [
-        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "default": null, "help": "Project alias (uses default if omitted)."},
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)."},
         {"kind": "option", "name": "limit", "opts": ["--limit", "-n"], "type": "integer", "default": 10, "help": "Maximum number of chats to return."}
       ]
     },
@@ -1824,7 +1824,7 @@
       "category": "read",
       "help": "Check Kai server health and MCP connection status.",
       "params": [
-        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "default": null, "help": "Project alias (uses default if omitted)."}
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)."}
       ]
     },
     {
@@ -1834,7 +1834,7 @@
       "category": "read",
       "help": "Check whether the configured token can use Kai (master token + AI Agent Chat).\n\nInspects /v2/storage/tokens/verify and returns a structured readiness\npayload WITHOUT raising on failure — unlike ``ping``/``ask``/``chat``\nwhich fail-fast with KAI_NOT_ENABLED. Useful for UIs and pre-flight\nautomation that need to render an informative warning instead of an\nerror cascade.",
       "params": [
-        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "default": null, "help": "Project alias (uses default if omitted)."}
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)."}
       ]
     },
     {
@@ -1908,7 +1908,7 @@
       "category": "destructive",
       "help": "Add your approval (destructive: the last approval is what a merge waits for).\n\nOnly possible while the merge request is `in_review`. On a non-SOX project\nwith 0 required approvals (the default) that state is never reached --\n`request-review` jumps straight to `approved` -- so this command answers\n422 there. It exists for projects that require approvals. Under --json the\ntarget must be explicit.",
       "params": [
-        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "default": null, "help": "Project alias (default: KBAGENT_PROJECT, then the `project use` pin, then the sole project)"},
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id", "--id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID whose merge request to use (default: the active branch set via `branch use`). Mutually exclusive with --merge-request-id"}
       ]
@@ -1920,7 +1920,7 @@
       "category": "destructive",
       "help": "Arm or disarm automatic merging of this merge request (destructive).\n\nA backend scheduler runs every `approved` merge request whose strategy is\n`immediately` (or `scheduled` and due) through the same merge processor\n`merge` uses -- on its own, retrying until it lands, with `merge` never\ncalled. Arming is therefore a delayed production merge and its own,\nconsciously taken step: it is not a flag on `create` or `update`. Under\n--json the target must be explicit.",
       "params": [
-        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "default": null, "help": "Project alias (default: KBAGENT_PROJECT, then the `project use` pin, then the sole project)"},
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id", "--id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID whose merge request to use (default: the active branch set via `branch use`). Mutually exclusive with --merge-request-id"},
         {"kind": "option", "name": "strategy", "opts": ["--strategy"], "type": "text", "required": true, "default": null, "help": "immediately | scheduled | none. `immediately` and `scheduled` ARM: once the merge request is approved, the backend merges it into production on its own -- no `merge` call involved. `none` disarms"},
@@ -1935,7 +1935,7 @@
       "category": "read",
       "help": "List the configurations changed on both sides (computed live by the backend).\n\nConflicts are re-validated on every call and on every merge attempt, so\nrebasing each listed configuration (`merge-request resolve`) is sufficient\n-- there is no separate re-validate step.",
       "params": [
-        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "default": null, "help": "Project alias (default: KBAGENT_PROJECT, then the `project use` pin, then the sole project)"},
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id", "--id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID whose merge request to use (default: the active branch set via `branch use`). Mutually exclusive with --merge-request-id"}
       ]
@@ -1947,7 +1947,7 @@
       "category": "write",
       "help": "Open a merge request from a development branch into production.\n\nThe target is always the default branch; the source is --branch or the\nactive branch. A branch can have one merge request, ever. On a non-SOX\nproject with 0 required approvals you can `merge` straight from here --\nno `request-review` needed. Auto-merge is a separate, destructive step:\n`merge-request auto-merge`.",
       "params": [
-        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "default": null, "help": "Project alias (default: KBAGENT_PROJECT, then the `project use` pin, then the sole project)"},
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "title", "opts": ["--title"], "type": "text", "required": true, "default": null, "help": "Merge request title"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Source dev branch ID (default: the active branch set via `branch use`)"},
         {"kind": "option", "name": "description", "opts": ["--description"], "type": "text", "default": null, "help": "Description (on update: an empty string clears it)"},
@@ -1962,7 +1962,7 @@
       "category": "read",
       "help": "Show one merge request: readiness, blockers, reviewers, change log, conflicts.\n\nReadiness (`mergeable` / `merge_blockers`) is informational -- the merge\nitself stays the authority. The change log is empty until the merge\nrequest is sent for review; that is the backend's behaviour, not a gap.",
       "params": [
-        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "default": null, "help": "Project alias (default: KBAGENT_PROJECT, then the `project use` pin, then the sole project)"},
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id", "--id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID whose merge request to use (default: the active branch set via `branch use`). Mutually exclusive with --merge-request-id"},
         {"kind": "option", "name": "activity_log", "opts": ["--activity-log"], "type": "boolean", "is_flag": true, "default": false, "help": "Include the merge request's activity log"}
@@ -1975,7 +1975,7 @@
       "category": "read",
       "help": "Three-way diff of one conflicting configuration, classified per path.\n\nEach differing path is tagged by who changed it: both (the actual\nconflict), only you, or only production. Deletions are not paths -- a\nside deleted wholesale is reported as such, with the resolution to pick.\nThe branch is the merge request's own; there is no --branch of the diff.",
       "params": [
-        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "default": null, "help": "Project alias (default: KBAGENT_PROJECT, then the `project use` pin, then the sole project)"},
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id", "--id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID whose merge request to use (default: the active branch set via `branch use`). Mutually exclusive with --merge-request-id"},
         {"kind": "option", "name": "component_id", "opts": ["--component-id"], "type": "text", "required": true, "default": null, "help": "Component ID"},
@@ -1989,9 +1989,9 @@
       "kind": "command",
       "hidden": false,
       "category": "read",
-      "help": "List the project's merge requests, newest first.\n\nStatus is the derived state the web UI shows (in_development, in_review,\napproved, in_merge, merged, closed, rejected), not the raw lifecycle\nstate. Single-project: pass --project or rely on the `project use` pin.",
+      "help": "List the project's merge requests, newest first.\n\nStatus is the derived state the web UI shows (in_development, in_review,\napproved, in_merge, merged, closed, rejected), not the raw lifecycle\nstate. Single-project: pass --project or rely on the active project (`project use`).",
       "params": [
-        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "default": null, "help": "Project alias (default: KBAGENT_PROJECT, then the `project use` pin, then the sole project)"},
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "state", "opts": ["--state"], "type": "text", "default": null, "help": "Show only merge requests in this state (client-side filter). Accepted: approved, canceled, closed, development, in_development, in_merge, in_review, merged, published, rejected"}
       ]
     },
@@ -2002,7 +2002,7 @@
       "category": "destructive",
       "help": "Merge the merge request into production and delete its source branch.\n\nWaits for the merge job (up to 10 minutes). Works straight from\n`development` when approvals are satisfied. The source branch is always\ndeleted afterwards (a separate async job). Under --json the target must be\nexplicit: pass --merge-request-id or --branch.",
       "params": [
-        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "default": null, "help": "Project alias (default: KBAGENT_PROJECT, then the `project use` pin, then the sole project)"},
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id", "--id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID whose merge request to use (default: the active branch set via `branch use`). Mutually exclusive with --merge-request-id"},
         {"kind": "option", "name": "yes", "opts": ["--yes", "-y"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip confirmation prompt"}
@@ -2015,7 +2015,7 @@
       "category": "write",
       "help": "Send the merge request back to development; existing approvals are removed.\n\nThis is also the closest thing to closing a merge request: the API has no\ncancel, and the web UI's \"cancel\" is exactly this call made by the\ncreator. The merge request stays open in `development` and can be\nresubmitted; deleting the branch is the terminal outcome.",
       "params": [
-        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "default": null, "help": "Project alias (default: KBAGENT_PROJECT, then the `project use` pin, then the sole project)"},
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id", "--id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID whose merge request to use (default: the active branch set via `branch use`). Mutually exclusive with --merge-request-id"},
         {"kind": "option", "name": "reason", "opts": ["--reason"], "type": "text", "default": null, "help": "Why (max 1000 characters)"}
@@ -2028,7 +2028,7 @@
       "category": "destructive",
       "help": "Send the merge request for review (destructive: it moves the MR toward production).\n\nOn a non-SOX project with 0 required approvals (the default) the backend\nfinishes the review itself and the merge request lands directly in\n`approved` -- where an armed auto-merge fires, and `merge` needs nothing\nmore. `merge` works straight from `development` there, so this step is\noptional. Note: with no reviewers selected, the review-requested email\ngoes to every project member. Under --json the target must be explicit.",
       "params": [
-        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "default": null, "help": "Project alias (default: KBAGENT_PROJECT, then the `project use` pin, then the sole project)"},
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id", "--id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID whose merge request to use (default: the active branch set via `branch use`). Mutually exclusive with --merge-request-id"}
       ]
@@ -2040,7 +2040,7 @@
       "category": "destructive",
       "help": "Resolve one conflicting configuration (destructive: it removes a merge blocker).\n\nEvery mode replaces the configuration in your branch; the previous content\nstays in its version history. Rebasing each listed conflict makes the merge\nrequest mergeable -- there is no re-validate step, and on an armed MR the\nlast resolution is what lets the backend merge. There is deliberately no\n--all: conflicts are meant to be walked, not waved away. Under --json the\ntarget must be explicit.",
       "params": [
-        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "default": null, "help": "Project alias (default: KBAGENT_PROJECT, then the `project use` pin, then the sole project)"},
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id", "--id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID whose merge request to use (default: the active branch set via `branch use`). Mutually exclusive with --merge-request-id"},
         {"kind": "option", "name": "component_id", "opts": ["--component-id"], "type": "text", "required": true, "default": null, "help": "Component ID"},
@@ -2057,7 +2057,7 @@
       "category": "write",
       "help": "Change a merge request's title, description, reviewers or external id.\n\nOmitted fields stay as they are; an empty string clears --description /\n--external-id. --reviewer-id replaces the whole reviewer set. Auto-merge\nis not a field here -- it is the destructive `merge-request auto-merge`.",
       "params": [
-        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "default": null, "help": "Project alias (default: KBAGENT_PROJECT, then the `project use` pin, then the sole project)"},
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id", "--id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID whose merge request to use (default: the active branch set via `branch use`). Mutually exclusive with --merge-request-id"},
         {"kind": "option", "name": "title", "opts": ["--title"], "type": "text", "default": null, "help": "Merge request title"},
@@ -2119,8 +2119,8 @@
       "category": "read",
       "help": "List notification subscriptions (Flow Notifications tab) across projects.\n\nEach row shows the project, event, the configuration the subscription is\nscoped to, and the recipient that gets paged.\n\nSubscriptions are project-level, not branch-scoped: a branch-specific one\ncarries a ``branch.id`` filter, shown in the Branch column. Configuration\nnames are resolved against each project's active branch.\n\nCompanion to ``flow list`` / ``flow detail``, which only expose in-flow\nnotification *tasks* -- a different mechanism from these subscriptions.",
       "params": [
-        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias (repeatable; omit for all registered projects)"},
-        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Until 1.0.0 the same as omitting --project; from 1.0.0 an omitted --project reads only the default project. Cannot be used with --project."},
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias or ID, repeatable. Omitted: the active project (KBAGENT_PROJECT, then 'kbagent project use', then the only registered project). Use --all-projects for all projects."},
+        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Cannot be used with --project."},
         {"kind": "option", "name": "event", "opts": ["--event"], "type": "text", "default": null, "help": "Event name filter, e.g. 'job-failed'. Known events: job-failed, job-succeeded, job-succeeded-with-warning, job-processing-long, phase-job-failed, phase-job-succeeded, phase-job-succeeded-with-warning, phase-job-processing-long. Not validated against that list -- the service may add more."},
         {"kind": "option", "name": "component_id", "opts": ["--component-id"], "type": "text", "default": null, "help": "Only subscriptions filtering on this component (e.g. keboola.flow)"},
         {"kind": "option", "name": "config_id", "opts": ["--config-id"], "type": "text", "default": null, "help": "Only subscriptions filtering on this configuration ID"}
@@ -2258,7 +2258,7 @@
       "kind": "command",
       "hidden": false,
       "category": "read",
-      "help": "Show the effective default project.\n\nReports whether the value comes from the ``KBAGENT_PROJECT`` env var\n(``env``) or the persisted pin (``pin``). Prints nothing but a hint if\nneither is set. ``resolved_alias`` / ``resolved_source`` name the project\na command without ``--project`` would use (``env``, ``active_project``,\n``sole``, or ``none``).",
+      "help": "Show the active project.\n\nReports whether the value comes from the ``KBAGENT_PROJECT`` env var\n(``env``) or the saved active project (``pin``). Prints nothing but a hint if\nneither is set. ``resolved_alias`` / ``resolved_source`` name the project\na command without ``--project`` would use (``env``, ``active_project``,\n``sole``, or ``none``).",
       "params": []
     },
     {
@@ -2426,10 +2426,10 @@
       "kind": "command",
       "hidden": false,
       "category": "read",
-      "help": "Test connectivity to connected Keboola projects.",
+      "help": "Test connectivity to the active project, one project, or all projects.",
       "params": [
-        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "default": null, "help": "Check only this project (default: all)"},
-        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Until 1.0.0 the same as omitting --project; from 1.0.0 an omitted --project reads only the default project. Cannot be used with --project."}
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "default": null, "help": "Project alias or ID. Omitted: the active project (KBAGENT_PROJECT, then 'kbagent project use', then the only registered project). Use --all-projects for all projects."},
+        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Cannot be used with --project."}
       ]
     },
     {
@@ -2437,9 +2437,9 @@
       "kind": "command",
       "hidden": false,
       "category": "write",
-      "help": "Pin <alias> as the default project for subsequent commands.\n\nThe pin persists in config.json. ``KBAGENT_PROJECT`` overrides it for a\nsingle invocation; an explicit ``--project`` flag overrides both.",
+      "help": "Set <alias> as the active project for later commands.\n\nThe active project is saved in config.json. ``KBAGENT_PROJECT`` overrides\nit for a single invocation; an explicit ``--project`` flag overrides both.",
       "params": [
-        {"kind": "argument", "name": "alias", "opts": ["alias"], "type": "text", "required": true, "default": null, "help": "Project alias to pin as default"}
+        {"kind": "argument", "name": "alias", "opts": ["alias"], "type": "text", "required": true, "default": null, "help": "Project alias or ID to set as the active project"}
       ]
     },
     {
@@ -2473,10 +2473,10 @@
       "kind": "command",
       "hidden": false,
       "category": "read",
-      "help": "Audit schedules by cron window or job-freshness.\n\nThe ``last_run_at`` and ``matches_cron_window`` columns are always\npresent in the output but populated only when the corresponding\nfilter is active. Without filters both stay ``None`` -- this avoids\nN extra Queue API calls per project purely to populate columns the\ncaller did not ask for. Pass ``--not-run-since 0`` to force the\n``last_run_at`` lookup for every row (N extra API calls per\nproject).\n\n``--not-run-since`` resolves jobs via the Queue API, which has no\nbranch-awareness: ``schedule find --branch <DEV> --not-run-since N``\nstill compares against production jobs. Expect false-positive\n\"stale\" matches for dev branches with freshly-deployed configs.\n\n\b\nExamples:\n  # Schedules that fire between 02:00 and 04:00 across every project\n  kbagent --json schedule find --cron-window \"02:00-04:00\"\n\n  # Schedules whose parent hasn't run in the last 90 days\n  kbagent --json schedule find --not-run-since 90\n\n  # Both filters combined (AND)\n  kbagent --json schedule find --cron-window \"00:00-05:00\" --not-run-since 30\n\n  # No filters -> same rows as 'schedule list' plus empty last_run_at +\n  # empty matches_cron_window columns (populated only when filters active)\n  kbagent --json schedule find\n\n  # Force last_run_at population on every row (no staleness filter)\n  kbagent --json schedule find --not-run-since 0",
+      "help": "Audit schedules by cron window or job-freshness.\n\nThe ``last_run_at`` and ``matches_cron_window`` columns are always\npresent in the output but populated only when the corresponding\nfilter is active. Without filters both stay ``None`` -- this avoids\nN extra Queue API calls per project purely to populate columns the\ncaller did not ask for. Pass ``--not-run-since 0`` to force the\n``last_run_at`` lookup for every row (N extra API calls per\nproject).\n\n``--not-run-since`` resolves jobs via the Queue API, which has no\nbranch-awareness: ``schedule find --branch <DEV> --not-run-since N``\nstill compares against production jobs. Expect false-positive\n\"stale\" matches for dev branches with freshly-deployed configs.\n\n\b\nExamples:\n  # Schedules that fire between 02:00 and 04:00 across every project\n  kbagent --json schedule find --cron-window \"02:00-04:00\" --all-projects\n\n  # Schedules whose parent hasn't run in the last 90 days\n  kbagent --json schedule find --not-run-since 90\n\n  # Both filters combined (AND)\n  kbagent --json schedule find --cron-window \"00:00-05:00\" --not-run-since 30\n\n  # No filters -> same rows as 'schedule list' plus empty last_run_at +\n  # empty matches_cron_window columns (populated only when filters active)\n  kbagent --json schedule find\n\n  # Force last_run_at population on every row (no staleness filter)\n  kbagent --json schedule find --not-run-since 0",
       "params": [
-        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias (repeatable; omit for all projects)"},
-        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Until 1.0.0 the same as omitting --project; from 1.0.0 an omitted --project reads only the default project. Cannot be used with --project."},
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias or ID, repeatable. Omitted: the active project (KBAGENT_PROJECT, then 'kbagent project use', then the only registered project). Use --all-projects for all projects."},
+        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Cannot be used with --project."},
         {"kind": "option", "name": "cron_window", "opts": ["--cron-window"], "type": "text", "default": null, "help": "Only include schedules firing entirely inside an hour window, e.g. '02:00-04:00'. Hour-field approximation -- see gotchas.md."},
         {"kind": "option", "name": "not_run_since", "opts": ["--not-run-since"], "type": "integer", "default": null, "help": "Only include schedules whose parent config has not produced a job in the last N days (or never ran). Pass 0 to force the last_run_at lookup for every row without applying a staleness filter. NOTE: Queue API is not branch-aware -- combining with --branch still compares against production jobs."},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID (requires single --project)"}
@@ -2489,8 +2489,8 @@
       "category": "read",
       "help": "List cron schedules (keboola.scheduler configs) across projects.\n\nEach row shows: project alias, schedule ID + name, parent component ID\nand config name, cron expression, timezone, and enabled state.",
       "params": [
-        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias (repeatable; omit for all registered projects)"},
-        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Until 1.0.0 the same as omitting --project; from 1.0.0 an omitted --project reads only the default project. Cannot be used with --project."},
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias or ID, repeatable. Omitted: the active project (KBAGENT_PROJECT, then 'kbagent project use', then the only registered project). Use --all-projects for all projects."},
+        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Cannot be used with --project."},
         {"kind": "option", "name": "enabled_only", "opts": ["--enabled-only"], "type": "boolean", "is_flag": true, "default": false, "help": "Only show schedules whose state is 'enabled'"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID (requires single --project)"}
       ]
@@ -2503,8 +2503,8 @@
       "help": "Search for items (tables, buckets, configs, flows, …) by name or content.",
       "params": [
         {"kind": "argument", "name": "query", "opts": ["query"], "type": "text", "required": true, "default": null, "help": "Search query string."},
-        {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "multiple": true, "default": null, "help": "Project alias to search (repeatable; defaults to all projects)."},
-        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Until 1.0.0 the same as omitting --project; from 1.0.0 an omitted --project reads only the default project. Cannot be used with --project."},
+        {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "multiple": true, "default": null, "help": "Project alias or ID, repeatable. Omitted: the active project (KBAGENT_PROJECT, then 'kbagent project use', then the only registered project). Use --all-projects for all projects."},
+        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Cannot be used with --project."},
         {"kind": "option", "name": "item_type", "opts": ["--type", "-t"], "type": "text", "multiple": true, "default": null, "help": "Item type to restrict results. Repeatable. Valid values: table, bucket, config, flow, data-app, transformation."},
         {"kind": "option", "name": "search_type", "opts": ["--search-type"], "type": "text", "default": "textual", "help": "Search mode. ``textual`` (default) searches item names via the Storage API. ``config-based`` scans full configuration JSON bodies. Both modes match case-insensitively."},
         {"kind": "option", "name": "limit", "opts": ["--limit", "-l"], "type": "integer", "default": 50, "help": "Maximum number of results per project (textual search only, 1-100)."},
@@ -3152,8 +3152,8 @@
       "category": "read",
       "help": "Show cross-project data flow edges via bucket sharing.\n\nLists how data flows between projects through shared and linked buckets.\nEach edge represents a source bucket shared to a target project.\n\nFor column-level lineage, use `lineage build` + `lineage show`.",
       "params": [
-        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias to query (can be repeated for multiple projects)."},
-        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Until 1.0.0 the same as omitting --project; from 1.0.0 an omitted --project reads only the default project. Cannot be used with --project."}
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias or ID, repeatable. Omitted: the active project (KBAGENT_PROJECT, then 'kbagent project use', then the only registered project). Use --all-projects for all projects."},
+        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Cannot be used with --project."}
       ]
     },
     {
@@ -3177,8 +3177,8 @@
       "category": "read",
       "help": "List shared buckets available for linking.\n\nShows buckets shared within your organization that can be linked\ninto your projects. Uses the regular project token.",
       "params": [
-        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias (repeatable). Omit to query all projects."},
-        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Until 1.0.0 the same as omitting --project; from 1.0.0 an omitted --project reads only the default project. Cannot be used with --project."}
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias or ID, repeatable. Omitted: the active project (KBAGENT_PROJECT, then 'kbagent project use', then the only registered project). Use --all-projects for all projects."},
+        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Cannot be used with --project."}
       ]
     },
     {
@@ -3257,8 +3257,8 @@
       "category": "read",
       "help": "List storage buckets with sharing/linked bucket information.\n\nShows which buckets are linked from other projects, including the\nsource project ID and name.\n\nBranch handling: this read command uses the production endpoint by\ndefault, even when a dev branch is active via `branch use`. The\nStorage API branch-scoped endpoint only returns locally-modified\nbuckets, so a fresh dev branch lists nothing. Pass --branch to query\na dev branch explicitly.",
       "params": [
-        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias (can be repeated for multiple projects)"},
-        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Until 1.0.0 the same as omitting --project; from 1.0.0 an omitted --project reads only the default project. Cannot be used with --project."},
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias or ID, repeatable. Omitted: the active project (KBAGENT_PROJECT, then 'kbagent project use', then the only registered project). Use --all-projects for all projects."},
+        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Cannot be used with --project."},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID (defaults to production, even after 'branch use')"}
       ]
     },
@@ -3669,10 +3669,10 @@
       "kind": "command",
       "hidden": false,
       "category": "read",
-      "help": "List storage tables from one or more projects.\n\nQueries all connected projects in parallel by default, matching the\nbehaviour of ``storage buckets``, ``config list``, ``job list``, and other\nread commands. Each row in the output is tagged with ``project_alias``\nso results from multiple projects can be distinguished.\n\nBranch handling: this read command uses the production endpoint by\ndefault, even when a dev branch is active via `branch use`. The\nStorage API branch-scoped endpoint only returns tables that were\nlocally modified in the dev branch, so a fresh dev branch lists\nnothing. Pass --branch to query a dev branch explicitly.",
+      "help": "List storage tables from one or more projects.\n\nWithout --project it reads the active project; --all-projects reads every\nregistered project in parallel, like ``storage buckets``, ``config list``,\n``job list`` and the other fan-out reads. Each row in the output is tagged\nwith ``project_alias`` so results from multiple projects can be distinguished.\n\nBranch handling: this read command uses the production endpoint by\ndefault, even when a dev branch is active via `branch use`. The\nStorage API branch-scoped endpoint only returns tables that were\nlocally modified in the dev branch, so a fresh dev branch lists\nnothing. Pass --branch to query a dev branch explicitly.",
       "params": [
-        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias (can be repeated for multiple projects). Omit to query all connected projects in parallel."},
-        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Until 1.0.0 the same as omitting --project; from 1.0.0 an omitted --project reads only the default project. Cannot be used with --project."},
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias or ID, repeatable. Omitted: the active project (KBAGENT_PROJECT, then 'kbagent project use', then the only registered project). Use --all-projects for all projects."},
+        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Cannot be used with --project."},
         {"kind": "option", "name": "bucket_id", "opts": ["--bucket-id"], "type": "text", "default": null, "help": "Filter tables by bucket ID (applied independently per project)"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID (defaults to production, even after 'branch use')"},
         {"kind": "option", "name": "include_usage", "opts": ["--include-usage"], "type": "boolean", "is_flag": true, "default": false, "help": "Also report which configurations read or write each table, from their storage input/output mapping. Costs one extra component listing per project (not per table), but that listing carries every configuration body -- expect it to be slow in a big project."}
@@ -4138,10 +4138,10 @@
       "kind": "command",
       "hidden": false,
       "category": "read",
-      "help": "List workspaces from connected projects.\n\nBranch handling: without `--branch`, each project's active branch (`branch\nuse`) is used, else production. The `Target:` line on stderr (`targets` in\n--json) names the branch of each project.\n\nEach workspace entry exposes `login_type`, `read_only` and\n`qs_compatible` so data-app developers can pick a Query-Service-compatible\nworkspace without firing a probe query (closes #304).",
+      "help": "List workspaces of the active project, the given projects, or all projects.\n\nBranch handling: without `--branch`, each project's active branch (`branch\nuse`) is used, else production. The `Target:` line on stderr (`targets` in\n--json) names the branch of each project.\n\nEach workspace entry exposes `login_type`, `read_only` and\n`qs_compatible` so data-app developers can pick a Query-Service-compatible\nworkspace without firing a probe query (closes #304).",
       "params": [
-        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias to query (can be repeated for multiple projects)"},
-        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Until 1.0.0 the same as omitting --project; from 1.0.0 an omitted --project reads only the default project. Cannot be used with --project."},
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "multiple": true, "default": null, "help": "Project alias or ID, repeatable. Omitted: the active project (KBAGENT_PROJECT, then 'kbagent project use', then the only registered project). Use --all-projects for all projects."},
+        {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Cannot be used with --project."},
         {"kind": "option", "name": "orphaned", "opts": ["--orphaned"], "type": "boolean", "is_flag": true, "default": false, "help": "Show only orphaned workspaces (keboola.sandboxes config missing)"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID. Defaults to each project's active branch (`kbagent branch use`), else production. Requires exactly one --project."},
         {"kind": "option", "name": "qs_compatible", "opts": ["--qs-compatible"], "type": "boolean", "is_flag": true, "default": false, "help": "Show only workspaces whose loginType is known to work with the Query Service AND that are read-only -- the canonical shape for a data-app."}

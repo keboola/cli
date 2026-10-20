@@ -550,7 +550,7 @@ class TestProjectAuthModeColumn:
         assert "901-...4567" in flat
 
     def test_status_json_carries_auth_mode_for_both_types(self, tmp_path: Path) -> None:
-        result = self._invoke(tmp_path, ["--json", "project", "status"])
+        result = self._invoke(tmp_path, ["--json", "project", "status", "--all-projects"])
 
         assert result.exit_code == 0, result.output
         by_alias = {s["alias"]: s for s in json.loads(result.stdout)["data"]}
@@ -558,7 +558,7 @@ class TestProjectAuthModeColumn:
         assert by_alias["static-proj"]["auth_mode"] == "static"
 
     def test_status_human_shows_auth_column(self, tmp_path: Path) -> None:
-        result = self._invoke(tmp_path, ["project", "status"])
+        result = self._invoke(tmp_path, ["project", "status", "--all-projects"])
 
         assert result.exit_code == 0, result.output
         flat = " ".join(result.stdout.split())
@@ -673,7 +673,7 @@ class TestProjectUse:
         assert data["status"] == "error"
         assert data["error"]["code"] == "CONFIG_ERROR"
 
-    def test_project_use_human_mode_confirms_pin(self, tmp_path: Path) -> None:
+    def test_project_use_human_mode_confirms_the_active_project(self, tmp_path: Path) -> None:
         """project use in human mode prints the new pin."""
         config_dir = tmp_path / "config"
         config_dir.mkdir()
@@ -685,7 +685,7 @@ class TestProjectUse:
 
         assert result.exit_code == 0
         assert "prod" in result.output
-        assert "Pinned" in result.output or "pinned" in result.output
+        assert "Active project:" in result.output
 
     def test_project_current_with_pin(self, tmp_path: Path) -> None:
         """project current reports the persisted pin when no env is set."""
@@ -763,7 +763,7 @@ class TestProjectUse:
         assert result.exit_code == 0
         assert "prod" in result.output
         # Rich output should mention the source.
-        assert "pin" in result.output.lower()
+        assert "source: active project" in result.output
 
     def test_project_current_human_mode_env_warns_unknown(self, tmp_path: Path) -> None:
         """Human-mode project current warns when env points to unregistered alias."""
@@ -1832,11 +1832,13 @@ class TestConfigList:
             )
             MockCfgService.return_value = config_service
 
-            result = runner.invoke(app, ["--json", "config", "list"])
+            result = runner.invoke(app, ["--json", "config", "list", "--all-projects"])
 
-        assert result.exit_code == 0
+        # A failed project makes the read exit 1 after the full payload (E4).
+        assert result.exit_code == 1
         output = json.loads(result.output)
         assert output["status"] == "ok"
+        assert output["exit_code"] == 1
 
         configs = output["data"]["configs"]
         errors = output["data"]["errors"]
@@ -1889,9 +1891,9 @@ class TestConfigList:
             )
             MockCfgService.return_value = config_service
 
-            result = runner.invoke(app, ["config", "list"])
+            result = runner.invoke(app, ["config", "list", "--all-projects"])
 
-        assert result.exit_code == 0
+        assert result.exit_code == 1
         # Should show configs from good project
         assert "Configurations" in result.output
         # Rich may truncate long names in narrow terminals
@@ -2020,7 +2022,7 @@ class TestConfigList:
         )
 
     def test_config_list_branch_requires_project(self, tmp_path: Path) -> None:
-        """config list --branch 123 without --project returns exit code 2."""
+        """config list --branch 123 --all-projects returns exit code 2 (T15)."""
         config_dir = tmp_path / "config"
         config_dir.mkdir()
 
@@ -2046,6 +2048,7 @@ class TestConfigList:
                     "--json",
                     "config",
                     "list",
+                    "--all-projects",
                     "--branch",
                     "123",
                 ],
@@ -7000,7 +7003,7 @@ class TestSharingEdges:
 
             result = runner.invoke(app, ["sharing", "edges"])
 
-        assert result.exit_code == 0
+        assert result.exit_code == 1
         assert "bad" in result.output
         assert "Token expired" in result.output
 

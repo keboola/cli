@@ -21,7 +21,12 @@ from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..output import OutputFormatter, format_query_results, format_workspaces_table
 from ..services._storage_jobs import validate_wait_timeout
 from ..services._workspace_load_plan import LoadTablePlan
-from ._all_projects import AllProjectsOption, reject_project_with_all_projects
+from ._all_projects import (
+    FANOUT_PROJECT_HELP,
+    AllProjectsOption,
+    fanout_exit_code,
+    fanout_projects,
+)
 from ._helpers import (
     _confirm_or_abort,
     check_cli_permission,
@@ -167,7 +172,7 @@ def workspace_list(
     project: list[str] | None = typer.Option(
         None,
         "--project",
-        help="Project alias to query (can be repeated for multiple projects)",
+        help=FANOUT_PROJECT_HELP,
     ),
     all_projects: AllProjectsOption = False,
     orphaned: bool = typer.Option(
@@ -188,7 +193,7 @@ def workspace_list(
         "Service AND that are read-only -- the canonical shape for a data-app.",
     ),
 ) -> None:
-    """List workspaces from connected projects.
+    """List workspaces of the active project, the given projects, or all projects.
 
     Branch handling: without `--branch`, each project's active branch (`branch
     use`) is used, else production. The `Target:` line on stderr (`targets` in
@@ -199,15 +204,16 @@ def workspace_list(
     workspace without firing a probe query (closes #304).
     """
     formatter = get_formatter(ctx)
-    reject_project_with_all_projects(formatter, project, all_projects)
     service = get_service(ctx, "workspace_service")
 
-    if branch is not None and (not project or len(project) != 1):
+    if branch is not None and (all_projects or len(project or []) > 1):
         formatter.error(
             message="--branch requires exactly one --project (branch ID is per-project)",
             error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2)
+
+    project = fanout_projects(ctx, formatter, project, all_projects)
 
     try:
         result = service.list_workspaces(
@@ -224,11 +230,14 @@ def workspace_list(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
+    code = fanout_exit_code(result.get("errors", []))
     if formatter.json_mode:
-        formatter.output(result)
+        formatter.output(result, exit_code=code)
     else:
         format_workspaces_table(formatter.console, result)
         emit_project_warnings(formatter, result)
+    if code:
+        raise typer.Exit(code=code)
 
 
 @workspace_app.command("detail")

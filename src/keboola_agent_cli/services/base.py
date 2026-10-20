@@ -24,7 +24,7 @@ from ..constants import (
     ENV_MAX_PARALLEL_WORKERS,
     UNEXPECTED_ERROR_MAX_MESSAGE_LEN,
 )
-from ..effective_branch import TargetRole, record_branch
+from ..effective_branch import TargetRole, record_branch, record_project
 from ..errors import ErrorCode
 from ..models import AppConfig, ProjectConfig
 from ..project_ref import resolve_project_ref
@@ -317,7 +317,7 @@ def resolve_implicit_alias(
     if pinned:
         if pinned not in config.projects:
             raise ConfigError(
-                f"Pinned default project '{pinned}' is not registered. "
+                f"Active project '{pinned}' is not registered. "
                 "Run 'kbagent project use <alias>' to repair."
             )
         return pinned, "pin"
@@ -330,7 +330,7 @@ def resolve_implicit_alias(
         raise NoImplicitProjectError("No projects configured. Run 'kbagent project add' first.")
 
     raise NoImplicitProjectError(
-        "Multiple projects configured and no default pinned. "
+        "Multiple projects configured and no active project. "
         "Pass --project <alias>, set KBAGENT_PROJECT, or run "
         "'kbagent project use <alias>'."
     )
@@ -402,6 +402,8 @@ class BaseService:
         config = self._config_store.load()
 
         if not aliases:
+            for alias, project in config.projects.items():
+                record_project(alias, "all", project)
             return dict(config.projects)
 
         resolved: dict[str, ProjectConfig] = {}
@@ -411,6 +413,7 @@ class BaseService:
                     alias, self._config_store.config_path, self._config_store.source
                 )
             resolved[alias] = config.projects[alias]
+            record_project(alias, "explicit", resolved[alias])
 
         return resolved
 
@@ -483,13 +486,16 @@ class BaseService:
                 raise project_not_found_error(
                     explicit, self._config_store.config_path, self._config_store.source
                 )
+            record_project(alias, "explicit", config.projects[alias])
             return alias, "explicit"
 
-        return resolve_implicit_alias(
+        alias, source = resolve_implicit_alias(
             config,
             os.environ.get(ENV_KBAGENT_PROJECT),
             env_fix="Use 'kbagent project add' or unset the env var.",
         )
+        record_project(alias, source, config.projects[alias])
+        return alias, source
 
     def _resolve_max_workers(self) -> int:
         """Resolve max parallel workers: env var > config.json > default (10).

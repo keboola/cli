@@ -192,11 +192,11 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
 **A command without `--project` refused with CONFIG_ERROR (or picked a project)**
 - On **0.93.0+** the `kai` group, `docs query`, `component detail`, `component
   list --query`, `config examples`, and `config new` (scaffold mode) resolve an
-  omitted `--project` through the pin cascade: `--project` > `KBAGENT_PROJECT`
-  env > `project use` pin > sole project. Several projects and no pin -> exit 5
-  (`CONFIG_ERROR`). That exit is the fix working, not a bug -- pass `--project`
-  or run `project use`. On <= 0.90.1 the same commands silently used the FIRST
-  registered project and ignored the pin (issue #684). gotchas.md.
+  omitted `--project` through the chain `--project` > `KBAGENT_PROJECT` >
+  active project (`project use`) > sole project, else exit 5 (`CONFIG_ERROR`):
+  pass `--project` or run `project use`. *(since vNEXT)* the 18 fan-out reads
+  (`config list`, `job list`, ...) too: for all projects pass `--all-projects`
+  (0.100.0+). gotchas.md.
 - *(since 0.100.0)* removing the active project clears it (it used to move to
   the next alias). With 2+ projects left, a command without `--project` exits
   5 -- ask which project, then `project use`.
@@ -472,8 +472,8 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   `projects_failed` / `projects_refresh_failed` / `failed` / `summary.failed`
   and retry only the failed
   items, never the whole command blind. A `--dry-run` of these exits 1 when it
-  reports a failed item, like the real run. Other read-only fan-outs
-  (`billing credits`, `job list`, ...) still exit 0.
+  reports a failed item, like the real run. The 18 fan-out reads
+  (`billing credits`, `job list`, ...) exit 1 too (since vNEXT, 0 before).
   On 0.97.0 and older these writes exit 0 even when items failed: check the
   same keys.
 - `project refresh` / `org setup --refresh` SKIP session projects (`--force`
@@ -523,7 +523,7 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
 
 ```
 kbagent --json project list                        # confirm target project
-kbagent --json project current                     # see pinned default
+kbagent --json project current                     # see the active project
 kbagent --json config list --project P [--component-type extractor|writer|transformation|...]
 kbagent --json config search --query "LX" --project P --ignore-case
 kbagent --json config detail --project P --component-id C --config-id K

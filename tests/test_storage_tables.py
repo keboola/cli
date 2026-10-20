@@ -273,8 +273,8 @@ class TestStorageNullNumericCoercion:
 class TestStorageTablesCli:
     """CLI tests for `kbagent storage tables`."""
 
-    def test_no_project_queries_all(self, tmp_path: Path) -> None:
-        """Omitting --project passes aliases=None to the service."""
+    def test_all_projects_queries_all(self, tmp_path: Path) -> None:
+        """--all-projects passes aliases=None to the service."""
         store = _make_multi_store(tmp_path)
         with (
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
@@ -283,11 +283,10 @@ class TestStorageTablesCli:
             MockStore.return_value = store
             svc = MockSvc.return_value
             svc.list_tables.return_value = {"tables": [], "errors": []}
-            result = runner.invoke(app, ["--json", "storage", "tables"])
+            result = runner.invoke(app, ["--json", "storage", "tables", "--all-projects"])
 
         assert result.exit_code == 0, result.output
         call_kwargs = svc.list_tables.call_args.kwargs
-        # Typer delivers a list[str] | None -- when nothing is passed it's None
         assert call_kwargs["aliases"] is None
 
         payload = json.loads(result.output)
@@ -405,8 +404,8 @@ class TestStorageTablesCli:
         assert result.exit_code == 2, result.output
         assert "--branch requires exactly one --project" in result.output
 
-    def test_branch_without_project_rejected(self, tmp_path: Path) -> None:
-        """--branch with no --project is also a usage error."""
+    def test_branch_with_all_projects_rejected(self, tmp_path: Path) -> None:
+        """--branch with --all-projects is also a usage error (T15)."""
         store = _make_multi_store(tmp_path)
         with (
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
@@ -416,7 +415,7 @@ class TestStorageTablesCli:
             MockSvc.return_value.list_tables.return_value = {"tables": [], "errors": []}
             result = runner.invoke(
                 app,
-                ["--json", "storage", "tables", "--branch", "99"],
+                ["--json", "storage", "tables", "--all-projects", "--branch", "99"],
             )
 
         assert result.exit_code == 2, result.output
@@ -440,10 +439,12 @@ class TestStorageTablesCli:
                     }
                 ],
             }
-            result = runner.invoke(app, ["--json", "storage", "tables"])
+            result = runner.invoke(app, ["--json", "storage", "tables", "--all-projects"])
 
-        assert result.exit_code == 0, result.output
+        # A failed project makes the read exit 1 after the payload (E4).
+        assert result.exit_code == 1, result.output
         payload = json.loads(result.output)
+        assert payload["exit_code"] == 1
         assert payload["data"]["errors"][0]["project_alias"] == "p1"
         assert payload["data"]["errors"][0]["error_code"] == "NOT_FOUND"
 

@@ -841,7 +841,7 @@ class TestStorageBucketsBranch:
         assert call_kwargs["branch_id"] == 10
 
     def test_cli_branch_requires_single_project(self, tmp_path: Path) -> None:
-        """storage buckets --branch without --project returns exit code 2."""
+        """storage buckets --branch with --all-projects returns exit code 2 (T15)."""
         store = _make_store(tmp_path)
         with (
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
@@ -851,7 +851,7 @@ class TestStorageBucketsBranch:
             MockSvc.return_value.list_buckets.return_value = {"buckets": [], "errors": []}
             result = runner.invoke(
                 app,
-                ["--json", "storage", "buckets", "--branch", "10"],
+                ["--json", "storage", "buckets", "--all-projects", "--branch", "10"],
             )
         assert result.exit_code == 2
         output = json.loads(result.output)

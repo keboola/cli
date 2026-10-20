@@ -98,13 +98,13 @@ def status(
 
 @router.get("/current", summary="Get the active project")
 def current(registry: ServiceRegistry = Depends(get_registry)) -> dict[str, Any]:
-    """Currently pinned project alias. Mirrors `kbagent project current`."""
+    """The active project. Mirrors `kbagent project current`."""
     return registry.project.current_project()
 
 
 @router.post("/use/{alias}", summary="Switch the active project")
 def use_project(alias: str, registry: ServiceRegistry = Depends(get_registry)) -> dict[str, Any]:
-    """Pin a project as the current default. Mirrors `kbagent project use`."""
+    """Set a project as the active project. Mirrors `kbagent project use`."""
     return registry.project.use_project(alias)
 
 

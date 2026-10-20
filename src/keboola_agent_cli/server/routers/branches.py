@@ -44,7 +44,7 @@ def create(
     )
 
 
-@router.post("/{project}/use", summary="Pin the active branch")
+@router.post("/{project}/use", summary="Set the active branch")
 def use(
     project: str, body: BranchUse, registry: ServiceRegistry = Depends(get_registry)
 ) -> dict[str, Any]:
@@ -52,9 +52,9 @@ def use(
     return registry.branch.set_active_branch(alias=project, branch_id=body.branch_id)
 
 
-@router.post("/{project}/reset", summary="Reset to the default branch")
+@router.post("/{project}/reset", summary="Clear the active branch")
 def reset(project: str, registry: ServiceRegistry = Depends(get_registry)) -> dict[str, Any]:
-    """Clear branch pin and revert to default branch. Mirrors `kbagent branch reset`."""
+    """Clear the active branch, so commands use production. Mirrors `kbagent branch reset`."""
     return registry.branch.reset_branch(alias=project)
 
 

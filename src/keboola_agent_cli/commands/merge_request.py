@@ -103,7 +103,7 @@ def merge_request_list(
 
     Status is the derived state the web UI shows (in_development, in_review,
     approved, in_merge, merged, closed, rejected), not the raw lifecycle
-    state. Single-project: pass --project or rely on the `project use` pin.
+    state. Single-project: pass --project or rely on the active project (`project use`).
     """
     formatter = get_formatter(ctx)
     if state is not None and state.lower() not in STATE_FILTER_VOCABULARY:

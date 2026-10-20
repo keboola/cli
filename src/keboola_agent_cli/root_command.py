@@ -112,6 +112,14 @@ class LeafCommand(TyperCommand):
             _report_repeated_options(self, ctx, args)
         return super().parse_args(ctx, args)
 
+    def invoke(self, ctx: Any) -> Any:
+        # The formatter needs the category for the T12 warning in --json.
+        root_obj = ctx.find_root().obj
+        formatter = root_obj.get("formatter") if isinstance(root_obj, dict) else None
+        if formatter is not None:
+            formatter.command_category = OPERATION_REGISTRY.get(self.operation, "write")
+        return super().invoke(ctx)
+
 
 class CommandGroup(TyperGroup):
     """The class of every group below the root: a bare group is a usage error (O1)."""

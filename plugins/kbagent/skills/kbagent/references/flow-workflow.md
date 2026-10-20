@@ -131,7 +131,7 @@ condition:
 ```bash
 # Conditional flows across all projects (legacy orchestrator configs are
 # NOT listed -- their count surfaces as legacy_orchestrator_count + a warning).
-kbagent --json flow list
+kbagent --json flow list --all-projects
 
 # Flows in one project
 kbagent --json flow list --project prod
