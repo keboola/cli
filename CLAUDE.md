@@ -636,7 +636,7 @@ kbagent config clone --project P --component-id ID --config-id ID --name NAME [-
 #   project when --project is omitted (KBAGENT_PROJECT > `project use` > sole project > CONFIG_ERROR, exit 5,
 #   commands/_all_projects.fanout_projects). --all-projects reads all registered projects (with --project:
 #   USAGE_ERROR, exit 2). A read in which a project failed exits 1 after the full payload (finish_fanout,
-#   PAYG_NOT_AVAILABLE excluded; through finish_items(), no headline yet). No registered project = exit 5.
+#   PAYG_NOT_AVAILABLE counts as read; headline `Success: N project(s) read.`). No registered project = exit 5.
 #   Every `targets` record has `project_source`
 #   (explicit|env|active_project|sole|all). effective_branch.record_project records it, called by the --project
 #   option callback, resolve_pinned_alias, resolve_projects and fanout_projects. A project without a branch record
@@ -1201,8 +1201,13 @@ kbagent sync push --project ALIAS [--all-projects] [--dry-run] [--force] [--allo
 #   `flow schedule-remove` (new `errors[]` key, always present, empty when nothing
 #   failed; a partial failure fills it and exits 1; when every schedule delete
 #   fails it still raises `SCHEDULE_DELETE_FAILED`). Each of these, and the bulk
-#   `storage` deletes, `storage file-tag` and `job terminate`, ends its human output with
-#   one headline on stdout (CLI-50, spec HO2): `Success: ...` or `Failed: N of M <noun>. ...`.
+#   `storage` deletes, `storage file-tag`, `job terminate`, `auth register-projects`,
+#   `token list --with-last-used`, `config detail` with several --project (now exit 1 on a failed
+#   project) and the 18 fan-out reads, ends its human output with one headline on stdout (CLI-50,
+#   spec HO2), one form for all: `Success: 2 table(s) deleted.` /
+#   `Failed: 1 of 3 projects. 2 project(s) read.` Every failed item is one `Error: <item>: <message>`
+#   line on stdout before it (OutputFormatter.item_error / output.format_item_error), never a stderr
+#   warning; contract cases in tests/test_cli_contract.py refuse any other form.
 #   `sync push --all-projects` counts a project
 #   whose push returned `errors[]` in `summary.failed`. The --json payload is emitted
 #   BEFORE the exit; the items that succeeded stay written. A `--dry-run` of these

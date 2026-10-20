@@ -22,6 +22,7 @@ from ..constants import (
     PROJECT_ROLES,
 )
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
+from ..output import format_item_error
 from ..services.project_service import AUTH_MODE_SESSION, AUTH_MODE_STATIC
 from ._all_projects import (
     FANOUT_ONE_PROJECT_HELP,
@@ -520,16 +521,8 @@ def _format_refresh_result(console: Console, data: dict) -> None:
 
     # Failed projects
     failed = data.get("projects_failed", [])
-    if failed:
-        table = Table(title="Projects Failed")
-        table.add_column("Alias", style="bold cyan")
-        table.add_column("Error", style="bold red")
-
-        for p in failed:
-            table.add_row(p["alias"], p["error"])
-
-        console.print(table)
-        console.print()
+    for p in failed:
+        console.print(format_item_error(f"project '{p['alias']}'", p["error"]), soft_wrap=True)
 
     # Summary line
     summary_parts = []
@@ -668,7 +661,7 @@ def project_refresh(
                 failed=preview_failed,
                 total=_refresh_total(preview),
                 noun="projects",
-                summary="No token to refresh." if preview_failed else "All tokens are valid.",
+                summary="0 token(s) refreshed.",
             )
             return
 
@@ -683,14 +676,14 @@ def project_refresh(
         raise typer.Exit(code=exit_code) from None
 
     # A project whose token check or refresh failed is collected, not raised (#745).
-    verb = "to refresh" if result.get("dry_run") else "refreshed"
+    done_as = "would be refreshed" if result.get("dry_run") else "refreshed"
     finish_items(
         formatter,
         result,
         failed=len(result.get("projects_failed", [])),
         total=_refresh_total(result),
         noun="projects",
-        summary=f"{len(result.get('projects_refreshed', []))} token(s) {verb}.",
+        summary=f"{len(result.get('projects_refreshed', []))} token(s) {done_as}.",
         render=lambda: _format_refresh_result(formatter.console, result),
     )
 
@@ -939,16 +932,25 @@ def _format_bulk_invite_result(console: Console, data: dict[str, Any]) -> None:
         f"succeeded={data['succeeded']} noop={data['noop']} failed={data['failed']}"
         + (" [dim](dry-run)[/dim]" if data.get("dry_run") else "")
     )
-    rows = data.get("rows") or []
-    if not rows:
-        return
+    all_rows = data.get("rows") or []
+    # A failed row is one `Error:` line after the table (HO2), not a table row.
+    rows = [row for row in all_rows if row.get("status") != "failed"]
+    failed_rows = [row for row in all_rows if row.get("status") == "failed"]
+    if rows:
+        _print_invite_rows(console, rows)
+    for row in failed_rows:
+        item = f"{row.get('email', '')} in {row.get('project', '')}"
+        console.print(format_item_error(item, row.get("note", "")), soft_wrap=True)
+
+
+def _print_invite_rows(console: Console, rows: list[dict[str, Any]]) -> None:
     table = Table(title="Per-row results")
     table.add_column("Status", style="bold")
     table.add_column("Email")
     table.add_column("Project")
     table.add_column("Role")
     table.add_column("Note")
-    status_style = {"ok": "green", "noop": "yellow", "failed": "red"}
+    status_style = {"ok": "green", "noop": "yellow"}
     for row in rows:
         status = row.get("status", "")
         style = status_style.get(status, "white")
@@ -1102,8 +1104,9 @@ def project_invite(
                 failed=payload.get("failed", 0),
                 total=payload.get("total", 0),
                 noun="rows",
-                summary=f"{payload.get('succeeded', 0)} invited, {payload.get('noop', 0)} "
-                "unchanged.",
+                summary=f"{payload.get('succeeded', 0)} member(s) "
+                f"{'would be invited' if payload.get('dry_run') else 'invited'}, "
+                f"{payload.get('noop', 0)} unchanged.",
                 render=lambda: _format_bulk_invite_result(formatter.console, payload),
             )
             return

@@ -64,14 +64,6 @@ def _format_credits_table(formatter: Any, credits: list[dict[str, Any]]) -> None
     formatter.console.print(tbl)
 
 
-def _emit_errors(formatter: Any, errors: list[dict[str, Any]]) -> None:
-    for err in errors:
-        formatter.warning(
-            f"Project '{escape(str(err.get('project_alias', '?')))}': "
-            f"{escape(str(err.get('message', 'error')))}"
-        )
-
-
 @billing_app.command("credits")
 def billing_credits(
     ctx: typer.Context,
@@ -113,6 +105,5 @@ def billing_credits(
             formatter.console.print("[dim]No PAYG projects found.[/dim]")
         else:
             _format_credits_table(formatter, credits)
-        _emit_errors(formatter, result.get("errors", []))
 
     finish_fanout(formatter, result, result.get("errors", []), render)

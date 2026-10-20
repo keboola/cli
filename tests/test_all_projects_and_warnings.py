@@ -22,7 +22,6 @@ from rich.markup import escape
 from typer.testing import CliRunner
 
 from keboola_agent_cli.cli import app
-from keboola_agent_cli.commands._helpers import emit_project_warnings
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.models import ProjectConfig
 from keboola_agent_cli.output import OutputFormatter, _plain_text
@@ -350,17 +349,10 @@ class TestPlainTextKeepsBrackets:
     def test_escaped_text_comes_back_unchanged(self) -> None:
         assert _plain_text(escape("[bold] and [in.c-main.x]")) == "[bold] and [in.c-main.x]"
 
-    def test_emit_project_warnings_keeps_a_bracketed_backend_message(
+    def test_item_error_keeps_a_bracketed_backend_message(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """The commands call this helper only in human mode; this runs it in JSON mode."""
-        formatter = OutputFormatter(json_mode=True)
-        emit_project_warnings(
-            formatter,
-            {"errors": [{"project_alias": "prod", "message": "Bucket [in.c-main.x] failed"}]},
-        )
-        formatter.output({})
-
-        assert _json_document(capsys)["warnings"] == [
-            {"code": "WARNING", "message": "Project 'prod': Bucket [in.c-main.x] failed"}
-        ]
+        """A failed project is one stdout line; Rich must not read the bucket ID as markup."""
+        OutputFormatter(no_color=True).item_error("project 'prod'", "Bucket [in.c-main.x] failed")
+        out = capsys.readouterr().out
+        assert out.strip() == "Error: project 'prod': Bucket [in.c-main.x] failed"

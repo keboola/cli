@@ -190,7 +190,9 @@ def test_human_mode_exits_1_after_the_output(tmp_path: Path) -> None:
         result = runner.invoke(app, ["job", "list", "--all-projects"])
 
     assert result.exit_code == 1, result.output
-    assert "Invalid token" in result.stderr
+    # A failed project is an `Error:` line on stdout, before the headline (HO2).
+    assert "Error: project 'dev': Invalid token" in result.stdout
+    assert result.stdout.strip().splitlines()[-1].startswith("Failed: 1 of 2 projects.")
 
 
 # --------------------------------------------------------------------------- #

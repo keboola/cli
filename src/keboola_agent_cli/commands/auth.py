@@ -51,6 +51,7 @@ from ._helpers import (
     check_cli_operation,
     check_cli_permission,
     emit_api_error,
+    finish_items,
     get_formatter,
     get_service,
     map_error_to_exit_code,
@@ -708,7 +709,19 @@ def auth_register_projects(
             )
     except (ConfigError, KeboolaApiError) as exc:
         _handle_errors(formatter, exc)
-    formatter.output(result, _format_register_projects_result)
+    # "exists" and "skipped" (alias taken) are outcomes, not failures, as in
+    # `org setup`; a real error raises before this point (HO2).
+    statuses = [p.status for p in result.registered_projects]
+    finish_items(
+        formatter,
+        result,
+        failed=0,
+        total=len(statuses),
+        noun="projects",
+        summary=f"{statuses.count('registered')} project(s) registered, "
+        f"{statuses.count('exists')} already registered, {statuses.count('skipped')} skipped.",
+        render=lambda: _format_register_projects_result(formatter.console, result),
+    )
 
 
 def _pick_projects_interactively(

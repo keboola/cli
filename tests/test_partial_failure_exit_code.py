@@ -453,7 +453,7 @@ class TestSyncClone:
         result = self._invoke_clone(tmp_path, clone_result)
         assert result.exit_code == 1
         assert "Success:" not in result.output
-        assert "4 created" in result.output
+        assert "4 config(s) cloned into prod" in result.output
         assert "Failed: 1 of 5 items." in result.output
 
     def test_rerun_with_bucket_error_exits_1(self, tmp_path: Path) -> None:
@@ -466,7 +466,9 @@ class TestSyncClone:
         }
         result = self._invoke_clone(tmp_path, clone_result)
         assert result.exit_code == 1
-        assert "Failed: 1 of 1 items. Already cloned into prod" in result.output
+        assert (
+            "Failed: 1 of 1 items. 0 config(s) cloned into prod, already cloned." in result.output
+        )
 
     def test_clean_clone_succeeds(self, tmp_path: Path) -> None:
         mock_sync = MagicMock()
@@ -565,7 +567,7 @@ class TestOrgSetup:
         # No --yes in a human run: the preview has nothing to add, so it is the whole run.
         result = self._invoke(tmp_path, {**ORG_SETUP_FAILED, "dry_run": True}, [], json_mode=False)
         assert result.exit_code == 1
-        assert "No new projects to add." in result.output
+        assert "Failed: 1 of 1 projects. 0 project(s) added, 0 skipped." in result.output
 
     def test_failed_projects_exit_1(self, tmp_path: Path) -> None:
         result = self._invoke(tmp_path, ORG_SETUP_FAILED)
@@ -631,7 +633,7 @@ class TestOrgSetup:
         assert data["projects_refresh_failed"] == [REFRESH_FAILED_ENTRY]
         assert data["projects_failed"] == []
         assert human.exit_code == 1
-        assert "Token Refresh Failed" in human.output
+        assert "Error: project 'prod' token refresh: Error checking token" in human.output
         assert "Error checking token" in human.output
 
 
@@ -753,7 +755,7 @@ class TestProjectRefresh:
         # refresh; the failed projects in that preview are the run's result.
         result = self._invoke(tmp_path, {"projects_failed": [REFRESH_FAILED_ENTRY]}, [])
         assert result.exit_code == 1
-        assert "No token to refresh." in result.output
+        assert "Failed: 1 of 1 projects. 0 token(s) refreshed." in result.output
         assert "All tokens are valid." not in result.output
 
 
@@ -1099,7 +1101,7 @@ class TestStorageDescribeBatchAndMigrate:
         result = self._batch(tmp_path, [BATCH_ERROR], json_mode=False)
         assert result.exit_code == 1
         assert "Batch complete" not in result.output
-        assert "Failed: 1 of 1 descriptions. 0 applied." in result.output
+        assert "Failed: 1 of 1 descriptions. 0 description(s) applied." in result.output
 
     def test_clean_batch_json_exits_0(self, tmp_path: Path) -> None:
         assert self._batch(tmp_path, [], json_mode=True).exit_code == 0
@@ -1117,7 +1119,7 @@ class TestStorageDescribeBatchAndMigrate:
         args = ["storage", "describe-migrate", "--project", "prod", "--yes"]
         result = _invoke_with(tmp_path, "StorageService", mock, args)
         assert result.exit_code == 1
-        assert "Failed: 1 of 2 tables. Migrated 1 table(s) of 2 scanned." in result.output
+        assert "Failed: 1 of 2 tables. 1 table(s) migrated, 2 scanned." in result.output
 
 
 class TestFlowScheduleRemove:
@@ -1136,7 +1138,7 @@ class TestFlowScheduleRemove:
         result = _invoke_with(tmp_path, "FlowService", mock, args)
         assert result.exit_code == 1
         assert "Success:" not in result.output
-        assert "Failed: 1 of 2 schedules. Removed 1 schedule(s) from flow 42." in result.output
+        assert "Failed: 1 of 2 schedules. 1 schedule(s) removed from flow 42." in result.output
         assert "schedule s2: HTTP 500" in result.output
 
     def test_clean_remove_exits_0(self, tmp_path: Path) -> None:

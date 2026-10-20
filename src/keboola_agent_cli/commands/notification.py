@@ -123,13 +123,6 @@ def _format_subscription_table(formatter: Any, subscriptions: list[dict[str, Any
     formatter.console.print(tbl)
 
 
-def _emit_errors(formatter: Any, errors: list[dict[str, Any]]) -> None:
-    for err in errors:
-        formatter.warning(
-            f"Project '{err.get('project_alias', '?')}': {err.get('message', 'error')}"
-        )
-
-
 def _print_subscription(formatter: Any, row: dict[str, Any]) -> None:
     """Print one subscription's audit row in human mode.
 
@@ -243,8 +236,6 @@ def notification_list(
                 "They have no configuration filter, so they also fire for this one -- "
                 "re-run without the filter to see who else gets paged."
             )
-
-        _emit_errors(formatter, result.get("errors", []))
 
     finish_fanout(formatter, result, result.get("errors", []), render)
 

@@ -14,8 +14,9 @@ from collections.abc import Callable
 from typing import Annotated, Any
 
 import typer
+from rich.markup import escape
 
-from ..effective_branch import record_project
+from ..effective_branch import record_project, recorded_targets
 from ..errors import ConfigError, ErrorCode
 from ..output import OutputFormatter
 from ..services.base import BaseService
@@ -100,21 +101,56 @@ def finish_fanout(
     failures: list[dict[str, Any]],
     render: Callable[[], object],
 ) -> None:
-    """End a fan-out read: the output, then exit 1 when a project failed (E4).
+    """End a fan-out read: the output, one headline, then exit 1 when a project failed (E4).
 
     ``failures`` is the result's per-project error list. An entry whose
-    ``error_code`` is in :data:`NOT_FAILED_CODES` is an answer, not a failure.
-    ``--json`` gets the envelope with ``exit_code``; human mode gets
-    ``render()`` and no headline (see :func:`finish_items`).
+    ``error_code`` is in :data:`NOT_FAILED_CODES` is an answer, not a failure:
+    its project counts as read. The projects are the ones the command
+    recorded for ``targets``. The headline is ``Success: N project(s) read.``
+    or ``Failed: X of N projects. Y project(s) read.`` (HO2). Each failed
+    project is one ``Error: project '<alias>': <message>`` line before it.
     """
+    failed_entries = [f for f in failures if str(f.get("error_code", "")) not in NOT_FAILED_CODES]
+    answers = [f for f in failures if f not in failed_entries]
+    failed_projects = {
+        f.get("project_alias") or f.get("alias") or str(index)
+        for index, f in enumerate(failed_entries)
+    }
+    projects = {t.project_alias for t in recorded_targets()}
+    total = max(len(projects | failed_projects), len(failed_projects))
+    failed = len(failed_projects)
     finish_items(
         formatter,
         result,
-        failed=failures,
-        total=len(failures),
+        failed=failed,
+        total=total,
         noun="projects",
-        summary="",
-        render=render,
-        not_failed_codes=NOT_FAILED_CODES,
-        headline=False,
+        summary=f"{total - failed} project(s) read.",
+        render=lambda: _render_fanout(formatter, render, failed_entries, answers),
     )
+
+
+def _render_fanout(
+    formatter: OutputFormatter,
+    render: Callable[[], object],
+    failed_entries: list[dict[str, Any]],
+    answers: list[dict[str, Any]],
+) -> None:
+    """The read's own output, then one ``Error:`` line per failed project (stdout).
+
+    A per-project answer that is not a failure (``PAYG_NOT_AVAILABLE``) stays
+    a notice on stderr.
+    """
+    render()
+    for entry in answers:
+        formatter.warning(f"Project '{escape(_alias(entry))}': {escape(_message(entry))}")
+    for entry in failed_entries:
+        formatter.item_error(f"project '{_alias(entry)}'", _message(entry))
+
+
+def _alias(entry: dict[str, Any]) -> str:
+    return str(entry.get("project_alias") or entry.get("alias") or "?")
+
+
+def _message(entry: dict[str, Any]) -> str:
+    return str(entry.get("message") or entry.get("error") or "error")

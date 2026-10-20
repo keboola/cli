@@ -30,7 +30,6 @@ from ..commands._all_projects import (
 )
 from ..commands._helpers import (
     emit_api_error,
-    emit_project_warnings,
     get_formatter,
     get_service,
     map_error_to_exit_code,
@@ -186,7 +185,6 @@ def search_command(
 
     def render() -> None:
         _format_search_results(formatter.console, result, query, search_type, regex)
-        emit_project_warnings(formatter, result)
 
     finish_fanout(formatter, result, result.get("errors", []), render)
 

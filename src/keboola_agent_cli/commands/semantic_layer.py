@@ -17,6 +17,7 @@ from rich.syntax import Syntax
 from rich.table import Table
 
 from ..errors import ErrorCode
+from ..output import format_item_error
 from ..services._semantic_layer_internals import PUSH_ORDER
 from ..services.semantic_layer_service import SCHEMA_TYPE_ALIAS
 from ._helpers import (
@@ -312,7 +313,9 @@ def _print_import_result(console: Console, data: dict) -> None:
     console.print(table)
     for plural, per in (data.get("imported") or {}).items():
         for f in per.get("failed", []):
-            console.print(f"  [red]✗ {plural}.{f.get('name')}: {f.get('reason')}[/red]")
+            console.print(
+                format_item_error(f"{plural}.{f.get('name')}", f.get("reason")), soft_wrap=True
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -351,7 +354,9 @@ def _print_promote_result(console: Console, data: dict) -> None:
             keys = ", ".join(c.get("diff_keys", []))
             console.print(f"  [yellow]~ {plural}.{key}[/yellow] ([dim]{keys}[/dim])")
         for f in per.get("failed", []):
-            console.print(f"  [red]✗ {plural}.{f.get('name')}: {f.get('reason')}[/red]")
+            console.print(
+                format_item_error(f"{plural}.{f.get('name')}", f.get("reason")), soft_wrap=True
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -387,7 +392,7 @@ def _print_build_result(console: Console, data: dict) -> None:
             f"\n[bold red]Fetch failed: {len(fetch_errs)} table(s) left out of the model[/bold red]"
         )
         for e in fetch_errs:
-            console.print(f"  [red]✗[/red] {e['table_id']} — {e['error']}")
+            console.print(format_item_error(e["table_id"], e["error"]), soft_wrap=True)
     type_errs = data.get("type_resolution_errors") or []
     if type_errs:
         console.print(
@@ -565,7 +570,7 @@ def semantic_layer_build(
         failed=failed,
         total=built + failed,
         noun="tables",
-        summary=f"Built {built} dataset(s).",
+        summary=f"{built} dataset(s) {'would be built' if result.get('dry_run') else 'built'}.",
         render=lambda: _print_build_result(formatter.console, result),
     )
 
@@ -645,7 +650,7 @@ def semantic_layer_promote(
         failed=failed,
         total=done + failed,
         noun="items",
-        summary=f"Promoted {done} item(s).",
+        summary=f"{done} item(s) {'would be promoted' if result.get('dry_run') else 'promoted'}.",
         render=lambda: _print_promote_result(formatter.console, result),
     )
 
@@ -715,7 +720,7 @@ def semantic_layer_import(
         failed=failed,
         total=done + failed,
         noun="items",
-        summary=f"Imported {done} item(s).",
+        summary=f"{done} item(s) {'would be imported' if result.get('dry_run') else 'imported'}.",
         render=lambda: _print_import_result(formatter.console, result),
     )
 

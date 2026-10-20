@@ -769,7 +769,7 @@ def test_output_with_an_exit_code_is_finish_items_or_a_verdict() -> None:
     assert sites == {"_helpers.py:finish_items", *VERDICT_EXITS}
 
 
-# The commands that process several items and exit 1 after a failed item (#747).
+# Every command that processes several items: the #747 commands and the fan-out reads.
 MULTI_ITEM_COMMANDS = (
     "flow schedule-remove",
     "job terminate",
@@ -794,8 +794,30 @@ MULTI_ITEM_COMMANDS = (
     "sync pull",
     "sync push",
     "workspace gc",
+    "auth register-projects",
+    "config detail",
+    "token list",
+    # The 18 fan-out reads (CLI-45) end through finish_fanout.
+    "billing credits",
+    "branch list",
+    "component list",
+    "config list",
+    "config search",
+    "data-app list",
+    "flow list",
+    "job list",
+    "notification list",
+    "project status",
+    "schedule find",
+    "schedule list",
+    "search",
+    "sharing edges",
+    "sharing list",
+    "storage buckets",
+    "storage tables",
+    "workspace list",
 )
-_FINISHERS = frozenset({"finish_items", "finish_bulk"})
+_FINISHERS = frozenset({"finish_items", "finish_bulk", "finish_fanout"})
 
 
 def _reaches_finisher(callback: Any) -> bool:
@@ -836,15 +858,15 @@ def test_multi_item_command_ends_through_finish_items(path: str) -> None:
 @pytest.mark.parametrize(
     ("failed", "total", "expected"),
     [
-        (0, 2, "Success: Deleted 2 table(s)."),
-        (1, 2, "Failed: 1 of 2 tables. Deleted 2 table(s)."),
+        (0, 2, "Success: 2 table(s) deleted."),
+        (1, 2, "Failed: 1 of 2 tables. 2 table(s) deleted."),
     ],
 )
 def test_headline_text(failed: int, total: int, expected: str) -> None:
     from keboola_agent_cli.output import _plain_text, format_item_headline
 
     line = format_item_headline(
-        failed=failed, total=total, noun="tables", summary="Deleted 2 table(s)."
+        failed=failed, total=total, noun="tables", summary="2 table(s) deleted."
     )
     assert _plain_text(line) == expected
 
@@ -866,7 +888,7 @@ def test_finish_items_ends_with_one_headline(
             failed=failed,
             total=2,
             noun="tables",
-            summary="Deleted 1 table(s).",
+            summary="1 table(s) deleted.",
             render=lambda: rendered.append("items"),
         )
         code = 0
@@ -883,30 +905,93 @@ def test_finish_items_ends_with_one_headline(
     assert last.startswith("Failed: 1 of 2 tables." if failed else "Success: ")
 
 
-def test_finish_items_skips_codes_that_are_not_failures(
-    capsys: pytest.CaptureFixture[str],
+def test_finish_fanout_counts_projects_and_skips_answers(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """An entry whose code is an answer (E4, PAYG_NOT_AVAILABLE) does not fail the run."""
-    from keboola_agent_cli.commands._helpers import finish_items
+    """A PAYG_NOT_AVAILABLE project counts as read, not failed (E4); the headline counts projects."""
+    from keboola_agent_cli.commands import _all_projects
     from keboola_agent_cli.output import OutputFormatter
 
-    entries = [{"error_code": "PAYG_NOT_AVAILABLE"}]
-    finish_items(
-        OutputFormatter(json_mode=True),
-        {"errors": entries},
-        failed=entries,
-        total=2,
-        noun="projects",
-        summary="2 project(s) read.",
-        not_failed_codes=frozenset({"PAYG_NOT_AVAILABLE"}),
-    )
-    assert json.loads(capsys.readouterr().out)["exit_code"] == 0
-    with pytest.raises(typer.Exit):
-        finish_items(
-            OutputFormatter(json_mode=True),
-            {"errors": entries},
-            failed=entries,
-            total=2,
-            noun="projects",
-            summary="2 project(s) read.",
+    targets = [type("T", (), {"project_alias": a})() for a in ("a", "b", "c")]
+    monkeypatch.setattr(_all_projects, "recorded_targets", lambda: targets)
+    payg = {"project_alias": "a", "error_code": "PAYG_NOT_AVAILABLE"}
+    broken = {"project_alias": "b", "error_code": "INVALID_TOKEN"}
+
+    _all_projects.finish_fanout(OutputFormatter(no_color=True), {}, [payg], lambda: None)
+    assert capsys.readouterr().out.strip() == "Success: 3 project(s) read."
+
+    with pytest.raises(typer.Exit) as exc:
+        _all_projects.finish_fanout(
+            OutputFormatter(no_color=True), {}, [payg, broken], lambda: None
         )
+    assert exc.value.exit_code == 1
+    assert capsys.readouterr().out.strip().splitlines() == [
+        "Error: project 'b': error",
+        "Failed: 1 of 3 projects. 2 project(s) read.",
+    ]
+
+
+# A failed item is one `Error: <item>: <message>` line on stdout, printed only by
+# the shared renderer (`OutputFormatter.item_error` / `output.format_item_error`).
+_FAILURE_LISTS = (
+    "errors",
+    "failed",
+    "bucket_errors",
+    "fetch_errors",
+    "projects_failed",
+    "refresh_failed",
+    "failed_rows",
+    "failed_entries",
+)
+# Loops over a list of problems that are not failed items of a multi-item command.
+NOT_ITEM_FAILURES = {
+    "flow.py:flow_validate": "validation findings of one flow definition",
+    "config.py:_render_push_result_human": "schema validation findings of one configuration",
+}
+# Literal `Error:` labels outside the renderer.
+ERROR_LABEL_EXCEPTIONS = {
+    "_auth_picker.py": "the picker's input validation messages, not failed items",
+}
+
+
+def _failure_loop_violations() -> list[str]:
+    found: list[str] = []
+    renderers = COMMANDS_DIR.parent / "output.py"
+    for path in [*sorted(COMMANDS_DIR.glob("*.py")), renderers]:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for func in ast.walk(tree):
+            if not isinstance(func, ast.FunctionDef):
+                continue
+            subject = f"{path.name}:{func.name}"
+            for loop in ast.walk(func):
+                if not isinstance(loop, ast.For):
+                    continue
+                if not any(name in ast.unparse(loop.iter) for name in _FAILURE_LISTS):
+                    continue
+                for node in ast.walk(loop):
+                    if not isinstance(node, ast.Call):
+                        continue
+                    name = ast.unparse(node.func)
+                    first = node.args[0] if node.args else None
+                    via_renderer = (
+                        isinstance(first, ast.Call)
+                        and ast.unparse(first.func) == "format_item_error"
+                    )
+                    if name.endswith(".warning") or (name.endswith(".print") and not via_renderer):
+                        found.append(f"{subject} line {node.lineno}: {name}")
+    return [v for v in found if v.split(" line ")[0] not in NOT_ITEM_FAILURES]
+
+
+def test_failed_items_go_through_the_item_error_renderer() -> None:
+    """A loop over failed items prints only through item_error / format_item_error (HO2)."""
+    assert _failure_loop_violations() == []
+
+
+def test_no_error_label_outside_the_renderer() -> None:
+    offenders = [
+        path.name
+        for path in sorted(COMMANDS_DIR.glob("*.py"))
+        if "[bold red]Error:" in path.read_text(encoding="utf-8")
+        and path.name not in ERROR_LABEL_EXCEPTIONS
+    ]
+    assert offenders == []

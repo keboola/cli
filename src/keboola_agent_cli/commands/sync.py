@@ -392,9 +392,8 @@ def _format_push_result(formatter: Any, result: dict) -> None:
         f"{result.get('deleted', 0)} deleted{failed}"
     )
     for err in errors:
-        formatter.warning(
-            f"  Error: {err['change_type']} {err['component_id']}/{err['config_id']}: "
-            f"{err['message']}"
+        formatter.item_error(
+            f"{err['change_type']} {err['component_id']}/{err['config_id']}", err["message"]
         )
     print_push_skips(formatter, result)
     _format_never_fetched(formatter, result.get("never_fetched", []))
@@ -509,7 +508,7 @@ def _format_all_results(
         # A push with per-config errors[] is a failed project, not "OK" (#745).
         mark = "[red]x[/red]" if proj_result.get("errors") else "[green]OK[/green]"
         if "error" in proj_result:
-            formatter.console.print(f"  [red]x[/red] {alias}: [red]{proj_result['error']}[/red]")
+            formatter.item_error(f"project '{alias}'", proj_result["error"])
         elif verbose and per_project_formatter:
             formatter.console.print(f"\n[bold]{alias}:[/bold]")
             per_project_formatter(formatter, proj_result)
@@ -523,7 +522,7 @@ def _format_all_results(
 
 
 def _finish_all_projects(
-    formatter: Any, data: dict, per_project_formatter: Any, one_liner: Any
+    formatter: Any, data: dict, per_project_formatter: Any, one_liner: Any, done_as: str
 ) -> None:
     """End an ``--all-projects`` run: per-project lines, then one headline (HO2)."""
     summary = data["summary"]
@@ -533,7 +532,7 @@ def _finish_all_projects(
         failed=summary["failed"],
         total=summary["total"],
         noun="projects",
-        summary=f"{summary['success']} of {summary['total']} project(s) OK"
+        summary=f"{summary['success']} project(s) {done_as}"
         + (f", {summary['skipped']} skipped." if summary.get("skipped") else "."),
         render=lambda: _format_all_results(formatter, data, per_project_formatter, one_liner),
     )
@@ -669,7 +668,8 @@ def sync_pull(
             formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
             raise typer.Exit(code=5) from None
 
-        _finish_all_projects(formatter, data, _format_pull_result, _pull_one_liner)
+        done_as = "would be pulled" if dry_run else "pulled"
+        _finish_all_projects(formatter, data, _format_pull_result, _pull_one_liner, done_as)
         return
 
     project_root = _resolve_project_root(directory, project)
@@ -867,7 +867,7 @@ def sync_diff(
             formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
             raise typer.Exit(code=5) from None
 
-        _finish_all_projects(formatter, data, _format_diff_result, _diff_one_liner)
+        _finish_all_projects(formatter, data, _format_diff_result, _diff_one_liner, "compared")
         return
 
     project_root = _resolve_project_root(directory, project)
@@ -1086,7 +1086,8 @@ def sync_push(
             formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
             raise typer.Exit(code=5) from None
 
-        _finish_all_projects(formatter, data, _format_push_result, _push_one_liner)
+        done_as = "would be pushed" if dry_run else "pushed"
+        _finish_all_projects(formatter, data, _format_push_result, _push_one_liner, done_as)
         return
 
     project_root = _resolve_project_root(directory, project)
@@ -1137,16 +1138,20 @@ def _push_summary(result: dict[str, Any]) -> str:
     """The headline text of a single-project ``sync push``."""
     status = result.get("status", "")
     if status == "no_changes":
-        return "No changes to push."
+        return "0 config(s) pushed, no changes."
     if status == "dry_run":
         summary = result.get("summary", {})
+        added, modified = summary.get("added", 0), summary.get("modified", 0)
+        deleted = summary.get("deleted", 0)
         return (
-            f"Dry run: would create {summary.get('added', 0)}, update "
-            f"{summary.get('modified', 0)}, delete {summary.get('deleted', 0)}."
+            f"{added + modified + deleted} config(s) would be pushed: {added} created, "
+            f"{modified} updated, {deleted} deleted."
         )
+    created, updated = result.get("created", 0), result.get("updated", 0)
+    deleted = result.get("deleted", 0)
     return (
-        f"Pushed: {result.get('created', 0)} created, {result.get('updated', 0)} updated, "
-        f"{result.get('deleted', 0)} deleted."
+        f"{created + updated + deleted} config(s) pushed: {created} created, "
+        f"{updated} updated, {deleted} deleted."
     )
 
 
@@ -1180,9 +1185,8 @@ def _render_push_result(formatter: Any, result: dict[str, Any]) -> None:
         action = change["change_type"].upper()
         formatter.console.print(f"  {action} {label}")
     for err in errors:
-        formatter.warning(
-            f"  Error: {err['change_type']} {err['component_id']}/{err['config_id']}: "
-            f"{err['message']}"
+        formatter.item_error(
+            f"{err['change_type']} {err['component_id']}/{err['config_id']}", err["message"]
         )
 
 

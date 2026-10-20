@@ -26,7 +26,6 @@ from ._helpers import (
     _confirm_or_abort,
     check_cli_permission,
     emit_api_error,
-    emit_project_warnings,
     finish_bulk,
     finish_items,
     get_formatter,
@@ -135,7 +134,6 @@ def storage_buckets(
     def render() -> None:
         if not result["buckets"]:
             formatter.console.print("[dim]No buckets found.[/dim]")
-            emit_project_warnings(formatter, result)
         else:
             from rich.table import Table
 
@@ -167,8 +165,6 @@ def storage_buckets(
 
                 formatter.console.print(table)
                 formatter.console.print()
-
-            emit_project_warnings(formatter, result)
 
     finish_fanout(formatter, result, result.get("errors", []), render)
 
@@ -368,7 +364,6 @@ def storage_tables(
             formatter.console.print("[dim]No tables found.[/dim]")
         else:
             render_tables(formatter.console, tables, include_usage)
-        emit_project_warnings(formatter, result)
 
     finish_fanout(formatter, result, result.get("errors", []), render)
 
@@ -1108,11 +1103,9 @@ def storage_delete_table(
         for tid in result["deleted"]:
             formatter.console.print(f"[bold green]Deleted:[/bold green] {tid}")
         for f_item in result["failed"]:
-            formatter.console.print(
-                f"[bold red]Failed:[/bold red] {f_item['id']}: {f_item['error']}"
-            )
+            formatter.item_error(f_item["id"], f_item["error"])
 
-    finish_bulk(formatter, result, result["deleted"], "table", "Deleted", render)
+    finish_bulk(formatter, result, result["deleted"], "table", "deleted", render)
 
 
 @storage_app.command("truncate-table", rich_help_panel=_TABLES)
@@ -1210,11 +1203,9 @@ def storage_truncate_table(
                 f"({entry['rows_before']} -> 0 rows)"
             )
         for f_item in result["failed"]:
-            formatter.console.print(
-                f"[bold red]Failed:[/bold red] {f_item['id']}: {f_item['error']}"
-            )
+            formatter.item_error(f_item["id"], f_item["error"])
 
-    finish_bulk(formatter, result, result["truncated"], "table", "Truncated", render)
+    finish_bulk(formatter, result, result["truncated"], "table", "truncated", render)
 
 
 @storage_app.command("add-column", rich_help_panel=_TABLES)
@@ -1388,11 +1379,9 @@ def storage_delete_column(
         for col in result["deleted"]:
             formatter.console.print(f"[bold green]Deleted:[/bold green] {col} from {table_id}")
         for f_item in result["failed"]:
-            formatter.console.print(
-                f"[bold red]Failed:[/bold red] {f_item['column']}: {f_item['error']}"
-            )
+            formatter.item_error(f_item["column"], f_item["error"])
 
-    finish_bulk(formatter, result, result["deleted"], "column", "Deleted", render)
+    finish_bulk(formatter, result, result["deleted"], "column", "deleted", render)
 
 
 @storage_app.command("swap-tables", rich_help_panel=_TABLES)
@@ -2016,9 +2005,7 @@ def storage_file_tag(
         for tag_name in result["removed"]:
             formatter.console.print(f"[bold yellow]Removed tag:[/bold yellow] {tag_name}")
         for err in result["errors"]:
-            formatter.console.print(
-                f"[bold red]Failed:[/bold red] {err['action']} tag '{err['tag']}': {err['error']}"
-            )
+            formatter.item_error(f"{err['action']} tag '{err['tag']}'", err["error"])
 
     added, removed = len(result["added"]), len(result["removed"])
     failed = len(result["errors"])
@@ -2028,7 +2015,7 @@ def storage_file_tag(
         failed=failed,
         total=added + removed + failed,
         noun="tag changes",
-        summary=f"Added {added} tag(s), removed {removed} tag(s).",
+        summary=f"{added} tag(s) added, {removed} removed.",
         render=render,
     )
 

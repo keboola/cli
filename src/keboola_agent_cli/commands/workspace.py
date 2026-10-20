@@ -31,7 +31,6 @@ from ._helpers import (
     _confirm_or_abort,
     check_cli_permission,
     emit_api_error,
-    emit_project_warnings,
     finish_items,
     get_formatter,
     get_service,
@@ -232,7 +231,6 @@ def workspace_list(
 
     def render() -> None:
         format_workspaces_table(formatter.console, result)
-        emit_project_warnings(formatter, result)
 
     finish_fanout(formatter, result, result.get("errors", []), render)
 
@@ -685,12 +683,11 @@ def workspace_gc(
         # Listing failures carry `message`, delete failures carry `workspace_id` and `error`.
         for err in result.get("errors", []):
             target = (
-                f"workspace {err['workspace_id']} in '{escape(err['project_alias'])}'"
+                f"workspace {err['workspace_id']} in '{err['project_alias']}'"
                 if "workspace_id" in err
-                else f"project '{escape(err.get('project_alias', '?'))}'"
+                else f"project '{err.get('project_alias', '?')}'"
             )
-            text = escape(str(err.get("error") or err.get("message") or ""))
-            formatter.console.print(f"  [red]error[/red] {target}: {text}")
+            formatter.item_error(target, err.get("error") or err.get("message") or "")
 
     # Items are workspaces to delete and projects to list.
     done = len(result.get("would_delete" if dry_run else "deleted", []))
@@ -701,7 +698,7 @@ def workspace_gc(
         failed=failed,
         total=done + failed,
         noun="items",
-        summary=escape(result.get("message", "")),
+        summary=f"{done} workspace(s) {'would be deleted' if dry_run else 'deleted'}.",
         render=render,
     )
 

@@ -13,6 +13,7 @@ import typer
 from rich.console import Console
 
 from ..errors import ErrorCode
+from ..output import format_item_error
 from ._helpers import (
     _confirm_or_abort,
     check_cli_permission,
@@ -364,11 +365,12 @@ def _print_edit_result(label: str):  # type: ignore[no-untyped-def]
         cascaded = d.get("cascaded_constraints") or []
         for entry in cascaded:
             status = entry.get("status", "?")
-            colour = "green" if status == "updated" else "red"
-            c.print(
-                f"  [{colour}]cascade {status}[/{colour}] "
-                f"constraint [cyan]{entry.get('constraint', '?')}[/cyan]"
-            )
+            name = entry.get("constraint", "?")
+            if status == "failed":
+                reason = entry.get("error") or entry.get("reason") or "cascade failed"
+                c.print(format_item_error(f"constraint {name}", reason), soft_wrap=True)
+            else:
+                c.print(f"  [green]cascade {status}[/green] constraint [cyan]{name}[/cyan]")
         if d.get("rollback"):
             c.print(f"[bold red]Rollback applied:[/bold red] {d['rollback']}")
         if d.get("recovery_hint"):
@@ -419,7 +421,7 @@ def edit_metric(
         failed=failed,
         total=len(cascaded) + 1,
         noun="items",
-        summary=f"Updated the metric and {len(cascaded) - failed} constraint(s).",
+        summary=f"1 metric and {len(cascaded) - failed} constraint(s) updated.",
         render=lambda: _print_edit_result("metric")(formatter.console, result),
     )
 

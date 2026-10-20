@@ -44,7 +44,6 @@ from ._helpers import (
     check_cli_operation,
     check_cli_permission,
     emit_api_error,
-    emit_project_warnings,
     get_formatter,
     get_service,
     map_error_to_exit_code,
@@ -149,7 +148,6 @@ def config_list(
     def render() -> None:
         # In human mode, show per-project errors as warnings and configs as table
         format_configs_table(formatter.console, result)
-        emit_project_warnings(formatter, result)
 
     finish_fanout(formatter, result, result.get("errors", []), render)
 
@@ -301,12 +299,11 @@ def config_detail(
         # Single-config mode: emit unchanged shape
         formatter.output(result, format_config_detail)
     else:
-        # Bulk mode: emit {configs: [...], errors: [...]}
-        if formatter.json_mode:
-            formatter.output(result)
-        else:
+        # Bulk mode: emit {configs: [...], errors: [...]}; a failed project exits 1 (E4).
+        def render() -> None:
             _format_config_detail_bulk(formatter.console, result, component_id, with_state)
-            emit_project_warnings(formatter, result)
+
+        finish_fanout(formatter, result, result.get("errors", []), render)
 
 
 def _format_config_detail_bulk(
@@ -551,7 +548,6 @@ def config_search(
 
     def render() -> None:
         format_search_results(formatter.console, result)
-        emit_project_warnings(formatter, result)
 
     finish_fanout(formatter, result, result.get("errors", []), render)
 

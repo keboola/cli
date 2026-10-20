@@ -775,12 +775,12 @@ The 0.x line, until T0, ships only bug, security and data-loss fixes (C4), the m
 ## 14. Human output
 
 <a id="HO1"></a><a id="output.no-direct-print"></a>
-**HO1 · MUST · now.** Results go to stdout. The final summary line of a human-mode result (`Success:` or `Failed:`) goes to stdout after the result. Notices, hints, progress, prompts and panels go to stderr, also in human mode (O6). A command prints only through `OutputFormatter` and the shared renderers in `output.py`, not through `print`, `typer.echo`, `click.echo` or a new `rich` console. Before 1.0.0, `auth login` printed its notices to stdout in human mode.
+**HO1 · MUST · now.** Results go to stdout. A failed item of a multi-item command is part of the result: one `Error: <item>: <message>` line on stdout. The final summary line of a human-mode result (`Success:` or `Failed:`) goes to stdout after the result. Notices, hints, progress, prompts and panels go to stderr, also in human mode (O6). A command prints only through `OutputFormatter` and the shared renderers in `output.py`, not through `print`, `typer.echo`, `click.echo` or a new `rich` console. Before 1.0.0, `auth login` printed its notices to stdout in human mode.
 
 - Checked by: `output.no-direct-print`.
 
 <a id="HO2"></a><a id="output.multi-item-headline"></a>
-**HO2 · MUST · now for new commands; 1.0.0 for existing ones.** A command that processes several items ends its human output with one headline on stdout (HO1): `Success:` when nothing failed, `Failed: N of M` when an item failed. The headline comes from `finish_items()` in `commands/_helpers.py`, the only source of the per-item exit code (E4).
+**HO2 · MUST · now for new commands; 1.0.0 for existing ones.** Every command that processes several items (projects, tables, buckets, files, configs, schedules, ...) ends its human output with one headline on stdout (HO1): `Success:` when nothing failed, `Failed: N of M <items>.` when an item failed. This includes the fan-out reads, for which the items are projects. The text after the label has one form: `<N> <item>(s) <what happened>`, details after a comma, a closing period, and `would be <...>` for a dry run (`Success: 2 table(s) deleted.`, `Failed: 1 of 3 projects. 2 project(s) read.`). Every failed item is one line `Error: <item>: <message>` on stdout before the headline, never a warning on stderr, so `Failed:` appears only in the headline. The fan-out reads print `Error: project '<alias>': <message>`. The line comes from one renderer, `OutputFormatter.item_error()` / `output.format_item_error()`. The headline comes from `finish_items()` in `commands/_helpers.py` (the fan-out reads call it through `finish_fanout()`), the only source of the per-item exit code (E4).
 
 - Checked by: `output.multi-item-headline` (`tests/test_cli_contract.py`) and the headline snapshots of HO7.
 

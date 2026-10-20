@@ -38,7 +38,6 @@ from ._helpers import (
     _confirm_or_abort,
     check_cli_permission,
     emit_api_error,
-    emit_project_warnings,
     finish_items,
     get_formatter,
     get_service,
@@ -201,7 +200,6 @@ def job_list(
 
     def render() -> None:
         format_jobs_table(formatter.console, result)
-        emit_project_warnings(formatter, result)
 
     finish_fanout(formatter, result, result.get("errors", []), render)
 
@@ -711,9 +709,7 @@ def job_terminate(
         for jid in result["not_found"]:
             formatter.console.print(f"[bold red]Not found:[/bold red] {jid}")
         for f_item in result["failed"]:
-            formatter.console.print(
-                f"[bold red]Failed:[/bold red] {f_item['id']}: {f_item['error']}"
-            )
+            formatter.item_error(f_item["id"], f_item["error"])
 
     killed, failed = len(result["killed"]), len(result["failed"])
     finished, not_found = len(result["already_finished"]), len(result["not_found"])
@@ -723,6 +719,6 @@ def job_terminate(
         failed=failed,
         total=killed + finished + not_found + failed,
         noun="jobs",
-        summary=f"Killed {killed} job(s), {finished} already finished, {not_found} not found.",
+        summary=f"{killed} job(s) killed, {finished} already finished, {not_found} not found.",
         render=render,
     )

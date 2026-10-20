@@ -415,9 +415,7 @@ def register(app: typer.Typer) -> None:
                 else:
                     formatter.console.print(f"  [green]✓[/green] {obj_type} {obj_id}")
             for item in result["errors"]:
-                formatter.console.print(
-                    f"  [red]✗[/red] {item['type']} {item['id']}: {item['error']}"
-                )
+                formatter.item_error(f"{item['type']} {item['id']}", item["error"])
 
         applied = result.get("applied_count", 0)
         failed = len(result.get("errors") or [])
@@ -427,7 +425,7 @@ def register(app: typer.Typer) -> None:
             failed=failed,
             total=applied + failed,
             noun="descriptions",
-            summary=f"{applied} applied.",
+            summary=f"{applied} description(s) applied.",
             render=render,
         )
 
@@ -545,9 +543,9 @@ def register(app: typer.Typer) -> None:
                     f"  [dim]Pruned orphan {item['table_id']}.{item['column']}[/dim]"
                 )
             for item in result["errors"]:
-                formatter.console.print(f"  [red]✗[/red] {item['table_id']}: {item['error']}")
+                formatter.item_error(item["table_id"], item["error"])
 
-        verb = "Would migrate" if result["dry_run"] else "Migrated"
+        done_as = "would be migrated" if result["dry_run"] else "migrated"
         migrated, failed = len(result["migrated"]), len(result["errors"])
         finish_items(
             formatter,
@@ -555,6 +553,6 @@ def register(app: typer.Typer) -> None:
             failed=failed,
             total=migrated + failed,
             noun="tables",
-            summary=f"{verb} {migrated} table(s) of {result['tables_scanned']} scanned.",
+            summary=f"{migrated} table(s) {done_as}, {result['tables_scanned']} scanned.",
             render=render,
         )

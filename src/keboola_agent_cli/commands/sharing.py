@@ -19,7 +19,6 @@ from ._all_projects import (
 from ._helpers import (
     check_cli_permission,
     emit_api_error,
-    emit_project_warnings,
     get_formatter,
     get_service,
     map_error_to_exit_code,
@@ -69,7 +68,6 @@ def sharing_list(
     def render() -> None:
         if not result["shared_buckets"]:
             formatter.console.print("[dim]No shared buckets found.[/dim]")
-            emit_project_warnings(formatter, result)
         else:
             from rich.table import Table
 
@@ -93,7 +91,6 @@ def sharing_list(
                 )
 
             formatter.console.print(table)
-            emit_project_warnings(formatter, result)
 
     finish_fanout(formatter, result, result.get("errors", []), render)
 
@@ -366,6 +363,5 @@ def sharing_edges(
         from ..output import format_lineage_table
 
         format_lineage_table(formatter.console, result)
-        emit_project_warnings(formatter, result)
 
     finish_fanout(formatter, result, result.get("errors", []), render)

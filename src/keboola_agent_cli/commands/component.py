@@ -26,7 +26,6 @@ from ._all_projects import (
 from ._helpers import (
     check_cli_permission,
     emit_api_error,
-    emit_project_warnings,
     get_formatter,
     get_service,
     map_error_to_exit_code,
@@ -51,12 +50,6 @@ def _format_components_table(console: Console, data: dict) -> None:
     components = data.get("components", [])
     errors = data.get("errors", [])
     is_search = data.get("query") is not None
-
-    for err in errors:
-        console.print(
-            f"[bold yellow]Warning:[/bold yellow] Project [bold]{err['project_alias']}[/bold]: "
-            f"{err['message']}"
-        )
 
     if not components:
         if not errors:
@@ -209,7 +202,6 @@ def component_list(
 
     def render() -> None:
         _format_components_table(formatter.console, result)
-        emit_project_warnings(formatter, result)
 
     finish_fanout(formatter, result, result.get("errors", []), render)
 

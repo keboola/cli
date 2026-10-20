@@ -213,7 +213,6 @@ def _format_flows_table(
     formatter: Any, result: dict[str, Any], *, with_schedules: bool = False
 ) -> None:
     flows = result.get("flows", [])
-    errors = result.get("errors", [])
 
     if not flows:
         formatter.console.print("[dim]No flows found.[/dim]")
@@ -248,11 +247,6 @@ def _format_flows_table(
                     row.append("\n".join(lines))
             tbl.add_row(*row)
         formatter.console.print(tbl)
-
-    for err in errors:
-        formatter.warning(
-            f"Project '{err.get('project_alias', '?')}': {err.get('message', 'error')}"
-        )
 
     legacy = result.get("legacy_orchestrator_count", 0)
     if legacy:
@@ -1052,7 +1046,7 @@ def flow_schedule_remove(
 
     def render() -> None:
         for err in errors:
-            formatter.warning(f"  Error: schedule {err['schedule_id']}: {escape(err['error'])}")
+            formatter.item_error(f"schedule {err['schedule_id']}", err["error"])
         for warning in result.get("warnings", []):
             formatter.warning(warning)
 
@@ -1062,9 +1056,7 @@ def flow_schedule_remove(
         failed=len(errors),
         total=count + len(errors),
         noun="schedules",
-        summary=f"Removed {count} schedule(s) from flow {escape(flow_id)}."
-        if count or errors
-        else "No schedules found, nothing removed.",
+        summary=f"{count} schedule(s) removed from flow {escape(flow_id)}.",
         render=render,
     )
 

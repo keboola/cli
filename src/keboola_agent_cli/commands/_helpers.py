@@ -12,7 +12,7 @@ import json
 import os
 import secrets
 import sys
-from collections.abc import Callable, Mapping, Sequence, Sized
+from collections.abc import Callable, Sized
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -430,18 +430,6 @@ def emit_api_error(formatter: OutputFormatter, exc: KeboolaApiError, *, project:
     )
 
 
-def emit_project_warnings(formatter: OutputFormatter, result: dict) -> None:
-    """Emit warnings from multi-project operation results.
-
-    Iterates the 'errors' list in the result dict (if present) and prints
-    each entry as a warning via the formatter.
-    """
-    for err in result.get("errors", []):
-        alias = err.get("project_alias", "unknown")
-        message = err.get("message", "Unknown error")
-        formatter.warning(f"Project '{alias}': {message}")
-
-
 def item_failure_exit_code(failed: int) -> int | None:
     """Map the number of failed items of a multi-item operation to a CLI exit code.
 
@@ -468,13 +456,11 @@ def finish_items(
     formatter: OutputFormatter,
     result: Any,
     *,
-    failed: int | Sequence[Mapping[str, Any]],
+    failed: int,
     total: int,
     noun: str,
     summary: str,
     render: Callable[[], object] | None = None,
-    not_failed_codes: frozenset[str] = frozenset(),
-    headline: bool = True,
 ) -> None:
     """End a command that processes several items: output, one headline, exit code.
 
@@ -483,23 +469,20 @@ def finish_items(
     then one headline, ``Success: <summary>`` or ``Failed: N of M <noun>.``
     The command exits 1 when an item failed. ``noun`` is plural ("tables").
 
-    ``failed`` is the number of failed items, or their entries. With entries,
-    an entry whose ``error_code`` is in ``not_failed_codes`` is an answer, not
-    a failure (E4: ``PAYG_NOT_AVAILABLE`` in ``billing credits``).
-
-    ``headline=False`` leaves out the headline; the fan-out reads use it
-    (``_all_projects.finish_fanout``) until it is decided whether they print one.
+    One wording for every summary (HO2): ``<N> <noun>(s) <what happened>``,
+    with details after a comma and a closing period, for example
+    ``2 table(s) deleted.`` or ``3 config(s) pushed: 1 created, 2 updated, 0 deleted.``
+    A dry run says ``would be <...>``.
+    The fan-out reads end through ``_all_projects.finish_fanout``, which
+    counts failed projects (E4: ``PAYG_NOT_AVAILABLE`` is not a failure).
     """
-    if not isinstance(failed, int):
-        failed = sum(1 for e in failed if str(e.get("error_code", "")) not in not_failed_codes)
     code = item_failure_exit_code(failed)
     if formatter.json_mode:
         formatter.output(result, exit_code=code or 0)
     else:
         if render is not None:
             render()
-        if headline:
-            formatter.item_headline(failed=failed, total=total, noun=noun, summary=summary)
+        formatter.item_headline(failed=failed, total=total, noun=noun, summary=summary)
     if code:
         raise typer.Exit(code=code)
 
@@ -509,14 +492,15 @@ def finish_bulk(
     result: dict[str, Any],
     done: Sized,
     noun: str,
-    verb: str,
+    done_as: str,
     render: Callable[[], object],
 ) -> None:
     """:func:`finish_items` for a bulk command whose result lists its failures in ``failed``.
 
     ``done`` holds the items that succeeded; ``noun`` is singular ("table"),
-    ``verb`` the past tense ("Deleted"), so the headline reads
-    ``Success: Deleted 2 table(s).`` or ``Failed: 1 of 3 tables. Deleted 2 table(s).``
+    ``done_as`` what happened to them ("deleted", "would be deleted"), so the
+    headline reads ``Success: 2 table(s) deleted.`` or
+    ``Failed: 1 of 3 tables. 2 table(s) deleted.``
     """
     failed = len(result["failed"])
     finish_items(
@@ -525,7 +509,7 @@ def finish_bulk(
         failed=failed,
         total=len(done) + failed,
         noun=f"{noun}s",
-        summary=f"{verb} {len(done)} {noun}(s).",
+        summary=f"{len(done)} {noun}(s) {done_as}.",
         render=render,
     )
 

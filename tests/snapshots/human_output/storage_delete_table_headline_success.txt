@@ -2,6 +2,6 @@ exit: 0
 --- stdout ---
 Deleted: in.c-main.orders
 Deleted: in.c-main.items
-Success: Deleted 2 table(s).
+Success: 2 table(s) deleted.
 --- stderr ---
 Target: project 'prod', production

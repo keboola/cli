@@ -121,13 +121,6 @@ def _format_schedule_table(
     formatter.console.print(tbl)
 
 
-def _emit_errors(formatter: Any, errors: list[dict[str, Any]]) -> None:
-    for err in errors:
-        formatter.warning(
-            f"Project '{err.get('project_alias', '?')}': {err.get('message', 'error')}"
-        )
-
-
 # ---------------------------------------------------------------------------
 # schedule list
 # ---------------------------------------------------------------------------
@@ -184,7 +177,6 @@ def schedule_list(
             formatter.console.print(f"[dim]{_NO_CRON_SCHEDULES}[/dim]")
         else:
             _format_schedule_table(formatter, schedules)
-        _emit_errors(formatter, result.get("errors", []))
 
     finish_fanout(formatter, result, result.get("errors", []), render)
 
@@ -351,6 +343,5 @@ def schedule_find(
             if not_run_since is not None:
                 extras.append("Last run")
             _format_schedule_table(formatter, schedules, extra_columns=extras)
-        _emit_errors(formatter, result.get("errors", []))
 
     finish_fanout(formatter, result, result.get("errors", []), render)

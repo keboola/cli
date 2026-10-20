@@ -44,7 +44,6 @@ from ._helpers import (
     _confirm_or_abort,
     check_cli_permission,
     emit_api_error,
-    emit_project_warnings,
     get_formatter,
     get_service,
     map_error_to_exit_code,
@@ -149,7 +148,6 @@ def data_app_list(
 
     def render() -> None:
         _print_data_app_table(formatter, result)
-        emit_project_warnings(formatter, result)
 
     finish_fanout(formatter, result, result.get("errors", []), render)
 

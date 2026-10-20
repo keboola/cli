@@ -27,10 +27,12 @@ from rich.panel import Panel
 from rich.table import Table
 
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
+from ..output import format_item_error
 from ._helpers import (
     _confirm_or_abort,
     check_cli_permission,
     emit_api_error,
+    finish_items,
     get_formatter,
     get_service,
     map_error_to_exit_code,
@@ -185,8 +187,11 @@ def _format_token_list(console: Console, data: dict[str, Any], columns: list[str
     console.print(table)
     for error in data.get("errors") or []:
         console.print(
-            f"[red]Last-used lookup failed[/red] for token "
-            f"[bold]{error.get('token_id', '')}[/bold]: {error.get('message', '')}"
+            format_item_error(
+                f"token {error.get('token_id', '')}",
+                f"last-used lookup failed: {error.get('message', '')}",
+            ),
+            soft_wrap=True,
         )
 
 
@@ -328,7 +333,20 @@ def token_list(
     except (ConfigError, KeboolaApiError) as exc:
         _handle_errors(formatter, exc)
     selected = _resolve_columns(columns, with_last_used)
-    formatter.output(result, partial(_format_token_list, columns=selected))
+    if not with_last_used:
+        formatter.output(result, partial(_format_token_list, columns=selected))
+        return
+    # One last-used lookup per token: a failed lookup is a failed item (E4, HO2).
+    total, failed = len(result.get("tokens") or []), len(result.get("errors") or [])
+    finish_items(
+        formatter,
+        result,
+        failed=failed,
+        total=max(total, failed),
+        noun="tokens",
+        summary=f"{max(total, failed) - failed} token(s) checked for last use.",
+        render=lambda: _format_token_list(formatter.console, result, selected),
+    )
 
 
 @token_app.command("delete")

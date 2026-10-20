@@ -37,7 +37,7 @@ def _print_clone_buckets(formatter: Any, result: dict[str, Any]) -> None:
             f"bucket {link.get('source_bucket_id')}"
         )
     for berr in result.get("bucket_errors", []):
-        formatter.warning(f"  Bucket error: {berr.get('bucket_id')}: {berr.get('error')}")
+        formatter.item_error(f"bucket {berr.get('bucket_id')}", berr.get("error") or "")
 
 
 def clone_summary(result: dict[str, Any]) -> str:
@@ -46,16 +46,16 @@ def clone_summary(result: dict[str, Any]) -> str:
     target = escape(str(result.get("target_alias")))
     if status == "dry_run":
         added = result.get("summary", {}).get("added", 0)
-        return f"Dry run: would create {added} config(s) in {target}."
+        return f"{added} config(s) would be cloned into {target}."
     if status == "no_changes":
-        return f"Already cloned into {target}, no changes to push."
+        return f"0 config(s) cloned into {target}, already cloned."
     overrides = (
         f"buckets={result.get('bucket_rewrites', 0)}, "
         f"variables={result.get('variable_overrides', 0)}, "
         f"renamed={result.get('renamed_instances', 0)}"
     )
     return (
-        f"Cloned into {target}: {result.get('created', 0)} created "
+        f"{result.get('created', 0)} config(s) cloned into {target} "
         f"({overrides}, flow_task_remaps={result.get('flow_task_remaps', 0)})."
     )
 
@@ -75,7 +75,7 @@ def _format_clone_result(formatter: Any, result: dict[str, Any]) -> None:
     if status == "no_changes":
         return
     for err in result.get("errors", []):
-        formatter.warning(
-            f"  Error: {err.get('change_type')} "
-            f"{err.get('component_id')}/{err.get('config_id')}: {err.get('message')}"
+        formatter.item_error(
+            f"{err.get('change_type')} {err.get('component_id')}/{err.get('config_id')}",
+            err.get("message") or "",
         )

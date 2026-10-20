@@ -107,13 +107,11 @@ def register(app: typer.Typer) -> None:
                 for bid in result["deleted"]:
                     formatter.console.print(f"[bold green]Deleted:[/bold green] {bid}")
             for f_item in result["failed"]:
-                formatter.console.print(
-                    f"[bold red]Failed:[/bold red] {f_item['id']}: {f_item['error']}"
-                )
+                formatter.item_error(f_item["id"], f_item["error"])
 
         done = result.get("would_delete", []) if dry_run else result["deleted"]
-        verb = "Would delete" if dry_run else "Deleted"
-        finish_bulk(formatter, result, done, "bucket", verb, render)
+        done_as = "would be deleted" if dry_run else "deleted"
+        finish_bulk(formatter, result, done, "bucket", done_as, render)
 
     @app.command("file-delete", rich_help_panel="Files")
     def storage_file_delete(
@@ -170,10 +168,8 @@ def register(app: typer.Typer) -> None:
                 for fid in result["deleted"]:
                     formatter.console.print(f"[bold green]Deleted:[/bold green] file ID {fid}")
             for f_err in result["failed"]:
-                formatter.console.print(
-                    f"[bold red]Failed:[/bold red] file ID {f_err['id']}: {f_err['error']}"
-                )
+                formatter.item_error(f"file ID {f_err['id']}", f_err["error"])
 
         done = result.get("would_delete", []) if dry_run else result["deleted"]
-        verb = "Would delete" if dry_run else "Deleted"
-        finish_bulk(formatter, result, done, "file", verb, render)
+        done_as = "would be deleted" if dry_run else "deleted"
+        finish_bulk(formatter, result, done, "file", done_as, render)

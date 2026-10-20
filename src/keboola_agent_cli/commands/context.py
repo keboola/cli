@@ -125,9 +125,10 @@ Use `kbagent <command> --help` for full flag details and examples.
     foreground `--json auth login` blocks until the user approves, so run
     it in a background shell and check `auth status`.
     Notices, the device panel and hints go to stderr, the result to stdout
-    (since vNEXT; before, notices went to stdout in human mode). A command
-    that processes several items ends with one `Success:` or `Failed: N of
-    M` line on stdout, after its result (since vNEXT).
+    (since vNEXT; before, notices went to stdout in human mode). Every
+    command that processes several items, the fan-out reads included, ends
+    with one `Success:` or `Failed: N of M` line on stdout, after its result
+    (since vNEXT), e.g. `Failed: 1 of 3 projects. 2 project(s) read.`
     Before the browser wait, login prints a notice on stderr: it
     waits up to 115 s. If the browser shows the project list and not
     "Login complete", the sign-in cannot return; the way out is Ctrl+C and
@@ -2685,11 +2686,12 @@ item fails exit 1 when at least one item failed: sync push, sync
 push/pull/diff --all-projects, sync clone, org setup, project refresh,
 project invite --from-csv, workspace gc, semantic-layer
 import/promote/build/edit metric, storage describe-batch, flow
-schedule-remove. Only sync push, sync clone, storage describe-batch, storage
-describe-migrate and flow schedule-remove print a "Failed:" headline with the
-failed count instead of "Success:". The other commands list the failed items
-in a table or in summary lines, and the --all-projects variants state the
-count in the summary line. flow schedule-remove always returns the errors[]
+schedule-remove. Since vNEXT every command that processes several items (these,
+the bulk storage commands, job terminate, auth register-projects, token list
+--with-last-used, config detail with several --project and the fan-out reads)
+prints each failed item as one "Error: <item>: <message>" line on stdout
+(fan-out reads: "Error: project '<alias>': ...", no longer a stderr warning)
+and ends with one "Success: ..." or "Failed: N of M ..." line. flow schedule-remove always returns the errors[]
 key, empty when nothing failed; a partial failure fills it and exits 1; when
 every schedule delete fails it still raises SCHEDULE_DELETE_FAILED.
 The bulk storage commands
