@@ -255,7 +255,7 @@ Full author checklist: see `CONTRIBUTING.md` > "Releasing a beta (pre-release) v
 
 5. **Error handling**: commands catch `KeboolaApiError` and `ConfigError`, map them to the appropriate exit code, and output structured errors in JSON mode. Report a `KeboolaApiError` with `emit_api_error(formatter, exc)` (`commands/_helpers.py`), which keeps its `retryable` and `details`. `tests/test_error_forwarding.py` fails on a handler that drops them.
 
-6. **Exit codes**: 0=success, 1=general error, 2=usage error, 3=auth error, 4=network error, 5=config error, 6=permission denied, 7=job timed out and cancelled (`JOB_TIMEOUT_TERMINATED`), 130=interrupted.
+6. **Exit codes**: 0=success, 1=general error, 2=usage error, 3=auth error, 4=network error, 5=config error, 6=permission denied, 7=job timed out and cancelled (`JOB_TIMEOUT_TERMINATED`), 130=interrupted. [`docs/error-codes.md`](docs/error-codes.md) is the one list of error codes with their exit code and error type. `ERROR_CODE_TABLE` in `errors.py` holds the same pairs and `map_error_to_exit_code` reads it. `make check-error-codes` keeps the two equal.
 
 7. **Token masking**: tokens are never printed in full. Use `mask_token()` from `errors.py`.
 
@@ -508,7 +508,7 @@ kbagent project create --url URL [--project ALIAS] [--name NAME] [--backend snow
 #   (`/manage/programmatic-projects`, gated by the `agent-provisioning` stack feature
 #   / `STACK_FEATURES__AGENT_PROVISIONING`, off on most stacks -- the COMMAND is always
 #   registered, so `--help` proves nothing about the stack; without the feature the stack 404s
-#   and this exits 1 with AUTH_NOT_SUPPORTED_ON_STACK, naming the flag and the browser path),
+#   and this exits 5 (1 before 1.0.0) with AUTH_NOT_SUPPORTED_ON_STACK, naming the flag and the browser path),
 #   stores the returned project-pinned session in auth.json, and registers the project in
 #   config.json under the `kbc-session://` sentinel -- becoming the default project when nothing
 #   else was registered. THE PROJECT IT CREATES IS OWNED BY NOBODY: the result's `confirm_url` is a
@@ -637,7 +637,7 @@ kbagent job terminate --project NAME (--job-id ID [--job-id ID ...] | --status a
 #   ID (read from GET /v2/storage/dev-branches). Before, it matched no job. Version gate in gotchas.md.
 # job run --idempotency-key: a pending entry is recorded BEFORE the create. A definite failure (4xx,
 #   refused connection, connect timeout) removes it; an unknown outcome (read timeout, 5xx, exhausted
-#   retries) keeps it, because the job may exist. A replay that finds the pending entry exits 1 (INVALID_ARGUMENT, HTTP 400 over serve) and
+#   retries) keeps it, because the job may exist. A replay that finds the pending entry exits with INVALID_ARGUMENT (1 before 1.0.0, 2 from 1.0.0, HTTP 400 over serve) and
 #   creates nothing; check `job list`, then `--force-rerun`. Version gate lives in gotchas.md.
 
 kbagent storage buckets [--project NAME | --all-projects] [--branch ID]

@@ -19,6 +19,7 @@ from ..constants import (
     KEBOOLA_DIR_NAME,
 )
 from ..errors import SyncConflictError
+from .base import item_failure
 
 if TYPE_CHECKING:
     from .sync_service import SyncService
@@ -75,14 +76,10 @@ def pull_all(
             # `--all-projects --json` can tell a merge conflict apart from any
             # other error and read the conflicting configs -- the single-project
             # path emits the same code + conflicts.
-            results[alias] = {
-                "error": exc.message,
-                "error_code": exc.error_code,
-                "conflicts": exc.conflicts,
-            }
+            results[alias] = item_failure(exc, error=exc.message, conflicts=exc.conflicts)
             failed_count += 1
         except Exception as exc:
-            results[alias] = {"error": str(exc)}
+            results[alias] = item_failure(exc, error=str(exc))
             failed_count += 1
 
     max_workers = min(len(projects), service._resolve_max_workers()) if projects else 1

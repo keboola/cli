@@ -430,7 +430,7 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   `agent-provisioning` stack feature (`STACK_FEATURES__AGENT_PROVISIONING`),
   which is OFF on most stacks. The COMMAND is always registered, so its
   presence proves nothing -- a stack without the feature answers 404 ->
-  `AUTH_NOT_SUPPORTED_ON_STACK`, exit 1, whose message names the flag and the
+  `AUTH_NOT_SUPPORTED_ON_STACK`, exit 5 (since vNEXT, 1 before), whose message names the flag and the
   fallback; not a routing or credential problem, and not worth retrying. The project it creates is
   **owned by nobody** until a human opens the single-use `confirm_url`;
   relay it verbatim, and do not call the task done before they have. `auth

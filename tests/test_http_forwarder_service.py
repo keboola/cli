@@ -43,15 +43,16 @@ class TestResolveEndpoint:
         url, _ = HttpForwarderService.resolve_endpoint()
         assert url == "http://127.0.0.1:8001"  # no trailing /
 
-    def test_missing_url_raises_exit_2(self, monkeypatch) -> None:
+    def test_missing_url_raises_exit_5(self, monkeypatch) -> None:
+        """A missing env var is a configuration error: CONFIG_ERROR exits 5 (spec E1)."""
         monkeypatch.delenv(ENV_KBAGENT_SERVE_URL, raising=False)
         monkeypatch.setenv(ENV_KBAGENT_SERVE_TOKEN, "x")
         with pytest.raises(ForwarderError) as exc_info:
             HttpForwarderService.resolve_endpoint()
-        assert exc_info.value.exit_code == 2
+        assert exc_info.value.exit_code == 5
         assert exc_info.value.error_code == ErrorCode.CONFIG_ERROR
 
-    def test_missing_token_raises_exit_2(self, monkeypatch) -> None:
+    def test_missing_token_raises_exit_5(self, monkeypatch) -> None:
         monkeypatch.setenv(ENV_KBAGENT_SERVE_URL, "http://x")
         monkeypatch.delenv(ENV_KBAGENT_SERVE_TOKEN, raising=False)
         with pytest.raises(ForwarderError):
@@ -81,6 +82,7 @@ class TestResolveBody:
         with pytest.raises(ForwarderError) as exc_info:
             HttpForwarderService.resolve_body("{not json")
         assert exc_info.value.exit_code == 2
+        assert exc_info.value.error_code == ErrorCode.INVALID_ARGUMENT
         assert "valid JSON" in exc_info.value.message
 
 

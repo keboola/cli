@@ -132,10 +132,15 @@ class FlowSchemaFetch:
     could not be obtained; ``reason`` explains the failure (``None`` on
     success). A ``None`` schema must NOT block a write -- callers degrade to
     semantic-only validation and surface ``reason`` as a warning.
+
+    ``error`` holds the API error when the request itself failed (network,
+    auth, HTTP status). A caller that reports the failure as an error keeps
+    its code, exit code and ``retryable`` instead of calling it NOT_FOUND.
     """
 
     schema: dict[str, Any] | None
     reason: str | None
+    error: KeboolaApiError | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -286,7 +291,7 @@ class FlowService(BaseService):
         try:
             raw = ai_client.get_component_detail(FLOW_COMPONENT_ID)
         except KeboolaApiError as exc:
-            return FlowSchemaFetch(schema=None, reason=exc.message)
+            return FlowSchemaFetch(schema=None, reason=exc.message, error=exc)
         except Exception as exc:
             # Intentionally broad: ANY schema-fetch failure must degrade to
             # semantic-only validation, never block the write. Narrowing to

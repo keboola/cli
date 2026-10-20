@@ -158,11 +158,8 @@ class TestMapErrorCodeToType:
         """Generic ERROR code falls back to api type."""
         assert map_error_code_to_type("ERROR") == "api"
 
-    def test_catch_all_codes_take_the_api_default(self) -> None:
-        """`_ERROR_CODE_TO_TYPE` lists only codes whose type differs from the
-        default, so the catch-alls are deliberately absent from it -- the same
-        treatment `UNKNOWN_ERROR` / `INTERNAL_ERROR` / `KAI_ERROR` already get.
-        Pinned so adding a member does not imply the map must grow with it."""
+    def test_catch_all_codes_are_api(self) -> None:
+        """The catch-alls have an explicit `api` entry in `ERROR_CODE_TABLE`."""
         assert map_error_code_to_type("UNEXPECTED_ERROR") == "api"
         assert map_error_code_to_type("UNKNOWN_ERROR") == "api"
 

@@ -147,7 +147,7 @@ Other behaviour worth knowing:
   the `agent-provisioning` stack feature (`STACK_FEATURES__AGENT_PROVISIONING`),
   off on most stacks, so `kbagent project create --help` says nothing about
   whether this stack will accept it. Without the feature the stack answers 404,
-  surfaced as `AUTH_NOT_SUPPORTED_ON_STACK` (exit 1) with a message naming the
+  reported as `AUTH_NOT_SUPPORTED_ON_STACK` (exit 5 since vNEXT, exit 1 before) with a message naming the
   missing feature, the flag an operator flips, and how to connect an existing
   project instead -- not a routing bug and not a credential problem.
 - **The call is never retried automatically**, on any status. It is not

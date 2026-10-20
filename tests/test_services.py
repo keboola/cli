@@ -4489,7 +4489,15 @@ class TestJobServiceTerminateJobs:
         service = JobService(store, client_factory=lambda url, token: mock_client)
         result = service.terminate_jobs(alias="prod", job_ids=["1"])
 
-        assert result["failed"] == [{"id": "1", "error": "Token expired"}]
+        assert result["failed"] == [
+            {
+                "id": "1",
+                "error": "Token expired",
+                "error_code": "INVALID_TOKEN",
+                "retryable": False,
+                "message": "Token expired",
+            }
+        ]
         assert result["killed"] == []
 
     def test_batch_tolerates_partial_failures(self, tmp_config_dir: Path) -> None:
@@ -4508,7 +4516,15 @@ class TestJobServiceTerminateJobs:
         result = service.terminate_jobs(alias="prod", job_ids=["ok1", "bad", "ok2"])
 
         assert {entry["id"] for entry in result["killed"]} == {"ok1", "ok2"}
-        assert result["failed"] == [{"id": "bad", "error": "Boom"}]
+        assert result["failed"] == [
+            {
+                "id": "bad",
+                "error": "Boom",
+                "error_code": "API_ERROR",
+                "retryable": False,
+                "message": "Boom",
+            }
+        ]
 
     def test_resolve_job_ids_filters_by_branch_client_side(self, tmp_config_dir: Path) -> None:
         """resolve_job_ids_by_filter applies branch_id filter client-side (Queue API doesn't)."""

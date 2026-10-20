@@ -424,7 +424,8 @@ class TestErrorsAndReveal:
 
         result = _run(argv, caplog)
 
-        assert result.exit_code == 1
+        # VALIDATION_ERROR exits 2 (spec E1).
+        assert result.exit_code == 2
         if json_mode:
             assert json.loads(result.stdout)["error"]["code"] == "VALIDATION_ERROR"
         assert "auth: public" in result.output
