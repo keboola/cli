@@ -42,7 +42,7 @@ from typing import Any
 import httpx
 
 from ..constants import ENV_KBAGENT_SERVE_TOKEN, ENV_KBAGENT_SERVE_URL
-from ..errors import ErrorCode
+from ..errors import ErrorCode, exit_code_for
 
 logger = logging.getLogger(__name__)
 
@@ -51,19 +51,21 @@ logger = logging.getLogger(__name__)
 class ForwarderError(Exception):
     """Single error type for every failure mode of ``HttpForwarderService``.
 
-    Pairs an :class:`ErrorCode` with a message and a CLI-appropriate exit
-    code so the command layer can map exceptions to ``typer.Exit`` with one
-    handler instead of one per call site.
-
-    The exit-code semantics mirror the rest of the kbagent CLI:
-    - ``2``  usage error (missing env vars, malformed --body)
-    - ``4``  network error (connection refused, DNS, timeout)
-    - ``1``  general API error (HTTP 4xx/5xx response from the serve)
+    Pairs an :class:`ErrorCode` with a message. ``exit_code`` comes from the
+    error code table (``errors.exit_code_for``), so the command layer maps
+    every exception to ``typer.Exit`` with one handler:
+    - ``2``  usage error (malformed --body): ``INVALID_ARGUMENT``
+    - ``4``  network error (connection refused, DNS, timeout): ``CONNECTION_ERROR``
+    - ``5``  configuration error (missing env vars): ``CONFIG_ERROR``
+    - ``1``  general API error (HTTP 4xx/5xx response from the serve): ``API_ERROR``
     """
 
     error_code: ErrorCode
     message: str
-    exit_code: int
+
+    @property
+    def exit_code(self) -> int:
+        return exit_code_for(self.error_code)
 
     def __str__(self) -> str:  # pragma: no cover -- format only
         return self.message
@@ -103,7 +105,7 @@ class HttpForwarderService:
         """Read ``KBAGENT_SERVE_URL`` + ``KBAGENT_SERVE_TOKEN`` from env.
 
         Raises:
-            ForwarderError: with ``exit_code=2`` if either variable is
+            ForwarderError: ``CONFIG_ERROR`` (exit 5) if either variable is
                 unset/empty. The message names both required vars and the
                 expected context (parent serve subprocess) so the operator
                 doesn't have to grep the source.
@@ -119,7 +121,6 @@ class HttpForwarderService:
                     "by `kbagent serve` for scheduled-agent subprocesses; outside "
                     "that context the command has no target."
                 ),
-                exit_code=2,
             )
         return url, token
 
@@ -134,8 +135,8 @@ class HttpForwarderService:
         - anything else     -> treat as inline JSON literal
 
         Raises:
-            ForwarderError: with ``exit_code=2`` if the resulting string
-                is not valid JSON. Includes the parser's column/line so
+            ForwarderError: ``INVALID_ARGUMENT`` (exit 2) if the resulting
+                string is not valid JSON. Includes the parser's column/line so
                 the user can fix the literal without rerunning with
                 ``--verbose``.
         """
@@ -152,9 +153,8 @@ class HttpForwarderService:
             return json.loads(raw)
         except json.JSONDecodeError as exc:
             raise ForwarderError(
-                error_code=ErrorCode.CONFIG_ERROR,
+                error_code=ErrorCode.INVALID_ARGUMENT,
                 message=f"--body is not valid JSON: {exc}",
-                exit_code=2,
             ) from None
 
     def request(
@@ -189,7 +189,7 @@ class HttpForwarderService:
 
         Raises:
             ForwarderError: usage / network / non-2xx HTTP. The
-                ``exit_code`` field is the CLI's intended outcome.
+                ``exit_code`` is the CLI's intended outcome.
         """
         base_url, token = self.resolve_endpoint()
         payload = self.resolve_body(body)
@@ -212,7 +212,6 @@ class HttpForwarderService:
             raise ForwarderError(
                 error_code=ErrorCode.CONNECTION_ERROR,
                 message=f"HTTP transport error: {exc}",
-                exit_code=4,
             ) from None
 
         content_type = response.headers.get("content-type", "")
@@ -230,7 +229,6 @@ class HttpForwarderService:
             raise ForwarderError(
                 error_code=ErrorCode.API_ERROR,
                 message=f"HTTP {response.status_code}: {decoded}",
-                exit_code=1,
             )
 
         return ForwardedResponse(decoded=decoded, is_json=is_json)

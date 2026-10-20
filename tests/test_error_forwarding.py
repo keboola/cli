@@ -261,7 +261,8 @@ def test_search_json_error_keeps_typed_code(tmp_config_dir: Path) -> None:
     ):
         result = runner.invoke(app, ["--json", "search", "orders"])
 
-    assert result.exit_code == 1
+    # TIMEOUT exits 4 (spec E1). `search` exited 1 for every API error before 1.0.0.
+    assert result.exit_code == 4
     _assert_error_envelope(result.stdout, ErrorCode.TIMEOUT)
 
 

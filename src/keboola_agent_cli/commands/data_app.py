@@ -21,7 +21,7 @@ from rich.markup import escape
 
 from ..constants import DEFAULT_JOB_RUN_TIMEOUT
 from ..effective_branch import resolve_branch
-from ..errors import ConfigError, ErrorCode, KeboolaApiError
+from ..errors import ConfigError, ErrorCode, KeboolaApiError, exit_code_for
 from ._all_projects import AllProjectsOption, reject_project_with_all_projects
 from ._data_app_git import register_git_commands
 from ._data_app_password import (
@@ -410,7 +410,7 @@ def data_app_create(
                 message=f"Cannot read --description-file {description_file}: {exc}",
                 error_code=ErrorCode.READ_ERROR,
             )
-            raise typer.Exit(code=2) from None
+            raise typer.Exit(code=exit_code_for(ErrorCode.READ_ERROR)) from None
 
     # Source-of-code selection: exactly one of an external --git-repo or a
     # Keboola --use-managed-git-repo. Catch the two obvious mistakes at the CLI

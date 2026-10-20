@@ -883,7 +883,8 @@ class TestLineageDeepCli:
                 "/nonexistent/lineage.json",
             ],
         )
-        assert result.exit_code == 1
+        # FILE_NOT_FOUND exits 2 (spec E1). This path exited 1 before 1.0.0.
+        assert result.exit_code == 2
 
     def _ambiguous_cache(self, tmp_path: Path) -> Path:
         cache_path = tmp_path / "shared-lineage.json"

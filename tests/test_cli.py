@@ -3724,7 +3724,8 @@ class TestJobRun:
             replay = runner.invoke(app, args)
 
         assert first.exit_code == 4, first.output
-        assert replay.exit_code == 1, replay.output
+        # INVALID_ARGUMENT exits 2 (spec E1: the error code table).
+        assert replay.exit_code == 2, replay.output
         error = json.loads(replay.output)["error"]
         assert error["code"] == "INVALID_ARGUMENT"
         assert "kbagent job list" in error["message"]

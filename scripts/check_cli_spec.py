@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import importlib.util
 import inspect
 import json
 import re
@@ -770,6 +771,16 @@ def r_config_error_keeps_code(c: Context) -> Violations:
     return found
 
 
+def r_code_has_type_and_exit(c: Context) -> Violations:
+    """`scripts/check_error_codes.py` owns the rule. This reports it in the spec check too."""
+    path = Path(__file__).with_name("check_error_codes.py")
+    spec = importlib.util.spec_from_file_location("_check_error_codes_for_spec", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.code_table_violations()
+
+
 def r_confirm_via_helper(c: Context) -> Violations:
     return {
         site.subject: "direct confirmation prompt"
@@ -1112,6 +1123,13 @@ RULES: tuple[Rule, ...] = (
         r_config_error_keeps_code,
     ),
     Rule(
+        "errors.code-has-type-and-exit",
+        "ast",
+        "every ErrorCode has an explicit (error_type, exit_code) entry that docs/error-codes.md repeats",
+        r_code_has_type_and_exit,
+        baseline=False,
+    ),
+    Rule(
         "safety.destructive-has-dry-run",
         "tree",
         "category destructive => --dry-run",
@@ -1228,7 +1246,6 @@ DEFERRED_RULES: dict[str, str] = {
     "input.content-option-refuses-at-file": "the @file refusal lands in 1.0.0 (Input)",
     "output.no-warning-after-output": "lands with warnings[] in the --json envelope",
     "output.multi-item-headline": "contract; lands with HO2",
-    "errors.code-has-type-and-exit": "the error code table lands in 1.0.0 (Errors)",
     "errors.fanout-exit": "contract; the default-project change for fan-out reads is 1.0.0",
     "help.context-from-manifest": "kbagent context is generated from the manifest in 1.0.0 (AG1)",
     "env.registry-complete": "the environment variable registry does not exist yet",
