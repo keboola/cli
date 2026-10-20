@@ -11,6 +11,18 @@ Versioning convention:
   behavior; the inline `(updated vX.Y.Z)` records when the refinement landed.
 -->
 
+## A confirmation without a terminal refuses, and `branch delete` and `workspace delete` ask
+
+*(since vNEXT)* (CLI-46, #791)
+
+- **Human mode without a terminal: a confirmation refuses unless `--yes`.** A command that asks before it changes something (the deletes, `token delete/refresh`, `job terminate`, `merge-request merge`, `auth logout`, `org setup`, `project refresh`, ...) now exits 2 with `CONFIRMATION_REQUIRED` when stdin or stderr is not a terminal and `--yes` is not given. The message names `--yes` and says "AI agents: ask the user before you retry with --yes." Before, the prompt read its answer from stdin, so a harness with an open stdin pipe (or `echo y |`) could answer it. Nothing changes under `--json`: `--json` is consent and there is no prompt. On a terminal the prompt now goes to stderr. A declined prompt still prints `Aborted.` and exits 0.
+- **Exceptions that keep their own prompt.** The non-safety questions of `init` (copy the global projects) and of the `auth login` / `auth register-projects` project picker. The guards of `semantic-layer add metric` (a dataset that is not in the model) and `semantic-layer edit metric` (a rename that changes constraints) are in the service: without a terminal they refuse with `VALIDATION_ERROR` (exit 2) unless `--yes`, and on a terminal they ask also under `--json`.
+- **`semantic-layer edit glossary --new-term`, `semantic-layer remove *` and `semantic-layer reference-data delete` refuse under `--json` too.** For these `--json` is no consent: without a terminal and without `--yes` they refuse with `VALIDATION_ERROR` under `--json` (as before) and with `CONFIRMATION_REQUIRED` in human mode. Both exit 2.
+- **`storage delete-bucket` and `storage file-delete` without a terminal now refuse too.** Before, they deleted without asking when no terminal was attached. Give `--yes` (or `--json`).
+- **`branch delete` and `workspace delete` ask for confirmation and take `--yes` / `-y` and `--dry-run`.** `--dry-run` reads the branch (`GET /v2/storage/dev-branches`) or the workspace (one `GET`) and deletes nothing. A missing branch or workspace is `NOT_FOUND`. Over `kbagent serve`, `DELETE /branches/{project}/{branch_id}` and `DELETE /workspaces/{project}/{workspace_id}` accept `dry_run=true` and never prompt. On older versions these two commands deleted without a prompt and had neither flag: on both, `kbagent --json branch delete ...` works without a prompt.
+- **`stream delete --force` is a hidden deprecated alias of `--yes`, and `semantic-layer import --yes` is hidden and has no effect.** Both still work and add a `warnings[]` entry `{"code": "DEPRECATED", "replacement": "--yes" | null, "remove_after": null, "hint": ...}` (one stderr line in human mode). `remove_after` stays null until the removal date is known: at least 28 days after the 1.0 migration date. Use `stream delete --yes`, and drop `--yes` from `semantic-layer import`.
+- **`workspace load` without a terminal does not ask about a large COPY.** It refuses with `WORKSPACE_LOAD_COPY_TOO_LARGE` and names `--force`, as under `--json`.
+
 ## `--branch 0` is production in `job terminate`, `swap-tables`, `clone-table` and `create-table --source-branch-id`
 
 *(since 0.100.0)* (CLI-21, #791)

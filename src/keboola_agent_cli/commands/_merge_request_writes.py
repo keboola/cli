@@ -42,6 +42,7 @@ from ..services.merge_request_service import (
     validate_auto_merge_flags,
 )
 from ._helpers import (
+    _confirm_or_abort,
     get_formatter,
     get_service,
     parse_json_arg,
@@ -99,16 +100,6 @@ def _check_external_id(formatter: Any, external_id: str | None) -> None:
             f"--external-id is capped at {MERGE_REQUEST_EXTERNAL_ID_MAX_LENGTH} characters "
             f"(got {len(external_id)}).",
         )
-
-
-def _confirm_or_abort(formatter: Any, yes: bool, question: str) -> None:
-    """The house prompt shape: skipped by --yes and in --json (where consent is
-    implied and the explicit-target rule stands in for it)."""
-    if yes or formatter.json_mode:
-        return
-    if not typer.confirm(question):
-        formatter.console.print("Aborted.")
-        raise typer.Exit(code=0)
 
 
 def _warn_if_armed(formatter: Any, result: dict[str, Any]) -> None:

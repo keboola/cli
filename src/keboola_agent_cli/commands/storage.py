@@ -18,6 +18,7 @@ from ..services._storage_jobs import validate_wait_timeout
 from ..services._storage_tables import CLONE_TABLE_PRODUCTION_MESSAGE
 from ._all_projects import AllProjectsOption, reject_project_with_all_projects
 from ._helpers import (
+    _confirm_or_abort,
     check_cli_permission,
     emit_api_error,
     emit_project_warnings,
@@ -1081,9 +1082,7 @@ def storage_delete_table(
             f"FORCE-delete {len(table_id)} table(s) from project '{project}'?"
             " This will also delete all aliases in downstream projects."
         )
-    if not yes and not formatter.json_mode and not typer.confirm(confirm_msg):
-        formatter.console.print("Aborted.")
-        raise typer.Exit(code=0)
+    _confirm_or_abort(formatter, yes, confirm_msg)
 
     try:
         result = service.delete_tables(
@@ -1186,9 +1185,7 @@ def storage_truncate_table(
         f"Truncate {len(table_id)} table(s) in project '{project}'? "
         "All rows will be deleted; schema and dependents are preserved."
     )
-    if not yes and not formatter.json_mode and not typer.confirm(confirm_msg):
-        formatter.console.print("Aborted.")
-        raise typer.Exit(code=0)
+    _confirm_or_abort(formatter, yes, confirm_msg)
 
     try:
         result = service.truncate_tables(
@@ -1366,15 +1363,11 @@ def storage_delete_column(
                 )
         return
 
-    if (
-        not yes
-        and not formatter.json_mode
-        and not typer.confirm(
-            f"Delete {len(column)} column(s) from table '{table_id}' in project '{project}'?"
-        )
-    ):
-        formatter.console.print("Aborted.")
-        raise typer.Exit(code=0)
+    _confirm_or_abort(
+        formatter,
+        yes,
+        f"Delete {len(column)} column(s) from table '{table_id}' in project '{project}'?",
+    )
 
     try:
         result = service.delete_columns(
@@ -1515,9 +1508,7 @@ def storage_swap_tables(
         "same physical position (i.e. they will expose the OTHER table's data "
         "after the swap)."
     )
-    if not yes and not formatter.json_mode and not typer.confirm(confirm_msg):
-        formatter.console.print("Aborted.")
-        raise typer.Exit(code=0)
+    _confirm_or_abort(formatter, yes, confirm_msg)
 
     try:
         result = service.swap_tables(

@@ -47,6 +47,7 @@ from ..services.auth_service import (
 )
 from ._auth_picker import parse_alias_overrides, run_project_picker
 from ._helpers import (
+    _confirm_or_abort,
     check_cli_operation,
     check_cli_permission,
     emit_api_error,
@@ -596,15 +597,11 @@ def auth_logout(
     formatter = get_formatter(ctx)
     if remove_projects:
         check_cli_operation(ctx, "auth.logout --remove-projects")
-    if (
-        not formatter.json_mode
-        and not yes
-        and not typer.confirm(
-            "Log out of the current Keboola session? Local credentials will be cleared."
-        )
-    ):
-        formatter.console.print("Aborted.")
-        raise typer.Exit(code=0)
+    _confirm_or_abort(
+        formatter,
+        yes,
+        "Log out of the current Keboola session? Local credentials will be cleared.",
+    )
     service: AuthService = get_service(ctx, "auth_service")
     try:
         result = service.logout(stack=stack, remove_projects=remove_projects)

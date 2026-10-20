@@ -860,6 +860,7 @@ class TestLogout:
         assert result.exit_code == 0, result.output
         assert "may still be active" in result.output
 
+    @pytest.mark.usefixtures("interactive_terminal")
     def test_confirm_abort(self, tmp_path: Path) -> None:
         config_dir = tmp_path / "c"
         config_dir.mkdir()

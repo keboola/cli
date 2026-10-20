@@ -1016,8 +1016,10 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Show base + per-signal endpoints (/v1/logs|/v1/traces|/v1/metrics), protocol http/protobuf,
     and destination bucket/tables (from sinks). The secret embedded in the OTLP URL is MASKED
     by default; pass --reveal to print it (e.g. to wire OTEL_EXPORTER_OTLP_ENDPOINT).
-  kbagent stream delete SOURCE_ID --project NAME [--branch ID] [--dry-run] [--yes|--force]
-    Delete a source (destructive; async task polled to completion).
+  kbagent stream delete SOURCE_ID --project NAME [--branch ID] [--dry-run] [--yes]
+    Delete a source (destructive, async task polled to completion). --force is a
+    hidden deprecated alias of --yes since vNEXT: it still works and adds a
+    DEPRECATED warning. Use --yes.
   Notes: uses the per-project Storage token (no manage token). Control plane = stream.<region>
   derived from connection.<region>. The OTLP ingest host is stream-in.<region>, returned in
   source.otlp.url -- never derived. The raw Stream API does not auto-create sinks, so kbagent
@@ -1356,8 +1358,10 @@ remain branch-aware because modifying a dev branch is the expected intent.
   kbagent branch reset --project ALIAS
     Reset to main/production branch.
 
-  kbagent branch delete --project ALIAS --branch ID
-    Delete branch (async). Auto-resets to main if it was active.
+  kbagent branch delete --project ALIAS --branch ID [--dry-run] [--yes]
+    Delete branch (async). Auto-resets to main if it was active. Since vNEXT it
+    asks for confirmation unless --yes or --json. --dry-run reads the branch and
+    deletes nothing.
 
   kbagent branch merge --project ALIAS [--branch ID]
     DEPRECATED (since 0.94.0): builds a KBC UI merge URL (does NOT merge via API) and
@@ -1464,8 +1468,10 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Workspace connection details (no password). Includes login_type, read_only, qs_compatible.
     Without --branch uses the alias's active branch (`branch use`), else production.
 
-  kbagent workspace delete --project ALIAS --workspace-id ID
-    Delete workspace. They also expire automatically.
+  kbagent workspace delete --project ALIAS --workspace-id ID [--dry-run] [--yes]
+    Delete workspace. They also expire automatically. Since vNEXT it asks for
+    confirmation unless --yes or --json. --dry-run reads the workspace and
+    deletes nothing.
 
   kbagent workspace password --project ALIAS --workspace-id ID
     Reset and return new workspace password.
@@ -2022,8 +2028,9 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
     removes -- no orphan-check (those entities aren't referenced by others).
     `remove glossary` identifies the entity by --term, not --name.
 
-  kbagent semantic-layer import --project P --file PATH [--model M] [--types T,T,...] [--dry-run] [--yes] [--overwrite]
-    Replay a snapshot. Default: skip on conflict. --overwrite opts into
+  kbagent semantic-layer import --project P --file PATH [--model M] [--types T,T,...] [--dry-run] [--overwrite]
+    Replay a snapshot. Default: skip on conflict. --yes never had an effect here.
+    Since vNEXT it is hidden and adds a DEPRECATED warning. --overwrite opts into
     an in-place update (keeps the existing item's scope). Dependency-ordered push (datasets -> metrics -> relationships
     -> glossary -> constraints).
 
@@ -2493,6 +2500,12 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
 
 1. ALWAYS use --json flag for reliable, parseable output:
      kbagent --json project list
+   Confirmations (since vNEXT): --yes and --json mean consent, so a command
+   that asks for confirmation does not ask under them. In human mode without a
+   terminal it refuses with CONFIRMATION_REQUIRED (exit 2) and names --yes. A
+   piped "y" does not confirm. Ask the user before you retry with --yes.
+   A DEPRECATED entry in "warnings" names the replacement of an old flag
+   ("replacement"). Its "remove_after" is null until the removal date is known.
 
 2. JSON response format:
      Success: {{"status": "ok", "data": ...}}
@@ -2625,7 +2638,8 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
 
   0    Success
   1    General error
-  2    Usage or validation error (invalid arguments)
+  2    Usage or validation error (invalid arguments), or a confirmation refused
+       without a terminal (CONFIRMATION_REQUIRED, since vNEXT)
   3    Authentication error (invalid or expired token)
   4    Network error (timeout, unreachable server), or a local wait that timed
        out while the server job keeps running

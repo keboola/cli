@@ -212,6 +212,7 @@ class TestWorkspaceGc:
         assert data["data"]["count_deleted"] == 1
         assert data["data"]["dry_run"] is False
 
+    @pytest.mark.usefixtures("interactive_terminal")
     def test_gc_no_confirmation_aborts(self, tmp_path: Path) -> None:
         """In non-JSON mode without --yes, answering 'n' exits 0 without calling service."""
         store = _setup_store(tmp_path)

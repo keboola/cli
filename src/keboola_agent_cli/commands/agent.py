@@ -32,7 +32,12 @@ from ..server.agents_store import (
     annotate_removed_action,
 )
 from ..services.agent_service import AgentService
-from ._helpers import check_cli_permission, get_formatter, get_service
+from ._helpers import (
+    _confirm_or_abort,
+    check_cli_permission,
+    get_formatter,
+    get_service,
+)
 
 agent_app = typer.Typer(help="Scheduled agent tasks (cron / manual / chained)")
 
@@ -689,11 +694,7 @@ def agent_delete(
     formatter = get_formatter(ctx)
     service: AgentService = get_service(ctx, "agent_service")
     task_id = _resolve_id(formatter, task_id, task_id_opt, label="Task ID", flag="--id/--task-id")
-    if not yes and not formatter.json_mode:
-        confirm = typer.confirm(f"Delete task '{task_id}'?")
-        if not confirm:
-            formatter.console.print("[yellow]Aborted.[/yellow]")
-            raise typer.Exit(code=0)
+    _confirm_or_abort(formatter, yes, f"Delete task '{task_id}'?")
     try:
         service.delete_task(task_id)
     except ConfigError as exc:

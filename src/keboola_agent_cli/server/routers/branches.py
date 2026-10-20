@@ -60,10 +60,16 @@ def reset(project: str, registry: ServiceRegistry = Depends(get_registry)) -> di
 
 @router.delete("/{project}/{branch_id}", summary="Delete a branch")
 def delete(
-    project: str, branch_id: int, registry: ServiceRegistry = Depends(get_registry)
+    project: str,
+    branch_id: int,
+    dry_run: bool = False,
+    registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
-    """Delete a development branch. Mirrors `kbagent branch delete`."""
-    return registry.branch.delete_branch(alias=project, branch_id=branch_id)
+    """Delete a development branch. Mirrors `kbagent branch delete`.
+
+    No confirmation over REST: the request is the consent, as with `--yes`.
+    """
+    return registry.branch.delete_branch(alias=project, branch_id=branch_id, dry_run=dry_run)
 
 
 @router.get("/{project}/merge-url", summary="Get the branch merge URL")

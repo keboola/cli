@@ -21,6 +21,7 @@ from ..config_store import ConfigStore
 from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._helpers import (
+    _confirm_or_abort,
     emit_api_error,
     get_formatter,
     get_service,
@@ -525,11 +526,9 @@ def register(app: typer.Typer) -> None:
                 f"{column_count} legacy column description(s) "
                 f"of {scan['tables_scanned']} table(s) scanned."
             )
-            if not typer.confirm(
-                f"Migrate {len(scan['migrated'])} table(s) in project '{project}'?"
-            ):
-                formatter.console.print("Aborted.")
-                raise typer.Exit(code=0)
+            _confirm_or_abort(
+                formatter, yes, f"Migrate {len(scan['migrated'])} table(s) in project '{project}'?"
+            )
 
         result = _migrate(dry_run)
 

@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
 from typer.testing import CliRunner
 
 from keboola_agent_cli.cli import app
@@ -237,6 +238,7 @@ class TestFeatureProjectAdd:
             manage_token=MANAGE_TOKEN, alias=ALIAS, feature=FEATURE, dry_run=True
         )
 
+    @pytest.mark.usefixtures("interactive_terminal")
     def test_confirm_abort_does_not_call_service(self, tmp_path: Path) -> None:
         config_dir = tmp_path / "config"
         config_dir.mkdir()
@@ -325,6 +327,7 @@ class TestFeatureProjectRemove:
             manage_token=MANAGE_TOKEN, alias=ALIAS, feature=FEATURE, dry_run=True
         )
 
+    @pytest.mark.usefixtures("interactive_terminal")
     def test_confirm_abort_does_not_call_service(self, tmp_path: Path) -> None:
         config_dir = tmp_path / "config"
         config_dir.mkdir()
@@ -452,6 +455,7 @@ class TestFeatureUserAdd:
             manage_token=MANAGE_TOKEN, alias=ALIAS, email=EMAIL, feature=FEATURE, dry_run=True
         )
 
+    @pytest.mark.usefixtures("interactive_terminal")
     def test_confirm_abort_does_not_call_service(self, tmp_path: Path) -> None:
         config_dir = tmp_path / "config"
         config_dir.mkdir()
@@ -540,6 +544,7 @@ class TestFeatureUserRemove:
             manage_token=MANAGE_TOKEN, alias=ALIAS, email=EMAIL, feature=FEATURE, dry_run=True
         )
 
+    @pytest.mark.usefixtures("interactive_terminal")
     def test_confirm_abort_does_not_call_service(self, tmp_path: Path) -> None:
         config_dir = tmp_path / "config"
         config_dir.mkdir()

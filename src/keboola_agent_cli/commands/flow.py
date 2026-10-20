@@ -29,6 +29,7 @@ from ..services.flow_service import (
 from ..services.flow_validation import find_unreachable_phases, validate_conditional_flow
 from ._all_projects import AllProjectsOption, reject_project_with_all_projects
 from ._helpers import (
+    _confirm_or_abort,
     check_cli_permission,
     emit_api_error,
     get_formatter,
@@ -828,11 +829,7 @@ def flow_delete(
             )
         return
 
-    if not yes and not formatter.json_mode:
-        confirmed = typer.confirm(f"Delete flow keboola.flow/{flow_id}?")
-        if not confirmed:
-            formatter.console.print("[yellow]Aborted.[/yellow]")
-            raise typer.Exit(code=0)
+    _confirm_or_abort(formatter, yes, f"Delete flow keboola.flow/{flow_id}?")
 
     try:
         result = service.delete_flow(
@@ -1024,10 +1021,7 @@ def flow_schedule_remove(
             raise typer.Exit(code=0)
 
         _print_schedule_list(formatter, schedules)
-        confirmed = typer.confirm(f"Remove {len(schedules)} schedule(s) above?")
-        if not confirmed:
-            formatter.console.print("[yellow]Aborted.[/yellow]")
-            raise typer.Exit(code=0)
+        _confirm_or_abort(formatter, yes, f"Remove {len(schedules)} schedule(s) above?")
 
     try:
         result = service.remove_flow_schedule(
