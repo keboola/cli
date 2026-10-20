@@ -215,14 +215,30 @@ Anything else requires auth.
 
 ## Error envelope
 
-Every non-2xx response carries this exact JSON body:
+Every non-2xx response carries this JSON body (since vNEXT the `error`
+object has the fields of the CLI error object, and `targets` / `warnings`
+are present when not empty):
 
 ```json
 {
   "status": "error",
+  "targets": [
+    {
+      "role": "target",
+      "project_alias": "prod",
+      "project_source": "explicit",
+      "branch_id": 456,
+      "branch_name": "feature-x",
+      "branch_source": "active_branch",
+      "active_branch": {"branch_id": 456, "branch_name": "feature-x"}
+    }
+  ],
   "error": {
     "code": "STABLE_MACHINE_READABLE_CODE",
-    "message": "Human-readable description."
+    "error_type": "not_found",
+    "message": "Human-readable description.",
+    "project": "prod",
+    "retryable": false
   }
 }
 ```
@@ -231,16 +247,18 @@ Programmatic callers should **always** parse `error.code` (stable, listed
 below) and surface `error.message` to humans. Do not pattern-match the
 message text — it is informational and may be improved between releases.
 
-Successful 2xx responses follow the matching envelope:
-
-```json
-{
-  "status": "ok",
-  "data": {
-    "...": "endpoint-specific payload"
-  }
-}
-```
+A successful 2xx response body is the bare payload of the endpoint. Since
+vNEXT the project and branch that the request used are in the
+`Kbagent-Targets` response header, and its warnings (for example a
+`DEPRECATED` route form) in the `Kbagent-Warnings` header. Both are JSON
+lists in the shape of `targets` and `warnings[]` of the CLI `--json`
+envelope, and each is left out when its list is empty. A route that takes an
+optional `branch_id` uses the active branch (`kbagent branch use`) when it is
+omitted. Send `branch_id: 0` for production. A list route that reads several
+projects (`GET /configs`, `GET /jobs`, ...) reads the active project when
+`project` is omitted. Send `all_projects=true` for all registered projects.
+A destructive route on the active branch adds a `TARGET_FROM_ACTIVE_CHOICE`
+entry to `Kbagent-Warnings`.
 
 Some endpoints (notably `/jobs/.../stream`) bypass the envelope and stream
 raw SSE; see [Streaming (SSE)](#streaming-sse).
@@ -255,14 +273,17 @@ major bump).
 
 | HTTP status | Common codes you should expect | Cause |
 |---|---|---|
-| 400 | `CONFIG_ERROR`, `VALIDATION_ERROR`, `INVALID_ARGUMENT`, `MISSING_PARAMETER`, `HTTP_ERROR` | Bad client request, missing field, bad path. |
-| 401 | `UNAUTHORIZED`, `INVALID_TOKEN`, `MISSING_MASTER_TOKEN` | Bearer header / cookie missing or wrong; Manage operation without `X-Manage-Token`. |
-| 403 | `ACCESS_DENIED`, `PERMISSION_DENIED` | Token valid but operation forbidden by policy or upstream Keboola ACL. |
-| 404 | `NOT_FOUND`, `HTTP_ERROR` | Resource not found, route not found. |
-| 422 | `VALIDATION_ERROR` | Pydantic body validation failed. |
-| 502 | `API_ERROR`, `KAI_ERROR`, `QUEUE_JOB_FAILED`, `STORAGE_JOB_FAILED` | Upstream Keboola API returned an error. |
-| 503 | `KAI_NOT_ENABLED`, `RETRY_EXHAUSTED`, `CONNECTION_ERROR` | Upstream temporarily unavailable. |
-| 500 | `INTERNAL_ERROR`, `UNKNOWN_ERROR` | Bug in the server. File an issue. |
+| 400 | `CONFIG_ERROR`, `VALIDATION_ERROR`, `INVALID_ARGUMENT`, `MISSING_PARAMETER`, `HTTP_ERROR` | Bad client request, missing field, bad path. Every `validation` and `configuration` code, and an `api` code that exits 2. |
+| 401 | `UNAUTHORIZED`, `INVALID_TOKEN`, `MISSING_MASTER_TOKEN`, `SESSION_EXPIRED` | Bearer header or cookie missing or wrong, and every `authentication` code. |
+| 403 | `PERMISSION_DENIED` | Operation forbidden by the permission policy (`authorization` codes). |
+| 404 | `NOT_FOUND`, `FILE_NOT_FOUND`, `HTTP_ERROR` | Resource not found, route not found (`not_found` codes). |
+| 409 | `ALREADY_EXISTS`, `MR_MERGE_CONFLICT`, `MR_NOT_READY_TO_MERGE` | The state of the resource blocks the request (`conflict` codes). |
+| 422 | `HTTP_ERROR` or FastAPI's `detail` list | Body validation failed, an undeclared `dry_run`, an undeclared field on a `PATCH` route. |
+| 502 | `API_ERROR`, `ACCESS_DENIED`, `KAI_ERROR`, `QUEUE_JOB_FAILED`, `STORAGE_JOB_FAILED`, `CONNECTION_ERROR`, `TIMEOUT` | Upstream Keboola API returned an error or could not be reached (`api` and `network` codes). |
+| 500 | `INTERNAL_ERROR` | Bug in the server. File an issue. |
+
+Since vNEXT the status comes from the `error_type` of the code in
+[error-codes.md](error-codes.md), so one code has one status on every route.
 
 Domain-specific codes (`DATA_APP_*`, `KAI_*`, `JOB_TIMEOUT_TERMINATED`,
 `INVALID_FLOW_DEFINITION`, …) appear alongside the generic ones when the failure

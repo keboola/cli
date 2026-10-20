@@ -16,10 +16,10 @@ from typing import Annotated, Any
 import typer
 from rich.markup import escape
 
-from ..effective_branch import record_project, recorded_targets
+from ..effective_branch import recorded_targets
 from ..errors import ConfigError, ErrorCode
 from ..output import OutputFormatter
-from ..services.base import BaseService
+from ..services.base import resolve_fanout_aliases
 from ._helpers import finish_items
 
 ALL_PROJECTS_HELP = "Read all registered projects. Cannot be used with --project."
@@ -75,24 +75,13 @@ def fanout_projects(
             project resolves, or when ``--all-projects`` finds none registered.
     """
     reject_project_with_all_projects(formatter, project, all_projects)
-    if project:
-        return list(project)
-    config_store = ctx.obj["config_store"]
     try:
-        if all_projects:
-            projects = config_store.load().projects
-            if not projects:
-                raise ConfigError("No projects configured. Run 'kbagent project add' first.")
-            for alias, registered in projects.items():
-                record_project(alias, "all", registered)
-            return None
-        alias, _source = BaseService(config_store).resolve_pinned_alias()
+        return resolve_fanout_aliases(ctx.obj["config_store"], project, all_projects)
     except ConfigError as exc:
         formatter.error(
             message=exc.message, error_code=getattr(exc, "error_code", ErrorCode.CONFIG_ERROR)
         )
         raise typer.Exit(code=5) from None
-    return [alias]
 
 
 def finish_fanout(

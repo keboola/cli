@@ -4,6 +4,7 @@ import { type ReactNode, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api } from "../api/client";
+import { projectScope } from "../lib/projectScope";
 import { Drawer } from "../components/Drawer";
 import { ErrorBox, Loading, PageTitle } from "../components/Empty";
 import { KeyValueGrid } from "../components/KeyValueGrid";
@@ -81,7 +82,7 @@ export function ComponentsPage() {
     queryFn: () =>
       api.get("/components", {
         query: {
-          project: project ?? undefined,
+          ...projectScope(project),
           query: query || undefined,
           type: type || undefined,
         },
@@ -224,7 +225,8 @@ function ComponentDetail({ componentId }: { componentId: string }) {
     queryKey: ["component-detail", componentId, project],
     queryFn: () =>
       api.get(`/components/${encodeURIComponent(componentId)}`, {
-        query: { project: project ?? undefined },
+        // No project: the server uses the active project (one project, no fan-out).
+        query: project ? { project } : {},
       }),
   });
   if (q.isLoading) return <Loading />;

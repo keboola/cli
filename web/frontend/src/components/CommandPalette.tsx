@@ -40,6 +40,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { api } from "../api/client";
+import { projectScope } from "../lib/projectScope";
 import { branchParam } from "../lib/branch";
 import { PALETTE_ONLY_PAGES, SECTIONS } from "../layout/Sidebar";
 import { buildStorageSel } from "../pages/Storage";
@@ -167,7 +168,7 @@ export function CommandPalette() {
     queryKey: ["buckets", project, branchId],
     queryFn: () =>
       api.get("/storage/buckets", {
-        query: { project: project ?? undefined, branch_id: branchParam(branchId) },
+        query: { ...projectScope(project), branch_id: branchParam(branchId) },
       }),
     enabled: open && !!project,
   });
@@ -177,7 +178,7 @@ export function CommandPalette() {
     queryKey: ["tables", project, null, branchId],
     queryFn: () =>
       api.get("/storage/tables", {
-        query: { project: project ?? undefined, branch_id: branchParam(branchId) },
+        query: { ...projectScope(project), branch_id: branchParam(branchId) },
       }),
     enabled: open && !!project,
   });
@@ -189,7 +190,7 @@ export function CommandPalette() {
   // would be noise in a list you are typing through.
   const allBucketsQ = useQuery<{ buckets: Bucket[]; errors: unknown[] }>({
     queryKey: ["buckets-all"],
-    queryFn: () => api.get("/storage/buckets"),
+    queryFn: () => api.get("/storage/buckets", { query: projectScope(null) }),
     enabled: open,
     staleTime: 60_000,
   });

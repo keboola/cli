@@ -188,7 +188,7 @@ class TestUndeclaredDryRunIsRefused:
         flow = MagicMock()
         flow.list_flows.return_value = {"flows": []}
         client = TestClient(_app(tmp_path, MagicMock(flow=flow)))
-        response = client.get("/flows?dry_run=true", headers=AUTH)
+        response = client.get("/flows?project=p&dry_run=true", headers=AUTH)
         assert response.status_code == 200, response.text
 
 

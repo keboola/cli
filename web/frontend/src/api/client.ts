@@ -43,6 +43,9 @@ const API_BASE = "/api";
  */
 export const SESSION_EXPIRED_EVENT = "kbagent:session-expired";
 
+/** The 401 codes that mean the session itself was rejected. */
+const SESSION_CODES = new Set(["UNAUTHORIZED", "SESSION_EXPIRED", "SESSION_NOT_FOUND"]);
+
 export interface SessionExpiredDetail {
   code: string;
   message: string;
@@ -119,7 +122,23 @@ async function request<T>(
     // is a no-op (browser sends an empty cookie jar for the BFF origin).
     credentials: "include",
   });
-  if (res.status === 401 && !isRetry) {
+  let payload: KbagentError | null = null;
+  if (!res.ok) {
+    try {
+      payload = (await res.json()) as KbagentError;
+    } catch {
+      // not JSON
+    }
+  }
+  // Only a rejected session is a session problem: the bearer cookie
+  // (UNAUTHORIZED) or a browser login on the host (SESSION_*). Since 1.0 every
+  // `authentication` code answers 401 (an invalid project token, for example);
+  // those are normal errors, with no retry and no banner. A 401 without a
+  // kbagent body (a proxy in front of the server) counts as a session problem.
+  const sessionRejected =
+    res.status === 401 &&
+    (payload?.error?.code === undefined || SESSION_CODES.has(payload.error.code));
+  if (sessionRejected && !isRetry) {
     // Stale session cookie (server restarted with a new bearer token):
     // re-bootstrap the cookie and retry exactly once. Safe for mutations
     // too -- a 401 means the request was rejected on auth, not applied.
@@ -127,15 +146,9 @@ async function request<T>(
     return request<T>(method, path, opts, true);
   }
   if (!res.ok) {
-    let payload: KbagentError | null = null;
-    try {
-      payload = (await res.json()) as KbagentError;
-    } catch {
-      // not JSON
-    }
     const message = payload?.error?.message ?? res.statusText;
     const code = payload?.error?.code ?? "HTTP_ERROR";
-    if (res.status === 401) {
+    if (sessionRejected) {
       window.dispatchEvent(
         new CustomEvent<SessionExpiredDetail>(SESSION_EXPIRED_EVENT, {
           detail: { code, message },

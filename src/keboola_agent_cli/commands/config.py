@@ -26,6 +26,7 @@ from ..services.component_service import (
     stamp_scaffold_config_id,
 )
 from ..services.config_service import validate_set_paths
+from ..services.variables_service import variables_preview
 from ..sync.branch_registry import default_branch_prefix
 from ._all_projects import (
     FANOUT_PROJECT_HELP,
@@ -1899,20 +1900,7 @@ def config_variables_set(
             formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
             raise typer.Exit(code=5) from None
 
-        preview_values = (
-            dict(variables_dict) if replace else {**current["values"], **variables_dict}
-        )
-        result = {
-            "dry_run": True,
-            "project_alias": project,
-            "parent_component_id": component_id,
-            "parent_config_id": config_id,
-            "was_linked": current["linked"],
-            "current_variables_id": current["variables_id"],
-            "current_values": current["values"],
-            "would_write": preview_values,
-            "action": "would_create" if not current["linked"] else "would_update",
-        }
+        result = variables_preview(current, variables_dict, replace=replace)
         if formatter.json_mode:
             formatter.output(result)
         else:

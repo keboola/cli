@@ -6,10 +6,12 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from ...permissions import PermissionEngine
-from ..dependencies import ServiceRegistry, get_permission_engine, get_registry
+from ...services.base import resolve_fanout_aliases
+from ..dependencies import ALL_PROJECTS_HELP, ServiceRegistry, get_permission_engine, get_registry
+from ..response_meta import note_operation, warn_deprecated
 
 router = APIRouter(prefix="/configs", tags=["configs"])
 
@@ -88,15 +90,18 @@ class ConfigStateUpdate(BaseModel):
 
 @router.get("", summary="List component configurations")
 def list_configs(
-    project: str | None = Query(None, description="Project alias (None = all)"),
+    project: str | None = Query(None, description="Project alias or ID"),
     component_type: str | None = None,
     component_id: str | None = None,
     branch_id: int | None = None,
     include_rows: bool = False,
+    all_projects: bool = Query(False, description=ALL_PROJECTS_HELP),
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
     """List component configurations across projects. Mirrors `kbagent config list`."""
-    aliases = [project] if project else None
+    aliases = resolve_fanout_aliases(
+        registry.config_store, [project] if project else None, all_projects
+    )
     return registry.config.list_configs(
         aliases=aliases,
         component_type=component_type,
@@ -114,10 +119,13 @@ def search_configs(
     ignore_case: bool = False,
     regex: bool = False,
     branch_id: int | None = None,
+    all_projects: bool = Query(False, description=ALL_PROJECTS_HELP),
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
     """Search component configurations by substring or regex. Mirrors `kbagent config search`."""
-    aliases = [project] if project else None
+    aliases = resolve_fanout_aliases(
+        registry.config_store, [project] if project else None, all_projects
+    )
     return registry.config.search_configs(
         query=query,
         aliases=aliases,
@@ -603,6 +611,18 @@ class VariablesSet(BaseModel):
     branch_id: int | None = None
 
 
+class VariablesMerge(BaseModel):
+    """The body of the ``PATCH`` merge: no ``replace`` field (spec V9)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    variables: dict[str, str]
+    variables_id: str | None = None
+    values_id: str | None = None
+    branch_id: int | None = None
+    dry_run: bool = False
+
+
 @router.get(
     "/{project}/{component_id}/{config_id}/variables",
     summary="Get configuration variables",
@@ -623,9 +643,45 @@ def variables_get(
     )
 
 
+@router.patch(
+    "/{project}/{component_id}/{config_id}/variables",
+    summary="Merge configuration variables",
+)
+def variables_merge(
+    project: str,
+    component_id: str,
+    config_id: str,
+    body: VariablesMerge,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """Merge variables into a configuration: the keys in the body change, the others stay.
+
+    Mirrors `kbagent config variables-set` without `--replace`; ``dry_run``
+    returns what it would write and writes nothing.
+    """
+    if body.dry_run:
+        return registry.variables.preview_set_variables(
+            alias=project,
+            component_id=component_id,
+            config_id=config_id,
+            variables=body.variables,
+            branch_id=body.branch_id,
+        )
+    return registry.variables.set_variables(
+        alias=project,
+        component_id=component_id,
+        config_id=config_id,
+        variables=body.variables,
+        replace=False,
+        variables_id=body.variables_id,
+        values_id=body.values_id,
+        branch_id=body.branch_id,
+    )
+
+
 @router.put(
     "/{project}/{component_id}/{config_id}/variables",
-    summary="Set configuration variables",
+    summary="Replace configuration variables (replace: true)",
 )
 def variables_set(
     project: str,
@@ -635,9 +691,18 @@ def variables_set(
     registry: ServiceRegistry = Depends(get_registry),
     engine: PermissionEngine = Depends(get_permission_engine),
 ) -> dict[str, Any]:
-    """Set or merge configuration variables. Mirrors `kbagent config variables-set`."""
+    """Replace all variables of a configuration. Mirrors `kbagent config variables-set --replace`.
+
+    Send ``replace: true``. Without it the request still merges, as before,
+    with a ``DEPRECATED`` entry in ``Kbagent-Warnings`` (spec V9): use
+    ``PATCH`` to merge. After the window such a request is refused, never
+    run as a replace.
+    """
     if body.replace:
         engine.check_or_raise("config.variables-set --replace")
+        note_operation("config.variables-set --replace")
+    else:
+        warn_deprecated("PUT /configs/{project}/{component_id}/{config_id}/variables")
     return registry.variables.set_variables(
         alias=project,
         component_id=component_id,

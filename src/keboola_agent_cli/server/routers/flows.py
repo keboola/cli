@@ -7,9 +7,10 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
+from ...services.base import resolve_fanout_aliases
 from ...services.flow_service import FLOW_COMPONENT_ID, get_flow_examples
 from ...services.flow_validation import find_unreachable_phases, validate_conditional_flow
-from ..dependencies import ServiceRegistry, get_registry
+from ..dependencies import ALL_PROJECTS_HELP, ServiceRegistry, get_registry
 
 router = APIRouter(prefix="/flows", tags=["flows"])
 
@@ -116,11 +117,13 @@ def list_flows(
     project: list[str] | None = Query(None),
     branch_id: int | None = None,
     with_schedules: bool = False,
+    all_projects: bool = Query(False, description=ALL_PROJECTS_HELP),
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
     """List flows in one or more projects. Mirrors `kbagent flow list`."""
+    aliases = resolve_fanout_aliases(registry.config_store, project, all_projects)
     return registry.flow.list_flows(
-        aliases=project, branch_id=branch_id, with_schedules=with_schedules
+        aliases=aliases, branch_id=branch_id, with_schedules=with_schedules
     )
 
 

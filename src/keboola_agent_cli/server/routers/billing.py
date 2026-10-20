@@ -12,7 +12,8 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Query
 
-from ..dependencies import ServiceRegistry, get_registry
+from ...services.base import resolve_fanout_aliases
+from ..dependencies import ALL_PROJECTS_HELP, ServiceRegistry, get_registry
 
 router = APIRouter(prefix="/billing", tags=["billing"])
 
@@ -20,6 +21,7 @@ router = APIRouter(prefix="/billing", tags=["billing"])
 @router.get("/credits", summary="PAYG credit balance across projects")
 def credits(
     project: list[str] | None = Query(None),
+    all_projects: bool = Query(False, description=ALL_PROJECTS_HELP),
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
     """PAYG credit balance per project. Mirrors `kbagent billing credits`.
@@ -29,4 +31,5 @@ def credits(
     Read-only: the upstream billing service's `POST /credits` performs a
     real-money automatic top-up and is deliberately not exposed.
     """
-    return registry.billing.get_credits(aliases=project)
+    aliases = resolve_fanout_aliases(registry.config_store, project, all_projects)
+    return registry.billing.get_credits(aliases=aliases)

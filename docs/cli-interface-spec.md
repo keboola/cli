@@ -312,7 +312,7 @@ What stays as it is:
 - Checked by: `input.content-option-refuses-at-file` (the options without the refusal are in the baseline).
 
 <a id="I4"></a>
-**I4 · MUST · 1.0.0.** A bad input value is a usage error (exit 2, `INVALID_ARGUMENT`) that names the option, never a traceback. In 0.x, some bad values end in a traceback with exit 1. Known gaps in 1.0.0: the structured options that exited 2 before 1.0.0 keep their error code (`config` `--configuration`, `--state` and `--config-data`: `VALIDATION_ERROR`; `encrypt values --input`: `INPUT_ERROR`; `agent --from-file` and `--runtime-input`: `INVALID_FORMAT`; `flow --file`: `VALIDATION_ERROR`; `data-app create --description-file`: `READ_ERROR`, exit 1; `data-app secrets-set --secrets-file`: `DATA_APP_INVALID_SECRET`; `semantic-layer reference-data set --members-file`: `VALIDATION_ERROR`), and a value refused by Click or by `typer.BadParameter` is `USAGE_ERROR`.
+**I4 · MUST · 1.0.0.** A bad input value is a usage error (exit 2, `INVALID_ARGUMENT`) that names the option, never a traceback. In 0.x, some bad values end in a traceback with exit 1. Known gaps in 1.0.0: the structured options that exited 2 before 1.0.0 keep their error code (`config` `--configuration`, `--state` and `--config-data`: `VALIDATION_ERROR`; `encrypt values --input`: `INPUT_ERROR`; `agent --from-file` and `--runtime-input`: `INVALID_FORMAT`; `flow --file`: `VALIDATION_ERROR`; `data-app create --description-file`: `READ_ERROR`, exit 1; `data-app secrets-set --secrets-file`: `DATA_APP_INVALID_SECRET`; `semantic-layer reference-data set --members-file`: `VALIDATION_ERROR`). A value refused by Click's type check or by `typer.BadParameter` is `INVALID_ARGUMENT` too (the root command class maps `BadParameter`); a missing required option stays `USAGE_ERROR`.
 
 - Checked by: `output.one-json-document` (crash case) and review.
 
@@ -337,6 +337,7 @@ What stays as it is:
 **T2 · MUST · 1.0.0.** The 18 fan-out reads use the T1 chain when no `--project` is given, like every other command. `--all-projects` reads all registered projects. Until 1.0.0, an omitted `--project` on these reads reads all registered projects.
 
 - Why: with E4, an implicit read of all projects would fail because of one expired token in another project.
+- The `kbagent serve` list routes that read several projects follow the same rule: without `project` they use the T1 chain (HTTP 400 `CONFIG_ERROR` when no project resolves), and `all_projects=true` reads all registered projects. `project` with `all_projects=true` is `USAGE_ERROR` (HTTP 400). A list route in which a project failed answers HTTP 200 with the failure in `errors`, because REST has no exit code.
 - Checked by: `target.project-help-states-default`, which checks only that the help states the class (for the 18 reads: the active project and `--all-projects`), and the `target.targets-reported` contract case, which checks the behavior.
 
 <a id="T3"></a><a id="target.no-write-fanout"></a>
@@ -385,9 +386,9 @@ What stays as it is:
 - Checked by: `target.project-help-states-default` for `--project` only; review for `--branch`.
 
 <a id="T12"></a>
-**T12 · MUST · 1.0.0.** A `destructive` command under `--json` whose project comes from the active project, or whose branch comes from the active branch, adds a `warnings[]` entry `TARGET_FROM_ACTIVE_CHOICE` with a hint that names the explicit flag. The command still runs, because `--json` stays consent.
+**T12 · MUST · 1.0.0.** A `destructive` command under `--json` whose project comes from the active project, or whose branch comes from the active branch, adds a `warnings[]` entry `TARGET_FROM_ACTIVE_CHOICE` with a hint that names the explicit flag. The command still runs, because `--json` stays consent. Over `kbagent serve`, a destructive route (its class in `server/route_permissions.py`, or a flag escalation) whose branch comes from the active branch adds the same entry to `Kbagent-Warnings`, with the hint `branch_id=<id>`. The project of a route is in its path, so only the branch half applies.
 
-- Checked by: `target.targets-reported` (contract, `tests/test_target_selection.py`).
+- Checked by: `target.targets-reported` (contract, `tests/test_target_selection.py`); the REST form by `serve.targets-reported` (`tests/test_server_response_meta.py`).
 
 <a id="T13"></a>
 **T13 · SHOULD · now.** `project use` warns when `KBAGENT_PROJECT` overrides the choice being saved. `branch use` warns when `KBAGENT_PROJECT` names another project than `--project`, because commands on the T1 chain in that shell then use the active branch of the other project. The warning also goes into `warnings[]` once the envelope has it. Today `project use` prints the note in human mode and returns `env_override`.
@@ -412,7 +413,7 @@ What stays as it is:
 ## 6. Machine output
 
 <a id="O1"></a><a id="output.one-json-document"></a><a id="output.bare-group-exits-2"></a>
-**O1 · MUST · 1.0.0.** With `--json`, stdout holds exactly one JSON document for every exit code, parse errors, bare groups and crashes included. `--stream` commands write NDJSON. Everything else goes to stderr. An explicit `--help` (and `-h`, H5) prints help on stdout with exit 0 in both modes. A bare group, and `--json` without a command, exit 2 with a `USAGE_ERROR` envelope. Until 1.0.0, a parse error, a crash or a bare group under `--json` gives an empty stdout.
+**O1 · MUST · 1.0.0.** With `--json`, stdout holds exactly one JSON document for every exit code, parse errors, bare groups and crashes included. `--stream` commands write NDJSON. Everything else goes to stderr. An explicit `--help` (and `-h`, H5) prints help on stdout with exit 0 in both modes. A bare group, `--json` without a command, and a malformed command line exit 2 with a `USAGE_ERROR` envelope. A bad option value exits 2 with `INVALID_ARGUMENT` (I4). Until 1.0.0, a parse error, a crash or a bare group under `--json` gives an empty stdout.
 
 - Checked by: `output.one-json-document`, `output.bare-group-exits-2`.
 
@@ -612,7 +613,7 @@ A flag that raises the class is in `FLAG_ESCALATIONS` and is checked where the f
 ## 10. Lists
 
 <a id="L1"></a>
-**L1 · note.** A Typer `min`/`max` bound on `--limit` is acceptable. From 1.0.0 a rejected value gives a `USAGE_ERROR` envelope with exit 2 (O1). No new bound is added to a limit that is unbounded today.
+**L1 · note.** A Typer `min`/`max` bound on `--limit` is acceptable. From 1.0.0 a rejected value gives an `INVALID_ARGUMENT` envelope with exit 2 (O1, I4). No new bound is added to a limit that is unbounded today.
 
 <a id="L2"></a>
 **L2 · MUST · now for new commands; existing lists after 1.0.0.** A limited list reports `limit`, `offset` when it has one, and `has_more`.
@@ -686,17 +687,19 @@ A flag that raises the class is in `FLAG_ESCALATIONS` and is checked where the f
 <a id="V2"></a>
 **V2 · MUST · 1.0.0.** A route chooses the branch with the CLI rule T5: when `branch_id` is omitted, the service applies the active branch through `effective_branch.resolve_branch`. Until 1.0.0, the 26 routes that this changes do not apply the active branch. From 0.x the web UI sends `branch_id: 0` in its production view, so that the 1.0.0 change does not change what the UI labels as production.
 
-- Checked by: `serve.targets-reported` (deferred).
+- The 26 routes: the storage writes and `GET /storage/table-download/...`, `POST /jobs/{project}/run` and `/terminate`, the three `/transformations` routes, the `/configs/.../variables` routes and `POST /components/{component_id}/actions/{action}`. `docs/migrate-to-1.0.md` lists them.
+- Checked by: `serve.targets-reported` (contract, `tests/test_server_response_meta.py`).
 
 <a id="V3"></a><a id="serve.targets-reported"></a>
 **V3 · MUST · 1.0.0.** A success response carries the `targets` record in a `Kbagent-Targets` response header and the warnings in a `Kbagent-Warnings` header, both JSON, because REST success bodies are bare service dicts. The error body carries `targets` and `warnings` as keys.
 
-- Checked by: `serve.targets-reported` (deferred: lands with the headers).
+- A header is left out when its list is empty. A `{project}` path parameter is `project_source: "explicit"`. The HTTP 500 answer of an unhandled error has the two keys in its body only, because the outermost error layer answers after the middleware that adds the headers.
+- Checked by: `serve.targets-reported` (contract, `tests/test_server_response_meta.py`).
 
 <a id="V4"></a>
-**V4 · MUST · 1.0.0.** The REST error body has the same fields as the CLI error object (`error_type`, `project`, `retryable`).
+**V4 · MUST · 1.0.0.** The REST error body has the same fields as the CLI error object (`error_type`, `project`, `retryable`). The HTTP status follows the `error_type` of the code in the error-code table: `validation` and `configuration` 400, `authentication` 401, `authorization` 403, `not_found` 404, `conflict` 409, `api` and `network` 502, and 400 for an `api` code that exits 2. `UNAUTHORIZED` (the bearer check of the server) is 401 and `INTERNAL_ERROR` (an unhandled error) is 500.
 
-- Checked by: review.
+- Checked by: review, and `tests/test_server_response_meta.py` for the status of every code.
 
 <a id="V5"></a><a id="serve.dry-run-parity"></a><a id="serve.undeclared-dry-run-rejected"></a>
 **V5 · MUST · now.** A route offers the same `dry_run`, guard and `idempotency_key` parameters as its command. A mutating route rejects an undeclared `dry_run`, in the query or in the body, with HTTP 422. A new route rejects every undeclared parameter (`extra="forbid"` on its body model).
@@ -714,7 +717,7 @@ A flag that raises the class is in `FLAG_ESCALATIONS` and is checked where the f
 - Checked by: `serve.command-has-route`, `serve.map-names-live-command`.
 
 <a id="V8"></a>
-**V8 · MUST · 1.0.0.** The routes that change the saved choice on disk (`POST /projects/use/{alias}`, `POST /branches/{project}/use`, `POST /branches/{project}/reset`) change it for every CLI call and every REST client that uses the same configuration directory. They stay, because the web UI uses them. Their summaries say that the change is shared, their responses carry `active_project_set` or `active_branch_set` (T8), and they add a `Kbagent-Warnings` entry that names the configuration directory.
+**V8 · MUST · 1.0.0.** The routes that change the saved choice on disk (`POST /projects/use/{alias}`, `POST /branches/{project}/use`, `POST /branches/{project}/reset`) change it for every CLI call and every REST client that uses the same configuration directory. They stay, because the web UI uses them. Their summaries say that the change is shared, their responses carry `active_project_set`, `active_branch_set` or, for the reset, `active_branch_cleared` (T8), and they add a `Kbagent-Warnings` entry `ACTIVE_CHOICE_SHARED` that names the configuration directory.
 
 - Checked by: review.
 

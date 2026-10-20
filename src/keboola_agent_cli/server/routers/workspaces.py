@@ -12,7 +12,8 @@ from pydantic import BaseModel, Field
 
 from ...constants import AI_SQL_HELPER_TIMEOUT, QUERY_RESULTS_DEFAULT_LIMIT
 from ...errors import ErrorCode, KeboolaApiError
-from ..dependencies import ServiceRegistry, get_registry
+from ...services.base import resolve_fanout_aliases
+from ..dependencies import ALL_PROJECTS_HELP, ServiceRegistry, get_registry
 
 router = APIRouter(prefix="/workspaces", tags=["workspaces"])
 
@@ -99,16 +100,18 @@ def list_workspaces(
             "data-app shape). See QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES."
         ),
     ),
+    all_projects: bool = Query(False, description=ALL_PROJECTS_HELP),
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
     """List workspaces in one or more projects. Mirrors `kbagent workspace list`."""
-    if branch is not None and (project is None or len(project) != 1):
+    aliases = resolve_fanout_aliases(registry.config_store, project, all_projects)
+    if branch is not None and (aliases is None or len(aliases) != 1):
         raise HTTPException(
             status_code=400,
             detail="branch requires exactly one project (branch ID is per-project)",
         )
     return registry.workspace.list_workspaces(
-        aliases=project,
+        aliases=aliases,
         orphaned_only=orphaned,
         branch_id=branch,
         qs_compatible_only=qs_compatible,

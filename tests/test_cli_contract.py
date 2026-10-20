@@ -22,6 +22,7 @@ import pytest
 import typer
 from typer.testing import CliRunner
 
+from keboola_agent_cli import root_command
 from keboola_agent_cli.cli import app
 from keboola_agent_cli.constants import ENV_AUTO_UPDATE
 from keboola_agent_cli.permissions import OPERATION_REGISTRY
@@ -219,6 +220,36 @@ def test_one_json_document_for_a_parse_error(
     result = runner.invoke(app, ["--config-dir", str(tmp_path), "--json", *path, BAD_FLAG])
     document = _usage_error_document(result)
     assert BAD_FLAG in document["error"]["message"]
+
+
+def test_a_bad_option_value_is_invalid_argument(root: Any, tmp_path: Path, httpx_mock: Any) -> None:
+    """I4: a value that fails Click's type check is INVALID_ARGUMENT and names the option."""
+    args = ["agent", "cron-preview", "--cron", "0 6 * * 1", "--count", "abc"]
+    result = runner.invoke(app, ["--config-dir", str(tmp_path), "--json", *args])
+    assert result.exit_code == 2, result.output
+    document = _json_document(result.stdout)
+    assert document["error"]["code"] == "INVALID_ARGUMENT"
+    assert "--count" in document["error"]["message"]
+
+
+def test_a_missing_required_option_stays_usage_error(
+    root: Any, tmp_path: Path, httpx_mock: Any
+) -> None:
+    result = runner.invoke(
+        app, ["--config-dir", str(tmp_path), "--json", "agent", "cron-preview", "--count", "2"]
+    )
+    document = _usage_error_document(result)
+    assert "--cron" in document["error"]["message"]
+
+
+def test_click_error_codes() -> None:
+    """A bad value is INVALID_ARGUMENT; a missing option or a malformed call is USAGE_ERROR."""
+    click = root_command._click.exceptions
+    assert root_command.click_error_code(click.BadParameter("bad")) == "INVALID_ARGUMENT"
+    assert root_command.click_error_code(click.MissingParameter()) == "USAGE_ERROR"
+    assert root_command.click_error_code(click.UsageError("bad call")) == "USAGE_ERROR"
+    assert root_command.click_error_code(click.NoSuchOption("--x")) == "USAGE_ERROR"
+    assert root_command.click_error_code(click.ClickException("other")) == "UNKNOWN_ERROR"
 
 
 @pytest.mark.parametrize("path", LEAVES, ids=_ids(LEAVES))

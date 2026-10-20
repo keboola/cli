@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, ssePost, type SsePostHandle } from "../api/client";
+import { projectScope } from "../lib/projectScope";
 import { Drawer } from "../components/Drawer";
 import { Empty, ErrorBox, Loading, PageTitle, TwoPathEmpty } from "../components/Empty";
 import { DataTable } from "../components/Table";
@@ -51,7 +52,7 @@ export function WorkspacesPage() {
 
   const q = useQuery<WorkspacesResp>({
     queryKey: ["workspaces", project],
-    queryFn: () => api.get("/workspaces", { query: { project: project ?? undefined } }),
+    queryFn: () => api.get("/workspaces", { query: projectScope(project) }),
     enabled: !!project,
   });
 

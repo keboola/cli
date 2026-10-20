@@ -2149,6 +2149,18 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
     `kbagent http` calls the serve directly so you always see the same config
     the operator configured (not the global ~/.config one). Outside a serve
     subprocess context the command refuses to run.
+    Serve routes (since vNEXT): a route that takes `branch_id` uses the active
+    branch (`branch use`) when it is omitted, as the CLI does. Send
+    `branch_id: 0` for production. A list route (GET /configs, /jobs, ...)
+    without `project` reads the active project. Pass all_projects=true for
+    all projects. A destructive route on the active branch adds a
+    TARGET_FROM_ACTIVE_CHOICE warning. An error body carries "targets" and the CLI
+    error fields (code, error_type, message, project, retryable). Its HTTP
+    status follows error_type. The four partial updates use PATCH (PUT
+    /semantic-layer/items/..., /merge-requests/{{project}}/{{id}},
+    /data-apps/.../secrets, the merge of /configs/.../variables). The old PUT
+    adds a DEPRECATED warning in the Kbagent-Warnings header. `kbagent http`
+    prints only the body, not the Kbagent-Targets / Kbagent-Warnings headers.
 
 ### Agent Tasks (CLI parity with the `/agents` REST surface)
 
@@ -2543,8 +2555,9 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
    "exit_code" is a negative answer (flow validate, auth status, permissions
    check, data-app validate-repo) or a failed item. The error envelope has
    "schema_version" and no "exit_code". Every exit under --json writes one
-   JSON document: a parse error or a bare group is USAGE_ERROR (exit 2, help
-   on stderr), a crash is INTERNAL_ERROR (exit 1, traceback on stderr).
+   JSON document: a malformed command line or a bare group is USAGE_ERROR
+   (exit 2, help on stderr), a bad option value is INVALID_ARGUMENT (exit 2,
+   names the option), a crash is INTERNAL_ERROR (exit 1, traceback on stderr).
    --json/-j, --deny-writes and --deny-destructive also work after the
    subcommand, and -h works as --help (since vNEXT). A single-value option
    given twice is USAGE_ERROR on a write, destructive or admin command, and

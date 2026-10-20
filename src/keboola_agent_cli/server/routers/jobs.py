@@ -17,8 +17,9 @@ from ...constants import (
     DEFAULT_LOG_TAIL_LINES,
     DEFAULT_POLL_STRATEGY,
 )
+from ...services.base import resolve_fanout_aliases
 from ...services.job_service import resolve_events_run_id
-from ..dependencies import ServiceRegistry, get_registry
+from ..dependencies import ALL_PROJECTS_HELP, ServiceRegistry, get_registry
 from ..sse import json_event
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -56,11 +57,13 @@ def list_jobs(
     offset: int = 0,
     sort_by: str = DEFAULT_JOB_SORT_BY,
     sort_order: str = DEFAULT_JOB_SORT_ORDER,
+    all_projects: bool = Query(False, description=ALL_PROJECTS_HELP),
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
     """List jobs across one or more projects. Mirrors `kbagent job list`."""
+    aliases = resolve_fanout_aliases(registry.config_store, project, all_projects)
     return registry.job.list_jobs(
-        aliases=project,
+        aliases=aliases,
         component_id=component_id,
         config_id=config_id,
         status=status,

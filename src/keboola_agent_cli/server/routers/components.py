@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
-from ..dependencies import ServiceRegistry, get_registry
+from ...services.base import resolve_fanout_aliases
+from ..dependencies import ALL_PROJECTS_HELP, ServiceRegistry, get_registry
 
 router = APIRouter(prefix="/components", tags=["components"])
 
@@ -26,10 +27,19 @@ def list_components(
     project: str | None = None,
     type: str | None = None,
     query: str | None = None,
+    all_projects: bool = Query(False, description=ALL_PROJECTS_HELP),
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
-    """Browse available components, optionally filtered. Mirrors `kbagent component list`."""
-    aliases = [project] if project else None
+    """Browse available components, optionally filtered. Mirrors `kbagent component list`.
+
+    ``query`` searches one project (the active one when ``project`` is
+    omitted), so ``all_projects`` has no effect with it, as in the CLI.
+    """
+    if query:
+        all_projects = False
+    aliases = resolve_fanout_aliases(
+        registry.config_store, [project] if project else None, all_projects
+    )
     return registry.component.list_components(aliases=aliases, component_type=type, query=query)
 
 

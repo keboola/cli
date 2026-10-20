@@ -7,7 +7,9 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
-from ..dependencies import ServiceRegistry, get_registry
+from ...services.base import resolve_fanout_aliases
+from ..dependencies import ALL_PROJECTS_HELP, ServiceRegistry, get_registry
+from ..response_meta import warn_active_choice_shared
 
 router = APIRouter(prefix="/branches", tags=["branches"])
 
@@ -28,10 +30,12 @@ class MetadataSet(BaseModel):
 @router.get("", summary="List branches")
 def list_branches(
     project: list[str] | None = Query(None),
+    all_projects: bool = Query(False, description=ALL_PROJECTS_HELP),
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
     """List development branches across one or more projects. Mirrors `kbagent branch list`."""
-    return registry.branch.list_branches(aliases=project)
+    aliases = resolve_fanout_aliases(registry.config_store, project, all_projects)
+    return registry.branch.list_branches(aliases=aliases)
 
 
 @router.post("/{project}", summary="Create a branch")
@@ -44,18 +48,40 @@ def create(
     )
 
 
-@router.post("/{project}/use", summary="Set the active branch")
+@router.post(
+    "/{project}/use",
+    summary="Set the active branch (shared with every CLI call and REST client)",
+)
 def use(
     project: str, body: BranchUse, registry: ServiceRegistry = Depends(get_registry)
 ) -> dict[str, Any]:
-    """Set the active branch for the project. Mirrors `kbagent branch use`."""
-    return registry.branch.set_active_branch(alias=project, branch_id=body.branch_id)
+    """Set the active branch for the project. Mirrors `kbagent branch use`.
+
+    The choice is saved in the configuration directory, so every CLI call and
+    every REST client that uses the directory uses it too, and every route
+    without ``branch_id`` on this project then uses it (spec V2, V8). The
+    response carries ``active_branch_set`` and a ``Kbagent-Warnings`` entry
+    ``ACTIVE_CHOICE_SHARED`` that names the directory.
+    """
+    result = registry.branch.set_active_branch(alias=project, branch_id=body.branch_id)
+    warn_active_choice_shared(registry.config_store.config_dir, "active branch")
+    return {**result, "active_branch_set": body.branch_id}
 
 
-@router.post("/{project}/reset", summary="Clear the active branch")
+@router.post(
+    "/{project}/reset",
+    summary="Clear the active branch (shared with every CLI call and REST client)",
+)
 def reset(project: str, registry: ServiceRegistry = Depends(get_registry)) -> dict[str, Any]:
-    """Clear the active branch, so commands use production. Mirrors `kbagent branch reset`."""
-    return registry.branch.reset_branch(alias=project)
+    """Clear the active branch, so commands use production. Mirrors `kbagent branch reset`.
+
+    Shared like ``POST /branches/{project}/use`` (spec V8). The response
+    carries ``active_branch_cleared`` (the cleared branch ID, null when none
+    was set) and a ``Kbagent-Warnings`` entry ``ACTIVE_CHOICE_SHARED``.
+    """
+    result = registry.branch.reset_branch(alias=project)
+    warn_active_choice_shared(registry.config_store.config_dir, "active branch")
+    return {**result, "active_branch_cleared": result.get("previous_branch_id")}
 
 
 @router.delete("/{project}/{branch_id}", summary="Delete a branch")
