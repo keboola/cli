@@ -20,7 +20,12 @@ from rich.table import Table
 
 from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
-from ._all_projects import AllProjectsOption, reject_project_with_all_projects
+from ._all_projects import (
+    FANOUT_PROJECT_HELP,
+    AllProjectsOption,
+    fanout_projects,
+    finish_fanout,
+)
 from ._helpers import (
     check_cli_permission,
     emit_api_error,
@@ -134,7 +139,7 @@ def schedule_list(
     project: list[str] | None = typer.Option(
         None,
         "--project",
-        help="Project alias (repeatable; omit for all registered projects)",
+        help=FANOUT_PROJECT_HELP,
     ),
     all_projects: AllProjectsOption = False,
     enabled_only: bool = typer.Option(
@@ -152,15 +157,16 @@ def schedule_list(
     and config name, cron expression, timezone, and enabled state.
     """
     formatter = get_formatter(ctx)
-    reject_project_with_all_projects(formatter, project, all_projects)
     service = get_service(ctx, "schedule_service")
 
-    if branch is not None and (not project or len(project) != 1):
+    if branch is not None and (all_projects or len(project or []) > 1):
         formatter.error(
             message="--branch requires exactly one --project",
             error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2) from None
+
+    project = fanout_projects(ctx, formatter, project, all_projects)
 
     try:
         result = service.list_schedules(
@@ -172,16 +178,15 @@ def schedule_list(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
-    if formatter.json_mode:
-        formatter.output(result)
-        return
+    def render() -> None:
+        schedules = result.get("schedules", [])
+        if not schedules:
+            formatter.console.print(f"[dim]{_NO_CRON_SCHEDULES}[/dim]")
+        else:
+            _format_schedule_table(formatter, schedules)
+        _emit_errors(formatter, result.get("errors", []))
 
-    schedules = result.get("schedules", [])
-    if not schedules:
-        formatter.console.print(f"[dim]{_NO_CRON_SCHEDULES}[/dim]")
-    else:
-        _format_schedule_table(formatter, schedules)
-    _emit_errors(formatter, result.get("errors", []))
+    finish_fanout(formatter, result, result.get("errors", []), render)
 
 
 # ---------------------------------------------------------------------------
@@ -255,7 +260,7 @@ def schedule_find(
     project: list[str] | None = typer.Option(
         None,
         "--project",
-        help="Project alias (repeatable; omit for all projects)",
+        help=FANOUT_PROJECT_HELP,
     ),
     all_projects: AllProjectsOption = False,
     cron_window: str | None = typer.Option(
@@ -295,7 +300,7 @@ def schedule_find(
     \b
     Examples:
       # Schedules that fire between 02:00 and 04:00 across every project
-      kbagent --json schedule find --cron-window "02:00-04:00"
+      kbagent --json schedule find --cron-window "02:00-04:00" --all-projects
 
       # Schedules whose parent hasn't run in the last 90 days
       kbagent --json schedule find --not-run-since 90
@@ -311,15 +316,16 @@ def schedule_find(
       kbagent --json schedule find --not-run-since 0
     """
     formatter = get_formatter(ctx)
-    reject_project_with_all_projects(formatter, project, all_projects)
     service = get_service(ctx, "schedule_service")
 
-    if branch is not None and (not project or len(project) != 1):
+    if branch is not None and (all_projects or len(project or []) > 1):
         formatter.error(
             message="--branch requires exactly one --project",
             error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2) from None
+
+    project = fanout_projects(ctx, formatter, project, all_projects)
 
     try:
         result = service.find_schedules(
@@ -332,18 +338,19 @@ def schedule_find(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
-    if formatter.json_mode:
-        formatter.output(result)
-        return
+    def render() -> None:
+        schedules = result.get("schedules", [])
+        if not schedules:
+            formatter.console.print(
+                f"[dim]No cron schedules match the filters. {_NOT_CHECKED}[/dim]"
+            )
+        else:
+            extras: list[str] = []
+            if cron_window is not None:
+                extras.append("In window")
+            if not_run_since is not None:
+                extras.append("Last run")
+            _format_schedule_table(formatter, schedules, extra_columns=extras)
+        _emit_errors(formatter, result.get("errors", []))
 
-    schedules = result.get("schedules", [])
-    if not schedules:
-        formatter.console.print(f"[dim]No cron schedules match the filters. {_NOT_CHECKED}[/dim]")
-    else:
-        extras: list[str] = []
-        if cron_window is not None:
-            extras.append("In window")
-        if not_run_since is not None:
-            extras.append("Last run")
-        _format_schedule_table(formatter, schedules, extra_columns=extras)
-    _emit_errors(formatter, result.get("errors", []))
+    finish_fanout(formatter, result, result.get("errors", []), render)

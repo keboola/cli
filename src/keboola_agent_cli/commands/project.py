@@ -23,7 +23,12 @@ from ..constants import (
 )
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..services.project_service import AUTH_MODE_SESSION, AUTH_MODE_STATIC
-from ._all_projects import AllProjectsOption, reject_project_with_all_projects
+from ._all_projects import (
+    FANOUT_ONE_PROJECT_HELP,
+    AllProjectsOption,
+    fanout_projects,
+    finish_fanout,
+)
 from ._helpers import (
     KEEP_TOKEN_FILE_OPTION,
     TOKEN_ENV_OPTION,
@@ -544,21 +549,16 @@ def _format_refresh_result(console: Console, data: dict) -> None:
 @project_app.command("status")
 def project_status(
     ctx: typer.Context,
-    project: str | None = typer.Option(
-        None, "--project", help="Check only this project (default: all)"
-    ),
+    project: str | None = typer.Option(None, "--project", help=FANOUT_ONE_PROJECT_HELP),
     all_projects: AllProjectsOption = False,
 ) -> None:
-    """Test connectivity to connected Keboola projects."""
+    """Test connectivity to the active project, one project, or all projects."""
     formatter = get_formatter(ctx)
-    reject_project_with_all_projects(formatter, project, all_projects)
+    aliases = fanout_projects(ctx, formatter, [project] if project else None, all_projects)
     service = get_service(ctx, "project_service")
-
-    aliases = [project] if project else None
 
     try:
         statuses = service.get_status(aliases=aliases)
-        formatter.output(statuses, _format_status_table)
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
@@ -566,6 +566,14 @@ def project_status(
         exit_code = map_error_to_exit_code(exc)
         emit_api_error(formatter, exc)
         raise typer.Exit(code=exit_code) from None
+
+    # A project whose check failed is a row with status "error" (E4).
+    finish_fanout(
+        formatter,
+        statuses,
+        [s for s in statuses if s.get("status") == "error"],
+        lambda: _format_status_table(formatter.console, statuses),
+    )
 
 
 @project_app.command("refresh")
@@ -693,18 +701,18 @@ def _refresh_total(data: dict[str, Any]) -> int:
     return sum(len(data.get(key, [])) for key in keys)
 
 
-# ── Project pin (default project) ─────────────────────────────────────
+# ── Active project (`project use`) ────────────────────────────────────
 
 
 @project_app.command("use")
 def project_use(
     ctx: typer.Context,
-    alias: str = typer.Argument(..., help="Project alias to pin as default"),
+    alias: str = typer.Argument(..., help="Project alias or ID to set as the active project"),
 ) -> None:
-    """Pin <alias> as the default project for subsequent commands.
+    """Set <alias> as the active project for later commands.
 
-    The pin persists in config.json. ``KBAGENT_PROJECT`` overrides it for a
-    single invocation; an explicit ``--project`` flag overrides both.
+    The active project is saved in config.json. ``KBAGENT_PROJECT`` overrides
+    it for a single invocation; an explicit ``--project`` flag overrides both.
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "project_service")
@@ -720,10 +728,10 @@ def project_use(
 
 @project_app.command("current")
 def project_current(ctx: typer.Context) -> None:
-    """Show the effective default project.
+    """Show the active project.
 
     Reports whether the value comes from the ``KBAGENT_PROJECT`` env var
-    (``env``) or the persisted pin (``pin``). Prints nothing but a hint if
+    (``env``) or the saved active project (``pin``). Prints nothing but a hint if
     neither is set. ``resolved_alias`` / ``resolved_source`` name the project
     a command without ``--project`` would use (``env``, ``active_project``,
     ``sole``, or ``none``).

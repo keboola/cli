@@ -337,7 +337,7 @@ What stays as it is:
 **T2 · MUST · 1.0.0.** The 18 fan-out reads use the T1 chain when no `--project` is given, like every other command. `--all-projects` reads all registered projects. Until 1.0.0, an omitted `--project` on these reads reads all registered projects.
 
 - Why: with E4, an implicit read of all projects would fail because of one expired token in another project.
-- Checked by: `target.project-help-states-default`, which checks only that the help states the class, not the behavior.
+- Checked by: `target.project-help-states-default`, which checks only that the help states the class (for the 18 reads: the active project and `--all-projects`), and the `target.targets-reported` contract case, which checks the behavior.
 
 <a id="T3"></a><a id="target.no-write-fanout"></a>
 **T3 · MUST · now.** A `write` or `destructive` command never reads or changes several projects implicitly. `workspace gc` requires `--project` or `--all-projects`, also in 1.0.0, and does not use the T1 chain.
@@ -358,7 +358,8 @@ What stays as it is:
 **T6 · MUST · now; `project_source` from 1.0.0.** Every command that uses a project or a branch reports it in `targets`: in the success envelope, in the error envelope and in `--dry-run`, and in one `Target:` line on stderr in human mode. Each record carries `branch_source`. From 1.0.0 each record also carries `project_source`, and a command that chose no branch has `branch_source: "none"`.
 
 - Why: an agent's `export` does not persist between its calls, so the saved active project and branch are the only target state that persists, and neither is on the command line that a human approves.
-- Checked by: `tests/test_effective_branch.py`; `target.targets-reported` (deferred: lands with `project_source` in 1.0.0).
+- `project_source` values: `explicit` (the command line named the project: `--project` or another option that names a registered project, T16), `env`, `active_project`, `sole` (T1) and `all` (`--all-projects`). It is null when the command found the project in none of these ways. A consumer treats null like `active_project`.
+- Checked by: `tests/test_effective_branch.py`; `target.targets-reported` (contract, `tests/test_target_selection.py`).
 
 <a id="T7"></a>
 **T7.** Withdrawn: from 1.0.0 an omitted `--project` no longer reads all projects (T2), so no fan-out warning is needed.
@@ -386,7 +387,7 @@ What stays as it is:
 <a id="T12"></a>
 **T12 · MUST · 1.0.0.** A `destructive` command under `--json` whose project comes from the active project, or whose branch comes from the active branch, adds a `warnings[]` entry `TARGET_FROM_ACTIVE_CHOICE` with a hint that names the explicit flag. The command still runs, because `--json` stays consent.
 
-- Checked by: `target.targets-reported` (deferred).
+- Checked by: `target.targets-reported` (contract, `tests/test_target_selection.py`).
 
 <a id="T13"></a>
 **T13 · SHOULD · now.** `project use` warns when `KBAGENT_PROJECT` overrides the choice being saved. `branch use` warns when `KBAGENT_PROJECT` names another project than `--project`, because commands on the T1 chain in that shell then use the active branch of the other project. The warning also goes into `warnings[]` once the envelope has it. Today `project use` prints the note in human mode and returns `env_override`.
@@ -514,7 +515,7 @@ Shape of the success envelope in 1.0.0 (`storage delete-table --project prod`, a
 <a id="E4"></a><a id="errors.fanout-exit"></a>
 **E4 · MUST · now for writes; 1.0.0 for fan-out reads.** A command that processes several items or projects exits 1 when at least one of them failed, reads included. It prints the full payload before it exits, and the items that succeeded stay written. A `--dry-run` that reports a failed item exits 1 like the real run. A run with no failed item exits 0. A fan-out read with no registered project exits 5. An answer that is not a failure (`PAYG_NOT_AVAILABLE` in `billing credits`) does not count as failed. Use `finish_items()` in `commands/_helpers.py`, which also prints the headline (HO2). Until 1.0.0, a fan-out read exits 0 when a project failed and lists the failure in `data.errors`.
 
-- Checked by: `errors.fanout-exit` (deferred: lands with T2 in 1.0.0) and unit tests.
+- Checked by: `errors.fanout-exit` (contract, `tests/test_target_selection.py`) and unit tests.
 
 <a id="E5"></a>
 **E5 · SHOULD · now.** A per-item failure entry keeps its existing keys (`error`, `message`, `reason`) and adds `error_code`, `retryable`, and `message` where it is missing.

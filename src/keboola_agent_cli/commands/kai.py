@@ -36,7 +36,7 @@ def kai_ping(
     project: str | None = typer.Option(
         None,
         "--project",
-        help="Project alias (uses default if omitted).",
+        help="Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project).",
     ),
 ) -> None:
     """Check Kai server health and MCP connection status."""
@@ -77,7 +77,7 @@ def kai_ask(
     project: str | None = typer.Option(
         None,
         "--project",
-        help="Project alias (uses default if omitted).",
+        help="Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project).",
     ),
 ) -> None:
     """Ask Kai a one-shot question and get the full response.
@@ -124,7 +124,7 @@ def kai_chat(
     project: str | None = typer.Option(
         None,
         "--project",
-        help="Project alias (uses default if omitted).",
+        help="Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project).",
     ),
 ) -> None:
     """Send a message to Kai in a chat session.
@@ -160,7 +160,7 @@ def kai_preflight(
     project: str | None = typer.Option(
         None,
         "--project",
-        help="Project alias (uses default if omitted).",
+        help="Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project).",
     ),
 ) -> None:
     """Check whether the configured token can use Kai (master token + AI Agent Chat).
@@ -215,7 +215,7 @@ def kai_chat_detail(
     project: str | None = typer.Option(
         None,
         "--project",
-        help="Project alias (uses default if omitted).",
+        help="Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project).",
     ),
 ) -> None:
     """Fetch the full message history of a single Kai chat.
@@ -265,7 +265,7 @@ def kai_history(
     project: str | None = typer.Option(
         None,
         "--project",
-        help="Project alias (uses default if omitted).",
+        help="Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project).",
     ),
     limit: int = typer.Option(
         10,

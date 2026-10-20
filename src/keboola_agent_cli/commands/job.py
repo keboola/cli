@@ -28,7 +28,12 @@ from ..constants import (
 from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..output import OutputFormatter, format_job_detail, format_jobs_table
-from ._all_projects import AllProjectsOption, reject_project_with_all_projects
+from ._all_projects import (
+    FANOUT_PROJECT_HELP,
+    AllProjectsOption,
+    fanout_projects,
+    finish_fanout,
+)
 from ._helpers import (
     _confirm_or_abort,
     check_cli_permission,
@@ -87,7 +92,7 @@ def job_list(
     project: list[str] | None = typer.Option(
         None,
         "--project",
-        help="Project alias to query (can be repeated for multiple projects)",
+        help=FANOUT_PROJECT_HELP,
     ),
     all_projects: AllProjectsOption = False,
     component_id: str | None = typer.Option(
@@ -126,9 +131,8 @@ def job_list(
         help=f"Sort direction: {', '.join(JOB_SORT_ORDERS)}",
     ),
 ) -> None:
-    """List jobs from connected projects."""
+    """List jobs of the active project, the given projects, or all projects."""
     formatter = get_formatter(ctx)
-    reject_project_with_all_projects(formatter, project, all_projects)
     service = get_service(ctx, "job_service")
 
     # Validate status
@@ -178,6 +182,8 @@ def job_list(
         )
         raise typer.Exit(code=2)
 
+    project = fanout_projects(ctx, formatter, project, all_projects)
+
     try:
         result = service.list_jobs(
             aliases=project,
@@ -193,11 +199,11 @@ def job_list(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
-    if formatter.json_mode:
-        formatter.output(result)
-    else:
+    def render() -> None:
         format_jobs_table(formatter.console, result)
         emit_project_warnings(formatter, result)
+
+    finish_fanout(formatter, result, result.get("errors", []), render)
 
 
 @job_app.command("detail")

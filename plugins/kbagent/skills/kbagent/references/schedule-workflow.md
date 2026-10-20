@@ -31,7 +31,7 @@ Notice that `state` is a **string** (`"enabled"` / `"disabled"`), not a nested o
 
 ```bash
 # Fleet-wide listing (every project kbagent knows about)
-kbagent --json schedule list
+kbagent --json schedule list --all-projects
 
 # Narrow to a subset of projects
 kbagent --json schedule list --project prod --project staging
@@ -76,7 +76,7 @@ The detail view adds the raw `configuration` body, `version`, `created`, and `ch
 
 ```bash
 # Every schedule that fires between 02:00 and 04:00 across every project
-kbagent --json schedule find --cron-window "02:00-04:00"
+kbagent --json schedule find --cron-window "02:00-04:00" --all-projects
 ```
 
 The matcher is an **hour-field approximation**: it parses only the third cron field (hour). That is sufficient for operational audits (*"which jobs are running overnight?"*) and keeps the CLI dependency-free. Cron expressions whose hour field is `*` (every hour) are treated as **not confined** to any bounded window -- they do not match, even if minute restrictions would technically limit them. See the [gotchas](gotchas.md#schedule-find-cron-window-is-an-hour-field-approximation) for the full rationale.
@@ -169,7 +169,7 @@ They are safe to run under `--deny-writes` and `--deny-destructive`.
 | Question | Command |
 |---|---|
 | "How many cron schedules exist in project X?" | `kbagent schedule list --project X` |
-| "Which configs across all 14 projects run at 03:00?" | `kbagent schedule find --cron-window "03:00-03:00"` |
+| "Which configs across all 14 projects run at 03:00?" | `kbagent schedule find --cron-window "03:00-03:00" --all-projects` |
 | "Which scheduled parents haven't run in 90 days?" | `kbagent schedule find --not-run-since 90` |
 | "What schedules are attached to this flow?" | `kbagent flow list --with-schedules --project X` (flow-centric) or `kbagent schedule list --project X` then grep |
 | "Full detail for schedule SC1 including parent name?" | `kbagent schedule detail --project X --schedule-id SC1` |

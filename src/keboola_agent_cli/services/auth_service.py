@@ -1148,7 +1148,7 @@ class AuthService:
             raise ConfigError(
                 "No stack to log into -- login is not stack discovery. Pass "
                 "--stack <url-or-alias>, set KBAGENT_PROJECT to a registered alias, "
-                "or select a default project first (`kbagent project add` / "
+                "or set an active project first (`kbagent project add` / "
                 "`kbagent project use <alias>`)."
             ) from None
         return normalize_stack_url(config.projects[alias].stack_url)

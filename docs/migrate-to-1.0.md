@@ -88,8 +88,8 @@ kbagent update --major   # kbagent 0.100.0 and later
 
 Before you move, check the [changes in 1.0.0](#changes-in-100) against your scripts. Two forms work on 0.x and on 1.0, so you can change a script before you move:
 
-- Give `--project` explicitly, or give `--all-projects` when you want all projects. `--all-projects` on the 18 fan-out reads is added in a 0.x release before T0; this page names the version when it ships.
-- Read `warnings[]` in the envelope when it is present. The key is added in a 0.x release before T0.
+- Give `--project` explicitly, or give `--all-projects` when you want all projects. `--all-projects` on the 18 fan-out reads exists since 0.100.0.
+- Read `warnings[]` in the envelope when it is present. The key exists since 0.100.0.
 
 ## Stay on 0.x
 
@@ -137,8 +137,8 @@ Every change below has a `BREAKING:` bullet in the 1.0.0 changelog. The number i
 
 | # | Old form (0.x) | New form (1.0.0) | How you see it | Who is affected |
 |---|---|---|---|---|
-| 27 | An omitted `--project` on the 18 fan-out reads reads all registered projects | An omitted `--project` uses the default-project chain (`KBAGENT_PROJECT` > active project > sole project); all projects need `--all-projects` | `targets[].project_source`; `CONFIG_ERROR` (exit 5) when no project resolves | scripts, agents |
-| 15 | A fan-out read exits 0 when one project failed; the failure is only in `data.errors` | Exits 1 when a project failed; exits 5 when no project is registered | exit code; `exit_code` in the envelope | scripts, agents |
+| 27 | An omitted `--project` on the 18 fan-out reads reads all registered projects (`kbagent config list`) | An omitted `--project` uses the active project, like every other command (`KBAGENT_PROJECT` > `project use` > sole project). All projects need `--all-projects` (`kbagent config list --all-projects`, accepted since 0.100.0). `--branch` with `--all-projects` stays `INVALID_ARGUMENT` (exit 2). The `kbagent serve` list routes (`GET /configs`, `GET /jobs`, ...) do not change: without `project` they read all registered projects | `targets[].project_source` (`active_project`, `env`, `sole`, `all`, `explicit`), and `CONFIG_ERROR` (exit 5) naming `--project` when no project resolves | scripts, agents |
+| 15 | A fan-out read exits 0 when one project failed; the failure is only in `data.errors` (in `project status` a row with `status: "error"`) | Exits 1 after the full payload when a project failed. Exits 5 (`CONFIG_ERROR`) when no project is registered, also with `--all-projects`. `PAYG_NOT_AVAILABLE` in `billing credits` is not a failure (exit 0). The REST routes still answer HTTP 200 | exit code; `exit_code` in the envelope | scripts, agents |
 | 12 | A bare group (`kbagent storage`) exits 0 and prints nothing; `kbagent --json` without a command prints help on stdout and exits 0 | Exit 2, help on stderr. A command that needs arguments (`kbagent search`) and gets none also prints its help on stderr, not on stdout | `USAGE_ERROR` envelope | scripts, agents |
 | 25 | A bad input value can end in a Python traceback with exit 1 | Usage error with exit 2 that names the option | `INVALID_ARGUMENT` | scripts, agents |
 | 19 | A single-value option given twice: the last value wins, with no message (`storage delete-bucket --project x ... --project test` acts on `test`) | Usage error (exit 2) on write, destructive and admin commands (`project remove --project a --project b` no longer removes `b`); on read commands the last value still wins, with a warning. A flag without a `--no-` form (`--yes`) is not reported | `USAGE_ERROR` naming the option; a `REPEATED_OPTION` entry in `warnings[]` | scripts, agents |
@@ -188,7 +188,7 @@ Under `--json`, 1.0.0 keeps every key of the 0.x envelope and adds keys. No key 
 - stdout holds exactly one JSON document for every exit code, also for a parse error, a bare group and a crash. An explicit `--help` or `-h` still prints help on stdout with exit 0. A parse error and a bare group give `USAGE_ERROR` with exit 2. A crash gives `INTERNAL_ERROR` with exit 1 and the traceback on stderr. Ctrl+C gives `INTERRUPTED` with exit 130. Any other non-zero exit that wrote no document gives `UNKNOWN_ERROR` with that exit code. A `--stream` command keeps stdout NDJSON: an error after its first line is one more line, `{"event": "error", "data": {"code", "message"}}`.
 - The success envelope adds `exit_code` (the process exit code) and `schema_version` (`"1.0"`; an added key raises the minor number). The error envelope adds `schema_version`; it has no `exit_code`.
 - `warnings[]` holds `{code, message, hint}` entries. It is present only when it is not empty. Treat `code` as an open list: new codes can appear in a minor release.
-- Each record in `targets` adds `project_source` next to `branch_source`. Values: `explicit`, `env`, `active_project`, `sole`, `all`. Treat an unknown value like `active_project`.
+- Each record in `targets` adds `project_source` next to `branch_source`. Values: `explicit`, `env`, `active_project`, `sole`, `all`. Treat an unknown value like `active_project`. A project for which the command chose no branch gets one record with `branch_source: "none"`.
 - A destructive command whose project or branch comes from the active choice (`project use`, `branch use`) adds the warning `TARGET_FROM_ACTIVE_CHOICE` with the explicit flag as the hint.
 - `--json` (`-j`), `--deny-writes` and `--deny-destructive` are also accepted after the subcommand: `kbagent config list --project prod --json`. kbagent does not rewrite the command line, so `--description --json` still sets the description to `--json`. On 0.x, put these flags before the subcommand.
 - `-h` works as `--help`.

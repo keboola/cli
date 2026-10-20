@@ -16,7 +16,12 @@ from ..effective_branch import record_branch, resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..services._storage_jobs import validate_wait_timeout
 from ..services._storage_tables import CLONE_TABLE_PRODUCTION_MESSAGE
-from ._all_projects import AllProjectsOption, reject_project_with_all_projects
+from ._all_projects import (
+    FANOUT_PROJECT_HELP,
+    AllProjectsOption,
+    fanout_projects,
+    finish_fanout,
+)
 from ._helpers import (
     _confirm_or_abort,
     check_cli_permission,
@@ -76,7 +81,7 @@ def storage_buckets(
     project: list[str] | None = typer.Option(
         None,
         "--project",
-        help="Project alias (can be repeated for multiple projects)",
+        help=FANOUT_PROJECT_HELP,
     ),
     all_projects: AllProjectsOption = False,
     branch: int | None = typer.Option(
@@ -97,17 +102,18 @@ def storage_buckets(
     a dev branch explicitly.
     """
     formatter = get_formatter(ctx)
-    reject_project_with_all_projects(formatter, project, all_projects)
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
 
     # --branch requires exactly one --project
-    if branch is not None and (not project or len(project) != 1):
+    if branch is not None and (all_projects or len(project or []) > 1):
         formatter.error(
             message="--branch requires exactly one --project (branch ID is per-project)",
             error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2)
+
+    project = fanout_projects(ctx, formatter, project, all_projects)
 
     # Resolve active branch for single-project queries.
     # Storage read commands ignore the implicit active dev branch: the
@@ -126,44 +132,45 @@ def storage_buckets(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
-    if formatter.json_mode:
-        formatter.output(result)
-    else:
-        from rich.table import Table
-
-        buckets = result["buckets"]
-        if not buckets:
+    def render() -> None:
+        if not result["buckets"]:
             formatter.console.print("[dim]No buckets found.[/dim]")
-            return
+            emit_project_warnings(formatter, result)
+        else:
+            from rich.table import Table
 
-        # Group by project
-        by_project: dict[str, list[dict]] = {}
-        for b in buckets:
-            alias = b["project_alias"]
-            by_project.setdefault(alias, []).append(b)
+            buckets = result["buckets"]
 
-        for alias, proj_buckets in by_project.items():
-            table = Table(title=f"Buckets - {alias}")
-            table.add_column("Bucket ID", style="bold cyan")
-            table.add_column("Stage", style="dim")
-            table.add_column("Rows", justify="right")
-            table.add_column("Linked From", style="yellow")
+            # Group by project
+            by_project: dict[str, list[dict]] = {}
+            for b in buckets:
+                alias = b["project_alias"]
+                by_project.setdefault(alias, []).append(b)
 
-            for b in proj_buckets:
-                linked = ""
-                if b["is_linked"]:
-                    linked = f"{escape(b['source_project_name'])} (#{b['source_project_id']})"
-                table.add_row(
-                    b["id"],
-                    b["stage"],
-                    str(b["rows_count"]),
-                    linked,
-                )
+            for alias, proj_buckets in by_project.items():
+                table = Table(title=f"Buckets - {alias}")
+                table.add_column("Bucket ID", style="bold cyan")
+                table.add_column("Stage", style="dim")
+                table.add_column("Rows", justify="right")
+                table.add_column("Linked From", style="yellow")
 
-            formatter.console.print(table)
-            formatter.console.print()
+                for b in proj_buckets:
+                    linked = ""
+                    if b["is_linked"]:
+                        linked = f"{escape(b['source_project_name'])} (#{b['source_project_id']})"
+                    table.add_row(
+                        b["id"],
+                        b["stage"],
+                        str(b["rows_count"]),
+                        linked,
+                    )
 
-        emit_project_warnings(formatter, result)
+                formatter.console.print(table)
+                formatter.console.print()
+
+            emit_project_warnings(formatter, result)
+
+    finish_fanout(formatter, result, result.get("errors", []), render)
 
 
 @storage_app.command("bucket-detail", rich_help_panel=_BUCKETS)
@@ -278,8 +285,7 @@ def storage_tables(
     project: list[str] | None = typer.Option(
         None,
         "--project",
-        help="Project alias (can be repeated for multiple projects). "
-        "Omit to query all connected projects in parallel.",
+        help=FANOUT_PROJECT_HELP,
     ),
     all_projects: AllProjectsOption = False,
     bucket_id: str | None = typer.Option(
@@ -305,10 +311,10 @@ def storage_tables(
 ) -> None:
     """List storage tables from one or more projects.
 
-    Queries all connected projects in parallel by default, matching the
-    behaviour of ``storage buckets``, ``config list``, ``job list``, and other
-    read commands. Each row in the output is tagged with ``project_alias``
-    so results from multiple projects can be distinguished.
+    Without --project it reads the active project; --all-projects reads every
+    registered project in parallel, like ``storage buckets``, ``config list``,
+    ``job list`` and the other fan-out reads. Each row in the output is tagged
+    with ``project_alias`` so results from multiple projects can be distinguished.
 
     Branch handling: this read command uses the production endpoint by
     default, even when a dev branch is active via `branch use`. The
@@ -317,18 +323,19 @@ def storage_tables(
     nothing. Pass --branch to query a dev branch explicitly.
     """
     formatter = get_formatter(ctx)
-    reject_project_with_all_projects(formatter, project, all_projects)
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
 
     # --branch requires exactly one --project (branch ID is per-project).
     # Mirrors the validation used by `storage buckets` and `config list`.
-    if branch is not None and (not project or len(project) != 1):
+    if branch is not None and (all_projects or len(project or []) > 1):
         formatter.error(
             message="--branch requires exactly one --project (branch ID is per-project)",
             error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2)
+
+    project = fanout_projects(ctx, formatter, project, all_projects)
 
     # Resolve active branch only for single-project queries; multi-project
     # listing intentionally skips active-branch resolution because branches
@@ -355,15 +362,15 @@ def storage_tables(
         emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
-    if formatter.json_mode:
-        formatter.output(result)
-    else:
+    def render() -> None:
         tables = result["tables"]
         if not tables:
             formatter.console.print("[dim]No tables found.[/dim]")
         else:
             render_tables(formatter.console, tables, include_usage)
         emit_project_warnings(formatter, result)
+
+    finish_fanout(formatter, result, result.get("errors", []), render)
 
 
 @storage_app.command("table-detail", rich_help_panel=_TABLES)

@@ -28,6 +28,7 @@ from ..constants import (
 )
 from ..errors import ErrorCode, KeboolaApiError, PermissionDeniedError, exit_code_for
 from ..output import OutputFormatter
+from ..permissions import FLAG_ESCALATIONS
 from ..update_crossing import print_held_warning, refusal_for
 
 
@@ -473,6 +474,7 @@ def finish_items(
     summary: str,
     render: Callable[[], object] | None = None,
     not_failed_codes: frozenset[str] = frozenset(),
+    headline: bool = True,
 ) -> None:
     """End a command that processes several items: output, one headline, exit code.
 
@@ -484,16 +486,20 @@ def finish_items(
     ``failed`` is the number of failed items, or their entries. With entries,
     an entry whose ``error_code`` is in ``not_failed_codes`` is an answer, not
     a failure (E4: ``PAYG_NOT_AVAILABLE`` in ``billing credits``).
+
+    ``headline=False`` leaves out the headline; the fan-out reads use it
+    (``_all_projects.finish_fanout``) until it is decided whether they print one.
     """
     if not isinstance(failed, int):
-        failed = sum(1 for e in failed if e.get("error_code") not in not_failed_codes)
+        failed = sum(1 for e in failed if str(e.get("error_code", "")) not in not_failed_codes)
     code = item_failure_exit_code(failed)
     if formatter.json_mode:
         formatter.output(result, exit_code=code or 0)
     else:
         if render is not None:
             render()
-        formatter.item_headline(failed=failed, total=total, noun=noun, summary=summary)
+        if headline:
+            formatter.item_headline(failed=failed, total=total, noun=noun, summary=summary)
     if code:
         raise typer.Exit(code=code)
 
@@ -597,7 +603,13 @@ def check_cli_operation(ctx: typer.Context, operation: str) -> None:
     higher risk class than its command (see `permissions.FLAG_ESCALATIONS`).
     The callback has already cleared the bare command by the time a command
     body runs, so this is an additional gate, not a replacement.
+
+    A command calls this exactly when the escalating flag (or an inherited
+    organization scope) applies, so it also raises the command category that
+    the ``TARGET_FROM_ACTIVE_CHOICE`` warning reads (spec T12).
     """
+    if FLAG_ESCALATIONS.get(operation) == "destructive":
+        get_formatter(ctx).command_category = "destructive"
     engine = ctx.obj.get("permission_engine")
     if engine is None or not engine.active:
         return

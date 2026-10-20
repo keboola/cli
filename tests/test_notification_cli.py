@@ -238,7 +238,8 @@ class TestNotificationListCli:
 
         result = _run(["notification", "list"], store, service)
 
-        assert result.exit_code == 0
+        # A failed project makes the read exit 1 (E4).
+        assert result.exit_code == 1
         assert "broken" in result.output
 
     def test_config_error_exits_5(self, tmp_path: Path) -> None:

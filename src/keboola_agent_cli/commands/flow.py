@@ -27,7 +27,12 @@ from ..services.flow_service import (
     get_flow_examples,
 )
 from ..services.flow_validation import find_unreachable_phases, validate_conditional_flow
-from ._all_projects import AllProjectsOption, reject_project_with_all_projects
+from ._all_projects import (
+    FANOUT_PROJECT_HELP,
+    AllProjectsOption,
+    fanout_projects,
+    finish_fanout,
+)
 from ._helpers import (
     _confirm_or_abort,
     check_cli_permission,
@@ -154,7 +159,7 @@ def flow_list(
     project: list[str] | None = typer.Option(
         None,
         "--project",
-        help="Project alias (repeatable for multiple projects; omit for all)",
+        help=FANOUT_PROJECT_HELP,
     ),
     all_projects: AllProjectsOption = False,
     branch: int | None = typer.Option(
@@ -177,15 +182,16 @@ def flow_list(
     any schedule get ``schedules=[]``.
     """
     formatter = get_formatter(ctx)
-    reject_project_with_all_projects(formatter, project, all_projects)
     service = get_service(ctx, "flow_service")
 
-    if branch is not None and (not project or len(project) != 1):
+    if branch is not None and (all_projects or len(project or []) > 1):
         formatter.error(
             message="--branch requires exactly one --project",
             error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2)
+
+    project = fanout_projects(ctx, formatter, project, all_projects)
 
     try:
         result = service.list_flows(
@@ -197,10 +203,10 @@ def flow_list(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
-    if formatter.json_mode:
-        formatter.output(result)
-    else:
+    def render() -> None:
         _format_flows_table(formatter, result, with_schedules=with_schedules)
+
+    finish_fanout(formatter, result, result.get("errors", []), render)
 
 
 def _format_flows_table(

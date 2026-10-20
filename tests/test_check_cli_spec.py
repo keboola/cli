@@ -579,3 +579,14 @@ def test_env_registry_reads_subscripts_membership_and_families(tree: Any) -> Non
         assert name not in found and f"{name} (registered)" not in found
     assert "KBAGENT_UNKNOWN_FAMILY_<" in found
     assert not any("os.environ.get" in s for s in found)
+
+
+def test_fanout_reads_are_the_reads_with_all_projects(tree: Any) -> None:
+    """FANOUT_READS lists every read command that has --all-projects (T2), and no other."""
+    reads = {
+        lf.name
+        for lf in tree.leaves
+        if lf.category == "read" and "--all-projects" in spec_check.opt_names(lf)
+    }
+    # `sync diff` and `sync pull` have their own --all-projects (one tree per project).
+    assert reads - {"sync diff", "sync pull"} == spec_check.FANOUT_READS

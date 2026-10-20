@@ -38,7 +38,7 @@ If kbagent is not installed or you need the full standalone reference, run `kbag
 
 1. **Always use `--json`**: `kbagent --json <command>` for parseable output
 2. **Set conversation ID**: pass `--conversation-id "<unique-id>"` (e.g. session UUID) on every kbagent call -- `kbagent --json --conversation-id <id> <command>`. All API requests include it as the `X-Conversation-ID` header for platform observability. **Do not use a standalone `export`**: agent harnesses (Claude Code included) do not persist shell state between tool calls, so the variable is gone by the next command -- and prefixing each command with `export ...` stops it matching a `Bash(kbagent ...)` permission allow-rule. For a whole session, set `KBAGENT_CONVERSATION_ID` in the harness's own env block (Claude Code: `settings.json` -> `env`) instead.
-3. **Multi-project by default**: read commands query ALL connected projects in parallel -- no need to loop
+3. **Multi-project reads**: pass `--all-projects` (0.100.0+) to read ALL registered projects in parallel -- no need to loop. Without `--project` a read uses the active project (since vNEXT, on 0.x it read all projects)
 4. **Write commands need `--project`**: specify the target project alias
 5. **Tokens are always masked** in output -- this is expected, not an error
 6. **Always fetch fresh before write**: configs change between commands and across users. Re-fetch from the API immediately before any update; never reuse a config dump from earlier in the session. Stale local files are how `vN+1` silently overwrites someone else's `vN` changes.
@@ -83,10 +83,10 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | List all connected Keboola projects | `kbagent project list` |
 | Remove a Keboola project connection | `kbagent project remove --project ALIAS` |
 | Edit an existing Keboola project connection | `kbagent project edit --project ALIAS` |
-| Test connectivity to connected Keboola projects | `kbagent project status` |
+| Test connectivity to the active project, one project, or all projects | `kbagent project status` |
 | Refresh expired or invalid Storage API tokens | `kbagent project refresh` |
-| Pin <alias> as the default project for subsequent commands | `kbagent project use <ALIAS>` |
-| Show the effective default project | `kbagent project current` |
+| Set <alias> as the active project for later commands | `kbagent project use <ALIAS>` |
+| Show the active project | `kbagent project current` |
 | Get the Keboola dashboard project description | `kbagent project description-get --project PROJECT` |
 | Set the Keboola dashboard project description (markdown) | `kbagent project description-set --project PROJECT` |
 | Show detailed project metadata | `kbagent project info --project PROJECT` |
@@ -109,10 +109,10 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Revoke a Storage API token immediately (destructive; only non-master tokens) | `kbagent token delete --project PROJECT --token-id TOKEN-ID` |
 | Rotate a token: generate a new value and invalidate the old one (secret shown once) | `kbagent token refresh --project PROJECT --token-id TOKEN-ID` |
 | Show the current PAYG credit balance for one or more projects | `kbagent billing credits` |
-| List available components from connected projects | `kbagent component list` |
+| List the components of the active project, the given projects, or all projects | `kbagent component list` |
 | Show detailed information about a specific component | `kbagent component detail --component-id COMPONENT-ID` |
 | Run a synchronous component action such as testConnection | `kbagent component sync-action <ACTION-NAME> --component-id COMPONENT-ID --project PROJECT` |
-| List configurations from connected projects | `kbagent config list` |
+| List configurations of the active project, the given projects, or all projects | `kbagent config list` |
 | Show detailed information about one or many configurations | `kbagent config detail --component-id COMPONENT-ID` |
 | Show sample configuration JSON examples for a component | `kbagent config examples --component-id COMPONENT-ID` |
 | Search through configuration bodies for a string or pattern | `kbagent config search --query QUERY` |
@@ -156,7 +156,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Show ONE key from parameters.dataApp.secrets | `kbagent data-app secrets-get --project PROJECT --app-id APP-ID --key KEY` |
 | Remove one or more app-runtime secrets. | `kbagent data-app secrets-remove --project PROJECT --app-id APP-ID --key KEY` |
 | Copy the password of a password-protected data app to the clipboard | `kbagent data-app password --project PROJECT --app-id APP-ID` |
-| List jobs from connected projects | `kbagent job list` |
+| List jobs of the active project, the given projects, or all projects | `kbagent job list` |
 | Show detailed information about a specific job | `kbagent job detail --project PROJECT --job-id JOB-ID` |
 | Run a job for a component configuration | `kbagent job run --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Terminate one or more Queue API jobs (use to stop runaway or stuck jobs) | `kbagent job terminate --project PROJECT` |
@@ -237,7 +237,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Create a notification subscription | `kbagent notification create --project PROJECT --event EVENT --channel CHANNEL --address ADDRESS` |
 | Delete a notification subscription | `kbagent notification delete --project PROJECT --subscription-id SUBSCRIPTION-ID` |
 | Replace a subscription's recipient | `kbagent notification replace-recipient --project PROJECT --subscription-id SUBSCRIPTION-ID --address ADDRESS` |
-| List development branches from connected projects | `kbagent branch list` |
+| List development branches of the active project, the given projects, or all projects | `kbagent branch list` |
 | Create a new development branch and auto-activate it | `kbagent branch create --project PROJECT --name NAME` |
 | Set an existing development branch as active | `kbagent branch use --project PROJECT --branch BRANCH` |
 | Reset the active branch back to main/production | `kbagent branch reset --project PROJECT` |
@@ -272,7 +272,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Merge the merge request into production and delete its source branch | `kbagent mr merge` |
 | Resolve one conflicting configuration (destructive: it removes a merge blocker) | `kbagent mr resolve --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Create a new workspace | `kbagent workspace create --project PROJECT` |
-| List workspaces from connected projects | `kbagent workspace list` |
+| List workspaces of the active project, the given projects, or all projects | `kbagent workspace list` |
 | Show workspace details (password NOT included) | `kbagent workspace detail --project PROJECT --workspace-id WORKSPACE-ID` |
 | Delete a workspace | `kbagent workspace delete --project PROJECT --workspace-id WORKSPACE-ID` |
 | Reset workspace password and show the new one | `kbagent workspace password --project PROJECT --workspace-id WORKSPACE-ID` |

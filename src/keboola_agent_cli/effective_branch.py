@@ -9,6 +9,11 @@ mode and ``targets`` in the ``--json`` envelope, also for ``--dry-run``.
 ``tests/test_effective_branch.py`` fails on a new read of ``active_branch_id``
 outside this module.
 
+The record also names where the project came from (``project_source``, spec
+T6): :func:`record_project` keeps one source per alias, and
+:func:`recorded_targets` merges it into every record of that alias. A project
+with no branch record gets one record with ``branch_source: "none"``.
+
 Only a CLI command opens the record (see :func:`record_targets`). ``kbagent
 serve`` and the SDK do not, so there :func:`resolve_branch` only returns the ID.
 """
@@ -16,15 +21,19 @@ serve`` and the SDK do not, so there :func:`resolve_branch` only returns the ID.
 import threading
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from .config_store import ConfigStore
+    from .models import ProjectConfig
 
 BranchSource = Literal[
-    "explicit", "active_branch", "git_mapping", "manifest", "merge_request", "production"
+    "explicit", "active_branch", "git_mapping", "manifest", "merge_request", "production", "none"
 ]
+# Where the project came from: a flag, KBAGENT_PROJECT, the saved active
+# project (`project use`), the only registered project, or --all-projects.
+ProjectSource = Literal["explicit", "env", "active_project", "sole", "all"]
 TargetRole = Literal["target", "source"]
 
 
@@ -39,6 +48,7 @@ class BranchTarget:
     branch_source: BranchSource
     active_id: int | None  # the project's active branch (`branch use`), applied or not
     active_name: str | None
+    project_source: ProjectSource | None = None  # merged in by recorded_targets()
 
     def to_dict(self) -> dict[str, Any]:
         active = None
@@ -47,6 +57,7 @@ class BranchTarget:
         return {
             "role": self.role,
             "project_alias": self.project_alias,
+            "project_source": self.project_source,
             "branch_id": self.branch_id,
             "branch_name": self.branch_name,
             "branch_source": self.branch_source,
@@ -81,18 +92,28 @@ class _Recorder:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._targets: list[BranchTarget] | None = None
+        # alias -> (project source, active branch ID, active branch name)
+        self._projects: dict[str, tuple[ProjectSource, int | None, str | None]] = {}
         self._on_record: Callable[[BranchTarget], None] | None = None
 
     @contextmanager
     def open(self, on_record: Callable[[BranchTarget], None]) -> Iterator[None]:
         with self._lock:
-            previous = (self._targets, self._on_record)
-            self._targets, self._on_record = [], on_record
+            previous = (self._targets, self._projects, self._on_record)
+            self._targets, self._projects, self._on_record = [], {}, on_record
         try:
             yield
         finally:
             with self._lock:
-                self._targets, self._on_record = previous
+                self._targets, self._projects, self._on_record = previous
+
+    def add_project(
+        self, alias: str, source: ProjectSource, active_id: int | None, active_name: str | None
+    ) -> None:
+        """Keep the first source recorded for ``alias``: the most specific resolver runs first."""
+        with self._lock:
+            if self._targets is not None:
+                self._projects.setdefault(alias, (source, active_id, active_name))
 
     def add(self, target: BranchTarget) -> None:
         with self._lock:
@@ -104,7 +125,29 @@ class _Recorder:
 
     def targets(self) -> list[BranchTarget]:
         with self._lock:
-            found = list(self._targets or [])
+            branches = list(self._targets or [])
+            projects = dict(self._projects)
+        found = [
+            replace(t, project_source=projects[t.project_alias][0])
+            if t.project_alias in projects
+            else t
+            for t in branches
+        ]
+        with_branch = {t.project_alias for t in branches}
+        for alias, (source, active_id, active_name) in projects.items():
+            if alias not in with_branch:
+                found.append(
+                    BranchTarget(
+                        role="target",
+                        project_alias=alias,
+                        branch_id=None,
+                        branch_name=None,
+                        branch_source="none",
+                        active_id=active_id,
+                        active_name=active_name,
+                        project_source=source,
+                    )
+                )
         return sorted(found, key=lambda t: (t.role != "source", t.project_alias, t.branch_id or 0))
 
 
@@ -117,8 +160,33 @@ def record_targets(on_record: Callable[[BranchTarget], None]) -> AbstractContext
 
 
 def recorded_targets() -> list[BranchTarget]:
-    """The targets of the running command, sorted; empty when no command records."""
+    """The targets of the running command, sorted; empty when no command records.
+
+    Each record carries the project source of its alias. A recorded project
+    without a branch record is one record with ``branch_source: "none"``.
+    """
     return _RECORDER.targets()
+
+
+# The sources of `resolve_implicit_alias` ("pin" is the saved active project).
+_PROJECT_SOURCES: dict[str, ProjectSource] = {
+    "explicit": "explicit",
+    "env": "env",
+    "pin": "active_project",
+    "sole": "sole",
+    "all": "all",
+}
+
+
+def record_project(alias: str, source: str, project: "ProjectConfig") -> None:
+    """Record where the registered project ``alias`` came from (spec T6); the first source wins.
+
+    ``source`` is a :data:`ProjectSource` or ``"pin"``, the name that
+    ``resolve_implicit_alias`` and ``project current`` keep for the active project.
+    """
+    _RECORDER.add_project(
+        alias, _PROJECT_SOURCES[source], project.active_branch_id, project.active_branch_name
+    )
 
 
 def record_branch(

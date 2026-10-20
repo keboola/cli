@@ -9,6 +9,7 @@ from typing import Any
 
 from rich.console import Console
 from rich.errors import StyleSyntaxError
+from rich.markup import escape
 from rich.panel import Panel
 from rich.style import Style
 from rich.table import Table
@@ -73,6 +74,8 @@ def force_utf8_when_redirected() -> None:
 
 # The ``code`` of a ``warnings[]`` entry from ``OutputFormatter.warning()``.
 WARNING_CODE = "WARNING"
+# T12: a destructive command acts on the saved active project or branch.
+TARGET_FROM_ACTIVE_CHOICE_CODE = "TARGET_FROM_ACTIVE_CHOICE"
 
 
 def _envelope_warnings(warnings: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
@@ -255,6 +258,9 @@ class OutputFormatter:
         # envelope is already on stdout (a later warning is then dropped).
         self.warnings: list[dict[str, Any]] = []
         self._document_written = False
+        # The OPERATION_REGISTRY category of the running command, set by
+        # root_command.LeafCommand before the command body runs (T12).
+        self.command_category: str | None = None
         # JSON mode: a `--stream` command wrote NDJSON; stdout belongs to the stream.
         self._streaming = False
 
@@ -299,6 +305,7 @@ class OutputFormatter:
                 envelope's ``exit_code`` equals the process exit code.
         """
         if self.json_mode:
+            self._warn_target_from_active_choice()
             write_machine_output(success_json(data, self.warnings, exit_code))
             self._document_written = True
         else:
@@ -333,6 +340,7 @@ class OutputFormatter:
             self.stream_line({"event": "error", "data": {"code": error_code, "message": message}})
             return
         if self.json_mode:
+            self._warn_target_from_active_choice()
             if not error_type:
                 from .errors import map_error_code_to_type
 
@@ -368,6 +376,7 @@ class OutputFormatter:
             message: The success message to display.
         """
         if self.json_mode:
+            self._warn_target_from_active_choice()
             write_machine_output(success_json({"message": message}, self.warnings))
             self._document_written = True
         else:
@@ -383,6 +392,36 @@ class OutputFormatter:
             self.console.print(
                 format_item_headline(failed=failed, total=total, noun=noun, summary=summary)
             )
+
+    def _warn_target_from_active_choice(self) -> None:
+        """Warn when a destructive command acts on the saved active project or branch (T12).
+
+        Only in JSON mode, right before the envelope: ``--json`` is consent, so
+        the command runs, and this entry is the notice that the target was not
+        on the command line. The hint names the flag that makes it explicit.
+        """
+        if self.command_category != "destructive" or self._document_written:
+            return
+        seen: set[tuple[str, str, int | None]] = set()
+        for target in recorded_targets():
+            alias = target.project_alias
+            if target.project_source == "active_project" and ("project", alias, None) not in seen:
+                seen.add(("project", alias, None))
+                self.warning(
+                    f"Project '{escape(alias)}' comes from 'kbagent project use', "
+                    "not from the command line.",
+                    code=TARGET_FROM_ACTIVE_CHOICE_CODE,
+                    hint=f"--project {alias}",
+                )
+            branch = ("branch", alias, target.branch_id)
+            if target.branch_source == "active_branch" and branch not in seen:
+                seen.add(branch)
+                self.warning(
+                    f"Branch {target.branch_id} of project '{escape(alias)}' comes from "
+                    "'kbagent branch use', not from the command line.",
+                    code=TARGET_FROM_ACTIVE_CHOICE_CODE,
+                    hint=f"--branch {target.branch_id}",
+                )
 
     def report_target(self, target: BranchTarget) -> None:
         """Print the project and branch a command uses, on stderr (human mode only)."""
