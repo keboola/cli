@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
+import { projectScope } from "../lib/projectScope";
 import { branchParam } from "../lib/branch";
 import { ErrorBox, Loading, PageTitle } from "../components/Empty";
 import { DataTable } from "../components/Table";
@@ -18,7 +19,7 @@ export function SchedulesPage() {
     queryFn: () =>
       api.get("/schedules", {
         query: {
-          project: project ? [project] : undefined,
+          ...projectScope(project),
           branch_id: branchParam(branchId),
         },
       }),

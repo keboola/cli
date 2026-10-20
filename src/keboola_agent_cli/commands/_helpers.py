@@ -759,24 +759,54 @@ DEPRECATIONS: dict[str, Deprecation] = {
         hint="omit --yes (skip on conflict is the default)",
         replacement=None,
     ),
+    # V9: `kbagent serve` partial updates move from PUT to PATCH. A REST form
+    # is keyed "METHOD /path"; its warning goes into the Kbagent-Warnings header.
+    "PUT /semantic-layer/items/{kind}/{name}": Deprecation(
+        message="PUT /semantic-layer/items/{kind}/{name} is deprecated. Use PATCH.",
+        hint="PATCH /semantic-layer/items/{kind}/{name}",
+        replacement="PATCH /semantic-layer/items/{kind}/{name}",
+    ),
+    "PUT /merge-requests/{project}/{merge_request_id}": Deprecation(
+        message="PUT /merge-requests/{project}/{merge_request_id} is deprecated. Use PATCH.",
+        hint="PATCH /merge-requests/{project}/{merge_request_id}",
+        replacement="PATCH /merge-requests/{project}/{merge_request_id}",
+    ),
+    "PUT /data-apps/{project}/{app_id}/secrets": Deprecation(
+        message="PUT /data-apps/{project}/{app_id}/secrets is deprecated. Use PATCH.",
+        hint="PATCH /data-apps/{project}/{app_id}/secrets",
+        replacement="PATCH /data-apps/{project}/{app_id}/secrets",
+    ),
+    # Only the merge is deprecated: PUT with `replace: true` stays the full replace.
+    "PUT /configs/{project}/{component_id}/{config_id}/variables": Deprecation(
+        message="PUT .../variables without replace: true merges the variables, which is "
+        "deprecated. Use PATCH to merge, or PUT with replace: true to replace all variables. "
+        "After the window, a PUT without replace: true is refused, never run as a replace.",
+        hint="PATCH /configs/{project}/{component_id}/{config_id}/variables",
+        replacement="PATCH /configs/{project}/{component_id}/{config_id}/variables",
+    ),
 }
 
 
-def warn_deprecated(formatter: OutputFormatter, form: str) -> None:
-    """Add the ``DEPRECATED`` warning of a ``DEPRECATIONS`` entry (one stderr line in human mode)."""
+def deprecation_entry(form: str) -> tuple[str, dict[str, Any]]:
+    """The message and the extra fields of the ``DEPRECATED`` warning of ``form``."""
     entry = DEPRECATIONS[form]
     when = (
         f"It can be removed after {entry.remove_after}."
         if entry.remove_after
         else "It keeps working until at least 28 days after the 1.0 migration date."
     )
-    formatter.warning(
-        f"{entry.message} {when}",
-        code=DEPRECATED_CODE,
-        hint=entry.hint,
-        replacement=entry.replacement,
-        remove_after=entry.remove_after,
-    )
+    extra = {
+        "hint": entry.hint,
+        "replacement": entry.replacement,
+        "remove_after": entry.remove_after,
+    }
+    return f"{entry.message} {when}", extra
+
+
+def warn_deprecated(formatter: OutputFormatter, form: str) -> None:
+    """Add the ``DEPRECATED`` warning of a ``DEPRECATIONS`` entry (one stderr line in human mode)."""
+    message, extra = deprecation_entry(form)
+    formatter.warning(message, code=DEPRECATED_CODE, **extra)
 
 
 def deprecated_option(form: str, *param_decls: str) -> Any:

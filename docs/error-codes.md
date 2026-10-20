@@ -60,7 +60,7 @@ A command that fails with an error code exits with the code's `Exit` value below
 |---|---|---|---|
 | `API_ERROR` | 1 | `api` | Unexpected HTTP error from the Keboola API |
 | `NOT_FOUND` | 1 | `not_found` | Requested resource does not exist (404) |
-| `ALREADY_EXISTS` | 1 | `api` | Resource or file already exists and was not overwritten |
+| `ALREADY_EXISTS` | 1 | `conflict` | Resource or file already exists and was not overwritten |
 | `VALIDATION_ERROR` | 2 | `validation` | Request failed API-side validation |
 | `INVALID_ARGUMENT` | 2 | `validation` | Caller supplied an invalid argument value |
 | `INVALID_FORMAT` | 2 | `api` | Input is not in the expected format |

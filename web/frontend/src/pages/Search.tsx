@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
+import { projectScope } from "../lib/projectScope";
 import { ErrorBox, Loading, PageTitle } from "../components/Empty";
 import { DataTable } from "../components/Table";
 import { useUIState } from "../state";
@@ -127,6 +128,7 @@ export function SearchPage() {
     mutationFn: (q: string) =>
       api.get<SearchResp>("/search", {
         query: {
+          ...projectScope(null),
           query: q,
           search_type: mode,
           type: types.length ? types : undefined,

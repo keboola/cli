@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, ApiError } from "../api/client";
+import { projectScope } from "../lib/projectScope";
 import { branchParam, PRODUCTION_BRANCH_ID } from "../lib/branch";
 import { Drawer } from "../components/Drawer";
 import { Empty, ErrorBox, Loading, PageTitle } from "../components/Empty";
@@ -191,7 +192,7 @@ export function StoragePage() {
   const bucketsQ = useQuery<BucketsResp>({
     queryKey: ["buckets", project, branchId],
     queryFn: () =>
-      api.get("/storage/buckets", { query: { project: project ?? undefined, branch_id: branchParam(branchId) } }),
+      api.get("/storage/buckets", { query: { ...projectScope(project), branch_id: branchParam(branchId) } }),
     enabled: !!project,
   });
   const tablesQ = useQuery<TablesResp>({
@@ -199,7 +200,7 @@ export function StoragePage() {
     queryFn: () =>
       api.get("/storage/tables", {
         query: {
-          project: project ?? undefined,
+          ...projectScope(project),
           bucket_id: bucketFilter ?? undefined,
           branch_id: branchParam(branchId),
         },
@@ -1311,7 +1312,7 @@ function FilesTab() {
   const { project } = useUIState();
   const q = useQuery<{ files: Array<Record<string, unknown>>; total?: number }>({
     queryKey: ["files", project],
-    queryFn: () => api.get("/storage/files", { query: { project: project ?? undefined, limit: 50 } }),
+    queryFn: () => api.get("/storage/files", { query: { project: project!, limit: 50 } }),
     enabled: !!project,
   });
   if (q.isLoading) return <Loading />;

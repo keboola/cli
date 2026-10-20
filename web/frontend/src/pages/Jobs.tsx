@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
+import { projectScope } from "../lib/projectScope";
 import { Empty, ErrorBox, Loading, PageTitle } from "../components/Empty";
 import { DataTable } from "../components/Table";
 import { useUIState } from "../state";
@@ -27,7 +28,7 @@ export function JobsPage() {
     queryFn: () =>
       api.get("/jobs", {
         query: {
-          project: project ?? undefined,
+          ...projectScope(project),
           status: statusFilter ?? undefined,
           limit: 100,
         },

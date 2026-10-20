@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..client import KeboolaClient
+from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..sync.code_extraction import (
     SQL_TRANSFORMATION_COMPONENTS,
@@ -138,6 +139,7 @@ class TransformationService(BaseService):
                 component and no explicit ``component_id`` was given.
             KeboolaApiError: On API failure.
         """
+        branch_id = resolve_branch(self._config_store, alias, branch_id)
         statements = split_statements(sql)
         if not statements:
             raise ValueError("SQL contains no statements (empty input)")
@@ -200,6 +202,7 @@ class TransformationService(BaseService):
             with synthetic positional IDs ``b{i}`` / ``b{i}.c{j}``) and
             ``storage``.
         """
+        branch_id = resolve_branch(self._config_store, alias, branch_id)
         project = self.resolve_projects([alias])[alias]
         client = self._client_factory(project.stack_url, project.token)
         try:
@@ -265,6 +268,7 @@ class TransformationService(BaseService):
             ValueError: On invalid ops (schema or against current structure).
             KeboolaApiError: On API failure (including config not found).
         """
+        branch_id = resolve_branch(self._config_store, alias, branch_id)
         parsed_ops = tf_ops.parse_ops(ops)
 
         project = self.resolve_projects([alias])[alias]

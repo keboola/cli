@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FileCode, Layers, PlayCircle, RotateCcw, SlidersHorizontal, Trash2 } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
+import { projectScope } from "../lib/projectScope";
 import { branchParam } from "../lib/branch";
 import { ConfirmModal } from "../components/ConfirmModal";
 import { Drawer } from "../components/Drawer";
@@ -83,7 +84,7 @@ export function ConfigsPage() {
     queryKey: ["configs", project, branchId],
     queryFn: () =>
       api.get("/configs", {
-        query: { project: project ?? undefined, branch_id: branchParam(branchId) },
+        query: { ...projectScope(project), branch_id: branchParam(branchId) },
       }),
     enabled: !!project && tab === "configs",
   });

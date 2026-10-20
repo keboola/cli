@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
+import { projectScope } from "../lib/projectScope";
 import { Empty, ErrorBox, Loading, PageTitle } from "../components/Empty";
 import { DataTable } from "../components/Table";
 import { calculateJobCredits, formatCredits, sumJobCredits } from "../config/credits";
@@ -63,7 +64,7 @@ export function JobsAllPage() {
     queryFn: () =>
       api.get("/jobs", {
         query: {
-          // No `project`: that omission IS the fan-out switch server-side.
+          ...projectScope(null),
           status: statusFilter ?? undefined,
           limit: PER_PROJECT_LIMIT,
           sort_by: "createdTime",

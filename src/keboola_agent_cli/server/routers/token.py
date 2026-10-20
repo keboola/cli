@@ -14,7 +14,8 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
-from ..dependencies import ServiceRegistry, get_registry
+from ...services.base import resolve_fanout_aliases
+from ..dependencies import ALL_PROJECTS_HELP, ServiceRegistry, get_registry
 
 router = APIRouter(prefix="/token", tags=["token"])
 
@@ -36,14 +37,15 @@ class TokenIdBody(BaseModel):
 def list_tokens_all(
     project: list[str] | None = Query(None),
     with_last_used: bool = False,
+    all_projects: bool = Query(False, description=ALL_PROJECTS_HELP),
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
     """List tokens across one, many, or all registered projects.
 
     No CLI counterpart (`kbagent token list` is single-project); this exists
     for the web UI's cross-project token audit. `project` is repeatable
-    (`?project=a&project=b`); omitting it queries every registered project,
-    matching the `GET /jobs` / `GET /billing/credits` convention. Every token
+    (`?project=a&project=b`). Without it the active project is read, and
+    `all_projects=true` reads every registered project, as on `GET /jobs`. Every token
     row and every error entry carries `project_alias`. Failures come back in
     two separate lists: `errors` (a project could not be listed at all) and
     `token_errors` (the project listed fine, but one token's last-used lookup
@@ -54,7 +56,8 @@ def list_tokens_all(
     switches the tokens' sort order from "grouped by project" to a single
     dormant-first order spanning every project's tokens together.
     """
-    return registry.token.list_tokens_all(aliases=project, with_last_used=with_last_used)
+    aliases = resolve_fanout_aliases(registry.config_store, project, all_projects)
+    return registry.token.list_tokens_all(aliases=aliases, with_last_used=with_last_used)
 
 
 @router.get("/{project}/list", summary="List the project's Storage tokens")

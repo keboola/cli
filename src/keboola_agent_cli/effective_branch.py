@@ -14,13 +14,16 @@ T6): :func:`record_project` keeps one source per alias, and
 :func:`recorded_targets` merges it into every record of that alias. A project
 with no branch record gets one record with ``branch_source: "none"``.
 
-Only a CLI command opens the record (see :func:`record_targets`). ``kbagent
-serve`` and the SDK do not, so there :func:`resolve_branch` only returns the ID.
+A CLI command opens the record with :func:`record_targets`, and the
+``kbagent serve`` middleware opens one per request with
+:func:`open_request_record` (spec V3: the ``Kbagent-Targets`` header). The
+SDK opens none, so there :func:`resolve_branch` only returns the ID.
 """
 
 import threading
 from collections.abc import Callable, Iterator
-from contextlib import AbstractContextManager, contextmanager
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -86,46 +89,33 @@ def _keep(targets: list[BranchTarget], target: BranchTarget) -> bool:
     return True
 
 
-class _Recorder:
-    """The targets of the running command. Workers of a fan-out add to it concurrently."""
+class _Record:
+    """The targets of one command or one REST request. Fan-out workers add to it concurrently."""
 
-    def __init__(self) -> None:
+    def __init__(self, on_record: Callable[[BranchTarget], None] | None) -> None:
         self._lock = threading.Lock()
-        self._targets: list[BranchTarget] | None = None
+        self._targets: list[BranchTarget] = []
         # alias -> (project source, active branch ID, active branch name)
         self._projects: dict[str, tuple[ProjectSource, int | None, str | None]] = {}
-        self._on_record: Callable[[BranchTarget], None] | None = None
-
-    @contextmanager
-    def open(self, on_record: Callable[[BranchTarget], None]) -> Iterator[None]:
-        with self._lock:
-            previous = (self._targets, self._projects, self._on_record)
-            self._targets, self._projects, self._on_record = [], {}, on_record
-        try:
-            yield
-        finally:
-            with self._lock:
-                self._targets, self._projects, self._on_record = previous
+        self._on_record = on_record
 
     def add_project(
         self, alias: str, source: ProjectSource, active_id: int | None, active_name: str | None
     ) -> None:
         """Keep the first source recorded for ``alias``: the most specific resolver runs first."""
         with self._lock:
-            if self._targets is not None:
-                self._projects.setdefault(alias, (source, active_id, active_name))
+            self._projects.setdefault(alias, (source, active_id, active_name))
 
     def add(self, target: BranchTarget) -> None:
         with self._lock:
-            if self._targets is None or not _keep(self._targets, target):
+            if not _keep(self._targets, target):
                 return
-            on_record = self._on_record
-        if on_record is not None:
-            on_record(target)
+        if self._on_record is not None:
+            self._on_record(target)
 
     def targets(self) -> list[BranchTarget]:
         with self._lock:
-            branches = list(self._targets or [])
+            branches = list(self._targets)
             projects = dict(self._projects)
         found = [
             replace(t, project_source=projects[t.project_alias][0])
@@ -151,21 +141,52 @@ class _Recorder:
         return sorted(found, key=lambda t: (t.role != "source", t.project_alias, t.branch_id or 0))
 
 
-_RECORDER = _Recorder()
+# The record of the running CLI command: one per process, so every thread of
+# the command adds to it.
+_COMMAND_LOCK = threading.Lock()
+_command_record: _Record | None = None
+# The record of one `kbagent serve` request (spec V3). A request runs in its own
+# context, and the threads that run its route get a copy of that context, so
+# they add to the record of their own request. It wins over the command record.
+_REQUEST_RECORD: ContextVar[_Record | None] = ContextVar("kbagent_request_targets", default=None)
 
 
-def record_targets(on_record: Callable[[BranchTarget], None]) -> AbstractContextManager[None]:
+def _open_record() -> _Record | None:
+    return _REQUEST_RECORD.get() or _command_record
+
+
+@contextmanager
+def record_targets(on_record: Callable[[BranchTarget], None]) -> Iterator[None]:
     """Record the targets of one CLI command; ``on_record`` gets each new one."""
-    return _RECORDER.open(on_record)
+    global _command_record
+    with _COMMAND_LOCK:
+        previous = _command_record
+        _command_record = _Record(on_record)
+    try:
+        yield
+    finally:
+        with _COMMAND_LOCK:
+            _command_record = previous
+
+
+def open_request_record() -> None:
+    """Start the record of one REST request in the current context (``kbagent serve``).
+
+    The serve middleware calls it before the route runs. A thread that the
+    route starts records into it only when it runs in a copy of the context
+    (``BaseService._run_parallel`` does so).
+    """
+    _REQUEST_RECORD.set(_Record(None))
 
 
 def recorded_targets() -> list[BranchTarget]:
-    """The targets of the running command, sorted; empty when no command records.
+    """The targets of the running command or request, sorted; empty when nothing records.
 
     Each record carries the project source of its alias. A recorded project
     without a branch record is one record with ``branch_source: "none"``.
     """
-    return _RECORDER.targets()
+    record = _open_record()
+    return record.targets() if record is not None else []
 
 
 # The sources of `resolve_implicit_alias` ("pin" is the saved active project).
@@ -184,9 +205,11 @@ def record_project(alias: str, source: str, project: "ProjectConfig") -> None:
     ``source`` is a :data:`ProjectSource` or ``"pin"``, the name that
     ``resolve_implicit_alias`` and ``project current`` keep for the active project.
     """
-    _RECORDER.add_project(
-        alias, _PROJECT_SOURCES[source], project.active_branch_id, project.active_branch_name
-    )
+    record = _open_record()
+    if record is not None:
+        record.add_project(
+            alias, _PROJECT_SOURCES[source], project.active_branch_id, project.active_branch_name
+        )
 
 
 def record_branch(
@@ -215,7 +238,10 @@ def record_branch(
         active_id = active_name = None
     if branch_name is None and branch_id is not None and branch_id == active_id:
         branch_name = active_name
-    _RECORDER.add(
+    record = _open_record()
+    if record is None:
+        return branch_id
+    record.add(
         BranchTarget(
             role=role,
             project_alias=alias,

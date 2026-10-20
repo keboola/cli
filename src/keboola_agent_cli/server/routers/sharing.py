@@ -8,7 +8,8 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from ...constants import DEFAULT_LINK_STAGE
-from ..dependencies import ServiceRegistry, get_registry
+from ...services.base import resolve_fanout_aliases
+from ..dependencies import ALL_PROJECTS_HELP, ServiceRegistry, get_registry
 
 router = APIRouter(prefix="/sharing", tags=["sharing"])
 
@@ -33,19 +34,23 @@ class LinkBucket(BaseModel):
 @router.get("", summary="List shared buckets")
 def list_shared(
     project: list[str] | None = Query(None),
+    all_projects: bool = Query(False, description=ALL_PROJECTS_HELP),
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
     """List buckets shared by or to the given projects. Mirrors `kbagent sharing list`."""
-    return registry.sharing.list_shared(aliases=project)
+    aliases = resolve_fanout_aliases(registry.config_store, project, all_projects)
+    return registry.sharing.list_shared(aliases=aliases)
 
 
 @router.get("/edges", summary="List cross-project sharing edges")
 def edges(
     project: list[str] | None = Query(None),
+    all_projects: bool = Query(False, description=ALL_PROJECTS_HELP),
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
     """Cross-project lineage edges via shared buckets. Mirrors `kbagent sharing edges`."""
-    return registry.lineage.get_lineage(aliases=project)
+    aliases = resolve_fanout_aliases(registry.config_store, project, all_projects)
+    return registry.lineage.get_lineage(aliases=aliases)
 
 
 @router.post("/{project}/share", summary="Share a bucket")

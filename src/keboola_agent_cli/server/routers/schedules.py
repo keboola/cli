@@ -6,7 +6,8 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Query
 
-from ..dependencies import ServiceRegistry, get_registry
+from ...services.base import resolve_fanout_aliases
+from ..dependencies import ALL_PROJECTS_HELP, ServiceRegistry, get_registry
 
 router = APIRouter(prefix="/schedules", tags=["schedules"])
 
@@ -16,11 +17,13 @@ def list_schedules(
     project: list[str] | None = Query(None),
     enabled_only: bool = False,
     branch_id: int | None = None,
+    all_projects: bool = Query(False, description=ALL_PROJECTS_HELP),
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
     """List flow schedules across projects. Mirrors `kbagent schedule list`."""
+    aliases = resolve_fanout_aliases(registry.config_store, project, all_projects)
     return registry.schedule.list_schedules(
-        aliases=project, enabled_only=enabled_only, branch_id=branch_id
+        aliases=aliases, enabled_only=enabled_only, branch_id=branch_id
     )
 
 
@@ -32,13 +35,15 @@ def find(
     not_run_since: int | None = None,
     project: list[str] | None = Query(None),
     branch_id: int | None = None,
+    all_projects: bool = Query(False, description=ALL_PROJECTS_HELP),
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
     """Find schedules by cron window or last-run age. Mirrors `kbagent schedule find`."""
+    aliases = resolve_fanout_aliases(registry.config_store, project, all_projects)
     return registry.schedule.find_schedules(
         cron_window=cron_window,
         not_run_since_days=not_run_since,
-        aliases=project,
+        aliases=aliases,
         branch_id=branch_id,
     )
 

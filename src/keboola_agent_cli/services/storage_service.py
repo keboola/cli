@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from ..constants import STORAGE_BRANCHES_FEATURE, TABLE_DATA_JOB_MAX_WAIT
+from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..models import ProjectConfig
 from ._column_descriptions import ColumnDescriptionsMixin
@@ -31,7 +32,12 @@ from ._storage_jobs import (
     with_import_hint,
     with_job_timeout_hint,
 )
-from ._storage_tables import build_table_source, normalize_table_rows, refuse_production_clone
+from ._storage_tables import (
+    build_bigquery_layout,
+    build_table_source,
+    normalize_table_rows,
+    refuse_production_clone,
+)
 from ._table_detail import build_table_detail
 from .base import item_failure
 from .table_usage import collect_table_usage, fetch_usage_components
@@ -144,88 +150,6 @@ def _parse_default_assignments(defaults: list[str] | None) -> dict[str, str]:
             raise ValueError(f"Invalid --default {spec!r}: empty column name.")
         result[name] = value
     return result
-
-
-def _build_bigquery_layout(
-    time_partitioning_type: str | None,
-    time_partitioning_field: str | None,
-    time_partitioning_expiration_ms: str | None,
-    range_partitioning_field: str | None,
-    range_partitioning_start: str | None,
-    range_partitioning_end: str | None,
-    range_partitioning_interval: str | None,
-    clustering_fields: list[str] | None,
-) -> tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None]:
-    """Assemble the BigQuery partition/clustering objects from typed flags.
-
-    Mirrors the shapes the Storage API already expects (connection's
-    ``BigqueryCreateTableDefinitionRequest``):
-
-    - ``timePartitioning`` ``{"type", "field"?, "expirationMs"?}`` -- ``type`` required.
-    - ``rangePartitioning`` ``{"field", "range": {"start", "end", "interval"}}`` --
-      all four required together; range bounds are **strings** in the API.
-    - ``clustering`` ``{"fields": [...]}``.
-
-    ``timePartitioning`` and ``rangePartitioning`` are mutually exclusive
-    (BigQuery allows only one partitioning kind). Returns ``(None, None, None)``
-    when nothing is requested.
-
-    Raises:
-        ValueError: incomplete/conflicting partitioning flags.
-    """
-    has_time = any(
-        v is not None
-        for v in (time_partitioning_type, time_partitioning_field, time_partitioning_expiration_ms)
-    )
-    range_parts = (
-        range_partitioning_field,
-        range_partitioning_start,
-        range_partitioning_end,
-        range_partitioning_interval,
-    )
-    has_range = any(v is not None for v in range_parts)
-
-    if has_time and has_range:
-        raise ValueError(
-            "--time-partitioning-* and --range-partitioning-* are mutually exclusive; "
-            "BigQuery supports only one partitioning kind per table."
-        )
-
-    time_partitioning: dict[str, Any] | None = None
-    if has_time:
-        if not time_partitioning_type:
-            raise ValueError(
-                "--time-partitioning-type is required when any --time-partitioning-* "
-                "flag is set (e.g. DAY, HOUR, MONTH, YEAR)."
-            )
-        time_partitioning = {"type": time_partitioning_type}
-        if time_partitioning_field is not None:
-            time_partitioning["field"] = time_partitioning_field
-        if time_partitioning_expiration_ms is not None:
-            time_partitioning["expirationMs"] = time_partitioning_expiration_ms
-
-    range_partitioning: dict[str, Any] | None = None
-    if has_range:
-        if not all(v is not None for v in range_parts):
-            raise ValueError(
-                "--range-partitioning requires all of --range-partitioning-field, "
-                "--range-partitioning-start, --range-partitioning-end and "
-                "--range-partitioning-interval."
-            )
-        range_partitioning = {
-            "field": range_partitioning_field,
-            "range": {
-                "start": range_partitioning_start,
-                "end": range_partitioning_end,
-                "interval": range_partitioning_interval,
-            },
-        }
-
-    clustering: dict[str, Any] | None = None
-    if clustering_fields:
-        clustering = {"fields": list(clustering_fields)}
-
-    return time_partitioning, range_partitioning, clustering
 
 
 def _ensure_bucket_exists_in_branch(
@@ -651,6 +575,7 @@ class StorageService(ColumnDescriptionsMixin):
         Raises:
             ValueError: If stage is not "in" or "out".
         """
+        branch_id = resolve_branch(self._config_store, alias, branch_id)
         stage = stage.lower()
         if stage not in ("in", "out"):
             raise ValueError(f"Invalid stage '{stage}'. Must be 'in' or 'out'.")
@@ -780,6 +705,7 @@ class StorageService(ColumnDescriptionsMixin):
                 incomplete or conflicting partitioning flags; or BigQuery-only
                 features requested on a non-BigQuery backend.
         """
+        branch_id = resolve_branch(self._config_store, alias, branch_id)
         max_wait = resolve_wait_timeout(timeout, TABLE_DATA_JOB_MAX_WAIT)
         not_null_set = set(not_null_columns or [])
         defaults_map = _parse_default_assignments(defaults)
@@ -790,7 +716,7 @@ class StorageService(ColumnDescriptionsMixin):
             raise ValueError("--source-branch-id requires --source-table-id.")
 
         source = build_table_source(source_table_id, source_branch_id)
-        time_partitioning, range_partitioning, clustering = _build_bigquery_layout(
+        time_partitioning, range_partitioning, clustering = build_bigquery_layout(
             time_partitioning_type,
             time_partitioning_field,
             time_partitioning_expiration_ms,
@@ -1024,6 +950,7 @@ class StorageService(ColumnDescriptionsMixin):
             KeboolaApiError: An import timeout names the still-running job and
                 the ``storage job-detail`` command to follow it.
         """
+        branch_id = resolve_branch(self._config_store, alias, branch_id)
         validate_wait_timeout(timeout)
         projects = self.resolve_projects([alias])
         project = projects[alias]
@@ -1164,6 +1091,7 @@ class StorageService(ColumnDescriptionsMixin):
             Dict with export metadata. With ``keep_slices`` the result also
             contains ``slice_count`` and ``slices`` (list of {path, size}).
         """
+        branch_id = resolve_branch(self._config_store, alias, branch_id)
         from ..errors import KeboolaApiError
 
         projects = self.resolve_projects([alias])
@@ -1304,6 +1232,7 @@ class StorageService(ColumnDescriptionsMixin):
             Dict with 'deleted', 'failed', 'dry_run', 'project_alias',
             and optionally 'would_delete'.
         """
+        branch_id = resolve_branch(self._config_store, alias, branch_id)
         from ..errors import KeboolaApiError
 
         projects = self.resolve_projects([alias])
@@ -1370,6 +1299,7 @@ class StorageService(ColumnDescriptionsMixin):
             the queued job to completion before returning, so
             ``rows_after`` is always 0 on success.
         """
+        branch_id = resolve_branch(self._config_store, alias, branch_id)
         from ..errors import KeboolaApiError
 
         projects = self.resolve_projects([alias])
@@ -1464,6 +1394,7 @@ class StorageService(ColumnDescriptionsMixin):
         Returns:
             Dict with the added column name, its definition, table_id, and alias.
         """
+        branch_id = resolve_branch(self._config_store, alias, branch_id)
         projects = self.resolve_projects([alias])
         project = projects[alias]
 
@@ -1515,6 +1446,7 @@ class StorageService(ColumnDescriptionsMixin):
             Dict with 'deleted', 'failed', 'dry_run', 'project_alias',
             'table_id', and optionally 'would_delete'.
         """
+        branch_id = resolve_branch(self._config_store, alias, branch_id)
         from ..errors import KeboolaApiError
 
         projects = self.resolve_projects([alias])
@@ -1750,6 +1682,7 @@ class StorageService(ColumnDescriptionsMixin):
             Dict with 'deleted', 'failed', 'dry_run', 'project_alias',
             and optionally 'would_delete'.
         """
+        branch_id = resolve_branch(self._config_store, alias, branch_id)
         from ..errors import KeboolaApiError
 
         projects = self.resolve_projects([alias])
@@ -1891,6 +1824,7 @@ class StorageService(ColumnDescriptionsMixin):
         Returns:
             Dict with file metadata.
         """
+        branch_id = resolve_branch(self._config_store, alias, branch_id)
         projects = self.resolve_projects([alias])
         project = projects[alias]
 
@@ -2181,6 +2115,7 @@ class StorageService(ColumnDescriptionsMixin):
         Returns:
             Dict with import results plus ``job_id`` / ``job_status``.
         """
+        branch_id = resolve_branch(self._config_store, alias, branch_id)
         validate_wait_timeout(timeout)
         projects = self.resolve_projects([alias])
         project = projects[alias]
@@ -2292,6 +2227,7 @@ class StorageService(ColumnDescriptionsMixin):
         Returns:
             Dict with export metadata and file info.
         """
+        branch_id = resolve_branch(self._config_store, alias, branch_id)
         from ..errors import KeboolaApiError
 
         if file_type not in ("csv", "parquet"):
@@ -2433,6 +2369,7 @@ class StorageService(ColumnDescriptionsMixin):
         Returns:
             Dict with project_alias, bucket_id, description, result, message.
         """
+        branch_id = resolve_branch(self._config_store, alias, branch_id)
         projects = self.resolve_projects([alias])
         project = projects[alias]
         client = self._client_factory(project.stack_url, project.token)
@@ -2472,6 +2409,7 @@ class StorageService(ColumnDescriptionsMixin):
         Returns:
             Dict with project_alias, table_id, description, result, message.
         """
+        branch_id = resolve_branch(self._config_store, alias, branch_id)
         projects = self.resolve_projects([alias])
         project = projects[alias]
         client = self._client_factory(project.stack_url, project.token)
@@ -2539,6 +2477,7 @@ class StorageService(ColumnDescriptionsMixin):
         Returns:
             Dict with project_alias, applied, errors, applied_count, error_count.
         """
+        branch_id = resolve_branch(self._config_store, alias, branch_id)
         from ..errors import KeboolaApiError
         from ._describe_batch_input import parse_describe_batch_file
 

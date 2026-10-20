@@ -16,6 +16,7 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
+from ..effective_branch import resolve_branch
 from ..errors import KeboolaApiError
 from .base import BaseService, item_failure
 
@@ -406,6 +407,7 @@ class ColumnDescriptionsMixin(BaseService):
             Dict with project_alias, table_id, columns, migrated, skipped,
             result (the completed storage job), message.
         """
+        branch_id = resolve_branch(self._config_store, alias, branch_id)
         if not columns:
             raise ValueError("At least one column description must be provided.")
         projects = self.resolve_projects([alias])
@@ -470,6 +472,7 @@ class ColumnDescriptionsMixin(BaseService):
             Dict with project_alias, dry_run, tables_scanned, tables_migrated,
             migrated, skipped, pruned_orphans, errors, message.
         """
+        branch_id = resolve_branch(self._config_store, alias, branch_id)
         if table_ids and bucket_id:
             raise ValueError("--table-id and --bucket-id are mutually exclusive.")
 

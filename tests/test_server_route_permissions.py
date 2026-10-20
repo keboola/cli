@@ -732,7 +732,12 @@ class TestDenialEnvelope:
         # Same keys as any other error the server returns, here a plain 404.
         assert not_found.status_code == 404
         expected = self._shape(not_found.json())
-        assert expected == (["error", "status"], "error", ["code", "message"])
+        # The error object has the fields of the CLI error object (spec V4).
+        assert expected == (
+            ["error", "status"],
+            "error",
+            ["code", "error_type", "message", "project", "retryable"],
+        )
         for response in (table, inline, unmapped):
             assert self._shape(response.json()) == expected
 
