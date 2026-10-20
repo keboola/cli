@@ -12,6 +12,7 @@ import json
 import os
 import secrets
 import sys
+from collections.abc import Callable, Mapping, Sequence, Sized
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -460,6 +461,67 @@ def item_failure_exit_code(failed: int) -> int | None:
         return None
     telemetry.note_command_error(f"{failed} item(s) failed")
     return 1
+
+
+def finish_items(
+    formatter: OutputFormatter,
+    result: Any,
+    *,
+    failed: int | Sequence[Mapping[str, Any]],
+    total: int,
+    noun: str,
+    summary: str,
+    render: Callable[[], object] | None = None,
+    not_failed_codes: frozenset[str] = frozenset(),
+) -> None:
+    """End a command that processes several items: output, one headline, exit code.
+
+    The one way to end such a command (HO2, E4): ``--json`` gets the envelope
+    with ``exit_code``; human mode gets ``render()`` (the per-item lines) and
+    then one headline, ``Success: <summary>`` or ``Failed: N of M <noun>.``
+    The command exits 1 when an item failed. ``noun`` is plural ("tables").
+
+    ``failed`` is the number of failed items, or their entries. With entries,
+    an entry whose ``error_code`` is in ``not_failed_codes`` is an answer, not
+    a failure (E4: ``PAYG_NOT_AVAILABLE`` in ``billing credits``).
+    """
+    if not isinstance(failed, int):
+        failed = sum(1 for e in failed if e.get("error_code") not in not_failed_codes)
+    code = item_failure_exit_code(failed)
+    if formatter.json_mode:
+        formatter.output(result, exit_code=code or 0)
+    else:
+        if render is not None:
+            render()
+        formatter.item_headline(failed=failed, total=total, noun=noun, summary=summary)
+    if code:
+        raise typer.Exit(code=code)
+
+
+def finish_bulk(
+    formatter: OutputFormatter,
+    result: dict[str, Any],
+    done: Sized,
+    noun: str,
+    verb: str,
+    render: Callable[[], object],
+) -> None:
+    """:func:`finish_items` for a bulk command whose result lists its failures in ``failed``.
+
+    ``done`` holds the items that succeeded; ``noun`` is singular ("table"),
+    ``verb`` the past tense ("Deleted"), so the headline reads
+    ``Success: Deleted 2 table(s).`` or ``Failed: 1 of 3 tables. Deleted 2 table(s).``
+    """
+    failed = len(result["failed"])
+    finish_items(
+        formatter,
+        result,
+        failed=failed,
+        total=len(done) + failed,
+        noun=f"{noun}s",
+        summary=f"{verb} {len(done)} {noun}(s).",
+        render=render,
+    )
 
 
 def _is_help_request(ctx: typer.Context) -> bool:

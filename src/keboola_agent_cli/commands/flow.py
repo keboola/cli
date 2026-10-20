@@ -32,9 +32,9 @@ from ._helpers import (
     _confirm_or_abort,
     check_cli_permission,
     emit_api_error,
+    finish_items,
     get_formatter,
     get_service,
-    item_failure_exit_code,
     map_error_to_exit_code,
 )
 
@@ -1041,28 +1041,26 @@ def flow_schedule_remove(
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
     # A schedule whose config could not be deleted is collected, not raised (#745).
-    code = item_failure_exit_code(len(result.get("errors", [])))
-    if formatter.json_mode:
-        formatter.output(result, exit_code=code or 0)
-    else:
-        count = result.get("deleted_count", 0)
-        errors = result.get("errors", [])
-        headline = f"Removed {count} schedule(s) from flow {escape(flow_id)}"
-        if errors:
-            formatter.console.print(
-                f"[bold red]Failed:[/bold red] {headline}, {len(errors)} failed"
-            )
-        elif count == 0:
-            formatter.console.print("[dim]No schedules found — nothing removed.[/dim]")
-        else:
-            formatter.success(headline)
+    count = result.get("deleted_count", 0)
+    errors = result.get("errors", [])
+
+    def render() -> None:
         for err in errors:
             formatter.warning(f"  Error: schedule {err['schedule_id']}: {escape(err['error'])}")
         for warning in result.get("warnings", []):
             formatter.warning(warning)
 
-    if code:
-        raise typer.Exit(code=code)
+    finish_items(
+        formatter,
+        result,
+        failed=len(errors),
+        total=count + len(errors),
+        noun="schedules",
+        summary=f"Removed {count} schedule(s) from flow {escape(flow_id)}."
+        if count or errors
+        else "No schedules found, nothing removed.",
+        render=render,
+    )
 
 
 # Mounted from a private module: `commands/flow.py` is exactly at the

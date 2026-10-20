@@ -359,12 +359,14 @@ def data_app_create(
     wait: bool = typer.Option(
         False,
         "--wait",
-        help="Block until state == running (or error). Respects pitfall #1: stopped is not terminal.",
+        help="Block until state == running (or error). Respects pitfall #1: stopped is not "
+        "terminal. Default: no wait.",
     ),
     timeout: float = typer.Option(
         DEFAULT_JOB_RUN_TIMEOUT,
         "--timeout",
-        help="Maximum seconds to wait for state == running (default 300).",
+        help=f"Maximum seconds to wait for state == running, with --wait. "
+        f"Default: {DEFAULT_JOB_RUN_TIMEOUT:g}.",
     ),
     keep_on_failure: bool = typer.Option(
         False,
@@ -541,9 +543,13 @@ def data_app_deploy(
         "--config-version",
         help="Pin a specific Storage config version (defaults to latest).",
     ),
-    wait: bool = typer.Option(False, "--wait", help="Block until running or error."),
+    wait: bool = typer.Option(
+        False, "--wait", help="Block until running or error. Default: no wait."
+    ),
     timeout: float = typer.Option(
-        DEFAULT_JOB_RUN_TIMEOUT, "--timeout", help="Max seconds to wait."
+        DEFAULT_JOB_RUN_TIMEOUT,
+        "--timeout",
+        help=f"Max seconds to wait, with --wait. Default: {DEFAULT_JOB_RUN_TIMEOUT:g}.",
     ),
     branch: int | None = typer.Option(
         None,
@@ -588,9 +594,13 @@ def data_app_start(
     ctx: typer.Context,
     project: str = typer.Option(..., "--project", help="Project alias"),
     app_id: str = typer.Option(..., "--app-id", help="Data Science numeric app id"),
-    wait: bool = typer.Option(False, "--wait", help="Block until running or error."),
+    wait: bool = typer.Option(
+        False, "--wait", help="Block until running or error. Default: no wait."
+    ),
     timeout: float = typer.Option(
-        DEFAULT_JOB_RUN_TIMEOUT, "--timeout", help="Max seconds to wait."
+        DEFAULT_JOB_RUN_TIMEOUT,
+        "--timeout",
+        help=f"Max seconds to wait, with --wait. Default: {DEFAULT_JOB_RUN_TIMEOUT:g}.",
     ),
 ) -> None:
     """Wake an auto-suspended data app at its currently-pinned configVersion."""
@@ -609,9 +619,11 @@ def data_app_stop(
     ctx: typer.Context,
     project: str = typer.Option(..., "--project", help="Project alias"),
     app_id: str = typer.Option(..., "--app-id", help="Data Science numeric app id"),
-    wait: bool = typer.Option(False, "--wait", help="Block until stopped."),
+    wait: bool = typer.Option(False, "--wait", help="Block until stopped. Default: no wait."),
     timeout: float = typer.Option(
-        DEFAULT_JOB_RUN_TIMEOUT, "--timeout", help="Max seconds to wait."
+        DEFAULT_JOB_RUN_TIMEOUT,
+        "--timeout",
+        help=f"Max seconds to wait, with --wait. Default: {DEFAULT_JOB_RUN_TIMEOUT:g}.",
     ),
 ) -> None:
     """Stop a running data app (preserves the URL and Storage config)."""

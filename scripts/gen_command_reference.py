@@ -48,6 +48,7 @@ import typer.main
 from keboola_agent_cli import __version__
 from keboola_agent_cli.cli import app
 from keboola_agent_cli.commands.repl import _is_group
+from keboola_agent_cli.env_vars import ENV_VARS
 
 PROG = "kbagent"
 
@@ -264,7 +265,24 @@ def build_reference() -> str:
             out += ["## Top-level commands", ""]
             for block in top_level:
                 out += block
+    out += _render_env_vars()
     return "\n".join(out).rstrip() + "\n"
+
+
+def _render_env_vars() -> list[str]:
+    """The environment variable registry (``env_vars.ENV_VARS``, spec rule EV1) as a table."""
+    out = [
+        "## Environment variables",
+        "",
+        "| Variable | Secret | Added in | Sets option | Purpose |",
+        "|---|---|---|---|---|",
+    ]
+    for var in ENV_VARS:
+        option = f"`{var.option}`" if var.option else ""
+        purpose = var.purpose + (f" Read by {var.library}." if var.library else "")
+        secret = "yes" if var.secret else "no"
+        out.append(f"| `{var.name}` | {secret} | {var.added_in} | {option} | {purpose} |")
+    return [*out, ""]
 
 
 def main() -> int:

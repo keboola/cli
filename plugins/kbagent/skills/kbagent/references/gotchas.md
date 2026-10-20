@@ -22,6 +22,16 @@ Versioning convention:
 - **`-h` works as `--help`.**
 - **A single-value option given twice:** a write, destructive or admin command refuses it with `USAGE_ERROR` (exit 2) that names the option, so `storage delete-bucket --project x ... --project test` no longer acts on `test`. Read commands use the last value and add a `REPEATED_OPTION` entry (with `options`) to `warnings[]` (stderr in human mode). A flag without a `--no-` form (`--yes`) given twice is not reported.
 
+## `auth login` notices on stderr, `--no-open`, one headline for multi-item commands, environment variables in `--help`
+
+*(since vNEXT)* (CLI-50, #791)
+
+- **`auth login` prints its notices on stderr in every mode.** The device-login panel (verification URL and user code), the wait and fallback notices, the `auth register-projects` hint and the picker question go to stderr. The login result stays on stdout. Before, human mode printed the notices on stdout. Capture `2>&1` when you relay the URL and code.
+- **`auth login --no-open`** uses the device-code flow and opens nothing; the result has `method: "device"` and `fallback_reason: "--no-open is set."`. Without it, `auth login` opens the browser as before, also under `--json` and without a terminal (an exception to the rule that a command opens no browser there). A foreground `--json auth login` blocks until the user approves in the browser (or on the device page with `--no-open`), so run it in a background shell and check `kbagent --json auth status`.
+- **A command that processes several items ends its human output with one headline** on stdout, after the result (notices, hints and panels go to stderr): `Success: ...` or `Failed: N of M <noun>. ...` (the bulk `storage` deletes, `storage file-tag`, `storage describe-batch` and `describe-migrate`, `job terminate`, `sync push`/`clone` and the `--all-projects` runs, `org setup`, `project refresh`, `project invite --from-csv`, `workspace gc`, `flow schedule-remove`, `semantic-layer build`/`import`/`promote`/`edit metric`). The exit code and the `--json` output do not change. Do not parse human output: use `--json` and `exit_code`.
+- **`--help` names the environment variable of an option** (`[env var: KBAGENT_CONFIG_DIR]` on `--config-dir`, `KBAGENT_CONVERSATION_ID` on `--conversation-id`). It never shows the value. The command reference of a release lists every variable that kbagent reads.
+- **The help of every command with `--wait` states the default** ("Default: no wait." or "Default: wait.") and the default `--timeout` in seconds. The defaults did not change: 300 for `job run` and the `data-app` waits, 600 for the Storage import waits.
+
 ## A confirmation without a terminal refuses, and `branch delete` and `workspace delete` ask
 
 *(since vNEXT)* (CLI-46, #791)

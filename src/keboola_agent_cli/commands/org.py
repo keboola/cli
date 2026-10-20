@@ -14,9 +14,9 @@ from ._helpers import (
     _confirm_or_abort,
     check_cli_permission,
     emit_api_error,
+    finish_items,
     get_formatter,
     get_service,
-    item_failure_exit_code,
     map_error_to_exit_code,
     resolve_manage_token,
 )
@@ -262,10 +262,15 @@ def org_setup(
         would_add = len(preview.get("projects_added", []))
         would_skip = len(preview.get("projects_skipped", []))
         if would_add == 0 and not (refresh and would_skip > 0):
-            formatter.console.print("\nNo new projects to add.")
             # The preview is the whole run here: its failed projects are real (#745).
-            if code := item_failure_exit_code(len(preview.get("projects_failed", []))):
-                raise typer.Exit(code=code)
+            finish_items(
+                formatter,
+                preview,
+                failed=len(preview.get("projects_failed", [])),
+                total=preview.get("projects_found", 0),
+                noun="projects",
+                summary="No new projects to add.",
+            )
             return
 
         if would_add > 0:
@@ -305,10 +310,17 @@ def org_setup(
     # Per-project failures are accumulated so one bad project does not abort the
     # run -- but the run itself is not a success, and exit 0 hid that (#745).
     failed = len(result.get("projects_failed", [])) + len(result.get("projects_refresh_failed", []))
-    code = item_failure_exit_code(failed)
-    formatter.output(result, _format_setup_result, exit_code=code or 0)
-    if code:
-        raise typer.Exit(code=code)
+    verb = "to add" if result.get("dry_run") else "added"
+    finish_items(
+        formatter,
+        result,
+        failed=failed,
+        total=max(result.get("projects_found", 0), failed),
+        noun="projects",
+        summary=f"{len(result.get('projects_added', []))} project(s) {verb}, "
+        f"{len(result.get('projects_skipped', []))} skipped.",
+        render=lambda: _format_setup_result(formatter.console, result),
+    )
 
 
 def _handle_api_error(formatter, exc: KeboolaApiError) -> None:

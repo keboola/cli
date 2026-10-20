@@ -243,7 +243,9 @@ Exit codes in 1.0.0: 0 success; 1 general or partial failure; 2 usage, validatio
 ### Terminal
 
 - In human mode without a terminal, a confirmation refuses with `CONFIRMATION_REQUIRED` unless `--yes` is given (row 16). A pipe no longer answers a prompt. The hint tells an AI agent to ask the user before it retries with `--yes`.
-- `auth login` prints its notices on stderr (row 30).
+- `auth login` prints its notices on stderr (row 30): the device-login panel, the wait notice, the fallback notice, the hint for `auth register-projects` and its question. The login result stays on stdout.
+- `auth login` opens the browser as in 0.x, also with `--json` and without a terminal, wherever the environment allows it. This is an exception to the rule that a command opens no browser under `--json` or without a terminal. The new `--no-open` uses the device-code flow, opens nothing, and prints the URL and the code on stderr.
+- A command that processes several items ends its human output with one line: `Success: ...` when nothing failed, `Failed: N of M ...` when an item failed. This final summary line goes to stdout after the result, like the `Success:` line before it. Notices, hints, progress, prompts and panels go to stderr. The exit code and the `--json` output do not change.
 
 ## REST API
 

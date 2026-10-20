@@ -75,8 +75,8 @@ Use `kbagent <command> --help` for full flag details and examples.
   In an ATTENDED session (a human is in the chat) an agent SHOULD complete
   it when its harness has a background shell: run `auth login --device-code
   --stack URL --register-projects` in a BACKGROUND shell capturing stdout
-  and stderr (human mode, NOT --json -- there the verification URL and user
-  code go to stderr and stdout stays empty until the flow ends), relay the
+  and stderr (the verification URL and user code go to stderr in every mode,
+  since vNEXT; before, to stdout in human mode), relay the
   URL + code printed before polling starts, then confirm with `auth status`
   (exit 0 = signed in, exit 3 = not yet). NEVER run it in a FOREGROUND tool
   shell -- a ~120s timeout kills the flow mid-flight and the kill tells you
@@ -90,7 +90,7 @@ Use `kbagent <command> --help` for full flag details and examples.
   single-project static Storage token via `project add --token-stdin` /
   `KBAGENT_PROJECT_FROM_ENV`).
 
-  kbagent auth login [--stack URL|alias] [--device-code] [--register-projects]
+  kbagent auth login [--stack URL|alias] [--device-code] [--register-projects] [--no-open]
     Opens the Keboola login page in a browser (or falls back to the RFC 8628
     device flow: prints a short user_code + verification URL) and stores the
     resulting "programmatic session" (kbc_at_* access token + kbc_rt_*
@@ -120,7 +120,15 @@ Use `kbagent <command> --help` for full flag details and examples.
     PKCE auto-falls-back to the device flow ONLY on a pre-exchange
     failure (no loopback browser, callback timeout, SSH/container/WSL
     detected) -- once the browser callback succeeds there is no fallback.
-    Before the browser wait, login prints a notice (stderr with --json): it
+    The browser opens also with --json and without a terminal, as before;
+    --no-open uses the device flow and opens nothing (since vNEXT). A
+    foreground `--json auth login` blocks until the user approves, so run
+    it in a background shell and check `auth status`.
+    Notices, the device panel and hints go to stderr, the result to stdout
+    (since vNEXT; before, notices went to stdout in human mode). A command
+    that processes several items ends with one `Success:` or `Failed: N of
+    M` line on stdout, after its result (since vNEXT).
+    Before the browser wait, login prints a notice on stderr: it
     waits up to 115 s. If the browser shows the project list and not
     "Login complete", the sign-in cannot return; the way out is Ctrl+C and
     the command the notice names: `kbagent auth login --stack <URL>

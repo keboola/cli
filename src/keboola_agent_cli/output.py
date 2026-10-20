@@ -186,6 +186,18 @@ def format_target_line(target: BranchTarget) -> str:
     return f"{label}: project '{target.project_alias}', {where}{suffix}"
 
 
+def format_item_headline(*, failed: int, total: int, noun: str, summary: str) -> str:
+    """The one closing line of a command that processes several items (HO2).
+
+    ``Success: <summary>`` when no item failed, else ``Failed: N of M <noun>.``
+    followed by the summary of what did succeed.
+    """
+    if failed:
+        tail = f" {summary}" if summary else ""
+        return f"[bold red]Failed:[/bold red] {failed} of {total} {noun}.{tail}"
+    return f"[bold green]Success:[/bold green] {summary}"
+
+
 def write_machine_output(text: str) -> None:
     """Write a machine-readable line to stdout as UTF-8, whatever the console is.
 
@@ -360,6 +372,17 @@ class OutputFormatter:
             self._document_written = True
         else:
             self.console.print(f"[bold green]Success:[/bold green] {message}")
+
+    def item_headline(self, *, failed: int, total: int, noun: str, summary: str) -> None:
+        """Print the closing headline of a multi-item command (human mode only, HO2).
+
+        It goes to stdout, like :meth:`success`, so a command that printed a
+        ``Success:`` line before keeps it on the same stream.
+        """
+        if not self.json_mode:
+            self.console.print(
+                format_item_headline(failed=failed, total=total, noun=noun, summary=summary)
+            )
 
     def report_target(self, target: BranchTarget) -> None:
         """Print the project and branch a command uses, on stderr (human mode only)."""

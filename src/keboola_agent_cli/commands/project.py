@@ -33,9 +33,9 @@ from ._helpers import (
     check_cli_permission,
     discard_token_file,
     emit_api_error,
+    finish_items,
     get_formatter,
     get_service,
-    item_failure_exit_code,
     map_error_to_exit_code,
     resolve_manage_token,
     resolve_storage_token_input,
@@ -653,12 +653,15 @@ def project_refresh(
         would_refresh = len(preview.get("projects_refreshed", []))
         if would_refresh == 0:
             preview_failed = len(preview.get("projects_failed", []))
-            formatter.console.print(
-                "\nNo token to refresh." if preview_failed else "\nAll tokens are valid."
-            )
             # The preview is the whole run here: its failed projects are real (#745).
-            if code := item_failure_exit_code(preview_failed):
-                raise typer.Exit(code=code)
+            finish_items(
+                formatter,
+                preview,
+                failed=preview_failed,
+                total=_refresh_total(preview),
+                noun="projects",
+                summary="No token to refresh." if preview_failed else "All tokens are valid.",
+            )
             return
 
         _confirm_or_abort(formatter, yes, f"Proceed to refresh {would_refresh} token(s)?")
@@ -672,10 +675,22 @@ def project_refresh(
         raise typer.Exit(code=exit_code) from None
 
     # A project whose token check or refresh failed is collected, not raised (#745).
-    code = item_failure_exit_code(len(result.get("projects_failed", [])))
-    formatter.output(result, _format_refresh_result, exit_code=code or 0)
-    if code:
-        raise typer.Exit(code=code)
+    verb = "to refresh" if result.get("dry_run") else "refreshed"
+    finish_items(
+        formatter,
+        result,
+        failed=len(result.get("projects_failed", [])),
+        total=_refresh_total(result),
+        noun="projects",
+        summary=f"{len(result.get('projects_refreshed', []))} token(s) {verb}.",
+        render=lambda: _format_refresh_result(formatter.console, result),
+    )
+
+
+def _refresh_total(data: dict[str, Any]) -> int:
+    """Every project that `project refresh` looked at."""
+    keys = ("projects_refreshed", "projects_valid", "projects_skipped", "projects_failed")
+    return sum(len(data.get(key, [])) for key in keys)
 
 
 # ── Project pin (default project) ─────────────────────────────────────
@@ -1073,10 +1088,16 @@ def project_invite(
             payload = result.model_dump()
             # A CSV where every row failed still printed "failed=N" and exit 0,
             # so a CI step could not tell a clean run from a total one (#745).
-            code = item_failure_exit_code(payload.get("failed", 0))
-            formatter.output(payload, _format_bulk_invite_result, exit_code=code or 0)
-            if code:
-                raise typer.Exit(code=code)
+            finish_items(
+                formatter,
+                payload,
+                failed=payload.get("failed", 0),
+                total=payload.get("total", 0),
+                noun="rows",
+                summary=f"{payload.get('succeeded', 0)} invited, {payload.get('noop', 0)} "
+                "unchanged.",
+                render=lambda: _format_bulk_invite_result(formatter.console, payload),
+            )
             return
 
         result = service.invite(

@@ -40,49 +40,41 @@ def _print_clone_buckets(formatter: Any, result: dict[str, Any]) -> None:
         formatter.warning(f"  Bucket error: {berr.get('bucket_id')}: {berr.get('error')}")
 
 
-def _format_clone_result(formatter: Any, result: dict[str, Any]) -> None:
-    """Human-mode rendering for ``sync clone``."""
+def clone_summary(result: dict[str, Any]) -> str:
+    """The headline text of ``sync clone`` (HO2); the command adds ``Success:`` or ``Failed:``."""
     status = result.get("status", "")
+    target = escape(str(result.get("target_alias")))
+    if status == "dry_run":
+        added = result.get("summary", {}).get("added", 0)
+        return f"Dry run: would create {added} config(s) in {target}."
+    if status == "no_changes":
+        return f"Already cloned into {target}, no changes to push."
     overrides = (
         f"buckets={result.get('bucket_rewrites', 0)}, "
         f"variables={result.get('variable_overrides', 0)}, "
         f"renamed={result.get('renamed_instances', 0)}"
     )
+    return (
+        f"Cloned into {target}: {result.get('created', 0)} created "
+        f"({overrides}, flow_task_remaps={result.get('flow_task_remaps', 0)})."
+    )
+
+
+def _format_clone_result(formatter: Any, result: dict[str, Any]) -> None:
+    """Human-mode rendering for ``sync clone``; the headline follows it."""
+    status = result.get("status", "")
     if status == "dry_run":
-        summary = result.get("summary", {})
         formatter.console.print("[yellow]Dry run -- nothing pushed.[/yellow]")
-        formatter.console.print(f"  Overrides applied: {overrides}")
         formatter.console.print(
-            f"  Would create {summary.get('added', 0)} config(s) in "
-            f"[cyan]{result.get('target_alias')}[/cyan]."
+            f"  Overrides applied: buckets={result.get('bucket_rewrites', 0)}, "
+            f"variables={result.get('variable_overrides', 0)}, "
+            f"renamed={result.get('renamed_instances', 0)}"
         )
         return
-    errors = result.get("errors", [])
-    # A bucket error is a failed item too: the count matches the error lines printed below.
-    failed = len(errors) + len(result.get("bucket_errors", []))
-    if status == "no_changes":
-        if failed:
-            formatter.console.print(
-                f"[bold red]Failed:[/bold red] Already cloned into "
-                f"[cyan]{result.get('target_alias')}[/cyan], {failed} failed"
-            )
-        else:
-            formatter.console.print(
-                f"[green]Already cloned[/green] -- no changes to push into "
-                f"[cyan]{result.get('target_alias')}[/cyan]."
-            )
-        _print_clone_buckets(formatter, result)
-        return
-    headline = (
-        f"Cloned into {result.get('target_alias')}: {result.get('created', 0)} created "
-        f"({overrides}, flow_task_remaps={result.get('flow_task_remaps', 0)})"
-    )
-    if failed:
-        formatter.console.print(f"[bold red]Failed:[/bold red] {headline}, {failed} failed")
-    else:
-        formatter.success(headline)
     _print_clone_buckets(formatter, result)
-    for err in errors:
+    if status == "no_changes":
+        return
+    for err in result.get("errors", []):
         formatter.warning(
             f"  Error: {err.get('change_type')} "
             f"{err.get('component_id')}/{err.get('config_id')}: {err.get('message')}"

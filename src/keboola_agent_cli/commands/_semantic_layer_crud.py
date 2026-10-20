@@ -16,9 +16,9 @@ from ..errors import ErrorCode
 from ._helpers import (
     _confirm_or_abort,
     check_cli_permission,
+    finish_items,
     get_formatter,
     get_service,
-    item_failure_exit_code,
 )
 from ._semantic_layer_helpers import (
     ScopeChoice,
@@ -412,10 +412,16 @@ def edit_metric(
     )
     # A constraint the rename could not repoint is a failed cascade item (#745).
     cascaded = result.get("cascaded_constraints") or []
-    code = item_failure_exit_code(sum(1 for c in cascaded if c.get("status") == "failed"))
-    formatter.output(result, _print_edit_result("metric"), exit_code=code or 0)
-    if code:
-        raise typer.Exit(code=code)
+    failed = sum(1 for c in cascaded if c.get("status") == "failed")
+    finish_items(
+        formatter,
+        result,
+        failed=failed,
+        total=len(cascaded) + 1,
+        noun="items",
+        summary=f"Updated the metric and {len(cascaded) - failed} constraint(s).",
+        render=lambda: _print_edit_result("metric")(formatter.console, result),
+    )
 
 
 @edit_app.command("dataset")

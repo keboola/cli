@@ -27,10 +27,10 @@ from ._helpers import (
     check_cli_permission,
     emit_api_error,
     emit_project_warnings,
+    finish_items,
     get_formatter,
     get_service,
     is_interactive_terminal,
-    item_failure_exit_code,
     map_error_to_exit_code,
 )
 
@@ -663,11 +663,7 @@ def workspace_gc(
 
     # A workspace that could not be deleted, or a project that could not be
     # listed, is collected in errors[]; the run is then not a success (#745).
-    code = item_failure_exit_code(len(result.get("errors", [])))
-    if formatter.json_mode:
-        formatter.output(result, exit_code=code or 0)
-    else:
-        formatter.console.print(result.get("message", ""))
+    def render() -> None:
         if dry_run:
             would_delete = result.get("would_delete", [])
             for ws in would_delete:
@@ -690,8 +686,18 @@ def workspace_gc(
             text = escape(str(err.get("error") or err.get("message") or ""))
             formatter.console.print(f"  [red]error[/red] {target}: {text}")
 
-    if code:
-        raise typer.Exit(code=code)
+    # Items are workspaces to delete and projects to list.
+    done = len(result.get("would_delete" if dry_run else "deleted", []))
+    failed = len(result.get("errors", []))
+    finish_items(
+        formatter,
+        result,
+        failed=failed,
+        total=done + failed,
+        noun="items",
+        summary=escape(result.get("message", "")),
+        render=render,
+    )
 
 
 @workspace_app.command("from-transformation")

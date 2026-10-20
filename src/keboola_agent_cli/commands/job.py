@@ -34,6 +34,7 @@ from ._helpers import (
     check_cli_permission,
     emit_api_error,
     emit_project_warnings,
+    finish_items,
     get_formatter,
     get_service,
     map_error_to_exit_code,
@@ -263,12 +264,12 @@ def job_run(
     wait: bool = typer.Option(
         False,
         "--wait",
-        help="Wait for job to finish (poll until terminal state)",
+        help="Wait for job to finish (poll until terminal state). Default: no wait.",
     ),
     timeout: float = typer.Option(
         DEFAULT_JOB_RUN_TIMEOUT,
         "--timeout",
-        help="Max seconds to wait when --wait is set",
+        help=f"Max seconds to wait when --wait is set. Default: {DEFAULT_JOB_RUN_TIMEOUT:g}.",
     ),
     branch: int | None = typer.Option(
         None,
@@ -691,10 +692,7 @@ def job_terminate(
     if filter_context is not None:
         result["filter"] = filter_context
 
-    exit_code = 1 if result["failed"] else 0
-    if formatter.json_mode:
-        formatter.output(result, exit_code=exit_code)
-    else:
+    def render() -> None:
         for entry in result["killed"]:
             formatter.console.print(
                 f"[bold green]Killed:[/bold green] {entry['id']} "
@@ -711,5 +709,14 @@ def job_terminate(
                 f"[bold red]Failed:[/bold red] {f_item['id']}: {f_item['error']}"
             )
 
-    if exit_code:
-        raise typer.Exit(code=exit_code)
+    killed, failed = len(result["killed"]), len(result["failed"])
+    finished, not_found = len(result["already_finished"]), len(result["not_found"])
+    finish_items(
+        formatter,
+        result,
+        failed=failed,
+        total=killed + finished + not_found + failed,
+        noun="jobs",
+        summary=f"Killed {killed} job(s), {finished} already finished, {not_found} not found.",
+        render=render,
+    )
