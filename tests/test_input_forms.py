@@ -366,8 +366,16 @@ def _bad_input_cases(tmp_path: Path) -> list[tuple[list[str], str]]:
         (["http", "post", "/x", "--body", "{not json"], "--body"),
         (["http", "post", "/x", "--body", f"@{tmp_path / 'missing.json'}"], "--body"),
         (["project", "description-set", "--project", "prod", "--file", binary], "--file"),
+        # Linux raises ENAMETOOLONG here, Windows reports "not a file": both name --file.
         (
             ["project", "description-set", "--project", "prod", "--file", "x" * 300],
+            "--file",
+        ),
+        (
+            [
+                *("project", "description-set", "--project", "prod"),
+                *("--file", str(tmp_path / "missing.md")),
+            ],
             "--file",
         ),
         (
