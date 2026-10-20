@@ -2534,8 +2534,9 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
    "exit_code" is a negative answer (flow validate, auth status, permissions
    check, data-app validate-repo) or a failed item. The error envelope has
    "schema_version" and no "exit_code". Every exit under --json writes one
-   JSON document: a parse error or a bare group is USAGE_ERROR (exit 2, help
-   on stderr), a crash is INTERNAL_ERROR (exit 1, traceback on stderr).
+   JSON document: a malformed command line or a bare group is USAGE_ERROR
+   (exit 2, help on stderr), a bad option value is INVALID_ARGUMENT (exit 2,
+   names the option), a crash is INTERNAL_ERROR (exit 1, traceback on stderr).
    --json/-j, --deny-writes and --deny-destructive also work after the
    subcommand, and -h works as --help (since vNEXT). A single-value option
    given twice is USAGE_ERROR on a write, destructive or admin command, and

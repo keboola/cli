@@ -380,8 +380,9 @@ plugins/kbagent/
 # Global options: --json, --verbose, --no-color, --config-dir, --conversation-id, --deny-writes, --deny-destructive, --allow-env-manage-token
 # Root command class (CLI-44, #791; root_command.py): --json/-j, --deny-writes and --deny-destructive are
 #   also accepted after the subcommand (hidden copies on every group and command, argv not rewritten);
-#   -h = --help. Under --json every exit writes one JSON document: a parse error or a bare group is
-#   USAGE_ERROR (exit 2, help on stderr), a crash INTERNAL_ERROR (exit 1). A bare group exits 2 with
+#   -h = --help. Under --json every exit writes one JSON document: a malformed command line or a bare
+#   group is USAGE_ERROR (exit 2, help on stderr), a bad option value (Click's BadParameter, also from a
+#   command body) INVALID_ARGUMENT (exit 2), a crash INTERNAL_ERROR (exit 1). A bare group exits 2 with
 #   its help on stderr in human mode too. Success envelope adds schema_version ("1.0") and exit_code;
 #   error envelope adds schema_version only. A site that exits non-zero after formatter.output() passes
 #   exit_code= (blocking rule output.ok-then-exit-declares-exit-code). A single-value option given twice
