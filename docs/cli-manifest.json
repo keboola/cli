@@ -890,7 +890,9 @@
       "hidden": false,
       "category": "read",
       "help": "Show usage instructions for AI agents interacting with Keboola.",
-      "params": []
+      "params": [
+        {"kind": "argument", "name": "group", "opts": ["group"], "type": "text", "default": null, "help": "Print only this command group or top-level command (for example storage). Default: the whole reference."}
+      ]
     },
     {
       "path": "data-app",

@@ -387,6 +387,118 @@ def test_stale_manifest_is_a_violation(
     }
 
 
+def test_committed_context_commands_are_fresh() -> None:
+    """AG1: the command part of `kbagent context` is the text generated from the manifest."""
+    manifest = json.loads(spec_check.MANIFEST_PATH.read_text(encoding="utf-8"))
+    have = spec_check.CONTEXT_COMMANDS_PATH.read_text(encoding="utf-8")
+    assert have == spec_check.context_commands_text(manifest)
+
+
+def test_stale_context_commands_are_a_violation(
+    tree: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = tmp_path / "_context_commands.py"
+    text = spec_check.CONTEXT_COMMANDS_PATH.read_text(encoding="utf-8")
+    module.write_text(text.replace("kbagent storage buckets", "kbagent storage bucketz"))
+    monkeypatch.setattr(spec_check, "CONTEXT_COMMANDS_PATH", module)
+    assert spec_check.r_context_from_manifest(spec_check.Context(tree)) == {
+        spec_check.CONTEXT_COMMANDS_REL: "differs from the text generated from "
+        "docs/cli-manifest.json; run 'make cli-manifest'"
+    }
+
+
+_SMALL_MANIFEST: dict[str, Any] = {
+    "aliases": {"g": "grp"},
+    "commands": [
+        {"path": "grp", "kind": "group", "hidden": False, "help": "The group.\n\nMore text."},
+        {
+            "path": "grp do",
+            "kind": "command",
+            "hidden": False,
+            "category": "write",
+            "help": "Do it.\n\n\bDetails that stay in --help.",
+            "params": [
+                {
+                    "kind": "option",
+                    "name": "project",
+                    "opts": ["--project"],
+                    "type": "text",
+                    "required": True,
+                    "default": None,
+                },
+                {
+                    "kind": "option",
+                    "name": "limit",
+                    "opts": ["--limit"],
+                    "type": "integer",
+                    "default": 10,
+                },
+                {
+                    "kind": "option",
+                    "name": "wait",
+                    "opts": ["--wait"],
+                    "secondary_opts": ["--no-wait"],
+                    "type": "boolean",
+                    "is_flag": True,
+                    "default": True,
+                },
+                {
+                    "kind": "option",
+                    "name": "mode",
+                    "opts": ["--mode"],
+                    "type": "choice",
+                    "choices": ["a", "b"],
+                    "multiple": True,
+                    "default": None,
+                },
+                {
+                    "kind": "option",
+                    "name": "old",
+                    "opts": ["--old"],
+                    "type": "text",
+                    "hidden": True,
+                    "default": None,
+                },
+                {
+                    "kind": "argument",
+                    "name": "name",
+                    "opts": ["name"],
+                    "type": "text",
+                    "default": None,
+                },
+            ],
+        },
+        {
+            "path": "solo",
+            "kind": "command",
+            "hidden": False,
+            "category": "read",
+            "help": 'Path "C:\\x" in """quotes""".',
+            "params": [],
+        },
+    ],
+}
+
+
+def test_context_section_has_usage_and_first_help_paragraph() -> None:
+    """Required options bare, optional in brackets, hidden ones left out. Wrapped at 78."""
+    assert spec_check.context_sections(_SMALL_MANIFEST)["grp"] == (
+        "### grp\n\nThe group.\n\n"
+        "  kbagent grp do --project PROJECT [--limit N] [--wait/--no-wait]\n"
+        "      [--mode a|b ...] [NAME]\n"
+        "    Do it.\n"
+    )
+
+
+def test_context_commands_text_is_python_with_the_same_sections(tmp_path: Path) -> None:
+    """Backslashes and triple quotes in a help text survive the generated module."""
+    path = tmp_path / "_context_commands.py"
+    path.write_text(spec_check.context_commands_text(_SMALL_MANIFEST), encoding="utf-8")
+    module = _load("_context_commands_under_test", str(path))
+    assert spec_check.context_sections(_SMALL_MANIFEST) == module.COMMAND_SECTIONS
+    assert module.ALIASES == {"g": "grp"}
+
+
 def test_details_of_an_unknown_rule_exits_2(capsys: pytest.CaptureFixture[str]) -> None:
     assert spec_check.main(["--details", "no.such-rule"]) == 2
     assert "unknown rule 'no.such-rule'" in capsys.readouterr().err

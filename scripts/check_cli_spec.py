@@ -20,6 +20,9 @@ Ratchet (per rule; the baseline holds a `blocking` flag for every rule):
 
 `help.manifest-fresh` takes no baseline: `docs/cli-manifest.json` must always
 equal the manifest generated from the live tree (`make cli-manifest`).
+`help.context-from-manifest` takes none either: `commands/_context_commands.py`
+(the command part of `kbagent context`) must equal the text generated from the
+committed manifest. `make cli-manifest` writes both files.
 
 Subjects: tree rules use the command path as a user types it; option rules
 append the first long option (`sync pull --force`), short-flag rules the short
@@ -38,7 +41,8 @@ Usage (from the repository root, with the `server` extra):
     python scripts/check_cli_spec.py --list-rules          # all rule ids and status
     python scripts/check_cli_spec.py --report              # per-command inventory
     python scripts/check_cli_spec.py --write-baseline      # `make cli-spec-baseline`
-    python scripts/check_cli_spec.py --write-manifest      # `make cli-manifest`
+    python scripts/check_cli_spec.py --write-manifest      # `make cli-manifest` (also
+                                                           # commands/_context_commands.py)
 """
 
 from __future__ import annotations
@@ -71,6 +75,8 @@ CLI_PY = PKG_ROOT / "cli.py"
 CLAUDE_MD = REPO_ROOT / "CLAUDE.md"
 BASELINE_PATH = REPO_ROOT / "scripts" / "cli_spec_baseline.json"
 MANIFEST_PATH = REPO_ROOT / "docs" / "cli-manifest.json"
+CONTEXT_COMMANDS_PATH = PKG_ROOT / "commands" / "_context_commands.py"
+CONTEXT_COMMANDS_REL = "src/keboola_agent_cli/commands/_context_commands.py"
 SPEC_DOC = "docs/cli-interface-spec.md"
 
 # --------------------------------------------------------------------------- #
@@ -1170,6 +1176,23 @@ def r_manifest_fresh(c: Context) -> Violations:
     return {"docs/cli-manifest.json": f"{_manifest_changes(have, want)}; run 'make cli-manifest'"}
 
 
+def r_context_from_manifest(c: Context) -> Violations:
+    """AG1: the command part of `kbagent context` equals the text generated from the manifest."""
+    manifest = _read_json(MANIFEST_PATH) if MANIFEST_PATH.exists() else None
+    if manifest is None:
+        return {CONTEXT_COMMANDS_REL: "docs/cli-manifest.json is missing; run 'make cli-manifest'"}
+    want = context_commands_text(manifest)
+    have = (
+        CONTEXT_COMMANDS_PATH.read_text(encoding="utf-8") if CONTEXT_COMMANDS_PATH.exists() else ""
+    )
+    if have == want:
+        return {}
+    return {
+        CONTEXT_COMMANDS_REL: "differs from the text generated from docs/cli-manifest.json; "
+        "run 'make cli-manifest'"
+    }
+
+
 def _manifest_changes(have: str, want: str) -> str:
     """Name the commands whose manifest entry changed, for the failure line."""
     try:
@@ -1475,6 +1498,13 @@ RULES: tuple[Rule, ...] = (
         baseline=False,
     ),
     Rule(
+        "help.context-from-manifest",
+        "tree",
+        "the command part of kbagent context equals the one generated from the manifest (AG1)",
+        r_context_from_manifest,
+        baseline=False,
+    ),
+    Rule(
         "enforcement.runtime-permission-guard",
         "tree",
         "every leaf reaches a permission check with its own key",
@@ -1541,7 +1571,6 @@ DEFERRED_RULES: dict[str, str] = {
     "args.global-option-one-shape": "the GLOBAL_OPTIONS registry is not reviewed yet (A1)",
     "naming.verb-vocabulary": "the verb vocabulary file is not reviewed yet",
     "output.no-warning-after-output": "lands with warnings[] in the --json envelope",
-    "help.context-from-manifest": "kbagent context is generated from the manifest in 1.0.0 (AG1)",
     "change.expired-deprecation": "no DEPRECATIONS entry has a remove_after date yet: "
     "the window of the 1.0.0 hidden aliases starts at M",
     "change.breaking-bullet-on-removal": "release kind; lands with the release mechanics",
@@ -1636,6 +1665,114 @@ def manifest_text(tree: Tree) -> str:
     text = json.dumps(manifest, indent=2, ensure_ascii=False)
     text = re.sub(r'"@@param-(\d+)@@"', lambda m: params[int(m.group(1))], text)
     return text + "\n"
+
+
+# --------------------------------------------------------------------------- #
+# The command part of `kbagent context` (AG1)
+# --------------------------------------------------------------------------- #
+
+_CONTEXT_WIDTH = 78
+
+
+def _first_paragraph(text: str) -> str:
+    """The first paragraph of a help text, on one line (Click's \\b markers removed)."""
+    paragraph = text.replace("\b", "").strip().split("\n\n")[0]
+    return " ".join(paragraph.split())
+
+
+def _metavar(opt: str, entry: dict[str, Any]) -> str:
+    """The value placeholder: the choices, N for a number, PATH, else the last word of the name."""
+    if entry.get("choices"):
+        return "|".join(entry["choices"])
+    if entry.get("type") in ("integer", "float"):
+        return "N"
+    if entry.get("type") in ("path", "file"):
+        return "PATH"
+    return opt.rsplit("-", 1)[-1].upper()
+
+
+def _param_usage(entry: dict[str, Any]) -> str:
+    """One parameter in usage form: `--name VALUE`, `[--flag]`, `[--x X ...]`, `ARG`."""
+    many = " ..." if entry.get("multiple") else ""
+    if entry["kind"] == "argument":
+        usage = entry["name"].upper() + many
+    else:
+        opt = next((o for o in entry["opts"] if o.startswith("--")), entry["opts"][0])
+        if entry.get("is_flag"):
+            usage = "/".join([opt, *entry.get("secondary_opts", [])[:1]])
+        else:
+            usage = f"{opt} {_metavar(opt, entry)}{many}"
+    return usage if entry.get("required") else f"[{usage}]"
+
+
+def _context_command(command: dict[str, Any]) -> list[str]:
+    """The usage line(s) and the first help paragraph of one command."""
+    words = ["kbagent", command["path"]] + [
+        _param_usage(p) for p in command.get("params", []) if not p.get("hidden")
+    ]
+    lines = ["  " + words[0]]
+    for word in words[1:]:
+        if len(lines[-1]) + 1 + len(word) > _CONTEXT_WIDTH and lines[-1].strip() != "kbagent":
+            lines.append("      " + word)
+        else:
+            lines[-1] += " " + word
+    summary = _first_paragraph(command["help"])
+    if summary:
+        lines += textwrap.wrap(
+            summary,
+            width=_CONTEXT_WIDTH,
+            initial_indent="    ",
+            subsequent_indent="    ",
+            break_long_words=False,
+            break_on_hyphens=False,
+        )
+    return lines
+
+
+def context_sections(manifest: dict[str, Any]) -> dict[str, str]:
+    """Top-level name -> its part of `kbagent context`, in manifest order (deterministic)."""
+    commands = [c for c in manifest["commands"] if not c.get("hidden")]
+    sections: dict[str, str] = {}
+    for top in (c for c in commands if " " not in c["path"]):
+        name = top["path"]
+        leaves = [
+            c
+            for c in commands
+            if c["kind"] == "command" and (c["path"] == name or c["path"].startswith(name + " "))
+        ]
+        lines = [f"### {name}", ""]
+        if top["kind"] == "group" and (summary := _first_paragraph(top["help"])):
+            lines += [*textwrap.wrap(summary, width=_CONTEXT_WIDTH), ""]
+        for leaf in leaves:
+            lines += [*_context_command(leaf), ""]
+        sections[name] = "\n".join(line.rstrip() for line in lines).rstrip("\n") + "\n"
+    return sections
+
+
+def context_commands_text(manifest: dict[str, Any]) -> str:
+    """The module `commands/_context_commands.py`, generated from the manifest."""
+    out = [
+        '"""The command part of `kbagent context`, generated from docs/cli-manifest.json.',
+        "",
+        "Do not edit. `make cli-manifest` writes this file, and the rule",
+        "`help.context-from-manifest` of `make cli-spec-check` fails when it differs from",
+        "the text generated from the manifest (AG1 of docs/cli-interface-spec.md).",
+        "Hand-written notes per group live in `commands/context.py`.",
+        '"""',
+        "",
+        "# Hidden alias -> the group it stands for.",
+        "ALIASES: dict[str, str] = {",
+        *(f"    {json.dumps(a)}: {json.dumps(g)}," for a, g in manifest["aliases"].items()),
+        "}",
+        "",
+        "# Top-level group or command -> its commands: usage and the first help paragraph.",
+        "COMMAND_SECTIONS: dict[str, str] = {",
+    ]
+    for name, text in context_sections(manifest).items():
+        body = text.replace("\\", "\\\\").replace('"""', '\\"\\"\\"')
+        out += [f'    {json.dumps(name)}: """\\', *body.rstrip("\n").split("\n"), '""",']
+    out.append("}")
+    return "\n".join(out) + "\n"
 
 
 # --------------------------------------------------------------------------- #
@@ -1834,8 +1971,13 @@ def main(argv: list[str] | None = None) -> int:
 
     tree = load_tree()
     if args.write_manifest:
-        MANIFEST_PATH.write_text(manifest_text(tree), encoding="utf-8", newline="\n")
+        text = manifest_text(tree)
+        MANIFEST_PATH.write_text(text, encoding="utf-8", newline="\n")
         print(f"wrote {MANIFEST_PATH.relative_to(REPO_ROOT)}")
+        CONTEXT_COMMANDS_PATH.write_text(
+            context_commands_text(json.loads(text)), encoding="utf-8", newline="\n"
+        )
+        print(f"wrote {CONTEXT_COMMANDS_REL}")
         return 0
 
     results = evaluate(tree)

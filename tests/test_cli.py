@@ -15,6 +15,8 @@ from typer.testing import CliRunner
 from helpers import make_mock_client
 from keboola_agent_cli.auth.sentinel import make_session_token
 from keboola_agent_cli.cli import app
+from keboola_agent_cli.commands._context_commands import COMMAND_SECTIONS
+from keboola_agent_cli.commands.context import AGENT_CONTEXT, GROUP_NOTES
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.constants import ENV_CONVERSATION_ID
 from keboola_agent_cli.errors import ConfigError, KeboolaApiError
@@ -5022,6 +5024,56 @@ class TestContext:
         assert "Authentication error" in result.output
         assert "Network error" in result.output
         assert "Configuration error" in result.output
+
+    @staticmethod
+    def _invoke(tmp_path: Path, args: list[str]) -> Any:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir(exist_ok=True)
+        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore:
+            MockStore.return_value = ConfigStore(config_dir=config_dir)
+            return runner.invoke(app, args)
+
+    def test_context_group_prints_one_section(self, tmp_path: Path) -> None:
+        """`kbagent context storage` prints the storage commands and notes only (AG1)."""
+        result = self._invoke(tmp_path, ["context", "storage"])
+
+        assert result.exit_code == 0
+        assert "### storage" in result.output
+        assert "kbagent storage buckets" in result.output
+        assert "#### Table Snapshots" in result.output
+        assert "### config" not in result.output
+        assert "## Tips for AI Agents" not in result.output
+
+    def test_context_group_json_names_the_group_and_takes_an_alias(self, tmp_path: Path) -> None:
+        result = self._invoke(tmp_path, ["--json", "context", "mr"])
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)["data"]
+        assert data["group"] == "merge-request"
+        assert data["context"].startswith("# kbagent - Keboola Agent CLI v")
+        assert "kbagent merge-request merge" in data["context"]
+
+    def test_context_without_group_has_group_null(self, tmp_path: Path) -> None:
+        result = self._invoke(tmp_path, ["--json", "context"])
+
+        data = json.loads(result.output)["data"]
+        assert data["group"] is None
+        assert data["context"] == AGENT_CONTEXT
+
+    def test_context_unknown_group_is_invalid_argument(self, tmp_path: Path) -> None:
+        result = self._invoke(tmp_path, ["--json", "context", "nope"])
+
+        assert result.exit_code == 2
+        error = json.loads(result.output)["error"]
+        assert error["code"] == "INVALID_ARGUMENT"
+        assert "Unknown group 'nope'" in error["message"]
+        assert "storage" in error["message"] and "merge-request" in error["message"]
+
+    def test_every_note_belongs_to_a_generated_section(self) -> None:
+        """A GROUP_NOTES key that is no top-level name would never be printed."""
+        assert set(GROUP_NOTES) <= set(COMMAND_SECTIONS)
+        for name in COMMAND_SECTIONS:
+            assert COMMAND_SECTIONS[name] in AGENT_CONTEXT
 
     def test_context_mentions_workflows(self, tmp_path: Path) -> None:
         """context output includes common workflows."""

@@ -11,6 +11,28 @@ Versioning convention:
   behavior; the inline `(updated vX.Y.Z)` records when the refinement landed.
 -->
 
+## Forms that work on 0.x and 1.x
+
+From the release of kbagent 1.0.0 until its migration date (28 days later), the user can run 0.x (0.100.0 and later) or 1.x. Write every command so it works on both. `kbagent --version` tells which one runs. The migration page is `docs/migrate-to-1.0.md` in the repository.
+
+- **Fan-out reads** (`search`, `billing credits`, `component list`, `config list`, `config search`, `data-app list`, `job list`, `storage buckets`, `storage tables`, `sharing list`, `sharing edges`, `flow list`, `schedule list`, `schedule find`, `notification list`, `branch list`, `workspace list`, `project status`): always give `--project P`, or `--all-projects` for every project. An omitted `--project` reads all projects on 0.x and only the active project on 1.x.
+- **Root flags** (`--json`, `--deny-writes`, `--deny-destructive`) go before the subcommand: `kbagent --json config list --project P`. 0.x refuses them after it.
+- **Help**: `--help`, not `-h`. Never run a bare group (`kbagent storage`): 0.x exits 0 with no output, 1.x exits 2.
+- **Options**: never give a single-value option twice (1.x refuses it on write, destructive and admin commands). A list option such as `sharing share --target-project-ids` gets one comma list (`11,22`): 0.x keeps only the last of repeated values.
+- **Confirmations**: run a destructive command under `--json` (consent on both), or with `--yes` where 0.x has it. `branch delete` and `workspace delete` have `--yes` and `--dry-run` only on 1.x: use `kbagent --json branch delete --project P --branch ID`. Never pipe `y` into a prompt: 1.x refuses without a terminal.
+- **Text from a file**: `--file` / `--sql-file`, never `--text @file` (1.x refuses it when the file exists, 0.x stores the literal text).
+- **Results**: read failed items and the outcome from `--json` (`errors[]`, `failed[]`, `exit_code`, `error.code`), not from human output or the exit code alone. The `Error:` lines, the headline and several exit codes differ between the majors (migration page, rows 15, 21 and 31).
+- **REST** (`kbagent http`, `kbagent serve`): send `project=` or `all_projects=true` on list routes, and `branch_id` on the routes that use the active branch on 1.x. Keep `PUT` on the 4 partial-update routes until 0.x is gone: 1.x still accepts it with a `DEPRECATED` warning, 0.x has no `PATCH` there.
+- **Updates**: `kbagent update` stays on the running major. Ask the user before `kbagent update --major`.
+
+## `kbagent context <group>` prints one group
+
+*(since vNEXT)* (CLI-52, #791)
+
+- **`kbagent --json context storage`** prints only the `storage` section: the commands with their options and the first paragraph of their help, then the notes for the group. A top-level command (`search`, `serve`) or a hidden alias (`mr`, `sl`) works too. `data.group` names the section, or is null without an argument. `data.context` holds the text as before.
+- **An unknown group** is `INVALID_ARGUMENT` (exit 2), and the message lists the valid groups.
+- **The command lists are generated from the command manifest**, so they always match `--help`. On 0.x, `kbagent context` takes no argument and prints the whole hand-written text.
+
 ## One JSON document for every exit, root flags after the subcommand, `-h`, repeated options
 
 *(since vNEXT)* (CLI-44, #791)
@@ -2414,7 +2436,7 @@ response. Now:
   delete / password / secrets-set / secrets-list / secrets-get /
   secrets-remove`. The companion `config_id` key is unchanged.
 - Pipe-friendly chain that v0.33.0 enables:
-  `kbagent --json data-app list | jq -r '.apps[].app_id' | xargs -I{} kbagent data-app deploy --project P --app-id {}`.
+  `kbagent --json data-app list --project P | jq -r '.data.apps[].app_id' | xargs -I{} kbagent --json data-app deploy --project P --app-id {}`.
   On pre-v0.33.0 you had to read `.apps[].id` (mismatched the input flag,
   surprised AI agents that templated `.app_id`).
 - **What is NOT renamed:** the Storage config back-pointer at
@@ -4217,7 +4239,7 @@ The trade-off is deliberate: one big call avoids the O(unique-parents) round-tri
 
 `kbagent search QUERY` searches across **all item types** (tables, buckets, configs, flows, data apps, transformations) via the Storage API global-search endpoint. It is distinct from `kbagent config search --query Q` which scans only configuration JSON bodies.
 - `search --search-type config-based` delegates to `config search` internally but exposes the unified results shape. It matches **case-insensitively** (since v0.84.0) while `config search --query` stays case-sensitive unless `-i` is passed -- the same logical table is often mixed-case in a row name and upper-case in `storage.input.tables[].source`, so a case-sensitive body scan answers "is this referenced anywhere?" with a false no.
-- Options (`--type`, `--project`, `--limit`) must come AFTER the QUERY argument: `kbagent search "text" --type table --limit 10`.
+- Options (`--type`, `--project`, `--limit`) must come AFTER the QUERY argument: `kbagent search "text" --project P --type table --limit 10`.
 
 ## `config row-create` / `row-update` / `row-delete` lifecycle
 
@@ -5776,7 +5798,7 @@ fallback (`config examples` already resolved it correctly).
 
 ## Multi-project `job list` now merges chronologically, not grouped by project (since v0.90.1)
 
-`kbagent job list` without `--project` (and `kbagent serve`'s `GET /jobs`) fans
+`kbagent job list --all-projects` (on 0.x before 0.100.0: without `--project`), and `kbagent serve`'s `GET /jobs`, fans
 out to every resolved project's Queue API in parallel. Each project's own page
 already comes back sorted server-side by `--sort-by`/`--sort-order`, but the
 old aggregation step then re-sorted the MERGED list by

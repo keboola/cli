@@ -159,7 +159,7 @@ kbagent --json workspace load --project prod --workspace-id W \
 kbagent --json workspace query --project prod --workspace-id W \
     --sql "SELECT SUM(amount) FROM \"out.c-revenue.fact_orders\""
 # Confirm the SQL works; clean up the workspace
-kbagent workspace delete --project prod --workspace-id W
+kbagent --json workspace delete --project prod --workspace-id W
 
 # 2. Add the metric (--dataset is a Storage tableId, NOT a dataset name)
 kbagent semantic-layer add metric \

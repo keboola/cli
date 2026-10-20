@@ -32,19 +32,20 @@ For detailed workflows, see the `references/` docs linked at the bottom.
 
 For **command flags and parameters**, use `kbagent <command> --help` (e.g. `kbagent config new --help`).
 
-If kbagent is not installed or you need the full standalone reference, run `kbagent context`.
+If kbagent is not installed or you need the full standalone reference, run `kbagent context`. On 1.x, `kbagent context <group>` prints one group (since vNEXT).
 
 ## Rules
 
 1. **Always use `--json`**: `kbagent --json <command>` for parseable output
 2. **Set conversation ID**: pass `--conversation-id "<unique-id>"` (e.g. session UUID) on every kbagent call -- `kbagent --json --conversation-id <id> <command>`. All API requests include it as the `X-Conversation-ID` header for platform observability. **Do not use a standalone `export`**: agent harnesses (Claude Code included) do not persist shell state between tool calls, so the variable is gone by the next command -- and prefixing each command with `export ...` stops it matching a `Bash(kbagent ...)` permission allow-rule. For a whole session, set `KBAGENT_CONVERSATION_ID` in the harness's own env block (Claude Code: `settings.json` -> `env`) instead.
-3. **Multi-project reads**: pass `--all-projects` (0.100.0+) to read ALL registered projects in parallel -- no need to loop. Without `--project` a read uses the active project (since vNEXT, on 0.x it read all projects)
+3. **Multi-project reads**: pass `--all-projects` (0.100.0+) to read ALL registered projects in parallel -- no need to loop. Always give a fan-out read `--project P` or `--all-projects`: without either it reads all projects on 0.x and the active project on 1.x (since vNEXT)
 4. **Write commands need `--project`**: specify the target project alias
 5. **Tokens are always masked** in output -- this is expected, not an error
 6. **Always fetch fresh before write**: configs change between commands and across users. Re-fetch from the API immediately before any update; never reuse a config dump from earlier in the session. Stale local files are how `vN+1` silently overwrites someone else's `vN` changes.
-7. **Always `--dry-run` first** for writes that have it (`config update`, `config delete`, `storage delete-*`, `sync push`). Show the user the diff and get explicit confirmation before applying. Some destructive commands have no `--dry-run` (`branch delete`, `workspace delete`, `http delete`). For these, describe the change and get confirmation first.
+7. **Always `--dry-run` first** for writes that have it (`config update`, `config delete`, `storage delete-*`, `sync push`). Show the user the diff and get explicit confirmation before applying. Some destructive commands have no `--dry-run` (`http delete`, and on 0.x `branch delete` and `workspace delete`). For these, describe the change and get confirmation first.
 8. **There is no MCP passthrough.** `kbagent tool list` / `tool call` and `agent --type mcp_tool` were removed in v0.85.0 -- every catalog tool has a native command. If a user names an old tool (`update_config`, `get_configs`, `query_data`, ...), map it via `docs/mcp-migration.md` in the repo and run the native command instead.
 9. **Never auto-run jobs after config changes**. `config update` (or `sync push`) and `job run` are always two separate steps. Wait for the user to confirm before triggering a run -- do not chain them.
+10. **Write commands that work on 0.x and 1.x**: root flags before the subcommand, `--help` not `-h`, no single-value option twice, one comma list for a list option. Until the 1.0 migration date the user may run either major. See [gotchas.md](references/gotchas.md) "Forms that work on 0.x and 1.x". When `kbagent --version` is 0.x, ask the user before `kbagent update --major`.
 
 ## Safe write workflow
 
