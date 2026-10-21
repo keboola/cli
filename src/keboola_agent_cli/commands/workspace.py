@@ -80,7 +80,7 @@ def _print_load_result(console: Console, data: dict[str, Any]) -> None:
         )
 
 
-def _print_created_workspace(c: Any, d: dict[str, Any]) -> None:
+def _print_created_workspace(c: Console, d: dict[str, Any]) -> None:
     """Human output of `workspace create`; a governed workspace has no credentials to show."""
     c.print(f"[bold green]Success:[/bold green] {d['message']}")
     c.print(f"\n[bold]Workspace ID:[/bold] {d['workspace_id']}")
@@ -88,7 +88,7 @@ def _print_created_workspace(c: Any, d: dict[str, Any]) -> None:
     c.print(f"[bold]Host:[/bold] {d['host']}")
     c.print(f"[bold]Schema:[/bold] {d['schema']}")
     if d.get("governed"):
-        c.print(f"[bold]Login type:[/bold] {d.get('login_type') or 'governed'} (no credentials)")
+        c.print(f"[bold]Login type:[/bold] {d['login_type']} (no credentials)")
         return
     c.print(f"[bold]User:[/bold] {d['user']}")
     if d.get("private_key"):

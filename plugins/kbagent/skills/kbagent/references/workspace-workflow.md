@@ -105,8 +105,7 @@ kbagent --json workspace query \
   --sql "SELECT * FROM \"table1\" LIMIT 10"
 ```
 
-
-## Option C: Governed workspace
+## Governed workspace
 
 *(since vNEXT)*
 
@@ -118,7 +117,9 @@ kbagent --json workspace detail --project ALIAS --workspace-id WS_ID            
 ```
 
 There is no password or key to save. `workspace password` and a direct login are refused; load tables with
-`workspace load` as usual and read them through Query Service. See gotchas.md "`workspace create --governed`".
+`workspace load` as usual and read them through Query Service (`workspace list --qs-compatible` does not list it yet). See gotchas.md
+"`workspace create --governed`".
+
 ## Load types: clone / copy / view
 
 *(since 0.91.0, #687)* **Cheapest first**: skip the load entirely if you can

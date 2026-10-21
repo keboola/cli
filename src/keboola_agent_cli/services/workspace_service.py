@@ -380,11 +380,18 @@ class WorkspaceService(BaseService):
             governed workspace).
 
         Raises:
-            ConfigError: ``governed`` with ``ui_mode`` or on a backend other than Snowflake.
+            KeboolaApiError: INVALID_ARGUMENT for ``governed`` with ``ui_mode``.
+            ConfigError: ``governed`` on a backend other than Snowflake.
         """
         if governed and ui_mode:
-            raise ConfigError(
-                "--governed cannot be combined with --ui: the Queue job path cannot request a loginType."
+            raise KeboolaApiError(
+                message=(
+                    "--governed cannot be combined with --ui: the Queue job path cannot "
+                    "request a loginType."
+                ),
+                status_code=0,
+                error_code=ErrorCode.INVALID_ARGUMENT,
+                retryable=False,
             )
         projects = self.resolve_projects([alias])
         project = projects[alias]
@@ -511,35 +518,38 @@ class WorkspaceService(BaseService):
         branch_id: int,
         backend: str,
         read_only: bool,
-        governed: bool = False,
+        governed: bool,
     ) -> dict[str, Any]:
         """Create workspace via Storage API (fast, headless)."""
-        # A governed workspace has no login, so there is no key pair to generate or send.
-        key_pair = None if governed else _workspace_key_pair_for_backend(backend)
+        if governed:
+            login_type: str | None = GOVERNED_WORKSPACE_LOGIN_TYPE
+            key_pair = None
+        else:
+            login_type = _workspace_login_type_for_backend(backend)
+            key_pair = _workspace_key_pair_for_backend(backend)
         ws_data = client.create_config_workspace(
             branch_id=branch_id,
             component_id="keboola.sandboxes",
             config_id=config_id,
             backend=backend,
-            login_type=(
-                GOVERNED_WORKSPACE_LOGIN_TYPE
-                if governed
-                else _workspace_login_type_for_backend(backend)
-            ),
+            login_type=login_type,
             public_key=key_pair.public_pem if key_pair else None,
         )
 
         connection = ws_data.get("connection", {})
-        credential_label = "private key" if key_pair else "password"
-        message = (
-            f"Workspace '{name}' created in project '{alias}'. "
-            f"Save the {credential_label} -- it cannot be retrieved later!"
-        )
-        if governed:
+        # What the API answered, not what was asked: a workspace that came back with a login is not governed.
+        governed_created = connection.get("loginType") == GOVERNED_WORKSPACE_LOGIN_TYPE
+        if governed_created:
             message = (
                 f"Governed workspace '{name}' created in project '{alias}'. It has no credentials: "
                 "only Query Service reads it, and the row- and column-level policies of the "
                 "project apply."
+            )
+        else:
+            credential_label = "private key" if key_pair else "password"
+            message = (
+                f"Workspace '{name}' created in project '{alias}'. "
+                f"Save the {credential_label} -- it cannot be retrieved later!"
             )
         result = {
             "project_alias": alias,
@@ -556,7 +566,7 @@ class WorkspaceService(BaseService):
             "read_only": read_only,
             "ui_mode": False,
             "login_type": connection.get("loginType", ""),
-            "governed": governed,
+            "governed": governed_created,
             "message": message,
         }
         if key_pair is not None:
