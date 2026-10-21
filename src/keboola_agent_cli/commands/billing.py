@@ -23,7 +23,12 @@ from rich.markup import escape
 from rich.table import Table
 
 from ..errors import ConfigError, ErrorCode
-from ._all_projects import AllProjectsOption, reject_project_with_all_projects
+from ._all_projects import (
+    FANOUT_PROJECT_HELP,
+    AllProjectsOption,
+    fanout_projects,
+    finish_fanout,
+)
 from ._helpers import check_cli_permission, get_formatter, get_service
 
 billing_app = typer.Typer(
@@ -59,21 +64,13 @@ def _format_credits_table(formatter: Any, credits: list[dict[str, Any]]) -> None
     formatter.console.print(tbl)
 
 
-def _emit_errors(formatter: Any, errors: list[dict[str, Any]]) -> None:
-    for err in errors:
-        formatter.warning(
-            f"Project '{escape(str(err.get('project_alias', '?')))}': "
-            f"{escape(str(err.get('message', 'error')))}"
-        )
-
-
 @billing_app.command("credits")
 def billing_credits(
     ctx: typer.Context,
     project: list[str] | None = typer.Option(
         None,
         "--project",
-        help="Project alias (repeatable; omit for all registered projects)",
+        help=FANOUT_PROJECT_HELP,
     ),
     all_projects: AllProjectsOption = False,
 ) -> None:
@@ -92,8 +89,9 @@ def billing_credits(
     does not accept a plain project Storage API token (issue #594).
     """
     formatter = get_formatter(ctx)
-    reject_project_with_all_projects(formatter, project, all_projects)
     service = get_service(ctx, "billing_service")
+
+    project = fanout_projects(ctx, formatter, project, all_projects)
 
     try:
         result = service.get_credits(aliases=project)
@@ -101,13 +99,11 @@ def billing_credits(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
-    if formatter.json_mode:
-        formatter.output(result)
-        return
+    def render() -> None:
+        credits = result.get("credits", [])
+        if not credits:
+            formatter.console.print("[dim]No PAYG projects found.[/dim]")
+        else:
+            _format_credits_table(formatter, credits)
 
-    credits = result.get("credits", [])
-    if not credits:
-        formatter.console.print("[dim]No PAYG projects found.[/dim]")
-    else:
-        _format_credits_table(formatter, credits)
-    _emit_errors(formatter, result.get("errors", []))
+    finish_fanout(formatter, result, result.get("errors", []), render)

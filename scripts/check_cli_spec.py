@@ -14,11 +14,15 @@ Ratchet (per rule; the baseline holds a `blocking` flag for every rule):
     more `violations` entries than the base (counted per rule, so a renamed
     command or a moved function is no growth), a subject added to `exceptions`
     (unless --allow-new-exceptions), a rule changed from blocking to
-    non-blocking, or a rule of the base that is missing: FAIL.
+    non-blocking, or a rule of the base that is missing: FAIL. A rule that is
+    not in the base baseline records its first entries without a growth FAIL.
   A non-blocking rule prints the same lines as NOTE and never fails.
 
 `help.manifest-fresh` takes no baseline: `docs/cli-manifest.json` must always
 equal the manifest generated from the live tree (`make cli-manifest`).
+`help.context-from-manifest` takes none either: `commands/_context_commands.py`
+(the command part of `kbagent context`) must equal the text generated from the
+committed manifest. `make cli-manifest` writes both files.
 
 Subjects: tree rules use the command path as a user types it; option rules
 append the first long option (`sync pull --force`), short-flag rules the short
@@ -37,7 +41,8 @@ Usage (from the repository root, with the `server` extra):
     python scripts/check_cli_spec.py --list-rules          # all rule ids and status
     python scripts/check_cli_spec.py --report              # per-command inventory
     python scripts/check_cli_spec.py --write-baseline      # `make cli-spec-baseline`
-    python scripts/check_cli_spec.py --write-manifest      # `make cli-manifest`
+    python scripts/check_cli_spec.py --write-manifest      # `make cli-manifest` (also
+                                                           # commands/_context_commands.py)
 """
 
 from __future__ import annotations
@@ -70,6 +75,8 @@ CLI_PY = PKG_ROOT / "cli.py"
 CLAUDE_MD = REPO_ROOT / "CLAUDE.md"
 BASELINE_PATH = REPO_ROOT / "scripts" / "cli_spec_baseline.json"
 MANIFEST_PATH = REPO_ROOT / "docs" / "cli-manifest.json"
+CONTEXT_COMMANDS_PATH = PKG_ROOT / "commands" / "_context_commands.py"
+CONTEXT_COMMANDS_REL = "src/keboola_agent_cli/commands/_context_commands.py"
 SPEC_DOC = "docs/cli-interface-spec.md"
 
 # --------------------------------------------------------------------------- #
@@ -133,6 +140,32 @@ PARTIAL_UPDATE_ROUTES: frozenset[str] = frozenset(
     }
 )
 
+# I3: the option names that carry free text a write, destructive or admin
+# command stores. Such an option has the RefuseAtFile callback (commands/_helpers.py).
+CONTENT_OPTIONS: frozenset[str] = frozenset(
+    {
+        "--change-description",
+        "--definition",
+        "--description",
+        "--draft",
+        "--goal",
+        "--message",
+        "--new-definition",
+        "--new-description",
+        "--new-sql",
+        "--prompt",
+        "--public-key",
+        "--reason",
+        "--runtime-prompt",
+        "--sql",
+        "--text",
+        "--title",
+        "--value",
+    }
+)
+# I1/I3: the functions that may read an `@` value: the parser and the refusal.
+_AT_VALUE_READERS = ("parse_json_arg", "RefuseAtFile.callback")
+
 # I-rules: file input is `--file` or `--<field>-file` next to `--<field>`.
 _INPUT_EXTRA = frozenset({"--from-file", "--stdin", "--from-csv", "--input"})
 # S1: leaf verbs that delete; such a leaf is `destructive` or `admin`.
@@ -154,6 +187,31 @@ _PROJECT_DEFAULT_WORDS = re.compile(
     re.IGNORECASE,
 )
 _COMMA_LIST = re.compile(r"comma[- ]separated|comma-delimited", re.IGNORECASE)
+# T2, T11: the 18 fan-out reads (spec "Fan-out reads"). Their `--project` help
+# must name the active project as the omitted default and `--all-projects`.
+FANOUT_READS: frozenset[str] = frozenset(
+    {
+        "search",
+        "billing credits",
+        "component list",
+        "config list",
+        "config search",
+        "data-app list",
+        "job list",
+        "storage buckets",
+        "storage tables",
+        "sharing list",
+        "sharing edges",
+        "flow list",
+        "schedule list",
+        "schedule find",
+        "notification list",
+        "branch list",
+        "workspace list",
+        "project status",
+    }
+)
+_FANOUT_DEFAULT_WORDS = ("active project", "--all-projects")
 
 # --------------------------------------------------------------------------- #
 # Tree model
@@ -695,8 +753,13 @@ def r_project_help_default(c: Context) -> Violations:
         p = param_with(lf, "--project")
         if p is None or (p.required and not getattr(p, "multiple", False)):
             continue
-        if not _PROJECT_DEFAULT_WORDS.search(getattr(p, "help", None) or ""):
+        text = getattr(p, "help", None) or ""
+        if not _PROJECT_DEFAULT_WORDS.search(text):
             found[f"{lf.name} --project"] = "help does not say what an omitted --project does"
+        elif lf.name in FANOUT_READS and not all(w in text for w in _FANOUT_DEFAULT_WORDS):
+            found[f"{lf.name} --project"] = (
+                "fan-out read: help must name the active project and --all-projects (T2)"
+            )
     return found
 
 
@@ -741,8 +804,32 @@ def r_single_parser(c: Context) -> Violations:
         and site.call.args
         and isinstance(site.call.args[0], ast.Constant)
         and site.call.args[0].value == "@"
-        and not site.function.endswith("parse_json_arg")
+        and not site.function.endswith(_AT_VALUE_READERS)
     }
+
+
+def r_content_refuses_at_file(c: Context) -> Violations:
+    return {
+        f"{lf.name} {label(p)}": "free-text content option stores @<file> as text"
+        for lf in c.tree.leaves
+        if lf.category in ("write", "destructive", "admin")
+        for p in filter(is_option, lf.params)
+        if not getattr(p, "is_flag", False)
+        and label(p) in CONTENT_OPTIONS
+        and not _refuses_at_file(p)
+    }
+
+
+def _refuses_at_file(p: Any) -> bool:
+    """True when the option callback is ``RefuseAtFile(...).callback``.
+
+    Typer wraps a parameter callback in a closure, so the bound method is
+    looked up in the closure cells as well.
+    """
+    callback = getattr(p, "callback", None)
+    cells = getattr(callback, "__closure__", None) or ()
+    found = (callback, *(cell.cell_contents for cell in cells))
+    return any(hasattr(getattr(obj, "__self__", None), "file_option") for obj in found)
 
 
 def r_forward_retryable(c: Context) -> Violations:
@@ -821,6 +908,187 @@ def r_no_direct_print(c: Context) -> Violations:
         kind = _DIRECT_PRINT.get(dotted(site.call.func))
         if kind is not None:
             found[f"{site.subject} {kind}"] = f"{kind} in commands/ bypasses OutputFormatter"
+    return found
+
+
+# `env.registry-complete` (EV1): reads of the environment in src/.
+_ENV_GETTERS = frozenset({"environ.get", "environ.pop", "os.getenv", "getenv"})
+_ENV_READ_HELPERS = frozenset({"_env_flag_set", "_env_truthy"})
+
+
+def _env_constants() -> dict[str, str]:
+    """``ENV_*`` names bound to a string literal at module level in src/, with import aliases."""
+    found: dict[str, str] = {}
+    aliases: dict[str, str] = {}
+    for _, mod in modules(PKG_ROOT):
+        for node in mod.body:
+            target = value = None
+            if isinstance(node, ast.Assign) and len(node.targets) == 1:
+                target, value = node.targets[0], node.value
+            elif isinstance(node, ast.AnnAssign):
+                target, value = node.target, node.value
+            if (
+                isinstance(target, ast.Name)
+                and "ENV" in target.id
+                and isinstance(value, ast.Constant)
+                and isinstance(value.value, str)
+            ):
+                found[target.id] = value.value
+        for node in ast.walk(mod):
+            if isinstance(node, ast.ImportFrom):
+                aliases.update({a.asname: a.name for a in node.names if a.asname})
+    for alias, name in aliases.items():
+        if name in found:
+            found.setdefault(alias, found[name])
+    return found
+
+
+def _env_name(
+    node: ast.expr | None, constants: dict[str, str], local: dict[str, ast.expr]
+) -> str | None:
+    """The variable name an expression stands for, or None when it is computed at run time.
+
+    An f-string that starts with a known name gives a family: ``f"{ENV_X}_{alias}"``
+    is ``"X_<"``, which matches a registry entry ``X_<ALIAS>``. A local name is
+    followed to its assignment in the same function.
+    """
+    if isinstance(node, ast.Name) and node.id in local:
+        node = local[node.id]
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.Name):
+        return constants.get(node.id)
+    if isinstance(node, ast.JoinedStr):
+        prefix = ""
+        for part in node.values:
+            if isinstance(part, ast.Constant) and isinstance(part.value, str):
+                prefix += part.value
+            elif isinstance(part, ast.FormattedValue) and isinstance(part.value, ast.Name):
+                known = constants.get(part.value.id)
+                if known is None:
+                    break
+                prefix += known
+            else:
+                break
+        else:
+            return prefix
+        return f"{prefix}<" if prefix else None
+    return None
+
+
+def _scoped_nodes(tree: ast.AST) -> Iterator[tuple[str, dict[str, ast.expr], ast.AST]]:
+    """Every node with its enclosing function and the local assignments of that function."""
+
+    def visit(
+        node: ast.AST, scope: tuple[str, ...], local: dict[str, ast.expr]
+    ) -> Iterator[tuple[str, dict[str, ast.expr], ast.AST]]:
+        for child in ast.iter_child_nodes(node):
+            inner_scope, inner_local = scope, local
+            if isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+                inner_scope = (*scope, child.name)
+                inner_local = {
+                    n.targets[0].id: n.value
+                    for n in ast.walk(child)
+                    if isinstance(n, ast.Assign)
+                    and len(n.targets) == 1
+                    and isinstance(n.targets[0], ast.Name)
+                }
+            yield ".".join(scope) or "<module>", local, child
+            yield from visit(child, inner_scope, inner_local)
+
+    yield from visit(tree, (), {})
+
+
+def _is_environ(node: ast.AST) -> bool:
+    return dotted(node).split(".")[-1] == "environ"
+
+
+def _env_read_arg(node: ast.AST) -> tuple[str, ast.expr | None] | None:
+    """(kind, name expression) when ``node`` reads the environment, else None.
+
+    Reads: ``os.environ.get``/``pop``, ``os.getenv``, an ``envvar=`` keyword,
+    a call of an ``_ENV_READ_HELPERS`` function, ``os.environ[X]`` (not as an
+    assignment target) and ``X in os.environ`` / ``X not in os.environ``.
+    """
+    if isinstance(node, ast.Call):
+        func = dotted(node.func)
+        if any(func == g or func.endswith(f".{g}") for g in _ENV_GETTERS) or (
+            func in _ENV_READ_HELPERS
+        ):
+            return func, node.args[0] if node.args else None
+        if keyword(node, "envvar") is not None:
+            return "envvar=", keyword(node, "envvar")
+    if (
+        isinstance(node, ast.Subscript)
+        and isinstance(node.ctx, ast.Load)
+        and _is_environ(node.value)
+    ):
+        return "os.environ[]", node.slice
+    if (
+        isinstance(node, ast.Compare)
+        and len(node.ops) == 1
+        and isinstance(node.ops[0], ast.In | ast.NotIn)
+        and _is_environ(node.comparators[0])
+    ):
+        return "in os.environ", node.left
+    return None
+
+
+def _env_reads(c: Context) -> tuple[dict[str, str], dict[str, str]]:
+    """(variable name -> first reader, reader subject -> what) for every read in src/.
+
+    See :func:`_env_read_arg` for what counts as a read. The body of an
+    ``_ENV_READ_HELPERS`` function is skipped: its callers name the variable.
+    A read whose name is computed at run time goes to the second map under its
+    function.
+    """
+    constants = c.cached("env_constants", _env_constants)
+    named: dict[str, str] = {}
+    dynamic: dict[str, str] = {}
+    for module, mod in c.cached("package_modules", lambda: modules(PKG_ROOT)):
+        for function, local, node in _scoped_nodes(mod):
+            read = _env_read_arg(node)
+            if read is None:
+                continue
+            kind, arg = read
+            subject = f"{module}:{function}"
+            name = _env_name(arg, constants, local)
+            if name is None and function.split(".")[-1] in _ENV_READ_HELPERS:
+                continue
+            if name is None:
+                dynamic[f"{subject} {kind}"] = "reads a variable named at run time"
+            else:
+                named.setdefault(name, subject)
+    return named, dynamic
+
+
+def _registered(name: str, registered: set[str]) -> bool:
+    """True for a registry name, or for a family read (``X_<``) of an entry ``X_<ALIAS>``."""
+    if name in registered:
+        return True
+    return name.endswith("<") and any(
+        "<" in entry and entry.startswith(name[:-1]) for entry in registered
+    )
+
+
+def r_env_registry_complete(c: Context) -> Violations:
+    from keboola_agent_cli.env_vars import ENV_VARS
+
+    named, dynamic = _env_reads(c)
+    registered = {var.name for var in ENV_VARS}
+    found = {
+        name: f"read in {where} but not in env_vars.ENV_VARS"
+        for name, where in named.items()
+        if not _registered(name, registered)
+    }
+    found.update(dynamic)
+    families = {name[:-1] for name in named if name.endswith("<")}
+    for var in ENV_VARS:
+        if var.library or var.name in named:
+            continue
+        if "<" in var.name and var.name.split("<")[0] in families:
+            continue
+        found[f"{var.name} (registered)"] = "in env_vars.ENV_VARS but nothing in src/ reads it"
     return found
 
 
@@ -906,6 +1174,23 @@ def r_manifest_fresh(c: Context) -> Violations:
     if have == want:
         return {}
     return {"docs/cli-manifest.json": f"{_manifest_changes(have, want)}; run 'make cli-manifest'"}
+
+
+def r_context_from_manifest(c: Context) -> Violations:
+    """AG1: the command part of `kbagent context` equals the text generated from the manifest."""
+    manifest = _read_json(MANIFEST_PATH) if MANIFEST_PATH.exists() else None
+    if manifest is None:
+        return {CONTEXT_COMMANDS_REL: "docs/cli-manifest.json is missing; run 'make cli-manifest'"}
+    want = context_commands_text(manifest)
+    have = (
+        CONTEXT_COMMANDS_PATH.read_text(encoding="utf-8") if CONTEXT_COMMANDS_PATH.exists() else ""
+    )
+    if have == want:
+        return {}
+    return {
+        CONTEXT_COMMANDS_REL: "differs from the text generated from docs/cli-manifest.json; "
+        "run 'make cli-manifest'"
+    }
 
 
 def _manifest_changes(have: str, want: str) -> str:
@@ -1007,10 +1292,16 @@ def r_dry_run_parity(c: Context) -> Violations:
 
 
 def r_partial_update_patch(c: Context) -> Violations:
+    """A partial update has a PATCH route; its old PUT stays only as a DEPRECATIONS form (C3)."""
+    from keboola_agent_cli.commands._helpers import DEPRECATIONS
+
+    patched = {path for method, path, _ in c.routes if method == "PATCH"}
     return {
         f"{method} {path}": "partial update served with PUT; use PATCH"
         for method, path, _ in c.routes
-        if method == "PUT" and path in PARTIAL_UPDATE_ROUTES
+        if method == "PUT"
+        and path in PARTIAL_UPDATE_ROUTES
+        and (path not in patched or f"PUT {path}" not in DEPRECATIONS)
     }
 
 
@@ -1099,6 +1390,12 @@ RULES: tuple[Rule, ...] = (
         r_single_parser,
     ),
     Rule(
+        "input.content-option-refuses-at-file",
+        "tree",
+        "a free-text content option refuses @<existing file> (RefuseAtFile)",
+        r_content_refuses_at_file,
+    ),
+    Rule(
         "target.project-help-states-default",
         "tree",
         "an optional or repeatable --project help states the omitted default",
@@ -1115,6 +1412,12 @@ RULES: tuple[Rule, ...] = (
         "ast",
         "no print, typer.echo, click.echo, stream write or new rich Console in commands/",
         r_no_direct_print,
+    ),
+    Rule(
+        "env.registry-complete",
+        "ast",
+        "every environment variable read in src/ is in env_vars.ENV_VARS, and every entry is read",
+        r_env_registry_complete,
     ),
     Rule(
         "output.ok-then-exit-declares-exit-code",
@@ -1195,6 +1498,13 @@ RULES: tuple[Rule, ...] = (
         baseline=False,
     ),
     Rule(
+        "help.context-from-manifest",
+        "tree",
+        "the command part of kbagent context equals the one generated from the manifest (AG1)",
+        r_context_from_manifest,
+        baseline=False,
+    ),
+    Rule(
         "enforcement.runtime-permission-guard",
         "tree",
         "every leaf reaches a permission check with its own key",
@@ -1233,7 +1543,7 @@ RULES: tuple[Rule, ...] = (
     Rule(
         "serve.partial-update-uses-patch",
         "tree",
-        "a route in the reviewed list of partial updates uses PATCH",
+        "a route in the reviewed list of partial updates uses PATCH; a PUT there is deprecated",
         r_partial_update_patch,
     ),
 )
@@ -1252,21 +1562,18 @@ CONTRACT_RULES: dict[str, str] = {
     "args.repeated-single-value": "tests/test_cli_contract.py",
     "serve.undeclared-dry-run-rejected": "tests/test_server_dry_run_guard.py",
     "safety.no-tty-confirmation": "tests/test_cli_contract.py",
+    "errors.fanout-exit": "tests/test_target_selection.py",
+    "target.targets-reported": "tests/test_target_selection.py",
+    "serve.targets-reported": "tests/test_server_response_meta.py",
+    "output.multi-item-headline": "tests/test_cli_contract.py",
 }
 DEFERRED_RULES: dict[str, str] = {
     "args.global-option-one-shape": "the GLOBAL_OPTIONS registry is not reviewed yet (A1)",
     "naming.verb-vocabulary": "the verb vocabulary file is not reviewed yet",
-    "input.content-option-refuses-at-file": "the @file refusal lands in 1.0.0 (Input)",
     "output.no-warning-after-output": "lands with warnings[] in the --json envelope",
-    "output.multi-item-headline": "contract; lands with HO2",
-    "errors.fanout-exit": "contract; the default-project change for fan-out reads is 1.0.0",
-    "help.context-from-manifest": "kbagent context is generated from the manifest in 1.0.0 (AG1)",
-    "env.registry-complete": "the environment variable registry does not exist yet",
     "change.expired-deprecation": "no DEPRECATIONS entry has a remove_after date yet: "
     "the window of the 1.0.0 hidden aliases starts at M",
     "change.breaking-bullet-on-removal": "release kind; lands with the release mechanics",
-    "target.targets-reported": "contract; lands with project_source in 1.0.0",
-    "serve.targets-reported": "contract; the Kbagent-Targets header lands in 1.0.0 (V3)",
 }
 
 # --------------------------------------------------------------------------- #
@@ -1358,6 +1665,114 @@ def manifest_text(tree: Tree) -> str:
     text = json.dumps(manifest, indent=2, ensure_ascii=False)
     text = re.sub(r'"@@param-(\d+)@@"', lambda m: params[int(m.group(1))], text)
     return text + "\n"
+
+
+# --------------------------------------------------------------------------- #
+# The command part of `kbagent context` (AG1)
+# --------------------------------------------------------------------------- #
+
+_CONTEXT_WIDTH = 78
+
+
+def _first_paragraph(text: str) -> str:
+    """The first paragraph of a help text, on one line (Click's \\b markers removed)."""
+    paragraph = text.replace("\b", "").strip().split("\n\n")[0]
+    return " ".join(paragraph.split())
+
+
+def _metavar(opt: str, entry: dict[str, Any]) -> str:
+    """The value placeholder: the choices, N for a number, PATH, else the last word of the name."""
+    if entry.get("choices"):
+        return "|".join(entry["choices"])
+    if entry.get("type") in ("integer", "float"):
+        return "N"
+    if entry.get("type") in ("path", "file"):
+        return "PATH"
+    return opt.rsplit("-", 1)[-1].upper()
+
+
+def _param_usage(entry: dict[str, Any]) -> str:
+    """One parameter in usage form: `--name VALUE`, `[--flag]`, `[--x X ...]`, `ARG`."""
+    many = " ..." if entry.get("multiple") else ""
+    if entry["kind"] == "argument":
+        usage = entry["name"].upper() + many
+    else:
+        opt = next((o for o in entry["opts"] if o.startswith("--")), entry["opts"][0])
+        if entry.get("is_flag"):
+            usage = "/".join([opt, *entry.get("secondary_opts", [])[:1]])
+        else:
+            usage = f"{opt} {_metavar(opt, entry)}{many}"
+    return usage if entry.get("required") else f"[{usage}]"
+
+
+def _context_command(command: dict[str, Any]) -> list[str]:
+    """The usage line(s) and the first help paragraph of one command."""
+    words = ["kbagent", command["path"]] + [
+        _param_usage(p) for p in command.get("params", []) if not p.get("hidden")
+    ]
+    lines = ["  " + words[0]]
+    for word in words[1:]:
+        if len(lines[-1]) + 1 + len(word) > _CONTEXT_WIDTH and lines[-1].strip() != "kbagent":
+            lines.append("      " + word)
+        else:
+            lines[-1] += " " + word
+    summary = _first_paragraph(command["help"])
+    if summary:
+        lines += textwrap.wrap(
+            summary,
+            width=_CONTEXT_WIDTH,
+            initial_indent="    ",
+            subsequent_indent="    ",
+            break_long_words=False,
+            break_on_hyphens=False,
+        )
+    return lines
+
+
+def context_sections(manifest: dict[str, Any]) -> dict[str, str]:
+    """Top-level name -> its part of `kbagent context`, in manifest order (deterministic)."""
+    commands = [c for c in manifest["commands"] if not c.get("hidden")]
+    sections: dict[str, str] = {}
+    for top in (c for c in commands if " " not in c["path"]):
+        name = top["path"]
+        leaves = [
+            c
+            for c in commands
+            if c["kind"] == "command" and (c["path"] == name or c["path"].startswith(name + " "))
+        ]
+        lines = [f"### {name}", ""]
+        if top["kind"] == "group" and (summary := _first_paragraph(top["help"])):
+            lines += [*textwrap.wrap(summary, width=_CONTEXT_WIDTH), ""]
+        for leaf in leaves:
+            lines += [*_context_command(leaf), ""]
+        sections[name] = "\n".join(line.rstrip() for line in lines).rstrip("\n") + "\n"
+    return sections
+
+
+def context_commands_text(manifest: dict[str, Any]) -> str:
+    """The module `commands/_context_commands.py`, generated from the manifest."""
+    out = [
+        '"""The command part of `kbagent context`, generated from docs/cli-manifest.json.',
+        "",
+        "Do not edit. `make cli-manifest` writes this file, and the rule",
+        "`help.context-from-manifest` of `make cli-spec-check` fails when it differs from",
+        "the text generated from the manifest (AG1 of docs/cli-interface-spec.md).",
+        "Hand-written notes per group live in `commands/context.py`.",
+        '"""',
+        "",
+        "# Hidden alias -> the group it stands for.",
+        "ALIASES: dict[str, str] = {",
+        *(f"    {json.dumps(a)}: {json.dumps(g)}," for a, g in manifest["aliases"].items()),
+        "}",
+        "",
+        "# Top-level group or command -> its commands: usage and the first help paragraph.",
+        "COMMAND_SECTIONS: dict[str, str] = {",
+    ]
+    for name, text in context_sections(manifest).items():
+        body = text.replace("\\", "\\\\").replace('"""', '\\"\\"\\"')
+        out += [f'    {json.dumps(name)}: """\\', *body.rstrip("\n").split("\n"), '""",']
+    out.append("}")
+    return "\n".join(out) + "\n"
 
 
 # --------------------------------------------------------------------------- #
@@ -1453,6 +1868,9 @@ def _growth(
     keeping the old name as a hidden alias (C3) or moving a function to another
     module renames its subject, and that is no growth. Known limit: a fixed
     entry can be swapped for a new violation of the same rule elsewhere.
+    A rule that the base baseline does not know (no `blocking` flag there) is
+    new: its first baseline is recorded here, and growth counts from the next
+    pull request on. New exceptions are still checked for it.
     """
     old_listed: dict[str, list[str]] = base.get("violations", {})
     old_excepted: dict[str, dict[str, str]] = base.get("exceptions", {})
@@ -1462,7 +1880,7 @@ def _growth(
         if not blocking.get(rid, True):
             continue
         old_count, count = len(old_listed.get(rid, [])), len(listed.get(rid, []))
-        if count > old_count:
+        if rid in old_blocking and count > old_count:
             fails.append(
                 f"FAIL grown    {rid}: {old_count} -> {count} entries -- the baseline "
                 "gained entries"
@@ -1553,8 +1971,13 @@ def main(argv: list[str] | None = None) -> int:
 
     tree = load_tree()
     if args.write_manifest:
-        MANIFEST_PATH.write_text(manifest_text(tree), encoding="utf-8", newline="\n")
+        text = manifest_text(tree)
+        MANIFEST_PATH.write_text(text, encoding="utf-8", newline="\n")
         print(f"wrote {MANIFEST_PATH.relative_to(REPO_ROOT)}")
+        CONTEXT_COMMANDS_PATH.write_text(
+            context_commands_text(json.loads(text)), encoding="utf-8", newline="\n"
+        )
+        print(f"wrote {CONTEXT_COMMANDS_REL}")
         return 0
 
     results = evaluate(tree)

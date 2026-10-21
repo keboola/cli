@@ -247,8 +247,15 @@ class AuthService:
         on_device_prompt: Callable[[DeviceAuthorization], None] | None = None,
         on_notice: Callable[[str], None] | None = None,
         device_wait: Callable[[float], None] | None = None,
+        no_open: bool = False,
     ) -> LoginResult:
         """Run the browser-login flow to a durable session, then introspect it.
+
+        ``no_open`` (``auth login --no-open``) forces the device flow and keeps
+        the browser closed, also for the verification link; the device prompt
+        still prints the URL and code. Without it the browser rule is the one
+        below, also under ``--json`` and without a terminal (the ``auth login``
+        exception to spec rule HO5).
 
         Algorithm (docs/programmatic-auth-login-plan.md section 4.5 / auth
         contract section 13), followed literally:
@@ -272,6 +279,10 @@ class AuthService:
         fallback_reason = ""
         method = "device" if device_code else "pkce"
 
+        if method == "pkce" and no_open:
+            method = "device"
+            fallback_reason = "--no-open is set."
+            notice(f"Using device login: {fallback_reason}")
         if method == "pkce":
             environment = self._browser_env_detector()
             if not environment.loopback_browser_usable:
@@ -305,7 +316,7 @@ class AuthService:
             if method == "device":
                 outcome = run_device_flow(
                     client,
-                    on_prompt=self._wrap_device_prompt(prompt, notice),
+                    on_prompt=(prompt if no_open else self._wrap_device_prompt(prompt, notice)),
                     # `device_wait`, when the command layer passes one, waits
                     # between polls AND watches the keyboard for the 'press c to
                     # copy' option; otherwise the plain injected sleep is used.
@@ -1137,7 +1148,7 @@ class AuthService:
             raise ConfigError(
                 "No stack to log into -- login is not stack discovery. Pass "
                 "--stack <url-or-alias>, set KBAGENT_PROJECT to a registered alias, "
-                "or select a default project first (`kbagent project add` / "
+                "or set an active project first (`kbagent project add` / "
                 "`kbagent project use <alias>`)."
             ) from None
         return normalize_stack_url(config.projects[alias].stack_url)

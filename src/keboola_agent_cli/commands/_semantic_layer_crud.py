@@ -13,12 +13,14 @@ import typer
 from rich.console import Console
 
 from ..errors import ErrorCode
+from ..output import format_item_error
 from ._helpers import (
     _confirm_or_abort,
     check_cli_permission,
+    finish_items,
     get_formatter,
     get_service,
-    item_failure_exit_code,
+    split_multi,
 )
 from ._semantic_layer_helpers import (
     ScopeChoice,
@@ -238,10 +240,10 @@ def add_constraint(
         "--rule",
         help='Rule expression STRING (e.g. "value >= 0"). NOT an object.',
     ),
-    metrics: str = typer.Option(
+    metrics: list[str] = typer.Option(
         ...,
         "--metrics",
-        help="Comma-separated list of metric names this constraint applies to.",
+        help="Metric name this constraint applies to (repeatable or comma-separated).",
     ),
     severity: str = typer.Option(
         "warning", "--severity", help="One of: error|warning|info (the 3-level API enum)."
@@ -252,7 +254,7 @@ def add_constraint(
     """Add a constraint."""
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
-    metrics_list = [m.strip() for m in metrics.split(",") if m.strip()]
+    metrics_list = split_multi(metrics)
     if not metrics_list:
         formatter.error(
             message="--metrics must contain at least one metric name.",
@@ -364,11 +366,12 @@ def _print_edit_result(label: str):  # type: ignore[no-untyped-def]
         cascaded = d.get("cascaded_constraints") or []
         for entry in cascaded:
             status = entry.get("status", "?")
-            colour = "green" if status == "updated" else "red"
-            c.print(
-                f"  [{colour}]cascade {status}[/{colour}] "
-                f"constraint [cyan]{entry.get('constraint', '?')}[/cyan]"
-            )
+            name = entry.get("constraint", "?")
+            if status == "failed":
+                reason = entry.get("error") or entry.get("reason") or "cascade failed"
+                c.print(format_item_error(f"constraint {name}", reason), soft_wrap=True)
+            else:
+                c.print(f"  [green]cascade {status}[/green] constraint [cyan]{name}[/cyan]")
         if d.get("rollback"):
             c.print(f"[bold red]Rollback applied:[/bold red] {d['rollback']}")
         if d.get("recovery_hint"):
@@ -412,10 +415,16 @@ def edit_metric(
     )
     # A constraint the rename could not repoint is a failed cascade item (#745).
     cascaded = result.get("cascaded_constraints") or []
-    code = item_failure_exit_code(sum(1 for c in cascaded if c.get("status") == "failed"))
-    formatter.output(result, _print_edit_result("metric"), exit_code=code or 0)
-    if code:
-        raise typer.Exit(code=code)
+    failed = sum(1 for c in cascaded if c.get("status") == "failed")
+    finish_items(
+        formatter,
+        result,
+        failed=failed,
+        total=len(cascaded) + 1,
+        noun="items",
+        summary=f"1 metric and {len(cascaded) - failed} constraint(s) updated.",
+        render=lambda: _print_edit_result("metric")(formatter.console, result),
+    )
 
 
 @edit_app.command("dataset")
@@ -462,18 +471,14 @@ def edit_constraint(
     new_severity: str | None = typer.Option(
         None, "--new-severity", help="Replace severity (error|warning|info)"
     ),
-    new_metrics: str | None = typer.Option(
-        None, "--new-metrics", help="Comma-separated list of metric names"
+    new_metrics: list[str] | None = typer.Option(
+        None, "--new-metrics", help="Replace metric names (repeatable or comma-separated)"
     ),
 ) -> None:
     """Edit a constraint (in-place update, with local validators)."""
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
-    metrics_list = (
-        [m.strip() for m in new_metrics.split(",") if m.strip()]
-        if new_metrics is not None
-        else None
-    )
+    metrics_list = split_multi(new_metrics) if new_metrics else None
     result = _handle_service_call(
         ctx,
         service.edit_constraint,

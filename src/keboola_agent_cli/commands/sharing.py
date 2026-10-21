@@ -10,14 +10,20 @@ import typer
 
 from ..constants import BUCKET_STAGES, DEFAULT_LINK_STAGE
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
-from ._all_projects import AllProjectsOption, reject_project_with_all_projects
+from ._all_projects import (
+    FANOUT_PROJECT_HELP,
+    AllProjectsOption,
+    fanout_projects,
+    finish_fanout,
+)
 from ._helpers import (
     check_cli_permission,
     emit_api_error,
-    emit_project_warnings,
     get_formatter,
     get_service,
     map_error_to_exit_code,
+    split_int_multi,
+    split_multi,
 )
 
 sharing_app = typer.Typer(
@@ -41,7 +47,7 @@ def sharing_list(
     project: list[str] | None = typer.Option(
         None,
         "--project",
-        help="Project alias (repeatable). Omit to query all projects.",
+        help=FANOUT_PROJECT_HELP,
     ),
     all_projects: AllProjectsOption = False,
 ) -> None:
@@ -51,8 +57,9 @@ def sharing_list(
     into your projects. Uses the regular project token.
     """
     formatter = get_formatter(ctx)
-    reject_project_with_all_projects(formatter, project, all_projects)
     service = get_service(ctx, "sharing_service")
+
+    project = fanout_projects(ctx, formatter, project, all_projects)
 
     try:
         result = service.list_shared(aliases=project)
@@ -60,36 +67,34 @@ def sharing_list(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
-    if formatter.json_mode:
-        formatter.output(result)
-    else:
-        from rich.table import Table
-
-        buckets = result["shared_buckets"]
-        if not buckets:
+    def render() -> None:
+        if not result["shared_buckets"]:
             formatter.console.print("[dim]No shared buckets found.[/dim]")
-            return
+        else:
+            from rich.table import Table
 
-        table = Table(title="Shared Buckets")
-        table.add_column("Source Project", style="bold")
-        table.add_column("Bucket ID", style="cyan")
-        table.add_column("Sharing Type", style="dim")
-        table.add_column("Backend", style="dim")
-        table.add_column("Tables", justify="right")
-        table.add_column("Rows", justify="right")
+            buckets = result["shared_buckets"]
+            table = Table(title="Shared Buckets")
+            table.add_column("Source Project", style="bold")
+            table.add_column("Bucket ID", style="cyan")
+            table.add_column("Sharing Type", style="dim")
+            table.add_column("Backend", style="dim")
+            table.add_column("Tables", justify="right")
+            table.add_column("Rows", justify="right")
 
-        for b in buckets:
-            table.add_row(
-                f"{b['source_project_name']} (#{b['source_project_id']})",
-                b["source_bucket_id"],
-                b["sharing"],
-                b["backend"],
-                str(len(b.get("tables", []))),
-                str(b["rows_count"]),
-            )
+            for b in buckets:
+                table.add_row(
+                    f"{b['source_project_name']} (#{b['source_project_id']})",
+                    b["source_bucket_id"],
+                    b["sharing"],
+                    b["backend"],
+                    str(len(b.get("tables", []))),
+                    str(b["rows_count"]),
+                )
 
-        formatter.console.print(table)
-        emit_project_warnings(formatter, result)
+            formatter.console.print(table)
+
+    finish_fanout(formatter, result, result.get("errors", []), render)
 
 
 @sharing_app.command("share")
@@ -115,15 +120,15 @@ def sharing_share(
             "'selected-users' (specific users, use --target-users)."
         ),
     ),
-    target_project_ids: str | None = typer.Option(
+    target_project_ids: list[str] | None = typer.Option(
         None,
         "--target-project-ids",
-        help="Comma-separated project IDs (required for --type selected-projects).",
+        help="Project ID (repeatable or comma-separated; required for --type selected-projects).",
     ),
-    target_users: str | None = typer.Option(
+    target_users: list[str] | None = typer.Option(
         None,
         "--target-users",
-        help="Comma-separated email addresses (required for --type selected-users).",
+        help="Email address (repeatable or comma-separated; required for --type selected-users).",
     ),
 ) -> None:
     """Enable sharing on a bucket.
@@ -143,22 +148,26 @@ def sharing_share(
     parsed_users: list[str] | None = None
 
     if sharing_type == "selected-projects":
-        if not target_project_ids:
+        try:
+            parsed_project_ids = split_int_multi(target_project_ids, label="--target-project-ids")
+        except ValueError as exc:
+            formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
+            raise typer.Exit(code=2) from None
+        if not parsed_project_ids:
             formatter.error(
                 message="--target-project-ids is required for --type selected-projects",
                 error_code=ErrorCode.USAGE_ERROR,
             )
             raise typer.Exit(code=2)
-        parsed_project_ids = [int(pid.strip()) for pid in target_project_ids.split(",")]
 
     if sharing_type == "selected-users":
-        if not target_users:
+        parsed_users = split_multi(target_users)
+        if not parsed_users:
             formatter.error(
                 message="--target-users is required for --type selected-users",
                 error_code=ErrorCode.USAGE_ERROR,
             )
             raise typer.Exit(code=2)
-        parsed_users = [u.strip() for u in target_users.split(",")]
 
     try:
         result = service.share(
@@ -334,7 +343,7 @@ def sharing_edges(
     project: list[str] | None = typer.Option(
         None,
         "--project",
-        help="Project alias to query (can be repeated for multiple projects).",
+        help=FANOUT_PROJECT_HELP,
     ),
     all_projects: AllProjectsOption = False,
 ) -> None:
@@ -346,8 +355,9 @@ def sharing_edges(
     For column-level lineage, use `lineage build` + `lineage show`.
     """
     formatter = get_formatter(ctx)
-    reject_project_with_all_projects(formatter, project, all_projects)
     service = get_service(ctx, "lineage_service")
+
+    project = fanout_projects(ctx, formatter, project, all_projects)
 
     try:
         result = service.get_lineage(aliases=project)
@@ -355,10 +365,9 @@ def sharing_edges(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
-    if formatter.json_mode:
-        formatter.output(result)
-    else:
+    def render() -> None:
         from ..output import format_lineage_table
 
         format_lineage_table(formatter.console, result)
-        emit_project_warnings(formatter, result)
+
+    finish_fanout(formatter, result, result.get("errors", []), render)

@@ -22,20 +22,27 @@ from ..constants import (
     PROJECT_ROLES,
 )
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
+from ..output import format_item_error
 from ..services.project_service import AUTH_MODE_SESSION, AUTH_MODE_STATIC
-from ._all_projects import AllProjectsOption, reject_project_with_all_projects
+from ._all_projects import (
+    FANOUT_ONE_PROJECT_HELP,
+    AllProjectsOption,
+    fanout_projects,
+    finish_fanout,
+)
 from ._helpers import (
     KEEP_TOKEN_FILE_OPTION,
     TOKEN_ENV_OPTION,
     TOKEN_FILE_OPTION,
     TOKEN_STDIN_OPTION,
+    RefuseAtFile,
     _confirm_or_abort,
     check_cli_permission,
     discard_token_file,
     emit_api_error,
+    finish_items,
     get_formatter,
     get_service,
-    item_failure_exit_code,
     map_error_to_exit_code,
     resolve_manage_token,
     resolve_storage_token_input,
@@ -515,16 +522,8 @@ def _format_refresh_result(console: Console, data: dict) -> None:
 
     # Failed projects
     failed = data.get("projects_failed", [])
-    if failed:
-        table = Table(title="Projects Failed")
-        table.add_column("Alias", style="bold cyan")
-        table.add_column("Error", style="bold red")
-
-        for p in failed:
-            table.add_row(p["alias"], p["error"])
-
-        console.print(table)
-        console.print()
+    for p in failed:
+        console.print(format_item_error(f"project '{p['alias']}'", p["error"]), soft_wrap=True)
 
     # Summary line
     summary_parts = []
@@ -544,21 +543,16 @@ def _format_refresh_result(console: Console, data: dict) -> None:
 @project_app.command("status")
 def project_status(
     ctx: typer.Context,
-    project: str | None = typer.Option(
-        None, "--project", help="Check only this project (default: all)"
-    ),
+    project: str | None = typer.Option(None, "--project", help=FANOUT_ONE_PROJECT_HELP),
     all_projects: AllProjectsOption = False,
 ) -> None:
-    """Test connectivity to connected Keboola projects."""
+    """Test connectivity to the active project, one project, or all projects."""
     formatter = get_formatter(ctx)
-    reject_project_with_all_projects(formatter, project, all_projects)
+    aliases = fanout_projects(ctx, formatter, [project] if project else None, all_projects)
     service = get_service(ctx, "project_service")
-
-    aliases = [project] if project else None
 
     try:
         statuses = service.get_status(aliases=aliases)
-        formatter.output(statuses, _format_status_table)
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
@@ -566,6 +560,14 @@ def project_status(
         exit_code = map_error_to_exit_code(exc)
         emit_api_error(formatter, exc)
         raise typer.Exit(code=exit_code) from None
+
+    # A project whose check failed is a row with status "error" (E4).
+    finish_fanout(
+        formatter,
+        statuses,
+        [s for s in statuses if s.get("status") == "error"],
+        lambda: _format_status_table(formatter.console, statuses),
+    )
 
 
 @project_app.command("refresh")
@@ -653,12 +655,15 @@ def project_refresh(
         would_refresh = len(preview.get("projects_refreshed", []))
         if would_refresh == 0:
             preview_failed = len(preview.get("projects_failed", []))
-            formatter.console.print(
-                "\nNo token to refresh." if preview_failed else "\nAll tokens are valid."
-            )
             # The preview is the whole run here: its failed projects are real (#745).
-            if code := item_failure_exit_code(preview_failed):
-                raise typer.Exit(code=code)
+            finish_items(
+                formatter,
+                preview,
+                failed=preview_failed,
+                total=_refresh_total(preview),
+                noun="projects",
+                summary="0 token(s) refreshed.",
+            )
             return
 
         _confirm_or_abort(formatter, yes, f"Proceed to refresh {would_refresh} token(s)?")
@@ -672,24 +677,36 @@ def project_refresh(
         raise typer.Exit(code=exit_code) from None
 
     # A project whose token check or refresh failed is collected, not raised (#745).
-    code = item_failure_exit_code(len(result.get("projects_failed", [])))
-    formatter.output(result, _format_refresh_result, exit_code=code or 0)
-    if code:
-        raise typer.Exit(code=code)
+    done_as = "would be refreshed" if result.get("dry_run") else "refreshed"
+    finish_items(
+        formatter,
+        result,
+        failed=len(result.get("projects_failed", [])),
+        total=_refresh_total(result),
+        noun="projects",
+        summary=f"{len(result.get('projects_refreshed', []))} token(s) {done_as}.",
+        render=lambda: _format_refresh_result(formatter.console, result),
+    )
 
 
-# ── Project pin (default project) ─────────────────────────────────────
+def _refresh_total(data: dict[str, Any]) -> int:
+    """Every project that `project refresh` looked at."""
+    keys = ("projects_refreshed", "projects_valid", "projects_skipped", "projects_failed")
+    return sum(len(data.get(key, [])) for key in keys)
+
+
+# ── Active project (`project use`) ────────────────────────────────────
 
 
 @project_app.command("use")
 def project_use(
     ctx: typer.Context,
-    alias: str = typer.Argument(..., help="Project alias to pin as default"),
+    alias: str = typer.Argument(..., help="Project alias or ID to set as the active project"),
 ) -> None:
-    """Pin <alias> as the default project for subsequent commands.
+    """Set <alias> as the active project for later commands.
 
-    The pin persists in config.json. ``KBAGENT_PROJECT`` overrides it for a
-    single invocation; an explicit ``--project`` flag overrides both.
+    The active project is saved in config.json. ``KBAGENT_PROJECT`` overrides
+    it for a single invocation; an explicit ``--project`` flag overrides both.
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "project_service")
@@ -705,10 +722,10 @@ def project_use(
 
 @project_app.command("current")
 def project_current(ctx: typer.Context) -> None:
-    """Show the effective default project.
+    """Show the active project.
 
     Reports whether the value comes from the ``KBAGENT_PROJECT`` env var
-    (``env``) or the persisted pin (``pin``). Prints nothing but a hint if
+    (``env``) or the saved active project (``pin``). Prints nothing but a hint if
     neither is set. ``resolved_alias`` / ``resolved_source`` name the project
     a command without ``--project`` would use (``env``, ``active_project``,
     ``sole``, or ``none``).
@@ -767,7 +784,9 @@ def project_description_set(
         "--project",
         help="Project alias to update",
     ),
-    text: str | None = typer.Option(None, "--text", help="Inline description string"),
+    text: str | None = typer.Option(
+        None, "--text", help="Inline description string", callback=RefuseAtFile("--file").callback
+    ),
     file: Path | None = typer.Option(
         None,
         "--file",
@@ -916,16 +935,25 @@ def _format_bulk_invite_result(console: Console, data: dict[str, Any]) -> None:
         f"succeeded={data['succeeded']} noop={data['noop']} failed={data['failed']}"
         + (" [dim](dry-run)[/dim]" if data.get("dry_run") else "")
     )
-    rows = data.get("rows") or []
-    if not rows:
-        return
+    all_rows = data.get("rows") or []
+    # A failed row is one `Error:` line after the table (HO2), not a table row.
+    rows = [row for row in all_rows if row.get("status") != "failed"]
+    failed_rows = [row for row in all_rows if row.get("status") == "failed"]
+    if rows:
+        _print_invite_rows(console, rows)
+    for row in failed_rows:
+        item = f"{row.get('email', '')} in {row.get('project', '')}"
+        console.print(format_item_error(item, row.get("note", "")), soft_wrap=True)
+
+
+def _print_invite_rows(console: Console, rows: list[dict[str, Any]]) -> None:
     table = Table(title="Per-row results")
     table.add_column("Status", style="bold")
     table.add_column("Email")
     table.add_column("Project")
     table.add_column("Role")
     table.add_column("Note")
-    status_style = {"ok": "green", "noop": "yellow", "failed": "red"}
+    status_style = {"ok": "green", "noop": "yellow"}
     for row in rows:
         status = row.get("status", "")
         style = status_style.get(status, "white")
@@ -1073,10 +1101,17 @@ def project_invite(
             payload = result.model_dump()
             # A CSV where every row failed still printed "failed=N" and exit 0,
             # so a CI step could not tell a clean run from a total one (#745).
-            code = item_failure_exit_code(payload.get("failed", 0))
-            formatter.output(payload, _format_bulk_invite_result, exit_code=code or 0)
-            if code:
-                raise typer.Exit(code=code)
+            finish_items(
+                formatter,
+                payload,
+                failed=payload.get("failed", 0),
+                total=payload.get("total", 0),
+                noun="rows",
+                summary=f"{payload.get('succeeded', 0)} member(s) "
+                f"{'would be invited' if payload.get('dry_run') else 'invited'}, "
+                f"{payload.get('noop', 0)} unchanged.",
+                render=lambda: _format_bulk_invite_result(formatter.console, payload),
+            )
             return
 
         result = service.invite(

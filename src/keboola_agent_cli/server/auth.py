@@ -13,11 +13,11 @@ import logging
 from dataclasses import dataclass
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
 from ..errors import ErrorCode
+from .response_meta import error_response
 
 logger = logging.getLogger(__name__)
 
@@ -88,27 +88,13 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
                 value = cookie_token
                 scheme = "bearer"
         if scheme.lower() != "bearer" or not value:
-            return JSONResponse(
-                status_code=401,
-                content={
-                    "status": "error",
-                    "error": {
-                        "code": str(ErrorCode.UNAUTHORIZED),
-                        "message": "Missing Bearer token. Set Authorization header.",
-                    },
-                },
+            return error_response(
+                "Missing Bearer token. Set Authorization header.",
+                ErrorCode.UNAUTHORIZED,
+                http_status=401,
             )
         if not hmac.compare_digest(value, self._token):
-            return JSONResponse(
-                status_code=401,
-                content={
-                    "status": "error",
-                    "error": {
-                        "code": str(ErrorCode.UNAUTHORIZED),
-                        "message": "Invalid Bearer token.",
-                    },
-                },
-            )
+            return error_response("Invalid Bearer token.", ErrorCode.UNAUTHORIZED, http_status=401)
         return await call_next(request)
 
 

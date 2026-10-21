@@ -1,8 +1,9 @@
-"""The two additive forms that 1.0.0 needs (#791 step 1, CLI-36).
+"""``--all-projects`` and the top-level ``warnings[]`` (#791, CLI-36, CLI-45).
 
-1. ``--all-projects`` on the fan-out reads. Until 1.0.0 it does the same as an
-   omitted ``--project``: the same service call and the same output. With
-   ``--project`` it is a usage error (exit 2), like ``workspace gc``.
+1. ``--all-projects`` on the fan-out reads reads every registered project; an
+   omitted ``--project`` uses the active project (spec T2, since CLI-45). With
+   ``--project`` it is a usage error (exit 2), like ``workspace gc``. The
+   contract cases of the change are in ``tests/test_target_selection.py``.
 2. The optional top-level ``warnings`` key of the ``--json`` envelope.
    ``OutputFormatter.warning()`` adds to it in JSON mode; the key is present
    only when not empty, in the success and in the error envelope. Human mode
@@ -21,17 +22,15 @@ from rich.markup import escape
 from typer.testing import CliRunner
 
 from keboola_agent_cli.cli import app
-from keboola_agent_cli.commands._helpers import emit_project_warnings
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.models import ProjectConfig
 from keboola_agent_cli.output import OutputFormatter, _plain_text
 
 runner = CliRunner()
 
-# The reads whose omitted --project reads all registered projects:
-# (command line without --project, service class in cli.py, service method).
-# `config detail` is not here: it requires --project. `project status` is: it
-# takes one --project, and moves to the default-project chain in 1.0.0 too.
+# The 18 fan-out reads (spec "Fan-out reads"): (command line without
+# --project, service class in cli.py, service method). `config detail` is not
+# here: it requires --project. `project status` is: it takes one --project.
 FAN_OUT_READS = [
     pytest.param(["search", "orders"], "SearchService", "search", id="search"),
     pytest.param(["billing", "credits"], "BillingService", "get_credits", id="billing-credits"),
@@ -86,7 +85,8 @@ def _invoke(
 ) -> tuple[Any, MagicMock]:
     """Run ``kbagent --json ARGS`` with the command's service replaced by a mock."""
     service = MagicMock()
-    getattr(service, method).return_value = {"errors": []}
+    # `project status` returns a list of status rows; the other reads a dict.
+    getattr(service, method).return_value = [] if method == "get_status" else {"errors": []}
     with (
         patch("keboola_agent_cli.cli.ConfigStore") as store_class,
         patch(f"keboola_agent_cli.cli.{service_class}") as service_factory,
@@ -99,20 +99,24 @@ def _invoke(
 
 class TestAllProjects:
     @pytest.mark.parametrize(("args", "service_class", "method"), FAN_OUT_READS)
-    def test_same_result_as_omitted_project(
+    def test_all_projects_reads_every_project(
         self, tmp_path: Path, args: list[str], service_class: str, method: str
     ) -> None:
-        omitted, omitted_call = _invoke(tmp_path, args, service_class, method)
-        explicit, explicit_call = _invoke(
-            tmp_path, [*args, "--all-projects"], service_class, method
-        )
+        result, call = _invoke(tmp_path, [*args, "--all-projects"], service_class, method)
 
-        assert omitted.exit_code == 0, omitted.output
-        assert explicit.exit_code == 0, explicit.output
-        assert explicit.stdout == omitted.stdout
-        assert explicit_call.call_args == omitted_call.call_args
-        # The omitted --project fans out: the service gets no project list.
-        assert not omitted_call.call_args.kwargs["aliases"]
+        assert result.exit_code == 0, result.output
+        # The service gets no project list: it reads every registered project.
+        assert call.call_args.kwargs["aliases"] is None
+
+    @pytest.mark.parametrize(("args", "service_class", "method"), FAN_OUT_READS)
+    def test_omitted_project_reads_the_active_project(
+        self, tmp_path: Path, args: list[str], service_class: str, method: str
+    ) -> None:
+        result, call = _invoke(tmp_path, args, service_class, method)
+
+        assert result.exit_code == 0, result.output
+        # `project add` made the first registered project the active one.
+        assert call.call_args.kwargs["aliases"] == ["prod"]
 
     @pytest.mark.parametrize(("args", "service_class", "method"), FAN_OUT_READS)
     def test_with_project_is_a_usage_error(
@@ -303,7 +307,8 @@ class TestComponentListQueryWithAllProjects:
         )
 
         assert result.exit_code == 0, result.output
-        assert call.call_args.kwargs["aliases"] is None
+        # --query reads one project: the active one.
+        assert call.call_args.kwargs["aliases"] == ["prod"]
         warnings = json.loads(result.stdout)["warnings"]
         assert [entry["code"] for entry in warnings] == ["WARNING"]
         assert "--all-projects has no effect" in warnings[0]["message"]
@@ -344,17 +349,10 @@ class TestPlainTextKeepsBrackets:
     def test_escaped_text_comes_back_unchanged(self) -> None:
         assert _plain_text(escape("[bold] and [in.c-main.x]")) == "[bold] and [in.c-main.x]"
 
-    def test_emit_project_warnings_keeps_a_bracketed_backend_message(
+    def test_item_error_keeps_a_bracketed_backend_message(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """The commands call this helper only in human mode; this runs it in JSON mode."""
-        formatter = OutputFormatter(json_mode=True)
-        emit_project_warnings(
-            formatter,
-            {"errors": [{"project_alias": "prod", "message": "Bucket [in.c-main.x] failed"}]},
-        )
-        formatter.output({})
-
-        assert _json_document(capsys)["warnings"] == [
-            {"code": "WARNING", "message": "Project 'prod': Bucket [in.c-main.x] failed"}
-        ]
+        """A failed project is one stdout line; Rich must not read the bucket ID as markup."""
+        OutputFormatter(no_color=True).item_error("project 'prod'", "Bucket [in.c-main.x] failed")
+        out = capsys.readouterr().out
+        assert out.strip() == "Error: project 'prod': Bucket [in.c-main.x] failed"

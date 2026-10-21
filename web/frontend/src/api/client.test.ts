@@ -116,6 +116,50 @@ describe("request 401 retry", () => {
     expect(events).toHaveLength(0);
   });
 
+  it("treats a 401 with a non-session code as a normal error", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      jsonResponse(401, {
+        status: "error",
+        error: { code: "INVALID_TOKEN", message: "Invalid token for project prod" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const events: Event[] = [];
+    window.addEventListener(SESSION_EXPIRED_EVENT, (evt) => events.push(evt));
+
+    await expect(api.get("/projects")).rejects.toMatchObject({
+      code: "INVALID_TOKEN",
+      status: 401,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(events).toHaveLength(0);
+  });
+
+  it("retries and dispatches for a session code from the host", async () => {
+    const expired = () =>
+      jsonResponse(401, {
+        status: "error",
+        error: { code: "SESSION_EXPIRED", message: "Run kbagent auth login." },
+      });
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(expired())
+      .mockResolvedValueOnce(shellResponse())
+      .mockResolvedValueOnce(expired());
+    vi.stubGlobal("fetch", fetchMock);
+    const events: CustomEvent[] = [];
+    window.addEventListener(SESSION_EXPIRED_EVENT, (evt) => {
+      events.push(evt as CustomEvent);
+    });
+
+    await expect(api.get("/projects")).rejects.toMatchObject({ status: 401 });
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(events).toHaveLength(1);
+    expect(events[0].detail).toMatchObject({ code: "SESSION_EXPIRED" });
+  });
+
   it("shares a single shell re-fetch across concurrent 401s", async () => {
     let releaseShell: (() => void) | undefined;
     const shellGate = new Promise<void>((resolve) => {

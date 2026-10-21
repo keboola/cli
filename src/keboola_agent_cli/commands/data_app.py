@@ -22,7 +22,12 @@ from rich.markup import escape
 from ..constants import DEFAULT_JOB_RUN_TIMEOUT
 from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError, exit_code_for
-from ._all_projects import AllProjectsOption, reject_project_with_all_projects
+from ._all_projects import (
+    FANOUT_PROJECT_HELP,
+    AllProjectsOption,
+    fanout_projects,
+    finish_fanout,
+)
 from ._data_app_git import register_git_commands
 from ._data_app_password import (
     CopyOption,
@@ -39,7 +44,6 @@ from ._helpers import (
     _confirm_or_abort,
     check_cli_permission,
     emit_api_error,
-    emit_project_warnings,
     get_formatter,
     get_service,
     map_error_to_exit_code,
@@ -111,7 +115,7 @@ def data_app_list(
     project: list[str] | None = typer.Option(
         None,
         "--project",
-        help="Project alias to query (repeatable). None = all projects.",
+        help=FANOUT_PROJECT_HELP,
     ),
     all_projects: AllProjectsOption = False,
     branch: int | None = typer.Option(
@@ -122,8 +126,10 @@ def data_app_list(
 ) -> None:
     """List data apps across one or more registered projects."""
     formatter = get_formatter(ctx)
-    reject_project_with_all_projects(formatter, project, all_projects)
     service = get_service(ctx, "data_app_service")
+
+    project = fanout_projects(ctx, formatter, project, all_projects)
+
     try:
         if project and len(project) == 1:
             branch = resolve_branch(
@@ -140,11 +146,10 @@ def data_app_list(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
-    if formatter.json_mode:
-        formatter.output(result)
-    else:
+    def render() -> None:
         _print_data_app_table(formatter, result)
-        emit_project_warnings(formatter, result)
+
+    finish_fanout(formatter, result, result.get("errors", []), render)
 
 
 # ---------------------------------------------------------------------------
@@ -359,12 +364,14 @@ def data_app_create(
     wait: bool = typer.Option(
         False,
         "--wait",
-        help="Block until state == running (or error). Respects pitfall #1: stopped is not terminal.",
+        help="Block until state == running (or error). Respects pitfall #1: stopped is not "
+        "terminal. Default: no wait.",
     ),
     timeout: float = typer.Option(
         DEFAULT_JOB_RUN_TIMEOUT,
         "--timeout",
-        help="Maximum seconds to wait for state == running (default 300).",
+        help=f"Maximum seconds to wait for state == running, with --wait. "
+        f"Default: {DEFAULT_JOB_RUN_TIMEOUT:g}.",
     ),
     keep_on_failure: bool = typer.Option(
         False,
@@ -406,7 +413,7 @@ def data_app_create(
     if description_file is not None:
         try:
             effective_description = description_file.read_text(encoding="utf-8")
-        except OSError as exc:
+        except (OSError, UnicodeDecodeError) as exc:
             formatter.error(
                 message=f"Cannot read --description-file {description_file}: {exc}",
                 error_code=ErrorCode.READ_ERROR,
@@ -541,9 +548,13 @@ def data_app_deploy(
         "--config-version",
         help="Pin a specific Storage config version (defaults to latest).",
     ),
-    wait: bool = typer.Option(False, "--wait", help="Block until running or error."),
+    wait: bool = typer.Option(
+        False, "--wait", help="Block until running or error. Default: no wait."
+    ),
     timeout: float = typer.Option(
-        DEFAULT_JOB_RUN_TIMEOUT, "--timeout", help="Max seconds to wait."
+        DEFAULT_JOB_RUN_TIMEOUT,
+        "--timeout",
+        help=f"Max seconds to wait, with --wait. Default: {DEFAULT_JOB_RUN_TIMEOUT:g}.",
     ),
     branch: int | None = typer.Option(
         None,
@@ -588,9 +599,13 @@ def data_app_start(
     ctx: typer.Context,
     project: str = typer.Option(..., "--project", help="Project alias"),
     app_id: str = typer.Option(..., "--app-id", help="Data Science numeric app id"),
-    wait: bool = typer.Option(False, "--wait", help="Block until running or error."),
+    wait: bool = typer.Option(
+        False, "--wait", help="Block until running or error. Default: no wait."
+    ),
     timeout: float = typer.Option(
-        DEFAULT_JOB_RUN_TIMEOUT, "--timeout", help="Max seconds to wait."
+        DEFAULT_JOB_RUN_TIMEOUT,
+        "--timeout",
+        help=f"Max seconds to wait, with --wait. Default: {DEFAULT_JOB_RUN_TIMEOUT:g}.",
     ),
 ) -> None:
     """Wake an auto-suspended data app at its currently-pinned configVersion."""
@@ -609,9 +624,11 @@ def data_app_stop(
     ctx: typer.Context,
     project: str = typer.Option(..., "--project", help="Project alias"),
     app_id: str = typer.Option(..., "--app-id", help="Data Science numeric app id"),
-    wait: bool = typer.Option(False, "--wait", help="Block until stopped."),
+    wait: bool = typer.Option(False, "--wait", help="Block until stopped. Default: no wait."),
     timeout: float = typer.Option(
-        DEFAULT_JOB_RUN_TIMEOUT, "--timeout", help="Max seconds to wait."
+        DEFAULT_JOB_RUN_TIMEOUT,
+        "--timeout",
+        help=f"Max seconds to wait, with --wait. Default: {DEFAULT_JOB_RUN_TIMEOUT:g}.",
     ),
 ) -> None:
     """Stop a running data app (preserves the URL and Storage config)."""

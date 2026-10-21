@@ -17,11 +17,15 @@ from ..constants import VALID_COMPONENT_TYPES
 from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..services.component_service import DOCUMENTATION_SOURCE_STORAGE_CATALOG
-from ._all_projects import ALL_PROJECTS_HELP, reject_project_with_all_projects
+from ._all_projects import (
+    ALL_PROJECTS_HELP,
+    FANOUT_PROJECT_HELP,
+    fanout_projects,
+    finish_fanout,
+)
 from ._helpers import (
     check_cli_permission,
     emit_api_error,
-    emit_project_warnings,
     get_formatter,
     get_service,
     map_error_to_exit_code,
@@ -46,12 +50,6 @@ def _format_components_table(console: Console, data: dict) -> None:
     components = data.get("components", [])
     errors = data.get("errors", [])
     is_search = data.get("query") is not None
-
-    for err in errors:
-        console.print(
-            f"[bold yellow]Warning:[/bold yellow] Project [bold]{err['project_alias']}[/bold]: "
-            f"{err['message']}"
-        )
 
     if not components:
         if not errors:
@@ -153,12 +151,12 @@ def component_list(
     project: list[str] | None = typer.Option(
         None,
         "--project",
-        help="Project alias to query (can be repeated for multiple projects)",
+        help=FANOUT_PROJECT_HELP,
     ),
     all_projects: bool = typer.Option(
         False,
         "--all-projects",
-        help=f"{ALL_PROJECTS_HELP} No effect with --query: --query searches only the default project.",
+        help=f"{ALL_PROJECTS_HELP} No effect with --query: --query searches only one project.",
     ),
     component_type: str | None = typer.Option(
         None,
@@ -172,9 +170,8 @@ def component_list(
         help="Search query to filter components by name or description",
     ),
 ) -> None:
-    """List available components from connected projects."""
+    """List the components of the active project, the given projects, or all projects."""
     formatter = get_formatter(ctx)
-    reject_project_with_all_projects(formatter, project, all_projects)
     service = get_service(ctx, "component_service")
 
     # Validate component_type if provided
@@ -186,10 +183,12 @@ def component_list(
         )
         raise typer.Exit(code=2)
 
-    if all_projects and query:
+    if all_projects and query and not project:
         formatter.warning(
-            "--query searches only the default project; --all-projects has no effect with it."
+            "--query searches only the active project; --all-projects has no effect with it."
         )
+        all_projects = False
+    project = fanout_projects(ctx, formatter, project, all_projects)
 
     try:
         result = service.list_components(
@@ -201,11 +200,10 @@ def component_list(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
-    if formatter.json_mode:
-        formatter.output(result)
-    else:
+    def render() -> None:
         _format_components_table(formatter.console, result)
-        emit_project_warnings(formatter, result)
+
+    finish_fanout(formatter, result, result.get("errors", []), render)
 
 
 @component_app.command("detail")
@@ -219,7 +217,7 @@ def component_detail(
     project: str | None = typer.Option(
         None,
         "--project",
-        help="Project alias (defaults to the pinned default project)",
+        help="Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)",
     ),
 ) -> None:
     """Show detailed information about a specific component."""
@@ -347,12 +345,9 @@ def component_sync_action(
     override: dict | None = None
     if config_data is not None:
         try:
-            override = _parse_json_input(config_data)
-        except (json.JSONDecodeError, FileNotFoundError) as exc:
-            formatter.error(
-                message=f"Invalid --config-data input: {exc}",
-                error_code=ErrorCode.VALIDATION_ERROR,
-            )
+            override = _parse_json_input(config_data, label="--config-data")
+        except ValueError as exc:
+            formatter.error(message=str(exc), error_code=ErrorCode.VALIDATION_ERROR)
             raise typer.Exit(code=2) from None
 
     effective_branch = resolve_branch(config_store, project, branch)

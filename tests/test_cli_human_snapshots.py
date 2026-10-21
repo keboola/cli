@@ -8,8 +8,10 @@ change to a renderer shows as a snapshot diff in the pull request.
 
 Renderers covered: a table (``config list``), a panel (``config detail``), the
 ``Target:`` and ``Source:`` lines, a ``Success:`` headline (``project
-remove``), a ``Warning:`` notice (``branch merge``), an ``Error:`` line, and
-the per-project failure notice of a fan-out read (``config list``).
+remove``), a ``Warning:`` notice (``branch merge``), an ``Error:`` line, the
+per-project failure notice of a fan-out read (``config list``), the
+multi-item headline (``storage delete-table``) and the ``auth login`` notices
+on stderr.
 
 Trailing spaces are removed from every line; Rich pads table titles with them.
 
@@ -23,6 +25,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import Any
+from unittest.mock import MagicMock, patch
 
 import pytest
 from rich.console import Console
@@ -30,8 +33,11 @@ from typer.testing import CliRunner
 
 from helpers import mock_api_routes, setup_single_project
 from keboola_agent_cli import output
+from keboola_agent_cli.auth.models import DeviceAuthorization
 from keboola_agent_cli.cli import app
 from keboola_agent_cli.constants import ENV_AUTO_UPDATE
+from keboola_agent_cli.services.auth_service import LoginResult
+from keboola_agent_cli.services.storage_service import StorageService
 
 SNAPSHOT_DIR = Path(__file__).parent / "snapshots" / "human_output"
 UPDATE = os.environ.get("KBAGENT_UPDATE_SNAPSHOTS") == "1"
@@ -160,7 +166,72 @@ def test_fanout_failure_notice_matches_snapshot(tmp_config_dir: Path, httpx_mock
     _check("config_list_fanout_failure", _render(result.exit_code, result.stdout, result.stderr))
 
 
+DELETE_RESULTS: dict[str, dict[str, Any]] = {
+    "storage_delete_table_headline_success": {
+        "deleted": ["in.c-main.orders", "in.c-main.items"],
+        "failed": [],
+    },
+    "storage_delete_table_headline_failed": {
+        "deleted": ["in.c-main.orders"],
+        "failed": [{"id": "in.c-main.items", "error": "Table is used by an alias"}],
+    },
+}
+
+
+@pytest.mark.parametrize("name", sorted(DELETE_RESULTS))
+def test_multi_item_headline_matches_snapshot(
+    name: str, tmp_config_dir: Path, httpx_mock: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """HO2: the one closing `Success:` or `Failed: N of M` line of a multi-item command."""
+    setup_single_project(tmp_config_dir)
+    mock_api_routes(httpx_mock, ROUTES)
+    result_data = {**DELETE_RESULTS[name], "dry_run": False, "project_alias": "prod"}
+    monkeypatch.setattr(StorageService, "delete_tables", lambda _self, **_kw: result_data)
+    args = ["storage", "delete-table", "--project", "prod", "--yes"]
+    args += ["--table-id", "in.c-main.orders", "--table-id", "in.c-main.items"]
+    result = runner.invoke(app, ["--config-dir", str(tmp_config_dir), *args])
+    _check(name, _render(result.exit_code, result.stdout, result.stderr))
+
+
+def test_auth_login_notices_match_snapshot(tmp_config_dir: Path) -> None:
+    """HO1, row 30 of keboola/cli#791: the device panel and the notices are on stderr."""
+
+    def _login(**kwargs: Any) -> LoginResult:
+        kwargs["on_notice"]("Using device login: --no-open is set.")
+        kwargs["on_device_prompt"](
+            DeviceAuthorization(
+                deviceCode="dc",
+                userCode="ABCD-EFGH",
+                verificationUri="https://connection.keboola.com/device",
+            )
+        )
+        return LoginResult(
+            status="ok",
+            method="device",
+            stack_url="https://connection.keboola.com",
+            session_id="sess-1",
+            user_email="user@example.com",
+            user_name="Test User",
+            access_expires_at="2026-07-27T12:00:00+00:00",
+            refresh_expires_at="2026-08-26T12:00:00+00:00",
+            fallback_reason="--no-open is set.",
+            replaced_session_id="",
+            orphaned_session_id="",
+            accessible_projects=[],
+            registered_projects=[],
+            warnings=[],
+        )
+
+    service = MagicMock()
+    service.login.side_effect = _login
+    with patch("keboola_agent_cli.cli.AuthService", return_value=service):
+        result = runner.invoke(
+            app, ["--config-dir", str(tmp_config_dir), "auth", "login", "--no-open"]
+        )
+    _check("auth_login_notices", _render(result.exit_code, result.stdout, result.stderr))
+
+
 def test_every_snapshot_has_a_case() -> None:
-    names = {*CASES, "config_list_fanout_failure"}
+    names = {*CASES, *DELETE_RESULTS, "config_list_fanout_failure", "auth_login_notices"}
     stale = sorted(p.stem for p in SNAPSHOT_DIR.glob("*.txt") if p.stem not in names)
     assert stale == [], f"snapshots without a test case: {stale}"

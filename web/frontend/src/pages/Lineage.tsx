@@ -3,6 +3,7 @@ import { ArrowLeftRight, FolderOpen, Hammer, Network } from "lucide-react";
 import mermaid from "mermaid";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api/client";
+import { projectScope } from "../lib/projectScope";
 import { Empty, ErrorBox, Loading, PageTitle } from "../components/Empty";
 import { JsonView } from "../components/JsonView";
 import { DataTable } from "../components/Table";
@@ -97,7 +98,7 @@ export function LineagePage() {
 function SharingTab({ onOpenDeepLineage }: { onOpenDeepLineage: () => void }) {
   const q = useQuery<SharingResp>({
     queryKey: ["lineage-sharing"],
-    queryFn: () => api.get("/lineage/edges"),
+    queryFn: () => api.get("/lineage/edges", { query: projectScope(null) }),
   });
   return (
     <>

@@ -21,17 +21,22 @@ from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..output import OutputFormatter, format_query_results, format_workspaces_table
 from ..services._storage_jobs import validate_wait_timeout
 from ..services._workspace_load_plan import LoadTablePlan
-from ._all_projects import AllProjectsOption, reject_project_with_all_projects
+from ._all_projects import (
+    FANOUT_PROJECT_HELP,
+    AllProjectsOption,
+    fanout_projects,
+    finish_fanout,
+)
 from ._helpers import (
     _confirm_or_abort,
     check_cli_permission,
     emit_api_error,
-    emit_project_warnings,
+    finish_items,
     get_formatter,
     get_service,
     is_interactive_terminal,
-    item_failure_exit_code,
     map_error_to_exit_code,
+    read_text_arg,
 )
 
 workspace_app = typer.Typer(help="Workspace lifecycle for SQL debugging")
@@ -167,7 +172,7 @@ def workspace_list(
     project: list[str] | None = typer.Option(
         None,
         "--project",
-        help="Project alias to query (can be repeated for multiple projects)",
+        help=FANOUT_PROJECT_HELP,
     ),
     all_projects: AllProjectsOption = False,
     orphaned: bool = typer.Option(
@@ -188,7 +193,7 @@ def workspace_list(
         "Service AND that are read-only -- the canonical shape for a data-app.",
     ),
 ) -> None:
-    """List workspaces from connected projects.
+    """List workspaces of the active project, the given projects, or all projects.
 
     Branch handling: without `--branch`, each project's active branch (`branch
     use`) is used, else production. The `Target:` line on stderr (`targets` in
@@ -199,15 +204,16 @@ def workspace_list(
     workspace without firing a probe query (closes #304).
     """
     formatter = get_formatter(ctx)
-    reject_project_with_all_projects(formatter, project, all_projects)
     service = get_service(ctx, "workspace_service")
 
-    if branch is not None and (not project or len(project) != 1):
+    if branch is not None and (all_projects or len(project or []) > 1):
         formatter.error(
             message="--branch requires exactly one --project (branch ID is per-project)",
             error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2)
+
+    project = fanout_projects(ctx, formatter, project, all_projects)
 
     try:
         result = service.list_workspaces(
@@ -224,11 +230,10 @@ def workspace_list(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
-    if formatter.json_mode:
-        formatter.output(result)
-    else:
+    def render() -> None:
         format_workspaces_table(formatter.console, result)
-        emit_project_warnings(formatter, result)
+
+    finish_fanout(formatter, result, result.get("errors", []), render)
 
 
 @workspace_app.command("detail")
@@ -561,7 +566,7 @@ def workspace_query(
         effective_sql = sql
     else:
         assert file is not None  # guaranteed: guard above exits if both sql and file absent
-        effective_sql = file.read_text(encoding="utf-8")
+        effective_sql = read_text_arg(formatter, file, label="--file")
 
     try:
         result = service.execute_query(
@@ -663,11 +668,7 @@ def workspace_gc(
 
     # A workspace that could not be deleted, or a project that could not be
     # listed, is collected in errors[]; the run is then not a success (#745).
-    code = item_failure_exit_code(len(result.get("errors", [])))
-    if formatter.json_mode:
-        formatter.output(result, exit_code=code or 0)
-    else:
-        formatter.console.print(result.get("message", ""))
+    def render() -> None:
         if dry_run:
             would_delete = result.get("would_delete", [])
             for ws in would_delete:
@@ -683,15 +684,24 @@ def workspace_gc(
         # Listing failures carry `message`, delete failures carry `workspace_id` and `error`.
         for err in result.get("errors", []):
             target = (
-                f"workspace {err['workspace_id']} in '{escape(err['project_alias'])}'"
+                f"workspace {err['workspace_id']} in '{err['project_alias']}'"
                 if "workspace_id" in err
-                else f"project '{escape(err.get('project_alias', '?'))}'"
+                else f"project '{err.get('project_alias', '?')}'"
             )
-            text = escape(str(err.get("error") or err.get("message") or ""))
-            formatter.console.print(f"  [red]error[/red] {target}: {text}")
+            formatter.item_error(target, err.get("error") or err.get("message") or "")
 
-    if code:
-        raise typer.Exit(code=code)
+    # Items are workspaces to delete and projects to list.
+    done = len(result.get("would_delete" if dry_run else "deleted", []))
+    failed = len(result.get("errors", []))
+    finish_items(
+        formatter,
+        result,
+        failed=failed,
+        total=done + failed,
+        noun="items",
+        summary=f"{done} workspace(s) {'would be deleted' if dry_run else 'deleted'}.",
+        render=render,
+    )
 
 
 @workspace_app.command("from-transformation")

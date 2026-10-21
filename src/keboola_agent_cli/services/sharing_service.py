@@ -125,13 +125,18 @@ class SharingService(BaseService):
         finally:
             client.close()
 
-        return {
+        result: dict[str, Any] = {
             "project_alias": alias,
             "bucket_id": bucket_id,
             "sharing_type": sharing_type,
             "job_status": job.get("status", "unknown"),
             "message": f"Bucket '{bucket_id}' shared as '{sharing_type}' in project '{alias}'.",
         }
+        if target_project_ids:
+            result["target_project_ids"] = target_project_ids
+        if target_users:
+            result["target_users"] = target_users
+        return result
 
     def unshare(
         self,

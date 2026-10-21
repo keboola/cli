@@ -162,7 +162,7 @@ Other behaviour worth knowing:
 ### `auth login`
 
 ```bash
-kbagent auth login [--stack URL|ALIAS] [--device-code] [--register-projects]
+kbagent auth login [--stack URL|ALIAS] [--device-code] [--register-projects] [--no-open]
 ```
 
 - **The stack is resolved, never discovered.** `--stack` accepts a stack URL

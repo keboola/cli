@@ -45,7 +45,7 @@ Each rule has an ID (`A1`, `T5`, …), a level, the version from which it applie
 - **Checked by**: a rule id of `make cli-spec-check` (for example `output.no-direct-print`), a named test, or **review**. A rule id is **report only** when the check prints its count but never fails. A rule id is **deferred** when the check does not run yet; `python scripts/check_cli_spec.py --list-rules` prints each rule id, its kind and what checks it.
 - **Anchors**: every spec ID and every rule id of the check has an anchor, so `docs/cli-interface-spec.md#A1` and `docs/cli-interface-spec.md#output.no-direct-print` both work. The failure lines of the check link to these anchors.
 
-The baseline `scripts/cli_spec_baseline.json` lists the existing violations of each rule id and a `blocking` flag per rule id. A new violation of a blocking rule fails CI, whatever the level of the spec rule behind it: a check that serves a SHOULD rule fails the same way as one that serves a MUST rule. A fix removes its line from the baseline (`make cli-spec-baseline`). On a pull request the number of entries per blocking rule can only shrink against the base branch; a rename keeps the count. A reviewed deviation goes into `exceptions` with a reason, where the diff shows it; CI accepts a new exception only when a reviewer has added the label `cli-spec-exception` to the pull request.
+The baseline `scripts/cli_spec_baseline.json` lists the existing violations of each rule id and a `blocking` flag per rule id. A new violation of a blocking rule fails CI, whatever the level of the spec rule behind it: a check that serves a SHOULD rule fails the same way as one that serves a MUST rule. A fix removes its line from the baseline (`make cli-spec-baseline`). On a pull request the number of entries per blocking rule can only shrink against the base branch; a rename keeps the count. A rule id that the base branch's baseline does not have yet starts its baseline in the pull request that adds it; from then on its count can only shrink. A reviewed deviation goes into `exceptions` with a reason, where the diff shows it; CI accepts a new exception only when a reviewer has added the label `cli-spec-exception` to the pull request.
 
 A rule changes only through a pull request that changes this document. When a new rule id lands in the check, its spec rule names it in the same pull request.
 
@@ -152,7 +152,7 @@ Every rule with its level, the version from which it applies, and how it is chec
 | [HO2](#HO2) | MUST | now for new commands; 1.0.0 for existing ones | `output.multi-item-headline`, review |
 | [HO3](#HO3) | MUST | now | review |
 | [HO4](#HO4) | SHOULD | now | `output.no-direct-print` |
-| [HO5](#HO5) | MUST | now for `config oauth-url`; `auth login` when `--no-open` is added | review |
+| [HO5](#HO5) | MUST | now | review |
 | [HO6](#HO6) | MUST | now | `output.no-direct-print` |
 | [HO7](#HO7) | MUST | now | `output.human-snapshots`, `tests/test_cli_human_snapshots.py` |
 | [SEC1](#SEC1) | MUST | now | review |
@@ -272,7 +272,7 @@ What stays as it is:
 - Checked by: `args.no-positional-arguments`, `args.no-bare-id-option` (both report only).
 
 <a id="A4"></a><a id="args.list-option-repeatable"></a>
-**A4 · MUST · now for new options; 1.0.0 for existing ones.** A list-valued option is repeatable. An option whose values are IDs or fixed values (project IDs, table IDs, types) also accepts a comma list in one occurrence. An option with free-form values (JSON, `KEY=VALUE`, `PATH=VALUE`, SQL, text; for example `transformation edit --op`, `config update --set`, `config variables-set --var`) is repeat-only, because a comma can be part of the value. Until 1.0.0, the nine existing comma-only options (`org setup --project-ids`, `sharing share --target-project-ids` and `--target-users`, and six `semantic-layer` options) take one comma string.
+**A4 · MUST · now for new options; 1.0.0 for existing ones.** A list-valued option is repeatable. An option whose values are IDs or fixed values (project IDs, table IDs, types) also accepts a comma list in one occurrence. An option with free-form values (JSON, `KEY=VALUE`, `PATH=VALUE`, SQL, text; for example `transformation edit --op`, `config update --set`, `config variables-set --var`) is repeat-only, because a comma can be part of the value. `split_multi()` in `commands/_helpers.py` flattens the values of an ID or fixed-value option. From 1.0.0 this covers the nine options that took one comma string before (`org setup --project-ids`, `sharing share --target-project-ids` and `--target-users`, and six `semantic-layer` options); in 0.x they take one comma string.
 
 - Checked by: `args.list-option-repeatable`.
 
@@ -295,7 +295,7 @@ What stays as it is:
 ## 4. Input
 
 <a id="I1"></a><a id="input.single-parser"></a>
-**I1 · MUST · now.** A structured value (JSON or YAML) accepts inline text, `@path`, and `-` for stdin, with the behavior of `parse_json_arg` in `commands/_helpers.py`. New code calls it. The other copies of this parsing move to it when their command is changed.
+**I1 · MUST · now.** A structured value (JSON or YAML) accepts inline text, `@path`, and `-` for stdin, with the behavior of `parse_json_arg` in `commands/_helpers.py`, and every structured option calls it (`allow_yaml=True` for YAML). The only other code that reads an `@` value is the refusal of I3.
 
 - Checked by: `input.single-parser`.
 
@@ -306,13 +306,13 @@ What stays as it is:
 - Checked by: `input.file-option-vocabulary` (report only).
 
 <a id="I3"></a><a id="input.content-option-refuses-at-file"></a>
-**I3 · MUST · 1.0.0.** A free-text content option refuses a value that is `@` followed by the path of an existing file, with exit 2 and a hint that names the file option. In 1.0.0 this covers the four commands that use `resolve_text_input` and `transformation create/edit --sql`; the other free-text options follow after 1.0.0. Until then, such a value is stored as text.
+**I3 · MUST · 1.0.0.** A free-text content option refuses a value that is `@` followed by the path of an existing file (a relative path is relative to the current directory), with exit 2 and a hint that names the file option. The hint also says how to store text that starts with `@`: write it to a file and pass that file with the file option. The option declares `callback=RefuseAtFile("--file").callback` (`commands/_helpers.py`); `@` followed by anything that is not a file stays text. In 1.0.0 this covers only five options: `--text` of the four commands that use `resolve_text_input` and `transformation create --sql` (`transformation edit` has no `--sql`). The other free-text options follow after 1.0.0 and store `@<file>` as text until then. In 0.x, such a value is stored as text. A free-text content option is an option of a write, destructive or admin command whose name is in `CONTENT_OPTIONS` in `scripts/check_cli_spec.py`.
 
 - Why: project and branch metadata keep no old value, so a wrong guess cannot be undone.
-- Checked by: `input.content-option-refuses-at-file` (deferred: lands in 1.0.0).
+- Checked by: `input.content-option-refuses-at-file` (the options without the refusal are in the baseline).
 
 <a id="I4"></a>
-**I4 · MUST · 1.0.0.** A bad input value is a usage error (exit 2, `INVALID_ARGUMENT`) that names the option, never a traceback. Until 1.0.0, some bad values end in a traceback with exit 1.
+**I4 · MUST · 1.0.0.** A bad input value is a usage error (exit 2, `INVALID_ARGUMENT`) that names the option, never a traceback. In 0.x, some bad values end in a traceback with exit 1. Known gaps in 1.0.0: the structured options that exited 2 before 1.0.0 keep their error code (`config` `--configuration`, `--state` and `--config-data`: `VALIDATION_ERROR`; `encrypt values --input`: `INPUT_ERROR`; `agent --from-file` and `--runtime-input`: `INVALID_FORMAT`; `flow --file`: `VALIDATION_ERROR`; `data-app create --description-file`: `READ_ERROR`, exit 1; `data-app secrets-set --secrets-file`: `DATA_APP_INVALID_SECRET`; `semantic-layer reference-data set --members-file`: `VALIDATION_ERROR`). A value refused by Click's type check or by `typer.BadParameter` is `INVALID_ARGUMENT` too (the root command class maps `BadParameter`); a missing required option stays `USAGE_ERROR`.
 
 - Checked by: `output.one-json-document` (crash case) and review.
 
@@ -337,7 +337,8 @@ What stays as it is:
 **T2 · MUST · 1.0.0.** The 18 fan-out reads use the T1 chain when no `--project` is given, like every other command. `--all-projects` reads all registered projects. Until 1.0.0, an omitted `--project` on these reads reads all registered projects.
 
 - Why: with E4, an implicit read of all projects would fail because of one expired token in another project.
-- Checked by: `target.project-help-states-default`, which checks only that the help states the class, not the behavior.
+- The `kbagent serve` list routes that read several projects follow the same rule: without `project` they use the T1 chain (HTTP 400 `CONFIG_ERROR` when no project resolves), and `all_projects=true` reads all registered projects. `project` with `all_projects=true` is `USAGE_ERROR` (HTTP 400). A list route in which a project failed answers HTTP 200 with the failure in `errors`, because REST has no exit code.
+- Checked by: `target.project-help-states-default`, which checks only that the help states the class (for the 18 reads: the active project and `--all-projects`), and the `target.targets-reported` contract case, which checks the behavior.
 
 <a id="T3"></a><a id="target.no-write-fanout"></a>
 **T3 · MUST · now.** A `write` or `destructive` command never reads or changes several projects implicitly. `workspace gc` requires `--project` or `--all-projects`, also in 1.0.0, and does not use the T1 chain.
@@ -358,7 +359,8 @@ What stays as it is:
 **T6 · MUST · now; `project_source` from 1.0.0.** Every command that uses a project or a branch reports it in `targets`: in the success envelope, in the error envelope and in `--dry-run`, and in one `Target:` line on stderr in human mode. Each record carries `branch_source`. From 1.0.0 each record also carries `project_source`, and a command that chose no branch has `branch_source: "none"`.
 
 - Why: an agent's `export` does not persist between its calls, so the saved active project and branch are the only target state that persists, and neither is on the command line that a human approves.
-- Checked by: `tests/test_effective_branch.py`; `target.targets-reported` (deferred: lands with `project_source` in 1.0.0).
+- `project_source` values: `explicit` (the command line named the project: `--project` or another option that names a registered project, T16), `env`, `active_project`, `sole` (T1) and `all` (`--all-projects`). It is null when the command found the project in none of these ways. A consumer treats null like `active_project`.
+- Checked by: `tests/test_effective_branch.py`; `target.targets-reported` (contract, `tests/test_target_selection.py`).
 
 <a id="T7"></a>
 **T7.** Withdrawn: from 1.0.0 an omitted `--project` no longer reads all projects (T2), so no fan-out warning is needed.
@@ -384,9 +386,9 @@ What stays as it is:
 - Checked by: `target.project-help-states-default` for `--project` only; review for `--branch`.
 
 <a id="T12"></a>
-**T12 · MUST · 1.0.0.** A `destructive` command under `--json` whose project comes from the active project, or whose branch comes from the active branch, adds a `warnings[]` entry `TARGET_FROM_ACTIVE_CHOICE` with a hint that names the explicit flag. The command still runs, because `--json` stays consent.
+**T12 · MUST · 1.0.0.** A `destructive` command under `--json` whose project comes from the active project, or whose branch comes from the active branch, adds a `warnings[]` entry `TARGET_FROM_ACTIVE_CHOICE` with a hint that names the explicit flag. The command still runs, because `--json` stays consent. Over `kbagent serve`, a destructive route (its class in `server/route_permissions.py`, or a flag escalation) whose branch comes from the active branch adds the same entry to `Kbagent-Warnings`, with the hint `branch_id=<id>`. The project of a route is in its path, so only the branch half applies.
 
-- Checked by: `target.targets-reported` (deferred).
+- Checked by: `target.targets-reported` (contract, `tests/test_target_selection.py`); the REST form by `serve.targets-reported` (`tests/test_server_response_meta.py`).
 
 <a id="T13"></a>
 **T13 · SHOULD · now.** `project use` warns when `KBAGENT_PROJECT` overrides the choice being saved. `branch use` warns when `KBAGENT_PROJECT` names another project than `--project`, because commands on the T1 chain in that shell then use the active branch of the other project. The warning also goes into `warnings[]` once the envelope has it. Today `project use` prints the note in human mode and returns `env_override`.
@@ -411,7 +413,7 @@ What stays as it is:
 ## 6. Machine output
 
 <a id="O1"></a><a id="output.one-json-document"></a><a id="output.bare-group-exits-2"></a>
-**O1 · MUST · 1.0.0.** With `--json`, stdout holds exactly one JSON document for every exit code, parse errors, bare groups and crashes included. `--stream` commands write NDJSON. Everything else goes to stderr. An explicit `--help` (and `-h`, H5) prints help on stdout with exit 0 in both modes. A bare group, and `--json` without a command, exit 2 with a `USAGE_ERROR` envelope. Until 1.0.0, a parse error, a crash or a bare group under `--json` gives an empty stdout.
+**O1 · MUST · 1.0.0.** With `--json`, stdout holds exactly one JSON document for every exit code, parse errors, bare groups and crashes included. `--stream` commands write NDJSON. Everything else goes to stderr. An explicit `--help` (and `-h`, H5) prints help on stdout with exit 0 in both modes. A bare group, `--json` without a command, and a malformed command line exit 2 with a `USAGE_ERROR` envelope. A bad option value exits 2 with `INVALID_ARGUMENT` (I4). Until 1.0.0, a parse error, a crash or a bare group under `--json` gives an empty stdout.
 
 - Checked by: `output.one-json-document`, `output.bare-group-exits-2`.
 
@@ -512,9 +514,9 @@ Shape of the success envelope in 1.0.0 (`storage delete-table --project prod`, a
 - Checked by: `errors.forward-retryable`, `errors.config-error-keeps-code`, `tests/test_error_forwarding.py`.
 
 <a id="E4"></a><a id="errors.fanout-exit"></a>
-**E4 · MUST · now for writes; 1.0.0 for fan-out reads.** A command that processes several items or projects exits 1 when at least one of them failed, reads included. It prints the full payload before it exits, and the items that succeeded stay written. A `--dry-run` that reports a failed item exits 1 like the real run. A run with no failed item exits 0. A fan-out read with no registered project exits 5. An answer that is not a failure (`PAYG_NOT_AVAILABLE` in `billing credits`) does not count as failed. Use `item_failure_exit_code()` in `commands/_helpers.py`. Until 1.0.0, a fan-out read exits 0 when a project failed and lists the failure in `data.errors`.
+**E4 · MUST · now for writes; 1.0.0 for fan-out reads.** A command that processes several items or projects exits 1 when at least one of them failed, reads included. It prints the full payload before it exits, and the items that succeeded stay written. A `--dry-run` that reports a failed item exits 1 like the real run. A run with no failed item exits 0. A fan-out read with no registered project exits 5. An answer that is not a failure (`PAYG_NOT_AVAILABLE` in `billing credits`) does not count as failed. Use `finish_items()` in `commands/_helpers.py`, which also prints the headline (HO2). Until 1.0.0, a fan-out read exits 0 when a project failed and lists the failure in `data.errors`.
 
-- Checked by: `errors.fanout-exit` (deferred: lands with T2 in 1.0.0) and unit tests.
+- Checked by: `errors.fanout-exit` (contract, `tests/test_target_selection.py`) and unit tests.
 
 <a id="E5"></a>
 **E5 · SHOULD · now.** A per-item failure entry keeps its existing keys (`error`, `message`, `reason`) and adds `error_code`, `retryable`, and `message` where it is missing.
@@ -611,7 +613,7 @@ A flag that raises the class is in `FLAG_ESCALATIONS` and is checked where the f
 ## 10. Lists
 
 <a id="L1"></a>
-**L1 · note.** A Typer `min`/`max` bound on `--limit` is acceptable. From 1.0.0 a rejected value gives a `USAGE_ERROR` envelope with exit 2 (O1). No new bound is added to a limit that is unbounded today.
+**L1 · note.** A Typer `min`/`max` bound on `--limit` is acceptable. From 1.0.0 a rejected value gives an `INVALID_ARGUMENT` envelope with exit 2 (O1, I4). No new bound is added to a limit that is unbounded today.
 
 <a id="L2"></a>
 **L2 · MUST · now for new commands; existing lists after 1.0.0.** A limited list reports `limit`, `offset` when it has one, and `has_more`.
@@ -685,17 +687,19 @@ A flag that raises the class is in `FLAG_ESCALATIONS` and is checked where the f
 <a id="V2"></a>
 **V2 · MUST · 1.0.0.** A route chooses the branch with the CLI rule T5: when `branch_id` is omitted, the service applies the active branch through `effective_branch.resolve_branch`. Until 1.0.0, the 26 routes that this changes do not apply the active branch. From 0.x the web UI sends `branch_id: 0` in its production view, so that the 1.0.0 change does not change what the UI labels as production.
 
-- Checked by: `serve.targets-reported` (deferred).
+- The 26 routes: the storage writes and `GET /storage/table-download/...`, `POST /jobs/{project}/run` and `/terminate`, the three `/transformations` routes, the `/configs/.../variables` routes and `POST /components/{component_id}/actions/{action}`. `docs/migrate-to-1.0.md` lists them.
+- Checked by: `serve.targets-reported` (contract, `tests/test_server_response_meta.py`).
 
 <a id="V3"></a><a id="serve.targets-reported"></a>
 **V3 · MUST · 1.0.0.** A success response carries the `targets` record in a `Kbagent-Targets` response header and the warnings in a `Kbagent-Warnings` header, both JSON, because REST success bodies are bare service dicts. The error body carries `targets` and `warnings` as keys.
 
-- Checked by: `serve.targets-reported` (deferred: lands with the headers).
+- A header is left out when its list is empty. A `{project}` path parameter is `project_source: "explicit"`. The HTTP 500 answer of an unhandled error has the two keys in its body only, because the outermost error layer answers after the middleware that adds the headers.
+- Checked by: `serve.targets-reported` (contract, `tests/test_server_response_meta.py`).
 
 <a id="V4"></a>
-**V4 · MUST · 1.0.0.** The REST error body has the same fields as the CLI error object (`error_type`, `project`, `retryable`).
+**V4 · MUST · 1.0.0.** The REST error body has the same fields as the CLI error object (`error_type`, `project`, `retryable`). The HTTP status follows the `error_type` of the code in the error-code table: `validation` and `configuration` 400, `authentication` 401, `authorization` 403, `not_found` 404, `conflict` 409, `api` and `network` 502, and 400 for an `api` code that exits 2. `UNAUTHORIZED` (the bearer check of the server) is 401 and `INTERNAL_ERROR` (an unhandled error) is 500.
 
-- Checked by: review.
+- Checked by: review, and `tests/test_server_response_meta.py` for the status of every code.
 
 <a id="V5"></a><a id="serve.dry-run-parity"></a><a id="serve.undeclared-dry-run-rejected"></a>
 **V5 · MUST · now.** A route offers the same `dry_run`, guard and `idempotency_key` parameters as its command. A mutating route rejects an undeclared `dry_run`, in the query or in the body, with HTTP 422. A new route rejects every undeclared parameter (`extra="forbid"` on its body model).
@@ -713,7 +717,7 @@ A flag that raises the class is in `FLAG_ESCALATIONS` and is checked where the f
 - Checked by: `serve.command-has-route`, `serve.map-names-live-command`.
 
 <a id="V8"></a>
-**V8 · MUST · 1.0.0.** The routes that change the saved choice on disk (`POST /projects/use/{alias}`, `POST /branches/{project}/use`, `POST /branches/{project}/reset`) change it for every CLI call and every REST client that uses the same configuration directory. They stay, because the web UI uses them. Their summaries say that the change is shared, their responses carry `active_project_set` or `active_branch_set` (T8), and they add a `Kbagent-Warnings` entry that names the configuration directory.
+**V8 · MUST · 1.0.0.** The routes that change the saved choice on disk (`POST /projects/use/{alias}`, `POST /branches/{project}/use`, `POST /branches/{project}/reset`) change it for every CLI call and every REST client that uses the same configuration directory. They stay, because the web UI uses them. Their summaries say that the change is shared, their responses carry `active_project_set`, `active_branch_set` or, for the reset, `active_branch_cleared` (T8), and they add a `Kbagent-Warnings` entry `ACTIVE_CHOICE_SHARED` that names the configuration directory.
 
 - Checked by: review.
 
@@ -774,14 +778,14 @@ The 0.x line, until T0, ships only bug, security and data-loss fixes (C4), the m
 ## 14. Human output
 
 <a id="HO1"></a><a id="output.no-direct-print"></a>
-**HO1 · MUST · now.** Results go to stdout. Headlines, notices, hints, progress, prompts and panels go to stderr, also in human mode (O6). A command prints only through `OutputFormatter` and the shared renderers in `output.py`, not through `print`, `typer.echo`, `click.echo` or a new `rich` console. `auth login` prints its notices to stdout in human mode until 1.0.0.
+**HO1 · MUST · now.** Results go to stdout. A failed item of a multi-item command is part of the result: one `Error: <item>: <message>` line on stdout. The final summary line of a human-mode result (`Success:` or `Failed:`) goes to stdout after the result. Notices, hints, progress, prompts and panels go to stderr, also in human mode (O6). A command prints only through `OutputFormatter` and the shared renderers in `output.py`, not through `print`, `typer.echo`, `click.echo` or a new `rich` console. Before 1.0.0, `auth login` printed its notices to stdout in human mode.
 
 - Checked by: `output.no-direct-print`.
 
 <a id="HO2"></a><a id="output.multi-item-headline"></a>
-**HO2 · MUST · now for new commands; 1.0.0 for existing ones.** A command that processes several items ends its human output with one headline: `Success:` when nothing failed, `Failed: N of M` when an item failed.
+**HO2 · MUST · now for new commands; 1.0.0 for existing ones.** Every command that processes several items (projects, tables, buckets, files, configs, schedules, ...) ends its human output with one headline on stdout (HO1): `Success:` when nothing failed, `Failed: N of M <items>.` when an item failed. This includes the fan-out reads, for which the items are projects. The text after the label has one form: `<N> <item>(s) <what happened>`, details after a comma, a closing period, and `would be <...>` for a dry run (`Success: 2 table(s) deleted.`, `Failed: 1 of 3 projects. 2 project(s) read.`). Every failed item is one line `Error: <item>: <message>` on stdout before the headline, never a warning on stderr, so `Failed:` appears only in the headline. The fan-out reads print `Error: project '<alias>': <message>`. The line comes from one renderer, `OutputFormatter.item_error()` / `output.format_item_error()`. The headline comes from `finish_items()` in `commands/_helpers.py` (the fan-out reads call it through `finish_fanout()`), the only source of the per-item exit code (E4).
 
-- Checked by: review today; `output.multi-item-headline` (deferred: lands with the headline renderer).
+- Checked by: `output.multi-item-headline` (`tests/test_cli_contract.py`) and the headline snapshots of HO7.
 
 <a id="HO3"></a>
 **HO3 · MUST · now.** No ANSI color when the stream is not a terminal, with `--no-color`, or with `NO_COLOR` set.
@@ -794,7 +798,7 @@ The 0.x line, until T0, ships only bug, security and data-loss fixes (C4), the m
 - Checked by: `output.no-direct-print`.
 
 <a id="HO5"></a>
-**HO5 · MUST · now for `config oauth-url`; `auth login` when `--no-open` is added.** A command whose purpose is a browser step (`auth login`, `config oauth-url`) opens the browser on a terminal, unless `--no-open` is given. Every other command opens a link only with `--open` (for example `data-app password --open`). No command opens a browser with `--json`, without a terminal, over SSH or in a container. Until `auth login` gets `--no-open`, it opens the browser where the environment allows, and `--device-code` avoids the browser.
+**HO5 · MUST · now.** A command whose purpose is a browser step (`auth login`, `config oauth-url`) opens the browser on a terminal, unless `--no-open` is given. Every other command opens a link only with `--open` (for example `data-app password --open`). No command opens a browser with `--json`, without a terminal, over SSH or in a container. Exception: `auth login` opens the browser also with `--json` and without a terminal, wherever the environment allows it. It tries PKCE first and uses the device-code flow only with `--device-code`, over SSH, in a container, in WSL without `wslview`, or after a failed browser step. `auth login --no-open` uses the device-code flow, opens nothing, and prints the URL and the code.
 
 - Checked by: review.
 
@@ -838,9 +842,11 @@ The 0.x line, until T0, ships only bug, security and data-loss fixes (C4), the m
 ## 16. Agent-facing documents
 
 <a id="AG1"></a><a id="help.context-from-manifest"></a>
-**AG1 · MUST · 1.0.0.** The command part of `kbagent context` is generated from the command manifest (H6); the hand-written part keeps only workflow guidance. `kbagent context <group>` prints one group. Until 1.0.0, `AGENT_CONTEXT` in `commands/context.py` is written by hand.
+**AG1 · MUST · 1.0.0.** The command part of `kbagent context` is generated from the command manifest (H6); the hand-written part keeps only workflow guidance. `kbagent context <group>` prints one group.
 
-- Checked by: `help.context-from-manifest` (deferred).
+- The command part is `commands/_context_commands.py`: one section per top-level group or command, with the usage line of every visible command and the first paragraph of its help. `make cli-manifest` writes it together with the manifest. The hand-written part (`commands/context.py`) is the header, the notes per group (`GROUP_NOTES`) and the tips for agents.
+- `<group>` is an optional argument: a top-level group or command, or a hidden alias (`mr`, `sl`). An unknown value is `INVALID_ARGUMENT` (exit 2), and the message lists the valid values. Under `--json`, `data.context` holds the text and `data.group` the section name (null without an argument).
+- Checked by: `help.context-from-manifest`.
 
 <a id="AG2"></a>
 **AG2 · MUST · now.** Every `kbagent …` example in `CLAUDE.md`, `kbagent context` and the plugin agents, skills and references parses against the command tree (H3).
@@ -872,9 +878,9 @@ The 0.x line, until T0, ships only bug, security and data-loss fixes (C4), the m
 ## 18. Environment variables and global options
 
 <a id="EV1"></a><a id="env.registry-complete"></a>
-**EV1 · MUST · now.** Every environment variable that kbagent reads is in one registry (name, purpose, secret or not, added in) and in the generated reference. An option that a variable sets declares it with `envvar=`, so that `--help` shows it. The registry does not exist yet; until it lands, a new variable is named in the pull request and documented in `CLAUDE.md`.
+**EV1 · MUST · now.** Every environment variable that kbagent reads is in one registry (name, purpose, secret or not, added in) and in the generated reference. An option that a variable sets declares it with `envvar=`, so that `--help` shows it. `--help` never shows the value of a variable. The registry is `ENV_VARS` in `src/keboola_agent_cli/env_vars.py`, and the command reference of `scripts/gen_command_reference.py` prints it.
 
-- Checked by: `env.registry-complete` (deferred: lands with the registry) and review.
+- Checked by: `env.registry-complete` and review.
 
 <a id="EV2"></a>
 **EV2 · MUST · now.** A new variable uses the prefix `KBAGENT_`. `KBC_` stays for values that other Keboola tools share (`KBC_TOKEN`, `KBC_STORAGE_API_URL`).

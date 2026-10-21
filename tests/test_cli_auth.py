@@ -340,26 +340,51 @@ class TestLoginPkceWaitNotice:
         return result
 
     def test_json_mode_notice_goes_to_stderr(self, tmp_path: Path, monkeypatch) -> None:
+        """--json still uses PKCE and the browser (the auth login exception to HO5)."""
         result = self._invoke_pkce_login(
             tmp_path, monkeypatch, ["--json", "auth", "login", "--stack", STACK_URL]
         )
         assert result.exit_code == 0, result.output
         stderr = " ".join(result.stderr.split())
         assert f"Waiting up to {AUTH_CALLBACK_TIMEOUT:.0f} s" in stderr
-        assert f"`kbagent auth login --stack {STACK_URL} --device-code`" in stderr
         assert "Waiting up to" not in result.stdout
-        # stdout stays one valid JSON document.
-        data = json.loads(result.stdout)["data"]
-        assert data["method"] == "pkce"
+        assert json.loads(result.stdout)["data"]["method"] == "pkce"
 
-    def test_human_mode_notice_is_printed(self, tmp_path: Path, monkeypatch) -> None:
+    def test_human_mode_notice_goes_to_stderr(self, tmp_path: Path, monkeypatch) -> None:
+        """Row 30 of keboola/cli#791: the notices left stdout in 1.0.0 (HO1)."""
         result = self._invoke_pkce_login(
             tmp_path, monkeypatch, ["auth", "login", "--stack", STACK_URL]
         )
         assert result.exit_code == 0, result.output
-        output = " ".join(result.output.split())
-        assert f"Waiting up to {AUTH_CALLBACK_TIMEOUT:.0f} s" in output
-        assert f"`kbagent auth login --stack {STACK_URL} --device-code`" in output
+        stderr = " ".join(result.stderr.split())
+        assert f"Waiting up to {AUTH_CALLBACK_TIMEOUT:.0f} s" in stderr
+        assert f"`kbagent auth login --stack {STACK_URL} --device-code`" in stderr
+        assert "Waiting up to" not in result.stdout
+        assert "Signed in to Keboola" in result.stdout
+
+
+class TestLoginNoOpen:
+    """HO5 exception: only --no-open keeps auth login from the browser."""
+
+    @pytest.mark.parametrize(
+        ("args", "no_open"),
+        [
+            (["auth", "login", "--no-open"], True),
+            (["--json", "auth", "login", "--no-open"], True),
+            (["--json", "auth", "login"], False),
+            (["auth", "login"], False),
+        ],
+    )
+    def test_no_open_passed_to_the_service(
+        self, tmp_path: Path, args: list[str], no_open: bool
+    ) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        svc = MagicMock()
+        svc.login.return_value = _login_result(accessible_projects=[])
+        result = _invoke(config_dir, svc, args)
+        assert result.exit_code == 0, result.output
+        assert svc.login.call_args.kwargs["no_open"] is no_open
 
 
 class TestLoginPassword:

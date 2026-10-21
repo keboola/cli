@@ -17,15 +17,17 @@ from rich.syntax import Syntax
 from rich.table import Table
 
 from ..errors import ErrorCode
+from ..output import format_item_error
 from ..services._semantic_layer_internals import PUSH_ORDER
 from ..services.semantic_layer_service import SCHEMA_TYPE_ALIAS
 from ._helpers import (
     _confirm_or_abort,
     check_cli_permission,
     deprecated_option,
+    finish_items,
     get_formatter,
     get_service,
-    item_failure_exit_code,
+    split_multi,
 )
 from ._semantic_layer_crud import add_app, edit_app, remove_app
 from ._semantic_layer_helpers import (
@@ -312,7 +314,9 @@ def _print_import_result(console: Console, data: dict) -> None:
     console.print(table)
     for plural, per in (data.get("imported") or {}).items():
         for f in per.get("failed", []):
-            console.print(f"  [red]✗ {plural}.{f.get('name')}: {f.get('reason')}[/red]")
+            console.print(
+                format_item_error(f"{plural}.{f.get('name')}", f.get("reason")), soft_wrap=True
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -351,7 +355,9 @@ def _print_promote_result(console: Console, data: dict) -> None:
             keys = ", ".join(c.get("diff_keys", []))
             console.print(f"  [yellow]~ {plural}.{key}[/yellow] ([dim]{keys}[/dim])")
         for f in per.get("failed", []):
-            console.print(f"  [red]✗ {plural}.{f.get('name')}: {f.get('reason')}[/red]")
+            console.print(
+                format_item_error(f"{plural}.{f.get('name')}", f.get("reason")), soft_wrap=True
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -384,10 +390,10 @@ def _print_build_result(console: Console, data: dict) -> None:
     fetch_errs = data.get("fetch_errors") or []
     if fetch_errs:
         console.print(
-            f"\n[bold red]Failed: {len(fetch_errs)} table(s) left out of the model[/bold red]"
+            f"\n[bold red]Fetch failed: {len(fetch_errs)} table(s) left out of the model[/bold red]"
         )
         for e in fetch_errs:
-            console.print(f"  [red]✗[/red] {e['table_id']} — {e['error']}")
+            console.print(format_item_error(e["table_id"], e["error"]), soft_wrap=True)
     type_errs = data.get("type_resolution_errors") or []
     if type_errs:
         console.print(
@@ -471,10 +477,10 @@ def semantic_layer_build(
         "--model",
         help="Update this existing model (name or UUID). If omitted, a new model is created.",
     ),
-    tables: str | None = typer.Option(
+    tables: list[str] | None = typer.Option(
         None,
         "--tables",
-        help="Comma-separated tableIds to base the model on (required).",
+        help="Table ID to base the model on (repeatable or comma-separated; required).",
     ),
     name: str | None = typer.Option(
         None, "--name", help="Model name when creating (default: kbagent_build_model)."
@@ -527,11 +533,11 @@ def semantic_layer_build(
 
     if not tables:
         formatter.error(
-            message="--tables is required (comma-separated tableIds).",
+            message="--tables is required (table IDs, repeatable or comma-separated).",
             error_code=ErrorCode.MISSING_PARAMETER,
         )
         raise typer.Exit(code=2)
-    table_ids = [t.strip() for t in tables.split(",") if t.strip()]
+    table_ids = split_multi(tables)
     if not table_ids:
         formatter.error(
             message="--tables contained no tableIds.",
@@ -557,10 +563,17 @@ def semantic_layer_build(
         auto_resolve_types=auto_types_workspace,
     )
     # A table whose schema fetch failed is left out of the model (#745).
-    code = item_failure_exit_code(len(result.get("fetch_errors") or []))
-    formatter.output(result, _print_build_result, exit_code=code or 0)
-    if code:
-        raise typer.Exit(code=code)
+    failed = len(result.get("fetch_errors") or [])
+    built = len((result.get("generated") or {}).get("datasets", []))
+    finish_items(
+        formatter,
+        result,
+        failed=failed,
+        total=built + failed,
+        noun="tables",
+        summary=f"{built} dataset(s) {'would be built' if result.get('dry_run') else 'built'}.",
+        render=lambda: _print_build_result(formatter.console, result),
+    )
 
 
 @semantic_layer_app.command("promote")
@@ -574,10 +587,11 @@ def semantic_layer_promote(
     to_model: str | None = typer.Option(
         None, "--to-model", help="Target model name or UUID (defaults to sole)"
     ),
-    types: str | None = typer.Option(
+    types: list[str] | None = typer.Option(
         None,
         "--types",
-        help="Comma-separated subset (datasets,metrics,relationships,glossary,constraints)",
+        help="Item type to copy (repeatable or comma-separated): "
+        "datasets, metrics, relationships, glossary, constraints",
     ),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Classify NEW/IDENTICAL/CHANGED without writing"
@@ -598,7 +612,7 @@ def semantic_layer_promote(
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
-    type_list = [t.strip() for t in types.split(",") if t.strip()] if types else None
+    type_list = split_multi(types) if types else None
 
     if not dry_run:
         _confirm_or_abort(
@@ -629,11 +643,18 @@ def semantic_layer_promote(
         target_projects=target_projects,
     )
     # Per-item failures are collected per type, not raised (#745).
-    failed = sum(len((result.get(plural) or {}).get("failed", [])) for plural, _ in PUSH_ORDER)
-    code = item_failure_exit_code(failed)
-    formatter.output(result, _print_promote_result, exit_code=code or 0)
-    if code:
-        raise typer.Exit(code=code)
+    per_type = [result.get(plural) or {} for plural, _ in PUSH_ORDER]
+    failed = sum(len(per.get("failed", [])) for per in per_type)
+    done = sum(per.get(k, 0) for per in per_type for k in ("new", "overwritten", "identical"))
+    finish_items(
+        formatter,
+        result,
+        failed=failed,
+        total=done + failed,
+        noun="items",
+        summary=f"{done} item(s) {'would be promoted' if result.get('dry_run') else 'promoted'}.",
+        render=lambda: _print_promote_result(formatter.console, result),
+    )
 
 
 @semantic_layer_app.command("import")
@@ -646,12 +667,11 @@ def semantic_layer_import(
     model: str | None = typer.Option(
         None, "--model", help="Target model name or UUID (defaults to the sole model)"
     ),
-    types: str | None = typer.Option(
+    types: list[str] | None = typer.Option(
         None,
         "--types",
-        help=(
-            "Comma-separated subset to import: datasets,metrics,relationships,glossary,constraints"
-        ),
+        help="Item type to import (repeatable or comma-separated): "
+        "datasets, metrics, relationships, glossary, constraints",
     ),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Plan the import without calling any write API"
@@ -670,7 +690,7 @@ def semantic_layer_import(
     service = get_service(ctx, "semantic_layer_service")
     # The deprecated --yes has no effect; its callback adds the DEPRECATED warning (C3).
     _ = yes
-    type_list = [t.strip() for t in types.split(",") if t.strip()] if types else None
+    type_list = split_multi(types) if types else None
     target_projects = resolve_scope_targets(
         ctx,
         operation="semantic-layer.import",
@@ -692,11 +712,18 @@ def semantic_layer_import(
         target_projects=target_projects,
     )
     # Per-item failures are collected per type, not raised (#745).
-    failed = sum(len(per.get("failed", [])) for per in (result.get("imported") or {}).values())
-    code = item_failure_exit_code(failed)
-    formatter.output(result, _print_import_result, exit_code=code or 0)
-    if code:
-        raise typer.Exit(code=code)
+    per_type = list((result.get("imported") or {}).values())
+    failed = sum(len(per.get("failed", [])) for per in per_type)
+    done = sum(per.get(k, 0) for per in per_type for k in ("created", "skipped", "overwritten"))
+    finish_items(
+        formatter,
+        result,
+        failed=failed,
+        total=done + failed,
+        noun="items",
+        summary=f"{done} item(s) {'would be imported' if result.get('dry_run') else 'imported'}.",
+        render=lambda: _print_import_result(formatter.console, result),
+    )
 
 
 @semantic_layer_app.command("show")
@@ -758,11 +785,11 @@ def _print_schemas(console: Console, data: dict) -> None:
 def semantic_layer_schema(
     ctx: typer.Context,
     project: str = typer.Option(..., "--project", help="Project alias"),
-    types: str | None = typer.Option(
+    types: list[str] | None = typer.Option(
         None,
         "--type",
         help=(
-            "Comma-separated semantic type(s): "
+            "Semantic type (repeatable or comma-separated): "
             "model | dataset | metric | relationship | constraint | glossary."
         ),
     ),
@@ -774,13 +801,13 @@ def semantic_layer_schema(
 
     Schemas are fetched live from the project's metastore (never bundled),
     so they always match the deployed metastore version. Pass exactly one
-    of ``--type`` (comma-separated list) or ``--all``.
+    of ``--type`` (repeatable or comma-separated) or ``--all``.
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
 
     # Mutual exclusion: exactly one of --type / --all.
-    if all_types == (types is not None):
+    if all_types == bool(types):
         formatter.error(
             message="Specify exactly one of --type or --all.",
             error_code=ErrorCode.USAGE_ERROR,
@@ -790,7 +817,7 @@ def semantic_layer_schema(
     if all_types:
         type_list = list(SCHEMA_TYPE_ALIAS)
     else:
-        type_list = [t.strip() for t in (types or "").split(",") if t.strip()]
+        type_list = split_multi(types)
         if not type_list:
             formatter.error(
                 message="--type contained no type names.",

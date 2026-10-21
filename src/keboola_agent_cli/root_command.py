@@ -8,7 +8,9 @@ class :class:`LeafCommand`. Together they hold these rules of
 
 - O1: with ``--json``, stdout holds one JSON document for every exit code. A
   usage error, a bare group and a crash write a ``USAGE_ERROR`` or
-  ``INTERNAL_ERROR`` envelope (:meth:`RootGroup.invoke`).
+  ``INTERNAL_ERROR`` envelope (:meth:`RootGroup.invoke`). A bad option value
+  (Click's ``BadParameter``, from type conversion or from a command body) is
+  ``INVALID_ARGUMENT`` (I4); a missing required option stays ``USAGE_ERROR``.
 - O1, row 12: a bare group, and ``kbagent --json`` without a command, exit 2
   with the help on stderr (:class:`MissingCommandError`).
 - O7, EV4: ``--json``/``-j``, ``--deny-writes`` and ``--deny-destructive`` are
@@ -44,6 +46,8 @@ from .permissions import OPERATION_REGISTRY
 # The vendored Click of Typer >= 0.25 (`typer._click`), else the `click` package.
 _click: Any = getattr(typer.core, "_click", None) or getattr(typer.core, "click")  # noqa: B009
 UsageError = _click.exceptions.UsageError
+BadParameter = _click.exceptions.BadParameter
+MissingParameter = _click.exceptions.MissingParameter
 
 # Root parameter name -> its option names. A hidden copy of each goes on every
 # group and command (O7).
@@ -111,6 +115,14 @@ class LeafCommand(TyperCommand):
                 raise MissingCommandError("Missing arguments.", ctx)
             _report_repeated_options(self, ctx, args)
         return super().parse_args(ctx, args)
+
+    def invoke(self, ctx: Any) -> Any:
+        # The formatter needs the category for the T12 warning in --json.
+        root_obj = ctx.find_root().obj
+        formatter = root_obj.get("formatter") if isinstance(root_obj, dict) else None
+        if formatter is not None:
+            formatter.command_category = OPERATION_REGISTRY.get(self.operation, "write")
+        return super().invoke(ctx)
 
 
 class CommandGroup(TyperGroup):
@@ -183,7 +195,7 @@ class RootGroup(ProjectRefGroup):
             # A bad root option: no root parameter is parsed yet, so look at the tokens.
             if not ({"--json", "-j"} & tokens):
                 raise
-            _emit_error(None, exc.format_message(), ErrorCode.USAGE_ERROR)
+            _emit_error(None, exc.format_message(), click_error_code(exc))
             raise typer.Exit(code=exc.exit_code) from None
 
     def invoke(self, ctx: Any) -> Any:
@@ -219,9 +231,7 @@ class RootGroup(ProjectRefGroup):
         except _click.ClickException as exc:
             if not ctx.params.get("json_output"):
                 raise
-            is_usage = isinstance(exc, UsageError)
-            code = ErrorCode.USAGE_ERROR if is_usage else ErrorCode.UNKNOWN_ERROR
-            _emit_error(ctx, exc.format_message(), code)
+            _emit_error(ctx, exc.format_message(), click_error_code(exc))
             raise typer.Exit(code=exc.exit_code) from None
         except Exception as exc:
             if not ctx.params.get("json_output"):
@@ -232,6 +242,22 @@ class RootGroup(ProjectRefGroup):
                 ctx, f"Unexpected error: {type(exc).__name__}: {exc}", ErrorCode.INTERNAL_ERROR
             )
             raise typer.Exit(code=1) from None
+
+
+def click_error_code(exc: Any) -> str:
+    """The error code of a Click exception under ``--json``.
+
+    A bad value of a well-formed option (``BadParameter``) is ``INVALID_ARGUMENT``
+    (I4), the same code the commands use for a bad value. A missing required
+    option (``MissingParameter``, a ``BadParameter`` subclass) and every other
+    usage error are ``USAGE_ERROR``. Any other Click exception is
+    ``UNKNOWN_ERROR``.
+    """
+    if isinstance(exc, BadParameter) and not isinstance(exc, MissingParameter):
+        return ErrorCode.INVALID_ARGUMENT
+    if isinstance(exc, UsageError):
+        return ErrorCode.USAGE_ERROR
+    return ErrorCode.UNKNOWN_ERROR
 
 
 def _emit_error(ctx: Any, message: str, error_code: str) -> None:

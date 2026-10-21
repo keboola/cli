@@ -201,7 +201,7 @@ class TestProjectCallCounts:
         """One token verify per project, nothing else."""
         setup_two_projects(tmp_config_dir)
         mock_api_routes(httpx_mock, {("GET", "/v2/storage/tokens/verify"): TOKEN_VERIFY})
-        result = _invoke(tmp_config_dir, "project", "status")
+        result = _invoke(tmp_config_dir, "project", "status", "--all-projects")
         assert sorted((p["alias"], p["status"]) for p in _data(result)) == [
             ("dev", "ok"),
             ("prod", "ok"),
@@ -331,7 +331,7 @@ class TestJobCallCounts:
         """Exactly one search per registered project; merged client-side."""
         setup_two_projects(tmp_config_dir)
         mock_api_routes(httpx_mock, {("GET", "/search/jobs"): _jobs(3)})
-        result = _invoke(tmp_config_dir, "job", "list")
+        result = _invoke(tmp_config_dir, "job", "list", "--all-projects")
         assert len(_data(result)["jobs"]) == 6
         assert_api_calls(
             httpx_mock,

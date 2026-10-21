@@ -294,9 +294,8 @@ class TestFormatJobsTable:
         format_jobs_table(console, data)
         output = cast(StringIO, console.file).getvalue()
 
-        assert "Warning" in output
-        assert "bad" in output
-        assert "Token expired" in output
+        # The failed project is an `Error:` line from finish_fanout, not part of the table.
+        assert "Token expired" not in output
         assert "all projects failed" in output
 
     def test_jobs_table_multi_project(self) -> None:
@@ -647,9 +646,8 @@ class TestFormatLineageTable:
         format_lineage_table(console, data)
         output = cast(StringIO, console.file).getvalue()
 
-        assert "Warning" in output
-        assert "bad" in output
-        assert "Token expired" in output
+        # The failed project is an `Error:` line from finish_fanout, not part of the table.
+        assert "Token expired" not in output
 
     def test_lineage_table_shared_buckets_no_edges(self) -> None:
         """format_lineage_table shows shared buckets table when edges are empty."""

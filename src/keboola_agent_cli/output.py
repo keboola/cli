@@ -9,6 +9,7 @@ from typing import Any
 
 from rich.console import Console
 from rich.errors import StyleSyntaxError
+from rich.markup import escape
 from rich.panel import Panel
 from rich.style import Style
 from rich.table import Table
@@ -73,6 +74,8 @@ def force_utf8_when_redirected() -> None:
 
 # The ``code`` of a ``warnings[]`` entry from ``OutputFormatter.warning()``.
 WARNING_CODE = "WARNING"
+# T12: a destructive command acts on the saved active project or branch.
+TARGET_FROM_ACTIVE_CHOICE_CODE = "TARGET_FROM_ACTIVE_CHOICE"
 
 
 def _envelope_warnings(warnings: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
@@ -186,6 +189,27 @@ def format_target_line(target: BranchTarget) -> str:
     return f"{label}: project '{target.project_alias}', {where}{suffix}"
 
 
+def format_item_headline(*, failed: int, total: int, noun: str, summary: str) -> str:
+    """The one closing line of a command that processes several items (HO2).
+
+    ``Success: <summary>`` when no item failed, else ``Failed: N of M <noun>.``
+    followed by the summary of what did succeed.
+    """
+    if failed:
+        tail = f" {summary}" if summary else ""
+        return f"[bold red]Failed:[/bold red] {failed} of {total} {noun}.{tail}"
+    return f"[bold green]Success:[/bold green] {summary}"
+
+
+def format_item_error(item: str, message: str) -> str:
+    """The one line of a failed item of a multi-item command (HO2): ``Error: <item>: <message>``.
+
+    Both parts are plain text; they are escaped here, so a caller passes them
+    unescaped.
+    """
+    return f"[bold red]Error:[/bold red] {escape(str(item))}: {escape(str(message))}"
+
+
 def write_machine_output(text: str) -> None:
     """Write a machine-readable line to stdout as UTF-8, whatever the console is.
 
@@ -243,6 +267,9 @@ class OutputFormatter:
         # envelope is already on stdout (a later warning is then dropped).
         self.warnings: list[dict[str, Any]] = []
         self._document_written = False
+        # The OPERATION_REGISTRY category of the running command, set by
+        # root_command.LeafCommand before the command body runs (T12).
+        self.command_category: str | None = None
         # JSON mode: a `--stream` command wrote NDJSON; stdout belongs to the stream.
         self._streaming = False
 
@@ -287,6 +314,7 @@ class OutputFormatter:
                 envelope's ``exit_code`` equals the process exit code.
         """
         if self.json_mode:
+            self._warn_target_from_active_choice()
             write_machine_output(success_json(data, self.warnings, exit_code))
             self._document_written = True
         else:
@@ -321,6 +349,7 @@ class OutputFormatter:
             self.stream_line({"event": "error", "data": {"code": error_code, "message": message}})
             return
         if self.json_mode:
+            self._warn_target_from_active_choice()
             if not error_type:
                 from .errors import map_error_code_to_type
 
@@ -356,10 +385,57 @@ class OutputFormatter:
             message: The success message to display.
         """
         if self.json_mode:
+            self._warn_target_from_active_choice()
             write_machine_output(success_json({"message": message}, self.warnings))
             self._document_written = True
         else:
             self.console.print(f"[bold green]Success:[/bold green] {message}")
+
+    def item_headline(self, *, failed: int, total: int, noun: str, summary: str) -> None:
+        """Print the closing headline of a multi-item command (human mode only, HO2).
+
+        It goes to stdout, like :meth:`success`, so a command that printed a
+        ``Success:`` line before keeps it on the same stream.
+        """
+        if not self.json_mode:
+            self.console.print(
+                format_item_headline(failed=failed, total=total, noun=noun, summary=summary)
+            )
+
+    def _warn_target_from_active_choice(self) -> None:
+        """Warn when a destructive command acts on the saved active project or branch (T12).
+
+        Only in JSON mode, right before the envelope: ``--json`` is consent, so
+        the command runs, and this entry is the notice that the target was not
+        on the command line. The hint names the flag that makes it explicit.
+        """
+        if self.command_category != "destructive" or self._document_written:
+            return
+        seen: set[tuple[str, str, int | None]] = set()
+        for target in recorded_targets():
+            alias = target.project_alias
+            if target.project_source == "active_project" and ("project", alias, None) not in seen:
+                seen.add(("project", alias, None))
+                self.warning(
+                    f"Project '{escape(alias)}' comes from 'kbagent project use', "
+                    "not from the command line.",
+                    code=TARGET_FROM_ACTIVE_CHOICE_CODE,
+                    hint=f"--project {alias}",
+                )
+            branch = ("branch", alias, target.branch_id)
+            if target.branch_source == "active_branch" and branch not in seen:
+                seen.add(branch)
+                self.warning(
+                    f"Branch {target.branch_id} of project '{escape(alias)}' comes from "
+                    "'kbagent branch use', not from the command line.",
+                    code=TARGET_FROM_ACTIVE_CHOICE_CODE,
+                    hint=f"--branch {target.branch_id}",
+                )
+
+    def item_error(self, item: str, message: str) -> None:
+        """Print one failed item on stdout, before the headline (human mode only, HO1, HO2)."""
+        if not self.json_mode:
+            self.console.print(format_item_error(item, message), soft_wrap=True)
 
     def report_target(self, target: BranchTarget) -> None:
         """Print the project and branch a command uses, on stderr (human mode only)."""
@@ -423,12 +499,7 @@ def format_configs_table(console: Console, data: dict[str, Any]) -> None:
     configs = data.get("configs", [])
     errors = data.get("errors", [])
 
-    # Show per-project errors as warnings
-    for err in errors:
-        console.print(
-            f"[bold yellow]Warning:[/bold yellow] Project [bold]{err['project_alias']}[/bold]: "
-            f"{err['message']}"
-        )
+    # A failed project is an `Error:` line from finish_fanout (HO2), not part of the table.
 
     if not configs:
         if not errors:
@@ -565,11 +636,7 @@ def format_jobs_table(console: Console, data: dict[str, Any]) -> None:
     jobs = data.get("jobs", [])
     errors = data.get("errors", [])
 
-    for err in errors:
-        console.print(
-            f"[bold yellow]Warning:[/bold yellow] Project [bold]{err['project_alias']}[/bold]: "
-            f"{err['message']}"
-        )
+    # A failed project is an `Error:` line from finish_fanout (HO2), not part of the table.
 
     if not jobs:
         if not errors:
@@ -762,12 +829,7 @@ def format_lineage_table(console: Console, data: dict[str, Any]) -> None:
     summary = data.get("summary", {})
     errors = data.get("errors", [])
 
-    # Show per-project errors
-    for err in errors:
-        console.print(
-            f"[bold yellow]Warning:[/bold yellow] Project [bold]{err['project_alias']}[/bold]: "
-            f"{err['message']}"
-        )
+    # A failed project is an `Error:` line from finish_fanout (HO2), not part of the table.
 
     # Render summary
     _render_lineage_summary(console, summary)
@@ -891,11 +953,7 @@ def format_branches_table(console: Console, data: dict[str, Any]) -> None:
     branches = data.get("branches", [])
     errors = data.get("errors", [])
 
-    for err in errors:
-        console.print(
-            f"[bold yellow]Warning:[/bold yellow] Project [bold]{err['project_alias']}[/bold]: "
-            f"{err['message']}"
-        )
+    # A failed project is an `Error:` line from finish_fanout (HO2), not part of the table.
 
     if not branches:
         if not errors:
@@ -1033,11 +1091,7 @@ def format_workspaces_table(console: Console, data: dict[str, Any]) -> None:
     workspaces = data.get("workspaces", [])
     errors = data.get("errors", [])
 
-    for err in errors:
-        console.print(
-            f"[bold yellow]Warning:[/bold yellow] Project [bold]{err['project_alias']}[/bold]: "
-            f"{err['message']}"
-        )
+    # A failed project is an `Error:` line from finish_fanout (HO2), not part of the table.
 
     if not workspaces:
         if not errors:
@@ -1181,14 +1235,9 @@ def format_search_results(console: Console, data: dict[str, Any]) -> None:
         data: Dict with "matches", "errors", and "stats".
     """
     matches = data.get("matches", [])
-    errors = data.get("errors", [])
     stats = data.get("stats", {})
 
-    for err in errors:
-        console.print(
-            f"[bold yellow]Warning:[/bold yellow] Project [bold]{err['project_alias']}[/bold]: "
-            f"{err['message']}"
-        )
+    # A failed project is an `Error:` line from finish_fanout (HO2), not part of the table.
 
     if not matches:
         console.print(

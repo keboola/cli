@@ -7,9 +7,11 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
-from ..dependencies import ServiceRegistry, get_registry
+from ...services.base import resolve_fanout_aliases
+from ..dependencies import ALL_PROJECTS_HELP, ServiceRegistry, get_registry
+from ..response_meta import warn_deprecated
 
 router = APIRouter(prefix="/data-apps", tags=["data-apps"])
 
@@ -69,6 +71,12 @@ class SecretsSet(BaseModel):
     dry_run: bool = False
 
 
+class SecretsMerge(SecretsSet):
+    """The body of the ``PATCH`` route: undeclared fields are refused (spec V5)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class SecretsRemove(BaseModel):
     keys: list[str]
     branch_id: int | None = None
@@ -96,10 +104,12 @@ class GitCredentialCreate(BaseModel):
 def list_apps(
     project: list[str] | None = Query(None),
     branch_id: int | None = None,
+    all_projects: bool = Query(False, description=ALL_PROJECTS_HELP),
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
     """List data apps in one or more projects. Mirrors `kbagent data-app list`."""
-    return registry.data_app.list_data_apps(aliases=project, branch_id=branch_id)
+    aliases = resolve_fanout_aliases(registry.config_store, project, all_projects)
+    return registry.data_app.list_data_apps(aliases=aliases, branch_id=branch_id)
 
 
 @router.get("/{project}/{app_id}", summary="Get data app detail")
@@ -316,14 +326,39 @@ def secrets_get(
     )
 
 
-@router.put("/{project}/{app_id}/secrets", summary="Set data app secrets")
+@router.patch("/{project}/{app_id}/secrets", summary="Set data app secrets")
+def secrets_merge(
+    project: str,
+    app_id: str,
+    body: SecretsMerge,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """Set or update the given secrets on a data app; the others stay.
+
+    Mirrors `kbagent data-app secrets-set`.
+    """
+    return _set_secrets(project, app_id, body, registry)
+
+
+@router.put(
+    "/{project}/{app_id}/secrets",
+    summary="Set data app secrets (deprecated: use PATCH)",
+    deprecated=True,
+)
 def secrets_set(
     project: str,
     app_id: str,
     body: SecretsSet,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
-    """Set or update encrypted secrets on a data app. Mirrors `kbagent data-app secrets-set`."""
+    """Deprecated form of ``PATCH`` (spec V9): same result, plus a ``DEPRECATED`` warning."""
+    warn_deprecated("PUT /data-apps/{project}/{app_id}/secrets")
+    return _set_secrets(project, app_id, body, registry)
+
+
+def _set_secrets(
+    project: str, app_id: str, body: SecretsSet, registry: ServiceRegistry
+) -> dict[str, Any]:
     return registry.data_app.set_data_app_secrets(
         alias=project,
         app_id=app_id,

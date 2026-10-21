@@ -14,6 +14,7 @@ from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._helpers import (
     _confirm_or_abort,
     emit_api_error,
+    finish_bulk,
     get_formatter,
     get_service,
     map_error_to_exit_code,
@@ -95,10 +96,7 @@ def register(app: typer.Typer) -> None:
             formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
             raise typer.Exit(code=5) from None
 
-        exit_code = 1 if result["failed"] else 0
-        if formatter.json_mode:
-            formatter.output(result, exit_code=exit_code)
-        else:
+        def render() -> None:
             if dry_run:
                 for bid in result.get("would_delete", []):
                     force_hint = " [force]" if force else ""
@@ -109,12 +107,11 @@ def register(app: typer.Typer) -> None:
                 for bid in result["deleted"]:
                     formatter.console.print(f"[bold green]Deleted:[/bold green] {bid}")
             for f_item in result["failed"]:
-                formatter.console.print(
-                    f"[bold red]Failed:[/bold red] {f_item['id']}: {f_item['error']}"
-                )
+                formatter.item_error(f_item["id"], f_item["error"])
 
-        if exit_code:
-            raise typer.Exit(code=exit_code)
+        done = result.get("would_delete", []) if dry_run else result["deleted"]
+        done_as = "would be deleted" if dry_run else "deleted"
+        finish_bulk(formatter, result, done, "bucket", done_as, render)
 
     @app.command("file-delete", rich_help_panel="Files")
     def storage_file_delete(
@@ -163,10 +160,7 @@ def register(app: typer.Typer) -> None:
             emit_api_error(formatter, exc)
             raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
-        exit_code = 1 if result["failed"] else 0
-        if formatter.json_mode:
-            formatter.output(result, exit_code=exit_code)
-        else:
+        def render() -> None:
             if dry_run:
                 for fid in result.get("would_delete", []):
                     formatter.console.print(f"[bold blue]Would delete:[/bold blue] file ID {fid}")
@@ -174,9 +168,8 @@ def register(app: typer.Typer) -> None:
                 for fid in result["deleted"]:
                     formatter.console.print(f"[bold green]Deleted:[/bold green] file ID {fid}")
             for f_err in result["failed"]:
-                formatter.console.print(
-                    f"[bold red]Failed:[/bold red] file ID {f_err['id']}: {f_err['error']}"
-                )
+                formatter.item_error(f"file ID {f_err['id']}", f_err["error"])
 
-        if exit_code:
-            raise typer.Exit(code=exit_code)
+        done = result.get("would_delete", []) if dry_run else result["deleted"]
+        done_as = "would be deleted" if dry_run else "deleted"
+        finish_bulk(formatter, result, done, "file", done_as, render)

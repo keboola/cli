@@ -8,6 +8,7 @@ import logging
 import os
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextvars import Context, copy_context
 from dataclasses import dataclass
 from typing import Any
 
@@ -24,8 +25,8 @@ from ..constants import (
     ENV_MAX_PARALLEL_WORKERS,
     UNEXPECTED_ERROR_MAX_MESSAGE_LEN,
 )
-from ..effective_branch import TargetRole, record_branch
-from ..errors import ErrorCode
+from ..effective_branch import TargetRole, record_branch, record_project
+from ..errors import ErrorCode, KeboolaApiError
 from ..models import AppConfig, ProjectConfig
 from ..project_ref import resolve_project_ref
 
@@ -67,6 +68,8 @@ def resolve_project_credentials(
     project = config_store.get_project(alias)
     if project is None:
         raise project_not_registered_error(alias)
+    # The caller named the project, as in `resolve_projects` (spec T6).
+    record_project(alias, "explicit", project)
     return ResolvedProjectCredentials(stack_url=project.stack_url, token=project.token)
 
 
@@ -317,7 +320,7 @@ def resolve_implicit_alias(
     if pinned:
         if pinned not in config.projects:
             raise ConfigError(
-                f"Pinned default project '{pinned}' is not registered. "
+                f"Active project '{pinned}' is not registered. "
                 "Run 'kbagent project use <alias>' to repair."
             )
         return pinned, "pin"
@@ -330,10 +333,43 @@ def resolve_implicit_alias(
         raise NoImplicitProjectError("No projects configured. Run 'kbagent project add' first.")
 
     raise NoImplicitProjectError(
-        "Multiple projects configured and no default pinned. "
+        "Multiple projects configured and no active project. "
         "Pass --project <alias>, set KBAGENT_PROJECT, or run "
         "'kbagent project use <alias>'."
     )
+
+
+def resolve_fanout_aliases(
+    config_store: ConfigStore, projects: list[str] | None, all_projects: bool
+) -> list[str] | None:
+    """The projects of a fan-out read: the ``aliases`` argument of its service call (T1, T2).
+
+    Shared by the CLI (``--project`` / ``--all-projects``) and the ``kbagent
+    serve`` list routes (``project`` / ``all_projects``). Named projects are
+    returned as they are. ``all_projects`` returns None, which the services
+    read as "every registered project", and records each one as ``all``.
+    Without either, the T1 chain picks one project and records its source.
+
+    Raises:
+        KeboolaApiError: ``USAGE_ERROR`` when both are given.
+        ConfigError: no project resolves, or ``all_projects`` finds none registered.
+    """
+    if all_projects and projects:
+        raise KeboolaApiError(
+            "Cannot use project with all_projects (--project with --all-projects).",
+            error_code=ErrorCode.USAGE_ERROR,
+        )
+    if projects:
+        return list(projects)
+    if all_projects:
+        registered = config_store.load().projects
+        if not registered:
+            raise ConfigError("No projects configured. Run 'kbagent project add' first.")
+        for alias, project in registered.items():
+            record_project(alias, "all", project)
+        return None
+    alias, _source = BaseService(config_store).resolve_pinned_alias()
+    return [alias]
 
 
 def make_telemetry_client(
@@ -366,6 +402,16 @@ def make_telemetry_client(
     return KeboolaClient(
         stack_url=stack_url, token="", http_auth=StaticBearerAuth(access, project_id)
     )
+
+
+def _run_in(
+    context: Context,
+    worker_fn: Callable[[str, ProjectConfig], tuple[Any, ...]],
+    alias: str,
+    project: ProjectConfig,
+) -> tuple[Any, ...]:
+    """Run ``worker_fn`` in ``context``, a copy of the submitting thread's context."""
+    return context.run(worker_fn, alias, project)
 
 
 class BaseService:
@@ -402,6 +448,8 @@ class BaseService:
         config = self._config_store.load()
 
         if not aliases:
+            for alias, project in config.projects.items():
+                record_project(alias, "all", project)
             return dict(config.projects)
 
         resolved: dict[str, ProjectConfig] = {}
@@ -411,6 +459,7 @@ class BaseService:
                     alias, self._config_store.config_path, self._config_store.source
                 )
             resolved[alias] = config.projects[alias]
+            record_project(alias, "explicit", resolved[alias])
 
         return resolved
 
@@ -483,13 +532,16 @@ class BaseService:
                 raise project_not_found_error(
                     explicit, self._config_store.config_path, self._config_store.source
                 )
+            record_project(alias, "explicit", config.projects[alias])
             return alias, "explicit"
 
-        return resolve_implicit_alias(
+        alias, source = resolve_implicit_alias(
             config,
             os.environ.get(ENV_KBAGENT_PROJECT),
             env_fix="Use 'kbagent project add' or unset the env var.",
         )
+        record_project(alias, source, config.projects[alias])
+        return alias, source
 
     def _resolve_max_workers(self) -> int:
         """Resolve max parallel workers: env var > config.json > default (10).
@@ -547,8 +599,12 @@ class BaseService:
 
         max_workers = min(len(projects), self._resolve_max_workers())
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Each worker runs in its own copy of the caller's context: a
+            # `kbagent serve` request keeps its target record in a ContextVar
+            # (effective_branch.open_request_record), and one Context cannot be
+            # entered by two threads at once. The copies share the record.
             future_to_alias = {
-                executor.submit(worker_fn, alias, project): alias
+                executor.submit(_run_in, copy_context(), worker_fn, alias, project): alias
                 for alias, project in projects.items()
             }
 

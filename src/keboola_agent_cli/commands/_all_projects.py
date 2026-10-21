@@ -1,30 +1,41 @@
-"""The shared ``--all-projects`` option of the fan-out read commands (#791, CLI-36).
+"""Project selection and exit code of the 18 fan-out reads (#791, CLI-36, CLI-45).
 
-In 1.0.0 an omitted ``--project`` on these reads uses the default project
-(``KBAGENT_PROJECT``, then the ``project use`` choice, then the sole project),
-and reading every registered project needs ``--all-projects``. The 0.x line
-accepts ``--all-projects`` already, so that one script works on 0.x and on
-1.0.0. Until 1.0.0 it does the same as an omitted ``--project``: the command
-gets no project list and reads all registered projects.
+An omitted ``--project`` on these reads uses the active project, like every
+other command (spec T1, T2): ``KBAGENT_PROJECT``, then the ``project use``
+choice, then the sole registered project, else ``CONFIG_ERROR`` (exit 5).
+``--all-projects`` reads every registered project. A read in which a project
+failed exits 1 after its output. With no registered project it exits 5 (E4).
 
 ``workspace gc`` and ``sync pull/push/diff`` declare their own
 ``--all-projects`` with their own meaning and are not covered here.
 """
 
-from typing import Annotated
+from collections.abc import Callable
+from typing import Annotated, Any
 
 import typer
+from rich.markup import escape
 
-from ..errors import ErrorCode
+from ..effective_branch import recorded_targets
+from ..errors import ConfigError, ErrorCode
 from ..output import OutputFormatter
+from ..services.base import resolve_fanout_aliases
+from ._helpers import finish_items
 
-ALL_PROJECTS_HELP = (
-    "Read all registered projects. Until 1.0.0 the same as omitting --project; "
-    "from 1.0.0 an omitted --project reads only the default project. "
-    "Cannot be used with --project."
+ALL_PROJECTS_HELP = "Read all registered projects. Cannot be used with --project."
+
+# T11: the --project help of a fan-out read states the omitted default.
+_OMITTED_PROJECT = (
+    "Omitted: the active project (KBAGENT_PROJECT, then 'kbagent project use', "
+    "then the only registered project). Use --all-projects for all projects."
 )
+FANOUT_PROJECT_HELP = f"Project alias or ID, repeatable. {_OMITTED_PROJECT}"
+FANOUT_ONE_PROJECT_HELP = f"Project alias or ID. {_OMITTED_PROJECT}"
 
 AllProjectsOption = Annotated[bool, typer.Option("--all-projects", help=ALL_PROJECTS_HELP)]
+
+# E4: a per-project answer that is not a failure (a project without PAYG).
+NOT_FAILED_CODES = frozenset({str(ErrorCode.PAYG_NOT_AVAILABLE)})
 
 
 def reject_project_with_all_projects(
@@ -43,3 +54,92 @@ def reject_project_with_all_projects(
             error_code=ErrorCode.USAGE_ERROR,
         )
         raise typer.Exit(code=2)
+
+
+def fanout_projects(
+    ctx: typer.Context,
+    formatter: OutputFormatter,
+    project: list[str] | None,
+    all_projects: bool,
+) -> list[str] | None:
+    """The ``aliases`` argument of a fan-out read's service call (T1, T2).
+
+    ``--project`` values are returned as they are (the option callback
+    records them as ``explicit``). ``--all-projects`` returns None, which the
+    services read as "every registered project", and records each one as
+    ``all``. Without either, the T1 chain picks one project and records its
+    source (T6).
+
+    Raises:
+        typer.Exit: 2 for ``--project`` with ``--all-projects``. 5 when no
+            project resolves, or when ``--all-projects`` finds none registered.
+    """
+    reject_project_with_all_projects(formatter, project, all_projects)
+    try:
+        return resolve_fanout_aliases(ctx.obj["config_store"], project, all_projects)
+    except ConfigError as exc:
+        formatter.error(
+            message=exc.message, error_code=getattr(exc, "error_code", ErrorCode.CONFIG_ERROR)
+        )
+        raise typer.Exit(code=5) from None
+
+
+def finish_fanout(
+    formatter: OutputFormatter,
+    result: Any,
+    failures: list[dict[str, Any]],
+    render: Callable[[], object],
+) -> None:
+    """End a fan-out read: the output, one headline, then exit 1 when a project failed (E4).
+
+    ``failures`` is the result's per-project error list. An entry whose
+    ``error_code`` is in :data:`NOT_FAILED_CODES` is an answer, not a failure:
+    its project counts as read. The projects are the ones the command
+    recorded for ``targets``. The headline is ``Success: N project(s) read.``
+    or ``Failed: X of N projects. Y project(s) read.`` (HO2). Each failed
+    project is one ``Error: project '<alias>': <message>`` line before it.
+    """
+    failed_entries = [f for f in failures if str(f.get("error_code", "")) not in NOT_FAILED_CODES]
+    answers = [f for f in failures if f not in failed_entries]
+    failed_projects = {
+        f.get("project_alias") or f.get("alias") or str(index)
+        for index, f in enumerate(failed_entries)
+    }
+    projects = {t.project_alias for t in recorded_targets()}
+    total = max(len(projects | failed_projects), len(failed_projects))
+    failed = len(failed_projects)
+    finish_items(
+        formatter,
+        result,
+        failed=failed,
+        total=total,
+        noun="projects",
+        summary=f"{total - failed} project(s) read.",
+        render=lambda: _render_fanout(formatter, render, failed_entries, answers),
+    )
+
+
+def _render_fanout(
+    formatter: OutputFormatter,
+    render: Callable[[], object],
+    failed_entries: list[dict[str, Any]],
+    answers: list[dict[str, Any]],
+) -> None:
+    """The read's own output, then one ``Error:`` line per failed project (stdout).
+
+    A per-project answer that is not a failure (``PAYG_NOT_AVAILABLE``) stays
+    a notice on stderr.
+    """
+    render()
+    for entry in answers:
+        formatter.warning(f"Project '{escape(_alias(entry))}': {escape(_message(entry))}")
+    for entry in failed_entries:
+        formatter.item_error(f"project '{_alias(entry)}'", _message(entry))
+
+
+def _alias(entry: dict[str, Any]) -> str:
+    return str(entry.get("project_alias") or entry.get("alias") or "?")
+
+
+def _message(entry: dict[str, Any]) -> str:
+    return str(entry.get("message") or entry.get("error") or "error")

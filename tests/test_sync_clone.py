@@ -1079,7 +1079,7 @@ class TestSyncCloneCLI:
         assert call["target_alias"] == "target"
         assert call["overrides"]["bucket_map"] == {"in.c-ref": "in.c-prod"}
         assert call["overrides"]["create_buckets"] is True
-        assert "Cloned into target" in result.output
+        assert "cloned into target" in result.output
         assert "Buckets: 1 created, 1 linked, 0 already present" in result.output
         assert "Linked in.c-shared -> project 42 bucket out.c-origin" in result.output
 

@@ -209,12 +209,10 @@ class TestEncryptValuesFileInput:
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
             patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
             patch("keboola_agent_cli.cli.EncryptService") as MockEncService,
-            patch("keboola_agent_cli.commands.encrypt.sys") as mock_sys,
         ):
             MockStore.return_value = store
             MockProjService.return_value = ProjectService(config_store=store)
             MockEncService.return_value = mock_enc
-            mock_sys.stdin.read.return_value = '{"#token": "abc"}'
 
             result = runner.invoke(
                 app,
@@ -229,6 +227,7 @@ class TestEncryptValuesFileInput:
                     "--input",
                     "-",
                 ],
+                input='{"#token": "abc"}',
             )
 
         assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"

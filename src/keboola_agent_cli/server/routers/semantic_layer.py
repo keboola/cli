@@ -29,6 +29,7 @@ from ...errors import ErrorCode
 from ...permissions import PermissionEngine
 from ...services.semantic_layer_service import SCHEMA_TYPE_ALIAS
 from ..dependencies import ServiceRegistry, get_permission_engine, get_registry
+from ..response_meta import note_operation, warn_deprecated
 
 router = APIRouter(prefix="/semantic-layer", tags=["semantic-layer"])
 
@@ -257,6 +258,7 @@ def _gate_organization_scope(
         scope = registry.semantic_layer.child_scope(alias=alias, model_name_or_uuid=model)
     if scope == "organization":
         engine.check_or_raise(f"{operation} --scope organization")
+        note_operation(f"{operation} --scope organization")
 
 
 # ── Routes (14 declarations, in the order from the plan) ────────────
@@ -571,8 +573,17 @@ def add_item(
     )
 
 
-@router.put("/items/{kind}/{name}", summary="Edit a model entity")
-def edit_item(
+_EDIT_MODELS: dict[str, type[BaseModel]] = {
+    "metric": EditMetric,
+    "dataset": EditDataset,
+    "relationship": EditRelationship,
+    "constraint": EditConstraint,
+    "glossary": EditGlossary,
+}
+
+
+@router.patch("/items/{kind}/{name}", summary="Edit a model entity")
+def patch_item(
     kind: ItemKind,
     name: str,
     body: dict[str, Any],
@@ -582,8 +593,36 @@ def edit_item(
 
     For ``kind="glossary"``, ``name`` is the current ``term`` (not a stored
     field called ``name``). FastAPI rejects unknown ``kind`` values at the
-    framework layer (422) via the :data:`ItemKind` ``Literal`` alias.
+    framework layer (422) via the :data:`ItemKind` ``Literal`` alias. A body
+    field that the kind does not declare is refused with 422 (spec V5).
     """
+    unknown = sorted(set(body) - set(_EDIT_MODELS[kind].model_fields))
+    if unknown:
+        raise HTTPException(
+            status_code=422, detail=f"Unknown field(s) for {kind}: {', '.join(unknown)}."
+        )
+    return _edit_item(kind, name, body, registry)
+
+
+@router.put(
+    "/items/{kind}/{name}",
+    summary="Edit a model entity (deprecated: use PATCH)",
+    deprecated=True,
+)
+def edit_item(
+    kind: ItemKind,
+    name: str,
+    body: dict[str, Any],
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """Deprecated form of ``PATCH`` (spec V9): same result, plus a ``DEPRECATED`` warning."""
+    warn_deprecated("PUT /semantic-layer/items/{kind}/{name}")
+    return _edit_item(kind, name, body, registry)
+
+
+def _edit_item(
+    kind: str, name: str, body: dict[str, Any], registry: ServiceRegistry
+) -> dict[str, Any]:
     svc = registry.semantic_layer
     if kind == "metric":
         m = EditMetric.model_validate(body)

@@ -665,6 +665,44 @@ class TestLoginMethodSelection:
         assert result.method == "device"
         assert env_calls == []  # --device-code bypasses environment detection entirely
 
+    def test_no_open_forces_device_flow_without_opening(
+        self, store, state_store, monkeypatch
+    ) -> None:
+        """--no-open: device flow, no browser (also not the verification link), the reason told."""
+        client = _FakeAuthClient()
+        client.introspect_response = _introspect()
+        opened: list[str] = []
+        notices: list[str] = []
+
+        def _record_open(url: str) -> bool:
+            opened.append(url)
+            return True
+
+        service = _make_service(store, state_store, client, browser_opener=_record_open)
+
+        def _fake_run_device_flow(_client, *, on_prompt, sleep):
+            from keboola_agent_cli.auth.device import DeviceFlowOutcome
+
+            on_prompt(
+                DeviceAuthorization(
+                    deviceCode="dc",
+                    userCode="ABCD-EFGH",
+                    verificationUri="https://connection.keboola.com/device",
+                    verificationUriComplete="https://connection.keboola.com/device?code=X",
+                    expiresIn=600,
+                )
+            )
+            return DeviceFlowOutcome(tokens=_tokens(), polls=1)
+
+        monkeypatch.setattr(svc_mod, "run_device_flow", _fake_run_device_flow)
+        result = service.login(stack=STACK_URL, on_notice=notices.append, no_open=True)
+
+        assert result.method == "device"
+        assert result.fallback_reason == "--no-open is set."
+        assert opened == []
+        assert notices == ["Using device login: --no-open is set."]
+        assert [name for name, _ in client.calls] == ["introspect"]
+
 
 class TestLoginPkceFallback:
     def test_setup_error_falls_back_to_device(self, store, state_store, monkeypatch) -> None:

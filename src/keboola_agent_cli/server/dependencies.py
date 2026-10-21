@@ -61,6 +61,7 @@ from ..services.transformation_service import TransformationService
 from ..services.variables_service import VariablesService
 from ..services.version_service import VersionService
 from ..services.workspace_service import WorkspaceService
+from .response_meta import note_operation
 
 
 @dataclass
@@ -273,6 +274,7 @@ def require_permission(operation: str) -> Callable[[PermissionEngine], None]:
         engine: PermissionEngine = Depends(get_permission_engine),
     ) -> None:
         engine.check_or_raise(operation)
+        note_operation(operation)
 
     setattr(_check_permission, PERMISSION_DEPENDENCY_MARKER, operation)
     return _check_permission
@@ -317,6 +319,14 @@ def translate_project_refs(*names: str) -> Callable[..., None]:
             request.__dict__.pop("_query_params", None)
 
     return _translate
+
+
+# The `all_projects` query parameter of the list routes that read several
+# projects (spec T2): without it and without `project`, the active project.
+ALL_PROJECTS_HELP = (
+    "Read all registered projects. Without it and without project: the active project "
+    "(KBAGENT_PROJECT, then 'kbagent project use', then the only registered project)."
+)
 
 
 _MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})

@@ -80,7 +80,7 @@ Why a dev branch (this is a **rehearsal**, not the thing that ships):
 - All the writes below (`storage create-table`, `workspace query`
   CTAS, `swap-tables`) are scoped to the branch by `branch use`'s active-branch
   resolution.
-- If anything goes wrong, `kbagent branch delete --branch <ID>` rolls
+- If anything goes wrong, `kbagent --json branch delete --project P --branch <ID>` rolls
   back the entire experiment in one call.
 
 The Storage API enforces this for swap-tables specifically: without an
@@ -377,7 +377,7 @@ swapped schema to production (only configs merge). Delete the branch
 (this also drops the branch-local `data_typed` sibling):
 
 ```bash
-kbagent branch delete --project ALIAS --branch <BRANCH_ID>
+kbagent --json branch delete --project ALIAS --branch <BRANCH_ID>
 ```
 
 Keep a written record of what the rehearsal proved -- the Phase 2 profile
@@ -464,7 +464,7 @@ The rehearsal branch is already gone (Phase 7); there is no merge step.
   branch.** Usually a config references a bucket that was not
   auto-materialized in the branch yet (see
   `storage-types-workflow.md` "Dev-branch auto-materialize"). Run
-  `kbagent storage tables --branch <ID>` to verify all input tables
+  `kbagent storage tables --project P --branch <ID>` to verify all input tables
   are visible.
 - **Swap on `legacy_branch_storage` projects** (no `storage-branches`
   feature flag). `swap-tables` will run, but the runner uses

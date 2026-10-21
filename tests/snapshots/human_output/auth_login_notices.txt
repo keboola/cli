@@ -1,0 +1,19 @@
+exit: 0
+--- stdout ---
+╭───────────── Signed in to Keboola ──────────────╮
+│ Stack: https://connection.keboola.com           │
+│ Method: device                                  │
+│ Signed in as: Test User                         │
+│ Session: sess-1                                 │
+│ Access token expires: 2026-07-27T12:00:00+00:00 │
+│ Fell back to device login: --no-open is set.    │
+╰─────────────────────────────────────────────────╯
+--- stderr ---
+Using device login: --no-open is set.
+╭─────────────── Keboola CLI device login ───────────────╮
+│ Open this URL and enter the code to finish signing in: │
+│                                                        │
+│ https://connection.keboola.com/device                  │
+│                                                        │
+│ Code: ABCD-EFGH                                        │
+╰────────────────────────────────────────────────────────╯

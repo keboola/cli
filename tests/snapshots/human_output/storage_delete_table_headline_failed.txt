@@ -1,0 +1,7 @@
+exit: 1
+--- stdout ---
+Deleted: in.c-main.orders
+Error: in.c-main.items: Table is used by an alias
+Failed: 1 of 2 tables. 1 table(s) deleted.
+--- stderr ---
+Target: project 'prod', production

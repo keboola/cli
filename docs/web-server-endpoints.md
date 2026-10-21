@@ -9,7 +9,7 @@ auth, and the concepts behind these routes live in
 [`web-server.md`](web-server.md); a running server serves the same spec
 interactively at `/docs` (Swagger) and `/openapi.json`.
 
-**257 operations** across **222 paths** and **32 routers**.
+**261 operations** across **222 paths** and **32 routers**.
 
 Paths are shown as the server registers them. Reaching them through the
 Node BFF (or single-process `--ui` mode) prefixes every path with `/api`.
@@ -39,7 +39,7 @@ Register, list, edit, and remove Keboola project aliases. Mirrors `kbagent proje
 | `PATCH` | `/projects/{alias}` | Edit a project |
 | `GET` | `/projects/status` | Check project connectivity |
 | `GET` | `/projects/current` | Get the active project |
-| `POST` | `/projects/use/{alias}` | Switch the active project |
+| `POST` | `/projects/use/{alias}` | Switch the active project (shared with every CLI call and REST client) |
 | `GET` | `/projects/{alias}/info` | Get project metadata |
 | `GET` | `/projects/{alias}/description` | Get the project description |
 | `PUT` | `/projects/{alias}/description` | Set the project description |
@@ -102,7 +102,7 @@ Scoped Storage API tokens -- mint (bucket read/write + component access + expiry
 
 ## Configurations
 
-### `configs` (26 operations)
+### `configs` (27 operations)
 
 Browse, search, update, and manage component configurations and rows (variables, metadata, folder, default bucket, OAuth URL). Mirrors `kbagent config *`.
 
@@ -132,7 +132,8 @@ Browse, search, update, and manage component configurations and rows (variables,
 | `GET` | `/configs/{project}/{component_id}/{config_id}/state` | Get configuration (or row) state |
 | `PUT` | `/configs/{project}/{component_id}/{config_id}/state` | Set configuration (or row) state |
 | `GET` | `/configs/{project}/{component_id}/{config_id}/variables` | Get configuration variables |
-| `PUT` | `/configs/{project}/{component_id}/{config_id}/variables` | Set configuration variables |
+| `PATCH` | `/configs/{project}/{component_id}/{config_id}/variables` | Merge configuration variables |
+| `PUT` | `/configs/{project}/{component_id}/{config_id}/variables` | Replace configuration variables (replace: true) |
 | `DELETE` | `/configs/{project}/{component_id}/{config_id}/variables` | Clear configuration variables |
 
 ### `components` (4 operations)
@@ -293,7 +294,7 @@ Flow Notifications-tab recipients (Notification Service subscriptions) -- audit 
 | `POST` | `/notifications/{project}` | Create a notification subscription |
 | `POST` | `/notifications/{project}/{subscription_id}/replace-recipient` | Replace a subscription's recipient |
 
-### `data-apps` (18 operations)
+### `data-apps` (19 operations)
 
 Python/JS (default), Streamlit and R data apps -- create, deploy, start/stop, manage secrets. Mirrors `kbagent data-app *`.
 
@@ -310,7 +311,8 @@ Python/JS (default), Streamlit and R data apps -- create, deploy, start/stop, ma
 | `GET` | `/data-apps/{project}/{app_id}/password` | Get data app password metadata (password only with reveal=true) |
 | `GET` | `/data-apps/{project}/{app_id}/logs` | Tail data app container logs |
 | `GET` | `/data-apps/{project}/{app_id}/secrets` | List data app secrets |
-| `PUT` | `/data-apps/{project}/{app_id}/secrets` | Set data app secrets |
+| `PATCH` | `/data-apps/{project}/{app_id}/secrets` | Set data app secrets |
+| `PUT` | `/data-apps/{project}/{app_id}/secrets` | Set data app secrets (deprecated: use PATCH) |
 | `GET` | `/data-apps/{project}/{app_id}/secrets/{key}` | Get a single data app secret |
 | `POST` | `/data-apps/{project}/{app_id}/secrets/remove` | Remove data app secrets |
 | `GET` | `/data-apps/{project}/{app_id}/git-repo` | Get a data app's git repository |
@@ -345,8 +347,8 @@ Dev branch lifecycle (create / use / reset / delete / merge) and branch metadata
 |---|---|---|
 | `GET` | `/branches` | List branches |
 | `POST` | `/branches/{project}` | Create a branch |
-| `POST` | `/branches/{project}/use` | Pin the active branch |
-| `POST` | `/branches/{project}/reset` | Reset to the default branch |
+| `POST` | `/branches/{project}/use` | Set the active branch (shared with every CLI call and REST client) |
+| `POST` | `/branches/{project}/reset` | Clear the active branch (shared with every CLI call and REST client) |
 | `DELETE` | `/branches/{project}/{branch_id}` | Delete a branch |
 | `GET` | `/branches/{project}/merge-url` | Get the branch merge URL |
 | `GET` | `/branches/{project}/metadata` | List branch metadata |
@@ -354,7 +356,7 @@ Dev branch lifecycle (create / use / reset / delete / merge) and branch metadata
 | `PUT` | `/branches/{project}/metadata/{key}` | Set a branch metadata value |
 | `DELETE` | `/branches/{project}/metadata/{metadata_id}` | Delete a branch metadata entry |
 
-### `merge-requests` (13 operations)
+### `merge-requests` (14 operations)
 
 Merge requests (Branches 2.0, non-SOX): list / detail / create / update / review transitions / merge, plus conflict inspection and resolution. Every route enforces the permission policy; `merge` and any operation that arms or completes an auto-merge are destructive. `POST .../merge` is synchronous and may block up to 600 s. Mirrors `kbagent merge-request *`.
 
@@ -364,7 +366,8 @@ Merge requests (Branches 2.0, non-SOX): list / detail / create / update / review
 | `POST` | `/merge-requests/{project}` | Create a merge request |
 | `GET` | `/merge-requests/{project}/by-branch/{branch_id}` | Find the merge request of a branch |
 | `GET` | `/merge-requests/{project}/{merge_request_id}` | Merge request detail |
-| `PUT` | `/merge-requests/{project}/{merge_request_id}` | Update a merge request |
+| `PATCH` | `/merge-requests/{project}/{merge_request_id}` | Update a merge request |
+| `PUT` | `/merge-requests/{project}/{merge_request_id}` | Update a merge request (deprecated: use PATCH) |
 | `GET` | `/merge-requests/{project}/{merge_request_id}/conflicts` | List conflicts |
 | `GET` | `/merge-requests/{project}/{merge_request_id}/diff/{component_id}/{config_id}` | Three-way diff of one conflicting configuration |
 | `PUT` | `/merge-requests/{project}/{merge_request_id}/auto-merge` | Arm or disarm auto-merge |
@@ -389,7 +392,7 @@ Build and query cross-project data lineage (table-level and column-level). Mirro
 | `GET` | `/lineage/walk` | Walk lineage graph from a node |
 | `GET` | `/lineage/mermaid` | Render lineage as Mermaid |
 
-### `semantic-layer` (28 operations)
+### `semantic-layer` (29 operations)
 
 Model, validate, import/export, diff, promote, and build semantic layer artifacts (datasets, metrics, relationships, constraints, glossary). Mirrors `kbagent semantic-layer *`.
 
@@ -406,7 +409,8 @@ Model, validate, import/export, diff, promote, and build semantic layer artifact
 | `GET` | `/semantic-layer/export` | Export model snapshot |
 | `POST` | `/semantic-layer/diff` | Diff two semantic-layer snapshots |
 | `POST` | `/semantic-layer/items/{kind}` | Add an entity to a model |
-| `PUT` | `/semantic-layer/items/{kind}/{name}` | Edit a model entity |
+| `PATCH` | `/semantic-layer/items/{kind}/{name}` | Edit a model entity |
+| `PUT` | `/semantic-layer/items/{kind}/{name}` | Edit a model entity (deprecated: use PATCH) |
 | `DELETE` | `/semantic-layer/items/{kind}/{name}` | Remove a model entity |
 | `POST` | `/semantic-layer/import` | Import a snapshot into a project |
 | `POST` | `/semantic-layer/promote` | Promote a model between projects |

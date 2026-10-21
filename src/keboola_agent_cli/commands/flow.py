@@ -8,8 +8,6 @@ from __future__ import annotations
 
 import json
 import logging
-import sys
-from pathlib import Path
 from typing import Any
 
 import typer
@@ -27,15 +25,21 @@ from ..services.flow_service import (
     get_flow_examples,
 )
 from ..services.flow_validation import find_unreachable_phases, validate_conditional_flow
-from ._all_projects import AllProjectsOption, reject_project_with_all_projects
+from ._all_projects import (
+    FANOUT_PROJECT_HELP,
+    AllProjectsOption,
+    fanout_projects,
+    finish_fanout,
+)
 from ._helpers import (
     _confirm_or_abort,
     check_cli_permission,
     emit_api_error,
+    finish_items,
     get_formatter,
     get_service,
-    item_failure_exit_code,
     map_error_to_exit_code,
+    parse_json_arg,
 )
 
 logger = logging.getLogger(__name__)
@@ -154,7 +158,7 @@ def flow_list(
     project: list[str] | None = typer.Option(
         None,
         "--project",
-        help="Project alias (repeatable for multiple projects; omit for all)",
+        help=FANOUT_PROJECT_HELP,
     ),
     all_projects: AllProjectsOption = False,
     branch: int | None = typer.Option(
@@ -177,15 +181,16 @@ def flow_list(
     any schedule get ``schedules=[]``.
     """
     formatter = get_formatter(ctx)
-    reject_project_with_all_projects(formatter, project, all_projects)
     service = get_service(ctx, "flow_service")
 
-    if branch is not None and (not project or len(project) != 1):
+    if branch is not None and (all_projects or len(project or []) > 1):
         formatter.error(
             message="--branch requires exactly one --project",
             error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2)
+
+    project = fanout_projects(ctx, formatter, project, all_projects)
 
     try:
         result = service.list_flows(
@@ -197,17 +202,16 @@ def flow_list(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
-    if formatter.json_mode:
-        formatter.output(result)
-    else:
+    def render() -> None:
         _format_flows_table(formatter, result, with_schedules=with_schedules)
+
+    finish_fanout(formatter, result, result.get("errors", []), render)
 
 
 def _format_flows_table(
     formatter: Any, result: dict[str, Any], *, with_schedules: bool = False
 ) -> None:
     flows = result.get("flows", [])
-    errors = result.get("errors", [])
 
     if not flows:
         formatter.console.print("[dim]No flows found.[/dim]")
@@ -242,11 +246,6 @@ def _format_flows_table(
                     row.append("\n".join(lines))
             tbl.add_row(*row)
         formatter.console.print(tbl)
-
-    for err in errors:
-        formatter.warning(
-            f"Project '{err.get('project_alias', '?')}': {err.get('message', 'error')}"
-        )
 
     legacy = result.get("legacy_orchestrator_count", 0)
     if legacy:
@@ -614,19 +613,8 @@ def flow_validate(
 
 
 def _load_flow_yaml(raw: str) -> dict[str, Any]:
-    """Load flow definition from inline JSON, @file, or - (stdin)."""
-    if raw == "-":
-        content = sys.stdin.read()
-    elif raw.startswith("@"):
-        file_path = Path(raw[1:])
-        if not file_path.is_file():
-            raise FileNotFoundError(f"File not found: {file_path}")
-        content = file_path.read_text(encoding="utf-8")
-    else:
-        content = raw
-
-    # Try YAML first (superset of JSON)
-    parsed = yaml.safe_load(content)
+    """Load flow definition from inline YAML/JSON, @file, or - (stdin)."""
+    parsed = parse_json_arg(raw, label="--file", allow_yaml=True)
     if parsed is None:
         return {}
     if not isinstance(parsed, dict):
@@ -1041,28 +1029,24 @@ def flow_schedule_remove(
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
     # A schedule whose config could not be deleted is collected, not raised (#745).
-    code = item_failure_exit_code(len(result.get("errors", [])))
-    if formatter.json_mode:
-        formatter.output(result, exit_code=code or 0)
-    else:
-        count = result.get("deleted_count", 0)
-        errors = result.get("errors", [])
-        headline = f"Removed {count} schedule(s) from flow {escape(flow_id)}"
-        if errors:
-            formatter.console.print(
-                f"[bold red]Failed:[/bold red] {headline}, {len(errors)} failed"
-            )
-        elif count == 0:
-            formatter.console.print("[dim]No schedules found — nothing removed.[/dim]")
-        else:
-            formatter.success(headline)
+    count = result.get("deleted_count", 0)
+    errors = result.get("errors", [])
+
+    def render() -> None:
         for err in errors:
-            formatter.warning(f"  Error: schedule {err['schedule_id']}: {escape(err['error'])}")
+            formatter.item_error(f"schedule {err['schedule_id']}", err["error"])
         for warning in result.get("warnings", []):
             formatter.warning(warning)
 
-    if code:
-        raise typer.Exit(code=code)
+    finish_items(
+        formatter,
+        result,
+        failed=len(errors),
+        total=count + len(errors),
+        noun="schedules",
+        summary=f"{count} schedule(s) removed from flow {escape(flow_id)}.",
+        render=render,
+    )
 
 
 # Mounted from a private module: `commands/flow.py` is exactly at the

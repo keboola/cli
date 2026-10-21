@@ -438,7 +438,8 @@ def test_every_deprecation_names_a_hidden_option_of_a_live_command() -> None:
     import typer.main
 
     root = typer.main.get_command(app)
-    for form in DEPRECATIONS:
+    # A REST form ("PUT /path") is checked in tests/test_server_response_meta.py.
+    for form in (f for f in DEPRECATIONS if not f.split()[0].isupper()):
         *path, option = form.split()
         command: Any = root
         for name in path:

@@ -11,6 +11,28 @@ Versioning convention:
   behavior; the inline `(updated vX.Y.Z)` records when the refinement landed.
 -->
 
+## Forms that work on 0.x and 1.x
+
+From the release of kbagent 1.0.0 until its migration date (28 days later), the user can run 0.x (0.100.0 and later) or 1.x. Write every command so it works on both. `kbagent --version` tells which one runs. The migration page is `docs/migrate-to-1.0.md` in the repository.
+
+- **Fan-out reads** (`search`, `billing credits`, `component list`, `config list`, `config search`, `data-app list`, `job list`, `storage buckets`, `storage tables`, `sharing list`, `sharing edges`, `flow list`, `schedule list`, `schedule find`, `notification list`, `branch list`, `workspace list`, `project status`): always give `--project P`, or `--all-projects` for every project. An omitted `--project` reads all projects on 0.x and only the active project on 1.x.
+- **Root flags** (`--json`, `--deny-writes`, `--deny-destructive`) go before the subcommand: `kbagent --json config list --project P`. 0.x refuses them after it.
+- **Help**: `--help`, not `-h`. Never run a bare group (`kbagent storage`): 0.x exits 0 with no output, 1.x exits 2.
+- **Options**: never give a single-value option twice (1.x refuses it on write, destructive and admin commands). A list option such as `sharing share --target-project-ids` gets one comma list (`11,22`): 0.x keeps only the last of repeated values.
+- **Confirmations**: run a destructive command under `--json` (consent on both), or with `--yes` where 0.x has it. `branch delete` and `workspace delete` have `--yes` and `--dry-run` only on 1.x: use `kbagent --json branch delete --project P --branch ID`. Never pipe `y` into a prompt: 1.x refuses without a terminal.
+- **Text from a file**: `--file` / `--sql-file`, never `--text @file` (1.x refuses it when the file exists, 0.x stores the literal text).
+- **Results**: read failed items and the outcome from `--json` (`errors[]`, `failed[]`, `exit_code`, `error.code`), not from human output or the exit code alone. The `Error:` lines, the headline and several exit codes differ between the majors (migration page, rows 15, 21 and 31).
+- **REST** (`kbagent http`, `kbagent serve`): send `project=` or `all_projects=true` on list routes, and `branch_id` on the routes that use the active branch on 1.x. Keep `PUT` on the 4 partial-update routes until 0.x is gone: 1.x still accepts it with a `DEPRECATED` warning, 0.x has no `PATCH` there.
+- **Updates**: `kbagent update` stays on the running major. Ask the user before `kbagent update --major`.
+
+## `kbagent context <group>` prints one group
+
+*(since vNEXT)* (CLI-52, #791)
+
+- **`kbagent --json context storage`** prints only the `storage` section: the commands with their options and the first paragraph of their help, then the notes for the group. A top-level command (`search`, `serve`) or a hidden alias (`mr`, `sl`) works too. `data.group` names the section, or is null without an argument. `data.context` holds the text as before.
+- **An unknown group** is `INVALID_ARGUMENT` (exit 2), and the message lists the valid groups.
+- **The command lists are generated from the command manifest**, so they always match `--help`. On 0.x, `kbagent context` takes no argument and prints the whole hand-written text.
+
 ## Config folder is the configuration's `folder` field, not the `KBC.configuration.folderName` metadata key
 
 *(since vNEXT)* (DMD-2348)
@@ -53,11 +75,21 @@ Versioning convention:
 *(since vNEXT)* (CLI-44, #791)
 
 - **The `--json` envelope has `schema_version` and, on success, `exit_code`.** Success: `{"status": "ok", "schema_version": "1.0", "exit_code": N, "targets"?, "warnings"?, "data"}`. Error: `{"status": "error", "schema_version": "1.0", "targets"?, "warnings"?, "error"}`, with no `exit_code`. `exit_code` equals the process exit code. `status: "ok"` with a non-zero `exit_code` is a negative answer (`flow validate`, `auth status`, `permissions check`, `data-app validate-repo`) or a failed item of a command that processes several items.
-- **stdout holds one JSON document for every exit code under `--json`.** A parse error (unknown option, missing option, bad value) and a bare group (`kbagent --json storage`) give `USAGE_ERROR`, exit 2. A crash gives `INTERNAL_ERROR`, exit 1, with the traceback on stderr. Ctrl+C gives `INTERRUPTED` (exit 130). A crash after the success envelope is written leaves that envelope as the only document. A `--stream` command (`agent run --stream`, `agent test --stream`) keeps stdout NDJSON: an interrupt or crash after its first line adds one line `{"event": "error", "data": {"code": "INTERRUPTED"|"INTERNAL_ERROR", "message"}}`. Before, stdout was empty or held help text.
+- **stdout holds one JSON document for every exit code under `--json`.** A malformed command line (unknown option, missing required option) and a bare group (`kbagent --json storage`) give `USAGE_ERROR`, exit 2. A bad option value (wrong type, a value not in the allowed list, a value the command refuses) gives `INVALID_ARGUMENT`, exit 2, naming the option. A crash gives `INTERNAL_ERROR`, exit 1, with the traceback on stderr. Ctrl+C gives `INTERRUPTED` (exit 130). A crash after the success envelope is written leaves that envelope as the only document. A `--stream` command (`agent run --stream`, `agent test --stream`) keeps stdout NDJSON: an interrupt or crash after its first line adds one line `{"event": "error", "data": {"code": "INTERRUPTED"|"INTERNAL_ERROR", "message"}}`. Before, stdout was empty or held help text.
 - **A bare group exits 2 with its help on stderr**, also in human mode (before: exit 0 and no output). `kbagent --json` without a command does the same. A command that needs arguments and gets none (`kbagent search`) prints its help on stderr, not on stdout.
 - **`--json`/`-j`, `--deny-writes` and `--deny-destructive` also work after the subcommand:** `kbagent project list --json`. Before, that was a usage error (`kbagent version --json` exited 2). kbagent does not rewrite the command line, so an option value `--json` (`--description --json`) stays a value. For 0.x installs, keep these flags before the subcommand.
 - **`-h` works as `--help`.**
 - **A single-value option given twice:** a write, destructive or admin command refuses it with `USAGE_ERROR` (exit 2) that names the option, so `storage delete-bucket --project x ... --project test` no longer acts on `test`. Read commands use the last value and add a `REPEATED_OPTION` entry (with `options`) to `warnings[]` (stderr in human mode). A flag without a `--no-` form (`--yes`) given twice is not reported.
+
+## `auth login` notices on stderr, `--no-open`, one headline for multi-item commands, environment variables in `--help`
+
+*(since vNEXT)* (CLI-50, #791)
+
+- **`auth login` prints its notices on stderr in every mode.** The device-login panel (verification URL and user code), the wait and fallback notices, the `auth register-projects` hint and the picker question go to stderr. The login result stays on stdout. Before, human mode printed the notices on stdout. Capture `2>&1` when you relay the URL and code.
+- **`auth login --no-open`** uses the device-code flow and opens nothing; the result has `method: "device"` and `fallback_reason: "--no-open is set."`. Without it, `auth login` opens the browser as before, also under `--json` and without a terminal (an exception to the rule that a command opens no browser there). A foreground `--json auth login` blocks until the user approves in the browser (or on the device page with `--no-open`), so run it in a background shell and check `kbagent --json auth status`.
+- **A command that processes several items ends its human output with one headline** on stdout, after the result (notices, hints and panels go to stderr): `Success: ...` or `Failed: N of M <noun>. ...` (the bulk `storage` deletes, `storage file-tag`, `storage describe-batch` and `describe-migrate`, `job terminate`, `sync push`/`clone` and the `--all-projects` runs, `org setup`, `project refresh`, `project invite --from-csv`, `workspace gc`, `flow schedule-remove`, `semantic-layer build`/`import`/`promote`/`edit metric`, `auth register-projects`, `token list --with-last-used`, `config detail` with several `--project`, and the 18 fan-out reads such as `config list` and `job list`). One form: `Success: 2 table(s) deleted.`, `Failed: 1 of 3 projects. 2 project(s) read.` A failed item is one `Error: <item>: <message>` line on stdout, before the headline (before: `Failed: <item>: ...` in the bulk `storage` commands, and a `Warning:` line on stderr in the fan-out reads, `config detail` with several `--project`, `sync push`/`clone` and `flow schedule-remove`). stderr holds only notices. Read failed projects from `--json` (`errors[]`), not from human output. `config detail` with several `--project` and `token list --with-last-used` now exit 1 when a project or a last-used lookup failed. The exit code and the `--json` output do not change. Do not parse human output: use `--json` and `exit_code`.
+- **`--help` names the environment variable of an option** (`[env var: KBAGENT_CONFIG_DIR]` on `--config-dir`, `KBAGENT_CONVERSATION_ID` on `--conversation-id`). It never shows the value. The command reference of a release lists every variable that kbagent reads.
+- **The help of every command with `--wait` states the default** ("Default: no wait." or "Default: wait.") and the default `--timeout` in seconds. The defaults did not change: 300 for `job run` and the `data-app` waits, 600 for the Storage import waits.
 
 ## A confirmation without a terminal refuses, and `branch delete` and `workspace delete` ask
 
@@ -71,6 +103,31 @@ Versioning convention:
 - **`stream delete --force` is a hidden deprecated alias of `--yes`, and `semantic-layer import --yes` is hidden and has no effect.** Both still work and add a `warnings[]` entry `{"code": "DEPRECATED", "replacement": "--yes" | null, "remove_after": null, "hint": ...}` (one stderr line in human mode). `remove_after` stays null until the removal date is known: at least 28 days after the 1.0 migration date. Use `stream delete --yes`, and drop `--yes` from `semantic-layer import`.
 - **`workspace load` without a terminal does not ask about a large COPY.** It refuses with `WORKSPACE_LOAD_COPY_TOO_LARGE` and names `--force`, as under `--json`.
 
+## The fan-out reads use the active project, exit 1 when a project failed, and `targets` names the project source
+
+*(since vNEXT)* (CLI-45, #791)
+
+- **An omitted `--project` on the 18 fan-out reads uses the active project**, like every other command: `KBAGENT_PROJECT`, then `project use`, then the only registered project. With several projects and none of these, the read exits 5 with `CONFIG_ERROR` that names `--project`, `KBAGENT_PROJECT` and `project use`. The reads: `search`, `billing credits`, `component list`, `config list`, `config search`, `data-app list`, `job list`, `storage buckets`, `storage tables`, `sharing list`, `sharing edges`, `flow list`, `schedule list`, `schedule find`, `notification list`, `branch list`, `workspace list`, `project status`. Before, an omitted `--project` read all registered projects.
+- **All projects need `--all-projects`** (since 0.100.0). Write it in scripts and agent calls that want every project: it works on 0.100.0 and later. `--branch` with `--all-projects` is still `INVALID_ARGUMENT` (exit 2). `--branch` without `--project` now works when the active project resolves, because the read targets one project.
+- **A fan-out read exits 1 when a project failed**, after the full payload. The failure stays in `data.errors` (`project status`: a row with `status: "error"`), and the envelope has `exit_code: 1`. `PAYG_NOT_AVAILABLE` in `billing credits` is an answer, not a failure (exit 0). With no registered project the read exits 5 (`CONFIG_ERROR`), also with `--all-projects`. Before, these reads exited 0 and the failure was only in `data.errors`.
+- **Every record in `targets` has `project_source`**, next to `branch_source`: `explicit`, `env` (`KBAGENT_PROJECT`), `active_project` (`project use`), `sole` (the only registered project) or `all` (`--all-projects`). `explicit` means that the command line named the project: `--project`, or another project option such as `config clone --target-project`, `sync clone --target` or the `semantic-layer promote/diff` project options. Treat an unknown value like `active_project`. A project for which the command chose no branch gets one record with `branch_source: "none"` and `branch_id: null`.
+- **`project_source: null`** means that the command found the project in none of these ways (no project option, no `KBAGENT_PROJECT`, `project use` or sole-project fallback, no `--all-projects`). Every command with a `--project` option reports `explicit` when the option is given, and a command without `--project` that uses the chain reports the chain source. Treat null as unknown, like `active_project`.
+- **A destructive command under `--json` whose project or branch is the saved active choice adds a warning** `{"code": "TARGET_FROM_ACTIVE_CHOICE", "message", "hint"}` to the top-level `warnings[]`. The hint is the explicit flag (`--project prod`, `--branch 456`). The command still runs: `--json` is consent. Read and write commands, human mode and explicit flags give no such warning.
+- *(updated vNEXT -- CLI-49)* **The `kbagent serve` list routes follow the same rule.** `GET /configs`, `GET /jobs` and the other list routes without `project` read the active project. `all_projects=true` reads all registered projects. A route in which a project failed still answers HTTP 200 with the failure in `errors`.
+- **"Active" is the one name for the saved choice.** `project use` prints `Active project: <alias>` (before: `Pinned: default project is <alias>`). The help texts, messages and REST summaries say "active project" and "active branch". The `--json` keys of `project current` (`pinned`, `source: "pin"`) and the `config.json` fields (`default_project`, `active_branch_id`) keep their names.
+
+## `kbagent serve`: the active branch, `Kbagent-Targets`, the CLI error fields, `PATCH` for partial updates
+
+*(since vNEXT)* (CLI-49, #791)
+
+- **26 routes use the active branch when `branch_id` is omitted**, as their CLI commands do: the storage writes and `GET /storage/table-download/...`, `POST /jobs/{project}/run` and `/terminate` (filter form), the three `/transformations` routes, the `/configs/.../variables` routes and `POST /components/{component_id}/actions/{action}`. Before, they used production. Send `branch_id: 0` for production. The storage reads (`GET /storage/buckets`, `/tables`, `/table-detail/...`, `/files`, `/snapshots/...`) still read production.
+- **A response carries the `Kbagent-Targets` header** (the `targets` record of the request, JSON) and the `Kbagent-Warnings` header (JSON list of `{code, message, ...}`), each only when not empty. An error body has the same lists as `targets` and `warnings` keys. `kbagent http` prints only the body, so it does not show the headers.
+- **The REST `error` object has the CLI error fields:** `code`, `error_type`, `message`, `project`, `retryable`, `details`. The HTTP status follows `error_type`: `validation` and `configuration` 400, `authentication` 401, `authorization` 403, `not_found` 404, `conflict` 409, `api` and `network` 502 (400 for an `api` code that exits 2). Before, most codes answered 502 (for example `VALIDATION_ERROR`, `INVALID_TOKEN`, `FILE_NOT_FOUND`). Branch on `error.code`.
+- **`POST /projects/use/{alias}`, `POST /branches/{project}/use` and `/reset` change the saved choice for every CLI call** of the same configuration directory. The responses add `active_project_set`, `active_branch_set` or `active_branch_cleared` and a `Kbagent-Warnings` entry `ACTIVE_CHOICE_SHARED` with `config_dir`.
+- **A list route without `project` reads the active project**, as the CLI does: `GET /configs`, `/jobs`, `/storage/buckets`, `/storage/tables`, `/flows`, `/schedules`, `/data-apps`, `/workspaces`, `/branches`, `/components`, `/sharing`, `/notifications`, `/billing/credits`, `/search`, `/projects/status`, `/token/list` and the other routes that read several projects. Send `all_projects=true` for all projects. Before, an omitted `project` read all registered projects. With nothing to resolve the route answers HTTP 400 `CONFIG_ERROR`.
+- **A destructive route on the active branch adds `TARGET_FROM_ACTIVE_CHOICE`** to `Kbagent-Warnings` (hint `branch_id=<id>`), as a destructive CLI command under `--json` does. Send `branch_id` to make the branch explicit. The route still runs.
+- **Partial updates use `PATCH`:** `/semantic-layer/items/{kind}/{name}`, `/merge-requests/{project}/{merge_request_id}`, `/data-apps/{project}/{app_id}/secrets`, and the merge of `/configs/{project}/{component_id}/{config_id}/variables`. A `PATCH` body refuses an undeclared field (HTTP 422). The old `PUT` still works and adds a `DEPRECATED` entry (`replacement`, `remove_after: null`) to `Kbagent-Warnings`. `PUT .../variables` with `replace: true` is the full replace and gives no warning. Without it, it merges with the warning.
+
 ## `--branch 0` is production in `job terminate`, `swap-tables`, `clone-table` and `create-table --source-branch-id`
 
 *(since 0.100.0)* (CLI-21, #791)
@@ -80,6 +137,15 @@ Versioning convention:
 - **`storage clone-table --branch 0` is a usage error.** The clone copies a production table into a dev branch, so production as the target has no meaning: `INVALID_ARGUMENT`, exit 2, before any API call, also with an active branch set. Over `kbagent serve`, `POST /storage/tables/{project}/{table_id}/pull` with `branch_id: 0` answers HTTP 400 `INVALID_ARGUMENT`. Before, the CLI exited 5 with `CONFIG_ERROR` asking for `--branch`, and the REST route called `/v2/storage/branch/0/.../pull`.
 - **`storage create-table --source-branch-id 0` reads the source table from production.** In a production request kbagent leaves `source.branchId` out (the API then uses the request branch, which is production). In a dev-branch request (`--branch ID` or an active branch) it sends the default branch ID. Before, it sent `source.branchId: 0`. Both cases rely on an omitted `source.branchId` meaning the request branch, as kbagent's create-table code already assumed; the dev-branch case is not verified against a live BigQuery project. The `Source:` line and the `source` record in `targets` now name production.
 - A project that reports no default branch fails `job terminate --branch 0`, `swap-tables --branch 0` and a dev-branch `create-table --source-branch-id 0` with `CONFIG_ERROR` (exit 5, HTTP 400 over `kbagent serve`) that names `kbagent branch list`.
+
+## List options repeat, `@<file>` in free text is refused, a bad input value is `INVALID_ARGUMENT`
+
+*(since vNEXT)* (CLI-48, #791)
+
+- **Nine list options are repeatable and still take a comma list:** `org setup --project-ids`, `sharing share --target-project-ids` and `--target-users`, `semantic-layer add constraint --metrics`, `edit constraint --new-metrics`, `build --tables`, `import --types`, `promote --types` and `schema --type`. `--target-project-ids 11 --target-project-ids 22,33` shares with 11, 22 and 33. Before, the option kept only its last value (22,33). A value given twice is used once. `sharing share` adds `target_project_ids` or `target_users` to `data`.
+- **`--text` of `project description-set`, `storage describe-bucket`, `storage describe-table` and `branch metadata-set`, and `transformation create --sql`, refuse `@` followed by the path of an existing file** (a relative path is relative to the current directory): `INVALID_ARGUMENT`, exit 2, and the message names the file option (`--file`, `--sql-file`). Before, kbagent stored the text `@notes.md`. Pass the file with the file option. To store text that starts with `@` while a file of that name exists, write the text to a file and pass that file with the file option. `@` followed by anything that is not a file is still stored as text. Only these 5 options refuse `@<file>`; every other free-text option (`--description`, `--change-description`, `--prompt`, ...) still stores it as text.
+- **A bad input value is `INVALID_ARGUMENT`, exit 2, and the message names the option, never a traceback:** a non-integer in `org setup --project-ids` or `sharing share --target-project-ids` (before: a traceback with exit 1, or a usage error without `--json` output), a missing or bad `http post/patch --body` file, a binary or unreadable file in `--file`, `--sql-file`, `--configuration-file`, `workspace query --file`, `data-app git-credentials-create --public-key-file`, `lineage server --load` (a missing `--load` file stays `FILE_NOT_FOUND`), `dev-portal patch --value-file`, and a bad `dev-portal create/patch --data` file. A JSON option that already failed with exit 2 keeps its error code (`--configuration`, `--state`, `--config-data`: `VALIDATION_ERROR`; `encrypt values --input`: `INPUT_ERROR`; `agent --from-file` / `--runtime-input`: `INVALID_FORMAT`) and no longer crashes on a binary or unreadable file; so do `data-app create --description-file` (`READ_ERROR`, exit 1), `data-app secrets-set --secrets-file` (`DATA_APP_INVALID_SECRET`) and `semantic-layer reference-data set --members-file` (`VALIDATION_ERROR`).
+- **`config update/new --configuration` and `--configuration-file`, `config row-create/row-update --configuration`, `config state-set --state` and `component sync-action --config-data` refuse JSON that is not an object** (for example `[1]`): `VALIDATION_ERROR`, exit 2. Before, the value went to the API.
 
 ## The updater stays on the running major version; `kbagent update --major`
 
@@ -123,7 +189,8 @@ Versioning convention:
 *(since 0.100.0)* (CLI-36, #791)
 
 - **18 reads accept `--all-projects`:** `search`, `billing credits`, `component list`, `config list`, `config search`, `data-app list`, `job list`, `storage buckets`, `storage tables`, `sharing list`, `sharing edges`, `flow list`, `schedule list`, `schedule find`, `notification list`, `branch list`, `workspace list`, `project status`. On this version it does the same as an omitted `--project`: the same service call and the same output. `component list --query` uses the default project when `--project` is omitted, so with `--all-projects` it does too, and adds a warning that `--all-projects` has no effect there.
-- **Why it exists:** from 1.0.0 an omitted `--project` on these reads reads only the default project (`KBAGENT_PROJECT`, then `project use`, then the sole project), and all projects need `--all-projects`. A script that writes `--all-projects` now works unchanged on 1.0.0. On an older kbagent the option does not exist (exit 2).
+- **Why it exists:** from 1.0.0 an omitted `--project` on these reads reads only the active project (`KBAGENT_PROJECT`, then `project use`, then the sole project), and all projects need `--all-projects`. A script that writes `--all-projects` now works unchanged on 1.0.0. On an older kbagent the option does not exist (exit 2).
+  - *(updated vNEXT -- CLI-45)* The 1.x line does this now: see "The fan-out reads use the active project" above.
 - **`--all-projects` together with `--project` is `USAGE_ERROR`, exit 2** ("Cannot use --project with --all-projects"), as in `workspace gc`. `config detail` has no `--all-projects`: it requires `--project`. The `kbagent serve` routes of these reads do not change: they take no `all_projects` parameter.
 - **The `--json` envelope has an optional top-level `warnings` key**, a list of entries with `code` and `message` (`code` is `WARNING` today); an entry can also carry `hint` and further fields, so read the keys you know and ignore the rest. It is in the success envelope (`status`, `targets`, `warnings`, `data`) and in the error envelope (`status`, `targets`, `warnings`, `error`), and only when a command gave a warning; without one the key is absent. Before, a warning in `--json` mode was dropped. Human mode is unchanged: warnings go to stderr.
 - **A warning after the envelope is written is dropped**, so stdout stays one JSON document. Some commands warn only after their output (for example the `merge-request` group); their warnings stay in `data.warnings`.
@@ -2413,7 +2480,7 @@ response. Now:
   delete / password / secrets-set / secrets-list / secrets-get /
   secrets-remove`. The companion `config_id` key is unchanged.
 - Pipe-friendly chain that v0.33.0 enables:
-  `kbagent --json data-app list | jq -r '.apps[].app_id' | xargs -I{} kbagent data-app deploy --project P --app-id {}`.
+  `kbagent --json data-app list --project P | jq -r '.data.apps[].app_id' | xargs -I{} kbagent --json data-app deploy --project P --app-id {}`.
   On pre-v0.33.0 you had to read `.apps[].id` (mismatched the input flag,
   surprised AI agents that templated `.app_id`).
 - **What is NOT renamed:** the Storage config back-pointer at
@@ -4216,7 +4283,7 @@ The trade-off is deliberate: one big call avoids the O(unique-parents) round-tri
 
 `kbagent search QUERY` searches across **all item types** (tables, buckets, configs, flows, data apps, transformations) via the Storage API global-search endpoint. It is distinct from `kbagent config search --query Q` which scans only configuration JSON bodies.
 - `search --search-type config-based` delegates to `config search` internally but exposes the unified results shape. It matches **case-insensitively** (since v0.84.0) while `config search --query` stays case-sensitive unless `-i` is passed -- the same logical table is often mixed-case in a row name and upper-case in `storage.input.tables[].source`, so a case-sensitive body scan answers "is this referenced anywhere?" with a false no.
-- Options (`--type`, `--project`, `--limit`) must come AFTER the QUERY argument: `kbagent search "text" --type table --limit 10`.
+- Options (`--type`, `--project`, `--limit`) must come AFTER the QUERY argument: `kbagent search "text" --project P --type table --limit 10`.
 
 ## `config row-create` / `row-update` / `row-delete` lifecycle
 
@@ -5775,7 +5842,7 @@ fallback (`config examples` already resolved it correctly).
 
 ## Multi-project `job list` now merges chronologically, not grouped by project (since v0.90.1)
 
-`kbagent job list` without `--project` (and `kbagent serve`'s `GET /jobs`) fans
+`kbagent job list --all-projects` (on 0.x before 0.100.0: without `--project`), and `kbagent serve`'s `GET /jobs`, fans
 out to every resolved project's Queue API in parallel. Each project's own page
 already comes back sorted server-side by `--sort-by`/`--sort-order`, but the
 old aggregation step then re-sorted the MERGED list by

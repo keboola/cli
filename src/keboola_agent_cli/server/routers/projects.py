@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
-from ..dependencies import ServiceRegistry, get_registry, translate_project_refs
+from ...services.base import resolve_fanout_aliases
+from ..dependencies import ALL_PROJECTS_HELP, ServiceRegistry, get_registry, translate_project_refs
+from ..response_meta import warn_active_choice_shared
 
 # `{alias}` / `?alias=` name an existing project here, so a project ID works
 # too (CLI-22). The new alias of `POST /projects` is in the body, untouched.
@@ -89,23 +91,42 @@ def edit_project(
 
 @router.get("/status", summary="Check project connectivity")
 def status(
-    alias: str | None = None, registry: ServiceRegistry = Depends(get_registry)
+    alias: str | None = None,
+    all_projects: bool = Query(False, description=ALL_PROJECTS_HELP),
+    registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
-    """Connectivity check; pass ``?alias=`` to limit to one project."""
-    aliases = [alias] if alias else None
+    """Connectivity check. Mirrors `kbagent project status`.
+
+    ``?alias=`` checks one project. Without it the active project is
+    checked, and ``all_projects=true`` checks every registered project.
+    """
+    aliases = resolve_fanout_aliases(
+        registry.config_store, [alias] if alias else None, all_projects
+    )
     return {"status": registry.project.get_status(aliases=aliases)}
 
 
 @router.get("/current", summary="Get the active project")
 def current(registry: ServiceRegistry = Depends(get_registry)) -> dict[str, Any]:
-    """Currently pinned project alias. Mirrors `kbagent project current`."""
+    """The active project. Mirrors `kbagent project current`."""
     return registry.project.current_project()
 
 
-@router.post("/use/{alias}", summary="Switch the active project")
+@router.post(
+    "/use/{alias}",
+    summary="Switch the active project (shared with every CLI call and REST client)",
+)
 def use_project(alias: str, registry: ServiceRegistry = Depends(get_registry)) -> dict[str, Any]:
-    """Pin a project as the current default. Mirrors `kbagent project use`."""
-    return registry.project.use_project(alias)
+    """Set a project as the active project. Mirrors `kbagent project use`.
+
+    The choice is saved in the configuration directory, so every CLI call and
+    every REST client that uses the directory uses it too (spec V8). The
+    response carries ``active_project_set`` and a ``Kbagent-Warnings`` entry
+    ``ACTIVE_CHOICE_SHARED`` that names the directory.
+    """
+    result = registry.project.use_project(alias)
+    warn_active_choice_shared(registry.config_store.config_dir, "active project")
+    return result
 
 
 @router.get("/{alias}/info", summary="Get project metadata")

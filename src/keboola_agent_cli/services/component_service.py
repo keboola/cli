@@ -16,6 +16,7 @@ import yaml
 from ..ai_client import AiServiceClient
 from ..config_store import ConfigStore
 from ..constants import CONFIG_FILENAME, SECRET_PLACEHOLDER
+from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..models import ComponentDetail, ComponentSuggestion, ProjectConfig
 from ..sync.code_extraction import DESCRIPTION_FILENAME, extract_code_files
@@ -798,6 +799,7 @@ class ComponentService(BaseService):
                 ``config_data_override`` is provided.
             KeboolaApiError: If any API call fails.
         """
+        branch_id = resolve_branch(self._config_store, alias, branch_id)
         projects = self.resolve_projects([alias])
         project = projects[alias]
 

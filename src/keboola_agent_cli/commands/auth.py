@@ -51,6 +51,7 @@ from ._helpers import (
     check_cli_operation,
     check_cli_permission,
     emit_api_error,
+    finish_items,
     get_formatter,
     get_service,
     map_error_to_exit_code,
@@ -355,6 +356,12 @@ def auth_login(
         "--register-projects",
         help="Register every project this session can access under a local alias",
     ),
+    no_open: bool = typer.Option(
+        False,
+        "--no-open",
+        help="Do not open a browser: use the device-code flow and only print the "
+        "verification URL and code",
+    ),
 ) -> None:
     """Sign in to a Keboola stack via browser login (PKCE) or device code.
 
@@ -362,8 +369,15 @@ def auth_login(
     should drive `--device-code` from a BACKGROUND shell -- never a
     foreground one, and never unattended -- relaying the verification URL
     and code, then confirming with `auth status`. The verification URL and
-    code are always printed (to stderr in --json mode); session tokens
-    themselves are never printed.
+    code are always printed to stderr; session tokens themselves are never
+    printed. Notices, hints and prompts go to stderr, the result to stdout.
+
+    The browser opens wherever the environment allows it, also under
+    `--json` and without a terminal: PKCE first, the device-code flow only
+    with `--device-code`, over SSH, in a container, in WSL without `wslview`,
+    or after a failed browser step. This is an exception to the rule that a
+    command opens no browser under `--json` or without a terminal. With
+    `--no-open` the command uses the device-code flow and opens nothing.
 
     When `--register-projects` is NOT passed and the session can see at
     least one project, a post-login hook offers to run the interactive
@@ -372,11 +386,12 @@ def auth_login(
     """
     formatter = get_formatter(ctx)
     service: AuthService = get_service(ctx, "auth_service")
-    target_console = formatter.err_console if formatter.json_mode else formatter.console
+    # Notices, the device-login panel and hints go to stderr in both modes (HO1).
+    target_console = formatter.err_console
 
     # 'press c to copy' for the verification link. Disabled (and silent) in
     # --json mode, off a TTY, or with no clipboard tool -- see CopyableUrlWait.
-    copy_wait = None if formatter.json_mode else CopyableUrlWait(formatter.console)
+    copy_wait = None if formatter.json_mode else CopyableUrlWait(formatter.err_console)
 
     def _on_prompt(authorization: DeviceAuthorization) -> None:
         target_console.print(_device_login_panel(authorization))
@@ -396,6 +411,7 @@ def auth_login(
             on_device_prompt=_on_prompt,
             on_notice=_on_notice,
             device_wait=copy_wait.wait if copy_wait is not None else None,
+            no_open=no_open,
         )
     except (ConfigError, KeboolaApiError) as exc:
         _handle_errors(formatter, exc)
@@ -430,23 +446,25 @@ def _run_post_login_hook(
     error during registration must not make a successful login look like a
     failed command.
     """
-    target_console = formatter.err_console if formatter.json_mode else formatter.console
+    # The hint, the question and the picker go to stderr; the registration
+    # result is a result and goes to stdout (HO1).
+    target_console = formatter.err_console
     try:
         if formatter.json_mode or not _is_stdout_tty():
             target_console.print(_REGISTER_HINT)
             return
 
-        if not typer.confirm("Register any of these projects as local aliases now?", default=True):
-            formatter.console.print(_REGISTER_HINT)
+        if not typer.confirm(
+            "Register any of these projects as local aliases now?", default=True, err=True
+        ):
+            target_console.print(_REGISTER_HINT)
             return
 
         candidates = service.candidates_from_projects(result.stack_url, result.accessible_projects)
-        formatter.console.print(
-            f"\n[bold]Accessible projects on {escape(result.stack_url)}[/bold]\n"
-        )
-        selections = run_project_picker(formatter.console, candidates)
+        target_console.print(f"\n[bold]Accessible projects on {escape(result.stack_url)}[/bold]\n")
+        selections = run_project_picker(target_console, candidates)
         if not selections:
-            formatter.console.print("No projects selected.")
+            target_console.print("No projects selected.")
             return
 
         register_result = service.register_projects(stack=result.stack_url, selections=selections)
@@ -691,7 +709,19 @@ def auth_register_projects(
             )
     except (ConfigError, KeboolaApiError) as exc:
         _handle_errors(formatter, exc)
-    formatter.output(result, _format_register_projects_result)
+    # "exists" and "skipped" (alias taken) are outcomes, not failures, as in
+    # `org setup`; a real error raises before this point (HO2).
+    statuses = [p.status for p in result.registered_projects]
+    finish_items(
+        formatter,
+        result,
+        failed=0,
+        total=len(statuses),
+        noun="projects",
+        summary=f"{statuses.count('registered')} project(s) registered, "
+        f"{statuses.count('exists')} already registered, {statuses.count('skipped')} skipped.",
+        render=lambda: _format_register_projects_result(formatter.console, result),
+    )
 
 
 def _pick_projects_interactively(

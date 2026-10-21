@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, Pause, Play, RefreshCw, Rocket, Trash2 } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
+import { projectScope } from "../lib/projectScope";
 import { branchParam } from "../lib/branch";
 import { ConfirmModal } from "../components/ConfirmModal";
 import { DetailTabs } from "../components/DetailTabs";
@@ -86,7 +87,7 @@ export function DataAppsPage() {
   const q = useQuery<DataAppsResp>({
     queryKey: ["data-apps", project, branchId],
     queryFn: () =>
-      api.get("/data-apps", { query: { project: project ?? undefined, branch_id: branchParam(branchId) } }),
+      api.get("/data-apps", { query: { ...projectScope(project), branch_id: branchParam(branchId) } }),
     enabled: !!project,
   });
   const startMu = useMutation({

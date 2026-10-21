@@ -14,9 +14,11 @@
     "args.list-option-repeatable": true,
     "input.file-option-vocabulary": false,
     "input.single-parser": true,
+    "input.content-option-refuses-at-file": true,
     "target.project-help-states-default": true,
     "target.no-write-fanout": true,
     "output.no-direct-print": true,
+    "env.registry-complete": true,
     "output.ok-then-exit-declares-exit-code": true,
     "errors.forward-retryable": true,
     "errors.config-error-keeps-code": true,
@@ -33,6 +35,7 @@
     "help.param-has-help": true,
     "help.claude-md-flags-exist": true,
     "help.manifest-fresh": true,
+    "help.context-from-manifest": true,
     "enforcement.runtime-permission-guard": true,
     "enforcement.permission-literal-matches-mount": true,
     "serve.command-has-route": true,
@@ -139,17 +142,6 @@
       "stream delete SOURCE_ID",
       "stream detail SOURCE_ID"
     ],
-    "args.list-option-repeatable": [
-      "org setup --project-ids",
-      "semantic-layer add constraint --metrics",
-      "semantic-layer build --tables",
-      "semantic-layer edit constraint --new-metrics",
-      "semantic-layer import --types",
-      "semantic-layer promote --types",
-      "semantic-layer schema --type",
-      "sharing share --target-project-ids",
-      "sharing share --target-users"
-    ],
     "input.file-option-vocabulary": [
       "agent create --from-file",
       "agent test --from-file",
@@ -161,36 +153,68 @@
       "semantic-layer reference-data set --members-file",
       "storage describe-batch --from-file"
     ],
-    "input.single-parser": [
-      "commands/agent.py:_read_payload",
-      "commands/config.py:_parse_json_input",
-      "commands/encrypt.py:_parse_input",
-      "commands/flow.py:_load_flow_yaml",
-      "services/http_forwarder_service.py:HttpForwarderService.resolve_body"
+    "input.content-option-refuses-at-file": [
+      "agent create --description",
+      "agent create --prompt",
+      "agent prompt-improve --draft",
+      "agent prompt-improve --goal",
+      "agent run --runtime-prompt",
+      "agent test --prompt",
+      "agent update --description",
+      "branch create --description",
+      "config clone --description",
+      "config new --description",
+      "config row-create --description",
+      "config row-update --change-description",
+      "config row-update --description",
+      "config set-metadata --value",
+      "config update --change-description",
+      "config update --description",
+      "data-app create --description",
+      "data-app git-credentials-create --public-key",
+      "dev-portal patch --value",
+      "flow new --description",
+      "flow update --description",
+      "kai chat --message",
+      "merge-request create --description",
+      "merge-request create --title",
+      "merge-request request-changes --reason",
+      "merge-request resolve --change-description",
+      "merge-request update --description",
+      "merge-request update --title",
+      "project invite --reason",
+      "semantic-layer add dataset --description",
+      "semantic-layer add glossary --definition",
+      "semantic-layer add metric --description",
+      "semantic-layer add metric --sql",
+      "semantic-layer edit dataset --new-description",
+      "semantic-layer edit glossary --new-definition",
+      "semantic-layer edit metric --new-description",
+      "semantic-layer edit metric --new-sql",
+      "semantic-layer model create --description",
+      "semantic-layer reference-data set --description",
+      "storage create-bucket --description",
+      "storage snapshot-create --description",
+      "token create --description",
+      "transformation create --description",
+      "transformation edit --change-description",
+      "workspace query --sql"
     ],
     "target.project-help-states-default": [
-      "branch list --project",
-      "component list --project",
-      "config list --project",
       "config new --project",
-      "config search --project",
       "flow schema --project",
       "flow validate --project",
       "init --project",
-      "job list --project",
       "lineage show --project",
       "project invite --project",
       "project refresh --project",
-      "sharing edges --project",
-      "storage buckets --project",
       "sync diff --project",
       "sync pull --project",
       "sync push --project",
       "transformation create --project",
       "transformation edit --project",
       "transformation show --project",
-      "workspace gc --project",
-      "workspace list --project"
+      "workspace gc --project"
     ],
     "output.no-direct-print": [
       "commands/_helpers.py:_read_token_file typer.echo",
@@ -580,15 +604,12 @@
       "PATCH /configs/{project}/{component_id}/{config_id}/rows/{row_id}",
       "POST /configs/{project}/{component_id}",
       "PUT /configs/{project}/{component_id}/{config_id}/variables"
-    ],
-    "serve.partial-update-uses-patch": [
-      "PUT /configs/{project}/{component_id}/{config_id}/variables",
-      "PUT /data-apps/{project}/{app_id}/secrets",
-      "PUT /merge-requests/{project}/{merge_request_id}",
-      "PUT /semantic-layer/items/{kind}/{name}"
     ]
   },
   "exceptions": {
+    "args.no-positional-arguments": {
+      "context GROUP": "AG1 names the form `kbagent context <group>`: a group name is not an identifier (A3)"
+    },
     "args.short-flag-one-meaning": {
       "changelog -n": "reserved short flag, existing use (A2)",
       "config search -r": "reserved short flag, existing use (A2)",
@@ -607,6 +628,11 @@
       "permissions reset": "permissions.* are always allowed to prevent lockout (permissions.py)",
       "permissions set": "permissions.* are always allowed to prevent lockout (permissions.py)",
       "permissions show": "permissions.* are always allowed to prevent lockout (permissions.py)"
+    },
+    "env.registry-complete": {
+      "commands/_helpers.py:resolve_storage_token_input os.environ.get": "the variable name is the value of the user option --token-env; a name the user chooses cannot be registered",
+      "commands/data_app.py:_read_pat_from_env os.environ.get": "the variable name is the value of the user option --git-pat-env; a name the user chooses cannot be registered",
+      "server/routers/data_apps.py:_resolve_git_pat os.environ.get": "the variable name is the value of the git_pat_env request field; a name the caller chooses cannot be registered"
     },
     "safety.confirm-via-helper": {
       "commands/_auth_picker.py:run_project_picker": "non-safety question: choose and register local aliases after auth login (S4)",

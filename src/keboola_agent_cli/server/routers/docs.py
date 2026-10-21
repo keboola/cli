@@ -29,8 +29,8 @@ def query(body: DocsQuery, registry: ServiceRegistry = Depends(get_registry)) ->
 
     Mirrors `kbagent docs query`. ``project`` selects which project's stack
     URL + token reach the AI Service. Omitted resolves through the
-    default-project cascade (``--project`` > ``KBAGENT_PROJECT`` env >
-    ``project use`` pin > sole project); the answer itself is
+    project chain (``--project`` > ``KBAGENT_PROJECT`` env > active
+    project > sole project); the answer itself is
     project-independent.
     """
     return registry.docs.ask_docs(alias=body.project, query=body.query)

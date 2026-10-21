@@ -21,6 +21,7 @@ from typing import Any
 import typer
 from typer.core import TyperGroup
 
+from ..effective_branch import record_project
 from ..errors import ConfigError, ErrorCode
 from ..project_ref import alias_shadow_notice, is_project_id, resolve_project_ref
 
@@ -96,12 +97,41 @@ def _names_existing_alias(command_path: tuple[str, ...], param: Any) -> bool:
 def _with_translation(original: ParamCallback | None) -> ParamCallback:
     """Run the translation after the callback the option already has, if any."""
     if original is None:
-        return _translate_project_ref
+        return _translate_and_record
 
     def _chained(ctx: Any, param: Any, value: Any) -> Any:
-        return _translate_project_ref(ctx, param, original(ctx, param, value))
+        return _translate_and_record(ctx, param, original(ctx, param, value))
 
     return _chained
+
+
+def _translate_and_record(ctx: Any, param: Any, value: Any) -> Any:
+    """Translate ``value`` to aliases, then record each registered one as ``explicit`` (T6)."""
+    value = _translate_project_ref(ctx, param, value)
+    _record_explicit(ctx, param, value)
+    return value
+
+
+def _record_explicit(ctx: Any, param: Any, value: Any) -> None:
+    """Record the projects an option names as given on the command line (``project_source``).
+
+    ``--stack`` names a stack, not a target project, and the ``project use``
+    argument is the choice being saved, so neither is recorded.
+    """
+    aliases = [v for v in (value if isinstance(value, tuple | list) else [value]) if v]
+    obj = ctx.obj if isinstance(ctx.obj, dict) else {}
+    config_store = obj.get("config_store")
+    if not aliases or config_store is None or param.param_type_name == "argument":
+        return
+    if "--stack" in param.opts:
+        return
+    try:
+        projects = config_store.load().projects
+    except ConfigError:
+        return  # the command reports the broken config itself
+    for alias in aliases:
+        if alias in projects:
+            record_project(alias, "explicit", projects[alias])
 
 
 def _translate_project_ref(ctx: Any, param: Any, value: Any) -> Any:
@@ -150,6 +180,6 @@ def env_override_warning(current: dict[str, Any]) -> str | None:
     if current.get("env_points_to_configured_project") is False:
         return (
             f"'{current['alias']}' is NOT in your configured projects. "
-            "Commands that use this pin will fail."
+            "Commands that use KBAGENT_PROJECT will fail."
         )
     return None

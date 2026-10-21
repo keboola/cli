@@ -15,6 +15,8 @@ from typer.testing import CliRunner
 from helpers import make_mock_client
 from keboola_agent_cli.auth.sentinel import make_session_token
 from keboola_agent_cli.cli import app
+from keboola_agent_cli.commands._context_commands import COMMAND_SECTIONS
+from keboola_agent_cli.commands.context import AGENT_CONTEXT, GROUP_NOTES
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.constants import ENV_CONVERSATION_ID
 from keboola_agent_cli.errors import ConfigError, KeboolaApiError
@@ -550,7 +552,7 @@ class TestProjectAuthModeColumn:
         assert "901-...4567" in flat
 
     def test_status_json_carries_auth_mode_for_both_types(self, tmp_path: Path) -> None:
-        result = self._invoke(tmp_path, ["--json", "project", "status"])
+        result = self._invoke(tmp_path, ["--json", "project", "status", "--all-projects"])
 
         assert result.exit_code == 0, result.output
         by_alias = {s["alias"]: s for s in json.loads(result.stdout)["data"]}
@@ -558,7 +560,7 @@ class TestProjectAuthModeColumn:
         assert by_alias["static-proj"]["auth_mode"] == "static"
 
     def test_status_human_shows_auth_column(self, tmp_path: Path) -> None:
-        result = self._invoke(tmp_path, ["project", "status"])
+        result = self._invoke(tmp_path, ["project", "status", "--all-projects"])
 
         assert result.exit_code == 0, result.output
         flat = " ".join(result.stdout.split())
@@ -673,7 +675,7 @@ class TestProjectUse:
         assert data["status"] == "error"
         assert data["error"]["code"] == "CONFIG_ERROR"
 
-    def test_project_use_human_mode_confirms_pin(self, tmp_path: Path) -> None:
+    def test_project_use_human_mode_confirms_the_active_project(self, tmp_path: Path) -> None:
         """project use in human mode prints the new pin."""
         config_dir = tmp_path / "config"
         config_dir.mkdir()
@@ -685,7 +687,7 @@ class TestProjectUse:
 
         assert result.exit_code == 0
         assert "prod" in result.output
-        assert "Pinned" in result.output or "pinned" in result.output
+        assert "Active project:" in result.output
 
     def test_project_current_with_pin(self, tmp_path: Path) -> None:
         """project current reports the persisted pin when no env is set."""
@@ -763,7 +765,7 @@ class TestProjectUse:
         assert result.exit_code == 0
         assert "prod" in result.output
         # Rich output should mention the source.
-        assert "pin" in result.output.lower()
+        assert "source: active project" in result.output
 
     def test_project_current_human_mode_env_warns_unknown(self, tmp_path: Path) -> None:
         """Human-mode project current warns when env points to unregistered alias."""
@@ -1832,11 +1834,13 @@ class TestConfigList:
             )
             MockCfgService.return_value = config_service
 
-            result = runner.invoke(app, ["--json", "config", "list"])
+            result = runner.invoke(app, ["--json", "config", "list", "--all-projects"])
 
-        assert result.exit_code == 0
+        # A failed project makes the read exit 1 after the full payload (E4).
+        assert result.exit_code == 1
         output = json.loads(result.output)
         assert output["status"] == "ok"
+        assert output["exit_code"] == 1
 
         configs = output["data"]["configs"]
         errors = output["data"]["errors"]
@@ -1889,9 +1893,9 @@ class TestConfigList:
             )
             MockCfgService.return_value = config_service
 
-            result = runner.invoke(app, ["config", "list"])
+            result = runner.invoke(app, ["config", "list", "--all-projects"])
 
-        assert result.exit_code == 0
+        assert result.exit_code == 1
         # Should show configs from good project
         assert "Configurations" in result.output
         # Rich may truncate long names in narrow terminals
@@ -2020,7 +2024,7 @@ class TestConfigList:
         )
 
     def test_config_list_branch_requires_project(self, tmp_path: Path) -> None:
-        """config list --branch 123 without --project returns exit code 2."""
+        """config list --branch 123 --all-projects returns exit code 2 (T15)."""
         config_dir = tmp_path / "config"
         config_dir.mkdir()
 
@@ -2046,6 +2050,7 @@ class TestConfigList:
                     "--json",
                     "config",
                     "list",
+                    "--all-projects",
                     "--branch",
                     "123",
                 ],
@@ -5020,6 +5025,56 @@ class TestContext:
         assert "Network error" in result.output
         assert "Configuration error" in result.output
 
+    @staticmethod
+    def _invoke(tmp_path: Path, args: list[str]) -> Any:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir(exist_ok=True)
+        with patch("keboola_agent_cli.cli.ConfigStore") as MockStore:
+            MockStore.return_value = ConfigStore(config_dir=config_dir)
+            return runner.invoke(app, args)
+
+    def test_context_group_prints_one_section(self, tmp_path: Path) -> None:
+        """`kbagent context storage` prints the storage commands and notes only (AG1)."""
+        result = self._invoke(tmp_path, ["context", "storage"])
+
+        assert result.exit_code == 0
+        assert "### storage" in result.output
+        assert "kbagent storage buckets" in result.output
+        assert "#### Table Snapshots" in result.output
+        assert "### config" not in result.output
+        assert "## Tips for AI Agents" not in result.output
+
+    def test_context_group_json_names_the_group_and_takes_an_alias(self, tmp_path: Path) -> None:
+        result = self._invoke(tmp_path, ["--json", "context", "mr"])
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)["data"]
+        assert data["group"] == "merge-request"
+        assert data["context"].startswith("# kbagent - Keboola Agent CLI v")
+        assert "kbagent merge-request merge" in data["context"]
+
+    def test_context_without_group_has_group_null(self, tmp_path: Path) -> None:
+        result = self._invoke(tmp_path, ["--json", "context"])
+
+        data = json.loads(result.output)["data"]
+        assert data["group"] is None
+        assert data["context"] == AGENT_CONTEXT
+
+    def test_context_unknown_group_is_invalid_argument(self, tmp_path: Path) -> None:
+        result = self._invoke(tmp_path, ["--json", "context", "nope"])
+
+        assert result.exit_code == 2
+        error = json.loads(result.output)["error"]
+        assert error["code"] == "INVALID_ARGUMENT"
+        assert "Unknown group 'nope'" in error["message"]
+        assert "storage" in error["message"] and "merge-request" in error["message"]
+
+    def test_every_note_belongs_to_a_generated_section(self) -> None:
+        """A GROUP_NOTES key that is no top-level name would never be printed."""
+        assert set(GROUP_NOTES) <= set(COMMAND_SECTIONS)
+        for name in COMMAND_SECTIONS:
+            assert COMMAND_SECTIONS[name] in AGENT_CONTEXT
+
     def test_context_mentions_workflows(self, tmp_path: Path) -> None:
         """context output includes common workflows."""
         config_dir = tmp_path / "config"
@@ -7000,7 +7055,7 @@ class TestSharingEdges:
 
             result = runner.invoke(app, ["sharing", "edges"])
 
-        assert result.exit_code == 0
+        assert result.exit_code == 1
         assert "bad" in result.output
         assert "Token expired" in result.output
 

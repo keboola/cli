@@ -260,6 +260,44 @@ def test_growth_against_base_fails_for_blocking_rules_only() -> None:
     assert fails == [f"FAIL grown    {RULE}: 0 -> 1 entries -- the baseline gained entries"]
 
 
+def test_new_rule_starts_its_baseline_without_a_growth_failure() -> None:
+    """A rule that the base baseline does not know records its first entries."""
+    base = _small_baseline()
+    del base["blocking"][RULE]
+    del base["violations"][RULE]
+    del base["exceptions"][RULE]
+    head = _small_baseline()
+    head["exceptions"][RULE] = {}
+    found = _results(**{RULE: {"branch delete": "x", "config delete": "x"}})
+    head["violations"][RULE] = ["branch delete", "config delete"]
+    assert spec_check.ratchet(found, head, base) == []
+
+
+def test_new_rule_still_needs_the_label_for_an_exception() -> None:
+    base = _small_baseline()
+    del base["blocking"][RULE]
+    del base["violations"][RULE]
+    del base["exceptions"][RULE]
+    fails = spec_check.ratchet(_results(), _small_baseline(), base)
+    assert fails == [
+        (
+            f"FAIL exception {RULE}: config delete -- new exception; a reviewer adds the "
+            "'cli-spec-exception' label to the pull request to accept it"
+        )
+    ]
+
+
+def test_existing_rule_that_grows_still_fails() -> None:
+    head = _small_baseline()
+    head["violations"][RULE] = ["branch delete", "workspace delete"]
+    found = _results(
+        **{RULE: {"branch delete": "x", "config delete": "x", "workspace delete": "x"}}
+    )
+    assert spec_check.ratchet(found, head, _small_baseline()) == [
+        f"FAIL grown    {RULE}: 1 -> 2 entries -- the baseline gained entries"
+    ]
+
+
 def test_renamed_command_in_a_tree_rule_is_no_growth() -> None:
     """A rename (or a hidden alias that keeps the old name, C3) changes the subject only."""
     head = _small_baseline()
@@ -347,6 +385,120 @@ def test_stale_manifest_is_a_violation(
     assert spec_check.r_manifest_fresh(spec_check.Context(tree)) == {
         "docs/cli-manifest.json": "differs from the live tree: agent; run 'make cli-manifest'"
     }
+
+
+def test_committed_context_commands_are_fresh() -> None:
+    """AG1: the command part of `kbagent context` is the text generated from the manifest."""
+    manifest = json.loads(spec_check.MANIFEST_PATH.read_text(encoding="utf-8"))
+    have = spec_check.CONTEXT_COMMANDS_PATH.read_text(encoding="utf-8")
+    assert have == spec_check.context_commands_text(manifest)
+
+
+def test_stale_context_commands_are_a_violation(
+    tree: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = tmp_path / "_context_commands.py"
+    text = spec_check.CONTEXT_COMMANDS_PATH.read_text(encoding="utf-8")
+    module.write_text(
+        text.replace("kbagent storage buckets", "kbagent storage bucketz"), encoding="utf-8"
+    )
+    monkeypatch.setattr(spec_check, "CONTEXT_COMMANDS_PATH", module)
+    assert spec_check.r_context_from_manifest(spec_check.Context(tree)) == {
+        spec_check.CONTEXT_COMMANDS_REL: "differs from the text generated from "
+        "docs/cli-manifest.json; run 'make cli-manifest'"
+    }
+
+
+_SMALL_MANIFEST: dict[str, Any] = {
+    "aliases": {"g": "grp"},
+    "commands": [
+        {"path": "grp", "kind": "group", "hidden": False, "help": "The group.\n\nMore text."},
+        {
+            "path": "grp do",
+            "kind": "command",
+            "hidden": False,
+            "category": "write",
+            "help": "Do it.\n\n\bDetails that stay in --help.",
+            "params": [
+                {
+                    "kind": "option",
+                    "name": "project",
+                    "opts": ["--project"],
+                    "type": "text",
+                    "required": True,
+                    "default": None,
+                },
+                {
+                    "kind": "option",
+                    "name": "limit",
+                    "opts": ["--limit"],
+                    "type": "integer",
+                    "default": 10,
+                },
+                {
+                    "kind": "option",
+                    "name": "wait",
+                    "opts": ["--wait"],
+                    "secondary_opts": ["--no-wait"],
+                    "type": "boolean",
+                    "is_flag": True,
+                    "default": True,
+                },
+                {
+                    "kind": "option",
+                    "name": "mode",
+                    "opts": ["--mode"],
+                    "type": "choice",
+                    "choices": ["a", "b"],
+                    "multiple": True,
+                    "default": None,
+                },
+                {
+                    "kind": "option",
+                    "name": "old",
+                    "opts": ["--old"],
+                    "type": "text",
+                    "hidden": True,
+                    "default": None,
+                },
+                {
+                    "kind": "argument",
+                    "name": "name",
+                    "opts": ["name"],
+                    "type": "text",
+                    "default": None,
+                },
+            ],
+        },
+        {
+            "path": "solo",
+            "kind": "command",
+            "hidden": False,
+            "category": "read",
+            "help": 'Path "C:\\x" in """quotes""".',
+            "params": [],
+        },
+    ],
+}
+
+
+def test_context_section_has_usage_and_first_help_paragraph() -> None:
+    """Required options bare, optional in brackets, hidden ones left out. Wrapped at 78."""
+    assert spec_check.context_sections(_SMALL_MANIFEST)["grp"] == (
+        "### grp\n\nThe group.\n\n"
+        "  kbagent grp do --project PROJECT [--limit N] [--wait/--no-wait]\n"
+        "      [--mode a|b ...] [NAME]\n"
+        "    Do it.\n"
+    )
+
+
+def test_context_commands_text_is_python_with_the_same_sections(tmp_path: Path) -> None:
+    """Backslashes and triple quotes in a help text survive the generated module."""
+    path = tmp_path / "_context_commands.py"
+    path.write_text(spec_check.context_commands_text(_SMALL_MANIFEST), encoding="utf-8")
+    module = _load("_context_commands_under_test", str(path))
+    assert spec_check.context_sections(_SMALL_MANIFEST) == module.COMMAND_SECTIONS
+    assert module.ALIASES == {"g": "grp"}
 
 
 def test_details_of_an_unknown_rule_exits_2(capsys: pytest.CaptureFixture[str]) -> None:
@@ -518,3 +670,75 @@ def test_short_flag_registry_is_pinned(tree: Any) -> None:
     """Every short flag in the tree is in SHORT_FLAGS (a new one needs an entry)."""
     found = spec_check.r_short_one_meaning(spec_check.Context(tree))
     assert not [s for s, why in found.items() if "not in SHORT_FLAGS" in why]
+
+
+def _env_context(tree: Any, source: str, constants: dict[str, str]) -> Any:
+    ctx = spec_check.Context(tree)
+    ctx._cache["package_modules"] = [("commands/demo.py", ast.parse(source))]
+    ctx._cache["env_constants"] = constants
+    return ctx
+
+
+def test_env_registry_complete(tree: Any) -> None:
+    """EV1: an unregistered or computed read fails, and so does an entry nothing reads."""
+    source = (
+        "import os, typer\n"
+        "ENV_DIR = 'KBAGENT_CONFIG_DIR'\n"
+        "def cmd(name):\n"
+        "    os.environ.get(ENV_DIR)\n"
+        "    os.getenv('KBAGENT_NOT_REGISTERED')\n"
+        "    os.environ.get(name)\n"
+        "    _env_flag_set('SSH_TTY')\n"
+        "    typer.Option(None, envvar='KBC_TOKEN')\n"
+        "def _env_flag_set(name):\n"
+        "    return bool(os.environ.get(name))\n"
+    )
+    found = spec_check.r_env_registry_complete(
+        _env_context(tree, source, {"ENV_DIR": "KBAGENT_CONFIG_DIR"})
+    )
+    assert "KBAGENT_NOT_REGISTERED" in found
+    assert "commands/demo.py:cmd os.environ.get" in found
+    # A read helper's own body is skipped: its callers name the variable.
+    assert not any(s.startswith("commands/demo.py:_env_flag_set") for s in found)
+    for name in ("KBAGENT_CONFIG_DIR", "SSH_TTY", "KBC_TOKEN"):
+        assert name not in found and f"{name} (registered)" not in found
+    assert "KBAGENT_PROJECT (registered)" in found
+    # A variable that a dependency reads needs no reader in src/.
+    assert "NO_COLOR (registered)" not in found
+    # Nothing reads the family here, so its entry is reported.
+    assert "KBC_MASTER_TOKEN_<ALIAS> (registered)" in found
+
+
+def test_env_registry_reads_subscripts_membership_and_families(tree: Any) -> None:
+    source = (
+        "import os\n"
+        "def cmd(alias):\n"
+        "    os.environ['KBAGENT_PROJECT']\n"
+        "    os.environ['KBAGENT_SUBSCRIPT_UNKNOWN']\n"
+        "    os.environ['KBAGENT_WRITTEN'] = '1'\n"
+        "    if 'KBAGENT_IN_UNKNOWN' in os.environ: pass\n"
+        "    if 'KBAGENT_SKIP_UPDATE' not in os.environ: pass\n"
+        "    key = f'{ENV_MASTER}_{alias.upper()}'\n"
+        "    os.environ.get(key)\n"
+        "    os.environ.get(f'{ENV_OTHER}_{alias}')\n"
+    )
+    constants = {"ENV_MASTER": "KBC_MASTER_TOKEN", "ENV_OTHER": "KBAGENT_UNKNOWN_FAMILY"}
+    found = spec_check.r_env_registry_complete(_env_context(tree, source, constants))
+    assert "KBAGENT_SUBSCRIPT_UNKNOWN" in found
+    assert "KBAGENT_IN_UNKNOWN" in found
+    assert "KBAGENT_WRITTEN" not in found  # an assignment is not a read
+    for name in ("KBAGENT_PROJECT", "KBAGENT_SKIP_UPDATE", "KBC_MASTER_TOKEN_<ALIAS>"):
+        assert name not in found and f"{name} (registered)" not in found
+    assert "KBAGENT_UNKNOWN_FAMILY_<" in found
+    assert not any("os.environ.get" in s for s in found)
+
+
+def test_fanout_reads_are_the_reads_with_all_projects(tree: Any) -> None:
+    """FANOUT_READS lists every read command that has --all-projects (T2), and no other."""
+    reads = {
+        lf.name
+        for lf in tree.leaves
+        if lf.category == "read" and "--all-projects" in spec_check.opt_names(lf)
+    }
+    # `sync diff` and `sync pull` have their own --all-projects (one tree per project).
+    assert reads - {"sync diff", "sync pull"} == spec_check.FANOUT_READS

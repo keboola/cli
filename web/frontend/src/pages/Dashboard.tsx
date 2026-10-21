@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { api } from "../api/client";
+import { projectScope } from "../lib/projectScope";
 import { Empty, Loading, PageTitle } from "../components/Empty";
 import { useUIState } from "../state";
 import type { PageId } from "../state";
@@ -71,7 +72,7 @@ export function DashboardPage() {
   });
   const statusQ = useQuery<{ status: ProjectStatus[] }>({
     queryKey: ["projects-status"],
-    queryFn: () => api.get("/projects/status"),
+    queryFn: () => api.get("/projects/status", { query: projectScope(null) }),
   });
   const agentsQ = useQuery<{ tasks: AgentTask[] }>({
     queryKey: ["agents"],
@@ -84,7 +85,7 @@ export function DashboardPage() {
   const jobsQ = useQuery<{ jobs: Job[] }>({
     queryKey: ["dashboard-jobs", project],
     queryFn: () =>
-      api.get("/jobs", { query: { project: project ?? undefined, limit: 5 } }),
+      api.get("/jobs", { query: { ...projectScope(project), limit: 5 } }),
     enabled: !!project,
   });
   // Scoped to the active project so the tile answers "how much is left HERE",
@@ -92,7 +93,7 @@ export function DashboardPage() {
   // dashboard visit.
   const creditsQ = useQuery<CreditsResp>({
     queryKey: ["billing-credits", project],
-    queryFn: () => api.get("/billing/credits", { query: { project: project ?? undefined } }),
+    queryFn: () => api.get("/billing/credits", { query: projectScope(project) }),
     enabled: !!project,
     staleTime: 5 * 60_000,
   });

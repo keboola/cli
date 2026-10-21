@@ -11,6 +11,7 @@ baseline: it passes for every subject or the test fails.
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 import re
@@ -21,6 +22,7 @@ import pytest
 import typer
 from typer.testing import CliRunner
 
+from keboola_agent_cli import root_command
 from keboola_agent_cli.cli import app
 from keboola_agent_cli.constants import ENV_AUTO_UPDATE
 from keboola_agent_cli.permissions import OPERATION_REGISTRY
@@ -218,6 +220,36 @@ def test_one_json_document_for_a_parse_error(
     result = runner.invoke(app, ["--config-dir", str(tmp_path), "--json", *path, BAD_FLAG])
     document = _usage_error_document(result)
     assert BAD_FLAG in document["error"]["message"]
+
+
+def test_a_bad_option_value_is_invalid_argument(root: Any, tmp_path: Path, httpx_mock: Any) -> None:
+    """I4: a value that fails Click's type check is INVALID_ARGUMENT and names the option."""
+    args = ["agent", "cron-preview", "--cron", "0 6 * * 1", "--count", "abc"]
+    result = runner.invoke(app, ["--config-dir", str(tmp_path), "--json", *args])
+    assert result.exit_code == 2, result.output
+    document = _json_document(result.stdout)
+    assert document["error"]["code"] == "INVALID_ARGUMENT"
+    assert "--count" in document["error"]["message"]
+
+
+def test_a_missing_required_option_stays_usage_error(
+    root: Any, tmp_path: Path, httpx_mock: Any
+) -> None:
+    result = runner.invoke(
+        app, ["--config-dir", str(tmp_path), "--json", "agent", "cron-preview", "--count", "2"]
+    )
+    document = _usage_error_document(result)
+    assert "--cron" in document["error"]["message"]
+
+
+def test_click_error_codes() -> None:
+    """A bad value is INVALID_ARGUMENT; a missing option or a malformed call is USAGE_ERROR."""
+    click = root_command._click.exceptions
+    assert root_command.click_error_code(click.BadParameter("bad")) == "INVALID_ARGUMENT"
+    assert root_command.click_error_code(click.MissingParameter()) == "USAGE_ERROR"
+    assert root_command.click_error_code(click.UsageError("bad call")) == "USAGE_ERROR"
+    assert root_command.click_error_code(click.NoSuchOption("--x")) == "USAGE_ERROR"
+    assert root_command.click_error_code(click.ClickException("other")) == "UNKNOWN_ERROR"
 
 
 @pytest.mark.parametrize("path", LEAVES, ids=_ids(LEAVES))
@@ -701,3 +733,296 @@ def test_no_terminal_confirmation_refuses(tmp_path: Path, command: str) -> None:
     assert "--yes" in result.stderr
     assert "AI agents: ask the user" in " ".join(result.stderr.split())
     assert result.stdout == ""
+
+
+# --------------------------------------------------------------------------- #
+# output.multi-item-headline: a command that processes several items ends its
+# human output with one headline, `Success:` or `Failed: N of M` (HO2). The
+# per-item exit code (E4) comes only from `_helpers.finish_items`, which also
+# prints the headline, so the two cannot come apart. The rendered headline has
+# snapshots in tests/test_cli_human_snapshots.py.
+# --------------------------------------------------------------------------- #
+
+COMMANDS_DIR = Path(__file__).resolve().parent.parent / "src" / "keboola_agent_cli" / "commands"
+
+# Commands whose exit code after a success envelope is a negative answer, not a
+# failed item (O4). Each one processes one subject.
+VERDICT_EXITS = {
+    "auth.py:auth_status": "session missing or expired",
+    "data_app.py:data_app_validate_repo": "the repository check found a blocking problem",
+    "flow.py:flow_validate": "the flow definition is not valid",
+    "permissions.py:permissions_check": "the operation is denied",
+}
+
+
+def _own_calls(func: ast.FunctionDef) -> list[ast.Call]:
+    """The calls in ``func`` itself; a nested function counts as its own function."""
+    calls: list[ast.Call] = []
+    todo: list[ast.AST] = list(ast.iter_child_nodes(func))
+    while todo:
+        node = todo.pop()
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda):
+            continue
+        if isinstance(node, ast.Call):
+            calls.append(node)
+        todo.extend(ast.iter_child_nodes(node))
+    return calls
+
+
+def _functions_with(predicate: Any) -> set[str]:
+    """``<module>:<function>`` of every function in commands/ with a call that matches."""
+    found: set[str] = set()
+    for path in sorted(COMMANDS_DIR.glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for func in ast.walk(tree):
+            if isinstance(func, ast.FunctionDef) and any(map(predicate, _own_calls(func))):
+                found.add(f"{path.name}:{func.name}")
+    return found
+
+
+def _calls_item_failure_exit_code(call: ast.Call) -> bool:
+    return isinstance(call.func, ast.Name) and call.func.id == "item_failure_exit_code"
+
+
+def _output_with_exit_code(call: ast.Call) -> bool:
+    return ast.unparse(call.func).endswith("formatter.output") and any(
+        k.arg == "exit_code" for k in call.keywords
+    )
+
+
+def test_multi_item_exit_code_only_through_finish_items() -> None:
+    assert _functions_with(_calls_item_failure_exit_code) == {"_helpers.py:finish_items"}
+
+
+def test_output_with_an_exit_code_is_finish_items_or_a_verdict() -> None:
+    """A new per-item exit code must go through finish_items, which prints the headline."""
+    sites = _functions_with(_output_with_exit_code)
+    assert sites == {"_helpers.py:finish_items", *VERDICT_EXITS}
+
+
+# Every command that processes several items: the #747 commands and the fan-out reads.
+MULTI_ITEM_COMMANDS = (
+    "flow schedule-remove",
+    "job terminate",
+    "org setup",
+    "project invite",
+    "project refresh",
+    "semantic-layer build",
+    "semantic-layer edit metric",
+    "semantic-layer import",
+    "semantic-layer promote",
+    "storage delete-bucket",
+    "storage delete-column",
+    "storage delete-table",
+    "storage describe-batch",
+    "storage describe-migrate",
+    "storage file-delete",
+    "storage file-tag",
+    "storage snapshot-delete",
+    "storage truncate-table",
+    "sync clone",
+    "sync diff",
+    "sync pull",
+    "sync push",
+    "workspace gc",
+    "auth register-projects",
+    "config detail",
+    "token list",
+    # The 18 fan-out reads (CLI-45) end through finish_fanout.
+    "billing credits",
+    "branch list",
+    "component list",
+    "config list",
+    "config search",
+    "data-app list",
+    "flow list",
+    "job list",
+    "notification list",
+    "project status",
+    "schedule find",
+    "schedule list",
+    "search",
+    "sharing edges",
+    "sharing list",
+    "storage buckets",
+    "storage tables",
+    "workspace list",
+)
+_FINISHERS = frozenset({"finish_items", "finish_bulk", "finish_fanout"})
+
+
+def _reaches_finisher(callback: Any) -> bool:
+    """The command body calls finish_items/finish_bulk, itself or in a helper of its module."""
+    import inspect
+    import textwrap
+
+    func = inspect.unwrap(callback)
+    module = ast.parse(Path(inspect.getfile(func)).read_text(encoding="utf-8"))
+    helpers = {
+        n.name: n
+        for n in ast.walk(module)
+        if isinstance(n, ast.FunctionDef) and n.name != func.__name__
+    }
+    body = ast.parse(textwrap.dedent(inspect.getsource(func)))
+    names = {
+        n.func.id
+        for n in ast.walk(body)
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+    }
+    if names & _FINISHERS:
+        return True
+    return any(
+        isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in _FINISHERS
+        for name in names & set(helpers)
+        for n in ast.walk(helpers[name])
+    )
+
+
+@pytest.mark.parametrize("path", MULTI_ITEM_COMMANDS)
+def test_multi_item_command_ends_through_finish_items(path: str) -> None:
+    node: Any = typer.main.get_command(app)
+    for part in path.split():
+        node = node.commands[part]
+    assert _reaches_finisher(node.callback), f"{path} does not end through finish_items()"
+
+
+@pytest.mark.parametrize(
+    ("failed", "total", "expected"),
+    [
+        (0, 2, "Success: 2 table(s) deleted."),
+        (1, 2, "Failed: 1 of 2 tables. 2 table(s) deleted."),
+    ],
+)
+def test_headline_text(failed: int, total: int, expected: str) -> None:
+    from keboola_agent_cli.output import _plain_text, format_item_headline
+
+    line = format_item_headline(
+        failed=failed, total=total, noun="tables", summary="2 table(s) deleted."
+    )
+    assert _plain_text(line) == expected
+
+
+@pytest.mark.parametrize("json_mode", [False, True])
+@pytest.mark.parametrize("failed", [0, 1])
+def test_finish_items_ends_with_one_headline(
+    capsys: pytest.CaptureFixture[str], json_mode: bool, failed: int
+) -> None:
+    from keboola_agent_cli.commands._helpers import finish_items
+    from keboola_agent_cli.output import OutputFormatter
+
+    formatter = OutputFormatter(json_mode=json_mode, no_color=True)
+    rendered: list[str] = []
+    try:
+        finish_items(
+            formatter,
+            {"deleted": ["a"], "failed": [{"id": "b"}] * failed},
+            failed=failed,
+            total=2,
+            noun="tables",
+            summary="1 table(s) deleted.",
+            render=lambda: rendered.append("items"),
+        )
+        code = 0
+    except typer.Exit as exc:
+        code = exc.exit_code
+    assert code == (1 if failed else 0)
+    stdout = capsys.readouterr().out
+    if json_mode:
+        assert json.loads(stdout)["exit_code"] == code
+        assert rendered == []
+        return
+    assert rendered == ["items"]
+    last = stdout.strip().splitlines()[-1]
+    assert last.startswith("Failed: 1 of 2 tables." if failed else "Success: ")
+
+
+def test_finish_fanout_counts_projects_and_skips_answers(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A PAYG_NOT_AVAILABLE project counts as read, not failed (E4); the headline counts projects."""
+    from keboola_agent_cli.commands import _all_projects
+    from keboola_agent_cli.output import OutputFormatter
+
+    targets = [type("T", (), {"project_alias": a})() for a in ("a", "b", "c")]
+    monkeypatch.setattr(_all_projects, "recorded_targets", lambda: targets)
+    payg = {"project_alias": "a", "error_code": "PAYG_NOT_AVAILABLE"}
+    broken = {"project_alias": "b", "error_code": "INVALID_TOKEN"}
+
+    _all_projects.finish_fanout(OutputFormatter(no_color=True), {}, [payg], lambda: None)
+    assert capsys.readouterr().out.strip() == "Success: 3 project(s) read."
+
+    with pytest.raises(typer.Exit) as exc:
+        _all_projects.finish_fanout(
+            OutputFormatter(no_color=True), {}, [payg, broken], lambda: None
+        )
+    assert exc.value.exit_code == 1
+    assert capsys.readouterr().out.strip().splitlines() == [
+        "Error: project 'b': error",
+        "Failed: 1 of 3 projects. 2 project(s) read.",
+    ]
+
+
+# A failed item is one `Error: <item>: <message>` line on stdout, printed only by
+# the shared renderer (`OutputFormatter.item_error` / `output.format_item_error`).
+_FAILURE_LISTS = (
+    "errors",
+    "failed",
+    "bucket_errors",
+    "fetch_errors",
+    "projects_failed",
+    "refresh_failed",
+    "failed_rows",
+    "failed_entries",
+)
+# Loops over a list of problems that are not failed items of a multi-item command.
+NOT_ITEM_FAILURES = {
+    "flow.py:flow_validate": "validation findings of one flow definition",
+    "config.py:_render_push_result_human": "schema validation findings of one configuration",
+}
+# Literal `Error:` labels outside the renderer.
+ERROR_LABEL_EXCEPTIONS = {
+    "_auth_picker.py": "the picker's input validation messages, not failed items",
+}
+
+
+def _failure_loop_violations() -> list[str]:
+    found: list[str] = []
+    renderers = COMMANDS_DIR.parent / "output.py"
+    for path in [*sorted(COMMANDS_DIR.glob("*.py")), renderers]:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for func in ast.walk(tree):
+            if not isinstance(func, ast.FunctionDef):
+                continue
+            subject = f"{path.name}:{func.name}"
+            for loop in ast.walk(func):
+                if not isinstance(loop, ast.For):
+                    continue
+                if not any(name in ast.unparse(loop.iter) for name in _FAILURE_LISTS):
+                    continue
+                for node in ast.walk(loop):
+                    if not isinstance(node, ast.Call):
+                        continue
+                    name = ast.unparse(node.func)
+                    first = node.args[0] if node.args else None
+                    via_renderer = (
+                        isinstance(first, ast.Call)
+                        and ast.unparse(first.func) == "format_item_error"
+                    )
+                    if name.endswith(".warning") or (name.endswith(".print") and not via_renderer):
+                        found.append(f"{subject} line {node.lineno}: {name}")
+    return [v for v in found if v.split(" line ")[0] not in NOT_ITEM_FAILURES]
+
+
+def test_failed_items_go_through_the_item_error_renderer() -> None:
+    """A loop over failed items prints only through item_error / format_item_error (HO2)."""
+    assert _failure_loop_violations() == []
+
+
+def test_no_error_label_outside_the_renderer() -> None:
+    offenders = [
+        path.name
+        for path in sorted(COMMANDS_DIR.glob("*.py"))
+        if "[bold red]Error:" in path.read_text(encoding="utf-8")
+        and path.name not in ERROR_LABEL_EXCEPTIONS
+    ]
+    assert offenders == []

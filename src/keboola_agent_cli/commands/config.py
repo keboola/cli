@@ -26,8 +26,14 @@ from ..services.component_service import (
     stamp_scaffold_config_id,
 )
 from ..services.config_service import validate_set_paths
+from ..services.variables_service import variables_preview
 from ..sync.branch_registry import default_branch_prefix
-from ._all_projects import AllProjectsOption, reject_project_with_all_projects
+from ._all_projects import (
+    FANOUT_PROJECT_HELP,
+    AllProjectsOption,
+    fanout_projects,
+    finish_fanout,
+)
 from ._config_variables_render import (
     format_variables_clear,
     format_variables_dry_run,
@@ -39,10 +45,11 @@ from ._helpers import (
     check_cli_operation,
     check_cli_permission,
     emit_api_error,
-    emit_project_warnings,
     get_formatter,
     get_service,
     map_error_to_exit_code,
+    parse_json_arg,
+    read_text_arg,
 )
 
 logger = logging.getLogger(__name__)
@@ -72,7 +79,7 @@ def config_list(
     project: list[str] | None = typer.Option(
         None,
         "--project",
-        help="Project alias to query (can be repeated for multiple projects)",
+        help=FANOUT_PROJECT_HELP,
     ),
     all_projects: AllProjectsOption = False,
     component_type: str | None = typer.Option(
@@ -100,18 +107,17 @@ def config_list(
         ),
     ),
 ) -> None:
-    """List configurations from connected projects.
+    """List configurations of the active project, the given projects, or all projects.
 
     If a dev branch is active (via 'branch use'), configs from that branch
     are listed. Use --branch to override.
     """
     formatter = get_formatter(ctx)
-    reject_project_with_all_projects(formatter, project, all_projects)
     service = get_service(ctx, "config_service")
 
     # --branch requires --project (branch ID is per-project)
     # For list with multiple projects, only validate if explicit --branch given
-    if branch is not None and (not project or len(project) != 1):
+    if branch is not None and (all_projects or len(project or []) > 1):
         formatter.error(
             message="--branch requires exactly one --project (branch ID is per-project)",
             error_code=ErrorCode.INVALID_ARGUMENT,
@@ -127,6 +133,8 @@ def config_list(
         )
         raise typer.Exit(code=2)
 
+    project = fanout_projects(ctx, formatter, project, all_projects)
+
     try:
         result = service.list_configs(
             aliases=project,
@@ -140,12 +148,11 @@ def config_list(
         raise typer.Exit(code=5) from None
 
     # In JSON mode, include both configs and errors in the response
-    if formatter.json_mode:
-        formatter.output(result)
-    else:
+    def render() -> None:
         # In human mode, show per-project errors as warnings and configs as table
         format_configs_table(formatter.console, result)
-        emit_project_warnings(formatter, result)
+
+    finish_fanout(formatter, result, result.get("errors", []), render)
 
 
 @config_app.command("detail", rich_help_panel="Browse")
@@ -295,12 +302,11 @@ def config_detail(
         # Single-config mode: emit unchanged shape
         formatter.output(result, format_config_detail)
     else:
-        # Bulk mode: emit {configs: [...], errors: [...]}
-        if formatter.json_mode:
-            formatter.output(result)
-        else:
+        # Bulk mode: emit {configs: [...], errors: [...]}; a failed project exits 1 (E4).
+        def render() -> None:
             _format_config_detail_bulk(formatter.console, result, component_id, with_state)
-            emit_project_warnings(formatter, result)
+
+        finish_fanout(formatter, result, result.get("errors", []), render)
 
 
 def _format_config_detail_bulk(
@@ -413,7 +419,7 @@ def config_examples(
     project: str | None = typer.Option(
         None,
         "--project",
-        help="Project alias (defaults to the pinned default project)",
+        help="Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)",
     ),
     row: bool = typer.Option(
         False,
@@ -457,7 +463,7 @@ def config_search(
     project: list[str] | None = typer.Option(
         None,
         "--project",
-        help="Project alias to search (can be repeated for multiple projects)",
+        help=FANOUT_PROJECT_HELP,
     ),
     all_projects: AllProjectsOption = False,
     component_type: str | None = typer.Option(
@@ -497,11 +503,10 @@ def config_search(
     are searched. Use --branch to override.
     """
     formatter = get_formatter(ctx)
-    reject_project_with_all_projects(formatter, project, all_projects)
     service = get_service(ctx, "config_service")
 
     # --branch requires exactly one --project
-    if branch is not None and (not project or len(project) != 1):
+    if branch is not None and (all_projects or len(project or []) > 1):
         formatter.error(
             message="--branch requires exactly one --project (branch ID is per-project)",
             error_code=ErrorCode.INVALID_ARGUMENT,
@@ -528,6 +533,8 @@ def config_search(
             )
             raise typer.Exit(code=2) from None
 
+    project = fanout_projects(ctx, formatter, project, all_projects)
+
     try:
         result = service.search_configs(
             query=query,
@@ -542,25 +549,33 @@ def config_search(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
-    if formatter.json_mode:
-        formatter.output(result)
-    else:
+    def render() -> None:
         format_search_results(formatter.console, result)
-        emit_project_warnings(formatter, result)
+
+    finish_fanout(formatter, result, result.get("errors", []), render)
 
 
-def _parse_json_input(raw: str) -> dict:
-    """Parse JSON from inline string, ``@file``, or ``-`` (stdin)."""
-    import sys
+def _parse_json_input(raw: str, *, label: str) -> dict:
+    """Parse a JSON object from inline text, ``@file`` or ``-`` (stdin).
 
-    if raw == "-":
-        return json.loads(sys.stdin.read())
-    if raw.startswith("@"):
-        file_path = Path(raw[1:])
-        if not file_path.is_file():
-            raise FileNotFoundError(f"Input file not found: {file_path}")
-        return json.loads(file_path.read_text(encoding="utf-8"))
-    return json.loads(raw)
+    Raises:
+        ValueError: On bad input or a value that is not a JSON object; the
+            message names ``label``.
+    """
+    parsed = parse_json_arg(raw, label=label)
+    if not isinstance(parsed, dict):
+        raise ValueError(f"{label} must be a JSON object, got {type(parsed).__name__}")
+    return parsed
+
+
+def _require_json_object(formatter: Any, value: object, *, label: str) -> None:
+    """Exit 2 (``VALIDATION_ERROR``) when a configuration body is not a JSON object."""
+    if not isinstance(value, dict):
+        formatter.error(
+            message=f"{label} must contain a JSON object, got {type(value).__name__}",
+            error_code=ErrorCode.VALIDATION_ERROR,
+        )
+        raise typer.Exit(code=2)
 
 
 def _parse_set_value(raw: str) -> object:
@@ -717,23 +732,23 @@ def config_update(
 
     if configuration:
         try:
-            config_dict = _parse_json_input(configuration)
-        except (json.JSONDecodeError, FileNotFoundError) as exc:
-            formatter.error(
-                message=f"Invalid --configuration input: {exc}",
-                error_code=ErrorCode.VALIDATION_ERROR,
-            )
+            config_dict = _parse_json_input(configuration, label="--configuration")
+        except ValueError as exc:
+            formatter.error(message=str(exc), error_code=ErrorCode.VALIDATION_ERROR)
             raise typer.Exit(code=2) from None
 
     if configuration_file:
         try:
-            config_dict = json.loads(configuration_file.read_text(encoding="utf-8"))
+            config_dict = json.loads(
+                read_text_arg(formatter, configuration_file, label="--configuration-file")
+            )
         except json.JSONDecodeError as exc:
             formatter.error(
                 message=f"Invalid JSON in {configuration_file}: {exc}",
                 error_code=ErrorCode.VALIDATION_ERROR,
             )
             raise typer.Exit(code=2) from None
+        _require_json_object(formatter, config_dict, label="--configuration-file")
 
     # --- Parse --set values ---------------------------------------------------
     parsed_sets: list[tuple[str, object]] | None = None
@@ -1319,22 +1334,22 @@ def config_new(
     if push:
         if configuration is not None:
             try:
-                config_body = _parse_json_input(configuration)
-            except (json.JSONDecodeError, FileNotFoundError) as exc:
-                formatter.error(
-                    message=f"Invalid --configuration input: {exc}",
-                    error_code=ErrorCode.VALIDATION_ERROR,
-                )
+                config_body = _parse_json_input(configuration, label="--configuration")
+            except ValueError as exc:
+                formatter.error(message=str(exc), error_code=ErrorCode.VALIDATION_ERROR)
                 raise typer.Exit(code=2) from None
         elif configuration_file is not None:
             try:
-                config_body = json.loads(configuration_file.read_text(encoding="utf-8"))
+                config_body = json.loads(
+                    read_text_arg(formatter, configuration_file, label="--configuration-file")
+                )
             except json.JSONDecodeError as exc:
                 formatter.error(
                     message=f"Invalid JSON in --configuration-file {configuration_file}: {exc}",
                     error_code=ErrorCode.VALIDATION_ERROR,
                 )
                 raise typer.Exit(code=2) from None
+            _require_json_object(formatter, config_body, label="--configuration-file")
 
     # ── Scaffold step (runs in scaffold-only mode and in push+files modes) ───
     scaffold: dict[str, Any] | None = None
@@ -1890,20 +1905,7 @@ def config_variables_set(
             formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
             raise typer.Exit(code=5) from None
 
-        preview_values = (
-            dict(variables_dict) if replace else {**current["values"], **variables_dict}
-        )
-        result = {
-            "dry_run": True,
-            "project_alias": project,
-            "parent_component_id": component_id,
-            "parent_config_id": config_id,
-            "was_linked": current["linked"],
-            "current_variables_id": current["variables_id"],
-            "current_values": current["values"],
-            "would_write": preview_values,
-            "action": "would_create" if not current["linked"] else "would_update",
-        }
+        result = variables_preview(current, variables_dict, replace=replace)
         if formatter.json_mode:
             formatter.output(result)
         else:
@@ -2102,12 +2104,9 @@ def config_row_create(
     config_dict: dict | None = None
     if configuration:
         try:
-            config_dict = _parse_json_input(configuration)
-        except (json.JSONDecodeError, FileNotFoundError) as exc:
-            formatter.error(
-                message=f"Invalid --configuration input: {exc}",
-                error_code=ErrorCode.VALIDATION_ERROR,
-            )
+            config_dict = _parse_json_input(configuration, label="--configuration")
+        except ValueError as exc:
+            formatter.error(message=str(exc), error_code=ErrorCode.VALIDATION_ERROR)
             raise typer.Exit(code=2) from None
 
     try:
@@ -2275,12 +2274,9 @@ def config_row_update(
     config_dict: dict | None = None
     if configuration:
         try:
-            config_dict = _parse_json_input(configuration)
-        except (json.JSONDecodeError, FileNotFoundError) as exc:
-            formatter.error(
-                message=f"Invalid --configuration input: {exc}",
-                error_code=ErrorCode.VALIDATION_ERROR,
-            )
+            config_dict = _parse_json_input(configuration, label="--configuration")
+        except ValueError as exc:
+            formatter.error(message=str(exc), error_code=ErrorCode.VALIDATION_ERROR)
             raise typer.Exit(code=2) from None
 
     parsed_sets: list[tuple[str, object]] | None = None
