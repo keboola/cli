@@ -205,7 +205,7 @@ def build_hardlink_retry_command(command: tuple[str, ...] | None) -> tuple[str, 
 
 
 def build_kbagent_upgrade_command(
-    *, prerelease: bool = False, target_version: str, wheel_url: str | None = None
+    *, target_version: str, wheel_url: str | None = None
 ) -> list[str] | None:
     """Build the argv command to recreate the kbagent tool environment.
 
@@ -214,15 +214,12 @@ def build_kbagent_upgrade_command(
     in particular, both preserve the optional ``[server]`` extras when
     they were originally installed.
 
+    The source is always a direct reference to one release, so a beta needs no
+    pre-release opt-in. The command never passes ``--prerelease=allow`` /
+    ``--pre``: they apply to every dependency, and with them uv installed
+    ``httpx 1.0.dev6`` into a beta environment, which has no ``httpx.Timeout``.
+
     Args:
-        prerelease: When True, opt into pre-release versions (beta / rc).
-            uv gets ``--prerelease=allow`` (resolver-level opt-in for the
-            entire tool environment), pip gets ``--pre`` (the legacy
-            equivalent). Without this flag, both resolvers reject
-            pre-release version strings like ``0.44.0b1`` even if they
-            are the newest available -- the default-deny behaviour we
-            want for cron-driven auto-update so stable users never
-            silently land on a beta release.
         target_version: Exact target release. The git source is always pinned
             to ``@v<target_version>``: ``main`` can carry the code of the next
             major before it is released (#791), so an untagged install is never
@@ -230,9 +227,9 @@ def build_kbagent_upgrade_command(
         wheel_url: When set, install the prebuilt wheel at this URL (a GitHub
             Release asset) via a PEP 508 direct reference instead of building
             from ``git+`` source -- the issue #353 fast path that skips the
-            on-machine npm/React build. Takes precedence over ``prerelease`` /
-            ``target_version`` (those are git-source knobs; the wheel URL
-            already pins an exact version). ``None`` keeps the git+ behaviour.
+            on-machine npm/React build. Takes precedence over ``target_version``
+            (a git-source knob; the wheel URL already pins an exact version).
+            ``None`` keeps the git+ behaviour.
 
     Returns:
         Command list ready for :func:`subprocess.run`, or ``None`` if
@@ -245,21 +242,13 @@ def build_kbagent_upgrade_command(
     spec = f"keboola-cli{'[server]' if has_server_extras() else ''} @ {install_source}"
     uv_path = shutil.which("uv")
     if uv_path:
-        cmd = [uv_path, "tool", "install", "--force", "--reinstall"]
-        if prerelease:
-            cmd.append("--prerelease=allow")
-        cmd.append(spec)
-        return cmd
+        return [uv_path, "tool", "install", "--force", "--reinstall", spec]
     pip_path = shutil.which("pip")
     if pip_path is None:
         return None
     # Pip cannot recreate a uv-managed tool environment transactionally; it
     # remains a best-effort fallback and is called out in failure guidance.
-    cmd = [pip_path, "install", "--upgrade"]
-    if prerelease:
-        cmd.append("--pre")
-    cmd.append(spec)
-    return cmd
+    return [pip_path, "install", "--upgrade", spec]
 
 
 def _render_command(command: tuple[str, ...]) -> str:
@@ -277,7 +266,6 @@ def _recovery_command(command: tuple[str, ...] | None, target_version: str | Non
             # runs after a failure, so it gets copy mode on Windows (#786).
             recovery = ("uv", *command[1:-1], *_uv_link_mode_args(), command[-1])
         else:
-            prerelease = ("--prerelease=allow",) if "--pre" in command else ()
             recovery = (
                 "uv",
                 "tool",
@@ -285,7 +273,6 @@ def _recovery_command(command: tuple[str, ...] | None, target_version: str | Non
                 "--force",
                 "--reinstall",
                 *_uv_link_mode_args(),
-                *prerelease,
                 command[-1],
             )
         return _render_command(recovery)
@@ -806,7 +793,6 @@ def _is_up_to_date(local: str | None, latest: str | None) -> bool | None:
 def prepare_kbagent_update_plan(
     latest_version: str | None,
     *,
-    include_prerelease: bool = False,
     major_flag: bool = False,
     same_major_missing: bool = False,
 ) -> KbagentUpdatePlan:
@@ -826,11 +812,7 @@ def prepare_kbagent_update_plan(
     command: tuple[str, ...] | None = None
     if up_to_date is False and latest_version is not None and frozen_distribution is None:
         wheel_url = resolve_kbagent_wheel_url(latest_version)
-        built = build_kbagent_upgrade_command(
-            prerelease=include_prerelease,
-            target_version=latest_version,
-            wheel_url=wheel_url,
-        )
+        built = build_kbagent_upgrade_command(target_version=latest_version, wheel_url=wheel_url)
         command = tuple(built) if built is not None else None
     return KbagentUpdatePlan(
         current_version=__version__,
@@ -900,7 +882,6 @@ def prepare_update_plan(
     return UpdatePlan(
         kbagent=prepare_kbagent_update_plan(
             gated.latest_version,
-            include_prerelease=include_prerelease,
             major_flag=allow_major,
             same_major_missing=gated.same_major_missing,
         ),
@@ -966,7 +947,7 @@ class VersionService:
             logger.debug("Could not persist version cache", exc_info=True)
 
         # Reflect the actual install command the user should run, including
-        # --prerelease=allow and @v<version> tag-pin when --beta is active.
+        # the @v<version> tag-pin when --beta is active.
         # Without this, programmatic JSON consumers reading upgrade_command
         # would copy a stable-channel install command even though
         # latest_version advertised a beta tag -- silently landing on the
@@ -1015,7 +996,6 @@ class VersionService:
             # gets the fast path too instead of a slow git+ source build.
             kbagent_wheel_url = resolve_kbagent_wheel_url(kbagent_latest)
             kbagent_upgrade_cmd = build_kbagent_upgrade_command(
-                prerelease=include_prerelease,
                 target_version=kbagent_target_version,
                 wheel_url=kbagent_wheel_url,
             )
