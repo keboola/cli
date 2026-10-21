@@ -46,6 +46,7 @@ from ..services._rls_condition import COMPARISON_SQL, Dialect
 from ..services.rls_service import PolicyScope
 from ._checkbox_select import CheckboxItem, CheckboxUnavailable, _stdio_is_tty, checkbox_select
 from ._helpers import (
+    _confirm_or_abort,
     check_cli_operation,
     check_cli_permission,
     get_formatter,
@@ -67,7 +68,7 @@ rls_app = typer.Typer(
 DIALECT_HELP = "Workspace SQL dialect; must match the project backend (default: the backend)"
 SCOPE_HELP = (
     "targeted (default): the owning project plus --target-project grants. organization: "
-    "EVERY project of the organization that has the row-level-security feature -- an explicit, "
+    "EVERY project of the organization -- an explicit, "
     "organization-admin-only choice, gated as destructive."
 )
 TARGET_HELP = (
@@ -115,12 +116,6 @@ def _rls_permission_check(ctx: typer.Context) -> None:
 # ---------------------------------------------------------------------------
 # Shared helpers (also used by `cls`)
 # ---------------------------------------------------------------------------
-
-
-def _confirm_or_exit(formatter: Any, question: str) -> None:
-    if not typer.confirm(question):
-        formatter.console.print("[yellow]Aborted.[/yellow]")
-        raise typer.Exit(code=0)
 
 
 def gate_scope(
@@ -317,7 +312,7 @@ def create_policy(
         # A validation/network error here is reported properly by the real call below.
         with contextlib.suppress(ConfigError, KeboolaApiError):
             _print_preview(formatter, group, service.create_policy(**kwargs, dry_run=True))
-        _confirm_or_exit(formatter, f"Create {group.label} policy on {kwargs['table']}?")
+        _confirm_or_abort(formatter, yes, f"Create {group.label} policy on {kwargs['table']}?")
 
     result = handle_service_call(ctx, service.create_policy, **kwargs, dry_run=dry_run)
 
@@ -358,7 +353,7 @@ def update_policy(
     policy_id = kwargs["policy_id"]
 
     if not dry_run and not yes and not formatter.json_mode:
-        _confirm_or_exit(formatter, f"Update {group.label} policy {policy_id}?")
+        _confirm_or_abort(formatter, yes, f"Update {group.label} policy {policy_id}?")
 
     result = handle_service_call(
         ctx,
@@ -393,7 +388,7 @@ def delete_policy(
     service = get_service(ctx, group.service)
 
     if not dry_run and not yes and not formatter.json_mode:
-        _confirm_or_exit(formatter, f"Delete {group.label} policy {policy_id}? {effect}")
+        _confirm_or_abort(formatter, yes, f"Delete {group.label} policy {policy_id}? {effect}")
 
     result = handle_service_call(
         ctx, service.delete_policy, alias=alias, policy_id=policy_id, dry_run=dry_run
@@ -637,7 +632,10 @@ def _build_rules_interactively(formatter: Any) -> list[dict[str, Any]]:
         else:
             rule["principals"] = principals
         rules.append(rule)
-        if not typer.confirm("Add another rule to this policy?", default=False):
+        if (
+            _prompt_choice(formatter, "Add another rule to this policy? (y/n)", ("y", "n"), "n")
+            == "n"
+        ):
             return rules
 
 
@@ -718,8 +716,7 @@ def rls_setup(
             continue
         _print_preview(formatter, RLS, preview)
 
-    if not yes:
-        _confirm_or_exit(formatter, f"Create {policies}?")
+    _confirm_or_abort(formatter, yes, f"Create {policies}?")
 
     failed: list[str] = []
     exit_codes: set[int] = set()

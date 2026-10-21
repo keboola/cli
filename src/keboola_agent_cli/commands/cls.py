@@ -15,8 +15,8 @@ Each rule is ``{principal|principals, visible_columns: [...]}``: the listed
 columns are the only ones that principal can read (allowlist projection;
 masking is not supported). As with ``rls``, every write is authored at
 ``targeted`` scope unless ``--scope organization`` is passed -- never
-``project``. Enforcement happens in ``keboola-mcp-server``'s
-``query_data``; kbagent only authors policies.
+``project``. Enforcement happens in Query Service on a governed workspace
+or in ``keboola-mcp-server``'s ``query_data``; kbagent only authors policies.
 
 ``list``/``detail``/``schema`` are read-only and safe under ``--deny-writes``;
 ``create``/``update`` are gated as ``admin``, ``delete`` and ``--scope

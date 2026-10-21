@@ -6762,8 +6762,10 @@ The package was named `keboola-agent-cli` up to 0.62.0 and is named `keboola-cli
 *(since vNEXT)*
 
 `kbagent rls` authors metastore `rls-policy` objects -- one per protected table. It never
-enforces anything itself: the actual SQL rewrite happens in `keboola-mcp-server`'s `query_data`
-tool, a separate repo/runtime. See [rls-workflow.md](rls-workflow.md) for full recipes.
+enforces anything itself: the actual SQL rewrite happens in Query Service on a governed workspace
+(`workspace create --governed`) or in `keboola-mcp-server`'s `query_data` tool, a separate
+repo/runtime. See [rls-workflow.md](rls-workflow.md) for full recipes, including the end-to-end
+governed-workspace flow.
 
 - **Availability depends on the stack's metastore.** The `rls-policy` and `cls-policy` object types are
   registered by the metastore's `2026-09-29` schema migrations. A stack whose metastore predates them
@@ -6771,16 +6773,17 @@ tool, a separate repo/runtime. See [rls-workflow.md](rls-workflow.md) for full r
   there, not a kbagent bug. Check with `kbagent --json rls schema --project P` / `cls schema`.
 - **Scope is `targeted` unless you pass `--scope organization`; there is no `project` scope.** `targeted`
   (the metastore schema's own default) governs the owning project plus the `--target-project` grants.
-  `organization` governs the table in EVERY project of the organization with the `row-level-security`
-  feature: the enforcement applies every policy the metastore lists for a project and does not re-check
+  `organization` governs the table in EVERY project of the organization where it is enforced: the enforcement applies every policy the metastore lists for a project and does not re-check
   the owner, so an organization policy is never "only where it matches". Every listed policy applies to
   the listing project. `--scope organization` is destructive-class (`rls.create --scope organization` /
   `cls.create --scope organization` in `FLAG_ESCALATIONS`).
 - **Who may write.** A project admin (master token, admin role) may create/update/delete `targeted`
   policies of its own project without grants. Grants (`--target-project`, `--clear-target-projects`) and
   `--scope organization` need the organization-admin role -- a master token alone gets a 403
-  (`ACCESS_DENIED`). A project admin reads only the policies its project owns. Policies are enforced only
-  where the consuming project has the `row-level-security` feature.
+  (`ACCESS_DENIED`). A project admin reads only the policies its project owns. On the MCP `query_data` path
+  policies are enforced only where the consuming project has the `row-level-security` feature; on a
+  governed workspace Query Service decides per project, and the identity running `workspace query` needs
+  a matching rule (default deny).
 - **Policy schema 1.1.0 (the metastore default) is a superset of 1.0.0.** A rule selects identities by
   `principal`, `principals` or IdP `groups` (exact strings, any listed group matches). Within a policy,
   every rule matching one identity applies: RLS conditions combine with OR, CLS `visible_columns` are

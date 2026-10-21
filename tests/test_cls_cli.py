@@ -205,6 +205,7 @@ class TestCreate:
         assert "a@x.com: SELECT id, region" in result.output
         assert service.create_policy.call_args.kwargs["dry_run"] is True
 
+    @pytest.mark.usefixtures("interactive_terminal")
     def test_confirmed_prompt_previews_then_writes(self, tmp_path: Path) -> None:
         service = MagicMock()
         service.create_policy.return_value = {**_row(), "preview": _preview()["preview"]}
@@ -215,6 +216,7 @@ class TestCreate:
         assert "Created CLS policy p-1" in result.output
         assert [c.kwargs["dry_run"] for c in service.create_policy.call_args_list] == [True, False]
 
+    @pytest.mark.usefixtures("interactive_terminal")
     def test_declined_prompt_aborts_without_writing(self, tmp_path: Path) -> None:
         service = MagicMock()
         service.create_policy.return_value = _preview(dry_run=True)
@@ -301,6 +303,7 @@ class TestUpdate:
         assert kwargs["dialect"] is None
         assert kwargs["rules"][0]["principal"] == "a@x.com"
 
+    @pytest.mark.usefixtures("interactive_terminal")
     def test_declined_prompt_aborts(self, tmp_path: Path) -> None:
         service = MagicMock()
 
@@ -314,6 +317,7 @@ class TestUpdate:
         assert "Aborted" in result.output
         service.update_policy.assert_not_called()
 
+    @pytest.mark.usefixtures("interactive_terminal")
     def test_confirmed_human_output(self, tmp_path: Path) -> None:
         service = MagicMock()
         service.update_policy.return_value = {**_row(), "preview": _preview()["preview"]}
@@ -391,6 +395,7 @@ class TestDelete:
         assert result.exit_code == 0, result.output
         assert json.loads(result.output)["data"]["deleted"] is True
 
+    @pytest.mark.usefixtures("interactive_terminal")
     def test_declined_prompt_does_not_delete(self, tmp_path: Path) -> None:
         service = MagicMock()
 

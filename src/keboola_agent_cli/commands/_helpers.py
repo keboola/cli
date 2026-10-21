@@ -12,11 +12,13 @@ import json
 import os
 import secrets
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Sized
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import typer
+import yaml
 
 from .. import telemetry
 from ..config_store import ConfigStore
@@ -27,6 +29,7 @@ from ..constants import (
 )
 from ..errors import ConfigError, ErrorCode, KeboolaApiError, PermissionDeniedError, exit_code_for
 from ..output import OutputFormatter
+from ..permissions import FLAG_ESCALATIONS
 from ..update_crossing import print_held_warning, refusal_for
 
 
@@ -78,34 +81,107 @@ def resolve_manage_token(*, allow_env: bool = False) -> str:
     raise typer.Exit(code=2)
 
 
-def parse_json_arg(raw: str, *, label: str) -> Any:
+def parse_json_arg(raw: str, *, label: str, allow_yaml: bool = False) -> Any:
     """Parse a ``JSON|@file|-`` argument: inline JSON, ``@path``, or ``-`` for stdin.
 
-    The house input contract for structured flags (``config update
-    --configuration``, ``transformation edit --op``, ``merge-request resolve
-    --resolved``). Hoisted from ``transformation.py``'s private copy so the
-    merge-request group did not add another; ``config.py`` still carries an
-    older dict-only variant (``_parse_json_input``) -- folding it in is a
-    follow-up, not this PR.
+    The house input contract for structured flags (spec rule I1): ``config
+    update --configuration``, ``transformation edit --op``, ``merge-request
+    resolve --resolved``, ``encrypt values --input``, ``http post --body`` and
+    the others. ``allow_yaml`` parses the text as YAML, a superset of JSON
+    (``flow new/update/validate --file``).
 
     Raises:
         ValueError: On a missing/unreadable file or malformed JSON -- the message
             names ``label`` (the flag) so the caller can print it at exit 2 as-is.
     """
+    loads: Callable[[str], Any] = yaml.safe_load if allow_yaml else json.loads
     try:
         if raw == "-":
-            return json.loads(sys.stdin.read())
+            return loads(sys.stdin.read())
         if raw.startswith("@"):
             file_path = Path(raw[1:])
             if not file_path.is_file():
                 raise ValueError(f"{label}: file not found: {file_path}")
-            return json.loads(file_path.read_text(encoding="utf-8"))
-        return json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"{label}: invalid JSON: {exc}") from exc
-    except OSError as exc:
-        # a directory, a permission problem -- a usage error, not a crash
-        raise ValueError(f"{label}: cannot read file: {exc}") from exc
+            return loads(file_path.read_text(encoding="utf-8"))
+        return loads(raw)
+    except (json.JSONDecodeError, yaml.YAMLError) as exc:
+        raise ValueError(f"{label}: invalid {'YAML' if allow_yaml else 'JSON'}: {exc}") from exc
+    except (OSError, UnicodeDecodeError) as exc:
+        # a directory, a permission problem, a binary file -- a usage error, not a crash
+        raise ValueError(f"{label}: cannot read input: {exc}") from exc
+
+
+def split_multi(values: Iterable[str] | None) -> list[str]:
+    """Flatten a repeatable option that also takes a comma list (spec rule A4).
+
+    ``--x a --x b,c`` gives ``["a", "b", "c"]``. Empty parts are dropped, and a
+    value given twice is kept once, in first-seen order. Use it only for IDs
+    and fixed values: a free-form value (JSON, ``KEY=VALUE``, SQL, text) can
+    contain a comma, so those options are repeat-only and stay unsplit.
+    """
+    parts = (part.strip() for value in values or () for part in value.split(","))
+    return list(dict.fromkeys(part for part in parts if part))
+
+
+def split_int_multi(values: Iterable[str] | None, *, label: str) -> list[int]:
+    """``split_multi`` for integer IDs; a part that is not an integer raises ``ValueError``."""
+    parts = split_multi(values)
+    bad = [part for part in parts if not (part.isascii() and part.isdigit())]
+    if bad:
+        raise ValueError(f"{label} takes integer IDs, got: {', '.join(bad)}")
+    return [int(part) for part in parts]
+
+
+def read_text_arg(formatter: OutputFormatter, path: Path, *, label: str) -> str:
+    """Read a UTF-8 file option; an unreadable file is ``INVALID_ARGUMENT`` naming ``label``."""
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        formatter.error(
+            message=f"{label}: cannot read file {path}: {exc}",
+            error_code=ErrorCode.INVALID_ARGUMENT,
+        )
+        raise typer.Exit(code=2) from None
+
+
+def _is_file(path: str) -> bool:
+    """``Path.is_file`` that answers False where it would raise (a name too long)."""
+    try:
+        return Path(path).is_file()
+    except (OSError, ValueError):
+        return False
+
+
+class RefuseAtFile:
+    """Option callback for free text that refuses ``@<existing file>`` (spec rule I3).
+
+    Without it, ``--text @notes.md`` stores the literal text ``@notes.md``.
+    The refusal is ``INVALID_ARGUMENT`` (exit 2) with a hint that names the
+    file option of the command, also for the case where the text itself starts
+    with ``@``. ``@`` followed by anything that is not a file (a relative path
+    is relative to the current directory) stays text. Use it as
+    ``typer.Option(..., callback=RefuseAtFile("--file").callback)``;
+    ``scripts/check_cli_spec.py`` finds the free-text options without it.
+    """
+
+    def __init__(self, file_option: str) -> None:
+        self.file_option = file_option
+
+    def callback(
+        self, ctx: typer.Context, param: typer.CallbackParam, value: str | None
+    ) -> str | None:
+        if value is not None and value.startswith("@") and _is_file(value[1:]):
+            get_formatter(ctx).error(
+                message=(
+                    f"{param.opts[0]} got {value!r}, the name of an existing file (relative "
+                    f"to the current directory). Use {self.file_option} {value[1:]} to read "
+                    f"the file. To store the text {value!r} itself, write it to a file and "
+                    f"pass that file with {self.file_option}."
+                ),
+                error_code=ErrorCode.INVALID_ARGUMENT,
+            )
+            raise typer.Exit(code=2)
+        return value
 
 
 def read_password_stdin(label: str = "Password: ") -> str:
@@ -455,18 +531,6 @@ def handle_service_call[T](
         raise typer.Exit(code=service_error_exit_code(exc)) from None
 
 
-def emit_project_warnings(formatter: OutputFormatter, result: dict) -> None:
-    """Emit warnings from multi-project operation results.
-
-    Iterates the 'errors' list in the result dict (if present) and prints
-    each entry as a warning via the formatter.
-    """
-    for err in result.get("errors", []):
-        alias = err.get("project_alias", "unknown")
-        message = err.get("message", "Unknown error")
-        formatter.warning(f"Project '{alias}': {message}")
-
-
 def item_failure_exit_code(failed: int) -> int | None:
     """Map the number of failed items of a multi-item operation to a CLI exit code.
 
@@ -487,6 +551,68 @@ def item_failure_exit_code(failed: int) -> int | None:
         return None
     telemetry.note_command_error(f"{failed} item(s) failed")
     return 1
+
+
+def finish_items(
+    formatter: OutputFormatter,
+    result: Any,
+    *,
+    failed: int,
+    total: int,
+    noun: str,
+    summary: str,
+    render: Callable[[], object] | None = None,
+) -> None:
+    """End a command that processes several items: output, one headline, exit code.
+
+    The one way to end such a command (HO2, E4): ``--json`` gets the envelope
+    with ``exit_code``; human mode gets ``render()`` (the per-item lines) and
+    then one headline, ``Success: <summary>`` or ``Failed: N of M <noun>.``
+    The command exits 1 when an item failed. ``noun`` is plural ("tables").
+
+    One wording for every summary (HO2): ``<N> <noun>(s) <what happened>``,
+    with details after a comma and a closing period, for example
+    ``2 table(s) deleted.`` or ``3 config(s) pushed: 1 created, 2 updated, 0 deleted.``
+    A dry run says ``would be <...>``.
+    The fan-out reads end through ``_all_projects.finish_fanout``, which
+    counts failed projects (E4: ``PAYG_NOT_AVAILABLE`` is not a failure).
+    """
+    code = item_failure_exit_code(failed)
+    if formatter.json_mode:
+        formatter.output(result, exit_code=code or 0)
+    else:
+        if render is not None:
+            render()
+        formatter.item_headline(failed=failed, total=total, noun=noun, summary=summary)
+    if code:
+        raise typer.Exit(code=code)
+
+
+def finish_bulk(
+    formatter: OutputFormatter,
+    result: dict[str, Any],
+    done: Sized,
+    noun: str,
+    done_as: str,
+    render: Callable[[], object],
+) -> None:
+    """:func:`finish_items` for a bulk command whose result lists its failures in ``failed``.
+
+    ``done`` holds the items that succeeded; ``noun`` is singular ("table"),
+    ``done_as`` what happened to them ("deleted", "would be deleted"), so the
+    headline reads ``Success: 2 table(s) deleted.`` or
+    ``Failed: 1 of 3 tables. 2 table(s) deleted.``
+    """
+    failed = len(result["failed"])
+    finish_items(
+        formatter,
+        result,
+        failed=failed,
+        total=len(done) + failed,
+        noun=f"{noun}s",
+        summary=f"{len(done)} {noun}(s) {done_as}.",
+        render=render,
+    )
 
 
 def _is_help_request(ctx: typer.Context) -> bool:
@@ -562,7 +688,13 @@ def check_cli_operation(ctx: typer.Context, operation: str) -> None:
     higher risk class than its command (see `permissions.FLAG_ESCALATIONS`).
     The callback has already cleared the bare command by the time a command
     body runs, so this is an additional gate, not a replacement.
+
+    A command calls this exactly when the escalating flag (or an inherited
+    organization scope) applies, so it also raises the command category that
+    the ``TARGET_FROM_ACTIVE_CHOICE`` warning reads (spec T12).
     """
+    if FLAG_ESCALATIONS.get(operation) == "destructive":
+        get_formatter(ctx).command_category = "destructive"
     engine = ctx.obj.get("permission_engine")
     if engine is None or not engine.active:
         return
@@ -628,6 +760,150 @@ def validate_branch_requires_project(
             error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2) from None
+
+
+def is_interactive_terminal() -> bool:
+    """True when a person can see a prompt on stderr and answer it on stdin."""
+    return bool(
+        hasattr(sys.stdin, "isatty")
+        and sys.stdin.isatty()
+        and hasattr(sys.stderr, "isatty")
+        and sys.stderr.isatty()
+    )
+
+
+CONFIRMATION_HINT = (
+    "Run the command again with --yes to confirm. "
+    "AI agents: ask the user before you retry with --yes."
+)
+
+
+def _confirm_or_abort(formatter: OutputFormatter, yes: bool, question: str) -> None:
+    """The shared safety prompt (spec S4).
+
+    ``--yes`` and ``--json`` skip it: both mean consent. On a terminal the
+    question goes to stderr, and a declined prompt prints ``Aborted.`` and
+    exits 0 (E6). Without a terminal nobody can answer, and an open stdin
+    pipe must not answer for the user (D6): the command refuses with
+    ``CONFIRMATION_REQUIRED`` and exit 2, and the message names ``--yes``.
+    """
+    if yes or formatter.json_mode:
+        return
+    if not is_interactive_terminal():
+        formatter.error(
+            message=f"{ErrorCode.CONFIRMATION_REQUIRED.value}: {question} "
+            f"There is no terminal to answer it. {CONFIRMATION_HINT}",
+            error_code=ErrorCode.CONFIRMATION_REQUIRED,
+        )
+        raise typer.Exit(code=2)
+    if not typer.confirm(question, err=True):
+        formatter.console.print("Aborted.")
+        raise typer.Exit(code=0)
+
+
+# The ``code`` of a ``warnings[]`` entry for a deprecated form (spec C3, O3).
+DEPRECATED_CODE = "DEPRECATED"
+
+
+@dataclass(frozen=True)
+class Deprecation:
+    """One deprecated command-line form (spec C3).
+
+    ``replacement`` is the form to use instead, or None when the old form
+    has no effect and the caller only drops it. ``remove_after`` is the ISO
+    date after which a minor release may remove the old form. It is None
+    while that date is unknown: the window of a form that 1.0.0 hides
+    starts at the migration time M, which exists only once v1.0.0 is
+    published.
+    """
+
+    message: str
+    hint: str
+    replacement: str | None
+    remove_after: str | None = None
+
+
+# C3: every deprecated form, keyed by its command path and option. A removed
+# form stays here, so that its error can name the replacement.
+DEPRECATIONS: dict[str, Deprecation] = {
+    "stream delete --force": Deprecation(
+        message="stream delete --force is deprecated. Use --yes to skip the confirmation.",
+        hint="--yes",
+        replacement="--yes",
+    ),
+    "semantic-layer import --yes": Deprecation(
+        message="semantic-layer import --yes is deprecated and has no effect. Omit it.",
+        hint="omit --yes (skip on conflict is the default)",
+        replacement=None,
+    ),
+    # V9: `kbagent serve` partial updates move from PUT to PATCH. A REST form
+    # is keyed "METHOD /path"; its warning goes into the Kbagent-Warnings header.
+    "PUT /semantic-layer/items/{kind}/{name}": Deprecation(
+        message="PUT /semantic-layer/items/{kind}/{name} is deprecated. Use PATCH.",
+        hint="PATCH /semantic-layer/items/{kind}/{name}",
+        replacement="PATCH /semantic-layer/items/{kind}/{name}",
+    ),
+    "PUT /merge-requests/{project}/{merge_request_id}": Deprecation(
+        message="PUT /merge-requests/{project}/{merge_request_id} is deprecated. Use PATCH.",
+        hint="PATCH /merge-requests/{project}/{merge_request_id}",
+        replacement="PATCH /merge-requests/{project}/{merge_request_id}",
+    ),
+    "PUT /data-apps/{project}/{app_id}/secrets": Deprecation(
+        message="PUT /data-apps/{project}/{app_id}/secrets is deprecated. Use PATCH.",
+        hint="PATCH /data-apps/{project}/{app_id}/secrets",
+        replacement="PATCH /data-apps/{project}/{app_id}/secrets",
+    ),
+    # Only the merge is deprecated: PUT with `replace: true` stays the full replace.
+    "PUT /configs/{project}/{component_id}/{config_id}/variables": Deprecation(
+        message="PUT .../variables without replace: true merges the variables, which is "
+        "deprecated. Use PATCH to merge, or PUT with replace: true to replace all variables. "
+        "After the window, a PUT without replace: true is refused, never run as a replace.",
+        hint="PATCH /configs/{project}/{component_id}/{config_id}/variables",
+        replacement="PATCH /configs/{project}/{component_id}/{config_id}/variables",
+    ),
+}
+
+
+def deprecation_entry(form: str) -> tuple[str, dict[str, Any]]:
+    """The message and the extra fields of the ``DEPRECATED`` warning of ``form``."""
+    entry = DEPRECATIONS[form]
+    when = (
+        f"It can be removed after {entry.remove_after}."
+        if entry.remove_after
+        else "It keeps working until at least 28 days after the 1.0 migration date."
+    )
+    extra = {
+        "hint": entry.hint,
+        "replacement": entry.replacement,
+        "remove_after": entry.remove_after,
+    }
+    return f"{entry.message} {when}", extra
+
+
+def warn_deprecated(formatter: OutputFormatter, form: str) -> None:
+    """Add the ``DEPRECATED`` warning of a ``DEPRECATIONS`` entry (one stderr line in human mode)."""
+    message, extra = deprecation_entry(form)
+    formatter.warning(message, code=DEPRECATED_CODE, **extra)
+
+
+def deprecated_option(form: str, *param_decls: str) -> Any:
+    """A hidden flag for a deprecated form in ``DEPRECATIONS`` (spec C3).
+
+    The vendored click has no option-level ``deprecated``. The flag keeps
+    working: the command reads its value (for an alias, ``yes = yes or
+    force``), and the callback adds the ``DEPRECATED`` warning when the
+    caller gives the flag.
+    """
+    if form not in DEPRECATIONS:
+        raise KeyError(f"{form!r} has no DEPRECATIONS entry")
+
+    def _warn(ctx: typer.Context, value: bool) -> bool:
+        formatter = (ctx.obj or {}).get("formatter")
+        if value and formatter is not None and not ctx.resilient_parsing:
+            warn_deprecated(formatter, form)
+        return value
+
+    return typer.Option(False, *param_decls, hidden=True, callback=_warn)
 
 
 _CONFIRM_CODE_LENGTH = 4

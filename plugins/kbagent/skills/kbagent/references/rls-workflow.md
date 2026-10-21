@@ -4,10 +4,11 @@ Row-level security in Keboola is authored as metastore `rls-policy` objects
 -- one object per protected table, holding a list of per-principal condition
 primitives (never a hand-written SQL predicate). `kbagent` only **authors**
 these objects; enforcement (the actual SQL rewrite on a query) happens
-inside `keboola-mcp-server`'s `query_data` tool, a different repo and a
-different runtime. `kbagent rls` never executes a query and never decides
-whether a real query gets filtered -- it only creates, reads, updates and
-deletes the policy objects the enforcement engine reads.
+outside kbagent, in one of two readers: Query Service on a governed workspace
+(see [End-to-end](#end-to-end----governed-workspace-policies-query-service);
+since vNEXT) or `keboola-mcp-server`'s `query_data` tool. `kbagent rls` never
+decides whether a real query gets filtered -- it only creates, reads, updates
+and deletes the policy objects the enforcement reads.
 
 **Scope: `targeted` by default, `organization` only when asked for, never `project`.**
 
@@ -15,7 +16,7 @@ deletes the policy objects the enforcement engine reads.
   table in the owning project (`--project`) plus every project granted with
   `--target-project` (alias or project ID, repeatable or comma-separated).
 - `--scope organization` governs the table in **every project of the
-  organization** that has the `row-level-security` project feature. The
+  organization** where it is enforced (see the prerequisite below). The
   enforcement applies every policy the metastore lists for a project -- it does
   not re-check the owning project -- so an organization policy is never "only
   for my project". It is gated as `destructive` (`rls.create --scope
@@ -31,9 +32,11 @@ deletes the policy objects the enforcement engine reads.
 | `--scope organization` | no (403) | yes |
 | Read (`list` / `detail`) | only the policies its project owns | everything visible to the project |
 
-**Enforcement prerequisite.** Policies do nothing until the consuming project has
-the `row-level-security` project feature (it gates CLS too). Without it, queries
-are unfiltered -- not an error.
+**Enforcement prerequisite.** On the MCP path (`query_data`), policies do nothing
+until the consuming project has the `row-level-security` project feature (it
+gates CLS too); without it, queries are unfiltered -- not an error. On a governed
+workspace, Query Service decides per project whether it enforces; that feature
+flag is not what switches it (since vNEXT).
 
 **How rules combine (policy schema 1.1.0, the metastore default; since vNEXT).** A
 rule selects identities by `principal`, `principals` or IdP `groups`. Within a
@@ -81,6 +84,50 @@ Non-obvious behaviors and version gates: [gotchas.md](gotchas.md).
 | Govern the table in every project of the organization (organization admin) | `rls create ... --scope organization` |
 | Preview the compiled condition before writing anything | any write command + `--dry-run` |
 | Remove a policy (un-protect a table) | `rls delete --project P --policy-id ID` (`--dry-run` shows it first) |
+| Query a table with the policies applied, no MCP server | governed workspace -- see [End-to-end](#end-to-end----governed-workspace-policies-query-service) |
+
+## End-to-end -- governed workspace, policies, Query Service
+
+*(since vNEXT)*
+
+Everything below is kbagent commands: no MCP server, no warehouse credentials.
+Workspace details and gotchas: [workspace-workflow.md](workspace-workflow.md#governed-workspace).
+
+```bash
+# 1. A governed workspace (Snowflake, headless). The result has no password and
+#    no private_key: there is nothing to save. Note workspace_id.
+kbagent --json workspace create --project prod --name "governed-ws" --governed
+
+# 2. Policies on the Storage table (preview with --dry-run first, see Workflow 2).
+#    Under default deny a table with no rls-policy is refused, so give every
+#    reader a rule -- including the identity you will query with in step 4.
+kbagent --json rls create --project prod --table-id in.c-crm.invoices \
+  --rules '[{"principal": "eu-analyst@example.com",
+             "condition": {"column": "region", "op": "eq", "value": "EU"}}]'
+kbagent --json cls create --project prod --table-id in.c-crm.invoices \
+  --rules '[{"principal": "eu-analyst@example.com",
+             "visible_columns": ["id", "region", "amount"]}]'
+
+# 3. Load the table into the workspace (or let Storage put it there).
+kbagent --json workspace load --project prod --workspace-id WS_ID \
+  --tables in.c-crm.invoices
+
+# 4. Read it through Query Service -- the only way into a governed workspace.
+kbagent --json workspace query --project prod --workspace-id WS_ID \
+  --sql 'SELECT * FROM "invoices"'
+```
+
+Expected (illustrative): for `eu-analyst@example.com` only the `region = 'EU'`
+rows, and only the columns `id`, `region`, `amount`. An identity with no
+matching rule is refused, not handed an empty result; a reader with no identity
+is always refused.
+
+- `workspace password` is refused on a governed workspace, and so is any direct
+  warehouse login: Query Service is the only reader.
+- `--governed` with `--ui` is `INVALID_ARGUMENT` (exit 2); on a non-Snowflake
+  backend it is `CONFIG_ERROR` (exit 5). Nothing is created in either case.
+- Query Service decides per project whether it enforces the policies. The
+  `row-level-security` project feature gates only the MCP `query_data` path.
 
 ---
 
@@ -161,7 +208,7 @@ A caller with no rule on a governed table is refused, not silently returned
 empty -- fail-closed is the enforcement engine's whole design point (see the
 RFC in `keboola-mcp-server`). Before protecting a table, make sure every
 principal who legitimately needs access has a matching rule, including
-yourself if you plan to verify the result via `query_data`. A principal is the
+yourself if you plan to verify the result (`query_data` or a governed workspace). A principal is the
 user's email, matched case-insensitively.
 
 ## Workflow 3 -- Inspect existing policies before making a change
@@ -269,8 +316,9 @@ row; anyone else sees no rows (the `default`), instead of an error.
 
 *(since vNEXT)*
 
-In a **governed workspace** (the platform creates every workspace governed once
-RLS/CLS is switched on for the organization or project) nothing is readable
+In a **governed workspace** (`workspace create --governed`, or a workspace the
+platform creates governed once RLS/CLS is switched on for the organization or
+project) nothing is readable
 until a policy says so: a table with **no** `rls-policy` is refused, and so is a
 table whose policies match the reader in no rule. Admins and organization admins
 are not exempt. An admin who sees no data has not authored the policies yet --
@@ -401,8 +449,9 @@ kbagent --json rls schema --project prod
 It mirrors `rls` (`list`, `detail`, `schema`, `create`, `update`, `delete`) with the same
 scope rule and default, the same write permissions, dialect check, `--dry-run`/`--yes`
 flags and partial `update`; there is no `cls setup` wizard and no `default`.
-Enforcement and RLS+CLS composition happen in `keboola-mcp-server`'s `query_data`,
-gated by the same `row-level-security` feature.
+Enforcement and RLS+CLS composition happen in the same two readers as RLS: Query
+Service on a governed workspace, or `keboola-mcp-server`'s `query_data` (gated by
+the `row-level-security` feature).
 
 ```bash
 kbagent --json cls schema --project prod            # live shape

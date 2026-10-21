@@ -350,6 +350,7 @@ class TestRlsCreateCli:
         _, kwargs = service.create_policy.call_args
         assert kwargs["dry_run"] is True
 
+    @pytest.mark.usefixtures("interactive_terminal")
     def test_human_mode_without_yes_aborts_on_no(self, tmp_path: Path) -> None:
         store = _setup_config(tmp_path / "cfg", {"prod": {}})
         service = MagicMock()
@@ -461,6 +462,7 @@ class TestRlsDeleteCli:
         assert result.exit_code == 0, result.output
         service.delete_policy.assert_called_once_with(alias="prod", policy_id="p-1", dry_run=False)
 
+    @pytest.mark.usefixtures("interactive_terminal")
     def test_human_mode_without_yes_aborts_on_no(self, tmp_path: Path) -> None:
         store = _setup_config(tmp_path / "cfg", {"prod": {}})
         service = MagicMock()
@@ -474,6 +476,21 @@ class TestRlsDeleteCli:
 
         assert result.exit_code == 0
         assert "Aborted" in result.output
+        service.delete_policy.assert_not_called()
+
+    def test_without_terminal_refuses_instead_of_reading_stdin(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        service = MagicMock()
+
+        result = _run(
+            ["rls", "delete", "--project", "prod", "--policy-id", "p-1"],
+            store,
+            service,
+            input="y\n",
+        )
+
+        assert result.exit_code == 2
+        assert "CONFIRMATION_REQUIRED" in result.output
         service.delete_policy.assert_not_called()
 
     def test_json_mode_needs_no_confirm(self, tmp_path: Path) -> None:
