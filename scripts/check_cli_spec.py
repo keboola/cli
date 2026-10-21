@@ -747,6 +747,19 @@ def r_list_option_repeatable(c: Context) -> Violations:
     }
 
 
+def r_boolean_flag_shape(c: Context) -> Violations:
+    """A7: a boolean is a flag, and a flag with the default true has an off form."""
+    found = {}
+    for lf in c.tree.leaves:
+        for p in filter(is_option, lf.params):
+            if not getattr(p, "is_flag", False):
+                if type_name(p) == "boolean":
+                    found[f"{lf.name} {label(p)}"] = "boolean option that takes a value"
+            elif p.default is True and not getattr(p, "secondary_opts", None):
+                found[f"{lf.name} {label(p)}"] = "flag with the default true and no off form"
+    return found
+
+
 def r_project_help_default(c: Context) -> Violations:
     found = {}
     for lf in c.tree.leaves:
@@ -1376,6 +1389,12 @@ RULES: tuple[Rule, ...] = (
         "tree",
         "no list option that takes only one comma string",
         r_list_option_repeatable,
+    ),
+    Rule(
+        "args.boolean-flag-shape",
+        "tree",
+        "a boolean is a flag; a flag with the default true has an off form (A7)",
+        r_boolean_flag_shape,
     ),
     Rule(
         "input.file-option-vocabulary",

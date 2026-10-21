@@ -66,7 +66,7 @@ Every rule with its level, the version from which it applies, and how it is chec
 | [A4](#A4) | MUST | now for new options; 1.0.0 for existing ones | `args.list-option-repeatable` |
 | [A5](#A5) | MUST | now | `args.no-dead-parameter` |
 | [A6](#A6) | MUST | 1.0.0 | `args.repeated-single-value` |
-| [A7](#A7) | SHOULD for new options | now | review |
+| [A7](#A7) | SHOULD for new options | now | `args.boolean-flag-shape`, review |
 | [I1](#I1) | MUST | now | `input.single-parser` |
 | [I2](#I2) | MUST | now | `input.file-option-vocabulary` |
 | [I3](#I3) | MUST | 1.0.0 | `input.content-option-refuses-at-file` |
@@ -104,6 +104,7 @@ Every rule with its level, the version from which it applies, and how it is chec
 | [E5](#E5) | SHOULD | now | review |
 | [E6](#E6) | MUST | now | review |
 | [E7](#E7) | MUST | now | review |
+| [E8](#E8) | MUST | now for new refusals | review |
 | [S1](#S1) | MUST | now | `safety.destructive-verb-category`, review |
 | [S2](#S2) | MUST | now | `safety.destructive-has-dry-run`, `safety.destructive-has-yes` |
 | [S3](#S3) | MUST | now; the flag changes in 1.0.0 | `safety.force-meaning-registered`, `safety.yes-has-short-y` |
@@ -287,10 +288,10 @@ What stays as it is:
 - Why: on a write, the dropped value can be the intended target (`--project x … --project test` acts on `test`).
 - Checked by: `args.repeated-single-value`.
 
-<a id="A7"></a>
-**A7 · SHOULD for new options · now.** Durations are seconds and data sizes are bytes, both integers without a unit suffix. Points in time are ISO 8601 with a time zone. Booleans are `--x/--no-x`. A fixed set of values, named sizes included, is a `click.Choice`. A fixed threshold in code (such as the 1 GB guard of `workspace load`) names its unit in the help and in the message.
+<a id="A7"></a><a id="args.boolean-flag-shape"></a>
+**A7 · SHOULD for new options · now.** Durations are seconds and data sizes are bytes, both integers without a unit suffix. Points in time are ISO 8601 with a time zone. A boolean is a flag, never an option that takes `true` or `false`. A flag with the default false can be one-way (`--dry-run`). A flag with the default true, or one whose omission keeps the current value, also has an off form: `--x/--no-x` (`--read-only/--no-read-only`) or a pair of names (`--enabled/--disabled`). A fixed set of values, named sizes included, is a `click.Choice`. A fixed threshold in code (such as the 1 GB guard of `workspace load`) names its unit in the help and in the message.
 
-- Checked by: review.
+- Checked by: `args.boolean-flag-shape` (an option that takes a boolean value, or a flag with the default true and no off form), review.
 
 ## 4. Input
 
@@ -531,6 +532,17 @@ Shape of the success envelope in 1.0.0 (`storage delete-table --project prod`, a
 <a id="E7"></a>
 **E7 · MUST · now.** An error message names the object, the reason and, when one exists, the next step as a command or a flag. Example: "Bucket in.c-main not found in project prod; run kbagent storage buckets --project prod", not "404".
 
+- Checked by: review.
+
+<a id="E8"></a>
+**E8 · MUST · now for new refusals.** When kbagent refuses a request before it changes anything, because the target cannot do what the command line asks, the error code follows the fix:
+
+- The fix is on the command line (leave out an option that the backend does not support, or change a combination of options): `INVALID_ARGUMENT`, exit 2. Example: `storage create-table --source-table-id` on a project that is not BigQuery.
+- The fix is in the project, the stack or the kbagent configuration (enable a project feature, register a project): a code of type `configuration`, exit 5. Examples: `FEATURE_NOT_ENABLED`, `AUTH_NOT_SUPPORTED_ON_STACK`.
+
+The message names the fix (E7). A refusal that uses another code today keeps it, because a change of an error code is breaking (C1).
+
+- Why: the error code tells a script or an agent what it must change before it tries again.
 - Checked by: review.
 
 ## 8. Safety

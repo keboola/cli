@@ -12,6 +12,7 @@
     "args.no-positional-arguments": false,
     "args.no-dead-parameter": true,
     "args.list-option-repeatable": true,
+    "args.boolean-flag-shape": true,
     "input.file-option-vocabulary": false,
     "input.single-parser": true,
     "input.content-option-refuses-at-file": true,
