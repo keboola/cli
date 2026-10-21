@@ -11,7 +11,7 @@ kbagent bridges Claude Code (local) to Kai (cloud) for Keboola-specific question
 | Situation | Use |
 |-----------|-----|
 | Need project-specific context (tables, configs, lineage) | `kbagent kai ask` |
-| Simple data listing (buckets, tables, configs) | `kbagent config list`, `kbagent storage tables` |
+| Simple data listing (buckets, tables, configs) | `kbagent config list --project P`, `kbagent storage tables --project P` |
 | Need Keboola domain knowledge (component behavior, best practices) | `kbagent kai ask` |
 | Need to modify data (upload, create, delete) | Direct CLI commands |
 

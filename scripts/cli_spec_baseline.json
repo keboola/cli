@@ -35,6 +35,7 @@
     "help.param-has-help": true,
     "help.claude-md-flags-exist": true,
     "help.manifest-fresh": true,
+    "help.context-from-manifest": true,
     "enforcement.runtime-permission-guard": true,
     "enforcement.permission-literal-matches-mount": true,
     "serve.command-has-route": true,
@@ -606,6 +607,9 @@
     ]
   },
   "exceptions": {
+    "args.no-positional-arguments": {
+      "context GROUP": "AG1 names the form `kbagent context <group>`: a group name is not an identifier (A3)"
+    },
     "args.short-flag-one-meaning": {
       "changelog -n": "reserved short flag, existing use (A2)",
       "config search -r": "reserved short flag, existing use (A2)",

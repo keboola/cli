@@ -21,6 +21,16 @@ NOTICE_SECTIONS = (
     "## Changes in 1.0.0",
 )
 
+# The rest of the content that section 4.5 of the #791 proposal names.
+CONTENT_SECTIONS = (
+    "## Envelope and exit codes",
+    "## Changed defaults",
+    "## REST API",
+    "## SDK",
+    "## Plugin",
+    "## Install channels",
+)
+
 _LINK = re.compile(r"\]\(([^)\s]+)\)")
 _HEADING = re.compile(r"^#{1,6}\s+(.+?)\s*$")
 
@@ -51,8 +61,17 @@ def test_migration_page_exists() -> None:
 
 def test_migration_page_has_the_sections_the_notice_relies_on() -> None:
     headings = set(_text().splitlines())
-    missing = [section for section in NOTICE_SECTIONS if section not in headings]
+    missing = [s for s in (*NOTICE_SECTIONS, *CONTENT_SECTIONS) if s not in headings]
     assert not missing, f"docs/migrate-to-1.0.md lacks: {missing}"
+
+
+def test_change_rows_have_unique_numbers_in_order() -> None:
+    """Other pages and the changelog cite a change by its row number."""
+    section = _text().split("## Changes in 1.0.0", 1)[1].split("\n## ", 1)[0]
+    cells = [line.split("|")[1].strip() for line in section.splitlines() if line.startswith("| ")]
+    numbers = [cell for cell in cells[2:] if cell != "---"]
+    assert all(n.isdigit() for n in numbers), numbers
+    assert [int(n) for n in numbers] == sorted({int(n) for n in numbers})
 
 
 def test_migration_page_links_resolve() -> None:

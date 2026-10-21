@@ -281,7 +281,7 @@ kbagent storage swap-tables \
 #    storage schema. Once the rehearsal proves the schema is safe, delete
 #    the branch and repeat steps 2-3 in the default/production branch
 #    (pass the default-branch ID to --branch on swap-tables).
-kbagent branch delete --project prod --branch <ID>
+kbagent --json branch delete --project prod --branch <ID>
 ```
 
 Rules:

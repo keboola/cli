@@ -842,9 +842,11 @@ The 0.x line, until T0, ships only bug, security and data-loss fixes (C4), the m
 ## 16. Agent-facing documents
 
 <a id="AG1"></a><a id="help.context-from-manifest"></a>
-**AG1 · MUST · 1.0.0.** The command part of `kbagent context` is generated from the command manifest (H6); the hand-written part keeps only workflow guidance. `kbagent context <group>` prints one group. Until 1.0.0, `AGENT_CONTEXT` in `commands/context.py` is written by hand.
+**AG1 · MUST · 1.0.0.** The command part of `kbagent context` is generated from the command manifest (H6); the hand-written part keeps only workflow guidance. `kbagent context <group>` prints one group.
 
-- Checked by: `help.context-from-manifest` (deferred).
+- The command part is `commands/_context_commands.py`: one section per top-level group or command, with the usage line of every visible command and the first paragraph of its help. `make cli-manifest` writes it together with the manifest. The hand-written part (`commands/context.py`) is the header, the notes per group (`GROUP_NOTES`) and the tips for agents.
+- `<group>` is an optional argument: a top-level group or command, or a hidden alias (`mr`, `sl`). An unknown value is `INVALID_ARGUMENT` (exit 2), and the message lists the valid values. Under `--json`, `data.context` holds the text and `data.group` the section name (null without an argument).
+- Checked by: `help.context-from-manifest`.
 
 <a id="AG2"></a>
 **AG2 · MUST · now.** Every `kbagent …` example in `CLAUDE.md`, `kbagent context` and the plugin agents, skills and references parses against the command tree (H3).

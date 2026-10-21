@@ -37,7 +37,7 @@ kbagent --json schedule list --all-projects
 kbagent --json schedule list --project prod --project staging
 
 # Only enabled schedules (exclude paused ones)
-kbagent --json schedule list --enabled-only
+kbagent --json schedule list --all-projects --enabled-only
 ```
 
 Each row has every field you need for a spreadsheet or dashboard:
@@ -85,7 +85,7 @@ The matcher is an **hour-field approximation**: it parses only the third cron fi
 
 ```bash
 # Schedules whose parent config has no job in the last 90 days (or never ran)
-kbagent --json schedule find --not-run-since 90
+kbagent --json schedule find --not-run-since 90 --all-projects
 ```
 
 The service fetches the latest job for each parent (single `list_jobs(limit=1)` call per unique parent config) and compares against the `startTime` / `createdTime`. A parent with no job history at all counts as stale -- that is usually what you want when auditing abandoned schedules.
@@ -96,7 +96,7 @@ The service fetches the latest job for each parent (single `list_jobs(limit=1)` 
 
 ```bash
 # Night-time schedules that also haven't run in the last 30 days
-kbagent --json schedule find \
+kbagent --json schedule find --all-projects \
   --cron-window "00:00-05:00" \
   --not-run-since 30
 ```
@@ -105,7 +105,7 @@ kbagent --json schedule find \
 
 ```bash
 # Same rows as 'schedule list' plus two audit columns left null
-kbagent --json schedule find
+kbagent --json schedule find --project prod
 ```
 
 Every response row from `schedule find` always carries `last_run_at` and `matches_cron_window`, but they are populated **only when the corresponding filter is active**:
@@ -170,7 +170,7 @@ They are safe to run under `--deny-writes` and `--deny-destructive`.
 |---|---|
 | "How many cron schedules exist in project X?" | `kbagent schedule list --project X` |
 | "Which configs across all 14 projects run at 03:00?" | `kbagent schedule find --cron-window "03:00-03:00" --all-projects` |
-| "Which scheduled parents haven't run in 90 days?" | `kbagent schedule find --not-run-since 90` |
+| "Which scheduled parents haven't run in 90 days?" | `kbagent schedule find --not-run-since 90 --all-projects` |
 | "What schedules are attached to this flow?" | `kbagent flow list --with-schedules --project X` (flow-centric) or `kbagent schedule list --project X` then grep |
 | "Full detail for schedule SC1 including parent name?" | `kbagent schedule detail --project X --schedule-id SC1` |
 | "Add a new cron schedule to flow F" | `kbagent flow schedule --project X --flow-id F --cron "0 6 * * *"` (see [flow-workflow.md](flow-workflow.md)) |
