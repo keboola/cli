@@ -47,6 +47,7 @@ from ..services.member_service import MemberService
 from ..services.merge_request_service import MergeRequestService
 from ..services.notification_service import NotificationService
 from ..services.org_service import OrgService
+from ..services.policy_binding_service import PolicyBindingService
 from ..services.project_service import ProjectService
 from ..services.repo_validate_service import RepoValidateService
 from ..services.rls_service import RlsService
@@ -129,6 +130,7 @@ class ServiceRegistry:
     semantic_layer: SemanticLayerService = field(init=False)
     rls: RlsService = field(init=False)
     cls: ClsService = field(init=False)
+    policy_binding: PolicyBindingService = field(init=False)
     repo_validate: RepoValidateService = field(init=False)
     kai: KaiService = field(init=False)
     encrypt: EncryptService = field(init=False)
@@ -177,6 +179,7 @@ class ServiceRegistry:
         self.semantic_layer = SemanticLayerService(config_store=cs)
         self.rls = RlsService(config_store=cs)
         self.cls = ClsService(config_store=cs)
+        self.policy_binding = PolicyBindingService(config_store=cs)
         self.repo_validate = RepoValidateService(config_store=cs)
         self.kai = KaiService(config_store=cs)
         self.encrypt = EncryptService(config_store=cs)

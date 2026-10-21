@@ -370,6 +370,12 @@ OPERATION_REGISTRY: dict[str, str] = {
     "rls.update": "admin",
     "rls.delete": "destructive",
     "rls.setup": "admin",
+    # Policy bindings (`rls bind` & co.): `bind` writes like `create`; `unbind` deletes;
+    # `bindings-sweep` only reports unless --yes (FLAG_ESCALATIONS), which deletes.
+    "rls.bind": "admin",
+    "rls.unbind": "destructive",
+    "rls.bindings": "read",
+    "rls.bindings-sweep": "read",
     # Column-level security: same classes as rls.* for the same reason.
     "cls.list": "read",
     "cls.detail": "read",
@@ -502,6 +508,8 @@ FLAG_ESCALATIONS: dict[str, str] = {
     # organization (one invalid policy refuses all of their queries).
     "rls.create --scope organization": "destructive",
     "cls.create --scope organization": "destructive",
+    # Deletes every orphaned policy binding it finds.
+    "rls.bindings-sweep --yes": "destructive",
 }
 
 # Operations that exist ONLY on the `kbagent serve` REST surface. They are real

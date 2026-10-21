@@ -668,6 +668,20 @@ class TestDeletePolicy:
         assert result["dry_run"] is True
         assert result["policy"]["id"] == "p-1"
 
+    @pytest.mark.parametrize(("status", "hint"), [(409, True), (500, False)])
+    def test_a_bound_policy_names_the_binding_commands(
+        self, tmp_path: Path, status: int, hint: bool
+    ) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.delete_item.side_effect = KeboolaApiError(
+            message="refused", status_code=status, error_code=ErrorCode.API_ERROR
+        )
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            service.delete_policy("prod", "p-1")
+
+        assert ("rls bindings" in exc_info.value.message) is hint
+
 
 # ---------------------------------------------------------------------------
 # Pure condition helpers

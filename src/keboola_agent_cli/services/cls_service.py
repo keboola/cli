@@ -10,8 +10,8 @@ rules match sees the union of their columns; there is no ``default``.
 Everything except the rule shape is identical to :class:`RlsService` (never
 ``project`` scope, partial (PATCH) update, live-schema validation that
 degrades to a warning), so this class only overrides the policy type and the
-rule / default hooks. Enforcement happens in ``keboola-mcp-server``'s
-``query_data``, not here -- kbagent only authors policies.
+rule / default hooks. Enforcement happens in Query Service on a governed workspace or in
+``keboola-mcp-server``'s ``query_data``, not here -- kbagent only authors policies.
 """
 
 from __future__ import annotations

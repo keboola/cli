@@ -6848,3 +6848,25 @@ governed-workspace flow.
   local check but add a `warnings` entry; an authentication/permission failure while fetching the schema
   is raised as that error.
 
+## Policy bindings (`rls bind`): no binding means every policy; a wrong stack id fails silently
+
+*(since vNEXT)*
+
+- A `policy-binding` restricts one governed workspace to some of the project's rls/cls policies. It is
+  named by the workspace KID `KID:<stack>:project-<id>:workspace-<id>` (no branch segment). **No binding =
+  the workspace gets every policy of the project**; a binding only narrows, it never grants (a governed
+  workspace is deny-by-default anyway). Query Service re-reads it on every governed query, so `bind` /
+  `unbind` apply to the next query.
+- **`--stack-id` (env `KBAGENT_STACK_ID`) is required and kbagent cannot check it.** No Storage, Manage or
+  Connection API exposes the stack segment; it must equal Query Service's `QUERY_RLS_STACK_ID` (AWS dev:
+  `dev-keboola-aws-eu-west-1`). A different value writes a binding nothing reads: the workspace silently
+  keeps every policy. Verify a binding with a `workspace query` by the bound identity.
+- `bind` replaces both lists (a rebind with only `--rls-policy` drops the old CLS list). A policy listed in
+  a binding cannot be deleted (`onDelete: restrict`, HTTP 409); `rls delete` / `cls delete` then name
+  `rls bindings` -- rebind without it or `rls unbind` first.
+- Deleting a workspace does not delete its binding: unbind first, or run `rls bindings-sweep` (report;
+  `--yes` deletes). The sweep deletes only a workspace KID of this project whose workspace 404s in
+  production and every dev branch and that was last updated more than `--older-than` days ago (default
+  30); any other error is a failed item, never a delete, and app KIDs are never swept. The metastore has no
+  reverse-reference lookup, so references to a binding are not checked first; it refuses (409) a delete
+  that one blocks.

@@ -35,7 +35,8 @@ def test_registry_entries_are_complete_and_unique() -> None:
     assert len(names) == len(set(names))
     for var in ENV_VARS:
         assert var.purpose.endswith("."), var.name
-        assert re.fullmatch(r"\d+\.\d+\.\d+", var.added_in), var.name
+        # `vNEXT` until the release PR: `make vnext-resolve` rewrites it in src/ like any gate.
+        assert re.fullmatch(r"\d+\.\d+\.\d+|vNEXT", var.added_in), var.name
 
 
 def _envvar_options() -> list[tuple[list[str], str]]:

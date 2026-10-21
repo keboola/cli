@@ -157,6 +157,7 @@ NOT_AN_ALIAS: dict[str, str] = {
     "--clear-target-projects": "a boolean flag (rls/cls update): revoke every grant, takes no project",
     "--register-projects": "a boolean flag",
     "--remove-projects": "a boolean flag",
+    "--stack-id": "rls bind/unbind: the stack segment of a workspace KID, not a registered alias",
 }
 
 

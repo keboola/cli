@@ -79,6 +79,7 @@ from .routers import (
     org,
     projects,
     rls,
+    rls_bindings,
     schedules,
     search,
     semantic_layer,
@@ -363,7 +364,8 @@ OPENAPI_TAGS: list[dict[str, str]] = [
             "Row-level security policies (metastore-backed `rls-policy` "
             "objects), authored at `targeted` scope unless `organization` is "
             "asked for -- never `project` scope. Mirrors `kbagent rls list|detail|schema|"
-            "create|update|delete` (`rls setup`'s interactive picker has no "
+            "create|update|delete|bind|unbind|bindings|bindings-sweep` (`rls setup`'s "
+            "interactive picker has no "
             "endpoint of its own, same carve-out as "
             "`auth register-projects`)."
         ),
@@ -1041,6 +1043,8 @@ def create_app(
     app.include_router(encrypt.router)
     app.include_router(search.router)
     app.include_router(semantic_layer.router)
+    # Before rls.router: GET /rls/{project}/{policy_id} would capture /rls/{project}/bindings.
+    app.include_router(rls_bindings.router)
     app.include_router(rls.router)
     app.include_router(cls.router)
     app.include_router(transformation.router)

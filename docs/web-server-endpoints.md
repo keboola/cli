@@ -9,7 +9,7 @@ auth, and the concepts behind these routes live in
 [`web-server.md`](web-server.md); a running server serves the same spec
 interactively at `/docs` (Swagger) and `/openapi.json`.
 
-**273 operations** across **228 paths** and **34 routers**.
+**277 operations** across **231 paths** and **34 routers**.
 
 Paths are shown as the server registers them. Reaching them through the
 Node BFF (or single-process `--ui` mode) prefixes every path with `/api`.
@@ -428,12 +428,16 @@ Model, validate, import/export, diff, promote, and build semantic layer artifact
 | `PUT` | `/semantic-layer/scope/{context_id}/elevation-request` | Request scope elevation |
 | `DELETE` | `/semantic-layer/scope/{context_id}/elevation-request` | Withdraw scope elevation request |
 
-### `rls` (6 operations)
+### `rls` (10 operations)
 
-Row-level security policies (metastore-backed `rls-policy` objects), authored at `targeted` scope unless `organization` is asked for -- never `project` scope. Mirrors `kbagent rls list|detail|schema|create|update|delete` (`rls setup`'s interactive picker has no endpoint of its own, same carve-out as `auth register-projects`).
+Row-level security policies (metastore-backed `rls-policy` objects), authored at `targeted` scope unless `organization` is asked for -- never `project` scope. Mirrors `kbagent rls list|detail|schema|create|update|delete|bind|unbind|bindings|bindings-sweep` (`rls setup`'s interactive picker has no endpoint of its own, same carve-out as `auth register-projects`).
 
 | Method | Path | Summary |
 |---|---|---|
+| `GET` | `/rls/{project}/bindings` | List the policy bindings of a project |
+| `POST` | `/rls/{project}/bindings/sweep` | Find (and delete) orphaned policy bindings |
+| `PUT` | `/rls/{project}/bindings/{workspace_id}` | Bind policies to a governed workspace |
+| `DELETE` | `/rls/{project}/bindings/{workspace_id}` | Delete the policy binding of a workspace |
 | `GET` | `/rls/{project}` | List RLS policies |
 | `POST` | `/rls/{project}` | Create a RLS policy |
 | `GET` | `/rls/{project}/schema` | Fetch the live rls-policy JSON Schema |

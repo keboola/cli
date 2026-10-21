@@ -2545,6 +2545,45 @@
       "help": "Manage row-level security policies (metastore-backed). 'list'/'detail'/'schema' are read-only; 'create'/'update'/'setup'/'delete' are gated as admin -- see CONTRIBUTING.md."
     },
     {
+      "path": "rls bind",
+      "kind": "command",
+      "hidden": false,
+      "category": "admin",
+      "help": "Bind policies to a governed workspace: it then gets only these policies.\n\nCreates the binding, or replaces both of its lists when the workspace is already bound.\nWithout a binding the workspace gets every policy of the project.",
+      "params": [
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "required": true, "default": null, "help": "Project alias"},
+        {"kind": "option", "name": "workspace_id", "opts": ["--workspace-id"], "type": "integer", "required": true, "default": null, "help": "Governed workspace ID"},
+        {"kind": "option", "name": "rls_policy", "opts": ["--rls-policy"], "type": "text", "multiple": true, "default": null, "help": "RLS policy ID to bind (repeatable or comma-separated)"},
+        {"kind": "option", "name": "cls_policy", "opts": ["--cls-policy"], "type": "text", "multiple": true, "default": null, "help": "CLS policy ID to bind (repeatable or comma-separated)"},
+        {"kind": "option", "name": "stack_id", "opts": ["--stack-id"], "type": "text", "envvar": "KBAGENT_STACK_ID", "default": null, "help": "Stack segment of the workspace KID -- the value Query Service is configured with, for example dev-keboola-aws-eu-west-1 (no API exposes it)"},
+        {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Validate and show the binding without writing"}
+      ]
+    },
+    {
+      "path": "rls bindings",
+      "kind": "command",
+      "hidden": false,
+      "category": "read",
+      "help": "List the policy bindings of a project and whether each workspace still exists.",
+      "params": [
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "required": true, "default": null, "help": "Project alias"},
+        {"kind": "option", "name": "workspace_id", "opts": ["--workspace-id"], "type": "integer", "default": null, "help": "Only the binding of this workspace"}
+      ]
+    },
+    {
+      "path": "rls bindings-sweep",
+      "kind": "command",
+      "hidden": false,
+      "category": "read",
+      "help": "Find the bindings whose workspace no longer exists; with --yes, delete them.\n\nA binding is orphaned when its workspace is gone (404 in production and every dev branch),\nit was last updated more than --older-than days ago, and the KID is a workspace KID of this\nproject. App KIDs are never swept. Without --yes nothing is deleted.",
+      "params": [
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "required": true, "default": null, "help": "Project alias"},
+        {"kind": "option", "name": "older_than", "opts": ["--older-than"], "type": "integer", "default": 30, "help": "Only bindings last updated more than this many days ago"},
+        {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Only report the orphaned bindings (the default)"},
+        {"kind": "option", "name": "yes", "opts": ["--yes", "-y"], "type": "boolean", "is_flag": true, "default": false, "help": "Delete the orphaned bindings"}
+      ]
+    },
+    {
       "path": "rls create",
       "kind": "command",
       "hidden": false,
@@ -2619,6 +2658,20 @@
         {"kind": "option", "name": "scope", "opts": ["--scope"], "type": "choice", "choices": ["targeted", "organization"], "default": "targeted", "help": "targeted (default): the owning project plus --target-project grants. organization: EVERY project of the organization -- an explicit, organization-admin-only choice, gated as destructive."},
         {"kind": "option", "name": "target_project", "opts": ["--target-project"], "type": "text", "multiple": true, "default": null, "help": "Project alias or ID the policy also applies to (repeatable or comma-separated; --scope targeted only; granting needs the organization-admin role)"},
         {"kind": "option", "name": "yes", "opts": ["--yes", "-y"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip the final confirmation"}
+      ]
+    },
+    {
+      "path": "rls unbind",
+      "kind": "command",
+      "hidden": false,
+      "category": "destructive",
+      "help": "Delete the policy binding of a workspace: it then gets every policy of the project.",
+      "params": [
+        {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "required": true, "default": null, "help": "Project alias"},
+        {"kind": "option", "name": "workspace_id", "opts": ["--workspace-id"], "type": "integer", "required": true, "default": null, "help": "Workspace ID"},
+        {"kind": "option", "name": "stack_id", "opts": ["--stack-id"], "type": "text", "envvar": "KBAGENT_STACK_ID", "default": null, "help": "Stack segment of the workspace KID -- the value Query Service is configured with, for example dev-keboola-aws-eu-west-1 (no API exposes it)"},
+        {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Show the binding without deleting it"},
+        {"kind": "option", "name": "yes", "opts": ["--yes", "-y"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip confirmation prompt"}
       ]
     },
     {

@@ -689,6 +689,7 @@ class TestFullE2E:
         )
         self._test_rls_commands()
         self._test_rls_cls_crud()
+        self._test_rls_bindings()
 
         # ==============================================================
         # PHASE 15: Cleanup
@@ -3818,6 +3819,33 @@ class TestFullE2E:
         refused = self._run("rls", "setup", "--project", self.alias)
         assert refused.exit_code == 2, refused.output
         assert "INVALID_ARGUMENT" in refused.output
+
+    def _test_rls_bindings(self) -> None:
+        """`rls bindings` / `bindings-sweep` (report only) / `bind --dry-run` / `unbind --dry-run`.
+
+        Nothing is written: the sweep runs without --yes, `bind` targets a workspace that does not
+        exist (NOT_FOUND before any write), and `unbind --dry-run` only looks the binding up. The
+        stack id is a syntactically valid placeholder, so the KID matches no real binding. A stack
+        whose metastore lacks the `policy-binding` type answers the reads with NOT_FOUND (a skip).
+        """
+        listed = self._run("rls", "bindings", "--project", self.alias)
+        if listed.exit_code != 0:
+            assert "NOT_FOUND" in listed.output, listed.output
+            print(f"  {_YELLOW}SKIP: rls bindings (policy-binding not registered here){_RESET}")
+            return
+        assert isinstance(_json_ok(listed)["data"]["bindings"], list)
+        swept = self._run_ok("rls", "bindings-sweep", "--project", self.alias)
+        assert swept["data"]["dry_run"] is True
+        stack = ("--stack-id", "kbagent-e2e-placeholder")
+        bound = self._run(
+            "rls", "bind", "--project", self.alias, "--workspace-id", "1", *stack,
+            "--rls-policy", "00000000-0000-4000-8000-000000000000", "--dry-run",
+        )  # fmt: skip
+        assert bound.exit_code != 0 and "NOT_FOUND" in bound.output, bound.output
+        unbound = self._run_ok(
+            "rls", "unbind", "--project", self.alias, "--workspace-id", "1", *stack, "--dry-run"
+        )
+        assert unbound["data"]["bound"] is False
 
     def _test_job_commands(self) -> None:
         """Verify job listing structure and detail (if jobs exist)."""

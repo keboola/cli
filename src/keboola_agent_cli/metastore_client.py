@@ -95,6 +95,8 @@ SemanticType = Literal[
     "semantic-reference-data",
     "rls-policy",
     "cls-policy",
+    # Not in SEMANTIC_TYPES: a binding is not a semantic-layer object (`rls bind`).
+    "policy-binding",
 ]
 
 

@@ -743,3 +743,10 @@ def rls_setup(
         # Same exit-code contract as `rls create`: when every failure maps to one code (auth -> 3,
         # config -> 5, ...) use it; a mix is a general failure.
         raise typer.Exit(code=exit_codes.pop() if len(exit_codes) == 1 else 1)
+
+
+# The policy-binding commands live in a private module (rls.py is near the commands-file size
+# ceiling). Mounted here so they share the `rls.*` permission namespace and `kbagent rls --help`.
+from ._rls_bindings import register as _register_binding_commands  # noqa: E402
+
+_register_binding_commands(rls_app)

@@ -864,6 +864,20 @@ Manage row-level security policies (metastore-backed).
 'list'/'detail'/'schema' are read-only; 'create'/'update'/'setup'/'delete' are
 gated as admin -- see CONTRIBUTING.md.
 
+  kbagent rls bind --project PROJECT --workspace-id N
+      [--rls-policy POLICY ...] [--cls-policy POLICY ...] [--stack-id ID]
+      [--dry-run]
+    Bind policies to a governed workspace: it then gets only these policies.
+
+  kbagent rls bindings --project PROJECT [--workspace-id N]
+    List the policy bindings of a project and whether each workspace still
+    exists.
+
+  kbagent rls bindings-sweep --project PROJECT [--older-than N] [--dry-run]
+      [--yes]
+    Find the bindings whose workspace no longer exists; with --yes, delete
+    them.
+
   kbagent rls create --project PROJECT --table-id ID --rules RULES
       [--default DEFAULT] [--dialect snowflake|bigquery]
       [--scope targeted|organization] [--target-project PROJECT ...]
@@ -887,6 +901,11 @@ gated as admin -- see CONTRIBUTING.md.
       [--rules RULES] [--scope targeted|organization]
       [--target-project PROJECT ...] [--yes]
     Guided RLS setup: pick tables, build a condition, preview, then write.
+
+  kbagent rls unbind --project PROJECT --workspace-id N [--stack-id ID]
+      [--dry-run] [--yes]
+    Delete the policy binding of a workspace: it then gets every policy of the
+    project.
 
   kbagent rls update --project PROJECT --policy-id ID [--table-id ID]
       [--dialect snowflake|bigquery] [--rules RULES] [--default DEFAULT]

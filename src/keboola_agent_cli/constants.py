@@ -747,6 +747,14 @@ SNOWFLAKE_WORKSPACE_LOGIN_TYPE: str = "snowflake-person-keypair"
 # Deliberately NOT in QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES until a query against one has been
 # verified on a stack (that list is "confirmed", not "expected").
 GOVERNED_WORKSPACE_LOGIN_TYPE: str = "governed"
+
+# --- Policy bindings (`rls bind`) ---
+# The stack segment of a workspace KID, `KID:<stack>:project-<n>:workspace-<n>`. Query Service takes
+# it from its own configuration (QUERY_RLS_STACK_ID); no Storage, Manage or Connection API exposes it,
+# so kbagent needs it from --stack-id or this variable. A value that differs from the Query Service
+# one writes a binding nothing reads: the workspace silently keeps every policy of the project.
+ENV_STACK_ID: str = "KBAGENT_STACK_ID"
+STACK_ID_EXAMPLE: str = "dev-keboola-aws-eu-west-1"
 QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES: frozenset[str] = frozenset(
     {
         "snowflake-service-keypair",

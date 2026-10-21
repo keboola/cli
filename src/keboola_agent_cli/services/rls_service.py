@@ -511,5 +511,21 @@ class RlsService(BaseService):
                     "policy": self._detail_row(client.get_item(self.item_type, policy_id)),
                     "dry_run": True,
                 }
-            client.delete_item(self.item_type, policy_id)
+            try:
+                client.delete_item(self.item_type, policy_id)
+            except KeboolaApiError as exc:
+                if exc.status_code != 409:
+                    raise
+                # A policy-binding lists it (references are onDelete: restrict).
+                raise KeboolaApiError(
+                    message=(
+                        f"The metastore refused to delete {self.label} policy {policy_id}: a "
+                        "policy-binding still lists it. Find it with `rls bindings`, then rebind "
+                        "the workspace without it (`rls bind`) or remove the binding "
+                        f"(`rls unbind`). {exc.message}"
+                    ),
+                    status_code=409,
+                    error_code=ErrorCode.API_ERROR,
+                    retryable=False,
+                ) from exc
         return {"project": alias, "policy_id": policy_id, "deleted": True}

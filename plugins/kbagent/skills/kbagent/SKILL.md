@@ -378,6 +378,10 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Update an existing RLS policy | `kbagent rls update --project PROJECT --policy-id POLICY-ID` |
 | Delete an RLS policy -- its table's rows are no longer filtered | `kbagent rls delete --project PROJECT --policy-id POLICY-ID` |
 | Guided RLS setup: pick tables, build a condition, preview, then write | `kbagent rls setup --project PROJECT` |
+| Bind policies to a governed workspace: it then gets only these policies | `kbagent rls bind --project PROJECT --workspace-id WORKSPACE-ID` |
+| Delete the policy binding of a workspace: it then gets every policy of the project | `kbagent rls unbind --project PROJECT --workspace-id WORKSPACE-ID` |
+| List the policy bindings of a project and whether each workspace still exists | `kbagent rls bindings --project PROJECT` |
+| Find the bindings whose workspace no longer exists; with --yes, delete them | `kbagent rls bindings-sweep --project PROJECT` |
 | List column-level security policies visible to a project | `kbagent cls list --project PROJECT` |
 | Show one CLS policy's full rule set | `kbagent cls detail --project PROJECT --policy-id POLICY-ID` |
 | Print the live ``cls-policy`` JSON Schema fetched from the metastore | `kbagent cls schema --project PROJECT` |

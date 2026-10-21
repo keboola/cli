@@ -1394,6 +1394,29 @@ kbagent rls create --project P --table-id TABLE_ID --rules JSON|@file|- [--defau
 kbagent rls update --project P --policy-id ID [--table-id TABLE_ID] [--dialect snowflake|bigquery] [--rules JSON|@file|-] [--default JSON|@file|-] [--target-project ALIAS|ID ... | --clear-target-projects] [--dry-run] [--yes]
 kbagent rls delete --project P --policy-id ID [--dry-run] [--yes]
 kbagent rls setup --project P [--dialect snowflake|bigquery] [--rules JSON|@file|-] [--scope targeted|organization] [--target-project ALIAS|ID ...] [--yes]
+kbagent rls bind --project P --workspace-id ID [--rls-policy UUID ...] [--cls-policy UUID ...] [--stack-id STACK] [--dry-run]
+kbagent rls unbind --project P --workspace-id ID [--stack-id STACK] [--dry-run] [--yes]
+kbagent rls bindings --project P [--workspace-id ID]
+kbagent rls bindings-sweep --project P [--older-than DAYS] [--dry-run | --yes]
+# rls bind/unbind/bindings/bindings-sweep: a `policy-binding` metastore object restricts ONE governed
+#   workspace to some of the project's rls/cls policies; named by the workspace KID
+#   `KID:<stack>:project-<id>:workspace-<id>`. No binding = the workspace gets EVERY policy of the
+#   project; a binding only narrows, never grants; Query Service re-reads it on every governed query,
+#   so a change applies to the next query. `bind` is an idempotent upsert (PUT replaces both lists),
+#   validates first (>=1 policy, every UUID readable as an rls/cls policy of the project, the workspace
+#   exists in production or a dev branch; a non-governed login type is only a warning) and prints the
+#   KID. --stack-id (env KBAGENT_STACK_ID) is REQUIRED: no API exposes the stack segment, it must equal
+#   Query Service's QUERY_RLS_STACK_ID (AWS dev: dev-keboola-aws-eu-west-1); a wrong one writes a
+#   binding nothing reads, so the workspace silently keeps every policy. `unbind` is destructive-class
+#   (looks the binding up, then confirms). `bindings-sweep` only reports unless --yes (destructive via
+#   FLAG_ESCALATIONS): orphaned = a workspace KID of this project whose workspace 404s in production
+#   and every dev branch AND last updated more than --older-than days (default 30) ago; any other
+#   check error is a failed item (exit 1), never a delete; app KIDs are never swept. References to a
+#   binding cannot be checked first (no reverse-reference API); the metastore refuses (409) a delete
+#   a reference blocks. A bound policy cannot be deleted (onDelete restrict): `rls delete`/`cls delete`
+#   then names `rls bindings`. REST: GET /rls/{project}/bindings, PUT|DELETE
+#   /rls/{project}/bindings/{workspace_id} (stack_id required), POST /rls/{project}/bindings/sweep.
+#   Version gate lives in gotchas.md.
 # rls: row-level security policy authoring, metastore-backed (`rls-policy` object type,
 #   one object per protected table, named by it). SCOPE: `targeted` by default (the schema's own
 #   default: the owning project plus --target-project grants); `--scope organization` governs the

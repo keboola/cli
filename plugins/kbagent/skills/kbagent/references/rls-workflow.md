@@ -85,6 +85,7 @@ Non-obvious behaviors and version gates: [gotchas.md](gotchas.md).
 | Preview the compiled condition before writing anything | any write command + `--dry-run` |
 | Remove a policy (un-protect a table) | `rls delete --project P --policy-id ID` (`--dry-run` shows it first) |
 | Query a table with the policies applied, no MCP server | governed workspace -- see [End-to-end](#end-to-end----governed-workspace-policies-query-service) |
+| Give one workspace only some of the policies | `rls bind --project P --workspace-id WS --rls-policy ID --stack-id S` (`rls unbind`, `rls bindings`, `rls bindings-sweep`) |
 
 ## End-to-end -- governed workspace, policies, Query Service
 
@@ -128,6 +129,40 @@ is always refused.
   backend it is `CONFIG_ERROR` (exit 5). Nothing is created in either case.
 - Query Service decides per project whether it enforces the policies. The
   `row-level-security` project feature gates only the MCP `query_data` path.
+
+### Restrict one workspace to some policies (bindings)
+
+Without a binding a workspace gets **every** policy of the project. A binding
+names the policies one workspace gets; it only narrows, never grants, and
+Query Service re-reads it on every query, so a change applies to the next query.
+
+```bash
+# Policy ids come from `rls list` / `cls list`. --stack-id (or KBAGENT_STACK_ID)
+# must equal Query Service's QUERY_RLS_STACK_ID; no API exposes it.
+kbagent --json rls bind --project prod --workspace-id WS_ID \
+  --rls-policy RLS_POLICY_ID --cls-policy CLS_POLICY_ID \
+  --stack-id dev-keboola-aws-eu-west-1 --dry-run   # validate, then rerun without --dry-run
+# -> {"kid": "KID:dev-keboola-aws-eu-west-1:project-1234:workspace-WS_ID", "action": "create", ...}
+
+kbagent --json rls bindings --project prod          # kid, policy ids, updated, workspace_exists
+kbagent rls unbind --project prod --workspace-id WS_ID --stack-id dev-keboola-aws-eu-west-1
+#   -> the workspace gets every policy of the project again
+
+# Deleting a workspace leaves its binding behind: unbind first, or sweep the leftovers.
+kbagent --json rls bindings-sweep --project prod                 # report only
+kbagent --json rls bindings-sweep --project prod --older-than 30 --yes   # delete the orphans
+```
+
+- `bind` validates first (at least one policy, every id is a policy of the
+  project, the workspace exists) and replaces both lists when the workspace is
+  already bound. A non-governed workspace is only a warning.
+- A wrong `--stack-id` writes a binding nothing reads: the workspace silently
+  keeps every policy. Check with a `workspace query` as the bound identity.
+- A policy listed in a binding cannot be deleted until it is unbound.
+- The sweep deletes only a binding whose workspace is gone (404 in production
+  and every dev branch) and that is older than `--older-than` days; app KIDs are
+  never swept. References to a binding cannot be checked first; the metastore
+  refuses a delete that one blocks.
 
 ---
 

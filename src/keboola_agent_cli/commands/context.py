@@ -1626,6 +1626,23 @@ the `row-level-security` feature and needs an engine that reads schema 1.1.0
     + confirm, then one `rls create` call per selected table. Under --json or
     without an interactive terminal it exits 2 (INVALID_ARGUMENT) pointing at
     `rls create`.
+  rls bind
+    Restricts ONE governed workspace to the listed policies (a `policy-binding`
+    named by the KID `KID:<stack>:project-<id>:workspace-<id>`, printed). No
+    binding = the workspace gets every policy of the project; a binding only
+    narrows; Query Service re-reads it on every query (since vNEXT). Upsert:
+    replaces both lists. --stack-id (env KBAGENT_STACK_ID) is required -- no
+    API exposes it; it must equal Query Service's QUERY_RLS_STACK_ID (AWS dev:
+    dev-keboola-aws-eu-west-1), or nothing reads the binding and the workspace
+    silently keeps every policy. A bound policy cannot be deleted.
+  rls unbind
+    Destructive-class; the workspace gets every policy again.
+  rls bindings-sweep
+    Reports orphaned bindings (workspace gone in production and every dev
+    branch, older than --older-than days); --yes deletes them (destructive).
+    Never deletes on any other error; app KIDs are never swept; references to
+    a binding cannot be checked first (the metastore refuses such a delete).
+    Delete a workspace's binding with it: `rls unbind` before `workspace delete`.
 """,
     "schedule": """\
 #### Schedule Discovery & Audit (Fleet-Wide)
