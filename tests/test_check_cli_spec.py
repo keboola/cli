@@ -672,6 +672,34 @@ def test_short_flag_registry_is_pinned(tree: Any) -> None:
     assert not [s for s, why in found.items() if "not in SHORT_FLAGS" in why]
 
 
+def _option(opts: list[str], **attrs: Any) -> Any:
+    fields = {
+        "is_flag": False,
+        "default": None,
+        "secondary_opts": [],
+        "type": SimpleNamespace(name="text"),
+    }
+    return SimpleNamespace(
+        param_type_name="option", opts=opts, metavar=None, name=opts[0], help="", **(fields | attrs)
+    )
+
+
+def test_boolean_flag_shape_finds_a_value_boolean_and_a_flag_that_stays_on() -> None:
+    """A7: a boolean that takes a value and a default-true flag without an off form fail."""
+    params = (
+        _option(["--one-way"], is_flag=True, default=False),
+        _option(["--pair"], is_flag=True, default=True, secondary_opts=["--no-pair"]),
+        _option(["--stays-on"], is_flag=True, default=True),
+        _option(["--value"], type=SimpleNamespace(name="boolean")),
+    )
+    leaf = spec_check.Leaf(("demo", "cmd"), "write", params, None, "", False)
+    ctx = spec_check.Context(spec_check.Tree(root=None, leaves=[leaf], groups=[]))
+    assert spec_check.r_boolean_flag_shape(ctx) == {
+        "demo cmd --stays-on": "flag with the default true and no off form",
+        "demo cmd --value": "boolean option that takes a value",
+    }
+
+
 def _env_context(tree: Any, source: str, constants: dict[str, str]) -> Any:
     ctx = spec_check.Context(tree)
     ctx._cache["package_modules"] = [("commands/demo.py", ast.parse(source))]
