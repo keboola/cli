@@ -954,6 +954,9 @@ is the `Date` header of the GitHub response, the same clock the clients use.
 2. **T0 − 14 days or earlier:** the 0.x release with the major gate (0.100.0)
    must be published by now, at least 14 days before T0.
    Check that `promote-major` runs on `main` and prints `tag=` (nothing to do).
+   `docs/migrate-to-<N>.0.md` must be on `main` by now: the notice of every
+   `<N-1>.x` install and the `UPDATED_ACROSS_MAJOR` refusal link it
+   (`migration_guide_url` in `constants.py` builds the URL from the major).
 3. **T0:** open the 1.0.0 release PR as usual (steps 1-15 above). In it, also
    check the documents:
    - The SDK section of `docs/migrate-to-1.0.md` says that 1.0.0 changes
