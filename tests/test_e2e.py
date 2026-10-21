@@ -8098,6 +8098,37 @@ class TestE2EIssue304WorkspaceDiscoverability:
         assert "private_key" in data
         assert data["private_key"].startswith("-----BEGIN PRIVATE KEY-----")
 
+    def test_governed_workspace_has_no_credentials_and_refuses_a_login(self) -> None:
+        """--governed creates a workspace with loginType governed: no key, no password, no login."""
+        _step(1, "workspace create --governed")
+        result = self._run("workspace", "create", "--project", self.alias, "--governed")
+        if result.exit_code == 5 and "only on Snowflake" in result.output:
+            pytest.skip("--governed needs a Snowflake stack")
+        if result.exit_code != 0 and "loginType" in result.output:
+            pytest.skip(
+                f"the stack's Connection does not accept loginType governed yet: {result.output}"
+            )
+        data = _json_ok(result)["data"]
+        ws_id = int(data["workspace_id"])
+        self._created_workspace_ids.append(ws_id)
+
+        assert data["governed"] is True
+        assert data["login_type"] == "governed"
+        assert "private_key" not in data
+        assert not data["password"]
+
+        _step(2, "workspace detail reports loginType governed")
+        detail = self._run_ok(
+            "workspace", "detail", "--project", self.alias, "--workspace-id", str(ws_id)
+        )["data"]
+        assert detail["login_type"] == "governed"
+
+        _step(3, "workspace password is refused: nobody but Query Service gets a login")
+        refused = self._run(
+            "workspace", "password", "--project", self.alias, "--workspace-id", str(ws_id)
+        )
+        assert refused.exit_code != 0, f"password reset of a governed workspace: {refused.output}"
+
     def test_issue_304_discoverability_roundtrip(self) -> None:
         """list/detail expose loginType; sandbox config annotation resolves real workspace ID."""
         _step(1, "workspace create (RO sandbox)")

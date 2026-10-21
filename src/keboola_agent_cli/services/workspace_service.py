@@ -20,6 +20,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from ..client import _collect_inline_results
 from ..constants import (
     BIGQUERY_WORKSPACE_LOGIN_TYPE,
+    GOVERNED_WORKSPACE_LOGIN_TYPE,
     QUERY_RESULTS_DEFAULT_LIMIT,
     QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES,
     QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES_BIGQUERY,
@@ -352,6 +353,7 @@ class WorkspaceService(BaseService):
         backend: str | None = None,
         read_only: bool = True,
         ui_mode: bool = False,
+        governed: bool = False,
     ) -> dict[str, Any]:
         """Create a new workspace.
 
@@ -370,10 +372,20 @@ class WorkspaceService(BaseService):
             backend: Workspace backend. Auto-detected from project if None.
             read_only: Whether the workspace has read-only storage access.
             ui_mode: If True, create via Queue job (visible in Keboola UI).
+            governed: If True, create a governed workspace (Snowflake only, headless only):
+                it has no login and no credentials, only Query Service reads it.
 
         Returns:
-            Dict with workspace details including connection credentials.
+            Dict with workspace details including connection credentials (none for a
+            governed workspace).
+
+        Raises:
+            ConfigError: ``governed`` with ``ui_mode`` or on a backend other than Snowflake.
         """
+        if governed and ui_mode:
+            raise ConfigError(
+                "--governed cannot be combined with --ui: the Queue job path cannot request a loginType."
+            )
         projects = self.resolve_projects([alias])
         project = projects[alias]
         branch_id = self._resolve_branch_id(alias, project)
@@ -382,6 +394,11 @@ class WorkspaceService(BaseService):
         client = self._client_factory(project.stack_url, project.token)
         try:
             effective_backend = backend or self._detect_backend(client)
+            if governed and effective_backend.lower() != "snowflake":
+                # Before the sandbox config exists, so nothing is left to roll back.
+                raise ConfigError(
+                    f"--governed is supported only on Snowflake; the backend is '{effective_backend}'."
+                )
             # Step 1: Create keboola.sandboxes config (in the correct branch)
             sandbox_config = client.create_sandbox_config(
                 name=effective_name,
@@ -415,6 +432,7 @@ class WorkspaceService(BaseService):
                     branch_id,
                     effective_backend,
                     read_only,
+                    governed,
                 )
             except KeboolaApiError as exc:
                 if _create_outcome_unknown(exc):
@@ -493,20 +511,36 @@ class WorkspaceService(BaseService):
         branch_id: int,
         backend: str,
         read_only: bool,
+        governed: bool = False,
     ) -> dict[str, Any]:
         """Create workspace via Storage API (fast, headless)."""
-        key_pair = _workspace_key_pair_for_backend(backend)
+        # A governed workspace has no login, so there is no key pair to generate or send.
+        key_pair = None if governed else _workspace_key_pair_for_backend(backend)
         ws_data = client.create_config_workspace(
             branch_id=branch_id,
             component_id="keboola.sandboxes",
             config_id=config_id,
             backend=backend,
-            login_type=_workspace_login_type_for_backend(backend),
+            login_type=(
+                GOVERNED_WORKSPACE_LOGIN_TYPE
+                if governed
+                else _workspace_login_type_for_backend(backend)
+            ),
             public_key=key_pair.public_pem if key_pair else None,
         )
 
         connection = ws_data.get("connection", {})
         credential_label = "private key" if key_pair else "password"
+        message = (
+            f"Workspace '{name}' created in project '{alias}'. "
+            f"Save the {credential_label} -- it cannot be retrieved later!"
+        )
+        if governed:
+            message = (
+                f"Governed workspace '{name}' created in project '{alias}'. It has no credentials: "
+                "only Query Service reads it, and the row- and column-level policies of the "
+                "project apply."
+            )
         result = {
             "project_alias": alias,
             "workspace_id": ws_data.get("id"),
@@ -521,8 +555,9 @@ class WorkspaceService(BaseService):
             "password": connection.get("password", ""),
             "read_only": read_only,
             "ui_mode": False,
-            "message": f"Workspace '{name}' created in project '{alias}'. "
-            f"Save the {credential_label} -- it cannot be retrieved later!",
+            "login_type": connection.get("loginType", ""),
+            "governed": governed,
+            "message": message,
         }
         if key_pair is not None:
             result["private_key"] = key_pair.private_pem

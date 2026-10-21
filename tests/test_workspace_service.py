@@ -157,6 +157,97 @@ class TestCreateWorkspace:
         # close() called twice: once in _resolve_branch_id, once in create_workspace
         assert mock_client.close.call_count == 2
 
+    def test_create_workspace_governed(self, tmp_config_dir: Path) -> None:
+        """--governed asks for loginType governed, sends no key and returns no credentials."""
+        mock_client = MagicMock()
+        mock_client.list_dev_branches.return_value = [{"id": 123, "isDefault": True}]
+        mock_client.create_sandbox_config.return_value = {"id": "cfg-123", "name": "gov-ws"}
+        mock_client.create_config_workspace.return_value = {
+            "id": 77,
+            "name": "gov-ws",
+            "connection": {
+                "backend": "snowflake",
+                "host": "account.snowflakecomputing.com",
+                "schema": "WORKSPACE_77",
+                "user": "",
+                "loginType": "governed",
+            },
+        }
+
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(config_store=store, client_factory=lambda url, token: mock_client)
+
+        result = svc.create_workspace(
+            alias="prod", name="gov-ws", backend="snowflake", governed=True
+        )
+
+        mock_client.create_config_workspace.assert_called_once_with(
+            branch_id=123,
+            component_id="keboola.sandboxes",
+            config_id="cfg-123",
+            backend="snowflake",
+            login_type="governed",
+            public_key=None,
+        )
+        assert result["governed"] is True
+        assert result["login_type"] == "governed"
+        assert "private_key" not in result
+        assert result["password"] == ""
+        assert "no credentials" in result["message"]
+        assert "Save the" not in result["message"]
+
+    def test_create_workspace_without_governed_is_not_governed(self, tmp_config_dir: Path) -> None:
+        """The default create reports governed false and the login type the API answered."""
+        mock_client = MagicMock()
+        mock_client.list_dev_branches.return_value = [{"id": 123, "isDefault": True}]
+        mock_client.create_sandbox_config.return_value = {"id": "cfg-1", "name": "ws"}
+        mock_client.create_config_workspace.return_value = {
+            "id": 42,
+            "connection": {
+                "backend": "snowflake",
+                "host": "account.snowflakecomputing.com",
+                "warehouse": "KEBOOLA_PROD",
+                "database": "KEBOOLA_258",
+                "schema": "WORKSPACE_42",
+                "user": "KEBOOLA_WORKSPACE_42",
+                "loginType": "snowflake-person-keypair",
+            },
+            "created": "2025-09-10T14:00:00Z",
+        }
+
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(config_store=store, client_factory=lambda url, token: mock_client)
+
+        result = svc.create_workspace(alias="prod", name="ws", backend="snowflake")
+
+        assert result["governed"] is False
+        assert result["login_type"] == "snowflake-person-keypair"
+
+    @pytest.mark.parametrize(
+        ("backend", "ui_mode", "expected"),
+        [
+            ("bigquery", False, "only on Snowflake"),
+            ("snowflake", True, "cannot be combined with --ui"),
+        ],
+    )
+    def test_create_workspace_governed_refused_before_anything_is_created(
+        self, tmp_config_dir: Path, backend: str, ui_mode: bool, expected: str
+    ) -> None:
+        """An unsupported --governed combination fails before a sandbox config exists."""
+        mock_client = MagicMock()
+        mock_client.list_dev_branches.return_value = [{"id": 123, "isDefault": True}]
+
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(config_store=store, client_factory=lambda url, token: mock_client)
+
+        with pytest.raises(ConfigError, match=expected):
+            svc.create_workspace(
+                alias="prod", name="ws", backend=backend, ui_mode=ui_mode, governed=True
+            )
+
+        mock_client.create_sandbox_config.assert_not_called()
+        mock_client.create_config_workspace.assert_not_called()
+
     def test_create_workspace_unknown_project(self, tmp_config_dir: Path) -> None:
         """create_workspace raises ConfigError for an unknown alias."""
         store = setup_single_project(tmp_config_dir)

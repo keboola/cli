@@ -266,6 +266,57 @@ class TestWorkspaceCreate:
         assert "-----BEGIN PRIVATE KEY-----" in result.output
         assert "Password:" not in result.output
 
+    def test_workspace_create_governed_passes_the_flag_and_shows_no_credentials(
+        self, tmp_path: Path
+    ) -> None:
+        """workspace create --governed forwards the flag; the human output has no credentials."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+
+        mock_ws = _make_workspace_mock()
+        mock_ws.create_workspace.return_value = {
+            "project_alias": "prod",
+            "workspace_id": 77,
+            "name": "gov-ws",
+            "config_id": "cfg-1",
+            "backend": "snowflake",
+            "host": "account.snowflakecomputing.com",
+            "schema": "WORKSPACE_77",
+            "user": "",
+            "password": "",
+            "login_type": "governed",
+            "governed": True,
+            "read_only": True,
+            "message": "Governed workspace 'gov-ws' created in project 'prod'. It has no credentials: only Query Service reads it.",
+        }
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+            patch("keboola_agent_cli.cli.JobService") as MockJobService,
+            patch("keboola_agent_cli.cli.WorkspaceService") as MockWsService,
+        ):
+            MockStore.return_value = store
+            MockProjService.return_value = ProjectService(config_store=store)
+            MockCfgService.return_value = ConfigService(config_store=store)
+            MockJobService.return_value = JobService(config_store=store)
+            MockWsService.return_value = mock_ws
+
+            result = runner.invoke(
+                app,
+                ["workspace", "create", "--project", "prod", "--governed"],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        assert mock_ws.create_workspace.call_args.kwargs["governed"] is True
+        assert "Login type: governed (no credentials)" in result.output
+        assert "Private key:" not in result.output
+        assert "Password:" not in result.output
+        assert "User:" not in result.output
+
     def test_workspace_create_api_error(self, tmp_path: Path) -> None:
         """workspace create with API error returns correct exit code."""
         config_dir = tmp_path / "config"

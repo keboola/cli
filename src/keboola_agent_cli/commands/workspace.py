@@ -80,6 +80,29 @@ def _print_load_result(console: Console, data: dict[str, Any]) -> None:
         )
 
 
+def _print_created_workspace(c: Any, d: dict[str, Any]) -> None:
+    """Human output of `workspace create`; a governed workspace has no credentials to show."""
+    c.print(f"[bold green]Success:[/bold green] {d['message']}")
+    c.print(f"\n[bold]Workspace ID:[/bold] {d['workspace_id']}")
+    c.print(f"[bold]Name:[/bold] {d.get('name', '')}")
+    c.print(f"[bold]Host:[/bold] {d['host']}")
+    c.print(f"[bold]Schema:[/bold] {d['schema']}")
+    if d.get("governed"):
+        c.print(f"[bold]Login type:[/bold] {d.get('login_type') or 'governed'} (no credentials)")
+        return
+    c.print(f"[bold]User:[/bold] {d['user']}")
+    if d.get("private_key"):
+        c.print(f"[bold yellow]Private key:[/bold yellow]\n{d['private_key']}")
+        c.print(
+            "\n[bold yellow]Warning:[/bold yellow] Save the private key now -- it cannot be retrieved later!"
+        )
+    else:
+        c.print(f"[bold yellow]Password:[/bold yellow] {d['password']}")
+        c.print(
+            "\n[bold yellow]Warning:[/bold yellow] Save the password now -- it cannot be retrieved later!"
+        )
+
+
 @workspace_app.callback(invoke_without_command=True)
 def _workspace_permission_check(ctx: typer.Context) -> None:
     check_cli_permission(ctx, "workspace")
@@ -118,41 +141,37 @@ def workspace_create(
             "them: creates via Queue job (~15s), visible in the Keboola UI"
         ),
     ),
+    governed: bool = typer.Option(
+        False,
+        "--governed",
+        help=(
+            "Create a governed workspace (Snowflake only, not with --ui): it has no login and no "
+            "credentials, only Query Service reads it and the row- and column-level policies of "
+            "the project apply. Needs a stack whose Connection accepts loginType 'governed' (no "
+            "project feature is needed)."
+        ),
+    ),
 ) -> None:
     """Create a new workspace.
 
     Default: fast headless mode via Storage API (~1s).
     With --ui: creates via Queue job (~15s), visible in Keboola UI Workspaces tab --
     only on stacks where keboola.sandboxes still provisions SQL workspaces.
+    With --governed: a workspace without credentials that only Query Service can read.
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "workspace_service")
 
     try:
         result = service.create_workspace(
-            alias=project, name=name, backend=backend, read_only=read_only, ui_mode=ui
+            alias=project,
+            name=name,
+            backend=backend,
+            read_only=read_only,
+            ui_mode=ui,
+            governed=governed,
         )
-        formatter.output(
-            result,
-            lambda c, d: (
-                c.print(f"[bold green]Success:[/bold green] {d['message']}"),
-                c.print(f"\n[bold]Workspace ID:[/bold] {d['workspace_id']}"),
-                c.print(f"[bold]Name:[/bold] {d.get('name', '')}"),
-                c.print(f"[bold]Host:[/bold] {d['host']}"),
-                c.print(f"[bold]Schema:[/bold] {d['schema']}"),
-                c.print(f"[bold]User:[/bold] {d['user']}"),
-                c.print(
-                    f"[bold yellow]Private key:[/bold yellow]\n{d['private_key']}"
-                    if d.get("private_key")
-                    else f"[bold yellow]Password:[/bold yellow] {d['password']}"
-                ),
-                c.print(
-                    "\n[bold yellow]Warning:[/bold yellow] Save the private key now -- it cannot be retrieved later!"
-                    if d.get("private_key")
-                    else "\n[bold yellow]Warning:[/bold yellow] Save the password now -- it cannot be retrieved later!"
-                ),
-            ),
-        )
+        formatter.output(result, _print_created_workspace)
         for warning in result.get("warnings", []):
             formatter.warning(warning)
     except KeboolaApiError as exc:
