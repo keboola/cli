@@ -611,108 +611,64 @@ class TestBuildKbagentWheelInstall:
 
     @patch("keboola_agent_cli.services.version_service.has_server_extras", return_value=True)
     @patch("keboola_agent_cli.services.version_service.shutil.which")
-    def test_wheel_url_takes_precedence_over_prerelease(
+    def test_wheel_url_takes_precedence_over_the_git_source(
         self, mock_which: MagicMock, mock_has_server: MagicMock
     ) -> None:
-        """wheel_url wins over prerelease / target_version (git-source knobs)."""
+        """wheel_url wins over target_version (a git-source knob)."""
         mock_which.side_effect = lambda x: "/usr/bin/uv" if x == "uv" else None
-        cmd = build_kbagent_upgrade_command(
-            prerelease=True, target_version="1.2.3", wheel_url=self.WHEEL
-        )
+        cmd = build_kbagent_upgrade_command(target_version="1.2.3", wheel_url=self.WHEEL)
         assert cmd is not None
-        assert "--prerelease=allow" in cmd
         assert "--reinstall" in cmd
         assert all("git+" not in part for part in cmd)
         assert cmd[-1] == f"keboola-cli[server] @ {self.WHEEL}"
 
 
 class TestBuildKbagentUpgradeCommand:
-    """Resolver pre-release opt-in propagation (since v0.42.0)."""
+    """The install source is pinned to one release; dependencies stay on stable versions."""
 
     @patch("keboola_agent_cli.services.version_service.has_server_extras")
     @patch("keboola_agent_cli.services.version_service.shutil.which")
-    def test_uv_without_extras_no_prerelease(
-        self, mock_which: MagicMock, mock_has_server: MagicMock
-    ) -> None:
+    def test_uv_without_extras(self, mock_which: MagicMock, mock_has_server: MagicMock) -> None:
         mock_which.side_effect = lambda x: "/usr/bin/uv" if x == "uv" else None
         mock_has_server.return_value = False
 
         cmd = build_kbagent_upgrade_command(target_version="1.2.3")
 
         assert cmd is not None
-        assert "--prerelease=allow" not in cmd
         assert cmd[-1] == "keboola-cli @ git+https://github.com/keboola/cli@v1.2.3"
 
     @patch("keboola_agent_cli.services.version_service.has_server_extras")
     @patch("keboola_agent_cli.services.version_service.shutil.which")
-    def test_uv_without_extras_with_prerelease(
-        self, mock_which: MagicMock, mock_has_server: MagicMock
-    ) -> None:
-        mock_which.side_effect = lambda x: "/usr/bin/uv" if x == "uv" else None
-        mock_has_server.return_value = False
-
-        cmd = build_kbagent_upgrade_command(prerelease=True, target_version="1.2.3")
-
-        assert cmd is not None
-        assert "--prerelease=allow" in cmd
-        # Flag must sit before the install spec (positional last arg).
-        assert cmd.index("--prerelease=allow") == len(cmd) - 2
-
-    @patch("keboola_agent_cli.services.version_service.has_server_extras")
-    @patch("keboola_agent_cli.services.version_service.shutil.which")
-    def test_uv_with_extras_with_prerelease(
-        self, mock_which: MagicMock, mock_has_server: MagicMock
-    ) -> None:
+    def test_uv_with_extras(self, mock_which: MagicMock, mock_has_server: MagicMock) -> None:
         mock_which.side_effect = lambda x: "/usr/bin/uv" if x == "uv" else None
         mock_has_server.return_value = True
 
-        cmd = build_kbagent_upgrade_command(prerelease=True, target_version="1.2.3")
+        cmd = build_kbagent_upgrade_command(target_version="1.2.3")
 
         assert cmd is not None
-        assert "--prerelease=allow" in cmd
         # Extras preserved in the pinned PEP 508 requirement
         assert cmd[-1] == "keboola-cli[server] @ git+https://github.com/keboola/cli@v1.2.3"
 
-    @patch("keboola_agent_cli.services.version_service.has_server_extras")
-    @patch("keboola_agent_cli.services.version_service.shutil.which")
-    def test_pip_fallback_with_prerelease(
-        self, mock_which: MagicMock, mock_has_server: MagicMock
+    @pytest.mark.parametrize("tool", ["uv", "pip"])
+    @pytest.mark.parametrize("wheel_url", [None, "https://example.test/keboola_cli-1.0.0b2.whl"])
+    def test_a_beta_install_allows_no_pre_release_dependency(
+        self, monkeypatch: pytest.MonkeyPatch, tool: str, wheel_url: str | None
     ) -> None:
-        mock_which.side_effect = lambda x: "/usr/bin/pip" if x == "pip" else None
-        mock_has_server.return_value = False
-
-        cmd = build_kbagent_upgrade_command(prerelease=True, target_version="1.2.3")
-
-        assert cmd is not None
-        # pip uses --pre, not --prerelease=allow
-        assert "--pre" in cmd
-        # Must sit after `--upgrade`, before the install spec
-        assert cmd.index("--pre") == cmd.index("--upgrade") + 1
-
-    @patch("keboola_agent_cli.services.version_service.has_server_extras")
-    @patch("keboola_agent_cli.services.version_service.shutil.which")
-    def test_uv_prerelease_with_target_version_appends_tag(
-        self, mock_which: MagicMock, mock_has_server: MagicMock
-    ) -> None:
-        """Variant B fix: prerelease+target_version tag-pins install URL.
-
-        Without this, uv resolves the default branch (`main`) which
-        carries the latest stable pyproject.toml -- even though the
-        version fetcher advertised a beta tag on a feature branch. Pinning
-        ``@v<version>`` forces uv to install the exact commit the tag
-        points to.
+        """A beta comes from its own direct reference; --prerelease=allow / --pre would
+        also let every dependency resolve to a pre-release (httpx 1.0.dev6 broke 1.0.0b1).
         """
-        mock_which.side_effect = lambda x: "/usr/bin/uv" if x == "uv" else None
-        mock_has_server.return_value = False
+        monkeypatch.setattr(f"{VS}.has_server_extras", _no_server_extras)
+        monkeypatch.setattr(
+            f"{VS}.shutil.which", lambda x: f"/usr/bin/{tool}" if x == tool else None
+        )
 
-        cmd = build_kbagent_upgrade_command(prerelease=True, target_version="0.44.0b1")
+        cmd = build_kbagent_upgrade_command(target_version="1.0.0b2", wheel_url=wheel_url)
 
         assert cmd is not None
-        # Install source = last positional arg, must end with @v<version>.
-        assert cmd[-1].endswith("@v0.44.0b1")
-        # --prerelease=allow still required so the resolver accepts the
-        # PEP 440 pre-release spec at the tag's pyproject.toml.
-        assert "--prerelease=allow" in cmd
+        assert not [part for part in cmd if part.startswith("--pre")]
+        assert (
+            cmd[-1] == f"keboola-cli @ {wheel_url or 'git+https://github.com/keboola/cli@v1.0.0b2'}"
+        )
 
     @patch("keboola_agent_cli.services.version_service.has_server_extras")
     @patch("keboola_agent_cli.services.version_service.shutil.which")
@@ -723,7 +679,7 @@ class TestBuildKbagentUpgradeCommand:
         mock_which.side_effect = lambda x: "/usr/bin/uv" if x == "uv" else None
         mock_has_server.return_value = False
 
-        cmd = build_kbagent_upgrade_command(prerelease=False, target_version="0.43.3")
+        cmd = build_kbagent_upgrade_command(target_version="0.43.3")
 
         assert cmd is not None
         assert cmd[-1].endswith("@v0.43.3")
@@ -797,7 +753,7 @@ class TestWindowsUvLinkMode:
         self, windows: None, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         self._uv_only(monkeypatch)
-        cmd = build_kbagent_upgrade_command(prerelease=True, target_version="1.2.3")
+        cmd = build_kbagent_upgrade_command(target_version="1.2.3")
         assert cmd is not None
         assert "--link-mode" not in cmd
 

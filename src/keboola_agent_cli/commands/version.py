@@ -66,9 +66,9 @@ def update_command(
             "Opt into pre-release versions (beta / rc). Without this flag (the "
             "default) and without KBAGENT_INCLUDE_PRERELEASE=1 in env, every "
             "release marked as a pre-release on GitHub is skipped, so a beta "
-            "release will never silently install. With --beta, the resolver opts into PEP 440 prereleases "
-            "(``uv --prerelease=allow`` / ``pip --pre``). --beta never installs "
-            "a new major version without --major."
+            "release will never silently install. With --beta, the newest pre-release "
+            "is installed from its own release; its dependencies stay on stable "
+            "versions. --beta never installs a new major version without --major."
         ),
     ),
     major: bool = typer.Option(
