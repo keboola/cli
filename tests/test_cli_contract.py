@@ -630,6 +630,12 @@ CONFIRMING_COMMANDS: dict[str, str] = {
     "auth logout": "auth logout",
     "branch delete": "branch delete --project p --branch 1",
     "branch metadata-delete": "branch metadata-delete --project p --metadata-id 1",
+    "cls create": (
+        'cls create --project p --table-id in.c-a.b --rules [{"principal":"a@example.com",'
+        '"visible_columns":["id"]}]'
+    ),
+    "cls delete": "cls delete --project p --policy-id x",
+    "cls update": "cls update --project p --policy-id x",
     "config delete-metadata": (
         "config delete-metadata --project p --component-id c --config-id 1 --metadata-id 1"
     ),
@@ -654,6 +660,12 @@ CONFIRMING_COMMANDS: dict[str, str] = {
     ),
     "project invitation-cancel": "project invitation-cancel --project p --email a@example.com",
     "project member-remove": "project member-remove --project p --email a@example.com",
+    "rls create": (
+        'rls create --project p --table-id in.c-a.b --rules [{"principal":"a@example.com",'
+        '"condition":{"true":true}}]'
+    ),
+    "rls delete": "rls delete --project p --policy-id x",
+    "rls update": "rls update --project p --policy-id x",
     "semantic-layer edit glossary": "semantic-layer edit glossary --project p --term a --new-term b",
     "semantic-layer model delete": "semantic-layer model delete --project p --model m",
     "semantic-layer promote": "semantic-layer promote --from-project a --to-project b",
@@ -687,6 +699,9 @@ YES_WITHOUT_OFFLINE_CASE: dict[str, str] = {
     "merge-request merge": "resolves the merge request first, then asks",
     "org setup": "needs the manage token first, then previews and asks",
     "project refresh": "needs the manage token first, then previews and asks",
+    "rls bindings-sweep": "--yes deletes the orphaned bindings; it answers no question",
+    "rls setup": "terminal-only wizard: without a terminal it exits 2 before any question",
+    "rls unbind": "looks the binding up first, then asks",
     "semantic-layer add metric": "dataset guard in the service; refuses without a terminal",
     "semantic-layer edit metric": "rename-cascade guard in the service; refuses without a terminal",
     "semantic-layer import": "hidden deprecated --yes with no effect (C3)",

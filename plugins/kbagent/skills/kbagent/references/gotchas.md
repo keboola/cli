@@ -6756,3 +6756,118 @@ The package was named `keboola-agent-cli` up to 0.62.0 and is named `keboola-cli
 - **`col_map.in_table` matched by substring**, so a mapping could land on the wrong input edge. It must now be the full input table id, its `alias:`-qualified form, or a unique input-mapping destination; anything else is skipped and counted in `ai_col_map_skipped`.
 - **Stale AI results are not applied** *(since 0.99.1)*: a result whose `_code_hash` differs from the config's current code hash describes code that no longer exists; it is skipped entirely and listed in `ai_status.ai_results_stale` (a fresh task is emitted for it). A result without `_code_hash` is still applied. A `col_map` naming a table the config reads under two aliases now maps onto both edges instead of being skipped as ambiguous.
 - `ai_status` keys: `ai_edges_added` (reads + writes), `ai_reads_added`, `ai_writes_added`, `ai_columns_merged`, `ai_external_added`, `ai_col_map_skipped`, `ai_outputs_unresolved`, `ai_results_stale`, `ai_tasks_missing_code_file`.
+
+## Row-Level and Column-Level Security (RLS, CLS): targeted by default, never project scope
+
+*(since vNEXT)*
+
+`kbagent rls` authors metastore `rls-policy` objects -- one per protected table. It never
+enforces anything itself: the actual SQL rewrite happens in Query Service on a governed workspace
+(`workspace create --governed`) or in `keboola-mcp-server`'s `query_data` tool, a separate
+repo/runtime. See [rls-workflow.md](rls-workflow.md) for full recipes, including the end-to-end
+governed-workspace flow.
+
+- **Availability depends on the stack's metastore.** The `rls-policy` and `cls-policy` object types are
+  registered by the metastore's `2026-09-29` schema migrations. A stack whose metastore predates them
+  answers `rls schema`/`cls schema` with a classified `NOT_FOUND` (schema-fetch failure) -- expected
+  there, not a kbagent bug. Check with `kbagent --json rls schema --project P` / `cls schema`.
+- **Scope is `targeted` unless you pass `--scope organization`; there is no `project` scope.** `targeted`
+  (the metastore schema's own default) governs the owning project plus the `--target-project` grants.
+  `organization` governs the table in EVERY project of the organization where it is enforced: the enforcement applies every policy the metastore lists for a project and does not re-check
+  the owner, so an organization policy is never "only where it matches". Every listed policy applies to
+  the listing project. `--scope organization` is destructive-class (`rls.create --scope organization` /
+  `cls.create --scope organization` in `FLAG_ESCALATIONS`).
+- **Who may write.** A project admin (master token, admin role) may create/update/delete `targeted`
+  policies of its own project without grants. Grants (`--target-project`, `--clear-target-projects`) and
+  `--scope organization` need the organization-admin role -- a master token alone gets a 403
+  (`ACCESS_DENIED`). A project admin reads only the policies its project owns. On the MCP `query_data` path
+  policies are enforced only where the consuming project has the `row-level-security` feature; on a
+  governed workspace Query Service always enforces (every project, no switch), and the identity running
+  `workspace query` needs a matching rule (default deny). The MCP server's own workspace is created governed in
+  a project with the feature; it gets every policy unless bound (see `rls-workflow.md`, "The MCP server's workspace").
+- **Policy schema 1.1.0 (the metastore default) is a superset of 1.0.0.** A rule selects identities by
+  `principal`, `principals` or IdP `groups` (exact strings, any listed group matches). Within a policy,
+  every rule matching one identity applies: RLS conditions combine with OR, CLS `visible_columns` are
+  united -- so one identity in several rules is no longer an error. Several policies on one table combine
+  with AND (CLS: intersection), so an added policy can only narrow access; a reader with no identity is
+  always refused. Needs a `keboola-mcp-server` whose engine reads schema 1.1.0 (keboola/mcp-server#709): an older engine refuses a policy that uses `groups`, `$identity`, a `default` or `{"false": true}`, and refuses every query of the project when one principal has two rules. RLS `--default` is the condition for
+  identities no rule matches (absent = refused; `{"false": true}` = no rows); an `update` cannot remove a
+  default (recreate the policy). `value: {"$identity": "email"}` and `values: {"$identity": "groups"}` are
+  resolved per reader by the enforcement. `dialect` is optional in the schema; kbagent still sends the
+  project backend and refuses another one (`INVALID_RLS_POLICY` / `INVALID_CLS_POLICY`), because the
+  enforcement refuses every read of a table whose policy names another dialect. An `organization`
+  policy also reaches projects on the OTHER backend -- prefer `targeted` in a mixed-backend organization.
+- **Wildcard `"*"` and default deny (since vNEXT).** `principal: "*"`, `principals: ["*"]` or `groups: ["*"]`
+  (schema 1.1.0) matches every identified reader (never a reader with no identity); it must be the only entry
+  of its list (`INVALID_RLS_POLICY` / `INVALID_CLS_POLICY` otherwise) and is refused against a metastore
+  whose schema is older than 1.1.0, where `"*"` is a literal that matches nobody. In a governed workspace
+  the platform denies by default: a table with no `rls-policy` is refused (a `cls-policy` alone grants no
+  rows), admins included, so a table is opened to everyone only by an explicit wildcard policy with
+  `{"true": true}`. Workflow: `rls-workflow.md` > "Default deny and the wildcard".
+- **One `rls-policy` object per protected table**, never one blob per project, named by its table: a
+  second policy on the same table in the same project answers `ALREADY_EXISTS` (update or delete the
+  first). `rls setup` creates one policy per selected table, all sharing the same rules.
+- **`condition` is a fixed six-shape primitive vocabulary, never a free-text predicate.**
+  Comparison (`eq`/`ne`/`gt`/`gte`/`lt`/`lte`), membership (`in`/`not_in` with `values`), nullness
+  (`is_null`/`is_not_null`), `and`/`or` (2+ nested conditions each, no `not`), or the `{"true": true}` /
+  `{"false": true}` sentinels. A `null` comparison value (or `null` in `values`) is refused: the
+  enforcement renders `col = NULL`, which matches nothing -- use `is_null`. A principal with whitespace or
+  control characters, or a group with control characters, is refused.
+- **The `--dry-run` preview follows the enforcement's rendering but is not the enforcement.** Columns
+  are quoted per dialect (`"col"` / `` `col` ``, so matching is case-exact), booleans render
+  `TRUE`/`FALSE`, `$identity` placeholders `<identity.email>` / `(<identity.groups>)`, a default as
+  `default_preview`. The compiler that decides what a query returns is `keboola-mcp-server`'s
+  `rls.py::_compile_primitive` (sqlglot).
+- **`rls update` sends a partial update (`PATCH`) of only the changed keys.** It still reads the policy
+  first: the metastore's PATCH validates only the keys it receives, so kbagent validates the MERGED
+  policy (and builds the `--dry-run` preview from it). Unknown keys and concurrent changes to other keys
+  survive. Grants change before the rules, so a refused grant writes nothing, and the result is re-read
+  after the write. An `update` with nothing to change is `INVALID_ARGUMENT` (exit 2).
+- **`--target-project` takes an alias or a project ID**, repeatable or comma-separated, de-duplicated
+  (the metastore requires unique, positive IDs). An alias must be on the owner's stack. On `create` the
+  grants go in the create request itself (one transaction); on `update` the list replaces the grants of a
+  `targeted` policy and `--clear-target-projects` revokes them. An `organization` policy has no grants
+  and cannot be narrowed.
+- **`delete` is destructive-class and has `--dry-run`.** `rls.delete` / `cls.delete` are `destructive`
+  (removing a policy removes the filter it enforced), so `--deny-destructive` blocks them.
+  `create`/`update`/`setup` stay `admin`; `cli:write` spans write, destructive AND admin.
+- **`rls setup` is interactive-terminal-only and has no REST route.** Under `--json` or without an
+  interactive terminal it exits 2 with an `INVALID_ARGUMENT` error (a JSON envelope under `--json`)
+  pointing at `rls create`. A prompted value is read as JSON when it is one (`42`, `true`); quote it to
+  keep a string. Exits non-zero when any selected table's policy could not be created.
+- **REST mirror.** `POST /rls/{project}` (`table_id`, `rules`, `default?`, `dialect?`, `scope`,
+  `target_projects`), `PATCH /rls/{project}/{policy_id}` (partial; `target_projects: []` revokes), `DELETE ...?dry_run=true`;
+  same for `/cls`. Every route is permission-gated; `scope: "organization"` is also checked as
+  `<group>.create --scope organization`.
+- **`cls` is the column-level sibling of `rls`.** `kbagent cls list|detail|schema|create|update|delete`
+  author `cls-policy` objects (`{table, dialect, rules: [{principal|principals|groups, visible_columns}]}`)
+  with the same scope, permissions, checks and partial `update` as `rls`. Differences: `visible_columns` is
+  a non-empty allowlist of `[A-Za-z0-9_]+` names (masking is not supported), `--dry-run` prints each
+  selector's projection, validation failures raise `INVALID_CLS_POLICY`, there is no `default`, and there
+  is no `cls setup`.
+- **Reduced validation is reported.** If the live schema could not be fetched, writes still run every
+  local check but add a `warnings` entry; an authentication/permission failure while fetching the schema
+  is raised as that error.
+
+## Policy bindings (`rls bind`): no binding means every policy; a wrong stack id fails silently
+
+*(since vNEXT)*
+
+- A `policy-binding` restricts one governed workspace to some of the project's rls/cls policies. It is
+  named by the workspace KID `KID:<stack>:project-<id>:workspace-<id>` (no branch segment). **No binding =
+  the workspace gets every policy of the project**; a binding only narrows, it never grants (a governed
+  workspace is deny-by-default anyway). Query Service re-reads it on every governed query, so `bind` /
+  `unbind` apply to the next query.
+- **`--stack-id` (env `KBAGENT_STACK_ID`) is required and kbagent cannot check it.** No Storage, Manage or
+  Connection API exposes the stack segment; it must equal Query Service's `QUERY_RLS_STACK_ID` (AWS dev:
+  `dev-keboola-aws-eu-west-1`). A different value writes a binding nothing reads: the workspace silently
+  keeps every policy. Verify a binding with a `workspace query` by the bound identity.
+- `bind` replaces both lists (a rebind with only `--rls-policy` drops the old CLS list). A policy listed in
+  a binding cannot be deleted (`onDelete: restrict`, HTTP 409); `rls delete` / `cls delete` then name
+  `rls bindings` -- rebind without it or `rls unbind` first.
+- Deleting a workspace does not delete its binding: unbind first, or run `rls bindings-sweep` (report;
+  `--yes` deletes). The sweep deletes only a workspace KID of this project whose workspace 404s in
+  production and every dev branch and that was last updated more than `--older-than` days ago (default
+  30); any other error is a failed item, never a delete, and app KIDs are never swept. The metastore has no
+  reverse-reference lookup, so references to a binding are not checked first; it refuses (409) a delete
+  that one blocks.

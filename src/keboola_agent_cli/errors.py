@@ -179,6 +179,14 @@ class ErrorCode(StrEnum):
     UPDATED_ACROSS_MAJOR = "UPDATED_ACROSS_MAJOR"
     UPDATED_ACROSS_BREAKING = "UPDATED_ACROSS_BREAKING"
 
+    # Row-level security (CLI-17). Same role INVALID_FLOW_DEFINITION plays
+    # for conditional flows: a candidate `rls-policy` body (table/dialect/
+    # rules/condition) that fails op-name or JSON-Schema structural checks.
+    INVALID_RLS_POLICY = "INVALID_RLS_POLICY"
+    # Column-level security: same role for a candidate `cls-policy` body
+    # (table/dialect/rules/visible_columns).
+    INVALID_CLS_POLICY = "INVALID_CLS_POLICY"
+
 
 def mask_token(token: str) -> str:
     """Mask a Keboola Storage API token for safe display.
@@ -488,6 +496,8 @@ ERROR_CODE_TABLE: dict[str, ErrorClass] = {
     # Flow
     ErrorCode.SCHEDULE_DELETE_FAILED: ErrorClass("api", 1),
     ErrorCode.INVALID_FLOW_DEFINITION: ErrorClass("api", 1),
+    ErrorCode.INVALID_CLS_POLICY: ErrorClass("api", 1),
+    ErrorCode.INVALID_RLS_POLICY: ErrorClass("api", 1),
     # Data apps
     ErrorCode.DATA_APP_BUILD_FAILED: ErrorClass("api", 1),
     ErrorCode.DATA_APP_DEPLOY_TIMEOUT: ErrorClass("api", 1),

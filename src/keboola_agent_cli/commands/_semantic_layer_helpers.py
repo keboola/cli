@@ -13,15 +13,9 @@ from enum import StrEnum
 
 import typer
 
-from ..errors import ConfigError, ErrorCode, KeboolaApiError
+from ..errors import ErrorCode
 from ._checkbox_select import CheckboxItem, CheckboxUnavailable, checkbox_select
-from ._helpers import (
-    check_cli_operation,
-    emit_api_error,
-    get_formatter,
-    get_service,
-    map_error_to_exit_code,
-)
+from ._helpers import check_cli_operation, get_formatter, get_service, handle_service_call
 
 
 class ScopeChoice(StrEnum):
@@ -49,24 +43,8 @@ class ItemType(StrEnum):
     GLOSSARY = "glossary"
 
 
-def _handle_service_call(ctx: typer.Context, func, *args, **kwargs):  # type: ignore[no-untyped-def]
-    """Run a service call, mapping ``ConfigError`` / ``KeboolaApiError`` to exit codes.
-
-    Returns the service result on success; on failure, prints the structured
-    error envelope (JSON mode) or a red error line (human mode) and raises
-    ``typer.Exit`` with the appropriate code.
-    """
-    formatter = get_formatter(ctx)
-    try:
-        return func(*args, **kwargs)
-    except ConfigError as exc:
-        formatter.error(
-            message=exc.message, error_code=getattr(exc, "error_code", ErrorCode.CONFIG_ERROR)
-        )
-        raise typer.Exit(code=5) from None
-    except KeboolaApiError as exc:
-        emit_api_error(formatter, exc)
-        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+# The handler is shared by every metastore-backed command group (semantic-layer, rls, cls).
+_handle_service_call = handle_service_call
 
 
 def _is_stdin_tty() -> bool:
