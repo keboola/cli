@@ -411,7 +411,7 @@ def delete_policy(
 @rls_app.command("list")
 def rls_list(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
 ) -> None:
     """List row-level security policies visible to a project."""
     list_policies(ctx, RLS, project)
@@ -420,7 +420,7 @@ def rls_list(
 @rls_app.command("detail")
 def rls_detail(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
     policy_id: str = typer.Option(..., "--policy-id", help="RLS policy ID"),
 ) -> None:
     """Show one RLS policy's full rule set."""
@@ -431,7 +431,7 @@ def rls_detail(
 def rls_schema(
     ctx: typer.Context,
     project: str = typer.Option(
-        ..., "--project", help="Project alias -- fetch the live schema from this stack"
+        ..., "--project", "-p", help="Project alias -- fetch the live schema from this stack"
     ),
 ) -> None:
     """Print the live ``rls-policy`` JSON Schema fetched from the metastore.
@@ -447,7 +447,7 @@ def rls_schema(
 def rls_create(
     ctx: typer.Context,
     project: str = typer.Option(
-        ..., "--project", help="Project alias -- the project that owns the policy"
+        ..., "--project", "-p", help="Project alias -- the project that owns the policy"
     ),
     table_id: str = typer.Option(..., "--table-id", help=TABLE_HELP),
     rules: str = typer.Option(
@@ -486,7 +486,7 @@ def rls_create(
 @rls_app.command("update")
 def rls_update(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
     policy_id: str = typer.Option(..., "--policy-id", help="RLS policy ID"),
     table_id: str | None = typer.Option(None, "--table-id", help="New table (unset = unchanged)"),
     dialect: Dialect | None = typer.Option(
@@ -537,7 +537,7 @@ def rls_update(
 @rls_app.command("delete")
 def rls_delete(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
     policy_id: str = typer.Option(..., "--policy-id", help="RLS policy ID"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show the policy without deleting it"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
@@ -643,7 +643,7 @@ def _build_rules_interactively(formatter: Any) -> list[dict[str, Any]]:
 def rls_setup(
     ctx: typer.Context,
     project: str = typer.Option(
-        ..., "--project", help="Project alias whose tables you're protecting"
+        ..., "--project", "-p", help="Project alias whose tables you're protecting"
     ),
     dialect: Dialect | None = typer.Option(None, "--dialect", help=DIALECT_HELP),
     rules: str | None = typer.Option(
