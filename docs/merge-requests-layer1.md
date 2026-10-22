@@ -396,7 +396,7 @@ blank `name` is a hole. The CLI test suite pins the round trip end to end: the f
 
 A missing key is reported on two different exit paths depending on who is at fault, and the
 renderer must not collapse them: a hole in a `--take` side's envelope is a backend contract
-violation (`VALIDATION_ERROR`, exit 2 since vNEXT, exit 1 before, "author the resolution manually"); a hole in a
+violation (`VALIDATION_ERROR`, exit 2 since 1.0.0rc1, exit 1 before, "author the resolution manually"); a hole in a
 `--resolved` body is the caller's (`ConfigError`, exit 5, naming the missing keys).
 
 **`resolve` has no `--all`.** Rebase *replaces*, so a bulk `--all --take theirs` is a bulk

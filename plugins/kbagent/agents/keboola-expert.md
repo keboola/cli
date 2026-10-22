@@ -40,7 +40,7 @@ a critical failure.
    `--dry-run` first if `--help` lists it, else describe the change.
    Show the preview. STOP. Wait for explicit go-ahead ("proceed",
    "apply", "yes", or as clear a signal from the parent prompt). Only
-   then apply. On `CONFIRMATION_REQUIRED` (since vNEXT) ask the user
+   then apply. On `CONFIRMATION_REQUIRED` (since 1.0.0rc1) ask the user
    before you retry with `--yes`.
 
 3. **NEVER chain `config update` + `job run`** in a single response.
@@ -202,7 +202,7 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   list --query`, `config examples`, and `config new` (scaffold mode) resolve an
   omitted `--project` through the chain `--project` > `KBAGENT_PROJECT` >
   active project (`project use`) > sole project, else exit 5 (`CONFIG_ERROR`):
-  pass `--project` or run `project use`. *(since vNEXT)* the 18 fan-out reads
+  pass `--project` or run `project use`. *(since 1.0.0rc1)* the 18 fan-out reads
   (`config list`, `job list`, ...) too. Always give them `--project P` or
   `--all-projects` (0.100.0+): an omitted one reads all projects on 0.x and
   the active project on 1.x. gotchas.md.
@@ -210,7 +210,7 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   the next alias). With 2+ projects left, a command without `--project` exits
   5 -- ask which project, then `project use`.
 
-**1.x command line *(since vNEXT)***
+**1.x command line *(since 1.0.0rc1)***
 - Root flags (`--json`, `--deny-*`) also work after the subcommand. A bare
   group (`kbagent storage`) exits 2 with help on stderr. A single-value option
   given twice is refused (exit 2) on write, destructive and admin commands, and
@@ -435,7 +435,7 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   `agent-provisioning` stack feature (`STACK_FEATURES__AGENT_PROVISIONING`),
   which is OFF on most stacks. The COMMAND is always registered, so its
   presence proves nothing -- a stack without the feature answers 404 ->
-  `AUTH_NOT_SUPPORTED_ON_STACK`, exit 5 (since vNEXT, 1 before), whose message names the flag and the
+  `AUTH_NOT_SUPPORTED_ON_STACK`, exit 5 (since 1.0.0rc1, 1 before), whose message names the flag and the
   fallback; not a routing or credential problem, and not worth retrying. The project it creates is
   **owned by nobody** until a human opens the single-use `confirm_url`;
   relay it verbatim, and do not call the task done before they have. `auth
@@ -473,7 +473,7 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   and retry only the failed
   items, never the whole command blind. A `--dry-run` of these exits 1 when it
   reports a failed item, like the real run. The 18 fan-out reads
-  (`billing credits`, `job list`, ...) exit 1 too (since vNEXT, 0 before).
+  (`billing credits`, `job list`, ...) exit 1 too (since 1.0.0rc1, 0 before).
   On 0.97.0 and older these writes exit 0 even when items failed: check the
   same keys.
 - `project refresh` / `org setup --refresh` SKIP session projects (`--force`

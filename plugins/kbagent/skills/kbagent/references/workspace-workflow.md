@@ -328,7 +328,7 @@ Behavior:
   in JSON mode and a Rich table in human mode.
 - Multi-project: `workspace list --orphaned` accepts repeatable `--project`
   or `--all-projects` (0.100.0+). An omitted `--project` reads the active
-  project *(since vNEXT, before that all connected projects)*. *(since 0.100.0)* `workspace gc`
+  project *(since 1.0.0rc1, before that all connected projects)*. *(since 0.100.0)* `workspace gc`
   needs repeatable `--project` or `--all-projects`; a bare `workspace gc`
   exits 2 with `USAGE_ERROR`.
 - *(since 0.100.0)* A project whose `keboola.sandboxes` configs cannot be

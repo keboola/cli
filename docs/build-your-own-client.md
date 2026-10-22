@@ -215,7 +215,7 @@ Anything else requires auth.
 
 ## Error envelope
 
-Every non-2xx response carries this JSON body (since vNEXT the `error`
+Every non-2xx response carries this JSON body (since 1.0.0rc1 the `error`
 object has the fields of the CLI error object, and `targets` / `warnings`
 are present when not empty):
 
@@ -248,7 +248,7 @@ below) and surface `error.message` to humans. Do not pattern-match the
 message text — it is informational and may be improved between releases.
 
 A successful 2xx response body is the bare payload of the endpoint. Since
-vNEXT the project and branch that the request used are in the
+1.0.0rc1 the project and branch that the request used are in the
 `Kbagent-Targets` response header, and its warnings (for example a
 `DEPRECATED` route form) in the `Kbagent-Warnings` header. Both are JSON
 lists in the shape of `targets` and `warnings[]` of the CLI `--json`
@@ -282,7 +282,7 @@ major bump).
 | 502 | `API_ERROR`, `ACCESS_DENIED`, `KAI_ERROR`, `QUEUE_JOB_FAILED`, `STORAGE_JOB_FAILED`, `CONNECTION_ERROR`, `TIMEOUT` | Upstream Keboola API returned an error or could not be reached (`api` and `network` codes). |
 | 500 | `INTERNAL_ERROR` | Bug in the server. File an issue. |
 
-Since vNEXT the status comes from the `error_type` of the code in
+Since 1.0.0rc1 the status comes from the `error_type` of the code in
 [error-codes.md](error-codes.md), so one code has one status on every route.
 
 Domain-specific codes (`DATA_APP_*`, `KAI_*`, `JOB_TIMEOUT_TERMINATED`,

@@ -751,7 +751,8 @@ class TestGetCachePath:
     """Tests for _get_cache_path()."""
 
     def test_returns_path_with_filename(self):
-        path = _get_cache_path()
+        with patch("keboola_agent_cli.auto_update.__version__", "0.100.0"):
+            path = _get_cache_path()
         assert path.name == "version_cache.json"
         assert "keboola-agent-cli" in str(path)
 
@@ -1336,7 +1337,8 @@ class TestFrozenBuildGuard:
         mock_plan.assert_not_called()
 
     def test_frozen_notification_names_the_real_channel(self, capsys):
-        self._run_frozen(cached=False)
+        with patch("keboola_agent_cli.auto_update.__version__", "0.100.0"):
+            self._run_frozen(cached=False)
         stderr = capsys.readouterr().err
         assert "choco upgrade keboola-cli2" in stderr
         assert "0.999.0" in stderr
