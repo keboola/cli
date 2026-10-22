@@ -83,10 +83,13 @@ SPEC_DOC = "docs/cli-interface-spec.md"
 # Reviewed data (rule parameters that are decisions, proposal section 7.2)
 # --------------------------------------------------------------------------- #
 
-# A2: one short flag = one long option; a new short flag needs an entry here.
-# The global short flags (-j, -v, -V) keep their global meaning. The others are
-# fixed from the majority use at the introduction of the check.
+# A2: one short flag = one long option, and every option with that long name
+# has it; a new short flag needs an entry here. The global short flags (-j, -v,
+# -V) keep their global meaning. -n follows the Azure CLI (--name) and -L the
+# GitHub CLI (--limit); the others come from the majority use at the
+# introduction of the check.
 SHORT_FLAGS: dict[str, str] = {
+    "-L": "--limit",
     "-V": "--version",
     "-a": "--allow",
     "-d": "--directory",
@@ -96,6 +99,7 @@ SHORT_FLAGS: dict[str, str] = {
     "-j": "--json",
     "-l": "--load",
     "-m": "--message",
+    "-n": "--name",
     "-o": "--output",
     "-p": "--project",
     "-q": "--query",
@@ -103,11 +107,6 @@ SHORT_FLAGS: dict[str, str] = {
     "-v": "--verbose",
     "-y": "--yes",
 }
-
-# A2: short flags whose uses are tied between two meanings (-c: --category and
-# --column; -n: --limit and --name; -r: --regex and --role). No new use with
-# either meaning; each existing use is an `exceptions` entry in the baseline.
-RESERVED_SHORT_FLAGS: frozenset[str] = frozenset({"-c", "-n", "-r"})
 
 # S3: what `--force` overrides, per command (the guards it names in its help).
 # A new `--force` fails the blocking rule safety.force-meaning-registered until
@@ -620,12 +619,22 @@ def r_short_one_meaning(c: Context) -> Violations:
         for p in filter(is_option, lf.params):
             for s in shorts(p):
                 want = SHORT_FLAGS.get(s)
-                if s in RESERVED_SHORT_FLAGS:
-                    found[f"{lf.name} {s}"] = f"{s} is a reserved short flag (no new use)"
-                elif want is None:
+                if want is None:
                     found[f"{lf.name} {s}"] = f"{s} is not in SHORT_FLAGS"
                 elif label(p) != want:
                     found[f"{lf.name} {s}"] = f"{s} means {label(p)} here, {want} in SHORT_FLAGS"
+    return found
+
+
+def r_short_on_every_option(c: Context) -> Violations:
+    """A2: an option whose long name has a short flag in SHORT_FLAGS declares it."""
+    short_of = {long: short for short, long in SHORT_FLAGS.items()}
+    found = {}
+    for lf in c.tree.leaves:
+        for p in filter(is_option, lf.params):
+            want = short_of.get(label(p))
+            if want is not None and want not in shorts(p):
+                found[f"{lf.name} {label(p)}"] = f"{label(p)} without {want}"
     return found
 
 
@@ -745,6 +754,19 @@ def r_list_option_repeatable(c: Context) -> Violations:
         and not getattr(p, "is_flag", False)
         and _COMMA_LIST.search(getattr(p, "help", None) or "")
     }
+
+
+def r_boolean_flag_shape(c: Context) -> Violations:
+    """A7: a boolean is a flag, and a flag with the default true has an off form."""
+    found = {}
+    for lf in c.tree.leaves:
+        for p in filter(is_option, lf.params):
+            if not getattr(p, "is_flag", False):
+                if type_name(p) == "boolean":
+                    found[f"{lf.name} {label(p)}"] = "boolean option that takes a value"
+            elif p.default is True and not getattr(p, "secondary_opts", None):
+                found[f"{lf.name} {label(p)}"] = "flag with the default true and no off form"
+    return found
 
 
 def r_project_help_default(c: Context) -> Violations:
@@ -1352,6 +1374,12 @@ RULES: tuple[Rule, ...] = (
         r_short_one_meaning,
     ),
     Rule(
+        "args.short-flag-on-every-option",
+        "tree",
+        "every option with a long name in SHORT_FLAGS has its short flag",
+        r_short_on_every_option,
+    ),
+    Rule(
         "args.no-global-option-shadow",
         "tree",
         "no command option reuses a global option name",
@@ -1376,6 +1404,12 @@ RULES: tuple[Rule, ...] = (
         "tree",
         "no list option that takes only one comma string",
         r_list_option_repeatable,
+    ),
+    Rule(
+        "args.boolean-flag-shape",
+        "tree",
+        "a boolean is a flag; a flag with the default true has an off form (A7)",
+        r_boolean_flag_shape,
     ),
     Rule(
         "input.file-option-vocabulary",

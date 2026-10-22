@@ -36,6 +36,7 @@ def kai_ping(
     project: str | None = typer.Option(
         None,
         "--project",
+        "-p",
         help="Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project).",
     ),
 ) -> None:
@@ -77,6 +78,7 @@ def kai_ask(
     project: str | None = typer.Option(
         None,
         "--project",
+        "-p",
         help="Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project).",
     ),
 ) -> None:
@@ -124,6 +126,7 @@ def kai_chat(
     project: str | None = typer.Option(
         None,
         "--project",
+        "-p",
         help="Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project).",
     ),
 ) -> None:
@@ -160,6 +163,7 @@ def kai_preflight(
     project: str | None = typer.Option(
         None,
         "--project",
+        "-p",
         help="Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project).",
     ),
 ) -> None:
@@ -215,6 +219,7 @@ def kai_chat_detail(
     project: str | None = typer.Option(
         None,
         "--project",
+        "-p",
         help="Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project).",
     ),
 ) -> None:
@@ -265,12 +270,13 @@ def kai_history(
     project: str | None = typer.Option(
         None,
         "--project",
+        "-p",
         help="Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project).",
     ),
     limit: int = typer.Option(
         10,
         "--limit",
-        "-n",
+        "-L",
         help="Maximum number of chats to return.",
     ),
 ) -> None:

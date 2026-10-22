@@ -476,9 +476,16 @@ NEXT_MAJOR_RECHECK_SECONDS: int = 86_400
 DEPRECATION_NOTICE_INTERVAL_SECONDS: int = 86_400
 # ... and on every run in this last window before M.
 DEPRECATION_NOTICE_FINAL_WINDOW_SECONDS: int = 72 * 3600
-MIGRATION_GUIDE_URL: str = (
-    f"https://github.com/{KBAGENT_GITHUB_REPO}/blob/main/docs/migrate-to-1.0.md"
+MIGRATION_GUIDE_URL_TEMPLATE: str = (
+    f"https://github.com/{KBAGENT_GITHUB_REPO}/blob/main/docs/migrate-to-{{major}}.0.md"
 )
+
+
+def migration_guide_url(major: int) -> str:
+    """The migration guide of major version ``major`` (``docs/migrate-to-<major>.0.md``)."""
+    return MIGRATION_GUIDE_URL_TEMPLATE.format(major=major)
+
+
 # Self-update subprocess timeout. Previously a hardcoded 120s in two places,
 # which falsely tripped on WSL where the git+ source build (npm/React SPA) runs
 # for minutes (issue #353). The prebuilt-wheel install is a seconds download, so

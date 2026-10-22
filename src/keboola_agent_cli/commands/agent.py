@@ -515,7 +515,7 @@ def agent_show(
 @agent_app.command("create")
 def agent_create(
     ctx: typer.Context,
-    name: str = typer.Option(..., "--name", help="Human-readable task name"),
+    name: str = typer.Option(..., "--name", "-n", help="Human-readable task name"),
     description: str = typer.Option("", "--description", help="Free-form description"),
     cron: str = typer.Option("0 * * * *", "--cron", help="Cron expression (UTC)"),
     manual: bool = typer.Option(
@@ -527,6 +527,7 @@ def agent_create(
     action_type: str | None = typer.Option(
         None,
         "--type",
+        "-t",
         help="Action type when not using --from-file: ai_agent|cli_command",
     ),
     from_file: str | None = typer.Option(
@@ -600,7 +601,7 @@ def agent_update(
     task_id_opt: str | None = typer.Option(
         None, "--id", "--task-id", help="Task ID (alias for the positional argument)."
     ),
-    name: str | None = typer.Option(None, "--name"),
+    name: str | None = typer.Option(None, "--name", "-n"),
     description: str | None = typer.Option(None, "--description"),
     cron: str | None = typer.Option(None, "--cron"),
     enabled: bool | None = typer.Option(
@@ -738,7 +739,7 @@ def agent_runs(
     task_id_opt: str | None = typer.Option(
         None, "--id", "--task-id", help="Task ID (alias for the positional argument)."
     ),
-    limit: int = typer.Option(50, "--limit", help="Max rows to return."),
+    limit: int = typer.Option(50, "--limit", "-L", help="Max rows to return."),
 ) -> None:
     """Show the run history of a task (most recent first)."""
     formatter = get_formatter(ctx)
@@ -826,11 +827,11 @@ def agent_run_events(
 @agent_app.command("test")
 def agent_test(
     ctx: typer.Context,
-    name: str = typer.Option("[preview]", "--name", help="Name shown in event init payload."),
+    name: str = typer.Option("[preview]", "--name", "-n", help="Name shown in event init payload."),
     stream: bool = typer.Option(
         False, "--stream", help="Stream events live instead of returning the final run record."
     ),
-    action_type: str | None = typer.Option(None, "--type", help="ai_agent|cli_command"),
+    action_type: str | None = typer.Option(None, "--type", "-t", help="ai_agent|cli_command"),
     from_file: str | None = typer.Option(None, "--from-file", help="Action JSON (or @path / -)."),
     cli: str | None = typer.Option(None, "--cli"),
     prompt: str | None = typer.Option(None, "--prompt"),
@@ -898,7 +899,7 @@ def agent_prompt_improve(
     goal: str = typer.Option(..., "--goal", help="Plain-English goal to polish."),
     draft: str = typer.Option("", "--draft", help="Optional half-baked prompt to refine."),
     cli: str = typer.Option("claude", "--cli", help="AI CLI to invoke: claude|codex|gemini."),
-    project: str | None = typer.Option(None, "--project", help="Pinned project alias hint."),
+    project: str | None = typer.Option(None, "--project", "-p", help="Pinned project alias hint."),
     extra_arg: list[str] = typer.Option([], "--extra-arg", help="Extra args for the AI CLI."),
     stream: bool = typer.Option(
         True, "--stream/--no-stream", help="Stream events as they arrive (default: on)."

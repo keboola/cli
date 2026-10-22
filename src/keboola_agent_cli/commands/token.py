@@ -226,7 +226,7 @@ def _format_refreshed_token(console: Console, data: dict[str, Any]) -> None:
 def token_create(
     ctx: typer.Context,
     project: str = typer.Option(..., "--project", "-p", help="Project alias"),
-    description: str = typer.Option(..., "--description", "-d", help="Human-readable token label"),
+    description: str = typer.Option(..., "--description", help="Human-readable token label"),
     bucket_write: list[str] | None = typer.Option(
         None, "--bucket-write", help="Bucket ID the token may WRITE (repeatable)"
     ),

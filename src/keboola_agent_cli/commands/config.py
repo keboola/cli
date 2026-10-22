@@ -79,6 +79,7 @@ def config_list(
     project: list[str] | None = typer.Option(
         None,
         "--project",
+        "-p",
         help=FANOUT_PROJECT_HELP,
     ),
     all_projects: AllProjectsOption = False,
@@ -161,6 +162,7 @@ def config_detail(
     project: list[str] | None = typer.Option(
         None,
         "--project",
+        "-p",
         help=(
             "Project alias to query. Repeat for multiple projects (only valid in "
             "bulk mode, i.e. when --config-id is omitted)."
@@ -419,6 +421,7 @@ def config_examples(
     project: str | None = typer.Option(
         None,
         "--project",
+        "-p",
         help="Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)",
     ),
     row: bool = typer.Option(
@@ -463,6 +466,7 @@ def config_search(
     project: list[str] | None = typer.Option(
         None,
         "--project",
+        "-p",
         help=FANOUT_PROJECT_HELP,
     ),
     all_projects: AllProjectsOption = False,
@@ -485,7 +489,6 @@ def config_search(
     use_regex: bool = typer.Option(
         False,
         "--regex",
-        "-r",
         help="Interpret query as a regular expression",
     ),
     branch: int | None = typer.Option(
@@ -619,6 +622,7 @@ def config_update(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias",
     ),
     component_id: str = typer.Option(
@@ -634,6 +638,7 @@ def config_update(
     name: str | None = typer.Option(
         None,
         "--name",
+        "-n",
         help="New configuration name",
     ),
     description: str | None = typer.Option(
@@ -872,6 +877,7 @@ def config_set_default_bucket(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias",
     ),
     component_id: str = typer.Option(
@@ -994,6 +1000,7 @@ def config_rename(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias",
     ),
     component_id: str = typer.Option(
@@ -1009,6 +1016,7 @@ def config_rename(
     name: str = typer.Option(
         ...,
         "--name",
+        "-n",
         help="New name for the configuration",
     ),
     branch: int | None = typer.Option(
@@ -1086,6 +1094,7 @@ def config_delete(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias",
     ),
     component_id: str = typer.Option(
@@ -1184,11 +1193,13 @@ def config_new(
     name: str = typer.Option(
         "",
         "--name",
+        "-n",
         help="Configuration name (default: auto-generated from component; required with --push)",
     ),
     project: str | None = typer.Option(
         None,
         "--project",
+        "-p",
         help="Project alias (for AI Service auth; required with --push)",
     ),
     output_dir: str | None = typer.Option(
@@ -1624,7 +1635,7 @@ def _render_push_result_human(
 @config_app.command("metadata-list", rich_help_panel="Metadata")
 def config_metadata_list(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
     component_id: str = typer.Option(..., "--component-id", help="Component ID"),
     config_id: str = typer.Option(..., "--config-id", help="Configuration ID"),
     branch: int | None = typer.Option(
@@ -1662,7 +1673,7 @@ def config_metadata_list(
 @config_app.command("get-metadata", rich_help_panel="Metadata")
 def config_get_metadata(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
     component_id: str = typer.Option(..., "--component-id", help="Component ID"),
     config_id: str = typer.Option(..., "--config-id", help="Configuration ID"),
     key: str = typer.Option(..., "--key", help="Metadata key to read"),
@@ -1694,7 +1705,7 @@ def config_get_metadata(
 @config_app.command("set-metadata", rich_help_panel="Metadata")
 def config_set_metadata(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
     component_id: str = typer.Option(..., "--component-id", help="Component ID"),
     config_id: str = typer.Option(..., "--config-id", help="Configuration ID"),
     key: str = typer.Option(..., "--key", help="Metadata key to set"),
@@ -1727,7 +1738,7 @@ def config_set_metadata(
 @config_app.command("delete-metadata", rich_help_panel="Metadata")
 def config_delete_metadata(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
     component_id: str = typer.Option(..., "--component-id", help="Component ID"),
     config_id: str = typer.Option(..., "--config-id", help="Configuration ID"),
     metadata_id: int = typer.Option(..., "--metadata-id", help="Numeric ID from metadata-list"),
@@ -1764,10 +1775,10 @@ def config_delete_metadata(
 @config_app.command("set-folder", rich_help_panel="Metadata")
 def config_set_folder(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
     component_id: str = typer.Option(..., "--component-id", help="Component ID"),
     config_id: str = typer.Option(..., "--config-id", help="Configuration ID"),
-    name: str = typer.Option(..., "--name", help="Folder name (empty string to clear)"),
+    name: str = typer.Option(..., "--name", "-n", help="Folder name (empty string to clear)"),
     branch: int | None = typer.Option(
         None, "--branch", help="Dev branch ID (defaults to active branch)"
     ),
@@ -1812,7 +1823,7 @@ def _parse_kv_var(raw: str) -> tuple[str, str]:
 @config_app.command("variables-set", rich_help_panel="Variables")
 def config_variables_set(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
     component_id: str = typer.Option(
         ..., "--component-id", help="Component ID of the config to attach variables to"
     ),
@@ -1936,7 +1947,7 @@ def config_variables_set(
 @config_app.command("variables-get", rich_help_panel="Variables")
 def config_variables_get(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
     component_id: str = typer.Option(
         ..., "--component-id", help="Component ID of the config whose variables to read"
     ),
@@ -1974,7 +1985,7 @@ def config_variables_get(
 @config_app.command("variables-clear", rich_help_panel="Variables")
 def config_variables_clear(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
     component_id: str = typer.Option(
         ..., "--component-id", help="Component ID of the config to unlink"
     ),
@@ -2031,6 +2042,7 @@ def config_row_create(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias",
     ),
     component_id: str = typer.Option(
@@ -2046,6 +2058,7 @@ def config_row_create(
     name: str = typer.Option(
         ...,
         "--name",
+        "-n",
         help="Row name",
     ),
     description: str = typer.Option(
@@ -2143,6 +2156,7 @@ def config_row_update(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias",
     ),
     component_id: str = typer.Option(
@@ -2163,6 +2177,7 @@ def config_row_update(
     name: str | None = typer.Option(
         None,
         "--name",
+        "-n",
         help="New row name",
     ),
     description: str | None = typer.Option(
@@ -2348,7 +2363,7 @@ def config_row_update(
 @config_app.command("row-delete", rich_help_panel="Rows")
 def config_row_delete(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
     component_id: str = typer.Option(..., "--component-id", help="Component ID"),
     config_id: str = typer.Option(..., "--config-id", help="Configuration ID"),
     row_id: str = typer.Option(..., "--row-id", help="Row ID to delete"),

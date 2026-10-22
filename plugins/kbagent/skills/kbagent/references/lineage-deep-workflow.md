@@ -88,13 +88,13 @@ the tree (at its first occurrence), not only under the queried node.
 
 ```bash
 # Trace a single column through the lineage
-kbagent lineage show -l lineage.json --downstream "my-project:in.c-main.users" -c user_id
+kbagent lineage show -l lineage.json --downstream "my-project:in.c-main.users" --column user_id
 ```
 
-`--column` / `-c` *(since 0.99.1)* is a hop-by-hop trace, not a filter:
+`--column` *(since 0.99.1)* is a hop-by-hop trace, not a filter:
 
 - The focus must be a **table**; a configuration focus is a usage error (exit 2).
-  `--column` works with text and `--json` only; with `-f mermaid|html|er` it is
+  `--column` works with text and `--json` only; with `--format mermaid|html|er` it is
   a usage error (exit 2) instead of being silently ignored.
 - **Upstream** from `T.C`: the producer config of `T`, then its input edges whose
   `column_mapping` has key `C` (case-insensitive), continuing at that input
@@ -112,7 +112,7 @@ kbagent lineage show -l lineage.json --downstream "my-project:in.c-main.users" -
 - JSON edges carry `source_column` / `target_column` and only the relevant
   mapping entry; the result has `column` (and the legacy `column_filter`).
 
-Before 0.99.1 `-c` kept every edge without column info and dropped edges whose
+Before 0.99.1 `--column` kept every edge without column info and dropped edges whose
 column list lacked the name, so unrelated branches stayed and real hops vanished.
 
 ## Refresh in one step
@@ -278,14 +278,14 @@ Diagrams *(since 0.99.1)*:
 - AI-recorded external systems render as dashed stadium nodes
   (`system -> config` for read, `config -> system` for write).
 - `--columns` now also reaches the flowcharts (column lists in table nodes);
-  `-f html --columns` saves to `lineage_<dir>_<node>_columns.html`, so it does
+  `--format html --columns` saves to `lineage_<dir>_<node>_columns.html`, so it does
   not overwrite the plain diagram.
-- The ER view (`-f er`, and the `lineage server` ER tab) always lists each
+- The ER view (`--format er`, and the `lineage server` ER tab) always lists each
   table's columns as attributes -- before 0.99.1 it showed only a rows/cols
   count unless `--columns` was given; `--columns` no longer changes it.
   External systems render as `ext:<system>` entities related to the tables
   their config touches (or to the config itself when it touches none).
-- `-f html` defaults to `--depth 3` (a depth-10 diagram of a real project
+- `--format html` defaults to `--depth 3` (a depth-10 diagram of a real project
   renders unreadably small); an explicit `--depth` wins, and `--json` as well
   as every other format keep the default of 10.
 

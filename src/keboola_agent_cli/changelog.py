@@ -28,6 +28,19 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.100.2": [
+        "Fix (#898): `kbagent update --beta` now allows a pre-release of kbagent itself, not of "
+        "the Python packages that kbagent uses. Before, it allowed pre-releases of every package, "
+        "so it could install `httpx 1.0.dev6`, and every command then failed at import. kbagent "
+        "now also requires `httpx` below 1, so a later httpx 1.0 release cannot break a new "
+        "install.",
+    ],
+    "0.100.1": [
+        'Security (#887): kbagent no longer trusts the root certificate "emSign ECC Root CA - G3". '
+        "Intermediate CA keys under this root are compromised. kbagent checks HTTPS servers "
+        "against the certificate bundle of the certifi package, and certifi removed this root.",
+        "Note (#878): housekeeping with no user-facing change.",
+    ],
     "0.100.0": [
         "BREAKING (#852): `--deny-writes`, `--deny-destructive` and a saved permission policy "
         "now also apply to `kbagent http` and `kbagent search`. `http delete` is destructive, "

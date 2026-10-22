@@ -43,6 +43,7 @@ def register(app: typer.Typer) -> None:
         project: str = typer.Option(
             ...,
             "--project",
+            "-p",
             help="Project alias",
         ),
         component_id: str = typer.Option(

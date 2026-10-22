@@ -378,6 +378,11 @@ plugins/kbagent/
 
 ```
 # Global options: --json, --verbose, --no-color, --config-dir, --conversation-id, --deny-writes, --deny-destructive, --allow-env-manage-token
+# Short flags (#791, spec A2): one short flag per long option, on every option of that long name:
+#   -p --project, -n --name, -t --type, -L --limit, -o --output, -e --email, -d --directory, -y --yes,
+#   ... (SHORT_FLAGS in scripts/check_cli_spec.py; blocking rules args.short-flag-one-meaning and
+#   args.short-flag-on-every-option). A long name outside the registry has no short flag. Removed in 1.0.0:
+#   -c, -r, and -d/-f/-l/-m/-n/-v where they meant another option. Version gate lives in gotchas.md.
 # Environment variables (CLI-50, spec EV1): every variable kbagent reads is in ENV_VARS in
 #   src/keboola_agent_cli/env_vars.py (name, purpose, secret, added in, option); a new read needs an
 #   entry there (blocking rule env.registry-complete). An option that a variable sets declares it with
@@ -1598,7 +1603,7 @@ kbagent update [--beta] [--major]
 # completes discovery first, then does the terminal exact-version reinstall and immediately
 # re-executes; failures print a copy-paste recovery command.
 kbagent changelog [--limit N] [--full]
-# Default shows first sentences: every BREAKING note of a version, plus its first other notes until at least two show; --full / -v expands every note.
+# Default shows first sentences: every BREAKING note of a version, plus its first other notes until at least two show; --full expands every note.
 kbagent serve [--host HOST] [--port PORT] [--ui] [--ui-dist PATH] [--reload] [--log-level LVL] [--cors-origin ORIGIN] [--config-dir DIR] [--no-banner]
 # serve REST parity (CLI-49, spec V2/V3/V4/V8/V9): the 26 routes whose command applies the active branch
 #   (storage writes + table-download, job run/terminate, transformation, config variables, component

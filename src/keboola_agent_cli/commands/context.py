@@ -1165,12 +1165,12 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     Node identifiers: full FQN project-alias:bucket_id.table_name or just table_id.
     Text output is a real tree (repeats shown as "(see above)"); edges are
     labelled reads / writes / shares, "[AI]" = AI-detected. --columns shows
-    column-level mapping. -c COL traces one column of a TABLE hop by hop
+    column-level mapping. --column COL traces one column of a TABLE hop by hop
     through mappings recorded by `lineage build --ai` and stops where no
     mapping is known (JSON: terminals[] with node, column, reason); a config
-    focus, or -c with mermaid/html/er, is a usage error (exit 2). Diagrams are
+    focus, or --column with mermaid/html/er, is a usage error (exit 2). Diagrams are
     always left-to-right with the queried node highlighted. --depth defaults
-    to 3 for -f html, 10 otherwise.
+    to 3 for --format html, 10 otherwise.
 
   lineage info
     Show what's in a cached lineage graph: projects, tables, most connected nodes.

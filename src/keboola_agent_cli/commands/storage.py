@@ -80,6 +80,7 @@ def storage_buckets(
     project: list[str] | None = typer.Option(
         None,
         "--project",
+        "-p",
         help=FANOUT_PROJECT_HELP,
     ),
     all_projects: AllProjectsOption = False,
@@ -175,6 +176,7 @@ def storage_bucket_detail(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias",
     ),
     bucket_id: str = typer.Option(
@@ -281,6 +283,7 @@ def storage_tables(
     project: list[str] | None = typer.Option(
         None,
         "--project",
+        "-p",
         help=FANOUT_PROJECT_HELP,
     ),
     all_projects: AllProjectsOption = False,
@@ -374,6 +377,7 @@ def storage_table_detail(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias",
     ),
     table_id: str = typer.Option(
@@ -438,6 +442,7 @@ def storage_create_bucket(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias",
     ),
     stage: str = typer.Option(
@@ -448,6 +453,7 @@ def storage_create_bucket(
     name: str = typer.Option(
         ...,
         "--name",
+        "-n",
         help="Bucket name slug (e.g. 'my-bucket')",
     ),
     description: str | None = typer.Option(
@@ -509,6 +515,7 @@ def storage_create_table(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias",
     ),
     bucket_id: str = typer.Option(
@@ -519,6 +526,7 @@ def storage_create_table(
     name: str = typer.Option(
         ...,
         "--name",
+        "-n",
         help="Table name",
     ),
     column: list[str] | None = typer.Option(
@@ -760,6 +768,7 @@ def storage_upload_table(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias",
     ),
     table_id: str = typer.Option(
@@ -878,6 +887,7 @@ def storage_download_table(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias",
     ),
     table_id: str = typer.Option(
@@ -888,6 +898,7 @@ def storage_download_table(
     output: str | None = typer.Option(
         None,
         "--output",
+        "-o",
         help=(
             "Output path. Default mode: file path (e.g. table.csv). "
             "With --keep-slices: directory path (default ./{project}/{table_id}.csv/)."
@@ -901,6 +912,7 @@ def storage_download_table(
     limit: int | None = typer.Option(
         None,
         "--limit",
+        "-L",
         help="Max number of rows to export",
     ),
     branch: int | None = typer.Option(
@@ -1018,6 +1030,7 @@ def storage_delete_table(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias",
     ),
     table_id: list[str] = typer.Option(
@@ -1114,6 +1127,7 @@ def storage_truncate_table(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias",
     ),
     table_id: list[str] = typer.Option(
@@ -1214,6 +1228,7 @@ def storage_add_column(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias",
     ),
     table_id: str = typer.Option(
@@ -1291,6 +1306,7 @@ def storage_delete_column(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias",
     ),
     table_id: str = typer.Option(
@@ -1390,6 +1406,7 @@ def storage_swap_tables(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias",
     ),
     table_id: str = typer.Option(
@@ -1531,6 +1548,7 @@ def storage_clone_table(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias",
     ),
     table_id: str = typer.Option(
@@ -1642,6 +1660,7 @@ def storage_file_list(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias",
     ),
     tag: list[str] | None = typer.Option(
@@ -1652,6 +1671,7 @@ def storage_file_list(
     limit: int = typer.Option(
         20,
         "--limit",
+        "-L",
         help="Max number of files to return",
     ),
     offset: int = typer.Option(
@@ -1738,6 +1758,7 @@ def storage_file_info(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias",
     ),
     file_id: int = typer.Option(
@@ -1785,6 +1806,7 @@ def storage_file_upload(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias",
     ),
     file: str = typer.Option(
@@ -1795,6 +1817,7 @@ def storage_file_upload(
     name: str | None = typer.Option(
         None,
         "--name",
+        "-n",
         help="Custom file name (default: local filename)",
     ),
     tag: list[str] | None = typer.Option(
@@ -1874,6 +1897,7 @@ def storage_file_download(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias",
     ),
     file_id: int | None = typer.Option(
@@ -1953,6 +1977,7 @@ def storage_file_tag(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias",
     ),
     file_id: int = typer.Option(
@@ -2026,6 +2051,7 @@ def storage_load_file(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias",
     ),
     file_id: int = typer.Option(
@@ -2116,6 +2142,7 @@ def storage_unload_table(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias",
     ),
     table_id: str = typer.Option(
@@ -2131,6 +2158,7 @@ def storage_unload_table(
     limit: int | None = typer.Option(
         None,
         "--limit",
+        "-L",
         help="Max number of rows to export",
     ),
     tag: list[str] | None = typer.Option(

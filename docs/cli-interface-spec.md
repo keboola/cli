@@ -61,12 +61,12 @@ Every rule with its level, the version from which it applies, and how it is chec
 | [N4](#N4) | MUST | now | `naming.alias-parity`, `naming.hidden-leaf-has-canonical` |
 | [N5](#N5) | MUST | now for new text; 1.0.0 for existing text | review |
 | [A1](#A1) | MUST | now | `args.global-option-one-shape`, `args.long-option-one-shape`, review |
-| [A2](#A2) | MUST | now | `args.short-flag-one-meaning`, `args.no-global-option-shadow` |
+| [A2](#A2) | MUST | now | `args.short-flag-one-meaning`, `args.short-flag-on-every-option`, `args.no-global-option-shadow` |
 | [A3](#A3) | MUST for new commands | now | `args.no-positional-arguments`, `args.no-bare-id-option` |
 | [A4](#A4) | MUST | now for new options; 1.0.0 for existing ones | `args.list-option-repeatable` |
 | [A5](#A5) | MUST | now | `args.no-dead-parameter` |
 | [A6](#A6) | MUST | 1.0.0 | `args.repeated-single-value` |
-| [A7](#A7) | SHOULD for new options | now | review |
+| [A7](#A7) | SHOULD for new options | now | `args.boolean-flag-shape`, review |
 | [I1](#I1) | MUST | now | `input.single-parser` |
 | [I2](#I2) | MUST | now | `input.file-option-vocabulary` |
 | [I3](#I3) | MUST | 1.0.0 | `input.content-option-refuses-at-file` |
@@ -104,6 +104,7 @@ Every rule with its level, the version from which it applies, and how it is chec
 | [E5](#E5) | SHOULD | now | review |
 | [E6](#E6) | MUST | now | review |
 | [E7](#E7) | MUST | now | review |
+| [E8](#E8) | MUST | now for new refusals | review |
 | [S1](#S1) | MUST | now | `safety.destructive-verb-category`, review |
 | [S2](#S2) | MUST | now | `safety.destructive-has-dry-run`, `safety.destructive-has-yes` |
 | [S3](#S3) | MUST | now; the flag changes in 1.0.0 | `safety.force-meaning-registered`, `safety.yes-has-short-y` |
@@ -238,33 +239,32 @@ What stays as it is:
 
 - Checked by: `args.global-option-one-shape` (deferred: the `GLOBAL_OPTIONS` registry is not reviewed yet); `args.long-option-one-shape` (report only).
 
-<a id="A2"></a><a id="args.short-flag-one-meaning"></a><a id="args.no-global-option-shadow"></a>
-**A2 · MUST · now.** One short flag maps to one long option. The map is the `SHORT_FLAGS` registry in `scripts/check_cli_spec.py`, and a new short flag needs an entry there. `-p` means `--project` only. A command option does not reuse the name of a global option. `-p` is not added to the existing `--project` options that lack it; new commands get it through a shared option object in `commands/_options.py`. Until `commands/_options.py` exists, a new command declares `-p` itself. The short flags `-c`, `-n` and `-r` are reserved: their existing uses stay (each is an `exceptions` entry in the baseline), and no new use is added with either meaning.
+<a id="A2"></a><a id="args.short-flag-one-meaning"></a><a id="args.short-flag-on-every-option"></a><a id="args.no-global-option-shadow"></a>
+**A2 · MUST · now.** One short flag maps to one long option, and every option with that long name has the short flag. The map is the `SHORT_FLAGS` registry in `scripts/check_cli_spec.py`. A new short flag needs an entry there, and the same pull request adds it to every option of its long name. A new option whose long name is in the registry declares its short flag. A long name that is not in the registry has no short flag. A command option does not reuse the name of a global option.
 
-- Checked by: `args.short-flag-one-meaning`, `args.no-global-option-shadow`.
+- Checked by: `args.short-flag-one-meaning`, `args.short-flag-on-every-option`, `args.no-global-option-shadow`.
 
-| Short flag | Long option | Status |
+| Short flag | Long option | Origin |
 |---|---|---|
 | `-V` | `--version` | global |
 | `-j` | `--json` | global |
 | `-v` | `--verbose` | global |
-| `-a` | `--allow` | fixed |
-| `-c` | `--category` or `--column` | reserved |
-| `-d` | `--directory` | fixed |
-| `-e` | `--email` | fixed |
-| `-f` | `--feature` | fixed |
-| `-i` | `--ignore-case` | fixed |
-| `-l` | `--load` | fixed |
-| `-m` | `--message` | fixed |
-| `-n` | `--limit` or `--name` | reserved |
-| `-o` | `--output` | fixed |
-| `-p` | `--project` | fixed |
-| `-q` | `--query` | fixed |
-| `-r` | `--regex` or `--role` | reserved |
-| `-t` | `--type` | fixed |
-| `-y` | `--yes` | fixed |
+| `-L` | `--limit` | GitHub CLI (`gh pr list -L`) |
+| `-a` | `--allow` | kbagent |
+| `-d` | `--directory` | kbagent |
+| `-e` | `--email` | kbagent |
+| `-f` | `--feature` | kbagent |
+| `-i` | `--ignore-case` | kbagent |
+| `-l` | `--load` | kbagent |
+| `-m` | `--message` | kbagent |
+| `-n` | `--name` | Azure CLI (`az group create -n`) |
+| `-o` | `--output` | kbagent |
+| `-p` | `--project` | kbagent |
+| `-q` | `--query` | kbagent |
+| `-t` | `--type` | kbagent |
+| `-y` | `--yes` | kbagent |
 
-"Fixed" entries follow the majority use when the check was introduced (`SHORT_FLAGS`); the other uses of a fixed flag are in the baseline. "Reserved" entries (`RESERVED_SHORT_FLAGS`) have tied uses: `-c` is `--category` once and `--column` once; `-n` is `--limit` twice and `--name` twice; `-r` is `--regex` twice and `--role` twice. A new use of a reserved flag fails the check, with either meaning.
+Before 1.0.0, `-p` was on 24 of the 228 `--project` options, and seven short flags had two or more meanings. kbagent 1.0.0 removes the short flags that meant another long option: `-c` (`--category`, `--column`), `-r` (`--regex`, `--role`), `-d` on `--body`, `--deny` and `--description`, `-f` on `--format`, `-l` and `-n` on `--limit` (use `-L`), `-m` on `--mode`, and `-v` on `changelog --full` (`-v` is the global `--verbose`).
 
 <a id="A3"></a><a id="args.no-positional-arguments"></a><a id="args.no-bare-id-option"></a>
 **A3 · MUST for new commands · now.** An identifier is an option `--<noun>-id`, with one name per identifier: `--config-id` for any configuration, `--component-id`, `--project`, `--identity`. Existing positional identifiers stay accepted.
@@ -287,10 +287,10 @@ What stays as it is:
 - Why: on a write, the dropped value can be the intended target (`--project x … --project test` acts on `test`).
 - Checked by: `args.repeated-single-value`.
 
-<a id="A7"></a>
-**A7 · SHOULD for new options · now.** Durations are seconds and data sizes are bytes, both integers without a unit suffix. Points in time are ISO 8601 with a time zone. Booleans are `--x/--no-x`. A fixed set of values, named sizes included, is a `click.Choice`. A fixed threshold in code (such as the 1 GB guard of `workspace load`) names its unit in the help and in the message.
+<a id="A7"></a><a id="args.boolean-flag-shape"></a>
+**A7 · SHOULD for new options · now.** Durations are seconds and data sizes are bytes, both integers without a unit suffix. Points in time are ISO 8601 with a time zone. A boolean is a flag, never an option that takes `true` or `false`. A flag with the default false can be one-way (`--dry-run`). A flag with the default true, or one whose omission keeps the current value, also has an off form: `--x/--no-x` (`--read-only/--no-read-only`) or a pair of names (`--enabled/--disabled`). A fixed set of values, named sizes included, is a `click.Choice`. A fixed threshold in code (such as the 1 GB guard of `workspace load`) names its unit in the help and in the message.
 
-- Checked by: review.
+- Checked by: `args.boolean-flag-shape` (an option that takes a boolean value, or a flag with the default true and no off form), review.
 
 ## 4. Input
 
@@ -531,6 +531,17 @@ Shape of the success envelope in 1.0.0 (`storage delete-table --project prod`, a
 <a id="E7"></a>
 **E7 · MUST · now.** An error message names the object, the reason and, when one exists, the next step as a command or a flag. Example: "Bucket in.c-main not found in project prod; run kbagent storage buckets --project prod", not "404".
 
+- Checked by: review.
+
+<a id="E8"></a>
+**E8 · MUST · now for new refusals.** When kbagent refuses a request before it changes anything, because the target cannot do what the command line asks, the error code follows the fix:
+
+- The fix is on the command line (leave out an option that the backend does not support, or change a combination of options): `INVALID_ARGUMENT`, exit 2. Example: `storage create-table --source-table-id` on a project that is not BigQuery.
+- The fix is in the project, the stack or the kbagent configuration (enable a project feature, register a project): a code of type `configuration`, exit 5. Examples: `FEATURE_NOT_ENABLED`, `AUTH_NOT_SUPPORTED_ON_STACK`.
+
+The message names the fix (E7). A refusal that uses another code today keeps it, because a change of an error code is breaking (C1).
+
+- Why: the error code tells a script or an agent what it must change before it tries again.
 - Checked by: review.
 
 ## 8. Safety

@@ -99,7 +99,7 @@ def register(app: typer.Typer) -> None:
     @app.command("job-detail", rich_help_panel=_JOBS)
     def storage_job_detail(
         ctx: typer.Context,
-        project: str = typer.Option(..., "--project", help="Project alias"),
+        project: str = typer.Option(..., "--project", "-p", help="Project alias"),
         job_id: int = typer.Option(
             ..., "--job-id", help="Storage job ID (e.g. from `upload-table --no-wait`)"
         ),

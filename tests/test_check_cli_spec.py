@@ -146,29 +146,37 @@ def test_rule_index_matches_the_rule_headings() -> None:
     assert _INDEX_ROW.findall(text) == headings
 
 
-def test_short_flag_table_matches_the_registries() -> None:
-    rows = re.findall(
-        r"^\| `(-[A-Za-z])` \| (.+?) \| (fixed|global|reserved) \|$", _spec_text(), re.MULTILINE
-    )
-    fixed = {flag: long.strip("`") for flag, long, status in rows if status != "reserved"}
-    reserved = {flag for flag, _, status in rows if status == "reserved"}
-    assert fixed == spec_check.SHORT_FLAGS
-    assert reserved == spec_check.RESERVED_SHORT_FLAGS
+def test_short_flag_table_matches_the_registry() -> None:
+    rows = re.findall(r"^\| `(-[A-Za-z])` \| `(--[a-z-]+)` \| .+ \|$", _spec_text(), re.MULTILINE)
+    assert dict(rows) == spec_check.SHORT_FLAGS
 
 
-def test_a_new_use_of_a_reserved_short_flag_fails() -> None:
+def _demo_tree(*opts: str) -> Any:
     option = SimpleNamespace(
-        param_type_name="option", name="name", opts=["--name", "-n"], secondary_opts=[]
+        param_type_name="option", name="demo", opts=list(opts), secondary_opts=[]
     )
     leaf = spec_check.Leaf(
         path=("demo",), category="read", params=(option,), callback=None, help="Demo.", hidden=False
     )
-    tree = spec_check.Tree(root=None, leaves=[leaf], groups=[])
-    found = spec_check.r_short_one_meaning(spec_check.Context(tree))
-    assert found == {"demo -n": "-n is a reserved short flag (no new use)"}
+    return spec_check.Context(spec_check.Tree(root=None, leaves=[leaf], groups=[]))
+
+
+def test_a_short_flag_with_another_meaning_fails() -> None:
+    found = spec_check.r_short_one_meaning(_demo_tree("--format", "-f"))
+    assert found == {"demo -f": "-f means --format here, --feature in SHORT_FLAGS"}
     rule = "args.short-flag-one-meaning"
     fails = spec_check.ratchet(_results(**{rule: found}), _small_baseline())
-    assert len(fails) == 1 and fails[0].startswith(f"FAIL new      {rule}: demo -n")
+    assert len(fails) == 1 and fails[0].startswith(f"FAIL new      {rule}: demo -f")
+
+
+def test_an_option_without_its_short_flag_fails() -> None:
+    found = spec_check.r_short_on_every_option(_demo_tree("--project"))
+    assert found == {"demo --project": "--project without -p"}
+    assert spec_check.r_short_on_every_option(_demo_tree("--project", "-p")) == {}
+    assert spec_check.r_short_on_every_option(_demo_tree("--format")) == {}
+    rule = "args.short-flag-on-every-option"
+    fails = spec_check.ratchet(_results(**{rule: found}), _small_baseline())
+    assert len(fails) == 1 and fails[0].startswith(f"FAIL new      {rule}: demo --project")
 
 
 @pytest.mark.parametrize(
@@ -670,6 +678,34 @@ def test_short_flag_registry_is_pinned(tree: Any) -> None:
     """Every short flag in the tree is in SHORT_FLAGS (a new one needs an entry)."""
     found = spec_check.r_short_one_meaning(spec_check.Context(tree))
     assert not [s for s, why in found.items() if "not in SHORT_FLAGS" in why]
+
+
+def _option(opts: list[str], **attrs: Any) -> Any:
+    fields = {
+        "is_flag": False,
+        "default": None,
+        "secondary_opts": [],
+        "type": SimpleNamespace(name="text"),
+    }
+    return SimpleNamespace(
+        param_type_name="option", opts=opts, metavar=None, name=opts[0], help="", **(fields | attrs)
+    )
+
+
+def test_boolean_flag_shape_finds_a_value_boolean_and_a_flag_that_stays_on() -> None:
+    """A7: a boolean that takes a value and a default-true flag without an off form fail."""
+    params = (
+        _option(["--one-way"], is_flag=True, default=False),
+        _option(["--pair"], is_flag=True, default=True, secondary_opts=["--no-pair"]),
+        _option(["--stays-on"], is_flag=True, default=True),
+        _option(["--value"], type=SimpleNamespace(name="boolean")),
+    )
+    leaf = spec_check.Leaf(("demo", "cmd"), "write", params, None, "", False)
+    ctx = spec_check.Context(spec_check.Tree(root=None, leaves=[leaf], groups=[]))
+    assert spec_check.r_boolean_flag_shape(ctx) == {
+        "demo cmd --stays-on": "flag with the default true and no off form",
+        "demo cmd --value": "boolean option that takes a value",
+    }
 
 
 def _env_context(tree: Any, source: str, constants: dict[str, str]) -> Any:

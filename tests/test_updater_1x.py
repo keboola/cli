@@ -39,11 +39,11 @@ from keboola_agent_cli import (
 from keboola_agent_cli.auto_update import _get_cache_path as real_get_cache_path
 from keboola_agent_cli.auto_update import version_cache_filename
 from keboola_agent_cli.cli import app
-from keboola_agent_cli.constants import MIGRATION_GUIDE_URL
 from keboola_agent_cli.permissions import OPERATION_REGISTRY, SERVE_ONLY_OPERATIONS
 from keboola_agent_cli.services import version_service
 from keboola_agent_cli.services.version_service import fetch_gated_release
 
+MIGRATION_GUIDE_URL = "https://github.com/keboola/cli/blob/main/docs/migrate-to-1.0.md"
 API = "https://api.github.com/repos/keboola/cli"
 LATEST_URL = f"{API}/releases/latest"
 LIST_URL = f"{API}/releases?per_page=100"
@@ -407,7 +407,7 @@ class TestCrossingRefusesOnce:
         warning = "That command is refused once, then every command runs."
 
         group_read = first_run(READ)
-        top_level_read = first_run(["changelog", "-n", "1"])
+        top_level_read = first_run(["changelog", "-L", "1"])
         write = first_run(WRITE)
 
         assert warning in group_read.stderr
@@ -446,7 +446,15 @@ class TestStateFile:
         assert "UPDATED_ACROSS_MAJOR" not in result.stdout
         assert not (tmp_path / "crossing_pending.json").exists()
 
-    @pytest.mark.parametrize("content", ["{not json", "", '{"from_version": 1}'])
+    @pytest.mark.parametrize(
+        "content",
+        [
+            "{not json",
+            "",
+            '{"from_version": 1}',
+            '{"from_version": "0.105.2", "to_version": "not-a-version"}',
+        ],
+    )
     def test_corrupt_state_refuses_nothing(self, first_run, tmp_path: Path, content) -> None:
         (tmp_path / "crossing_pending.json").write_text(content)
 
@@ -658,3 +666,27 @@ class TestBreakingBanner:
         result = first_run(["--json", *READ])
 
         assert "warnings" not in json.loads(result.stdout)
+
+
+class TestMigrationGuidePerMajor:
+    """The notice and the crossing link the guide of the major they are about, not of 1.0."""
+
+    GUIDE_2 = "https://github.com/keboola/cli/blob/main/docs/migrate-to-2.0.md"
+
+    def test_notice_of_a_1x_install_links_the_2_0_guide(self) -> None:
+        notice = update_notice.build_notice(
+            current_version="1.4.2",
+            next_version="2.0.0",
+            published_ts=T0.timestamp(),
+            migration_ts=(T0 + timedelta(days=28)).timestamp(),
+            now=NOW.timestamp(),
+            mode=update_notice.NoticeMode.AUTO_UPDATE,
+        )
+
+        assert notice.entry["url"] == self.GUIDE_2
+        assert f"What changes: {self.GUIDE_2}." in notice.text
+
+    def test_crossing_to_2x_links_the_2_0_guide(self) -> None:
+        text = update_crossing.crossing_text({"from_version": "1.4.2", "to_version": "2.0.0"})
+
+        assert f"Read what changed: {self.GUIDE_2}." in text

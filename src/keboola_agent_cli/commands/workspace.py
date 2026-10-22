@@ -114,11 +114,13 @@ def workspace_create(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias to create the workspace in",
     ),
     name: str = typer.Option(
         "",
         "--name",
+        "-n",
         help="Name for the workspace (shown in Keboola UI)",
     ),
     backend: str | None = typer.Option(
@@ -191,6 +193,7 @@ def workspace_list(
     project: list[str] | None = typer.Option(
         None,
         "--project",
+        "-p",
         help=FANOUT_PROJECT_HELP,
     ),
     all_projects: AllProjectsOption = False,
@@ -261,6 +264,7 @@ def workspace_detail(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias",
     ),
     workspace_id: int = typer.Option(
@@ -333,6 +337,7 @@ def workspace_delete(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias",
     ),
     workspace_id: int = typer.Option(
@@ -374,6 +379,7 @@ def workspace_password(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias",
     ),
     workspace_id: int = typer.Option(
@@ -410,6 +416,7 @@ def workspace_load(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias",
     ),
     workspace_id: int = typer.Option(
@@ -518,6 +525,7 @@ def workspace_query(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias",
     ),
     workspace_id: int = typer.Option(
@@ -551,6 +559,7 @@ def workspace_query(
     limit: int = typer.Option(
         QUERY_RESULTS_DEFAULT_LIMIT,
         "--limit",
+        "-L",
         min=1,
         help="Max rows to fetch via the fast inline path (ignored with --full).",
     ),
@@ -615,6 +624,7 @@ def workspace_gc(
     project: list[str] | None = typer.Option(
         None,
         "--project",
+        "-p",
         help="Project alias to clean up (can be repeated). Required unless --all-projects.",
     ),
     all_projects: bool = typer.Option(
@@ -729,6 +739,7 @@ def workspace_from_transformation(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias",
     ),
     component_id: str = typer.Option(

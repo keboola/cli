@@ -172,7 +172,7 @@ def stream_create_source(
     project: str = typer.Option(..., "--project", "-p", help="Project alias"),
     name: str = typer.Option(..., "--name", "-n", help="Human-readable source name"),
     source_type: SourceType = typer.Option(
-        SourceType.otlp, "--type", help="Source type (otlp | http)"
+        SourceType.otlp, "--type", "-t", help="Source type (otlp | http)"
     ),
     branch: str | None = typer.Option(
         None, "--branch", help="Branch ref (default branch if unset)"

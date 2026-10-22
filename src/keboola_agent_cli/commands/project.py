@@ -180,7 +180,7 @@ def _format_status_table(console: Console, statuses: list[dict[str, Any]]) -> No
 @project_app.command("add")
 def project_add(
     ctx: typer.Context,
-    alias: str = typer.Option(..., "--project", help="Human-friendly name for this project"),
+    alias: str = typer.Option(..., "--project", "-p", help="Human-friendly name for this project"),
     url: str = typer.Option(
         DEFAULT_STACK_URL,
         help="Keboola stack URL",
@@ -252,9 +252,9 @@ def project_create(
         help="Keboola stack URL to create the project on (required -- never guessed)",
     ),
     alias: str | None = typer.Option(
-        None, "--project", help="Local alias for the new project (default: from its name)"
+        None, "--project", "-p", help="Local alias for the new project (default: from its name)"
     ),
-    name: str | None = typer.Option(None, "--name", help="Name for the new Keboola project"),
+    name: str | None = typer.Option(None, "--name", "-n", help="Name for the new Keboola project"),
     backend: ProjectBackend | None = typer.Option(
         None, "--backend", help="Storage backend (default: the stack's own default)"
     ),
@@ -317,7 +317,7 @@ def project_list(ctx: typer.Context) -> None:
 @project_app.command("remove")
 def project_remove(
     ctx: typer.Context,
-    alias: str = typer.Option(..., "--project", help="Alias of the project to remove"),
+    alias: str = typer.Option(..., "--project", "-p", help="Alias of the project to remove"),
 ) -> None:
     """Remove a Keboola project connection."""
     formatter = get_formatter(ctx)
@@ -339,7 +339,7 @@ def _format_remove_result(c: Console, d: dict[str, Any]) -> None:
 @project_app.command("edit")
 def project_edit(
     ctx: typer.Context,
-    alias: str = typer.Option(..., "--project", help="Alias of the project to edit"),
+    alias: str = typer.Option(..., "--project", "-p", help="Alias of the project to edit"),
     url: str | None = typer.Option(None, help="New Keboola stack URL"),
     token: str | None = typer.Option(
         None,
@@ -543,7 +543,7 @@ def _format_refresh_result(console: Console, data: dict) -> None:
 @project_app.command("status")
 def project_status(
     ctx: typer.Context,
-    project: str | None = typer.Option(None, "--project", help=FANOUT_ONE_PROJECT_HELP),
+    project: str | None = typer.Option(None, "--project", "-p", help=FANOUT_ONE_PROJECT_HELP),
     all_projects: AllProjectsOption = False,
 ) -> None:
     """Test connectivity to the active project, one project, or all projects."""
@@ -746,6 +746,7 @@ def project_description_get(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias to query",
     ),
 ) -> None:
@@ -782,6 +783,7 @@ def project_description_set(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias to update",
     ),
     text: str | None = typer.Option(
@@ -878,6 +880,7 @@ def project_info(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias to query",
     ),
 ) -> None:
@@ -1035,7 +1038,6 @@ def project_invite(
     role: ProjectRole | None = typer.Option(
         None,
         "--role",
-        "-r",
         help="Role to grant: " + " | ".join(PROJECT_ROLES),
     ),
     reason: str | None = typer.Option(
@@ -1286,7 +1288,6 @@ def project_member_set_role(
     role: ProjectRole = typer.Option(
         ...,
         "--role",
-        "-r",
         help="New role: " + " | ".join(PROJECT_ROLES),
     ),
 ) -> None:

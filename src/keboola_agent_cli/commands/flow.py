@@ -158,6 +158,7 @@ def flow_list(
     project: list[str] | None = typer.Option(
         None,
         "--project",
+        "-p",
         help=FANOUT_PROJECT_HELP,
     ),
     all_projects: AllProjectsOption = False,
@@ -263,7 +264,7 @@ def _format_flows_table(
 @flow_app.command("detail")
 def flow_detail(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
     flow_id: str = typer.Option(..., "--flow-id", help="Flow configuration ID"),
     branch: int | None = typer.Option(None, "--branch", help="Dev branch ID"),
 ) -> None:
@@ -401,6 +402,7 @@ def flow_schema(
     project: str | None = typer.Option(
         None,
         "--project",
+        "-p",
         help="Project alias -- with --full, fetch the live schema from this stack.",
     ),
 ) -> None:
@@ -533,6 +535,7 @@ def flow_validate(
     project: str | None = typer.Option(
         None,
         "--project",
+        "-p",
         help=(
             "Project alias -- fetch the live JSON Schema from the stack for full "
             "structural + semantic validation. Without it, only semantic checks run."
@@ -627,8 +630,8 @@ def _load_flow_yaml(raw: str) -> dict[str, Any]:
 @flow_app.command("new")
 def flow_new(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
-    name: str = typer.Option(..., "--name", help="Flow name"),
+    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    name: str = typer.Option(..., "--name", "-n", help="Flow name"),
     description: str = typer.Option("", "--description", help="Optional description"),
     file: str | None = typer.Option(
         None,
@@ -701,9 +704,9 @@ def flow_new(
 @flow_app.command("update")
 def flow_update(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
     flow_id: str = typer.Option(..., "--flow-id", help="Flow configuration ID"),
-    name: str | None = typer.Option(None, "--name", help="New flow name"),
+    name: str | None = typer.Option(None, "--name", "-n", help="New flow name"),
     description: str | None = typer.Option(None, "--description", help="New description"),
     file: str | None = typer.Option(
         None,
@@ -783,7 +786,7 @@ def flow_update(
 @flow_app.command("delete")
 def flow_delete(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
     flow_id: str = typer.Option(..., "--flow-id", help="Flow configuration ID"),
     branch: int | None = typer.Option(None, "--branch", help="Dev branch ID"),
     dry_run: bool = typer.Option(
@@ -852,13 +855,13 @@ def flow_delete(
 @flow_app.command("schedule")
 def flow_schedule(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
     flow_id: str = typer.Option(..., "--flow-id", help="Flow configuration ID"),
     cron: str = typer.Option(..., "--cron", help="Cron expression (e.g. '0 6 * * *')"),
     timezone: str = typer.Option("UTC", "--timezone", help="IANA timezone (default: UTC)"),
     enabled: bool = typer.Option(True, "--enabled/--disabled", help="Enable the schedule"),
     schedule_name: str | None = typer.Option(
-        None, "--name", help="Name for the scheduler config (auto-generated if omitted)"
+        None, "--name", "-n", help="Name for the scheduler config (auto-generated if omitted)"
     ),
     branch: int | None = typer.Option(None, "--branch", help="Dev branch ID"),
 ) -> None:
@@ -936,7 +939,7 @@ def _print_schedule_list(formatter: Any, schedules: list[dict[str, Any]]) -> Non
 @flow_app.command("schedule-remove")
 def flow_schedule_remove(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
     flow_id: str = typer.Option(..., "--flow-id", help="Flow configuration ID"),
     branch: int | None = typer.Option(None, "--branch", help="Dev branch ID"),
     dry_run: bool = typer.Option(
