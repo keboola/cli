@@ -22,7 +22,7 @@ def register(app: typer.Typer) -> None:
     @app.command("restore", rich_help_panel="Lifecycle")
     def config_restore(
         ctx: typer.Context,
-        project: str = typer.Option(..., "--project", help="Project alias"),
+        project: str = typer.Option(..., "--project", "-p", help="Project alias"),
         component_id: str = typer.Option(
             ..., "--component-id", help="Component ID (e.g. keboola.snowflake-transformation)"
         ),
@@ -65,7 +65,7 @@ def register(app: typer.Typer) -> None:
     @app.command("trash-list", rich_help_panel="Lifecycle")
     def config_trash_list(
         ctx: typer.Context,
-        project: str = typer.Option(..., "--project", help="Project alias"),
+        project: str = typer.Option(..., "--project", "-p", help="Project alias"),
         component_id: str | None = typer.Option(
             None, "--component-id", help="Limit to one component's trashed configurations"
         ),

@@ -82,7 +82,6 @@ def permissions_list(
     category: str | None = typer.Option(
         None,
         "--category",
-        "-c",
         help="Filter by risk category: read, write, destructive, admin",
     ),
 ) -> None:
@@ -256,7 +255,6 @@ def permissions_set(
     mode: str = typer.Option(
         ...,
         "--mode",
-        "-m",
         help="Base mode: 'allow' (default-allow) or 'deny' (default-deny)",
     ),
     allow: list[str] | None = typer.Option(
@@ -268,7 +266,6 @@ def permissions_set(
     deny: list[str] | None = typer.Option(
         None,
         "--deny",
-        "-d",
         help="Denied operation patterns (repeatable)",
     ),
 ) -> None:

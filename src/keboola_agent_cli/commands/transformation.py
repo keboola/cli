@@ -99,8 +99,8 @@ def _render_blocks_human(console: Console, data: dict[str, Any]) -> None:
 @transformation_app.command("create")
 def transformation_create(
     ctx: typer.Context,
-    project: str | None = typer.Option(None, "--project", help="Project alias"),
-    name: str = typer.Option(..., "--name", help="Transformation name"),
+    project: str | None = typer.Option(None, "--project", "-p", help="Project alias"),
+    name: str = typer.Option(..., "--name", "-n", help="Transformation name"),
     sql: str | None = typer.Option(
         None,
         "--sql",
@@ -218,7 +218,7 @@ def transformation_create(
 @transformation_app.command("show")
 def transformation_show(
     ctx: typer.Context,
-    project: str | None = typer.Option(None, "--project", help="Project alias"),
+    project: str | None = typer.Option(None, "--project", "-p", help="Project alias"),
     config_id: str = typer.Option(..., "--config-id", help="Configuration ID"),
     component_id: str | None = typer.Option(
         None,
@@ -265,7 +265,7 @@ def transformation_show(
 @transformation_app.command("edit")
 def transformation_edit(
     ctx: typer.Context,
-    project: str | None = typer.Option(None, "--project", help="Project alias"),
+    project: str | None = typer.Option(None, "--project", "-p", help="Project alias"),
     config_id: str = typer.Option(..., "--config-id", help="Configuration ID"),
     component_id: str | None = typer.Option(
         None,

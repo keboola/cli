@@ -103,7 +103,7 @@ def register(app: typer.Typer) -> None:
     @app.command("triggers")
     def flow_triggers(
         ctx: typer.Context,
-        project: str = typer.Option(..., "--project", help="Project alias"),
+        project: str = typer.Option(..., "--project", "-p", help="Project alias"),
         flow_id: str = typer.Option(..., "--flow-id", help="Flow configuration ID"),
         branch: int | None = typer.Option(
             None,

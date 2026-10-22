@@ -181,22 +181,21 @@ class TestChangelogCliIntegration:
     def test_summary_is_shorter_than_full(self, monkeypatch) -> None:
         monkeypatch.setenv(ENV_SKIP_UPDATE, "1")
         runner = CliRunner()
-        summary = runner.invoke(app, ["changelog", "-n", "3"])
-        full = runner.invoke(app, ["changelog", "-n", "3", "--full"])
+        summary = runner.invoke(app, ["changelog", "-L", "3"])
+        full = runner.invoke(app, ["changelog", "-L", "3", "--full"])
         assert summary.exit_code == 0, summary.output
         assert full.exit_code == 0, full.output
         assert len(summary.output) < len(full.output)
 
-    def test_v_is_an_alias_for_full(self, monkeypatch) -> None:
+    def test_v_is_not_a_short_flag_of_full(self, monkeypatch) -> None:
+        """-v is the global --verbose (spec A2), so `changelog -v` is a usage error."""
         monkeypatch.setenv(ENV_SKIP_UPDATE, "1")
-        runner = CliRunner()
-        short_flag = runner.invoke(app, ["changelog", "-n", "2", "-v"])
-        long_flag = runner.invoke(app, ["changelog", "-n", "2", "--full"])
-        assert short_flag.output == long_flag.output
+        result = CliRunner().invoke(app, ["changelog", "-L", "2", "-v"])
+        assert result.exit_code == 2, result.output
 
     def test_json_payload_has_no_full_key(self, monkeypatch) -> None:
         monkeypatch.setenv(ENV_SKIP_UPDATE, "1")
-        result = CliRunner().invoke(app, ["--json", "changelog", "-n", "1"])
+        result = CliRunner().invoke(app, ["--json", "changelog", "-L", "1"])
         assert result.exit_code == 0, result.output
         data = json.loads(result.output)["data"]
         assert list(data.keys()) == ["entries"]

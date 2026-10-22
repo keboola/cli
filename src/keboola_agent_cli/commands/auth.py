@@ -483,6 +483,7 @@ def auth_login_password(
     email: str = typer.Option(
         ...,
         "--email",
+        "-e",
         envvar=ENV_KBC_LOGIN_EMAIL,
         help="Account email. Also settable via KBC_LOGIN_EMAIL.",
     ),

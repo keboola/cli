@@ -37,8 +37,8 @@ scope_app = typer.Typer(
     no_args_is_help=True,
 )
 
-_PROJECT = typer.Option(..., "--project", help="Owning project alias")
-_TYPE = typer.Option(..., "--type", help="Semantic item type")
+_PROJECT = typer.Option(..., "--project", "-p", help="Owning project alias")
+_TYPE = typer.Option(..., "--type", "-t", help="Semantic item type")
 _CONTEXT_ID = typer.Option(..., "--context-id", help="Item UUID")
 _TARGET_PROJECT = typer.Option(
     [],
@@ -245,9 +245,11 @@ def scope_request_delete(
 @scope_app.command("request-list")
 def scope_request_list(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias (org-admin token)"),
+    project: str = typer.Option(..., "--project", "-p", help="Project alias (org-admin token)"),
     type_: ItemType = _TYPE,
-    limit: int = typer.Option(DEFAULT_REQUEST_LIST_LIMIT, "--limit", min=1, help="Max results"),
+    limit: int = typer.Option(
+        DEFAULT_REQUEST_LIST_LIMIT, "--limit", "-L", min=1, help="Max results"
+    ),
     offset: int = typer.Option(0, "--offset", min=0, help="Skip this many results"),
 ) -> None:
     """List items of --type awaiting an org-admin's elevation decision, across the org."""

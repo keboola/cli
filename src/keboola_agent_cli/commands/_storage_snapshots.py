@@ -56,11 +56,11 @@ def register(app: typer.Typer) -> None:
     @app.command("snapshots", rich_help_panel=_SNAPSHOTS)
     def storage_snapshots(
         ctx: typer.Context,
-        project: str = typer.Option(..., "--project", help="Project alias"),
+        project: str = typer.Option(..., "--project", "-p", help="Project alias"),
         table_id: str = typer.Option(
             ..., "--table-id", help="Table ID (e.g. 'in.c-my-bucket.my-table')"
         ),
-        limit: int | None = typer.Option(None, "--limit", help="Max snapshots to return"),
+        limit: int | None = typer.Option(None, "--limit", "-L", help="Max snapshots to return"),
         branch: int | None = typer.Option(
             None, "--branch", help="Dev branch ID (production endpoint by default)"
         ),
@@ -114,7 +114,7 @@ def register(app: typer.Typer) -> None:
     @app.command("snapshot-create", rich_help_panel=_SNAPSHOTS)
     def storage_snapshot_create(
         ctx: typer.Context,
-        project: str = typer.Option(..., "--project", help="Project alias"),
+        project: str = typer.Option(..., "--project", "-p", help="Project alias"),
         table_id: str = typer.Option(
             ..., "--table-id", help="Table ID to snapshot (e.g. 'in.c-my-bucket.my-table')"
         ),
@@ -163,7 +163,7 @@ def register(app: typer.Typer) -> None:
     @app.command("snapshot-detail", rich_help_panel=_SNAPSHOTS)
     def storage_snapshot_detail(
         ctx: typer.Context,
-        project: str = typer.Option(..., "--project", help="Project alias"),
+        project: str = typer.Option(..., "--project", "-p", help="Project alias"),
         snapshot_id: str = typer.Option(..., "--snapshot-id", help="Snapshot ID"),
     ) -> None:
         """Show one snapshot's detail (source table, creation time, description)."""
@@ -189,7 +189,7 @@ def register(app: typer.Typer) -> None:
     @app.command("snapshot-delete", rich_help_panel=_SNAPSHOTS)
     def storage_snapshot_delete(
         ctx: typer.Context,
-        project: str = typer.Option(..., "--project", help="Project alias"),
+        project: str = typer.Option(..., "--project", "-p", help="Project alias"),
         snapshot_id: list[str] = typer.Option(
             ..., "--snapshot-id", help="Snapshot ID to delete (repeat for multiple)"
         ),
@@ -236,13 +236,13 @@ def register(app: typer.Typer) -> None:
     @app.command("table-from-snapshot", rich_help_panel=_SNAPSHOTS)
     def storage_table_from_snapshot(
         ctx: typer.Context,
-        project: str = typer.Option(..., "--project", help="Project alias"),
+        project: str = typer.Option(..., "--project", "-p", help="Project alias"),
         snapshot_id: str = typer.Option(..., "--snapshot-id", help="Source snapshot ID"),
         bucket_id: str = typer.Option(
             ..., "--bucket-id", help="Destination bucket ID (e.g. 'in.c-my-bucket')"
         ),
         name: str = typer.Option(
-            ..., "--name", help="Name for the new table (required by the API)"
+            ..., "--name", "-n", help="Name for the new table (required by the API)"
         ),
         branch: int | None = typer.Option(
             None,

@@ -42,6 +42,7 @@ def register(app: typer.Typer) -> None:
         project: str = typer.Option(
             ...,
             "--project",
+            "-p",
             help="Project alias",
         ),
         bucket_id: str = typer.Option(
@@ -115,6 +116,7 @@ def register(app: typer.Typer) -> None:
         project: str = typer.Option(
             ...,
             "--project",
+            "-p",
             help="Project alias",
         ),
         table_id: str = typer.Option(
@@ -188,6 +190,7 @@ def register(app: typer.Typer) -> None:
         project: str = typer.Option(
             ...,
             "--project",
+            "-p",
             help="Project alias",
         ),
         table_id: str = typer.Option(
@@ -293,6 +296,7 @@ def register(app: typer.Typer) -> None:
         project: str = typer.Option(
             ...,
             "--project",
+            "-p",
             help="Project alias",
         ),
         from_file: Path = typer.Option(
@@ -438,6 +442,7 @@ def register(app: typer.Typer) -> None:
         project: str = typer.Option(
             ...,
             "--project",
+            "-p",
             help="Project alias",
         ),
         table_id: list[str] | None = typer.Option(

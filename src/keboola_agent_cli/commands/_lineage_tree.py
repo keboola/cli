@@ -21,7 +21,7 @@ from ..services.deep_lineage_service import DeepLineageService, LineageGraph
 
 DIAGRAM_FORMATS = ("mermaid", "html", "er")
 
-# `-f html` renders a picture; at depth 10 a real project's fan-in renders
+# `--format html` renders a picture; at depth 10 a real project's fan-in renders
 # unreadably small, so html alone defaults shallower (#848). Explicit
 # `--depth` always wins, and `--json` keeps the data default.
 HTML_DEFAULT_DEPTH = 3

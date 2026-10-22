@@ -160,7 +160,7 @@ def changelog_command(
     limit: int = typer.Option(
         DEFAULT_CHANGELOG_LIMIT,
         "--limit",
-        "-n",
+        "-L",
         help="Number of versions to show.",
         min=1,
         max=100,
@@ -168,7 +168,6 @@ def changelog_command(
     full: bool = typer.Option(
         False,
         "--full",
-        "-v",
         help="Show complete notes for each version (default: headlines of the BREAKING and first notes).",
     ),
 ) -> None:

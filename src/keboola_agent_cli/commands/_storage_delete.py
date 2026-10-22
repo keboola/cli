@@ -30,6 +30,7 @@ def register(app: typer.Typer) -> None:
         project: str = typer.Option(
             ...,
             "--project",
+            "-p",
             help="Project alias",
         ),
         bucket_id: list[str] = typer.Option(
@@ -119,6 +120,7 @@ def register(app: typer.Typer) -> None:
         project: str = typer.Option(
             ...,
             "--project",
+            "-p",
             help="Project alias",
         ),
         file_id: list[int] = typer.Option(

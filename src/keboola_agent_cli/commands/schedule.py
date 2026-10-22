@@ -132,6 +132,7 @@ def schedule_list(
     project: list[str] | None = typer.Option(
         None,
         "--project",
+        "-p",
         help=FANOUT_PROJECT_HELP,
     ),
     all_projects: AllProjectsOption = False,
@@ -189,7 +190,7 @@ def schedule_list(
 @schedule_app.command("detail")
 def schedule_detail(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
     schedule_id: str = typer.Option(
         ..., "--schedule-id", help="keboola.scheduler configuration ID"
     ),
@@ -252,6 +253,7 @@ def schedule_find(
     project: list[str] | None = typer.Option(
         None,
         "--project",
+        "-p",
         help=FANOUT_PROJECT_HELP,
     ),
     all_projects: AllProjectsOption = False,

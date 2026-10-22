@@ -151,6 +151,7 @@ def component_list(
     project: list[str] | None = typer.Option(
         None,
         "--project",
+        "-p",
         help=FANOUT_PROJECT_HELP,
     ),
     all_projects: bool = typer.Option(
@@ -161,6 +162,7 @@ def component_list(
     component_type: str | None = typer.Option(
         None,
         "--type",
+        "-t",
         help="Filter by component type: extractor, writer, transformation, application",
     ),
     query: str | None = typer.Option(
@@ -217,6 +219,7 @@ def component_detail(
     project: str | None = typer.Option(
         None,
         "--project",
+        "-p",
         help="Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)",
     ),
 ) -> None:
@@ -281,6 +284,7 @@ def component_sync_action(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias",
     ),
     branch: int | None = typer.Option(
