@@ -2877,6 +2877,33 @@ def test_workspace_gc_route_forwards_target(
     ws_svc.gc_workspaces.assert_called_once_with(aliases=aliases, dry_run=True)
 
 
+@pytest.mark.parametrize(
+    ("body", "expected_governed"),
+    [({"name": "ws"}, False), ({"name": "ws", "governed": True}, True)],
+    ids=["default", "governed"],
+)
+def test_workspace_create_route_forwards_governed(
+    tmp_path: Path, body: dict[str, object], expected_governed: bool
+) -> None:
+    """POST /workspaces/{project} mirrors `workspace create --governed`: the flag reaches the service."""
+    ws_svc = MagicMock()
+    ws_svc.create_workspace.return_value = {"workspace_id": 7, "governed": expected_governed}
+    app = _make_app_with_registry(tmp_path, _mock_registry(workspace=ws_svc))
+
+    with TestClient(app) as client:
+        res = client.post(f"/workspaces/{PROJECT}", json=body, headers=AUTH)
+
+    assert res.status_code == 200, res.text
+    ws_svc.create_workspace.assert_called_once_with(
+        alias=PROJECT,
+        name="ws",
+        backend=None,
+        read_only=True,
+        ui_mode=False,
+        governed=expected_governed,
+    )
+
+
 def test_workspace_load_route_defaults(tmp_path: Path) -> None:
     """POST .../load forwards the auto defaults and never passes a guard prompt.
 

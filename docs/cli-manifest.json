@@ -4075,13 +4075,14 @@
       "kind": "command",
       "hidden": false,
       "category": "write",
-      "help": "Create a new workspace.\n\nDefault: fast headless mode via Storage API (~1s).\nWith --ui: creates via Queue job (~15s), visible in Keboola UI Workspaces tab --\nonly on stacks where keboola.sandboxes still provisions SQL workspaces.",
+      "help": "Create a new workspace.\n\nDefault: fast headless mode via Storage API (~1s).\nWith --ui: creates via Queue job (~15s), visible in Keboola UI Workspaces tab --\nonly on stacks where keboola.sandboxes still provisions SQL workspaces.\nWith --governed: a workspace without credentials that only Query Service can read.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "required": true, "default": null, "help": "Project alias to create the workspace in"},
         {"kind": "option", "name": "name", "opts": ["--name", "-n"], "type": "text", "default": "", "help": "Name for the workspace (shown in Keboola UI)"},
         {"kind": "option", "name": "backend", "opts": ["--backend"], "type": "text", "default": null, "help": "Workspace backend (auto-detected from project if omitted)"},
         {"kind": "option", "name": "read_only", "opts": ["--read-only"], "secondary_opts": ["--no-read-only"], "type": "boolean", "is_flag": true, "default": true, "help": "Whether the workspace has read-only storage access"},
-        {"kind": "option", "name": "ui", "opts": ["--ui"], "type": "boolean", "is_flag": true, "default": false, "help": "Fails on current SaaS stacks: the keboola.sandboxes component no longer provisions SQL workspaces, so the job ends in WORKSPACE_NOT_FOUND and the attempt is rolled back (#755). Works only on stacks where that component still provisions them: creates via Queue job (~15s), visible in the Keboola UI"}
+        {"kind": "option", "name": "ui", "opts": ["--ui"], "type": "boolean", "is_flag": true, "default": false, "help": "Fails on current SaaS stacks: the keboola.sandboxes component no longer provisions SQL workspaces, so the job ends in WORKSPACE_NOT_FOUND and the attempt is rolled back (#755). Works only on stacks where that component still provisions them: creates via Queue job (~15s), visible in the Keboola UI"},
+        {"kind": "option", "name": "governed", "opts": ["--governed"], "type": "boolean", "is_flag": true, "default": false, "help": "Create a governed workspace (Snowflake only, not with --ui): it has no login and no credentials, only Query Service reads it and the row- and column-level policies of the project apply. Needs a stack whose Connection accepts loginType 'governed' (no project feature is needed)."}
       ]
     },
     {

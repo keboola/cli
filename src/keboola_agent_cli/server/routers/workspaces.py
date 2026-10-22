@@ -23,6 +23,8 @@ class WorkspaceCreate(BaseModel):
     backend: str | None = None
     read_only: bool = True
     ui_mode: bool = False
+    # Snowflake only, not with ui_mode: a workspace with no login that only Query Service reads.
+    governed: bool = False
 
 
 class WorkspaceLoad(BaseModel):
@@ -158,6 +160,7 @@ def create(
         backend=body.backend,
         read_only=body.read_only,
         ui_mode=body.ui_mode,
+        governed=body.governed,
     )
 
 

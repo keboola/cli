@@ -1356,7 +1356,7 @@ SQL transformations - create, inspect, and edit blocks/codes
 Workspace lifecycle for SQL debugging
 
   kbagent workspace create --project PROJECT [--name NAME] [--backend BACKEND]
-      [--read-only/--no-read-only] [--ui]
+      [--read-only/--no-read-only] [--ui] [--governed]
     Create a new workspace.
 
   kbagent workspace delete --project PROJECT --workspace-id N [--dry-run]
