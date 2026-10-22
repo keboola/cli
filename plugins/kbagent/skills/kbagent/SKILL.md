@@ -126,7 +126,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Read a single metadata value by key | `kbagent config get-metadata --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID --key KEY` |
 | Set a metadata key/value on a configuration (upsert) | `kbagent config set-metadata --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID --key KEY --value VALUE` |
 | Delete a configuration metadata entry by its numeric ID | `kbagent config delete-metadata --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID --metadata-id METADATA-ID` |
-| Set the folder (KBC.configuration.folderName) on a configuration | `kbagent config set-folder --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID --name NAME` |
+| Set the UI folder of a configuration (its `folder` field) | `kbagent config set-folder --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID --name NAME` |
 | Assign variables to a config (auto-creates backing keboola.variables on first call) | `kbagent config variables-set --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Read the current variable values attached to a config | `kbagent config variables-get --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Unlink variables from a config (does NOT delete the underlying keboola.variables) | `kbagent config variables-clear --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |

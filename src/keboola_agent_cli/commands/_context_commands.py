@@ -254,7 +254,7 @@ Browse and inspect configurations
 
   kbagent config set-folder --project PROJECT --component-id ID --config-id ID
       --name NAME [--branch N]
-    Set the folder (KBC.configuration.folderName) on a configuration.
+    Set the UI folder of a configuration (its `folder` field).
 
   kbagent config set-metadata --project PROJECT --component-id ID
       --config-id ID --key KEY --value VALUE [--branch N]

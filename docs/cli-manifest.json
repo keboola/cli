@@ -749,7 +749,7 @@
       "kind": "command",
       "hidden": false,
       "category": "write",
-      "help": "Set the folder (KBC.configuration.folderName) on a configuration.\n\nOrganises configs into named groups in the Keboola UI.\nPass an empty string to remove the folder assignment.",
+      "help": "Set the UI folder of a configuration (its `folder` field).\n\nOrganises configs into named groups in the Keboola UI. The name is\ntrimmed; pass an empty string to remove the folder assignment.\nSetting the folder creates no configuration version.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project"], "type": "text", "required": true, "default": null, "help": "Project alias"},
         {"kind": "option", "name": "component_id", "opts": ["--component-id"], "type": "text", "required": true, "default": null, "help": "Component ID"},

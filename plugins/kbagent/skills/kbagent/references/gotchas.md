@@ -33,6 +33,43 @@ From the release of kbagent 1.0.0 until its migration date (28 days later), the 
 - **An unknown group** is `INVALID_ARGUMENT` (exit 2), and the message lists the valid groups.
 - **The command lists are generated from the command manifest**, so they always match `--help`. On 0.x, `kbagent context` takes no argument and prints the whole hand-written text.
 
+## Config folder is the configuration's `folder` field, not the `KBC.configuration.folderName` metadata key
+
+*(since vNEXT)* (DMD-2348)
+
+- **`config set-folder`** (and `POST /configs/{project}/{component_id}/{config_id}/folder`
+  over `kbagent serve`) writes the configuration's `folder` field with a config PUT. The
+  Storage API trims the name, rejects one over 400 characters (HTTP 400), stores an empty one
+  as "no folder", and creates no configuration version. The `--json` result keeps its keys:
+  `folder`, `value` (the folder as stored, `""` when cleared), `key` (frozen at
+  `"KBC.configuration.folderName"`), and `result` (now `{id, name, folder}` from the PUT
+  response instead of the metadata POST response).
+- **`config list`** reads `folder` from the components listing it already fetches. The
+  `search/component-configurations` call (and the `dev-branches` lookup it needed) is gone,
+  so one project costs one request instead of three.
+- **`sync pull`** reads the folder the same way and stores it in the manifest under the old
+  key name `KBC.configuration.folderName`, so existing trees and scaffolds keep working.
+  When the listing carries no `folder` field at all (a stack without it), pull keeps each
+  config's folder from the previous pull and reports `folder_lookup_failed: true`.
+- **`sync push` / `sync clone`** send the manifest folder as the create POST's `folder`
+  field. They no longer POST `KBC.configuration.folderName` to the metadata API; other
+  `KBC.*` manifest keys still go there. Only the create path carries the folder: a plain
+  push does not change the folder of an existing config, and `config clone` (server-side
+  copy) does not copy it -- use `config set-folder` for both.
+- Do not write `KBC.configuration.folderName` with `config set-metadata` any more. The
+  metadata API keeps working for that key server-side (the `folder` column mirrors it),
+  but first-party clients no longer read or write it.
+- **Stack requirement:** the field comes with keboola/connection DMD-2347. A stack
+  without it accepts and ignores the `folder` param, so kbagent checks the response:
+  `config set-folder` fails with `FEATURE_NOT_ENABLED` (exit 5; HTTP 400 over
+  `kbagent serve`) and changes nothing, `sync push` / `sync clone` still create the
+  config but add a `folder_not_supported` entry to `warnings[]` (with `config_id` and
+  `folder`), `sync pull` keeps the previous folders (`folder_lookup_failed: true`), and
+  `config list` shows every folder as `""`. kbagent never falls back to the metadata key.
+- The `result` of `config set-folder --json` changed shape: it was the metadata POST
+  response (a list of `{id, key, value, ...}`), it is now the object `{id, name, folder}`.
+  A consumer reading `result[0]["id"]` (the metadata id) must stop.
+
 ## One JSON document for every exit, root flags after the subcommand, `-h`, repeated options
 
 *(since vNEXT)* (CLI-44, #791)
@@ -1231,13 +1268,14 @@ Two follow-on contract notes:
   reports `status: no_changes, created: 0`. No more "every fresh-create
   emit doubles the manifest" workaround needed.
 - **`KBC.configuration.*` metadata propagates on CREATE.** If a placeholder
-  entry's `metadata` dict contains keys starting with `KBC.` (e.g.
-  `KBC.configuration.folderName`), they are POSTed to the metadata API
-  via `client.set_config_metadata` immediately after the create call.
+  entry's `metadata` dict contains keys starting with `KBC.`, they are
+  POSTed to the metadata API via `client.set_config_metadata` immediately
+  after the create call. (updated vNEXT) `KBC.configuration.folderName` is
+  sent as the create call's `folder` field instead, never to the metadata API.
   Bookkeeping keys (`pull_hash`, `pull_config_hash`, ...) are filtered
   out by the `KBC.` prefix check. `_push_update` does **not** propagate
-  metadata — use `kbagent config set-metadata` (or `config set-folder`)
-  for that.
+  metadata — use `kbagent config set-metadata` (or `config set-folder`
+  for the folder) for that.
 
 If a downstream consumer has been working around the duplication by
 post-processing the manifest, drop that workaround. The single-entry
@@ -1332,6 +1370,12 @@ non-dict body), pull keeps each config's folder from the previous pull instead o
 stripping it, and reports `folder_lookup_failed: true` in the result. A `true`
 value means the folders were not refreshed this pull -- it separates "no folders
 configured" from "the lookup failed".
+
+- (updated vNEXT) Pull no longer makes the `search/component-configurations` call:
+  the folder is the configuration's own `folder` field in the listing pull already
+  reads, and push / clone send it on the create POST. `folder_lookup_failed: true`
+  now means the listing carried no `folder` field. See "Config folder is the
+  configuration's `folder` field" at the top.
 
 ## `storage create-table --if-not-exists` returns `action: skipped` instead of raising on duplicate display name
 

@@ -166,6 +166,7 @@ class FakeApi:
         change_description: str = "",
         branch_id: int | None = None,
         is_disabled: bool | None = None,
+        folder: str | None = None,
     ) -> dict[str, Any]:
         config = self._find(component_id, config_id)
         self.update_calls.append({"component_id": component_id, "configuration": configuration})
@@ -187,6 +188,7 @@ class FakeApi:
         description: str = "",
         branch_id: int | None = None,
         is_disabled: bool = False,
+        folder: str | None = None,
     ) -> dict[str, Any]:
         config: dict[str, Any] = {
             "id": "cfg-new",

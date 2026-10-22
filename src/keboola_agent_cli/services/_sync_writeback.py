@@ -12,6 +12,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from ..constants import FOLDER_METADATA_KEY
 from ..errors import KeboolaApiError
 from ..sync.config_format import BASE_CONFIG_HASH_KEY
 from ..sync.manifest import ManifestConfigRow, ManifestConfiguration
@@ -194,6 +195,28 @@ def writeback_create_row_in_manifest(
     return new_row
 
 
+def manifest_folder(
+    manifest: Manifest, component_id: str, branch_id: int | None, config_path_str: str
+) -> str | None:
+    """Return the UI folder the manifest records for a config about to be created.
+
+    The manifest stores the folder under the legacy metadata key name
+    (``FOLDER_METADATA_KEY``); the create POST sends it as the configuration's
+    ``folder`` field. Matches the entry the way the create writeback does, on
+    ``(branch_id, component_id, path)``. ``None`` when there is no folder.
+    """
+    target_branch = branch_id or 0
+    for entry in manifest.configurations:
+        if (
+            entry.branch_id == target_branch
+            and entry.component_id == component_id
+            and entry.path == config_path_str
+        ):
+            folder = entry.metadata.get(FOLDER_METADATA_KEY)
+            return str(folder) if folder else None
+    return None
+
+
 def propagate_kbc_metadata(
     client: Any,
     entry: ManifestConfiguration,
@@ -202,7 +225,10 @@ def propagate_kbc_metadata(
     """POST any ``KBC.*`` keys from the manifest entry to the metadata API.
 
     Bookkeeping keys (``pull_hash``, ``pull_config_hash``, ...) live in the same
-    metadata dict but are filtered by the ``KBC.`` prefix. Called only on CREATE;
+    metadata dict but are filtered by the ``KBC.`` prefix. The folder key
+    (``FOLDER_METADATA_KEY``) is skipped: the create POST already sent it as
+    the configuration's ``folder`` field, and no first-party client writes
+    that key to the metadata API any more. Called only on CREATE;
     updates use ``kbagent config set-metadata`` explicitly. The metadata API
     stores configuration-level annotations only -- this is **not** a secret
     store; do not place tokens or passwords under ``KBC.*`` keys.
@@ -213,7 +239,11 @@ def propagate_kbc_metadata(
     single failed metadata POST is reported back to the push loop as an
     accumulated error rather than aborting the rest of the push.
     """
-    entries = [(key, str(value)) for key, value in entry.metadata.items() if key.startswith("KBC.")]
+    entries = [
+        (key, str(value))
+        for key, value in entry.metadata.items()
+        if key.startswith("KBC.") and key != FOLDER_METADATA_KEY
+    ]
     if not entries:
         return None
     try:
