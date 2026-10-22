@@ -105,6 +105,16 @@ def _classify_qs_compatibility(login_type: str, backend: str) -> bool:
     return login_type in QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES
 
 
+def _governed_usage_error(message: str) -> KeboolaApiError:
+    """A `--governed` combination that cannot work: a usage error (exit 2), refused before anything is created."""
+    return KeboolaApiError(
+        message=message,
+        status_code=0,
+        error_code=ErrorCode.INVALID_ARGUMENT,
+        retryable=False,
+    )
+
+
 def _sandbox_config_delete_command(alias: str, config_id: str, branch_id: int) -> str:
     """Return the 'config delete' command that removes a leftover sandbox config.
 
@@ -380,18 +390,13 @@ class WorkspaceService(BaseService):
             governed workspace).
 
         Raises:
-            KeboolaApiError: INVALID_ARGUMENT for ``governed`` with ``ui_mode``.
-            ConfigError: ``governed`` on a backend other than Snowflake.
+            KeboolaApiError: INVALID_ARGUMENT for ``governed`` with ``ui_mode`` or on a backend
+                other than Snowflake.
         """
         if governed and ui_mode:
-            raise KeboolaApiError(
-                message=(
-                    "--governed cannot be combined with --ui: the Queue job path cannot "
-                    "request a loginType."
-                ),
-                status_code=0,
-                error_code=ErrorCode.INVALID_ARGUMENT,
-                retryable=False,
+            raise _governed_usage_error(
+                "--governed cannot be combined with --ui: the Queue job path cannot "
+                "request a loginType."
             )
         projects = self.resolve_projects([alias])
         project = projects[alias]
@@ -403,7 +408,7 @@ class WorkspaceService(BaseService):
             effective_backend = backend or self._detect_backend(client)
             if governed and effective_backend.lower() != "snowflake":
                 # Before the sandbox config exists, so nothing is left to roll back.
-                raise ConfigError(
+                raise _governed_usage_error(
                     f"--governed is supported only on Snowflake; the backend is '{effective_backend}'."
                 )
             # Step 1: Create keboola.sandboxes config (in the correct branch)

@@ -8102,7 +8102,7 @@ class TestE2EIssue304WorkspaceDiscoverability:
         """--governed creates a workspace with loginType governed: no key, no password, no login."""
         _step(1, "workspace create --governed")
         result = self._run("workspace", "create", "--project", self.alias, "--governed")
-        if result.exit_code == 5 and "only on Snowflake" in result.output:
+        if result.exit_code == 2 and "only on Snowflake" in result.output:
             pytest.skip("--governed needs a Snowflake stack")
         if result.exit_code != 0 and "loginType" in result.output:
             pytest.skip(

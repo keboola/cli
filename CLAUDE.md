@@ -1031,7 +1031,7 @@ kbagent workspace create --project ALIAS [--name NAME] [--backend TYPE] [--ui] [
 # workspace create --governed (AJDA-3460): requests loginType `governed` -- a Snowflake workspace with no login
 #   and no credentials (no private_key, empty password) that only Query Service reads, with the
 #   project's row- and column-level policies applied. Snowflake and headless only (`--governed` with `--ui`
-#   is INVALID_ARGUMENT, exit 2; on a non-Snowflake backend CONFIG_ERROR, exit 5; nothing is created in
+#   and on a non-Snowflake backend are INVALID_ARGUMENT, exit 2; nothing is created in
 #   either case). Needs a stack whose Connection accepts the type; no project feature is needed. The result
 #   carries `governed` and `login_type`; `POST /workspaces/{project}` takes `governed: true`. Version gate
 #   for this entry lives in gotchas.md.

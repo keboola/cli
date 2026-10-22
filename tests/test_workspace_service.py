@@ -223,12 +223,12 @@ class TestCreateWorkspace:
         assert "Save the password" in result["message"]
 
     @pytest.mark.parametrize(
-        ("backend", "default_backend", "ui_mode", "error", "expected"),
+        ("backend", "default_backend", "ui_mode", "expected"),
         [
-            ("bigquery", None, False, ConfigError, "only on Snowflake"),
-            (None, "bigquery", False, ConfigError, "only on Snowflake"),
-            ("snowflake", None, True, KeboolaApiError, "cannot be combined with --ui"),
-            ("bigquery", None, True, KeboolaApiError, "cannot be combined with --ui"),
+            ("bigquery", None, False, "only on Snowflake"),
+            (None, "bigquery", False, "only on Snowflake"),
+            ("snowflake", None, True, "cannot be combined with --ui"),
+            ("bigquery", None, True, "cannot be combined with --ui"),
         ],
         ids=["bigquery", "detected-bigquery", "ui", "ui-wins-over-backend"],
     )
@@ -238,10 +238,9 @@ class TestCreateWorkspace:
         backend: str | None,
         default_backend: str | None,
         ui_mode: bool,
-        error: type[Exception],
         expected: str,
     ) -> None:
-        """An unsupported --governed combination fails before a sandbox config exists."""
+        """An unsupported --governed combination is a usage error before a sandbox config exists."""
         mock_client = MagicMock()
         mock_client.list_dev_branches.return_value = [{"id": 123, "isDefault": True}]
         mock_client.verify_token.return_value.default_backend = default_backend
@@ -249,13 +248,12 @@ class TestCreateWorkspace:
         store = setup_single_project(tmp_config_dir)
         svc = WorkspaceService(config_store=store, client_factory=lambda url, token: mock_client)
 
-        with pytest.raises(error, match=expected) as excinfo:
+        with pytest.raises(KeboolaApiError, match=expected) as excinfo:
             svc.create_workspace(
                 alias="prod", name="ws", backend=backend, ui_mode=ui_mode, governed=True
             )
 
-        if isinstance(excinfo.value, KeboolaApiError):
-            assert excinfo.value.error_code == ErrorCode.INVALID_ARGUMENT
+        assert excinfo.value.error_code == ErrorCode.INVALID_ARGUMENT
         mock_client.create_sandbox_config.assert_not_called()
         mock_client.create_config_workspace.assert_not_called()
 
