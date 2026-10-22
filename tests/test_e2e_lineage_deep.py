@@ -311,7 +311,7 @@ class TestE2ELineageDeep:
                 "--depth",
                 "1",
                 "--columns",
-                "-c",
+                "--column",
                 col,
             ],
         )

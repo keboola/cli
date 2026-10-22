@@ -91,7 +91,7 @@ def _read_secrets_file(path: Path) -> dict[str, str]:
 
 def data_app_secrets_set(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
     app_id: str = typer.Option(..., "--app-id", help="Data Science numeric app id"),
     secret: list[str] | None = typer.Option(
         None,
@@ -238,7 +238,7 @@ def data_app_secrets_set(
 
 def data_app_secrets_list(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
     app_id: str = typer.Option(..., "--app-id", help="Data Science numeric app id"),
     branch: int | None = typer.Option(
         None,
@@ -298,7 +298,7 @@ def data_app_secrets_list(
 
 def data_app_secrets_get(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
     app_id: str = typer.Option(..., "--app-id", help="Data Science numeric app id"),
     key: str = typer.Option(
         ..., "--key", help="Env-var key (with optional '#' prefix for encrypted secrets)."
@@ -365,7 +365,7 @@ def data_app_secrets_get(
 
 def data_app_secrets_remove(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
     app_id: str = typer.Option(..., "--app-id", help="Data Science numeric app id"),
     key: list[str] = typer.Option(
         ...,

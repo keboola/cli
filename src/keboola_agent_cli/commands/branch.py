@@ -50,6 +50,7 @@ def branch_list(
     project: list[str] | None = typer.Option(
         None,
         "--project",
+        "-p",
         help=FANOUT_PROJECT_HELP,
     ),
     all_projects: AllProjectsOption = False,
@@ -78,11 +79,13 @@ def branch_create(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias to create the branch in",
     ),
     name: str = typer.Option(
         ...,
         "--name",
+        "-n",
         help="Name for the new development branch",
     ),
     description: str = typer.Option(
@@ -120,6 +123,7 @@ def branch_use(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias to set the active branch for",
     ),
     branch: int = typer.Option(
@@ -157,6 +161,7 @@ def branch_reset(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias to reset the active branch for",
     ),
 ) -> None:
@@ -195,6 +200,7 @@ def branch_delete(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias to delete the branch from",
     ),
     branch: int = typer.Option(
@@ -240,6 +246,7 @@ def branch_merge(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias",
     ),
     branch: int | None = typer.Option(
@@ -290,6 +297,7 @@ def branch_metadata_list(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias to query",
     ),
     branch: str = typer.Option(
@@ -326,7 +334,7 @@ def branch_metadata_list(
 @branch_app.command("metadata-get")
 def branch_metadata_get(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias to query"),
+    project: str = typer.Option(..., "--project", "-p", help="Project alias to query"),
     key: str = typer.Option(..., "--key", help="Metadata key to read"),
     branch: str = typer.Option(
         "default",
@@ -361,7 +369,7 @@ def branch_metadata_get(
 @branch_app.command("metadata-set")
 def branch_metadata_set(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
     key: str = typer.Option(..., "--key", help="Metadata key to set"),
     text: str | None = typer.Option(
         None, "--text", help="Inline string value", callback=RefuseAtFile("--file").callback
@@ -416,7 +424,7 @@ def branch_metadata_set(
 @branch_app.command("metadata-delete")
 def branch_metadata_delete(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
     metadata_id: int = typer.Option(
         ...,
         "--metadata-id",

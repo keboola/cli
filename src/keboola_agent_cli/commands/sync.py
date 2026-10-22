@@ -91,6 +91,7 @@ def sync_init(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias to initialize sync for",
     ),
     directory: Path = typer.Option(
@@ -544,6 +545,7 @@ def sync_pull(
     project: str | None = typer.Option(
         None,
         "--project",
+        "-p",
         help="Project alias to pull configurations from",
     ),
     all_projects: bool = typer.Option(
@@ -810,6 +812,7 @@ def sync_diff(
     project: str | None = typer.Option(
         None,
         "--project",
+        "-p",
         help="Project alias to diff against",
     ),
     all_projects: bool = typer.Option(
@@ -990,6 +993,7 @@ def sync_push(
     project: str | None = typer.Option(
         None,
         "--project",
+        "-p",
         help="Project alias to push changes to",
     ),
     all_projects: bool = typer.Option(
@@ -1304,7 +1308,7 @@ def sync_clone(
 @sync_app.command("branch-link")
 def sync_branch_link(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
     directory: Path = typer.Option(Path("."), "--directory", "-d", help="Project root directory"),
     branch_id: int | None = typer.Option(
         None, "--branch-id", help="Link to existing Keboola branch by ID"

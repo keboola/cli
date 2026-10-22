@@ -402,7 +402,7 @@ class TestColumnTrace:
         graph = _column_chain()
         graph.edges[2].column_mapping = {}
 
-        result = _show(tmp_path, graph, "--upstream", END, "-c", "CUSTOMER")
+        result = _show(tmp_path, graph, "--upstream", END, "--column", "CUSTOMER")
 
         output = _plain(result.output)
         assert result.exit_code == 0, output
@@ -411,14 +411,16 @@ class TestColumnTrace:
 
     def test_config_focus_is_usage_error(self, tmp_path: Path) -> None:
         result = _show(
-            tmp_path, _column_chain(), "--upstream", END_CFG, "-c", "CUSTOMER", json_mode=True
+            tmp_path, _column_chain(), "--upstream", END_CFG, "--column", "CUSTOMER", json_mode=True
         )
 
         assert result.exit_code == 2, result.output
 
     @pytest.mark.parametrize("fmt", ["html", "mermaid", "er"])
     def test_column_with_diagram_format_is_usage_error(self, tmp_path: Path, fmt: str) -> None:
-        result = _show(tmp_path, _column_chain(), "--upstream", END, "-c", "CUSTOMER", "-f", fmt)
+        result = _show(
+            tmp_path, _column_chain(), "--upstream", END, "--column", "CUSTOMER", "--format", fmt
+        )
 
         assert result.exit_code == 2, result.output
 
@@ -514,7 +516,7 @@ class TestDefaultDepth:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.chdir(tmp_path)
-        result = _show(tmp_path, _long_chain(6), "--downstream", "p:in.c-b.t0", "-f", "html")
+        result = _show(tmp_path, _long_chain(6), "--downstream", "p:in.c-b.t0", "--format", "html")
 
         assert result.exit_code == 0, result.output
         page = next(tmp_path.glob("lineage_downstream_*.html")).read_text()
@@ -526,7 +528,14 @@ class TestDefaultDepth:
     ) -> None:
         monkeypatch.chdir(tmp_path)
         result = _show(
-            tmp_path, _long_chain(6), "--downstream", "p:in.c-b.t0", "-f", "html", "--depth", "5"
+            tmp_path,
+            _long_chain(6),
+            "--downstream",
+            "p:in.c-b.t0",
+            "--format",
+            "html",
+            "--depth",
+            "5",
         )
 
         assert result.exit_code == 0, result.output
@@ -535,14 +544,22 @@ class TestDefaultDepth:
 
     def test_json_html_keeps_depth_10(self, tmp_path: Path) -> None:
         result = _show(
-            tmp_path, _long_chain(12), "--downstream", "p:in.c-b.t0", "-f", "html", json_mode=True
+            tmp_path,
+            _long_chain(12),
+            "--downstream",
+            "p:in.c-b.t0",
+            "--format",
+            "html",
+            json_mode=True,
         )
 
         data = json.loads(result.stdout)["data"]
         assert max(e["depth"] for e in data["edges"]) == 10
 
     def test_mermaid_keeps_depth_10(self, tmp_path: Path) -> None:
-        result = _show(tmp_path, _long_chain(12), "--downstream", "p:in.c-b.t0", "-f", "mermaid")
+        result = _show(
+            tmp_path, _long_chain(12), "--downstream", "p:in.c-b.t0", "--format", "mermaid"
+        )
 
         assert "p_in_c_b_t10" in result.stdout
         assert "p_in_c_b_t11" not in result.stdout
@@ -726,7 +743,7 @@ class TestReviewFixes:
 
         assert "string cust_name" in code
         assert "rows," not in code
-        cli = _show(tmp_path, _column_chain(), "--downstream", SRC, "-f", "er")
+        cli = _show(tmp_path, _column_chain(), "--downstream", SRC, "--format", "er")
         assert cli.exit_code == 0, cli.output
         assert "string cust_name" in cli.output
 
@@ -761,8 +778,8 @@ class TestReviewFixes:
     ) -> None:
         monkeypatch.chdir(tmp_path)
         graph = _column_chain()
-        plain = _show(tmp_path, graph, "--downstream", SRC, "-f", "html")
-        with_cols = _show(tmp_path, graph, "--downstream", SRC, "-f", "html", "--columns")
+        plain = _show(tmp_path, graph, "--downstream", SRC, "--format", "html")
+        with_cols = _show(tmp_path, graph, "--downstream", SRC, "--format", "html", "--columns")
 
         assert plain.exit_code == 0 and with_cols.exit_code == 0
         names = sorted(p.name for p in tmp_path.glob("lineage_*.html"))

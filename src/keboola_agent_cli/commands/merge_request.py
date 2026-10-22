@@ -245,6 +245,7 @@ def merge_request_diff(
     output: Path | None = typer.Option(
         None,
         "--output",
+        "-o",
         help=(
             "Write the resolution candidate (your branch's content, ready to edit) to "
             "this file; hand it back with `merge-request resolve --resolved @FILE`"

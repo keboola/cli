@@ -36,6 +36,7 @@ def encrypt_values(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias",
     ),
     component_id: str = typer.Option(

@@ -407,7 +407,7 @@ class TestCrossingRefusesOnce:
         warning = "That command is refused once, then every command runs."
 
         group_read = first_run(READ)
-        top_level_read = first_run(["changelog", "-n", "1"])
+        top_level_read = first_run(["changelog", "-L", "1"])
         write = first_run(WRITE)
 
         assert warning in group_read.stderr

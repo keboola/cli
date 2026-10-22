@@ -61,7 +61,7 @@ Every rule with its level, the version from which it applies, and how it is chec
 | [N4](#N4) | MUST | now | `naming.alias-parity`, `naming.hidden-leaf-has-canonical` |
 | [N5](#N5) | MUST | now for new text; 1.0.0 for existing text | review |
 | [A1](#A1) | MUST | now | `args.global-option-one-shape`, `args.long-option-one-shape`, review |
-| [A2](#A2) | MUST | now | `args.short-flag-one-meaning`, `args.no-global-option-shadow` |
+| [A2](#A2) | MUST | now | `args.short-flag-one-meaning`, `args.short-flag-on-every-option`, `args.no-global-option-shadow` |
 | [A3](#A3) | MUST for new commands | now | `args.no-positional-arguments`, `args.no-bare-id-option` |
 | [A4](#A4) | MUST | now for new options; 1.0.0 for existing ones | `args.list-option-repeatable` |
 | [A5](#A5) | MUST | now | `args.no-dead-parameter` |
@@ -239,33 +239,32 @@ What stays as it is:
 
 - Checked by: `args.global-option-one-shape` (deferred: the `GLOBAL_OPTIONS` registry is not reviewed yet); `args.long-option-one-shape` (report only).
 
-<a id="A2"></a><a id="args.short-flag-one-meaning"></a><a id="args.no-global-option-shadow"></a>
-**A2 · MUST · now.** One short flag maps to one long option. The map is the `SHORT_FLAGS` registry in `scripts/check_cli_spec.py`, and a new short flag needs an entry there. `-p` means `--project` only. A command option does not reuse the name of a global option. `-p` is not added to the existing `--project` options that lack it; new commands get it through a shared option object in `commands/_options.py`. Until `commands/_options.py` exists, a new command declares `-p` itself. The short flags `-c`, `-n` and `-r` are reserved: their existing uses stay (each is an `exceptions` entry in the baseline), and no new use is added with either meaning.
+<a id="A2"></a><a id="args.short-flag-one-meaning"></a><a id="args.short-flag-on-every-option"></a><a id="args.no-global-option-shadow"></a>
+**A2 · MUST · now.** One short flag maps to one long option, and every option with that long name has the short flag. The map is the `SHORT_FLAGS` registry in `scripts/check_cli_spec.py`. A new short flag needs an entry there, and the same pull request adds it to every option of its long name. A new option whose long name is in the registry declares its short flag. A long name that is not in the registry has no short flag. A command option does not reuse the name of a global option.
 
-- Checked by: `args.short-flag-one-meaning`, `args.no-global-option-shadow`.
+- Checked by: `args.short-flag-one-meaning`, `args.short-flag-on-every-option`, `args.no-global-option-shadow`.
 
-| Short flag | Long option | Status |
+| Short flag | Long option | Origin |
 |---|---|---|
 | `-V` | `--version` | global |
 | `-j` | `--json` | global |
 | `-v` | `--verbose` | global |
-| `-a` | `--allow` | fixed |
-| `-c` | `--category` or `--column` | reserved |
-| `-d` | `--directory` | fixed |
-| `-e` | `--email` | fixed |
-| `-f` | `--feature` | fixed |
-| `-i` | `--ignore-case` | fixed |
-| `-l` | `--load` | fixed |
-| `-m` | `--message` | fixed |
-| `-n` | `--limit` or `--name` | reserved |
-| `-o` | `--output` | fixed |
-| `-p` | `--project` | fixed |
-| `-q` | `--query` | fixed |
-| `-r` | `--regex` or `--role` | reserved |
-| `-t` | `--type` | fixed |
-| `-y` | `--yes` | fixed |
+| `-L` | `--limit` | GitHub CLI (`gh pr list -L`) |
+| `-a` | `--allow` | kbagent |
+| `-d` | `--directory` | kbagent |
+| `-e` | `--email` | kbagent |
+| `-f` | `--feature` | kbagent |
+| `-i` | `--ignore-case` | kbagent |
+| `-l` | `--load` | kbagent |
+| `-m` | `--message` | kbagent |
+| `-n` | `--name` | Azure CLI (`az group create -n`) |
+| `-o` | `--output` | kbagent |
+| `-p` | `--project` | kbagent |
+| `-q` | `--query` | kbagent |
+| `-t` | `--type` | kbagent |
+| `-y` | `--yes` | kbagent |
 
-"Fixed" entries follow the majority use when the check was introduced (`SHORT_FLAGS`); the other uses of a fixed flag are in the baseline. "Reserved" entries (`RESERVED_SHORT_FLAGS`) have tied uses: `-c` is `--category` once and `--column` once; `-n` is `--limit` twice and `--name` twice; `-r` is `--regex` twice and `--role` twice. A new use of a reserved flag fails the check, with either meaning.
+Before 1.0.0, `-p` was on 24 of the 228 `--project` options, and seven short flags had two or more meanings. kbagent 1.0.0 removes the short flags that meant another long option: `-c` (`--category`, `--column`), `-r` (`--regex`, `--role`), `-d` on `--body`, `--deny` and `--description`, `-f` on `--format`, `-l` and `-n` on `--limit` (use `-L`), `-m` on `--mode`, and `-v` on `changelog --full` (`-v` is the global `--verbose`).
 
 <a id="A3"></a><a id="args.no-positional-arguments"></a><a id="args.no-bare-id-option"></a>
 **A3 · MUST for new commands · now.** An identifier is an option `--<noun>-id`, with one name per identifier: `--config-id` for any configuration, `--component-id`, `--project`, `--identity`. Existing positional identifiers stay accepted.

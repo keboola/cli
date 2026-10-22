@@ -84,12 +84,12 @@ def register(app: typer.Typer) -> None:
     @app.command("clone", rich_help_panel="Lifecycle")
     def config_clone(
         ctx: typer.Context,
-        project: str = typer.Option(..., "--project", help="Source project alias"),
+        project: str = typer.Option(..., "--project", "-p", help="Source project alias"),
         component_id: str = typer.Option(
             ..., "--component-id", help="Component ID (e.g. keboola.wr-db-snowflake)"
         ),
         config_id: str = typer.Option(..., "--config-id", help="Configuration ID to clone"),
-        name: str = typer.Option(..., "--name", help="Name for the new configuration"),
+        name: str = typer.Option(..., "--name", "-n", help="Name for the new configuration"),
         target_project: str | None = typer.Option(
             None,
             "--target-project",

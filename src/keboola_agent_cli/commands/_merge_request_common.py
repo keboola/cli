@@ -41,6 +41,7 @@ from ._merge_request_render import next_step_hints
 _PROJECT_OPT = typer.Option(
     None,
     "--project",
+    "-p",
     help="Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)",
 )
 _MERGE_REQUEST_ID_OPT = typer.Option(

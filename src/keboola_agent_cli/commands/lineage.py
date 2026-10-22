@@ -250,7 +250,6 @@ def lineage_show(
     column: str | None = typer.Option(
         None,
         "--column",
-        "-c",
         help="Trace one column of a TABLE hop by hop (text or --json only). Follows "
         "column mappings recorded by `lineage build --ai`; stops, and says so, where no "
         "mapping is known.",
@@ -259,7 +258,7 @@ def lineage_show(
         False,
         "--columns",
         help="Show column detail: mappings per edge in the text tree, column lists in "
-        "mermaid/html table nodes (-f er always lists columns).",
+        "mermaid/html table nodes (--format er always lists columns).",
     ),
     project: str | None = typer.Option(
         None,
@@ -268,12 +267,11 @@ def lineage_show(
         help="Project alias filter for queries.",
     ),
     depth: int | None = typer.Option(
-        None, "--depth", help="Max traversal depth (default: 3 for -f html, else 10)."
+        None, "--depth", help="Max traversal depth (default: 3 for --format html, else 10)."
     ),
     format: str = typer.Option(
         "text",
         "--format",
-        "-f",
         help="Output format: text, mermaid, html, or er (entity-relationship, always "
         "with table columns).",
     ),
@@ -304,11 +302,11 @@ def lineage_show(
 
       kbagent lineage show -l lineage.json --upstream "project:table" --columns
 
-      kbagent lineage show -l lineage.json --upstream "project:table" -c "col_name"
+      kbagent lineage show -l lineage.json --upstream "project:table" --column "col_name"
 
-      kbagent lineage show -l lineage.json --downstream "project:table" -f mermaid
+      kbagent lineage show -l lineage.json --downstream "project:table" --format mermaid
 
-      kbagent lineage show -l lineage.json --downstream "project:table" -f html
+      kbagent lineage show -l lineage.json --downstream "project:table" --format html
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "deep_lineage_service")

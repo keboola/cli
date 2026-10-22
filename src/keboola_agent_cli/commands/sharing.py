@@ -47,6 +47,7 @@ def sharing_list(
     project: list[str] | None = typer.Option(
         None,
         "--project",
+        "-p",
         help=FANOUT_PROJECT_HELP,
     ),
     all_projects: AllProjectsOption = False,
@@ -103,6 +104,7 @@ def sharing_share(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias that owns the bucket to share.",
     ),
     bucket_id: str = typer.Option(
@@ -113,6 +115,7 @@ def sharing_share(
     sharing_type: str = typer.Option(
         ...,
         "--type",
+        "-t",
         help=(
             "Sharing type: 'organization' (all org members), "
             "'organization-project' (all project members in org), "
@@ -196,6 +199,7 @@ def sharing_unshare(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias that owns the shared bucket.",
     ),
     bucket_id: str = typer.Option(
@@ -234,6 +238,7 @@ def sharing_link(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Target project alias where the linked bucket will be created.",
     ),
     source_project_id: int = typer.Option(
@@ -249,6 +254,7 @@ def sharing_link(
     name: str | None = typer.Option(
         None,
         "--name",
+        "-n",
         help="Display name for the linked bucket. Auto-generated if omitted.",
     ),
     stage: str = typer.Option(
@@ -306,6 +312,7 @@ def sharing_unlink(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias containing the linked bucket.",
     ),
     bucket_id: str = typer.Option(
@@ -343,6 +350,7 @@ def sharing_edges(
     project: list[str] | None = typer.Option(
         None,
         "--project",
+        "-p",
         help=FANOUT_PROJECT_HELP,
     ),
     all_projects: AllProjectsOption = False,

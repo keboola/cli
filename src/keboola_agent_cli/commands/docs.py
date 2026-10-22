@@ -58,6 +58,7 @@ def docs_query(
     project: str | None = typer.Option(
         None,
         "--project",
+        "-p",
         help="Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)",
     ),
 ) -> None:

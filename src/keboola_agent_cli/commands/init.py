@@ -29,6 +29,7 @@ def init_command(
     project: list[str] | None = typer.Option(
         None,
         "--project",
+        "-p",
         help="Copy only the named project(s) from the global config (repeatable). "
         "Implies --from-global. Without it, all global projects are copied.",
     ),

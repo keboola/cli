@@ -143,7 +143,7 @@ def _load_members(formatter: Any, members_file: str) -> list[dict]:
 @reference_data_app.command("list")
 def reference_data_list(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
     model: str | None = typer.Option(None, "--model", help="Filter to one model (name or UUID)"),
 ) -> None:
     """List reference-data records (dimension summaries; use ``get`` for members)."""
@@ -158,7 +158,7 @@ def reference_data_list(
 @reference_data_app.command("get")
 def reference_data_get(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
     id_: str | None = typer.Option(None, "--id", help="Record UUID"),
     dimension: str | None = typer.Option(
         None, "--dimension", help="Dimension name (project-unique; instead of --id)"
@@ -192,7 +192,7 @@ def reference_data_get(
 @reference_data_app.command("set")
 def reference_data_set(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
     model: str | None = typer.Option(None, "--model", help="Model name or UUID"),
     dimension: str = typer.Option(
         ..., "--dimension", help="Dimension name, e.g. 'chart_of_accounts'"
@@ -231,7 +231,7 @@ def reference_data_set(
 @reference_data_app.command("delete")
 def reference_data_delete(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
     id_: str = typer.Option(..., "--id", help="Record UUID"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirm prompt"),
 ) -> None:

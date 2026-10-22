@@ -91,6 +91,7 @@ def job_list(
     project: list[str] | None = typer.Option(
         None,
         "--project",
+        "-p",
         help=FANOUT_PROJECT_HELP,
     ),
     all_projects: AllProjectsOption = False,
@@ -112,6 +113,7 @@ def job_list(
     limit: int = typer.Option(
         DEFAULT_JOB_LIMIT,
         "--limit",
+        "-L",
         help=f"Maximum number of jobs to return per project (1-{MAX_JOB_LIMIT})",
     ),
     offset: int = typer.Option(
@@ -207,7 +209,7 @@ def job_list(
 @job_app.command("detail")
 def job_detail(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
     job_id: str = typer.Option(..., "--job-id", help="Job ID"),
     log_tail_lines: int = typer.Option(
         0,
@@ -248,6 +250,7 @@ def job_run(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias",
     ),
     component_id: str = typer.Option(
@@ -498,6 +501,7 @@ def job_terminate(
     project: str = typer.Option(
         ...,
         "--project",
+        "-p",
         help="Project alias",
     ),
     job_id: list[str] | None = typer.Option(
@@ -528,6 +532,7 @@ def job_terminate(
     limit: int = typer.Option(
         DEFAULT_JOB_LIMIT,
         "--limit",
+        "-L",
         help=f"Max jobs to consider when using --status (1-{MAX_JOB_LIMIT})",
     ),
     branch: int | None = typer.Option(
