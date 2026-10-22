@@ -481,7 +481,9 @@ def _format_deferred_report(report: DeferredUpdateReport) -> str:
     untouched and the next launch simply tries again.
     """
     if report.status is DeferredUpdateStatus.SUCCEEDED:
-        message = f"Updated kbagent to v{report.target_version}.\n"
+        # The running version, not the marker's target: an install that replaced the deferred
+        # one before its first successful start (a hand repair) runs a different version.
+        message = f"Updated kbagent to v{__version__}.\n"
         whats_new = format_whats_new(report.from_version, __version__) or ""
         return message + whats_new
     if report.status is DeferredUpdateStatus.ABANDONED:

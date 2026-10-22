@@ -1204,11 +1204,22 @@ class TestReportFinishedDeferredUpdate:
         report_finished_deferred_update()
         assert capsys.readouterr().err == ""
 
+    @patch("keboola_agent_cli.auto_update.__version__", "0.76.4")
     @patch("keboola_agent_cli.auto_update.collect_finished_deferred_update")
     def test_success_is_announced(self, mock_collect, capsys):
         mock_collect.return_value = self._report(DeferredUpdateStatus.SUCCEEDED)
         report_finished_deferred_update()
         assert "Updated kbagent to v0.76.4" in capsys.readouterr().err
+
+    @patch("keboola_agent_cli.auto_update.__version__", "0.76.5")
+    @patch("keboola_agent_cli.auto_update.collect_finished_deferred_update")
+    def test_success_names_the_running_version(self, mock_collect, capsys):
+        """An install that replaced the deferred one is reported as what runs, not the target."""
+        mock_collect.return_value = self._report(DeferredUpdateStatus.SUCCEEDED)
+        report_finished_deferred_update()
+        err = capsys.readouterr().err
+        assert "Updated kbagent to v0.76.5" in err
+        assert "v0.76.4" not in err
 
     @patch("keboola_agent_cli.auto_update.collect_finished_deferred_update")
     def test_failure_carries_the_recovery_command(self, mock_collect, capsys):
