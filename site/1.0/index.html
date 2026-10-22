@@ -1,0 +1,965 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>kbagent 1.0 at a glance</title>
+<meta name="description" content="The main changes in kbagent 1.0, the dangerous gaps that 0.x already closed, when 1.0 reaches you, and every change grouped by impact.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@600;700;800&family=Public+Sans:ital,wght@0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column. Main changes as before/after cards, dangerous gaps closed in 0.x, a three-stop timeline, then the full list grouped by impact. */
+:root {
+  color-scheme: light;
+  --bg: #f3f6fb;
+  --panel: #ffffff;
+  --ink: #141c29;
+  --muted: #546178;
+  --rule: #d7deea;
+  --code-bg: #e9eef6;
+  --accent: #1d55e4;
+  --accent-soft: #dce6ff;
+  --old: #a24c00;
+  --old-bg: #fff0dd;
+  --danger: #c4261a;
+  --danger-bg: #ffe3df;
+  --danger-line: #f3a59c;
+  --high: #d0331f;
+  --errors: #c86a00;
+  --text: #0a7f8f;
+  --deprecated: #6a3bd6;
+  --deprecated-bg: #ece4ff;
+  --new: #0f8a4c;
+  --new-bg: #d3f6e3;
+  --font-display: "Schibsted Grotesk", "Helvetica Neue", Arial, sans-serif;
+  --font-body: "Public Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0d1117;
+    --panel: #151b24;
+    --ink: #e6ebf2;
+    --muted: #9aa6b8;
+    --rule: #29323f;
+    --code-bg: #1f2733;
+    --accent: #7ea3ff;
+    --accent-soft: #1b2a4d;
+    --old: #ffb565;
+    --old-bg: #3a2610;
+    --danger: #ff7b6c;
+    --danger-bg: #3d1713;
+    --danger-line: #8a3027;
+    --high: #ff7b6c;
+    --errors: #ffb04a;
+    --text: #4fd2e0;
+    --deprecated: #b79dff;
+    --deprecated-bg: #2b2247;
+    --new: #5ee39a;
+    --new-bg: #123322;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0d1117;
+  --panel: #151b24;
+  --ink: #e6ebf2;
+  --muted: #9aa6b8;
+  --rule: #29323f;
+  --code-bg: #1f2733;
+  --accent: #7ea3ff;
+  --accent-soft: #1b2a4d;
+  --old: #ffb565;
+  --old-bg: #3a2610;
+  --danger: #ff7b6c;
+  --danger-bg: #3d1713;
+  --danger-line: #8a3027;
+  --high: #ff7b6c;
+  --errors: #ffb04a;
+  --text: #4fd2e0;
+  --deprecated: #b79dff;
+  --deprecated-bg: #2b2247;
+  --new: #5ee39a;
+  --new-bg: #123322;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 15.5px;
+  line-height: 1.6;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 0 80px;
+}
+a { color: var(--accent); text-underline-offset: 2px; text-decoration-thickness: 1px; }
+a:hover { text-decoration-thickness: 2px; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+code {
+  font-family: var(--font-mono);
+  font-size: 0.84em;
+  background: var(--code-bg);
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+  overflow-wrap: anywhere;
+}
+.wrap { max-width: 1000px; margin: 0 auto; }
+
+header.masthead { padding-block: 44px 8px; display: grid; gap: 14px; }
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+h1 {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: clamp(32px, 4.8vw, 48px);
+  line-height: 1.08;
+  letter-spacing: -0.02em;
+  margin: 0;
+  text-wrap: balance;
+}
+.lede { max-width: 66ch; margin: 0; color: var(--muted); font-size: 16.5px; }
+.lede strong { color: var(--ink); font-weight: 600; }
+
+h2 {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 26px;
+  line-height: 1.2;
+  margin: 56px 0 6px;
+  text-wrap: balance;
+}
+.intro { color: var(--muted); margin: 0 0 18px; max-width: 72ch; }
+
+/* Cards */
+.cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.card {
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-top: 4px solid var(--accent);
+  border-radius: 12px;
+  padding: 18px 20px;
+  display: grid;
+  gap: 12px;
+  align-content: start;
+  min-width: 0;
+}
+.card.wide { grid-column: 1 / -1; }
+.card h3 {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 19.5px;
+  line-height: 1.25;
+  margin: 0;
+  text-wrap: balance;
+}
+.ba { display: grid; gap: 8px; margin: 0; }
+.ba > div { border-radius: 8px; padding: 9px 12px; min-width: 0; }
+.ba .before { background: var(--old-bg); }
+.ba .after { background: var(--accent-soft); }
+.ba dt {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.ba .before dt { color: var(--old); }
+.ba .after dt { color: var(--accent); }
+.ba dd { margin: 0; }
+.todo { margin: 0; font-size: 14.5px; }
+.todo b { font-weight: 600; }
+
+.tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 8px; }
+.tile { border-radius: 8px; padding: 10px 12px; background: var(--panel); border: 1px solid var(--rule); min-width: 0; }
+.tile b {
+  display: block;
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 30px;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+.tile.t-stop b { color: var(--muted); }
+.tile.t-active b { color: var(--accent); }
+.tile.t-all b { color: var(--danger); }
+.tiles.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.tile.t-flag b { color: var(--accent); }
+.tile.t-good b { color: var(--new); }
+.risk {
+  color: var(--danger);
+  background: var(--danger-bg);
+  font-weight: 600;
+  border-radius: 4px;
+  padding: 1px 5px;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+.risk::before { content: "Risk: "; text-transform: uppercase; font-size: 0.78em; letter-spacing: 0.04em; }
+.tile span { font-size: 14px; }
+.source { font-size: 12.5px; color: var(--muted); margin: 6px 0 0; }
+
+.words { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0 10px; }
+.words s, .words strong {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  padding: 2px 10px;
+  border: 1px solid;
+  border-radius: 999px;
+  background: var(--panel);
+}
+.words s { color: var(--old); border-color: var(--old); text-decoration: none; }
+.words strong { color: var(--accent); border-color: var(--accent); font-weight: 600; }
+
+.same {
+  margin-top: 16px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  list-style: none;
+  padding: 0;
+}
+.same li {
+  font-size: 14px;
+  border: 1px solid var(--rule);
+  background: var(--panel);
+  border-radius: 999px;
+  padding: 5px 14px;
+}
+.same li::before { content: "✓ "; color: var(--new); font-weight: 700; }
+
+/* Dangerous gaps */
+.danger-band {
+  border: 2px solid var(--danger-line);
+  background: var(--danger-bg);
+  border-radius: 14px;
+  padding: 20px;
+  display: grid;
+  gap: 16px;
+}
+.danger-band .cards .card { border-top-color: var(--danger); }
+.fixed-in {
+  display: inline-block;
+  justify-self: start;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--new);
+  background: var(--new-bg);
+  border-radius: 4px;
+  padding: 2px 8px;
+}
+.ba .was { background: var(--danger-bg); }
+.ba .was dt { color: var(--danger); }
+.ba .now { background: var(--new-bg); }
+.ba .now dt { color: var(--new); }
+.more-danger { background: var(--panel); border: 1px solid var(--rule); border-radius: 12px; padding: 16px 20px; }
+.more-danger h3 { font-family: var(--font-display); font-weight: 700; font-size: 17px; margin: 0 0 8px; }
+.more-danger ul { margin: 0; padding-left: 20px; }
+.more-danger li { margin-bottom: 6px; }
+.more-danger .v { font-family: var(--font-mono); font-size: 12px; color: var(--new); white-space: nowrap; }
+details.other { margin-top: 2px; }
+details.other > summary { cursor: pointer; color: var(--accent); font-weight: 500; }
+details.other ul { margin: 10px 0 0; padding-left: 20px; }
+details.other li { margin-bottom: 6px; }
+
+/* Timeline */
+.timeline {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border: 1px solid var(--rule);
+  border-radius: 12px;
+  background: var(--panel);
+  overflow: hidden;
+}
+.stop { padding: 16px 18px; display: grid; gap: 6px; align-content: start; min-width: 0; border-top: 4px solid var(--accent); }
+.stop + .stop { border-left: 1px solid var(--rule); }
+.stop .when {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.stop h3 { font-family: var(--font-display); font-weight: 700; font-size: 17px; margin: 0; }
+.stop p { margin: 0; font-size: 14.5px; }
+.stay { margin: 14px 0 0; font-size: 14.5px; color: var(--muted); max-width: 72ch; }
+
+/* Full list */
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 14px; }
+.toolbar .label { font-size: 13px; color: var(--muted); margin-right: 4px; }
+.chip {
+  font: inherit;
+  font-size: 13.5px;
+  color: var(--ink);
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  padding: 4px 12px;
+  cursor: pointer;
+}
+.chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--panel); font-weight: 600; }
+.toolbar .spacer { flex: 1 1 auto; }
+.link-btn {
+  font: inherit;
+  font-size: 13.5px;
+  color: var(--accent);
+  background: none;
+  border: none;
+  padding: 4px 2px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.list {
+  border: 1px solid var(--rule);
+  border-radius: 12px;
+  background: var(--panel);
+  overflow: hidden;
+}
+.list-head, .item summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 150px 220px;
+  gap: 16px;
+  align-items: center;
+  padding: 9px 16px;
+}
+.list-head {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  background: var(--bg);
+  border-bottom: 1px solid var(--rule);
+}
+.group {
+  display: grid;
+  gap: 2px;
+  padding: 12px 16px 10px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--rule);
+  border-left: 5px solid var(--g);
+}
+.group .gname { font-family: var(--font-display); font-weight: 700; font-size: 15px; color: var(--g); }
+.group .gdesc { font-size: 13.5px; color: var(--muted); }
+.group[data-group="high"] { --g: var(--high); }
+.group[data-group="errors"] { --g: var(--errors); }
+.group[data-group="text"] { --g: var(--text); }
+.group[data-group="deprecated"] { --g: var(--deprecated); }
+.group[data-group="new"] { --g: var(--new); }
+.item { border-bottom: 1px solid var(--rule); scroll-margin-top: 16px; border-left: 5px solid var(--g); }
+.item[data-group="high"] { --g: var(--high); }
+.item[data-group="errors"] { --g: var(--errors); }
+.item[data-group="text"] { --g: var(--text); }
+.item[data-group="deprecated"] { --g: var(--deprecated); }
+.item[data-group="new"] { --g: var(--new); }
+.list > .item:last-of-type { border-bottom: none; }
+.item summary { cursor: pointer; list-style: none; }
+.item summary::-webkit-details-marker { display: none; }
+.item summary:hover { background: var(--bg); }
+.item .title { display: flex; gap: 10px; align-items: baseline; min-width: 0; }
+.item .title::before {
+  content: "";
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  transform: rotate(-45deg) translateY(-2px);
+  transition: transform 0.15s;
+}
+.item[open] .title::before { transform: rotate(45deg) translateY(-3px); }
+.area {
+  justify-self: start;
+  font-size: 12.5px;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 0 7px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.item .who-cell { color: var(--muted); font-size: 13px; }
+.item.target { background: var(--accent-soft); }
+.body {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 2px 16px 16px 33px;
+}
+.body > div { border-radius: 8px; padding: 9px 12px; min-width: 0; font-size: 14.5px; }
+.body .before { background: var(--old-bg); }
+.body .after { background: var(--accent-soft); }
+.body .only { grid-column: 1 / -1; }
+.body .do { grid-column: 1 / -1; padding: 0 2px; margin: 0; }
+.body .tag {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.body .before .tag { color: var(--old); }
+.body .after .tag { color: var(--accent); }
+.body .do b { font-weight: 600; }
+.empty { padding: 16px; color: var(--muted); margin: 0; }
+
+footer {
+  margin-top: 56px;
+  padding-top: 18px;
+  border-top: 1px solid var(--rule);
+  font-size: 14px;
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+}
+
+@media (max-width: 760px) {
+  .cards { grid-template-columns: minmax(0, 1fr); }
+  .tiles, .tiles.four { grid-template-columns: minmax(0, 1fr); }
+  .timeline { grid-template-columns: minmax(0, 1fr); }
+  .stop + .stop { border-left: none; }
+  .list-head, .item summary { grid-template-columns: minmax(0, 1fr) auto; }
+  .hide-narrow { display: none; }
+  .body { grid-template-columns: minmax(0, 1fr); padding-left: 16px; }
+  .danger-band { padding: 14px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .item .title::before { transition: none; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  html { scroll-behavior: smooth; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="masthead">
+    <div class="eyebrow">kbagent · 1.0 compared with 0.100</div>
+    <h1>kbagent 1.0 at a glance</h1>
+    <p class="lede">kbagent 1.0 makes all commands follow the same rules. <strong>No command and no long option is removed or renamed.</strong> Some defaults, exit codes and messages change. The main changes come first, then the gaps that 0.x already closed, then the full list.</p>
+  </header>
+
+  <section id="main" aria-labelledby="main-h">
+    <h2 id="main-h">The main changes in 1.0</h2>
+    <p class="intro">These are the changes that most often need a change in a script or an agent.</p>
+    <div class="cards">
+      <article class="card wide">
+        <h3>One rule for a missing <code>--project</code>, not three</h3>
+        <dl class="ba">
+          <div class="before"><dt>0.x</dt><dd>What a command did without <code>--project</code> depended on the command. 172 commands stopped with an error, 25 used your active project, and 19 worked on every registered project, for example <code>config list</code> and <code>job list</code>. <span class="risk">One of the 19 was <code>workspace gc</code>: without <code>--project</code> it deleted unused workspaces in every registered project.</span></dd></div>
+          <div class="after"><dt>1.0</dt><dd>No command works on every project unless you add <code>--all-projects</code>. The 18 read commands now use your active project, like the 25 others, and <code>workspace gc</code> stops until you give <code>--project</code> or <code>--all-projects</code>:
+            <div class="tiles">
+              <div class="tile t-good"><b>19 → 0</b><span>commands that work on every project without being asked</span></div>
+              <div class="tile t-flag"><b>25 → 43</b><span>commands that use your active project</span></div>
+              <div class="tile t-stop"><b>172 → 173</b><span>commands that stop and ask for <code>--project</code></span></div>
+            </div>
+            <p class="source">Counts from kbagent 0.99. Of the 19, the 18 read commands moved to the active project, and <code>workspace gc</code> moved to the commands that ask (since 0.100, see below).</p>
+          </dd></div>
+        </dl>
+        <p class="todo"><b>What to do:</b> add <code>--project</code> or <code>--all-projects</code> to the 18 read commands. Both already work on 0.100.</p>
+      </article>
+
+      <article class="card">
+        <h3>Deletes ask, scripts confirm with <code>--yes</code></h3>
+        <dl class="ba">
+          <div class="before"><dt>0.x</dt><dd>In a script, a confirmation took its answer from the input: <code>echo y | kbagent ...</code> confirmed a delete. <span class="risk"><code>branch delete</code> and <code>workspace delete</code> deleted at once, with no question and no <code>--dry-run</code>.</span></dd></div>
+          <div class="after"><dt>1.0</dt><dd>Without a terminal, the command stops unless you give <code>--yes</code>. <code>branch delete</code> and <code>workspace delete</code> ask, and take <code>--yes</code> and <code>--dry-run</code>. <code>--json</code> still counts as a confirmation.</dd></div>
+        </dl>
+        <p class="todo"><b>What to do:</b> add <code>--yes</code> to scripts that confirm.</p>
+      </article>
+
+      <article class="card">
+        <h3>Mistakes stop before they change data</h3>
+        <dl class="ba">
+          <div class="before"><dt>0.x</dt><dd>A single-value option given twice used the last value with no message: <code>--project x ... --project test</code> acted on <code>test</code>. <code>--text @notes.md</code> saved the file name, not the file.</dd></div>
+          <div class="after"><dt>1.0</dt><dd>Both are errors, and the message says what to fix. On read commands, an option given twice only adds a warning.</dd></div>
+        </dl>
+        <p class="todo"><b>What to do:</b> give a single-value option once. Use <code>--file</code> for text from a file.</p>
+      </article>
+
+      <article class="card wide">
+        <h3>One short flag for each option, on every command</h3>
+        <dl class="ba">
+          <div class="before"><dt>0.x</dt><dd>A short flag worked on some commands and not on others, and seven short flags meant different options in different commands. For example, <code>-d</code> was <code>--directory</code>, <code>--body</code>, <code>--deny</code> or <code>--description</code>.</dd></div>
+          <div class="after"><dt>1.0</dt><dd>Each short flag means one option, and every command with that option accepts it:
+            <div class="tiles four">
+              <div class="tile t-flag"><b>24 → 228</b><span><code>-p</code> for <code>--project</code></span></div>
+              <div class="tile t-flag"><b>2 → 40</b><span><code>-n</code> for <code>--name</code>, as in the Azure CLI</span></div>
+              <div class="tile t-flag"><b>1 → 20</b><span><code>-t</code> for <code>--type</code></span></div>
+              <div class="tile t-flag"><b>0 → 14</b><span><code>-L</code> for <code>--limit</code>, as in the GitHub CLI</span></div>
+            </div>
+            <p class="source">Commands that accept the short flag, before and after. Removed, because they meant a different option in some commands: <code>-c</code> and <code>-r</code> everywhere, and <code>-d</code>, <code>-f</code>, <code>-l</code>, <code>-m</code>, <code>-n</code> and <code>-v</code> where they did not mean <code>--directory</code>, <code>--feature</code>, <code>--load</code>, <code>--message</code>, <code>--name</code> and <code>--verbose</code>.</p>
+          </dd></div>
+        </dl>
+        <p class="todo"><b>What to do:</b> replace a removed short flag with the long option name. Long names work on 0.x and on 1.0.</p>
+      </article>
+
+      <article class="card">
+        <h3>A failure is never reported as success</h3>
+        <dl class="ba">
+          <div class="before"><dt>0.x</dt><dd>A read across projects ended with exit code 0 when one project failed. The same error could end with different exit codes in different commands.</dd></div>
+          <div class="after"><dt>1.0</dt><dd>Exit code 1 after the full output. Each error code has one exit code, in one <a href="https://github.com/keboola/cli/blob/main/docs/error-codes.md">published list</a>.</dd></div>
+        </dl>
+        <p class="todo"><b>What to do:</b> check scripts that test for a specific exit code.</p>
+      </article>
+
+      <article class="card">
+        <h3><code>--json</code> always answers in JSON</h3>
+        <dl class="ba">
+          <div class="before"><dt>0.x</dt><dd>A typo, a wrong value or a crash printed no JSON. <code>--json</code> worked only before the command.</dd></div>
+          <div class="after"><dt>1.0</dt><dd>Every run prints one JSON document, errors included. Only <code>--help</code> still prints help, and a <code>--stream</code> command still prints one JSON line per event. <code>kbagent config list --json</code> works too.</dd></div>
+        </dl>
+        <p class="todo"><b>What to do:</b> read <code>error.code</code> for every exit code.</p>
+      </article>
+
+      <article class="card">
+        <h3>One word for one thing</h3>
+        <dl class="ba">
+          <div class="before"><dt>0.x</dt><dd>The project you chose with <code>project use</code> was the "pin" or the "default project". The branch you chose with <code>branch use</code> was the "active branch", and the REST API called it "pin" too:
+            <div class="words"><s>pin</s><s>default project</s><s>active branch</s></div>
+            In Keboola, "default branch" already means the production branch.</dd></div>
+          <div class="after"><dt>1.0</dt><dd>One name everywhere:
+            <div class="words"><strong>active project</strong><strong>active branch</strong></div>
+            <code>project use</code> prints <code>Active project: prod</code>. The JSON fields and the configuration file do not change.</dd></div>
+        </dl>
+        <p class="todo"><b>What to do:</b> nothing, unless a script reads the text of <code>project use</code>.</p>
+      </article>
+
+      <article class="card">
+        <h3><code>kbagent serve</code> follows the same rules</h3>
+        <dl class="ba">
+          <div class="before"><dt>0.x</dt><dd>Over HTTP, 26 routes used production and list routes read all projects, while the command line used the active branch and project. Most errors answered HTTP 502.</dd></div>
+          <div class="after"><dt>1.0</dt><dd>The same project and branch as the command line, HTTP status codes that match the error, and <code>PATCH</code> for partial updates.</dd></div>
+        </dl>
+        <p class="todo"><b>What to do:</b> send <code>branch_id: 0</code> for production and <code>all_projects=true</code> for all projects.</p>
+      </article>
+    </div>
+
+    <ul class="same" aria-label="What stays the same">
+      <li>No command or long option removed or renamed</li>
+      <li>No JSON field removed or renamed</li>
+      <li>No new exit codes (still 0 to 7 and 130)</li>
+      <li>Python SDK unchanged</li>
+    </ul>
+  </section>
+
+  <section id="closed" aria-labelledby="closed-h">
+    <h2 id="closed-h">Dangerous gaps that 0.x already closed</h2>
+    <p class="intro">These could delete data, act on the wrong project, or let a command through a safety setting. They did not wait for 1.0: kbagent 0.96 to 0.100 fixed them. If you run an older 0.x version, update.</p>
+    <div class="danger-band">
+      <div class="cards">
+        <article class="card">
+          <span class="fixed-in">Fixed in 0.100.0</span>
+          <h3>Safety options that did nothing</h3>
+          <dl class="ba">
+            <div class="was"><dt>Before</dt><dd><code>storage delete-bucket</code> and <code>storage file-delete</code> had a <code>--yes</code> option, but never read it. They deleted without asking. <code>delete-bucket --force</code> also deleted a shared bucket, although the help says to unshare it first.</dd></div>
+            <div class="now"><dt>Now</dt><dd>Both ask in a terminal, and <code>--yes</code> skips the question. <code>--force</code> no longer deletes a shared bucket.</dd></div>
+          </dl>
+        </article>
+
+        <article class="card">
+          <span class="fixed-in">Fixed in 0.96.1 to 0.100.0</span>
+          <h3>A permission setting with gaps</h3>
+          <dl class="ba">
+            <div class="was"><dt>Before</dt><dd><code>--deny-writes</code>, <code>--deny-destructive</code> and saved permission policies did not apply to <code>kbagent http</code> and <code>kbagent search</code>, so <code>kbagent http delete</code> ran under <code>--deny-destructive</code>. <code>--deny-destructive</code> also did not stop <code>sync push --force</code>, a token refresh or a password reset. Over <code>kbagent serve</code>, only two groups of routes were checked.</dd></div>
+            <div class="now"><dt>Now</dt><dd>Every command and every <code>kbagent serve</code> route is checked, except the health and documentation routes. Commands that reset a password, invalidate a token or replace all variables count as destructive.</dd></div>
+          </dl>
+        </article>
+      </div>
+
+      <div class="more-danger">
+        <h3>Other dangerous behavior that 0.x fixed</h3>
+        <ul>
+          <li><code>workspace gc</code> without <code>--project</code> deleted unused workspaces in every registered project. When it could not list the configurations of a project, it took every sandbox workspace in that project as unused. <span class="v">0.100.0</span></li>
+          <li><code>sync push --project B</code> in a folder of project A created the configurations of project A in project B. <span class="v">0.100.0</span></li>
+          <li><code>sync push</code> deleted a configuration in Keboola when its local folder was missing, also without <code>--force</code>. <span class="v">0.96.1</span></li>
+          <li>A second <code>flow delete</code> of the same flow removed it from the trash for good. <span class="v">0.100.0</span></li>
+          <li><code>job run --idempotency-key</code>, repeated after a lost answer, started a second job. <span class="v">0.100.0</span></li>
+          <li>Over <code>kbagent serve</code>, <code>DELETE /flows/...?dry_run=true</code> ran the real delete. <span class="v">0.100.0</span></li>
+          <li>Removing the active project made the next project active without a notice. <span class="v">0.100.0</span></li>
+          <li>Commands used the branch from <code>branch use</code> and did not say so. Now each command names the project and branch it uses. <span class="v">0.96.1</span></li>
+          <li><code>data-app password</code> printed the password, so it went into an AI agent's chat history. Now it prints the password only with <code>--reveal</code>. <span class="v">0.96.1</span></li>
+        </ul>
+      </div>
+
+      <details class="other">
+        <summary>Other changes in 0.x</summary>
+        <ul>
+          <li>Commands that change several items end with exit code 1 after a failed item (0.98.0).</li>
+          <li><code>--project</code> also accepts a project ID (0.96.1).</li>
+          <li><code>--all-projects</code> on the 18 read commands, so one script works on 0.x and on 1.0 (0.100.0).</li>
+          <li><code>kbagent update</code> stays on 0.x until the move date. <code>kbagent update --major</code> moves earlier (0.100.0).</li>
+        </ul>
+      </details>
+    </div>
+  </section>
+
+  <section id="when" aria-labelledby="when-h">
+    <h2 id="when-h">When 1.0 reaches you</h2>
+    <div class="timeline">
+      <div class="stop">
+        <span class="when">Release day</span>
+        <h3>New installs get 1.0</h3>
+        <p>Install script, PyPI, Homebrew, apt and rpm (Chocolatey and winget after their package review). Also CI pipelines that install kbagent without a version, and package-manager upgrades.</p>
+      </div>
+      <div class="stop">
+        <span class="when">The next 28 days</span>
+        <h3>Installs that update themselves stay on 0.x</h3>
+        <p>kbagent 0.100 and later shows a notice with the move date. <code>kbagent update --major</code> moves to 1.0 at once.</p>
+      </div>
+      <div class="stop">
+        <span class="when">Day 28</span>
+        <h3>They move to 1.0</h3>
+        <p>An install that updates itself moves to 1.0, also a version older than 0.100. The first command that changes data after the move stops once and links to the migration guide.</p>
+      </div>
+    </div>
+    <p class="stay">To stay on 0.x, set <code>KBAGENT_AUTO_UPDATE=false</code>. In CI, also install <code>keboola-cli&lt;1</code>. A Homebrew, apt, rpm, Chocolatey or winget package stays on 0.x with a hold in the package manager, for example <code>brew pin</code> or <code>apt-mark hold</code>. 0.x gets security and data-loss fixes until day 28.</p>
+  </section>
+
+  <section id="all" aria-labelledby="all-h">
+    <h2 id="all-h">All changes in 1.0</h2>
+    <p class="intro">Grouped by impact, from the changes that can change which data a command touches to the additions that need nothing. Open a row to see the old and the new behavior and what to do.</p>
+    <div class="toolbar" role="group" aria-label="Who is affected">
+      <span class="label">Show changes for</span>
+      <button class="chip" type="button" id="w-all" data-who="all" aria-pressed="true">Everyone</button>
+      <button class="chip" type="button" id="w-scripts" data-who="scripts" aria-pressed="false">Scripts and CI</button>
+      <button class="chip" type="button" id="w-agents" data-who="agents" aria-pressed="false">AI agents</button>
+      <button class="chip" type="button" id="w-terminal" data-who="terminal" aria-pressed="false">Terminal users</button>
+      <button class="chip" type="button" id="w-serve" data-who="serve" aria-pressed="false">kbagent serve clients</button>
+      <span class="spacer"></span>
+      <button class="link-btn" type="button" id="toggle-all">Open all</button>
+    </div>
+
+    <div class="list" id="list">
+      <div class="list-head" aria-hidden="true"><span>Change</span><span>Area</span><span class="hide-narrow">Who is affected</span></div>
+
+      <div class="group" data-group="high"><span class="gname">Changes which project, branch or data a command uses</span><span class="gdesc">Check these first. Without a change, a script can work on other data than before, or stop.</span></div>
+      <details class="item" id="default-project" data-group="high" data-who="scripts agents terminal">
+        <summary><span class="title">Read commands use your active project by default</span><span class="area">Project and branch</span><span class="who-cell hide-narrow">Scripts and CI, AI agents, terminal users</span></summary>
+        <div class="body">
+          <div class="before"><span class="tag">0.x</span>18 read commands, for example <code>config list</code>, <code>job list</code>, <code>storage buckets</code> and <code>search</code>, read all registered projects when you did not name one. 25 other commands used your active project.</div>
+          <div class="after"><span class="tag">1.0</span>They read one project: <code>--project</code>, else <code>KBAGENT_PROJECT</code>, else the one from <code>kbagent project use</code>, else your only project. <code>--all-projects</code> reads all.</div>
+          <p class="do"><b>What to do:</b> add <code>--project</code> or <code>--all-projects</code>. Both work on 0.100.</p>
+        </div>
+      </details>
+      <details class="item" id="serve-project" data-group="high" data-who="serve">
+        <summary><span class="title">List routes use your active project</span><span class="area">kbagent serve</span><span class="who-cell hide-narrow">kbagent serve clients</span></summary>
+        <div class="body">
+          <div class="before"><span class="tag">0.x</span>A request without <code>project</code> read all projects.</div>
+          <div class="after"><span class="tag">1.0</span>The active project, as on the command line. <code>all_projects=true</code> reads all.</div>
+          <p class="do"><b>What to do:</b> send <code>project</code> or <code>all_projects=true</code>.</p>
+        </div>
+      </details>
+      <details class="item" id="serve-branch" data-group="high" data-who="serve">
+        <summary><span class="title">Routes use your active branch</span><span class="area">kbagent serve</span><span class="who-cell hide-narrow">kbagent serve clients</span></summary>
+        <div class="body">
+          <div class="before"><span class="tag">0.x</span>26 routes used production when the request had no <code>branch_id</code>. The same commands on the command line used the active branch.</div>
+          <div class="after"><span class="tag">1.0</span>The active branch, as on the command line. <code>branch_id: 0</code> is production.</div>
+          <p class="do"><b>What to do:</b> send <code>branch_id: 0</code> for production.</p>
+        </div>
+      </details>
+      <details class="item" id="option-twice" data-group="high" data-who="scripts agents">
+        <summary><span class="title">A single-value option given twice is an error on commands that change data</span><span class="area">Options and input</span><span class="who-cell hide-narrow">Scripts and CI, AI agents</span></summary>
+        <div class="body">
+          <div class="before"><span class="tag">0.x</span>The last value won, with no message. <code>storage delete-bucket --project x ... --project test</code> acted on <code>test</code>.</div>
+          <div class="after"><span class="tag">1.0</span>An error on commands that create, change or delete. A warning on read commands.</div>
+          <p class="do"><b>What to do:</b> give a single-value option once.</p>
+        </div>
+      </details>
+      <details class="item" id="list-options" data-group="high" data-who="scripts agents">
+        <summary><span class="title">Nine list options accept repeated values</span><span class="area">Options and input</span><span class="who-cell hide-narrow">Scripts and CI, AI agents</span></summary>
+        <div class="body">
+          <div class="before"><span class="tag">0.x</span><code>sharing share --target-project-ids 11 --target-project-ids 22</code> shared with 22 only.</div>
+          <div class="after"><span class="tag">1.0</span>Both values count. A comma list such as <code>11,22</code> still works.</div>
+          <p class="do"><b>What to do:</b> check scripts that repeat one of these options. They now send all values.</p>
+        </div>
+      </details>
+      <details class="item" id="at-file" data-group="high" data-who="scripts agents terminal">
+        <summary><span class="title"><code>@file</code> in a text option is refused</span><span class="area">Options and input</span><span class="who-cell hide-narrow">Scripts and CI, AI agents, terminal users</span></summary>
+        <div class="body">
+          <div class="before"><span class="tag">0.x</span><code>--text @notes.md</code> saved the text "@notes.md" in place of the file content.</div>
+          <div class="after"><span class="tag">1.0</span>An error that names <code>--file</code> or <code>--sql-file</code>.</div>
+          <p class="do"><b>What to do:</b> use <code>--file</code> or <code>--sql-file</code> for text from a file.</p>
+        </div>
+      </details>
+      <details class="item" id="no-pipe-answer" data-group="high" data-who="scripts agents">
+        <summary><span class="title">A confirmation needs a person or <code>--yes</code></span><span class="area">Confirmations</span><span class="who-cell hide-narrow">Scripts and CI, AI agents</span></summary>
+        <div class="body">
+          <div class="before"><span class="tag">0.x</span>In a script, the answer came from the input: <code>echo y | kbagent ...</code> confirmed a delete.</div>
+          <div class="after"><span class="tag">1.0</span>Without a terminal, the command stops with <code>CONFIRMATION_REQUIRED</code> unless you give <code>--yes</code>. <code>--json</code> still counts as a confirmation.</div>
+          <p class="do"><b>What to do:</b> add <code>--yes</code> to scripts that confirm.</p>
+        </div>
+      </details>
+      <details class="item" id="delete-asks" data-group="high" data-who="scripts terminal">
+        <summary><span class="title"><code>branch delete</code> and <code>workspace delete</code> ask first</span><span class="area">Confirmations</span><span class="who-cell hide-narrow">Scripts and CI, terminal users</span></summary>
+        <div class="body">
+          <div class="before"><span class="tag">0.x</span><span class="risk">Both deleted at once, with no question, no <code>--yes</code> and no <code>--dry-run</code>.</span></div>
+          <div class="after"><span class="tag">1.0</span>Both ask in a terminal, and take <code>--yes</code> and <code>--dry-run</code>.</div>
+          <p class="do"><b>What to do:</b> in scripts, add <code>--yes</code> or use <code>--json</code>.</p>
+        </div>
+      </details>
+      <details class="item" id="short-flags-removed" data-group="high" data-who="scripts agents terminal">
+        <summary><span class="title">Short flags with a second meaning are removed</span><span class="area">Options and input</span><span class="who-cell hide-narrow">Scripts and CI, AI agents, terminal users</span></summary>
+        <div class="body">
+          <div class="before"><span class="tag">0.x</span>Seven short flags meant different options in different commands. For example, <code>-n</code> was <code>--limit</code> in <code>changelog</code> and <code>--name</code> in <code>stream detail</code>.</div>
+          <div class="after"><span class="tag">1.0</span>Removed: <code>-c</code>, <code>-r</code>, <code>-d</code> on <code>--body</code>, <code>--deny</code> and <code>--description</code>, <code>-f</code> on <code>--format</code>, <code>-l</code> and <code>-n</code> on <code>--limit</code>, <code>-m</code> on <code>--mode</code>, and <code>-v</code> on <code>changelog --full</code>. A removed short flag is a usage error (exit code 2).</div>
+          <p class="do"><b>What to do:</b> use the long option name. For <code>--limit</code>, <code>-L</code> works on 1.0.</p>
+        </div>
+      </details>
+      <details class="item" id="first-change" data-group="high" data-who="scripts agents">
+        <summary><span class="title">After the automatic move, the first change stops once</span><span class="area">Updates</span><span class="who-cell hide-narrow">Scripts and CI, AI agents</span></summary>
+        <div class="body">
+          <div class="after only"><span class="tag">1.0</span>After kbagent updates itself from 0.x, the first command that changes data stops once with <code>UPDATED_ACROSS_MAJOR</code> and a link to the migration guide. Run it again and it works. A move with <code>kbagent update --major</code> does not stop anything.</div>
+          <p class="do"><b>What to do:</b> check the command against this page, then run it again.</p>
+        </div>
+      </details>
+
+      <div class="group" data-group="errors"><span class="gname">Changes exit codes and errors</span><span class="gdesc">The work is the same. A script that checks exit codes or error codes can react in another way.</span></div>
+      <details class="item" id="partial-failure" data-group="errors" data-who="scripts agents">
+        <summary><span class="title">A read that failed for one project ends with exit code 1</span><span class="area">Errors</span><span class="who-cell hide-narrow">Scripts and CI, AI agents</span></summary>
+        <div class="body">
+          <div class="before"><span class="tag">0.x</span>Exit code 0. The failure was only in the output.</div>
+          <div class="after"><span class="tag">1.0</span>Exit code 1 after the full output. Exit code 5 when no project is registered.</div>
+          <p class="do"><b>What to do:</b> treat exit code 1 as "some projects failed". The other results are still in the output.</p>
+        </div>
+      </details>
+      <details class="item" id="exit-codes" data-group="errors" data-who="scripts agents">
+        <summary><span class="title">Each error code has one exit code</span><span class="area">Errors</span><span class="who-cell hide-narrow">Scripts and CI, AI agents</span></summary>
+        <div class="body">
+          <div class="before"><span class="tag">0.x</span>The same error ended with different exit codes in different commands.</div>
+          <div class="after"><span class="tag">1.0</span>One exit code per error code, in one <a href="https://github.com/keboola/cli/blob/main/docs/error-codes.md">published list</a>. Some commands now end with another code, for example <code>transformation create</code> with invalid input: 1 → 2.</div>
+          <p class="do"><b>What to do:</b> check scripts that test for a specific exit code.</p>
+        </div>
+      </details>
+      <details class="item" id="specific-errors" data-group="errors" data-who="scripts agents">
+        <summary><span class="title">More specific error codes</span><span class="area">Errors</span><span class="who-cell hide-narrow">Scripts and CI, AI agents</span></summary>
+        <div class="body">
+          <div class="before"><span class="tag">0.x</span><code>kai</code> and <code>semantic-layer</code> reported <code>CONFIG_ERROR</code> also when the cause had its own code.</div>
+          <div class="after"><span class="tag">1.0</span><code>AUTH_NOT_SUPPORTED_ON_STACK</code> or <code>FEATURE_NOT_ENABLED</code>. Some error types change, for example <code>ALREADY_EXISTS</code> is now a <code>conflict</code>.</div>
+          <p class="do"><b>What to do:</b> check agents and scripts that look for <code>CONFIG_ERROR</code>.</p>
+        </div>
+      </details>
+      <details class="item" id="one-document" data-group="errors" data-who="scripts agents">
+        <summary><span class="title">Every run with <code>--json</code> prints one JSON document</span><span class="area">JSON output</span><span class="who-cell hide-narrow">Scripts and CI, AI agents</span></summary>
+        <div class="body">
+          <div class="before"><span class="tag">0.x</span>A typo, a wrong value, a crash or Ctrl+C printed no JSON.</div>
+          <div class="after"><span class="tag">1.0</span>Always one JSON document with an error code. <code>--help</code> and <code>--stream</code> keep their output. The exit codes do not change.</div>
+          <p class="do"><b>What to do:</b> read <code>error.code</code> for every exit code.</p>
+        </div>
+      </details>
+      <details class="item" id="bad-value" data-group="errors" data-who="scripts agents">
+        <summary><span class="title">A wrong value gives a clear error, not a crash</span><span class="area">Options and input</span><span class="who-cell hide-narrow">Scripts and CI, AI agents</span></summary>
+        <div class="body">
+          <div class="before"><span class="tag">0.x</span>Some wrong values ended in a Python traceback with exit code 1.</div>
+          <div class="after"><span class="tag">1.0</span><code>INVALID_ARGUMENT</code> with exit code 2, and the message names the option.</div>
+          <p class="do"><b>What to do:</b> nothing, unless a script expects exit code 1 for these mistakes.</p>
+        </div>
+      </details>
+      <details class="item" id="bare-group" data-group="errors" data-who="scripts agents">
+        <summary><span class="title">A command group without a command is an error</span><span class="area">JSON output</span><span class="who-cell hide-narrow">Scripts and CI, AI agents</span></summary>
+        <div class="body">
+          <div class="before"><span class="tag">0.x</span><code>kbagent storage</code> ended with exit code 0 and printed nothing.</div>
+          <div class="after"><span class="tag">1.0</span>Exit code 2 and the help.</div>
+          <p class="do"><b>What to do:</b> nothing for complete commands.</p>
+        </div>
+      </details>
+      <details class="item" id="serve-status" data-group="errors" data-who="serve">
+        <summary><span class="title">HTTP status codes follow the error</span><span class="area">kbagent serve</span><span class="who-cell hide-narrow">kbagent serve clients</span></summary>
+        <div class="body">
+          <div class="before"><span class="tag">0.x</span>Most errors answered HTTP 502, also an invalid request or an invalid token.</div>
+          <div class="after"><span class="tag">1.0</span>400, 401, 403, 404, 409 or 502 by the kind of error, and 500 for an internal error. The error has the same fields as on the command line.</div>
+          <p class="do"><b>What to do:</b> use <code>error.code</code>, not only the status.</p>
+        </div>
+      </details>
+
+      <div class="group" data-group="text"><span class="gname">Changes the text output</span><span class="gdesc">Only for scripts that read the text output. With <code>--json</code>, nothing changes.</span></div>
+      <details class="item" id="error-lines" data-group="text" data-who="scripts terminal">
+        <summary><span class="title">Each failed item is one <code>Error:</code> line</span><span class="area">Terminal output</span><span class="who-cell hide-narrow">Scripts and CI, terminal users</span></summary>
+        <div class="body">
+          <div class="before"><span class="tag">0.x</span>Five different forms, depending on the command, and some of them on stderr.</div>
+          <div class="after"><span class="tag">1.0</span>One line <code>Error: &lt;item&gt;: &lt;message&gt;</code> on stdout.</div>
+          <p class="do"><b>What to do:</b> read failed items from stdout, or use <code>--json</code>.</p>
+        </div>
+      </details>
+      <details class="item" id="summary-line" data-group="text" data-who="scripts terminal">
+        <summary><span class="title">A summary line at the end</span><span class="area">Terminal output</span><span class="who-cell hide-narrow">Scripts and CI, terminal users</span></summary>
+        <div class="body">
+          <div class="before"><span class="tag">0.x</span>Only 5 commands that handle several items printed a <code>Failed:</code> summary line.</div>
+          <div class="after"><span class="tag">1.0</span>One <code>Success: ...</code> or <code>Failed: N of M ...</code> line at the end.</div>
+          <p class="do"><b>What to do:</b> if a script parses the text output, ignore the last line or use <code>--json</code>.</p>
+        </div>
+      </details>
+      <details class="item" id="login-messages" data-group="text" data-who="scripts">
+        <summary><span class="title"><code>auth login</code> messages go to stderr</span><span class="area">Terminal output</span><span class="who-cell hide-narrow">Scripts and CI</span></summary>
+        <div class="body">
+          <div class="before"><span class="tag">0.x</span>Messages on stdout, mixed with the result.</div>
+          <div class="after"><span class="tag">1.0</span>Messages on stderr. The result stays on stdout.</div>
+          <p class="do"><b>What to do:</b> if a script reads these messages, read stderr.</p>
+        </div>
+      </details>
+      <details class="item" id="active-word" data-group="text" data-who="terminal">
+        <summary><span class="title">One word for the saved choice: active</span><span class="area">Terminal output</span><span class="who-cell hide-narrow">Terminal users</span></summary>
+        <div class="body">
+          <div class="before"><span class="tag">0.x</span>"Pin" and "default project" for the chosen project, "active branch" for the chosen branch, and "pin" again for the branch in the REST API.</div>
+          <div class="after"><span class="tag">1.0</span>"Active" everywhere. <code>project use</code> prints <code>Active project: prod</code>.</div>
+          <p class="do"><b>What to do:</b> nothing, unless a script reads that text.</p>
+        </div>
+      </details>
+
+      <div class="group" data-group="deprecated"><span class="gname">Old forms that still work for now</span><span class="gdesc">They work with a warning for at least 56 days after the release. A later release can remove them.</span></div>
+      <details class="item" id="force-to-yes" data-group="deprecated" data-who="scripts terminal">
+        <summary><span class="title"><code>stream delete --force</code> becomes <code>--yes</code></span><span class="area">Confirmations</span><span class="who-cell hide-narrow">Scripts and CI, terminal users</span></summary>
+        <div class="body">
+          <div class="before"><span class="tag">0.x</span><code>--force</code> skipped the confirmation. <code>semantic-layer import --yes</code> did nothing.</div>
+          <div class="after"><span class="tag">1.0</span>Use <code>stream delete --yes</code>, and run <code>semantic-layer import</code> without <code>--yes</code>.</div>
+          <p class="do"><b>What to do:</b> change the flags.</p>
+        </div>
+      </details>
+      <details class="item" id="serve-patch" data-group="deprecated" data-who="serve">
+        <summary><span class="title">Partial updates use <code>PATCH</code></span><span class="area">kbagent serve</span><span class="who-cell hide-narrow">kbagent serve clients</span></summary>
+        <div class="body">
+          <div class="before"><span class="tag">0.x</span>4 routes changed part of an item with <code>PUT</code>.</div>
+          <div class="after"><span class="tag">1.0</span><code>PATCH</code>. <code>PUT</code> works with a warning.</div>
+          <p class="do"><b>What to do:</b> switch these requests to <code>PATCH</code>.</p>
+        </div>
+      </details>
+
+      <div class="group" data-group="new"><span class="gname">New, nothing to change</span><span class="gdesc">Additions. Everything that worked before still works.</span></div>
+      <details class="item" id="flags-anywhere" data-group="new" data-who="scripts agents terminal">
+        <summary><span class="title"><code>--json</code> works after the command, <code>-h</code> shows help</span><span class="area">Options and input</span><span class="who-cell hide-narrow">Everyone</span></summary>
+        <div class="body">
+          <div class="before"><span class="tag">0.x</span><code>--json</code> worked only before the command. <code>-h</code> was an unknown option.</div>
+          <div class="after"><span class="tag">1.0</span><code>kbagent config list --json</code> works. <code>-h</code> shows help.</div>
+          <p class="do"><b>Note:</b> if a script must also run on 0.x, keep <code>--json</code> first.</p>
+        </div>
+      </details>
+      <details class="item" id="short-flags-everywhere" data-group="new" data-who="scripts agents terminal">
+        <summary><span class="title"><code>-p</code> and other short flags on every command</span><span class="area">Options and input</span><span class="who-cell hide-narrow">Everyone</span></summary>
+        <div class="body">
+          <div class="before"><span class="tag">0.x</span><code>-p</code> worked on 24 of the 228 commands with <code>--project</code>.</div>
+          <div class="after"><span class="tag">1.0</span>Every command with the option accepts its short flag: <code>-p</code> for <code>--project</code>, <code>-n</code> for <code>--name</code>, <code>-t</code> for <code>--type</code>, <code>-L</code> for <code>--limit</code>, <code>-o</code> for <code>--output</code>, <code>-e</code> for <code>--email</code>, and the others.</div>
+          <p class="do"><b>Note:</b> if a script must also run on 0.x, use the long option names.</p>
+        </div>
+      </details>
+      <details class="item" id="json-fields" data-group="new" data-who="scripts agents">
+        <summary><span class="title">New fields in the JSON output</span><span class="area">JSON output</span><span class="who-cell hide-narrow">Scripts and CI, AI agents</span></summary>
+        <div class="body">
+          <div class="after only"><span class="tag">1.0 adds</span><code>exit_code</code>, <code>schema_version</code>, where the project came from (<code>project_source</code>), a warning when a destructive command uses a project or branch saved with <code>project use</code> or <code>branch use</code>, and the error code of each failed item. Nothing is removed or renamed.</div>
+        </div>
+      </details>
+      <details class="item" id="serve-headers" data-group="new" data-who="serve">
+        <summary><span class="title">Responses say which project and branch they used</span><span class="area">kbagent serve</span><span class="who-cell hide-narrow">kbagent serve clients</span></summary>
+        <div class="body">
+          <div class="after only"><span class="tag">1.0 adds</span><code>Kbagent-Targets</code> and <code>Kbagent-Warnings</code> response headers, with the same content as in the JSON output of the command line.</div>
+        </div>
+      </details>
+      <details class="item" id="update-notes" data-group="new" data-who="terminal agents">
+        <summary><span class="title">Update notes list every breaking change you skipped</span><span class="area">Updates</span><span class="who-cell hide-narrow">Terminal users, AI agents</span></summary>
+        <div class="body">
+          <div class="after only"><span class="tag">1.0 adds</span>After an update, the "What's new" notice lists the breaking changes of every version that the update skipped.</div>
+        </div>
+      </details>
+      <details class="item" id="no-open" data-group="new" data-who="terminal">
+        <summary><span class="title"><code>auth login --no-open</code></span><span class="area">Terminal output</span><span class="who-cell hide-narrow">Terminal users</span></summary>
+        <div class="body">
+          <div class="after only"><span class="tag">1.0 adds</span>Sign in with a device code. kbagent opens no browser and prints the link and the code.</div>
+        </div>
+      </details>
+      <details class="item" id="wait-help" data-group="new" data-who="terminal">
+        <summary><span class="title">Help shows the wait and timeout defaults</span><span class="area">Terminal output</span><span class="who-cell hide-narrow">Terminal users</span></summary>
+        <div class="body">
+          <div class="after only"><span class="tag">1.0 adds</span>Each command with <code>--wait</code> says in its help whether it waits by default and how long. No default changed.</div>
+        </div>
+      </details>
+      <details class="item" id="context-group" data-group="new" data-who="agents">
+        <summary><span class="title"><code>kbagent context &lt;group&gt;</code></span><span class="area">AI agents</span><span class="who-cell hide-narrow">AI agents</span></summary>
+        <div class="body">
+          <div class="after only"><span class="tag">1.0 adds</span>The agent guide for one command group, for example <code>kbagent context storage</code>. The command list now comes from the commands themselves, so it matches <code>--help</code>.</div>
+        </div>
+      </details>
+
+      <p class="empty" id="empty" hidden>No change for this group.</p>
+    </div>
+  </section>
+
+  <footer>
+    <span>Full details: <a href="https://github.com/keboola/cli/blob/main/docs/migrate-to-1.0.md">Migration guide</a></span>
+    <span><a href="https://github.com/keboola/cli/blob/main/docs/error-codes.md">Error codes and exit codes</a></span>
+    <span><a href="https://github.com/keboola/cli/releases">kbagent releases</a></span>
+  </footer>
+</div>
+
+<script>
+(function () {
+  var items = Array.prototype.slice.call(document.querySelectorAll("details.item"));
+  var groups = Array.prototype.slice.call(document.querySelectorAll(".list .group"));
+  var chips = Array.prototype.slice.call(document.querySelectorAll(".chip[data-who]"));
+  var toggle = document.getElementById("toggle-all");
+  var empty = document.getElementById("empty");
+
+  function filter(who) {
+    var n = 0;
+    items.forEach(function (it) {
+      var ok = who === "all" || it.dataset.who.split(" ").indexOf(who) !== -1;
+      it.hidden = !ok;
+      if (ok) n++;
+    });
+    groups.forEach(function (g) {
+      g.hidden = !items.some(function (it) { return it.dataset.group === g.dataset.group && !it.hidden; });
+    });
+    empty.hidden = n !== 0;
+  }
+
+  chips.forEach(function (chip) {
+    chip.addEventListener("click", function () {
+      chips.forEach(function (c) { c.setAttribute("aria-pressed", String(c === chip)); });
+      filter(chip.dataset.who);
+    });
+  });
+
+  toggle.addEventListener("click", function () {
+    var open = toggle.textContent === "Open all";
+    items.forEach(function (it) { if (!it.hidden) it.open = open; });
+    toggle.textContent = open ? "Close all" : "Open all";
+  });
+
+  function focusHash() {
+    var id = location.hash.slice(1);
+    if (!id) return;
+    var el = document.getElementById(id);
+    if (!el) return;
+    if (el.classList.contains("item")) {
+      if (el.hidden) {
+        chips.forEach(function (c) { c.setAttribute("aria-pressed", String(c.dataset.who === "all")); });
+        filter("all");
+      }
+      items.forEach(function (it) { it.classList.remove("target"); });
+      el.classList.add("target");
+    }
+    if (el.tagName === "DETAILS") el.open = true;
+    el.scrollIntoView({ block: "start" });
+  }
+  window.addEventListener("hashchange", focusHash);
+
+  filter("all");
+  focusHash();
+})();
+</script>
+</body>
+</html>
