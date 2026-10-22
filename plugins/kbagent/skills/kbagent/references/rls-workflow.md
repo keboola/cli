@@ -32,11 +32,14 @@ and deletes the policy objects the enforcement reads.
 | `--scope organization` | no (403) | yes |
 | Read (`list` / `detail`) | only the policies its project owns | everything visible to the project |
 
-**Enforcement prerequisite.** On the MCP path (`query_data`), policies do nothing
-until the consuming project has the `row-level-security` project feature (it
-gates CLS too); without it, queries are unfiltered -- not an error. On a governed
-workspace, Query Service decides per project whether it enforces; that feature
-flag is not what switches it (since vNEXT).
+**Enforcement prerequisite.** On the MCP path (`query_data`) in an ordinary
+workspace, policies do nothing until the consuming project has the
+`row-level-security` project feature (it gates CLS too); without it, queries are
+unfiltered -- not an error. On a governed workspace, Query Service always
+enforces, in every project and with no per-project switch, and a table no
+`rls-policy` applies to is refused (since vNEXT). The project feature is read
+only by the MCP server, to decide that its own workspace is created governed
+(see [The MCP server's workspace](#the-mcp-servers-workspace)).
 
 **How rules combine (policy schema 1.1.0, the metastore default; since vNEXT).** A
 rule selects identities by `principal`, `principals` or IdP `groups`. Within a
@@ -125,10 +128,11 @@ is always refused.
 
 - `workspace password` is refused on a governed workspace, and so is any direct
   warehouse login: Query Service is the only reader.
-- `--governed` with `--ui` is `INVALID_ARGUMENT` (exit 2); on a non-Snowflake
-  backend it is `CONFIG_ERROR` (exit 5). Nothing is created in either case.
-- Query Service decides per project whether it enforces the policies. The
-  `row-level-security` project feature gates only the MCP `query_data` path.
+- `--governed` with `--ui` and `--governed` on a non-Snowflake backend are
+  `INVALID_ARGUMENT` (exit 2). Nothing is created in either case.
+- Query Service always enforces the policies on a governed workspace, in every
+  project. The `row-level-security` project feature gates only whether the MCP
+  server creates its workspace governed.
 
 ### Restrict one workspace to some policies (bindings)
 
@@ -159,10 +163,42 @@ kbagent --json rls bindings-sweep --project prod --older-than 30 --yes   # delet
 - A wrong `--stack-id` writes a binding nothing reads: the workspace silently
   keeps every policy. Check with a `workspace query` as the bound identity.
 - A policy listed in a binding cannot be deleted until it is unbound.
+- The workspace is governed: a table that none of the bound policies covers is
+  refused, so narrowing a binding closes tables, it never opens them.
 - The sweep deletes only a binding whose workspace is gone (404 in production
   and every dev branch) and that is older than `--older-than` days; app KIDs are
   never swept. References to a binding cannot be checked first; the metastore
   refuses a delete that one blocks.
+
+### The MCP server's workspace
+
+In a Snowflake project with the `row-level-security` feature, `keboola-mcp-server`
+creates its own workspace governed (config `mcp-workspace-<hex>` of the
+`keboola.mcp-server-tool` component), so Query Service enforces the policies on
+`query_data`. kbagent sets everything up for it with the commands above:
+
+```bash
+kbagent feature project-add --project prod --feature row-level-security   # super-admin manage token, once per project
+kbagent --json workspace list --project prod            # the MCP workspace: login_type governed, name mcp-workspace-<hex>
+kbagent --json rls list --project prod                  # the policies it gets
+kbagent --json rls bind --project prod --workspace-id MCP_WS_ID --rls-policy ID --stack-id S   # optional: only some of them
+```
+
+- **No binding = every policy of the project.** The MCP server never creates a
+  binding. Bind only to give the MCP workspace fewer policies than the project has.
+- **The KID changes with the workspace.** A branch session (a workspace per
+  branch) or a recreated workspace has a new id, so the binding of the old one
+  does not follow it and the new workspace starts with every policy again. Bind
+  again after `workspace list` shows the new id; `rls bindings-sweep` removes
+  what the old ones left behind.
+- **Deny by default.** A table with no applicable `rls-policy` is refused for
+  the MCP workspace (the opposite of an ordinary workspace, where it is
+  unfiltered); a `"*"` rule opens a table to every identified reader.
+- **Identity.** Query Service filters by the verified email of the programmatic
+  token the MCP server forwards. A session with only a legacy Storage token has
+  no identity and reads nothing from a governed table.
+- **Stack id.** `--stack-id` must equal Query Service's `QUERY_RLS_STACK_ID`
+  (for example `dev-keboola-aws-eu-west-1`); no API exposes it.
 
 ---
 

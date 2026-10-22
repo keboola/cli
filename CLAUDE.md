@@ -1424,7 +1424,7 @@ kbagent rls bindings-sweep --project P [--older-than DAYS] [--dry-run | --yes]
 #   destructive-class (FLAG_ESCALATIONS); there is no project scope. WHO: a project admin may
 #   write `targeted` policies of its own project without grants; grants and organization scope
 #   need the organization-admin role (403 otherwise). Enforced by Query Service on a governed
-#   workspace (`workspace create --governed`; Query Service decides per project), or by
+#   workspace (`workspace create --governed`; Query Service always enforces a governed workspace), or by
 #   keboola-mcp-server `query_data` where the project has the `row-level-security` feature. Policy schema 1.1.0 (the metastore default): a rule selects
 #   identities by principal, principals or IdP `groups`; within a policy every rule matching one
 #   identity applies and the conditions combine with OR; several policies on one table combine

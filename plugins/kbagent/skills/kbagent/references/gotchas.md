@@ -6782,8 +6782,9 @@ governed-workspace flow.
   `--scope organization` need the organization-admin role -- a master token alone gets a 403
   (`ACCESS_DENIED`). A project admin reads only the policies its project owns. On the MCP `query_data` path
   policies are enforced only where the consuming project has the `row-level-security` feature; on a
-  governed workspace Query Service decides per project, and the identity running `workspace query` needs
-  a matching rule (default deny).
+  governed workspace Query Service always enforces (every project, no switch), and the identity running
+  `workspace query` needs a matching rule (default deny). The MCP server's own workspace is created governed in
+  a project with the feature; it gets every policy unless bound (see `rls-workflow.md`, "The MCP server's workspace").
 - **Policy schema 1.1.0 (the metastore default) is a superset of 1.0.0.** A rule selects identities by
   `principal`, `principals` or IdP `groups` (exact strings, any listed group matches). Within a policy,
   every rule matching one identity applies: RLS conditions combine with OR, CLS `visible_columns` are

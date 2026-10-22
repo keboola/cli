@@ -1592,7 +1592,7 @@ NOT_FOUND schema-fetch error -- expected there, not a kbagent bug.
 **Enforcement** (the actual SQL rewrite) is never done by kbagent, which only
 authors policies. Two readers apply them: Query Service on a governed
 workspace (`workspace create --governed`, then `workspace load` and
-`workspace query`; Query Service decides per project whether to enforce), and
+`workspace query`; Query Service always enforces a governed workspace), and
 `keboola-mcp-server`'s `query_data`, which enforces only where the project has
 the `row-level-security` feature and needs an engine that reads schema 1.1.0
 (since vNEXT). The identity that queries needs a matching rule.
