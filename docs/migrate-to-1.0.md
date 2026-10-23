@@ -1,6 +1,6 @@
 # Migrating to kbagent 1.0
 
-kbagent 1.0.0 makes the command-line interface consistent: one way to select the target project, one JSON document on stdout, one exit-code table, one confirmation rule. Some of these changes break scripts, agents and REST clients that depend on the 0.x behavior. This page tells you when the change reaches you, how to move early or stay on 0.x, and what to change. The plan and the reasons are in [#791](https://github.com/keboola/cli/issues/791).
+kbagent 1.0.0 makes the command-line interface consistent: one way to select the target project, one JSON document on stdout, one exit-code table, one confirmation rule. Some of these changes break scripts, agents and REST clients that depend on the 0.x behavior. This page tells you when the change reaches you, how to move early or stay on 0.x, and what to change. The plan and the reasons are in [#791](https://github.com/keboola/cli/issues/791). A short overview of the changes, grouped by impact, is at <https://keboola.github.io/cli/1.0/>.
 
 ## What happens and when
 
