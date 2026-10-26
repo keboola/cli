@@ -346,9 +346,6 @@ class StorageFake:
     def list_components_with_configs(self, branch_id: int | None = None) -> list[dict[str, Any]]:
         return copy.deepcopy(self.components)
 
-    def list_config_folder_metadata(self, branch_id: int | None = None) -> dict[str, str]:
-        return {}
-
     def set_config_metadata(self, **kwargs: Any) -> None:
         return None
 
@@ -376,6 +373,7 @@ class StorageFake:
         description: str = "",
         branch_id: int | None = None,
         is_disabled: bool = False,
+        folder: str | None = None,
     ) -> dict[str, Any]:
         config = _config(f"new-{next(self._ids)}", name, copy.deepcopy(configuration))
         self.create_calls.append({"component_id": component_id, "id": config["id"]})
@@ -392,6 +390,7 @@ class StorageFake:
         change_description: str = "",
         branch_id: int | None = None,
         is_disabled: bool | None = None,
+        folder: str | None = None,
     ) -> dict[str, Any]:
         config = self.find(component_id, config_id)
         for key in list(self.fail_update_once):

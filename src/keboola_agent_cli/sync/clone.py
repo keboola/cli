@@ -97,9 +97,9 @@ def repoint_default_branch_configs(
     dev-branch entries keep their branch id so their tree still resolves. Push
     matches a create placeholder on ``(branch_id, component_id, path)`` and
     resolves the target branch to ``new_branch_id``. Without this the match
-    fails, a duplicate entry with no ``KBC.*`` metadata is appended, and config
-    metadata such as ``KBC.configuration.folderName`` never reaches the target
-    (CLI-9). ``new_branch_id`` must be what ``_resolve_branch_id`` returns for
+    fails, a duplicate entry with no ``KBC.*`` metadata is appended, and the
+    config folder (and other ``KBC.*`` manifest metadata) never reaches the
+    target (CLI-9). ``new_branch_id`` must be what ``_resolve_branch_id`` returns for
     the target, normalized to ``0`` for production (``None``), so the writeback
     ``branch_id or 0`` comparison matches.
     """

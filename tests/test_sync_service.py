@@ -3280,7 +3280,8 @@ class TestFreshCreateWriteback:
 
     def test_propagate_kbc_metadata_calls_set_config_metadata(self, tmp_config_dir: Path) -> None:
         """KBC.* keys are POSTed via client.set_config_metadata; bookkeeping
-        keys (``pull_hash``, ...) are filtered out."""
+        keys (``pull_hash``, ...) and the folder key are filtered out (the
+        folder goes on the create POST as the ``folder`` field, DMD-2348)."""
         from keboola_agent_cli.sync.manifest import ManifestConfiguration
 
         entry = ManifestConfiguration(
@@ -3306,9 +3307,24 @@ class TestFreshCreateWriteback:
         assert call.kwargs["branch_id"] == 99
         entries = dict(call.kwargs["entries"])
         assert entries == {
-            "KBC.configuration.folderName": "FI Pipeline",
             "KBC.configuration.category": "transformation",
-        }, "pull_* bookkeeping keys must not be sent to the metadata API"
+        }, "pull_* bookkeeping keys and the folder key must not reach the metadata API"
+
+    def test_propagate_kbc_metadata_never_writes_the_folder_key(self, tmp_config_dir: Path) -> None:
+        """An entry whose only KBC.* key is the folder makes no metadata call."""
+        from keboola_agent_cli.sync.manifest import ManifestConfiguration
+
+        entry = ManifestConfiguration(
+            branchId=0,
+            componentId="x",
+            id="y",
+            path="z",
+            metadata={"KBC.configuration.folderName": "FI Pipeline"},
+        )
+        client = MagicMock()
+
+        assert propagate_kbc_metadata(client, entry, branch_id=None) is None
+        client.set_config_metadata.assert_not_called()
 
     def test_propagate_kbc_metadata_noop_when_no_kbc_keys(self, tmp_config_dir: Path) -> None:
         """No KBC.* keys → no API call (don't waste a round-trip)."""
@@ -3341,7 +3357,7 @@ class TestFreshCreateWriteback:
             componentId="keboola.snowflake-transformation",
             id="cfg-123",
             path="x",
-            metadata={"KBC.configuration.folderName": "FI Pipeline"},
+            metadata={"KBC.configuration.category": "transformation"},
         )
         client = MagicMock()
         client.set_config_metadata.side_effect = KeboolaApiError(
@@ -3425,8 +3441,8 @@ class TestFreshCreateWriteback:
              a matching ``_config.yml`` file.
           3. Run sync push — assert: created=1, manifest length stays at 1
              (placeholder updated in place to real ULID), client.create_config
-             was called, client.set_config_metadata was called with the folder
-             metadata.
+             was called with ``folder``, and the folder never went to the
+             metadata API (DMD-2348).
           4. Run sync push a second time — assert: created=0, errors=0
              (idempotency naturally follows from writeback-in-place).
         """
@@ -3496,13 +3512,8 @@ class TestFreshCreateWriteback:
         assert result["created"] == 1
         assert result["errors"] == []
         push_client.create_config.assert_called_once()
-        push_client.set_config_metadata.assert_called_once()
-        meta_call = push_client.set_config_metadata.call_args
-        assert meta_call.kwargs["component_id"] == "keboola.snowflake-transformation"
-        assert meta_call.kwargs["config_id"] == "999000111"
-        assert dict(meta_call.kwargs["entries"]) == {
-            "KBC.configuration.folderName": "FI Pipeline",
-        }
+        assert push_client.create_config.call_args.kwargs["folder"] == "FI Pipeline"
+        push_client.set_config_metadata.assert_not_called()
 
         # Manifest must have updated the placeholder in place — NOT appended.
         post = load_manifest(project_root)

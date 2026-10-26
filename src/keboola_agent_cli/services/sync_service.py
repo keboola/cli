@@ -24,6 +24,7 @@ from ..constants import (
     DEFAULT_JOBS_PER_CONFIG,
     DEFAULT_MAX_SAMPLES,
     DEFAULT_SAMPLE_LIMIT,
+    FOLDER_METADATA_KEY,
     KEBOOLA_DIR_NAME,
     MANIFEST_VERSION,
 )
@@ -501,7 +502,7 @@ class SyncService(BaseService):
             components = client.list_components_with_configs(branch_id=branch_id)
             components = sql_workspaces.scope_listing(components, manifest)
             self._ensure_branch_registered(manifest, branch_id, client)
-            folder_map = self._fetch_config_folders(client, branch_id)
+            folder_map = self._collect_config_folders(components)
 
             if not no_storage:
                 try:
@@ -1005,22 +1006,19 @@ class SyncService(BaseService):
                         # shape version is stamped alongside it (issue #686).
                         CONFIG_HASH_VERSION_KEY: CONFIG_HASH_VERSION,
                     }
-                # Keep the UI folder (KBC.configuration.folderName) with the
-                # config. Pull dropped it before, so every pulled or cloned
-                # config landed in the root (CLI-9). The push create path
-                # already forwards KBC.* manifest metadata through
-                # propagate_kbc_metadata, so storing it here closes the loop.
-                # When the lookup failed (folder_map is None), keep the folder
-                # a previous pull captured rather than stripping it from every
-                # entry over one transient failure.
+                # Keep the UI folder with the config. Pull dropped it before,
+                # so every pulled or cloned config landed in the root (CLI-9).
+                # The manifest stores it under the legacy metadata key name
+                # (existing trees and scaffolds use it); the push create path
+                # sends it as the configuration's ``folder`` field. When the
+                # listing carried no ``folder`` (folder_map is None), keep the
+                # folder a previous pull captured rather than stripping it.
                 if folder_map is not None:
                     folder_name = folder_map.get(lookup_key)
                 else:
-                    folder_name = existing_metadata.get(lookup_key, {}).get(
-                        "KBC.configuration.folderName"
-                    )
+                    folder_name = existing_metadata.get(lookup_key, {}).get(FOLDER_METADATA_KEY)
                 if folder_name:
-                    cfg_metadata["KBC.configuration.folderName"] = folder_name
+                    cfg_metadata[FOLDER_METADATA_KEY] = folder_name
                 new_configurations.append(
                     ManifestConfiguration(
                         branchId=branch_id or 0,
@@ -1072,9 +1070,9 @@ class SyncService(BaseService):
             "jobs_written": jobs_written,
             "storage": storage_stats,
             "details": pull_details,
-            # True when the config-folder lookup failed: folders were kept from
-            # the previous pull, not refreshed. Lets a caller tell "no folders"
-            # from "the lookup failed" (CLI-9).
+            # True when the listing carried no ``folder`` field (a stack that
+            # predates it): folders were kept from the previous pull, not
+            # refreshed. Lets a caller tell "no folders" from "unknown" (CLI-9).
             "folder_lookup_failed": folder_map is None,
         }
 
@@ -2092,35 +2090,25 @@ class SyncService(BaseService):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _fetch_config_folders(client: Any, branch_id: int | None) -> dict[str, str] | None:
+    def _collect_config_folders(components: list[dict[str, Any]]) -> dict[str, str] | None:
         """Map ``{component_id}/{config_id}`` to its UI folder name.
 
-        The folder is config metadata (``KBC.configuration.folderName``), not a
-        field in the ``list_components_with_configs`` body, so pull must fetch it
-        separately. The search endpoint that serves it is branch-only, so a
-        production pull (``branch_id`` is ``None``) resolves the default branch
-        id first -- the same fallback ``ConfigService`` uses.
-
-        Returns ``None`` when the lookup fails (API error, no resolvable branch,
-        or a non-dict body). ``None`` means "unknown", NOT "no folders": the
-        caller then keeps each config's previously captured folder instead of
-        dropping it from every manifest entry over one transient failure
-        (CLI-9). A successful lookup returns a dict, possibly empty when no
-        config has a folder.
+        Read from the configuration's own ``folder`` field (null = no folder)
+        in the listing pull already fetched -- no extra request. Returns
+        ``None`` when a configuration lacks the field (a stack that predates
+        it): ``None`` means "unknown", NOT "no folders", so the caller keeps
+        each config's previously captured folder (CLI-9).
         """
-        try:
-            folder_branch_id = branch_id or find_default_branch_id(client.list_dev_branches())
-            if not folder_branch_id:
-                logger.warning("config-folder lookup skipped: no branch id resolved")
-                return None
-            result = client.list_config_folder_metadata(branch_id=folder_branch_id)
-            if isinstance(result, dict):
-                return result
-            logger.warning("config-folder lookup returned a non-dict body")
-            return None
-        except Exception:
-            logger.warning("config-folder metadata lookup failed", exc_info=True)
-            return None
+        folders: dict[str, str] = {}
+        for component in components:
+            component_id = component.get("id", "")
+            for cfg in component.get("configurations", []) or []:
+                if "folder" not in cfg:
+                    logger.warning("config listing carries no folder field; folders kept")
+                    return None
+                if cfg["folder"]:
+                    folders[f"{component_id}/{cfg.get('id', '')}"] = cfg["folder"]
+        return folders
 
     def _resolve_branch_id(
         self,

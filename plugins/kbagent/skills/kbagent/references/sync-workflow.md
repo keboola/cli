@@ -205,10 +205,12 @@ entry's id is updated to the API-assigned ULID. Re-pushes against the
 now-real id are naturally idempotent.
 
 If a placeholder entry's `metadata` dict contains `KBC.configuration.*`
-keys (e.g. `KBC.configuration.folderName`), they are propagated to the
-metadata API immediately after the create call. This was the previous
-"set folderName via `config set-folder` after push" workaround for
-fresh-create flows; from v0.47.0 a single push handles it.
+keys, they are propagated to the metadata API immediately after the create
+call. The folder key `KBC.configuration.folderName` is the exception: since
+vNEXT it is sent on the create call as the configuration's `folder` field and
+never written to the metadata API. This was the previous "set the folder via
+`config set-folder` after push" workaround for fresh-create flows; from
+v0.47.0 a single push handles it.
 
 **Variable links are resolved on fresh CREATE.** When the
 placeholder tree includes a `keboola.variables` config + default-values row and

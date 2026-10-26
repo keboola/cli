@@ -177,8 +177,8 @@ def _format_pull_result(formatter: Any, result: dict) -> None:
     """Format a single-project pull result for human output."""
     if result.get("folder_lookup_failed"):
         formatter.console.print(
-            "[yellow]Warning:[/yellow] config-folder lookup failed; existing folders kept, "
-            "not refreshed."
+            "[yellow]Warning:[/yellow] the config listing carries no folder field; "
+            "existing folders kept, not refreshed."
         )
     is_dry = result.get("status") == "dry_run"
     details = result.get("details", [])
@@ -435,10 +435,10 @@ def _pull_one_liner(result: dict) -> str:
         parts.append(f"[cyan]!{skip_n} skipped[/cyan]")
     if ign_n:
         parts.append(f"[dim]-{ign_n} ignored[/dim]")
-    # Show the degraded folder lookup here too: --all-projects human mode
+    # Show the unknown folders here too: --all-projects human mode
     # renders only this one-liner (not _format_pull_result) unless --verbose.
     if result.get("folder_lookup_failed"):
-        parts.append("[yellow]folder lookup failed[/yellow]")
+        parts.append("[yellow]folders not refreshed[/yellow]")
     if not parts:
         return "[green]up to date[/green]"
     return ", ".join(parts)

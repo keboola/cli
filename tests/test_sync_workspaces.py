@@ -149,7 +149,6 @@ def _client(components: list[dict[str, Any]] | None = None) -> MagicMock:
     client.verify_token.return_value = VERIFY_TOKEN
     client.list_dev_branches.return_value = BRANCHES
     client.list_components_with_configs.return_value = components or []
-    client.list_config_folder_metadata.return_value = {}
     client.list_editor_sessions.return_value = []
     # The workspace read right before a delete (the parameters.id check).
     client.get_config_detail.return_value = copy.deepcopy(SHARED_SQL)
@@ -487,7 +486,6 @@ _CONFIG_ONLY_CALLS = frozenset(
         "verify_token",
         "list_dev_branches",
         "list_components_with_configs",
-        "list_config_folder_metadata",
         "get_config_detail",
         "create_config",
         "update_config",

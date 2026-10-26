@@ -28,6 +28,7 @@ from ..sync.code_extraction import normalize_blocks_codes_script
 from ..sync.manifest import Manifest, load_manifest, save_manifest
 from ..sync.naming import sanitize_name
 from ._config_clone import clone_config_method
+from ._config_folder import set_config_folder_method
 from ._config_set_guard import validate_set_paths
 from ._encryption import collect_secrets, encrypt_secrets_in_config, find_plaintext_secret_keys
 from .base import (
@@ -161,20 +162,6 @@ class ConfigService(BaseService):
                     branch_id=effective_branch_id,
                 )
 
-            # Fetch folder metadata (requires branch ID — search endpoint is branch-only)
-            folder_map: dict[str, str] = {}
-            try:
-                # Use effective branch, active branch, or find the default branch ID
-                folder_branch_id = effective_branch_id
-                if not folder_branch_id:
-                    # Fetch default branch ID from dev-branches endpoint
-                    folder_branch_id = find_default_branch_id(client.list_dev_branches())
-                if folder_branch_id is not None:
-                    result = client.list_config_folder_metadata(branch_id=folder_branch_id)
-                    folder_map = result if isinstance(result, dict) else {}
-            except Exception:
-                logger.debug("config-folder metadata lookup failed", exc_info=True)
-
             configs: list[dict[str, Any]] = []
             for component in components:
                 comp_id = component.get("id", "")
@@ -203,7 +190,9 @@ class ConfigService(BaseService):
                         "last_modified": current_version.get("created", ""),
                         "last_modified_by": creator_token.get("description", ""),
                         "last_change_description": current_version.get("changeDescription", ""),
-                        "folder": folder_map.get(f"{comp_id}/{cfg_id}", ""),
+                        # The listing carries the configuration's own
+                        # ``folder`` field (null = no folder).
+                        "folder": cfg.get("folder") or "",
                     }
 
                     # When --include-rows, attach the full configuration + rows
@@ -1617,28 +1606,7 @@ class ConfigService(BaseService):
         finally:
             client.close()
 
-    def set_config_folder(
-        self,
-        alias: str,
-        component_id: str,
-        config_id: str,
-        folder_name: str,
-        branch_id: int | None = None,
-    ) -> dict[str, Any]:
-        """Set the folder name on a configuration (KBC.configuration.folderName)."""
-        result = self.set_config_metadata(
-            alias,
-            component_id,
-            config_id,
-            key="KBC.configuration.folderName",
-            value=folder_name,
-            branch_id=branch_id,
-        )
-        result["folder"] = folder_name
-        result["message"] = (
-            f"Folder '{folder_name}' set on config '{component_id}/{config_id}' in project '{alias}'."
-        )
-        return result
+    set_config_folder = set_config_folder_method
 
     def search_configs(
         self,
