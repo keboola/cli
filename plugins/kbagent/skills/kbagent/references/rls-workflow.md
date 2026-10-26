@@ -112,14 +112,14 @@ kbagent --json cls create --project prod --table-id in.c-crm.invoices \
   --rules '[{"principal": "eu-analyst@example.com",
              "visible_columns": ["id", "region", "amount"]}]'
 
-# 3. Load the table into the workspace (or let Storage put it there).
-kbagent --json workspace load --project prod --workspace-id WS_ID \
-  --tables in.c-crm.invoices
-
-# 4. Read it through Query Service -- the only way into a governed workspace.
+# 3. Read it through Query Service -- the only way into a governed workspace.
+#    No `workspace load`: Query Service reads the Storage table by its bucket name.
 kbagent --json workspace query --project prod --workspace-id WS_ID \
-  --sql 'SELECT * FROM "invoices"'
+  --sql 'SELECT * FROM "in.c-crm"."invoices"'
 ```
+
+Name a table as `"<bucket id>"."<table>"` (`"in.c-crm"."invoices"`). A bare
+`"invoices"` is refused with the same 403 as an unprotected table.
 
 Expected (illustrative): for `eu-analyst@example.com` only the `region = 'EU'`
 rows, and only the columns `id`, `region`, `amount`. An identity with no
@@ -164,7 +164,8 @@ kbagent --json rls bindings-sweep --project prod --older-than 30 --yes   # delet
   keeps every policy. Check with a `workspace query` as the bound identity.
 - A policy listed in a binding cannot be deleted until it is unbound.
 - The workspace is governed: a table that none of the bound policies covers is
-  refused, so narrowing a binding closes tables, it never opens them.
+  refused, so narrowing a binding closes tables, it never opens them. A table
+  needs an RLS policy in the binding: binding only `--cls-policy` refuses every table.
 - The sweep deletes only a binding whose workspace is gone (404 in production
   and every dev branch) and that is older than `--older-than` days; app KIDs are
   never swept. References to a binding cannot be checked first; the metastore
@@ -194,9 +195,12 @@ kbagent --json rls bind --project prod --workspace-id MCP_WS_ID --rls-policy ID 
 - **Deny by default.** A table with no applicable `rls-policy` is refused for
   the MCP workspace (the opposite of an ordinary workspace, where it is
   unfiltered); a `"*"` rule opens a table to every identified reader.
-- **Identity.** Query Service filters by the verified email of the programmatic
-  token the MCP server forwards. A session with only a legacy Storage token has
-  no identity and reads nothing from a governed table.
+- **Identity.** Query Service filters by the email of the project administrator
+  behind the Storage token of the request: a kbagent session, a programmatic
+  token (also the one the MCP server forwards) and an administrator's master
+  Storage token all resolve to that administrator. An integration, data app or
+  other non-administrator token has no identity and reads nothing from a
+  governed table.
 - **Stack id.** `--stack-id` must equal Query Service's `QUERY_RLS_STACK_ID`
   (for example `dev-keboola-aws-eu-west-1`); no API exposes it.
 
@@ -495,6 +499,12 @@ kbagent --json rls schema --project prod
   update with nothing to change.
 - **`CONFIG_ERROR` / exit 5** -- the `--project` alias isn't registered
   locally. `kbagent project list`.
+- **`workspace query` on a governed workspace: `ACCESS_DENIED` (403) "Row-level
+  security does not allow this query"** -- Query Service refuses by default.
+  Check in this order: the table is named `"<bucket id>"."<table>"`; an `rls-policy` (and a `cls-policy` if you use
+  one) covers the table (`rls list`) and a rule matches your identity or `"*"`;
+  the token is an administrator's (see Identity above); the workspace binding,
+  if any, lists that policy (`rls bindings`).
 
 ---
 
