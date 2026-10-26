@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from .constants import MIGRATION_GUIDE_URL
+from .constants import migration_guide_url
 
 DEPRECATED_VERSION_CODE = "DEPRECATED_VERSION"
 UPDATE_MAJOR_HINT = "kbagent update --major"
@@ -81,6 +81,7 @@ def build_notice(
     current_parts = current_version.split(".")
     current_major = current_parts[0]
     next_major = next_version.split(".")[0]
+    guide_url = migration_guide_url(int(next_major))
     short = ".".join(current_parts[:2])
     parts = [f"kbagent {short} is deprecated."]
     if published_ts is not None:
@@ -108,7 +109,7 @@ def build_notice(
             f"This installation updates itself to {next_major}.x on "
             f"{migration:%Y-%m-%d} at {migration:%H:%M} UTC."
         )
-    parts.append(f"What changes: {MIGRATION_GUIDE_URL}.")
+    parts.append(f"What changes: {guide_url}.")
     if mode is NoticeMode.AUTO_UPDATE:
         parts.append(f"Update now: {UPDATE_MAJOR_HINT}.")
     # A `keboola-cli<N` pin alone does not hold a self-updating install: the
@@ -129,7 +130,7 @@ def build_notice(
         "next_version": next_version,
         "released_at": _iso(published_ts),
         "migration_at": _iso(migration_ts),
-        "url": MIGRATION_GUIDE_URL,
+        "url": guide_url,
     }
     return DeprecationNotice(text=text, entry=entry)
 

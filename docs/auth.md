@@ -100,7 +100,7 @@ The reverse direction *is* possible, because it is an explicit request — see
 *(since 0.95.0)*
 
 ```bash
-kbagent project create --url URL [--project ALIAS] [--name NAME] \
+kbagent project create --url URL [--alias ALIAS] [--name NAME] \
                        [--backend snowflake|bigquery] [--sync-backend-init]
 ```
 

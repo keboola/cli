@@ -39,7 +39,7 @@ You have a Storage API token from the Keboola UI (Settings → API Tokens).
 Nothing else is needed.
 
 ```bash
-kbagent project add --project prod \
+kbagent project add --alias prod \
   --url https://connection.keboola.com \
   --token-stdin
 ```
@@ -48,7 +48,7 @@ kbagent project add --project prod \
 Enter. In a script, pipe the token in instead:
 
 ```bash
-printf '%s' "$KBC_TOKEN" | kbagent project add --project prod \
+printf '%s' "$KBC_TOKEN" | kbagent project add --alias prod \
   --url https://connection.keboola.com --token-stdin
 ```
 
@@ -64,10 +64,10 @@ Other ways to pass the token (also safe for shell history):
 ```bash
 # Env var
 export KBC_TOKEN=YOUR_STORAGE_API_TOKEN
-kbagent project add --project prod --url https://connection.keboola.com
+kbagent project add --alias prod --url https://connection.keboola.com
 
 # Interactive prompt (stdin hidden)
-kbagent project add --project prod --url https://connection.keboola.com
+kbagent project add --alias prod --url https://connection.keboola.com
 # -> prompts for the token
 ```
 
@@ -836,7 +836,7 @@ zero to a running container.
 
 ```bash
 # Register the project once (Storage API token from the UI, typed at a hidden prompt).
-kbagent project add --project prod \
+kbagent project add --alias prod \
   --url https://connection.keboola.com \
   --token-stdin
 

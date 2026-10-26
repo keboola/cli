@@ -24,6 +24,7 @@ from ..constants import IMPORT_JOB_MAX_WAIT
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..output import OutputFormatter
 from ._helpers import emit_api_error, get_formatter, get_service, map_error_to_exit_code
+from ._project_ref import PROJECT_HELP
 
 _JOBS = "Jobs"
 
@@ -99,7 +100,7 @@ def register(app: typer.Typer) -> None:
     @app.command("job-detail", rich_help_panel=_JOBS)
     def storage_job_detail(
         ctx: typer.Context,
-        project: str = typer.Option(..., "--project", help="Project alias"),
+        project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
         job_id: int = typer.Option(
             ..., "--job-id", help="Storage job ID (e.g. from `upload-table --no-wait`)"
         ),

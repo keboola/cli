@@ -11,7 +11,9 @@ import typer
 
 from ..constants import SYNC_ORPHAN_PREVIEW_LIMIT
 from ..errors import ConfigError, ErrorCode, KeboolaApiError, SyncConflictError
+from ._all_projects import FANOUT_ONE_PROJECT_HELP
 from ._helpers import (
+    BRANCH_ONE_PROJECT_MESSAGE,
     check_cli_operation,
     check_cli_permission,
     emit_api_error,
@@ -19,7 +21,9 @@ from ._helpers import (
     get_formatter,
     get_service,
     map_error_to_exit_code,
+    resolve_project_alias,
 )
+from ._project_ref import PROJECT_HELP
 from ._sync_clone_render import clone_summary, print_clone_result
 from ._sync_push_render import REMOTE_CHANGE_LABELS, print_push_skips, push_skips_one_liner
 
@@ -88,11 +92,7 @@ def _change_label(change: dict) -> str:
 @sync_app.command("init")
 def sync_init(
     ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        help="Project alias to initialize sync for",
-    ),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     directory: Path = typer.Option(
         Path("."),
         "--directory",
@@ -544,7 +544,8 @@ def sync_pull(
     project: str | None = typer.Option(
         None,
         "--project",
-        help="Project alias to pull configurations from",
+        "-p",
+        help=FANOUT_ONE_PROJECT_HELP,
     ),
     all_projects: bool = typer.Option(
         False,
@@ -637,15 +638,11 @@ def sync_pull(
         )
         raise typer.Exit(code=2)
     if not all_projects and not project:
-        formatter.error(
-            message="Specify --project ALIAS or --all-projects",
-            error_code=ErrorCode.USAGE_ERROR,
-        )
-        raise typer.Exit(code=2)
+        project = resolve_project_alias(ctx, formatter, None)
     if branch is not None and all_projects:
         formatter.error(
-            message="--branch requires --project (branch id is per-project)",
-            error_code=ErrorCode.USAGE_ERROR,
+            message=BRANCH_ONE_PROJECT_MESSAGE,
+            error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2)
 
@@ -810,7 +807,8 @@ def sync_diff(
     project: str | None = typer.Option(
         None,
         "--project",
-        help="Project alias to diff against",
+        "-p",
+        help=FANOUT_ONE_PROJECT_HELP,
     ),
     all_projects: bool = typer.Option(
         False,
@@ -847,15 +845,11 @@ def sync_diff(
         )
         raise typer.Exit(code=2)
     if not all_projects and not project:
-        formatter.error(
-            message="Specify --project ALIAS or --all-projects",
-            error_code=ErrorCode.USAGE_ERROR,
-        )
-        raise typer.Exit(code=2)
+        project = resolve_project_alias(ctx, formatter, None)
     if branch is not None and all_projects:
         formatter.error(
-            message="--branch requires --project (branch id is per-project)",
-            error_code=ErrorCode.USAGE_ERROR,
+            message=BRANCH_ONE_PROJECT_MESSAGE,
+            error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2)
 
@@ -990,7 +984,8 @@ def sync_push(
     project: str | None = typer.Option(
         None,
         "--project",
-        help="Project alias to push changes to",
+        "-p",
+        help=FANOUT_ONE_PROJECT_HELP,
     ),
     all_projects: bool = typer.Option(
         False,
@@ -1061,15 +1056,11 @@ def sync_push(
         )
         raise typer.Exit(code=2)
     if not all_projects and not project:
-        formatter.error(
-            message="Specify --project ALIAS or --all-projects",
-            error_code=ErrorCode.USAGE_ERROR,
-        )
-        raise typer.Exit(code=2)
+        project = resolve_project_alias(ctx, formatter, None)
     if branch is not None and all_projects:
         formatter.error(
-            message="--branch requires --project (branch id is per-project)",
-            error_code=ErrorCode.USAGE_ERROR,
+            message=BRANCH_ONE_PROJECT_MESSAGE,
+            error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2)
 
@@ -1304,7 +1295,7 @@ def sync_clone(
 @sync_app.command("branch-link")
 def sync_branch_link(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     directory: Path = typer.Option(Path("."), "--directory", "-d", help="Project root directory"),
     branch_id: int | None = typer.Option(
         None, "--branch-id", help="Link to existing Keboola branch by ID"

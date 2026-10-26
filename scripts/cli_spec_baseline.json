@@ -6,17 +6,20 @@
     "naming.alias-parity": true,
     "naming.hidden-leaf-has-canonical": true,
     "args.short-flag-one-meaning": true,
+    "args.short-flag-on-every-option": true,
     "args.no-global-option-shadow": true,
     "args.long-option-one-shape": false,
     "args.no-bare-id-option": false,
     "args.no-positional-arguments": false,
     "args.no-dead-parameter": true,
     "args.list-option-repeatable": true,
+    "args.boolean-flag-shape": true,
     "input.file-option-vocabulary": false,
     "input.single-parser": true,
     "input.content-option-refuses-at-file": true,
     "target.project-help-states-default": true,
     "target.no-write-fanout": true,
+    "target.project-not-required": true,
     "output.no-direct-print": true,
     "env.registry-complete": true,
     "output.ok-then-exit-declares-exit-code": true,
@@ -45,18 +48,7 @@
     "serve.partial-update-uses-patch": true
   },
   "violations": {
-    "args.short-flag-one-meaning": [
-      "changelog -v",
-      "http patch -d",
-      "http post -d",
-      "lineage show -f",
-      "permissions set -d",
-      "permissions set -m",
-      "search -l",
-      "token create -d"
-    ],
     "args.no-global-option-shadow": [
-      "changelog -v",
       "serve --config-dir"
     ],
     "args.long-option-one-shape": [
@@ -201,20 +193,8 @@
       "workspace query --sql"
     ],
     "target.project-help-states-default": [
-      "config new --project",
-      "flow schema --project",
-      "flow validate --project",
       "init --project",
-      "lineage show --project",
-      "project invite --project",
-      "project refresh --project",
-      "sync diff --project",
-      "sync pull --project",
-      "sync push --project",
-      "transformation create --project",
-      "transformation edit --project",
-      "transformation show --project",
-      "workspace gc --project"
+      "lineage show --project"
     ],
     "output.no-direct-print": [
       "commands/_helpers.py:_read_token_file typer.echo",
@@ -609,18 +589,6 @@
   "exceptions": {
     "args.no-positional-arguments": {
       "context GROUP": "AG1 names the form `kbagent context <group>`: a group name is not an identifier (A3)"
-    },
-    "args.short-flag-one-meaning": {
-      "changelog -n": "reserved short flag, existing use (A2)",
-      "config search -r": "reserved short flag, existing use (A2)",
-      "kai history -n": "reserved short flag, existing use (A2)",
-      "lineage show -c": "reserved short flag, existing use (A2)",
-      "permissions list -c": "reserved short flag, existing use (A2)",
-      "project invite -r": "reserved short flag, existing use (A2)",
-      "project member-set-role -r": "reserved short flag, existing use (A2)",
-      "search -r": "reserved short flag, existing use (A2)",
-      "stream create-source -n": "reserved short flag, existing use (A2)",
-      "stream detail -n": "reserved short flag, existing use (A2)"
     },
     "enforcement.runtime-permission-guard": {
       "permissions check": "permissions.* are always allowed to prevent lockout (permissions.py)",

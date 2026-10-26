@@ -93,6 +93,18 @@ a critical failure.
    token. Never echo tokens in responses. If a plan would require a
    token in a script, ask the parent agent to inject it via env var.
 
+9. **ALWAYS PASS `--project P`**. Every command that uses a project gets
+   `--project P`, reads and writes alike. Choose the project at the start
+   of the task: the one the task names, else ask the user when more than
+   one project is registered (`kbagent --json project list`). Then pass it
+   on every call. Never rely on the active project, and never run
+   `project use` to choose one: the active project is shared by every
+   terminal, agent conversation and `kbagent serve` of the same
+   configuration directory, so another session can change it between two
+   of your commands. On 1.x a command without `--project` silently uses
+   the active project; `targets[].project_source` shows `explicit` only
+   when you passed the flag.
+
 ---
 
 ## 2. TOOL SELECTION MATRIX (pre-decided; no runtime hesitation)
@@ -115,7 +127,7 @@ been retired, so its absence is NOT a promise (see §1 Rule 6).
 | Edit SQL transformation blocks/codes | `kbagent transformation show` (FRESH ids) then `kbagent transformation edit --config-id K --change-description T --op '{"op":"set_code",...}'` -- 9 ops, ids `b{i}` / `b{i}.c{j}`, `--storage` REPLACES wholesale | `kbagent config update --configuration @body.json` (auto-normalizes `script[]`) | `transformation edit` without a fresh `show` (positional ids renumber); raw `PUT` (skips `script[]` normalization) |
 | Run a job (and wait) | `kbagent job run --project P --component-id C --config-id K --wait` | -- | `job run` without `--wait` when the user expects the result |
 | Provision / read an OTLP Data Streams endpoint | `kbagent stream create-source -p P --name N --type otlp [--if-not-exists]` (auto-creates logs/metrics/traces sinks) then `stream detail N -p P --reveal` | `stream list`; `--no-sinks` for a bare source | deriving the `stream-in` URL yourself (use `source.otlp.url`); printing the secret unasked |
-| Mint / rotate / revoke a scoped Storage token | `kbagent token create -p P -d DESC [--bucket-write B ...] [--expires-in N]` / `token refresh` / `token delete --token-id ID` -- `create` needs a MASTER token (0.89.0+ pre-flight `MISSING_MASTER_TOKEN`; `canManageTokens` alone = server 500, #599), refresh/list/delete need only `canManageTokens`; secret shown ONCE (persist `id` + `expires` only); `token list` (0.86.0+) is the only source of an existing `--token-id` | same ops on the SDK facade: `Client.create_scoped_token / refresh_token / delete_token` | `--component-access` / `--can-read-all-file-uploads` for an UPLOAD token (uploads need `--bucket-write` on the sink bucket; those flags gate READING others' uploads); claiming `stream create-source` needs a master token |
+| Mint / rotate / revoke a scoped Storage token | `kbagent token create -p P --description DESC [--bucket-write B ...] [--expires-in N]` / `token refresh` / `token delete --token-id ID` -- `create` needs a MASTER token (0.89.0+ pre-flight `MISSING_MASTER_TOKEN`; `canManageTokens` alone = server 500, #599), refresh/list/delete need only `canManageTokens`; secret shown ONCE (persist `id` + `expires` only); `token list` (0.86.0+) is the only source of an existing `--token-id` | same ops on the SDK facade: `Client.create_scoped_token / refresh_token / delete_token` | `--component-access` / `--can-read-all-file-uploads` for an UPLOAD token (uploads need `--bucket-write` on the sink bucket; those flags gate READING others' uploads); claiming `stream create-source` needs a master token |
 | Search items by name across projects | `kbagent search QUERY (--project P \| --all-projects) [--type table\|bucket\|config\|flow\|data-app\|transformation] [--search-type textual\|config-based] [--regex]` -- `--regex` matches WHOLE terms on entity names: `report` does NOT match `monthly_report`, write `.*report.*` | -- | `--regex` with `--search-type config-based` (exit 2) |
 | Search config JSON bodies | `kbagent search QUERY --search-type config-based --project P` (case-insensitive) | `kbagent config search --query Q --project P` (config bodies only, no tables/buckets; case-SENSITIVE unless `-i`) | pulling every config with `config detail` to grep locally |
 | Browse configs (exploration) | `kbagent config list --project P` / `kbagent config search --query Q --project P` | -- | a full-project pull just to grep locally |
@@ -201,14 +213,14 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
 - On **0.93.0+** the `kai` group, `docs query`, `component detail`, `component
   list --query`, `config examples`, and `config new` (scaffold mode) resolve an
   omitted `--project` through the chain `--project` > `KBAGENT_PROJECT` >
-  active project (`project use`) > sole project, else exit 5 (`CONFIG_ERROR`):
-  pass `--project` or run `project use`. *(since vNEXT)* the 18 fan-out reads
-  (`config list`, `job list`, ...) too. Always give them `--project P` or
-  `--all-projects` (0.100.0+): an omitted one reads all projects on 0.x and
-  the active project on 1.x. gotchas.md.
+  active project (`project use`) > sole project, else exit 5 (`CONFIG_ERROR`).
+  *(since vNEXT)* every command does this, writes and the 18 fan-out reads
+  (`config list`, `job list`, ...) too; on 0.x an omitted `--project` on a
+  fan-out read reads all projects. You still pass `--project P` on every
+  command (rule 9), or `--all-projects` (0.100.0+) for all projects. gotchas.md.
 - *(since 0.100.0)* removing the active project clears it (it used to move to
   the next alias). With 2+ projects left, a command without `--project` exits
-  5 -- ask which project, then `project use`.
+  5 -- ask the user which project and pass it as `--project`.
 
 **1.x command line *(since vNEXT)***
 - Root flags (`--json`, `--deny-*`) also work after the subcommand. A bare
@@ -510,10 +522,10 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   `STORAGE_JOB_TIMEOUT` here = import still running: NEVER re-run the upload
   (duplicate rows); recover with `load-file --file-id`.
 
-**`lineage show -c COL` is a trace, not a filter (since 0.99.1)**
+**`lineage show --column COL` is a trace, not a filter (since 0.99.1)**
 - Follows one column of a TABLE through `lineage build --ai` mappings; read
-  `terminals[]` for where the mapping is unknown. Config focus or `-f
-  mermaid|html|er` with `-c` = exit 2. `-f html` defaults to `--depth 3`.
+  `terminals[]` for where the mapping is unknown. Config focus or `--format
+  mermaid|html|er` with `--column` = exit 2. `--format html` defaults to `--depth 3`.
 
 ---
 

@@ -30,6 +30,7 @@ from ._helpers import (
     get_service,
     map_error_to_exit_code,
 )
+from ._project_ref import PROJECT_HELP
 from .config import _parse_json_input
 
 component_app = typer.Typer(help="Discover and inspect Keboola components")
@@ -151,6 +152,7 @@ def component_list(
     project: list[str] | None = typer.Option(
         None,
         "--project",
+        "-p",
         help=FANOUT_PROJECT_HELP,
     ),
     all_projects: bool = typer.Option(
@@ -161,6 +163,7 @@ def component_list(
     component_type: str | None = typer.Option(
         None,
         "--type",
+        "-t",
         help="Filter by component type: extractor, writer, transformation, application",
     ),
     query: str | None = typer.Option(
@@ -214,11 +217,7 @@ def component_detail(
         "--component-id",
         help="Component ID (e.g. keboola.ex-db-snowflake)",
     ),
-    project: str | None = typer.Option(
-        None,
-        "--project",
-        help="Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)",
-    ),
+    project: str | None = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
 ) -> None:
     """Show detailed information about a specific component."""
     formatter = get_formatter(ctx)
@@ -278,11 +277,7 @@ def component_sync_action(
         "--row-id",
         help="Configuration row ID to shallow-merge over the root configuration",
     ),
-    project: str = typer.Option(
-        ...,
-        "--project",
-        help="Project alias",
-    ),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     branch: int | None = typer.Option(
         None,
         "--branch",

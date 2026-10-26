@@ -134,7 +134,6 @@ def http_post(
     body: str | None = typer.Option(
         None,
         "--body",
-        "-d",
         help="JSON body: inline JSON, @file.json, or - for stdin",
     ),
     timeout: float = typer.Option(
@@ -152,7 +151,6 @@ def http_patch(
     body: str | None = typer.Option(
         None,
         "--body",
-        "-d",
         help="JSON body: inline JSON, @file.json, or - for stdin",
     ),
     timeout: float = typer.Option(

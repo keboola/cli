@@ -558,6 +558,20 @@ class TestCancelInvitation:
         assert result["invitation_id"] == 1515
         mock_client.cancel_project_invitation.assert_called_once_with(PROJECT_ID, 1515)
 
+    def test_dry_run_looks_up_and_cancels_nothing(
+        self, store_with_master, manage_client_factory
+    ) -> None:
+        factory, mock_client = manage_client_factory
+        mock_client.list_project_invitations.return_value = [_make_invitation(1515, "a@b.com")]
+        svc = MemberService(store_with_master, manage_client_factory=factory)
+
+        result = svc.cancel_invitation(
+            manage_token=MANAGE_TOKEN, alias=ALIAS, email="a@b.com", dry_run=True
+        )
+
+        assert (result["status"], result["invitation_id"]) == ("dry_run", 1515)
+        mock_client.cancel_project_invitation.assert_not_called()
+
     def test_explicit_id_skips_lookup(self, store_with_master, manage_client_factory) -> None:
         factory, mock_client = manage_client_factory
         svc = MemberService(store_with_master, manage_client_factory=factory)
@@ -637,6 +651,20 @@ class TestSetMemberRole:
 
         assert result["role"] == "guest"
         mock_client.update_project_member_role.assert_called_once_with(PROJECT_ID, 216, "guest")
+
+    def test_dry_run_looks_up_and_changes_nothing(
+        self, store_with_master, manage_client_factory
+    ) -> None:
+        factory, mock_client = manage_client_factory
+        mock_client.list_project_members.return_value = [_make_member(216, "a@b.com", "admin")]
+        svc = MemberService(store_with_master, manage_client_factory=factory)
+
+        result = svc.set_member_role(
+            manage_token=MANAGE_TOKEN, alias=ALIAS, email="a@b.com", role="guest", dry_run=True
+        )
+
+        assert (result["status"], result["user_id"], result["role"]) == ("dry_run", 216, "guest")
+        mock_client.update_project_member_role.assert_not_called()
 
     def test_invalid_role_raises_value_error(
         self, store_with_master, manage_client_factory

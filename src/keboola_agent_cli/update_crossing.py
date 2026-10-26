@@ -35,7 +35,7 @@ from packaging.version import InvalidVersion, Version
 
 from . import update_notice, update_runner
 from .changelog import crossed_breaking_notes
-from .constants import CROSSING_PENDING_FILENAME, MIGRATION_GUIDE_URL
+from .constants import CROSSING_PENDING_FILENAME, migration_guide_url
 from .errors import ErrorCode
 from .permissions import OPERATION_REGISTRY
 
@@ -81,7 +81,14 @@ def _valid_state(data: object) -> dict[str, str] | None:
     from_version, to_version = data.get("from_version"), data.get("to_version")
     if not isinstance(from_version, str) or not isinstance(to_version, str):
         return None
+    if _major(to_version) is None:
+        return None
     return {"from_version": from_version, "to_version": to_version}
+
+
+def _guide_url(state: dict[str, str]) -> str:
+    """The migration guide of the major that ``state`` crossed into (parsed by :func:`_valid_state`)."""
+    return migration_guide_url(Version(state["to_version"]).major)
 
 
 def _read_state() -> dict[str, str] | None:
@@ -94,7 +101,7 @@ def _read_state() -> dict[str, str] | None:
 def _message(state: dict[str, str]) -> str:
     return (
         f"kbagent was updated from v{state['from_version']} to v{state['to_version']}, a new "
-        f"major version. Read what changed: {MIGRATION_GUIDE_URL}."
+        f"major version. Read what changed: {_guide_url(state)}."
     )
 
 
@@ -148,9 +155,9 @@ def announce_pending_crossing(*, json_mode: bool) -> None:
         {
             "code": ErrorCode.UPDATED_ACROSS_MAJOR.value,
             "message": _message(state),
-            "hint": MIGRATION_GUIDE_URL,
+            "hint": _guide_url(state),
             **state,
-            "url": MIGRATION_GUIDE_URL,
+            "url": _guide_url(state),
         }
     )
     if json_mode:
@@ -218,7 +225,7 @@ def refusal_for(operation: str) -> dict[str, Any] | None:
             f"kbagent was updated from v{state['from_version']} to v{state['to_version']}, "
             f"a new major version. '{operation}' did not run: kbagent {new_major}.x changes "
             f"defaults that this command can depend on. Read what changed: "
-            f"{MIGRATION_GUIDE_URL}. Run the command again to proceed."
+            f"{_guide_url(state)}. Run the command again to proceed."
         ),
-        "details": {**state, "url": MIGRATION_GUIDE_URL},
+        "details": {**state, "url": _guide_url(state)},
     }

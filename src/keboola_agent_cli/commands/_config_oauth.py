@@ -19,6 +19,7 @@ from rich.markup import escape
 from ..auth.environment import detect_browser_environment, open_browser
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._helpers import emit_api_error, get_formatter, get_service, map_error_to_exit_code
+from ._project_ref import PROJECT_HELP
 
 # The command exits right after the open, and `open_browser` runs the opener
 # on a daemon thread that dies with the process. Same wait as
@@ -40,11 +41,7 @@ def register(app: typer.Typer) -> None:
     )
     def config_oauth_url(
         ctx: typer.Context,
-        project: str = typer.Option(
-            ...,
-            "--project",
-            help="Project alias",
-        ),
+        project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
         component_id: str = typer.Option(
             ...,
             "--component-id",

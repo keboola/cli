@@ -37,6 +37,7 @@ from ._helpers import (
     get_service,
     map_error_to_exit_code,
 )
+from ._project_ref import PROJECT_HELP
 
 token_app = typer.Typer(help="Storage API token management (scoped mint / revoke / rotate)")
 
@@ -225,8 +226,8 @@ def _format_refreshed_token(console: Console, data: dict[str, Any]) -> None:
 @token_app.command("create")
 def token_create(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
-    description: str = typer.Option(..., "--description", "-d", help="Human-readable token label"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
+    description: str = typer.Option(..., "--description", help="Human-readable token label"),
     bucket_write: list[str] | None = typer.Option(
         None, "--bucket-write", help="Bucket ID the token may WRITE (repeatable)"
     ),
@@ -274,7 +275,7 @@ def token_create(
 @token_app.command("list")
 def token_list(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     with_last_used: bool = typer.Option(
         False,
         "--with-last-used",
@@ -352,7 +353,7 @@ def token_list(
 @token_app.command("delete")
 def token_delete(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     token_id: str = typer.Option(..., "--token-id", help="ID of the token to revoke"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
 ) -> None:
@@ -374,7 +375,7 @@ def token_delete(
 @token_app.command("refresh")
 def token_refresh(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     token_id: str = typer.Option(..., "--token-id", help="ID of the token to rotate"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
 ) -> None:

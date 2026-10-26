@@ -26,6 +26,7 @@ from ._helpers import (
     get_formatter,
     get_service,
 )
+from ._project_ref import PROJECT_DEFAULT
 from ._semantic_layer_helpers import ElevationScope, ItemType, _handle_service_call
 
 scope_app = typer.Typer(
@@ -37,8 +38,13 @@ scope_app = typer.Typer(
     no_args_is_help=True,
 )
 
-_PROJECT = typer.Option(..., "--project", help="Owning project alias")
-_TYPE = typer.Option(..., "--type", help="Semantic item type")
+_PROJECT = typer.Option(
+    None,
+    "--project",
+    "-p",
+    help=f"Owning project alias or ID ({PROJECT_DEFAULT})",
+)
+_TYPE = typer.Option(..., "--type", "-t", help="Semantic item type")
 _CONTEXT_ID = typer.Option(..., "--context-id", help="Item UUID")
 _TARGET_PROJECT = typer.Option(
     [],
@@ -102,7 +108,12 @@ def _print_request_table(console: Console, data: dict) -> None:
 @scope_app.command("get")
 def scope_get(
     ctx: typer.Context,
-    project: str = _PROJECT,
+    project: str = typer.Option(
+        None,
+        "--project",
+        "-p",
+        help=f"Owning project alias or ID ({PROJECT_DEFAULT})",
+    ),
     type_: ItemType = _TYPE,
     context_id: str = _CONTEXT_ID,
 ) -> None:
@@ -245,9 +256,16 @@ def scope_request_delete(
 @scope_app.command("request-list")
 def scope_request_list(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias (org-admin token)"),
+    project: str = typer.Option(
+        None,
+        "--project",
+        "-p",
+        help=f"Project alias or ID, with an org-admin token ({PROJECT_DEFAULT})",
+    ),
     type_: ItemType = _TYPE,
-    limit: int = typer.Option(DEFAULT_REQUEST_LIST_LIMIT, "--limit", min=1, help="Max results"),
+    limit: int = typer.Option(
+        DEFAULT_REQUEST_LIST_LIMIT, "--limit", "-L", min=1, help="Max results"
+    ),
     offset: int = typer.Option(0, "--offset", min=0, help="Skip this many results"),
 ) -> None:
     """List items of --type awaiting an org-admin's elevation decision, across the org."""

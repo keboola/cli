@@ -83,10 +83,13 @@ SPEC_DOC = "docs/cli-interface-spec.md"
 # Reviewed data (rule parameters that are decisions, proposal section 7.2)
 # --------------------------------------------------------------------------- #
 
-# A2: one short flag = one long option; a new short flag needs an entry here.
-# The global short flags (-j, -v, -V) keep their global meaning. The others are
-# fixed from the majority use at the introduction of the check.
+# A2: one short flag = one long option, and every option with that long name
+# has it; a new short flag needs an entry here. The global short flags (-j, -v,
+# -V) keep their global meaning. -n follows the Azure CLI (--name) and -L the
+# GitHub CLI (--limit); the others come from the majority use at the
+# introduction of the check.
 SHORT_FLAGS: dict[str, str] = {
+    "-L": "--limit",
     "-V": "--version",
     "-a": "--allow",
     "-d": "--directory",
@@ -96,6 +99,7 @@ SHORT_FLAGS: dict[str, str] = {
     "-j": "--json",
     "-l": "--load",
     "-m": "--message",
+    "-n": "--name",
     "-o": "--output",
     "-p": "--project",
     "-q": "--query",
@@ -103,11 +107,6 @@ SHORT_FLAGS: dict[str, str] = {
     "-v": "--verbose",
     "-y": "--yes",
 }
-
-# A2: short flags whose uses are tied between two meanings (-c: --category and
-# --column; -n: --limit and --name; -r: --regex and --role). No new use with
-# either meaning; each existing use is an `exceptions` entry in the baseline.
-RESERVED_SHORT_FLAGS: frozenset[str] = frozenset({"-c", "-n", "-r"})
 
 # S3: what `--force` overrides, per command (the guards it names in its help).
 # A new `--force` fails the blocking rule safety.force-meaning-registered until
@@ -187,7 +186,7 @@ _PROJECT_DEFAULT_WORDS = re.compile(
     re.IGNORECASE,
 )
 _COMMA_LIST = re.compile(r"comma[- ]separated|comma-delimited", re.IGNORECASE)
-# T2, T11: the 18 fan-out reads (spec "Fan-out reads"). Their `--project` help
+# T2, T11: the 20 fan-out reads (spec "Fan-out reads"). Their `--project` help
 # must name the active project as the omitted default and `--all-projects`.
 FANOUT_READS: frozenset[str] = frozenset(
     {
@@ -209,6 +208,8 @@ FANOUT_READS: frozenset[str] = frozenset(
         "branch list",
         "workspace list",
         "project status",
+        "sync pull",
+        "sync diff",
     }
 )
 _FANOUT_DEFAULT_WORDS = ("active project", "--all-projects")
@@ -620,12 +621,22 @@ def r_short_one_meaning(c: Context) -> Violations:
         for p in filter(is_option, lf.params):
             for s in shorts(p):
                 want = SHORT_FLAGS.get(s)
-                if s in RESERVED_SHORT_FLAGS:
-                    found[f"{lf.name} {s}"] = f"{s} is a reserved short flag (no new use)"
-                elif want is None:
+                if want is None:
                     found[f"{lf.name} {s}"] = f"{s} is not in SHORT_FLAGS"
                 elif label(p) != want:
                     found[f"{lf.name} {s}"] = f"{s} means {label(p)} here, {want} in SHORT_FLAGS"
+    return found
+
+
+def r_short_on_every_option(c: Context) -> Violations:
+    """A2: an option whose long name has a short flag in SHORT_FLAGS declares it."""
+    short_of = {long: short for short, long in SHORT_FLAGS.items()}
+    found = {}
+    for lf in c.tree.leaves:
+        for p in filter(is_option, lf.params):
+            want = short_of.get(label(p))
+            if want is not None and want not in shorts(p):
+                found[f"{lf.name} {label(p)}"] = f"{label(p)} without {want}"
     return found
 
 
@@ -747,11 +758,27 @@ def r_list_option_repeatable(c: Context) -> Violations:
     }
 
 
+def r_boolean_flag_shape(c: Context) -> Violations:
+    """A7: a boolean is a flag, and a flag with the default true has an off form."""
+    found = {}
+    for lf in c.tree.leaves:
+        for p in filter(is_option, lf.params):
+            if not getattr(p, "is_flag", False):
+                if type_name(p) == "boolean":
+                    found[f"{lf.name} {label(p)}"] = "boolean option that takes a value"
+            elif p.default is True and not getattr(p, "secondary_opts", None):
+                found[f"{lf.name} {label(p)}"] = "flag with the default true and no off form"
+    return found
+
+
 def r_project_help_default(c: Context) -> Violations:
     found = {}
     for lf in c.tree.leaves:
         p = param_with(lf, "--project")
-        if p is None or (p.required and not getattr(p, "multiple", False)):
+        # A hidden --project is a deprecated name (C3) that no help shows.
+        if p is None or getattr(p, "hidden", False):
+            continue
+        if p.required and not getattr(p, "multiple", False):
             continue
         text = getattr(p, "help", None) or ""
         if not _PROJECT_DEFAULT_WORDS.search(text):
@@ -775,6 +802,16 @@ def r_no_write_fanout(c: Context) -> Violations:
             and "--all-projects" not in opt_names(lf)
         ):
             found[lf.name] = f"{lf.category} command fans out without --all-projects"
+    return found
+
+
+def r_project_not_required(c: Context) -> Violations:
+    """T17: no command requires --project; an omitted one is the active project."""
+    found = {}
+    for lf in c.tree.leaves:
+        p = param_with(lf, "--project")
+        if p is not None and p.required:
+            found[f"{lf.name} --project"] = "required --project"
     return found
 
 
@@ -1352,6 +1389,12 @@ RULES: tuple[Rule, ...] = (
         r_short_one_meaning,
     ),
     Rule(
+        "args.short-flag-on-every-option",
+        "tree",
+        "every option with a long name in SHORT_FLAGS has its short flag",
+        r_short_on_every_option,
+    ),
+    Rule(
         "args.no-global-option-shadow",
         "tree",
         "no command option reuses a global option name",
@@ -1376,6 +1419,12 @@ RULES: tuple[Rule, ...] = (
         "tree",
         "no list option that takes only one comma string",
         r_list_option_repeatable,
+    ),
+    Rule(
+        "args.boolean-flag-shape",
+        "tree",
+        "a boolean is a flag; a flag with the default true has an off form (A7)",
+        r_boolean_flag_shape,
     ),
     Rule(
         "input.file-option-vocabulary",
@@ -1406,6 +1455,12 @@ RULES: tuple[Rule, ...] = (
         "tree",
         "a write or destructive command with an optional repeatable --project has --all-projects",
         r_no_write_fanout,
+    ),
+    Rule(
+        "target.project-not-required",
+        "tree",
+        "no command requires --project; an omitted one is the active project (T17)",
+        r_project_not_required,
     ),
     Rule(
         "output.no-direct-print",

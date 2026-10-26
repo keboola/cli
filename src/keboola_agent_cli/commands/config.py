@@ -41,6 +41,7 @@ from ._config_variables_render import (
     format_variables_set,
 )
 from ._helpers import (
+    BRANCH_ONE_PROJECT_MESSAGE,
     _confirm_or_abort,
     check_cli_operation,
     check_cli_permission,
@@ -50,7 +51,9 @@ from ._helpers import (
     map_error_to_exit_code,
     parse_json_arg,
     read_text_arg,
+    resolve_project_alias,
 )
+from ._project_ref import PROJECT_DEFAULT, PROJECT_HELP
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +82,7 @@ def config_list(
     project: list[str] | None = typer.Option(
         None,
         "--project",
+        "-p",
         help=FANOUT_PROJECT_HELP,
     ),
     all_projects: AllProjectsOption = False,
@@ -115,11 +119,11 @@ def config_list(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "config_service")
 
-    # --branch requires --project (branch ID is per-project)
+    # T15: --branch needs one project (a branch ID belongs to one project).
     # For list with multiple projects, only validate if explicit --branch given
     if branch is not None and (all_projects or len(project or []) > 1):
         formatter.error(
-            message="--branch requires exactly one --project (branch ID is per-project)",
+            message=BRANCH_ONE_PROJECT_MESSAGE,
             error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2)
@@ -161,10 +165,8 @@ def config_detail(
     project: list[str] | None = typer.Option(
         None,
         "--project",
-        help=(
-            "Project alias to query. Repeat for multiple projects (only valid in "
-            "bulk mode, i.e. when --config-id is omitted)."
-        ),
+        "-p",
+        help=(f"Project alias or ID, repeatable without --config-id ({PROJECT_DEFAULT})"),
     ),
     component_id: str = typer.Option(..., "--component-id", help="Component ID"),
     config_id: str | None = typer.Option(
@@ -223,13 +225,9 @@ def config_detail(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "config_service")
 
-    # --project is required (zero, one, or many)
+    # Without --project, the T1 chain picks one project (spec T17).
     if not project:
-        formatter.error(
-            message="--project is required (repeat for multiple projects in bulk mode).",
-            error_code=ErrorCode.INVALID_ARGUMENT,
-        )
-        raise typer.Exit(code=2)
+        project = [resolve_project_alias(ctx, formatter, None)]
 
     # Typer ``...`` enforces presence but not non-emptiness; guard here so
     # ``--component-id ""`` fails fast with a clear message instead of
@@ -253,10 +251,10 @@ def config_detail(
         )
         raise typer.Exit(code=2)
 
-    # --branch requires exactly one --project (branch IDs are per-project).
+    # T15: --branch needs one project (a branch ID belongs to one project).
     if branch is not None and len(project) != 1:
         formatter.error(
-            message="--branch requires exactly one --project (branch ID is per-project).",
+            message=BRANCH_ONE_PROJECT_MESSAGE,
             error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2)
@@ -416,11 +414,7 @@ def config_examples(
         "--component-id",
         help="Component ID (e.g. keboola.ex-google-drive)",
     ),
-    project: str | None = typer.Option(
-        None,
-        "--project",
-        help="Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)",
-    ),
+    project: str | None = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     row: bool = typer.Option(
         False,
         "--row",
@@ -463,6 +457,7 @@ def config_search(
     project: list[str] | None = typer.Option(
         None,
         "--project",
+        "-p",
         help=FANOUT_PROJECT_HELP,
     ),
     all_projects: AllProjectsOption = False,
@@ -485,7 +480,6 @@ def config_search(
     use_regex: bool = typer.Option(
         False,
         "--regex",
-        "-r",
         help="Interpret query as a regular expression",
     ),
     branch: int | None = typer.Option(
@@ -505,10 +499,10 @@ def config_search(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "config_service")
 
-    # --branch requires exactly one --project
+    # T15: --branch needs one project (a branch ID belongs to one project).
     if branch is not None and (all_projects or len(project or []) > 1):
         formatter.error(
-            message="--branch requires exactly one --project (branch ID is per-project)",
+            message=BRANCH_ONE_PROJECT_MESSAGE,
             error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2)
@@ -616,11 +610,7 @@ def _guard_set_paths(formatter: Any, parsed_sets: list[tuple[str, object]] | Non
 @config_app.command("update", rich_help_panel="Lifecycle")
 def config_update(
     ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        help="Project alias",
-    ),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     component_id: str = typer.Option(
         ...,
         "--component-id",
@@ -634,6 +624,7 @@ def config_update(
     name: str | None = typer.Option(
         None,
         "--name",
+        "-n",
         help="New configuration name",
     ),
     description: str | None = typer.Option(
@@ -869,11 +860,7 @@ def _emit_plaintext_written_warning(formatter: Any, result: dict[str, Any]) -> N
 @config_app.command("set-default-bucket", rich_help_panel="Storage")
 def config_set_default_bucket(
     ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        help="Project alias",
-    ),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     component_id: str = typer.Option(
         ...,
         "--component-id",
@@ -991,11 +978,7 @@ def config_set_default_bucket(
 @config_app.command("rename", rich_help_panel="Lifecycle")
 def config_rename(
     ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        help="Project alias",
-    ),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     component_id: str = typer.Option(
         ...,
         "--component-id",
@@ -1009,6 +992,7 @@ def config_rename(
     name: str = typer.Option(
         ...,
         "--name",
+        "-n",
         help="New name for the configuration",
     ),
     branch: int | None = typer.Option(
@@ -1083,11 +1067,7 @@ def config_rename(
 @config_app.command("delete", rich_help_panel="Lifecycle")
 def config_delete(
     ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        help="Project alias",
-    ),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     component_id: str = typer.Option(
         ...,
         "--component-id",
@@ -1184,12 +1164,14 @@ def config_new(
     name: str = typer.Option(
         "",
         "--name",
+        "-n",
         help="Configuration name (default: auto-generated from component; required with --push)",
     ),
     project: str | None = typer.Option(
         None,
         "--project",
-        help="Project alias (for AI Service auth; required with --push)",
+        "-p",
+        help=f"Project alias or ID, also for AI Service auth ({PROJECT_DEFAULT})",
     ),
     output_dir: str | None = typer.Option(
         None,
@@ -1199,7 +1181,7 @@ def config_new(
     push: bool = typer.Option(
         False,
         "--push",
-        help="Also create the configuration remotely via the Storage API (one-shot; requires --project and --name)",
+        help="Also create the configuration remotely via the Storage API (one-shot; requires --name)",
     ),
     no_files: bool = typer.Option(
         False,
@@ -1252,8 +1234,8 @@ def config_new(
         (config YAML, code blocks, description). Writes to --output-dir or
         prints to stdout. No Storage write calls -- one AI Service read
         fetches the component schema (hence --project for auth).
-      * With --push: scaffold step + POST to Storage API. Requires --project
-        and a non-empty --name. Use --no-files for FIIA-style one-shot create
+      * With --push: scaffold step + POST to Storage API. Requires a
+        non-empty --name. Use --no-files for FIIA-style one-shot create
         with no filesystem step.
 
     \b
@@ -1283,7 +1265,7 @@ def config_new(
     # ── Flag-combination validation ──────────────────────────────────────────
     #
     # All --push-gated flags must be set only when --push is on; --push itself
-    # requires --project and a non-empty --name; --configuration vs
+    # requires a non-empty --name; --configuration vs
     # --configuration-file and --output-dir vs --no-files are mutually
     # exclusive.
     push_gated: list[tuple[str, bool]] = [
@@ -1304,12 +1286,6 @@ def config_new(
                 )
                 raise typer.Exit(code=2)
     else:
-        if not project:
-            formatter.error(
-                message="--push requires --project",
-                error_code=ErrorCode.VALIDATION_ERROR,
-            )
-            raise typer.Exit(code=2)
         if not name:
             formatter.error(
                 message="--push requires a non-empty --name",
@@ -1624,7 +1600,7 @@ def _render_push_result_human(
 @config_app.command("metadata-list", rich_help_panel="Metadata")
 def config_metadata_list(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     component_id: str = typer.Option(..., "--component-id", help="Component ID"),
     config_id: str = typer.Option(..., "--config-id", help="Configuration ID"),
     branch: int | None = typer.Option(
@@ -1662,7 +1638,7 @@ def config_metadata_list(
 @config_app.command("get-metadata", rich_help_panel="Metadata")
 def config_get_metadata(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     component_id: str = typer.Option(..., "--component-id", help="Component ID"),
     config_id: str = typer.Option(..., "--config-id", help="Configuration ID"),
     key: str = typer.Option(..., "--key", help="Metadata key to read"),
@@ -1694,7 +1670,7 @@ def config_get_metadata(
 @config_app.command("set-metadata", rich_help_panel="Metadata")
 def config_set_metadata(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     component_id: str = typer.Option(..., "--component-id", help="Component ID"),
     config_id: str = typer.Option(..., "--config-id", help="Configuration ID"),
     key: str = typer.Option(..., "--key", help="Metadata key to set"),
@@ -1727,7 +1703,7 @@ def config_set_metadata(
 @config_app.command("delete-metadata", rich_help_panel="Metadata")
 def config_delete_metadata(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     component_id: str = typer.Option(..., "--component-id", help="Component ID"),
     config_id: str = typer.Option(..., "--config-id", help="Configuration ID"),
     metadata_id: int = typer.Option(..., "--metadata-id", help="Numeric ID from metadata-list"),
@@ -1764,10 +1740,10 @@ def config_delete_metadata(
 @config_app.command("set-folder", rich_help_panel="Metadata")
 def config_set_folder(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     component_id: str = typer.Option(..., "--component-id", help="Component ID"),
     config_id: str = typer.Option(..., "--config-id", help="Configuration ID"),
-    name: str = typer.Option(..., "--name", help="Folder name (empty string to clear)"),
+    name: str = typer.Option(..., "--name", "-n", help="Folder name (empty string to clear)"),
     branch: int | None = typer.Option(
         None, "--branch", help="Dev branch ID (defaults to active branch)"
     ),
@@ -1817,7 +1793,7 @@ def _parse_kv_var(raw: str) -> tuple[str, str]:
 @config_app.command("variables-set", rich_help_panel="Variables")
 def config_variables_set(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     component_id: str = typer.Option(
         ..., "--component-id", help="Component ID of the config to attach variables to"
     ),
@@ -1941,7 +1917,7 @@ def config_variables_set(
 @config_app.command("variables-get", rich_help_panel="Variables")
 def config_variables_get(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     component_id: str = typer.Option(
         ..., "--component-id", help="Component ID of the config whose variables to read"
     ),
@@ -1979,7 +1955,7 @@ def config_variables_get(
 @config_app.command("variables-clear", rich_help_panel="Variables")
 def config_variables_clear(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     component_id: str = typer.Option(
         ..., "--component-id", help="Component ID of the config to unlink"
     ),
@@ -2033,11 +2009,7 @@ def config_variables_clear(
 @config_app.command("row-create", rich_help_panel="Rows")
 def config_row_create(
     ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        help="Project alias",
-    ),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     component_id: str = typer.Option(
         ...,
         "--component-id",
@@ -2051,6 +2023,7 @@ def config_row_create(
     name: str = typer.Option(
         ...,
         "--name",
+        "-n",
         help="Row name",
     ),
     description: str = typer.Option(
@@ -2145,11 +2118,7 @@ def config_row_create(
 @config_app.command("row-update", rich_help_panel="Rows")
 def config_row_update(
     ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        help="Project alias",
-    ),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     component_id: str = typer.Option(
         ...,
         "--component-id",
@@ -2168,6 +2137,7 @@ def config_row_update(
     name: str | None = typer.Option(
         None,
         "--name",
+        "-n",
         help="New row name",
     ),
     description: str | None = typer.Option(
@@ -2353,7 +2323,7 @@ def config_row_update(
 @config_app.command("row-delete", rich_help_panel="Rows")
 def config_row_delete(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     component_id: str = typer.Option(..., "--component-id", help="Component ID"),
     config_id: str = typer.Option(..., "--config-id", help="Configuration ID"),
     row_id: str = typer.Option(..., "--row-id", help="Row ID to delete"),

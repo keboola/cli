@@ -46,6 +46,7 @@ from ._helpers import (
     get_service,
     map_error_to_exit_code,
 )
+from ._project_ref import PROJECT_HELP
 
 logger = logging.getLogger(__name__)
 
@@ -179,6 +180,7 @@ def notification_list(
     project: list[str] | None = typer.Option(
         None,
         "--project",
+        "-p",
         help=FANOUT_PROJECT_HELP,
     ),
     all_projects: AllProjectsOption = False,
@@ -248,7 +250,7 @@ def notification_list(
 @notification_app.command("detail")
 def notification_detail(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     subscription_id: str = typer.Option(
         ..., "--subscription-id", help="Notification subscription ID"
     ),
@@ -290,7 +292,7 @@ def notification_detail(
 @notification_app.command("create")
 def notification_create(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     event: str = typer.Option(..., "--event", help=_EVENT_HELP),
     channel: str = typer.Option(
         ..., "--channel", help=f"Recipient channel: {' | '.join(VALID_CHANNELS)}"
@@ -361,7 +363,7 @@ def notification_create(
 @notification_app.command("delete")
 def notification_delete(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     subscription_id: str = typer.Option(
         ..., "--subscription-id", help="Notification subscription ID"
     ),
@@ -396,7 +398,7 @@ def notification_delete(
 @notification_app.command("replace-recipient")
 def notification_replace_recipient(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     subscription_id: str = typer.Option(
         ..., "--subscription-id", help="Notification subscription ID to replace"
     ),

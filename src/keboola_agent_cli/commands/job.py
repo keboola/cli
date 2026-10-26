@@ -42,8 +42,8 @@ from ._helpers import (
     get_formatter,
     get_service,
     map_error_to_exit_code,
-    validate_branch_requires_project,
 )
+from ._project_ref import PROJECT_HELP
 
 
 class JobMode(StrEnum):
@@ -91,6 +91,7 @@ def job_list(
     project: list[str] | None = typer.Option(
         None,
         "--project",
+        "-p",
         help=FANOUT_PROJECT_HELP,
     ),
     all_projects: AllProjectsOption = False,
@@ -112,6 +113,7 @@ def job_list(
     limit: int = typer.Option(
         DEFAULT_JOB_LIMIT,
         "--limit",
+        "-L",
         help=f"Maximum number of jobs to return per project (1-{MAX_JOB_LIMIT})",
     ),
     offset: int = typer.Option(
@@ -207,7 +209,7 @@ def job_list(
 @job_app.command("detail")
 def job_detail(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     job_id: str = typer.Option(..., "--job-id", help="Job ID"),
     log_tail_lines: int = typer.Option(
         0,
@@ -245,11 +247,7 @@ def job_detail(
 @job_app.command("run")
 def job_run(
     ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        help="Project alias",
-    ),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     component_id: str = typer.Option(
         ...,
         "--component-id",
@@ -400,7 +398,6 @@ def job_run(
 
     _validate_log_tail_lines(formatter, log_tail_lines)
 
-    validate_branch_requires_project(formatter, branch, project)
     effective_branch = resolve_branch(config_store, project, branch)
 
     if not formatter.json_mode:
@@ -495,11 +492,7 @@ def _render_log_tail(formatter, details: dict | None) -> None:
 @job_app.command("terminate")
 def job_terminate(
     ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        help="Project alias",
-    ),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     job_id: list[str] | None = typer.Option(
         None,
         "--job-id",
@@ -528,6 +521,7 @@ def job_terminate(
     limit: int = typer.Option(
         DEFAULT_JOB_LIMIT,
         "--limit",
+        "-L",
         help=f"Max jobs to consider when using --status (1-{MAX_JOB_LIMIT})",
     ),
     branch: int | None = typer.Option(
@@ -597,8 +591,6 @@ def job_terminate(
             error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2)
-
-    validate_branch_requires_project(formatter, branch, project)
 
     # Resolve job IDs
     resolved_ids: list[str]

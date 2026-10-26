@@ -29,6 +29,7 @@ from ._helpers import (
     map_error_to_exit_code,
 )
 from ._metadata_input import resolve_text_input
+from ._project_ref import PROJECT_DEFAULT, PROJECT_HELP
 
 branch_app = typer.Typer(help="Manage development branches")
 
@@ -50,6 +51,7 @@ def branch_list(
     project: list[str] | None = typer.Option(
         None,
         "--project",
+        "-p",
         help=FANOUT_PROJECT_HELP,
     ),
     all_projects: AllProjectsOption = False,
@@ -76,13 +78,15 @@ def branch_list(
 def branch_create(
     ctx: typer.Context,
     project: str = typer.Option(
-        ...,
+        None,
         "--project",
-        help="Project alias to create the branch in",
+        "-p",
+        help=f"Project alias or ID to create the branch in ({PROJECT_DEFAULT})",
     ),
     name: str = typer.Option(
         ...,
         "--name",
+        "-n",
         help="Name for the new development branch",
     ),
     description: str = typer.Option(
@@ -118,9 +122,10 @@ def branch_create(
 def branch_use(
     ctx: typer.Context,
     project: str = typer.Option(
-        ...,
+        None,
         "--project",
-        help="Project alias to set the active branch for",
+        "-p",
+        help=f"Project alias or ID to set the active branch for ({PROJECT_DEFAULT})",
     ),
     branch: int = typer.Option(
         ...,
@@ -155,9 +160,10 @@ def branch_use(
 def branch_reset(
     ctx: typer.Context,
     project: str = typer.Option(
-        ...,
+        None,
         "--project",
-        help="Project alias to reset the active branch for",
+        "-p",
+        help=f"Project alias or ID to reset the active branch for ({PROJECT_DEFAULT})",
     ),
 ) -> None:
     """Reset the active branch back to main/production.
@@ -193,9 +199,10 @@ def _print_delete_result(console: Console, data: dict[str, Any]) -> None:
 def branch_delete(
     ctx: typer.Context,
     project: str = typer.Option(
-        ...,
+        None,
         "--project",
-        help="Project alias to delete the branch from",
+        "-p",
+        help=f"Project alias or ID to delete the branch from ({PROJECT_DEFAULT})",
     ),
     branch: int = typer.Option(
         ...,
@@ -237,11 +244,7 @@ def branch_delete(
 @branch_app.command("merge")
 def branch_merge(
     ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        help="Project alias",
-    ),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     branch: int | None = typer.Option(
         None,
         "--branch",
@@ -287,11 +290,7 @@ def branch_merge(
 @branch_app.command("metadata-list")
 def branch_metadata_list(
     ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        help="Project alias to query",
-    ),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     branch: str = typer.Option(
         "default",
         "--branch",
@@ -326,7 +325,7 @@ def branch_metadata_list(
 @branch_app.command("metadata-get")
 def branch_metadata_get(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias to query"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     key: str = typer.Option(..., "--key", help="Metadata key to read"),
     branch: str = typer.Option(
         "default",
@@ -361,7 +360,7 @@ def branch_metadata_get(
 @branch_app.command("metadata-set")
 def branch_metadata_set(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     key: str = typer.Option(..., "--key", help="Metadata key to set"),
     text: str | None = typer.Option(
         None, "--text", help="Inline string value", callback=RefuseAtFile("--file").callback
@@ -416,7 +415,7 @@ def branch_metadata_set(
 @branch_app.command("metadata-delete")
 def branch_metadata_delete(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     metadata_id: int = typer.Option(
         ...,
         "--metadata-id",

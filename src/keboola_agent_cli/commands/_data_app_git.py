@@ -29,6 +29,7 @@ from ._helpers import (
     map_error_to_exit_code,
     read_text_arg,
 )
+from ._project_ref import PROJECT_HELP
 
 # sandboxes-service git-repo credential enums (API contract literals).
 _GIT_CRED_TYPES = ("ssh_key", "http_token")
@@ -41,7 +42,7 @@ def register_git_commands(app: typer.Typer) -> None:
     @app.command("git-repo")
     def data_app_git_repo(
         ctx: typer.Context,
-        project: str = typer.Option(..., "--project", help="Project alias"),
+        project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
         app_id: str = typer.Option(..., "--app-id", help="Data Science numeric app id"),
     ) -> None:
         """Show the clone URLs of a data app's configured git repository.
@@ -76,7 +77,7 @@ def register_git_commands(app: typer.Typer) -> None:
     @app.command("git-credentials")
     def data_app_git_credentials(
         ctx: typer.Context,
-        project: str = typer.Option(..., "--project", help="Project alias"),
+        project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
         app_id: str = typer.Option(..., "--app-id", help="Data Science numeric app id"),
     ) -> None:
         """List the credentials of a data app's MANAGED git repository.
@@ -120,11 +121,12 @@ def register_git_commands(app: typer.Typer) -> None:
     @app.command("git-credentials-create")
     def data_app_git_credentials_create(
         ctx: typer.Context,
-        project: str = typer.Option(..., "--project", help="Project alias"),
+        project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
         app_id: str = typer.Option(..., "--app-id", help="Data Science numeric app id"),
         cred_type: str = typer.Option(
             ...,
             "--type",
+            "-t",
             help="Credential type: ssh_key | http_token.",
         ),
         permissions: str = typer.Option(
@@ -148,6 +150,7 @@ def register_git_commands(app: typer.Typer) -> None:
         name: str | None = typer.Option(
             None,
             "--name",
+            "-n",
             help="Optional display label for the credential.",
         ),
         yes: bool = typer.Option(

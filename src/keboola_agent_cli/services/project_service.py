@@ -93,24 +93,36 @@ class ProjectService(BaseService):
             "active_project_set": alias if became_active else None,
         }
 
-    def remove_project(self, alias: str) -> dict[str, Any]:
+    def remove_project(self, alias: str, dry_run: bool = False) -> dict[str, Any]:
         """Remove a project from the configuration.
 
         Args:
             alias: The project alias to remove.
+            dry_run: When True, apply the same checks and report the removal
+                without changing ``config.json``.
 
         Returns:
             Dict confirming the removal. ``active_project_cleared`` is the
-            alias when it was the active project (now cleared), else None.
+            alias when it was the active project (now cleared), else None
+            (always None in dry-run mode).
 
         Raises:
             ConfigError: If the alias does not exist.
         """
+        if dry_run:
+            self._config_store.ensure_removable(alias)
+            return {
+                "alias": alias,
+                "message": f"Project '{alias}' would be removed.",
+                "active_project_cleared": None,
+                "dry_run": True,
+            }
         was_active = self._config_store.remove_project(alias)
         return {
             "alias": alias,
             "message": f"Project '{alias}' removed.",
             "active_project_cleared": alias if was_active else None,
+            "dry_run": False,
         }
 
     def bulk_remove_projects(

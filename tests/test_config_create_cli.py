@@ -115,7 +115,9 @@ def _invoke_push(
 class TestConfigNewFlagValidation:
     """Push-gated flags must reject misuse with exit 2."""
 
-    def test_push_requires_project(self, tmp_path: Path) -> None:
+    def test_push_without_project_uses_the_active_project(self, tmp_path: Path) -> None:
+        svc_config = MagicMock()
+        svc_config.create_config.return_value = _push_result()
         result = _invoke_push(
             [
                 "--json",
@@ -126,13 +128,13 @@ class TestConfigNewFlagValidation:
                 "--name",
                 "T1",
                 "--push",
+                "--no-files",
             ],
             config_dir=tmp_path / "config",
+            config_service_mock=svc_config,
         )
-        assert result.exit_code == 2, result.output
-        envelope = json.loads(result.output)
-        assert envelope["status"] == "error"
-        assert "requires --project" in envelope["error"]["message"]
+        assert result.exit_code == 0, result.output
+        assert svc_config.create_config.call_args.kwargs["alias"] == "prod"
 
     def test_push_requires_non_empty_name(self, tmp_path: Path) -> None:
         result = _invoke_push(

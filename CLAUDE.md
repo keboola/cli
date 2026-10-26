@@ -320,6 +320,15 @@ Full author checklist: see `CONTRIBUTING.md` > "Releasing a beta (pre-release) v
     `project`, `alias` or `stack` until it is in `ALIAS_OPTIONS` or in the
     test's `NOT_AN_ALIAS` list; an option with any other name (like
     `sync clone --target`) needs that decision by hand.
+    A command that takes one project declares
+    `project: str = typer.Option(None, "--project", "-p", ...)`, never a
+    required `--project`: `LeafCommand.invoke` fills an omitted value from the
+    T1 chain before the body runs (`use_active_project`, spec T17, blocking
+    rule `target.project-not-required`), for writes and deletes too. A command
+    that decides in its body what an omitted `--project` means (`flow schema`,
+    `project invite`) goes into `OWN_PROJECT_DEFAULT_COMMANDS`; a command with
+    an all-projects option resolves its projects in its body. The plugin tells
+    agents to pass `--project` on every command anyway.
 
 21. **The CLI interface spec is binding.** Every change to the command-line interface or the `kbagent serve` REST API follows [`docs/cli-interface-spec.md`](docs/cli-interface-spec.md); `make cli-spec-check` enforces the rules that a machine can check.
 
@@ -378,6 +387,11 @@ plugins/kbagent/
 
 ```
 # Global options: --json, --verbose, --no-color, --config-dir, --conversation-id, --deny-writes, --deny-destructive, --allow-env-manage-token
+# Short flags (#791, spec A2): one short flag per long option, on every option of that long name:
+#   -p --project, -n --name, -t --type, -L --limit, -o --output, -e --email, -d --directory, -y --yes,
+#   ... (SHORT_FLAGS in scripts/check_cli_spec.py; blocking rules args.short-flag-one-meaning and
+#   args.short-flag-on-every-option). A long name outside the registry has no short flag. Removed in 1.0.0:
+#   -c, -r, and -d/-f/-l/-m/-n/-v where they meant another option. Version gate lives in gotchas.md.
 # Environment variables (CLI-50, spec EV1): every variable kbagent reads is in ENV_VARS in
 #   src/keboola_agent_cli/env_vars.py (name, purpose, secret, added in, option); a new read needs an
 #   entry there (blocking rule env.registry-complete). An option that a variable sets declares it with
@@ -523,7 +537,7 @@ kbagent auth register-projects [--stack URL|alias] [--all] [--project-id ID ...]
 #   starts the server and blocks every destructive route (none of them under `/auth/*`).
 #   See docs/web-server.md.
 
-kbagent project create --url URL [--project ALIAS] [--name NAME] [--backend snowflake|bigquery] [--sync-backend-init]
+kbagent project create --url URL [--alias ALIAS] [--name NAME] [--backend snowflake|bigquery] [--sync-backend-init]
 # project create (since 0.95.0, DMD-1940): the ONLY kbagent command that works from nothing --
 #   no account, no token, no `auth login`. POSTs the unauthenticated provisioning endpoint
 #   (`/manage/programmatic-projects`, gated by the `agent-provisioning` stack feature
@@ -548,13 +562,13 @@ kbagent project create --url URL [--project ALIAS] [--name NAME] [--backend snow
 #   delivered and may have succeeded (retryable:false, message says not to repeat -- check
 #   `auth status`, whose stored session + claim link is the evidence). `--sync-backend-init`
 #   raises that call's read timeout to 300s, which can outlast an agent's foreground shell.
-kbagent project add --project NAME --url URL [--token-stdin | --token-file PATH [--keep-token-file] | --token-env NAME | --token TOKEN]
+kbagent project add --alias NAME --url URL [--token-stdin | --token-file PATH [--keep-token-file] | --token-env NAME | --token TOKEN]
 kbagent project list
-kbagent project remove --project NAME
+kbagent project remove [--project NAME] [--dry-run] [--yes]
 kbagent project edit --project NAME [--url URL] [--token-stdin | --token-file PATH [--keep-token-file] | --token-env NAME | --token TOKEN] [--new-alias NEW]
 kbagent project status [--project NAME | --all-projects]
 kbagent project refresh --project ALIAS [--dry-run] [--force] [--yes] [--token-description DESC] [--token-expires-in N]
-kbagent project refresh --all [--dry-run] [--force] [--yes] [--token-description DESC] [--token-expires-in N]
+kbagent project refresh --all-projects [--dry-run] [--force] [--yes] [--token-description DESC] [--token-expires-in N]
 kbagent project description-get --project NAME
 kbagent project description-set --project NAME [--text STR | --file PATH | --stdin]
 kbagent project use ALIAS
@@ -570,9 +584,9 @@ kbagent project invite --project ALIAS --email EMAIL --role admin|guest|readOnly
 kbagent project invite --from-csv FILE [--default-role ROLE] [--workers N] [--dry-run]
 kbagent project member-list --project ALIAS [--include-pending]
 kbagent project invitation-list --project ALIAS
-kbagent project invitation-cancel --project ALIAS --email EMAIL [--invitation-id ID] [--yes]
+kbagent project invitation-cancel --project ALIAS --email EMAIL [--invitation-id ID] [--dry-run] [--yes]
 kbagent project member-remove --project ALIAS --email EMAIL [--yes]
-kbagent project member-set-role --project ALIAS --email EMAIL --role admin|guest|readOnly|share
+kbagent project member-set-role --project ALIAS --email EMAIL --role admin|guest|readOnly|share [--dry-run]
 
 kbagent config list [--project NAME | --all-projects] [--component-type TYPE] [--component-id ID] [--branch ID] [--include-rows]
 kbagent config detail --project NAME [--project NAME ...] --component-id ID [--config-id ID] [--branch ID] [--with-state]
@@ -640,9 +654,9 @@ kbagent config clone --project P --component-id ID --config-id ID --name NAME [-
 #   how you discover what to gather. Storage bucket/table IDs are copied VERBATIM, never remapped
 #   (`sync clone` is the command that remaps).
 
-# Target selection (CLI-45, spec T1/T2/T6/T12/E4): the 18 fan-out reads (search, billing credits, component
+# Target selection (CLI-45, spec T1/T2/T6/T12/E4): the 20 fan-out reads (search, billing credits, component
 #   list, config list/search, data-app list, job list, storage buckets/tables, sharing list/edges, flow list,
-#   schedule list/find, notification list, branch list, workspace list, project status) use the active
+#   schedule list/find, notification list, branch list, workspace list, project status, sync pull/diff) use the active
 #   project when --project is omitted (KBAGENT_PROJECT > `project use` > sole project > CONFIG_ERROR, exit 5,
 #   commands/_all_projects.fanout_projects). --all-projects reads all registered projects (with --project:
 #   USAGE_ERROR, exit 2). A read in which a project failed exits 1 after the full payload (finish_fanout,
@@ -650,7 +664,7 @@ kbagent config clone --project P --component-id ID --config-id ID --name NAME [-
 #   Every `targets` record has `project_source`
 #   (explicit|env|active_project|sole|all). effective_branch.record_project records it, called by the --project
 #   option callback, resolve_pinned_alias, resolve_projects and fanout_projects. A project without a branch record
-#   gets one record with branch_source "none". A destructive command under --json whose project or branch
+#   gets one record with branch_source "none". A destructive or admin command under --json whose project or branch
 #   is the active choice adds a TARGET_FROM_ACTIVE_CHOICE warnings[] entry (OutputFormatter, category set by
 #   root_command.LeafCommand). REST list routes follow the same chain since CLI-49. --json envelopes have an optional top-level
 #   `warnings` list ({code, message, ...}), not the same as `data.warnings`. Version gate in gotchas.md.
@@ -1081,9 +1095,9 @@ kbagent workspace query --project ALIAS --workspace-id ID --file query.sql
 # query: default reads results inline via Query Service `GET .../results` (fast, JSON columns+rows),
 #   capped at --limit rows (default 500); pass --full for the complete CSV export (slower, uncapped).
 #   Each statement carries structured columns+rows + a synthesized csv_data (back-compat) since 0.59.0.
-kbagent workspace gc (--project NAME ... | --all-projects) [--dry-run] [--yes]
-# gc (CLI-28): needs --project or --all-projects (neither or both = USAGE_ERROR, exit 2), also over
-#   REST (`project=` or `all_projects=true`, else HTTP 400 INVALID_ARGUMENT). A project whose sandbox
+kbagent workspace gc [--project NAME ... | --all-projects] [--dry-run] [--yes]
+# gc (CLI-28, T17): --project, --all-projects, or neither for the active project (both = USAGE_ERROR,
+#   exit 2). Over REST the same: without `project` and `all_projects=true`, the active project. A project whose sandbox
 #   configs cannot be listed goes to errors[] and nothing is deleted there. A NOT_FOUND listing counts as
 #   "no sandbox configs" only when the branch component listing confirms it. Version gate lives in gotchas.md.
 kbagent workspace from-transformation --project ALIAS --component-id ID --config-id ID [--row-id ID]
@@ -1221,7 +1235,7 @@ kbagent sync push --project ALIAS [--all-projects] [--dry-run] [--force] [--allo
 #   fails it still raises `SCHEDULE_DELETE_FAILED`). Each of these, and the bulk
 #   `storage` deletes, `storage file-tag`, `job terminate`, `auth register-projects`,
 #   `token list --with-last-used`, `config detail` with several --project (now exit 1 on a failed
-#   project) and the 18 fan-out reads, ends its human output with one headline on stdout (CLI-50,
+#   project) and the fan-out reads, ends its human output with one headline on stdout (CLI-50,
 #   spec HO2), one form for all: `Success: 2 table(s) deleted.` /
 #   `Failed: 1 of 3 projects. 2 project(s) read.` Every failed item is one `Error: <item>: <message>`
 #   line on stdout before it (OutputFormatter.item_error / output.format_item_error), never a stderr
@@ -1230,7 +1244,7 @@ kbagent sync push --project ALIAS [--all-projects] [--dry-run] [--force] [--allo
 #   whose push returned `errors[]` in `summary.failed`. The --json payload is emitted
 #   BEFORE the exit; the items that succeeded stay written. A `--dry-run` of these
 #   exits 1 when it reports a failed item, like the real run. `sync diff --all-projects`
-#   exits 1 when a project failed. The 18 fan-out reads (`billing credits`, `job list`,
+#   exits 1 when a project failed. The other fan-out reads (`billing credits`, `job list`,
 #   `schedule list`, ...) exit 1 too (CLI-45). The helper is `finish_items()` in
 #   commands/_helpers.py: it emits the envelope or the per-item lines plus the headline,
 #   then exits 1 when an item failed. The contract case output.multi-item-headline
@@ -1600,7 +1614,7 @@ kbagent update [--beta] [--major]
 # completes discovery first, then does the terminal exact-version reinstall and immediately
 # re-executes; failures print a copy-paste recovery command.
 kbagent changelog [--limit N] [--full]
-# Default shows first sentences: every BREAKING note of a version, plus its first other notes until at least two show; --full / -v expands every note.
+# Default shows first sentences: every BREAKING note of a version, plus its first other notes until at least two show; --full expands every note.
 kbagent serve [--host HOST] [--port PORT] [--ui] [--ui-dist PATH] [--reload] [--log-level LVL] [--cors-origin ORIGIN] [--config-dir DIR] [--no-banner]
 # serve REST parity (CLI-49, spec V2/V3/V4/V8/V9): the 26 routes whose command applies the active branch
 #   (storage writes + table-download, job run/terminate, transformation, config variables, component
@@ -1614,7 +1628,7 @@ kbagent serve [--host HOST] [--port PORT] [--ui] [--ui-dist PATH] [--reload] [--
 #   PUT is a DEPRECATIONS form (DEPRECATED in Kbagent-Warnings). PUT .../variables with replace: true stays
 #   the full replace. List routes that read several projects take all_projects=true; without it and
 #   without project they use services/base.resolve_fanout_aliases (the T1 chain, shared with the CLI
-#   fanout_projects). A destructive route (route class or flag escalation, response_meta.note_operation)
+#   fanout_projects). A destructive or admin route (route class or flag escalation, response_meta.note_operation)
 #   on the active branch adds TARGET_FROM_ACTIVE_CHOICE (hint branch_id=<id>). Version gate in gotchas.md.
 # serve dry_run (CLI-33): a POST/PUT/PATCH/DELETE route answers HTTP 422 (HTTP_ERROR) when the
 #   request sends `dry_run` in the query string or as a top-level JSON body key, and the route does

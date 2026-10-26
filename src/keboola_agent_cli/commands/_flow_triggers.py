@@ -36,6 +36,7 @@ from ._helpers import (
     get_service,
     map_error_to_exit_code,
 )
+from ._project_ref import PROJECT_HELP
 
 NOT_COVERED_NOTE = (
     "Cross-project triggers were NOT checked -- a trigger-queue app config in "
@@ -103,7 +104,7 @@ def register(app: typer.Typer) -> None:
     @app.command("triggers")
     def flow_triggers(
         ctx: typer.Context,
-        project: str = typer.Option(..., "--project", help="Project alias"),
+        project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
         flow_id: str = typer.Option(..., "--flow-id", help="Flow configuration ID"),
         branch: int | None = typer.Option(
             None,

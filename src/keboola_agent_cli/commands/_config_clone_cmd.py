@@ -19,6 +19,7 @@ from rich.markup import escape
 
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._helpers import emit_api_error, get_formatter, get_service, map_error_to_exit_code
+from ._project_ref import PROJECT_DEFAULT
 
 
 def _parse_pair_options(items: list[str] | None, flag: str, formatter: Any) -> dict[str, str]:
@@ -84,12 +85,17 @@ def register(app: typer.Typer) -> None:
     @app.command("clone", rich_help_panel="Lifecycle")
     def config_clone(
         ctx: typer.Context,
-        project: str = typer.Option(..., "--project", help="Source project alias"),
+        project: str = typer.Option(
+            None,
+            "--project",
+            "-p",
+            help=f"Source project alias or ID ({PROJECT_DEFAULT})",
+        ),
         component_id: str = typer.Option(
             ..., "--component-id", help="Component ID (e.g. keboola.wr-db-snowflake)"
         ),
         config_id: str = typer.Option(..., "--config-id", help="Configuration ID to clone"),
-        name: str = typer.Option(..., "--name", help="Name for the new configuration"),
+        name: str = typer.Option(..., "--name", "-n", help="Name for the new configuration"),
         target_project: str | None = typer.Option(
             None,
             "--target-project",

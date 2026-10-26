@@ -29,6 +29,7 @@ from ._helpers import (
     resolve_project_alias,
 )
 from ._merge_request_render import next_step_hints
+from ._project_ref import PROJECT_HELP
 
 # -- Shared option declarations ------------------------------------------------
 #
@@ -38,11 +39,7 @@ from ._merge_request_render import next_step_hints
 # nouns --project/--branch are the CONTEXT you work in); `--id` is the short
 # alias the `agent` group already established beside `--task-id`.
 
-_PROJECT_OPT = typer.Option(
-    None,
-    "--project",
-    help="Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)",
-)
+_PROJECT_OPT = typer.Option(None, "--project", "-p", help=PROJECT_HELP)
 _MERGE_REQUEST_ID_OPT = typer.Option(
     None,
     "--merge-request-id",

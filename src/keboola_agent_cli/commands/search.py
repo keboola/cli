@@ -73,7 +73,7 @@ def search_command(
     limit: int = typer.Option(
         50,
         "--limit",
-        "-l",
+        "-L",
         min=1,
         max=100,
         help="Maximum number of results per project (textual search only, 1-100).",
@@ -81,7 +81,6 @@ def search_command(
     regex: bool = typer.Option(
         False,
         "--regex",
-        "-r",
         help=(
             "Run the query as a regular expression (opt-in). Case-insensitive "
             "whole-term match against entity names only (not column names): "

@@ -22,11 +22,11 @@ from typer.testing import CliRunner
 
 from keboola_agent_cli import auto_update, update_notice
 from keboola_agent_cli.cli import app
-from keboola_agent_cli.constants import MIGRATION_GUIDE_URL
 from keboola_agent_cli.output import OutputFormatter, success_json
 from keboola_agent_cli.services import version_service
 from keboola_agent_cli.services.version_service import VersionService, fetch_gated_release
 
+MIGRATION_GUIDE_URL = "https://github.com/keboola/cli/blob/main/docs/migrate-to-1.0.md"
 RUNNING = "0.105.2"
 API = "https://api.github.com/repos/keboola/cli"
 LATEST_URL = f"{API}/releases/latest"

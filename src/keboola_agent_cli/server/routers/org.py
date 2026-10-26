@@ -7,7 +7,9 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from ...services.base import resolve_fanout_aliases
 from ..dependencies import ServiceRegistry, get_manage_token, get_registry
+from ..response_meta import warn_deprecated
 
 router = APIRouter(prefix="/org", tags=["org"])
 
@@ -29,6 +31,8 @@ class OrgSetup(BaseModel):
 
 class OrgRefresh(BaseModel):
     aliases: list[str] | None = None
+    all_projects: bool = False
+    # The deprecated name of all_projects (spec C3).
     refresh_all: bool = False
     token_description: str = "kbagent"
     dry_run: bool = False
@@ -74,21 +78,25 @@ def refresh(
     """Refresh the storage token for one alias, several aliases, or every project.
 
     Useful after rotating a Manage API token or when a per-project token is
-    near expiry. Pass `refresh_all=true` to refresh every persisted alias,
-    or a list of aliases to scope the refresh. Mirrors
-    `kbagent project refresh --project` and `kbagent project refresh --all`.
+    near expiry. Pass `all_projects=true` to refresh every persisted alias,
+    or a list of aliases to scope the refresh. Without either, the T1 chain
+    picks one project, as in the CLI (T17). Mirrors `kbagent project refresh
+    --project` and `kbagent project refresh --all-projects`.
     """
     if not manage_token:
         raise HTTPException(
             status_code=401,
             detail="Missing X-Manage-Token header. Refresh requires a manage token.",
         )
-    # Service has no refresh_all param: pass aliases=None to refresh all,
-    # or aliases=body.aliases to scope the refresh.
-    effective_aliases = None if body.refresh_all else body.aliases
+    if body.refresh_all:
+        warn_deprecated("POST /org/refresh refresh_all")
+    # The service reads aliases=None as every registered project.
+    aliases = resolve_fanout_aliases(
+        registry.config_store, body.aliases, body.all_projects or body.refresh_all
+    )
     return registry.org.refresh_tokens(
         manage_token=manage_token,
-        aliases=effective_aliases,
+        aliases=aliases,
         token_description=body.token_description,
         dry_run=body.dry_run,
         force=body.force,

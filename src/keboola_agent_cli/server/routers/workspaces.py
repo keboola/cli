@@ -11,7 +11,6 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from ...constants import AI_SQL_HELPER_TIMEOUT, QUERY_RESULTS_DEFAULT_LIMIT
-from ...errors import ErrorCode, KeboolaApiError
 from ...services.base import resolve_fanout_aliases
 from ..dependencies import ALL_PROJECTS_HELP, ServiceRegistry, get_registry
 
@@ -108,7 +107,10 @@ def list_workspaces(
     if branch is not None and (aliases is None or len(aliases) != 1):
         raise HTTPException(
             status_code=400,
-            detail="branch requires exactly one project (branch ID is per-project)",
+            detail=(
+                "branch needs one project: a branch ID belongs to one project, so it cannot "
+                "be used with several project values or with all_projects"
+            ),
         )
     return registry.workspace.list_workspaces(
         aliases=aliases,
@@ -129,22 +131,11 @@ def gc(
 ) -> dict[str, Any]:
     """Clean up orphaned workspaces. Mirrors `kbagent workspace gc`.
 
-    Needs `project` (repeatable) or `all_projects=true`, never both. The
-    refusal is INVALID_ARGUMENT (HTTP 400), the REST twin of the CLI's exit 2.
+    `project` (repeatable) or `all_projects=true`, never both (USAGE_ERROR, HTTP
+    400). Without either, the T1 chain picks one project, as in the CLI (T17).
     """
-    message = None
-    if all_projects and project:
-        message = "Cannot use project with all_projects"
-    elif not all_projects and not project:
-        message = "Specify project or all_projects"
-    if message:
-        raise KeboolaApiError(
-            message=message,
-            status_code=400,
-            error_code=ErrorCode.INVALID_ARGUMENT,
-            retryable=False,
-        )
-    return registry.workspace.gc_workspaces(aliases=project, dry_run=dry_run)
+    aliases = resolve_fanout_aliases(registry.config_store, project, all_projects)
+    return registry.workspace.gc_workspaces(aliases=aliases, dry_run=dry_run)
 
 
 @router.post("/{project}", summary="Create a workspace")

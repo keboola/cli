@@ -58,7 +58,7 @@ class TestProjectEditNewAlias:
 
             runner.invoke(
                 app,
-                ["project", "add", "--project", "old", "--url", "https://x.example.com"],
+                ["project", "add", "--alias", "old", "--url", "https://x.example.com"],
             )
 
             result = runner.invoke(
@@ -95,7 +95,7 @@ class TestProjectEditNewAlias:
             MockService.return_value = service
 
             runner.invoke(
-                app, ["project", "add", "--project", "old", "--url", "https://x.example.com"]
+                app, ["project", "add", "--alias", "old", "--url", "https://x.example.com"]
             )
 
             result = runner.invoke(
@@ -128,12 +128,8 @@ class TestProjectEditNewAliasErrorPaths:
             MockStore.return_value = store
             MockService.return_value = service
 
-            runner.invoke(
-                app, ["project", "add", "--project", "a", "--url", "https://a.example.com"]
-            )
-            runner.invoke(
-                app, ["project", "add", "--project", "b", "--url", "https://b.example.com"]
-            )
+            runner.invoke(app, ["project", "add", "--alias", "a", "--url", "https://a.example.com"])
+            runner.invoke(app, ["project", "add", "--alias", "b", "--url", "https://b.example.com"])
 
             result = runner.invoke(
                 app,
@@ -163,7 +159,7 @@ class TestProjectEditNewAliasErrorPaths:
             MockService.return_value = service
 
             runner.invoke(
-                app, ["project", "add", "--project", "old", "--url", "https://x.example.com"]
+                app, ["project", "add", "--alias", "old", "--url", "https://x.example.com"]
             )
 
             result = runner.invoke(
@@ -191,7 +187,7 @@ class TestProjectEditNewAliasErrorPaths:
             MockService.return_value = service
 
             runner.invoke(
-                app, ["project", "add", "--project", "old", "--url", "https://x.example.com"]
+                app, ["project", "add", "--alias", "old", "--url", "https://x.example.com"]
             )
 
             result = runner.invoke(
@@ -230,7 +226,7 @@ class TestProjectEditNewAliasErrorPaths:
             MockService.return_value = service
 
             runner.invoke(
-                app, ["project", "add", "--project", "test", "--url", "https://x.example.com"]
+                app, ["project", "add", "--alias", "test", "--url", "https://x.example.com"]
             )
 
             result = runner.invoke(app, ["--json", "project", "edit", "--project", "test"])

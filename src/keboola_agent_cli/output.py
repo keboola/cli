@@ -403,13 +403,13 @@ class OutputFormatter:
             )
 
     def _warn_target_from_active_choice(self) -> None:
-        """Warn when a destructive command acts on the saved active project or branch (T12).
+        """Warn when a destructive or admin command acts on the saved active project or branch (T12).
 
         Only in JSON mode, right before the envelope: ``--json`` is consent, so
         the command runs, and this entry is the notice that the target was not
         on the command line. The hint names the flag that makes it explicit.
         """
-        if self.command_category != "destructive" or self._document_written:
+        if self.command_category not in ("destructive", "admin") or self._document_written:
             return
         seen: set[tuple[str, str, int | None]] = set()
         for target in recorded_targets():

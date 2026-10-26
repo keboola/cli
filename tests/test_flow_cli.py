@@ -303,6 +303,15 @@ class TestFlowSchema:
         assert "$schema" in result.output or "draft-07" in result.output
         mock_flow.fetch_flow_schema.assert_called_once_with("prod")
 
+    def test_schema_full_without_project_uses_the_active_project(self, tmp_path: Path) -> None:
+        """No --project: the live schema of the active project (spec T17)."""
+        store = _setup_config(tmp_path, {"prod": {}})
+        mock_flow = MagicMock()
+        mock_flow.fetch_flow_schema.return_value = FlowSchemaFetch(schema=_LIVE_SCHEMA, reason=None)
+        result = _invoke(store, mock_flow, ["--json", "flow", "schema", "--full"])
+        assert result.exit_code == 0, result.output
+        mock_flow.fetch_flow_schema.assert_called_once_with("prod")
+
     def test_schema_full_with_project_json_mode(self, tmp_path: Path) -> None:
         store = _setup_config(tmp_path, {"prod": {}})
         mock_flow = MagicMock()
@@ -435,6 +444,17 @@ class TestFlowValidate:
         assert result.exit_code == 2
         payload = json.loads(result.output)
         assert payload["data"]["valid"] is False
+        mock_flow.fetch_flow_schema.assert_called_once_with("prod")
+
+    def test_validate_without_project_uses_the_active_project(self, tmp_path: Path) -> None:
+        """No --project: the live schema of the active project (spec T17)."""
+        store = _setup_config(tmp_path, {"prod": {}})
+        mock_flow = MagicMock()
+        mock_flow.fetch_flow_schema.return_value = FlowSchemaFetch(schema=_LIVE_SCHEMA, reason=None)
+        f = tmp_path / "flow.yaml"
+        f.write_text(_VALID_FLOW_YAML)
+        result = _invoke(store, mock_flow, ["--json", "flow", "validate", "--file", f"@{f}"])
+        assert result.exit_code == 0, result.output
         mock_flow.fetch_flow_schema.assert_called_once_with("prod")
 
     def test_validate_with_project_fetch_failure_degrades(self, tmp_path: Path) -> None:
