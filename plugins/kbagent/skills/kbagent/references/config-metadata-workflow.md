@@ -184,8 +184,9 @@ Each returns `project_alias`, `component_id`, `config_id`, `branch_id`, and a
 human-readable `message`. `set-folder` additionally returns `folder` (the
 folder as stored, `""` when cleared) so callers don't have to re-parse the
 message string. It also keeps `key` (frozen at `"KBC.configuration.folderName"`),
-`value` (same as `folder`) and `result` (`{id, name, folder}` from the config
-PUT) from the time it wrote the metadata key.
+`value` (same as `folder`) and `result` (still a list, `[{key, value}]`) from
+the time it wrote the metadata key, and adds `configuration` (`{id, name,
+folder}` from the config PUT).
 
 ## Provider semantics
 

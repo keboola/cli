@@ -618,7 +618,8 @@ kbagent config set-folder --project NAME --component-id ID --config-id ID --name
 #   `config list` and `sync pull` read `folder` from the listing they already fetch (no extra
 #   search/component-configurations call), `sync push` / `sync clone` send it on the create POST.
 #   The sync manifest still stores the folder under that key name. The set-folder JSON keeps
-#   `key` (frozen), `value` and `result` (now {id, name, folder}, was the metadata POST list).
+#   `key` (frozen), `value` and `result` (still a list: [{key, value}]); the PUT response
+#   subset {id, name, folder} is the new `configuration` key.
 #   Needs keboola/connection DMD-2347 on the stack: without it set-folder fails FEATURE_NOT_ENABLED
 #   (exit 5) and push/clone add a `folder_not_supported` warnings[] entry. No metadata fallback.
 #   Version gate in gotchas.md.

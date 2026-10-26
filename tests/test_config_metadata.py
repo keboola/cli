@@ -691,7 +691,9 @@ class TestConfigServiceMetadata:
         assert result["folder"] == "My Group"
         assert result["key"] == "KBC.configuration.folderName"
         assert result["value"] == "My Group"
-        assert result["result"] == {"id": CFG_ID, "name": "Cfg", "folder": "My Group"}
+        # result stays list-shaped like the metadata POST response it replaced.
+        assert result["result"] == [{"key": "KBC.configuration.folderName", "value": "My Group"}]
+        assert result["configuration"] == {"id": CFG_ID, "name": "Cfg", "folder": "My Group"}
         assert result["branch_id"] == 1
 
     def test_set_config_folder_clear_reports_empty_value(self, tmp_path: Path) -> None:
@@ -702,6 +704,7 @@ class TestConfigServiceMetadata:
         assert mock_client.update_config.call_args.kwargs["folder"] == ""
         assert result["folder"] == ""
         assert result["value"] == ""
+        assert result["result"] == [{"key": "KBC.configuration.folderName", "value": ""}]
         assert "cleared" in result["message"]
 
     def test_set_config_folder_fails_when_response_has_no_folder(self, tmp_path: Path) -> None:

@@ -52,8 +52,8 @@ From the release of kbagent 1.0.0 until its migration date (28 days later), the 
   Storage API trims the name, rejects one over 400 characters (HTTP 400), stores an empty one
   as "no folder", and creates no configuration version. The `--json` result keeps its keys:
   `folder`, `value` (the folder as stored, `""` when cleared), `key` (frozen at
-  `"KBC.configuration.folderName"`), and `result` (now `{id, name, folder}` from the PUT
-  response instead of the metadata POST response).
+  `"KBC.configuration.folderName"`), and `result` (still a list, now `[{key, value}]`). The
+  new `configuration` key holds `{id, name, folder}` from the PUT response.
 - **`config list`** reads `folder` from the components listing it already fetches. The
   `search/component-configurations` call (and the `dev-branches` lookup it needed) is gone,
   so one project costs one request instead of three.
@@ -76,9 +76,10 @@ From the release of kbagent 1.0.0 until its migration date (28 days later), the 
   config but add a `folder_not_supported` entry to `warnings[]` (with `config_id` and
   `folder`), `sync pull` keeps the previous folders (`folder_lookup_failed: true`), and
   `config list` shows every folder as `""`. kbagent never falls back to the metadata key.
-- The `result` of `config set-folder --json` changed shape: it was the metadata POST
-  response (a list of `{id, key, value, ...}`), it is now the object `{id, name, folder}`.
-  A consumer reading `result[0]["id"]` (the metadata id) must stop.
+- The `result` of `config set-folder --json` is still a one-entry list, but its entry is
+  now only `{key, value}`: the metadata-only fields (`id` of the metadata entry,
+  `provider`, `timestamp`) are gone because no metadata is written. Read
+  `configuration.id` for the configuration id.
 
 ## One JSON document for every exit, root flags after the subcommand, `-h`, repeated options
 

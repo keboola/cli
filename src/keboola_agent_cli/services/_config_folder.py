@@ -32,9 +32,10 @@ def set_config_folder_method(
 
     Writes the configuration's ``folder`` field (PUT, creates no version),
     never the ``KBC.configuration.folderName`` metadata key (DMD-2348). The
-    result keeps the keys it had when it wrote that key: ``key`` is frozen,
-    ``value`` is the folder as stored ('' when cleared), ``result`` is a
-    subset of the PUT response.
+    result keeps the keys and shapes it had when it wrote that key: ``key``
+    is frozen, ``value`` is the folder as stored ('' when cleared), and
+    ``result`` stays a one-entry list of ``{key, value}`` (it was the metadata
+    POST response). The PUT response subset is the new ``configuration``.
 
     Raises:
         FeatureNotEnabledError: the PUT response has no ``folder`` key. A stack
@@ -69,7 +70,8 @@ def set_config_folder_method(
         "branch_id": effective_branch_id,
         "key": FOLDER_METADATA_KEY,
         "value": folder,
-        "result": {
+        "result": [{"key": FOLDER_METADATA_KEY, "value": folder}],
+        "configuration": {
             "id": response.get("id", config_id),
             "name": response.get("name"),
             "folder": response.get("folder"),
