@@ -227,3 +227,10 @@ A command that fails with an error code exits with the code's `Exit` value below
 |---|---|---|---|
 | `UPDATED_ACROSS_MAJOR` | 6 | `authorization` | After an automatic update to a higher major version (for example from 0.x to 1.x), the first write or destructive command was refused once, with exit code 6. Every later command runs. Reads before that command run and get the same code as a `warnings[]` entry. Admin commands and an update started with `kbagent update --major` do not refuse. See [migrate-to-1.0.md](migrate-to-1.0.md) |
 | `UPDATED_ACROSS_BREAKING` | 1 | `api` | Only a `warnings[]` entry, in the first command after an update, never an error exit: the update crossed versions with `BREAKING:` changelog notes. `versions` lists them. `kbagent changelog --full` shows the notes |
+
+### Row-Level and Column-Level Security
+
+| Code | Exit | Type | Description |
+|---|---|---|---|
+| `INVALID_CLS_POLICY` | 1 | `api` | A `cls create`/`update` candidate body (`table`/`dialect`/`rules`/`visible_columns`) failed validation -- either the schema-independent local checks (`principal`/`principals` not exactly one, empty or non-identifier `visible_columns`) or the live JSON-Schema check against the metastore's `cls-policy` schema when reachable. The message lists every violation found; nothing was written. Not retryable |
+| `INVALID_RLS_POLICY` | 1 | `api` | An `rls create`/`update` candidate body (`table`/`dialect`/`rules`/`condition`) failed validation -- either the schema-independent local checks (unknown op, `principal`/`principals` not exactly one, a `"*"` wildcard that is not the sole entry of its list, or one used against a metastore whose `rls-policy` schema is older than 1.1.0) or the live JSON-Schema check against the metastore's `rls-policy` schema when reachable. The message lists every violation found; nothing was written. Not retryable |

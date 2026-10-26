@@ -63,6 +63,14 @@ ENV_VARS: tuple[EnvVar, ...] = (
         added_in="0.4.0",
     ),
     EnvVar(
+        "KBAGENT_STACK_ID",
+        "Stack segment of a workspace KID for 'rls bind' and 'rls unbind', when --stack-id "
+        "is not given.",
+        secret=False,
+        added_in="vNEXT",
+        option="rls bind --stack-id, rls unbind --stack-id",
+    ),
+    EnvVar(
         "KBC_TOKEN",
         "Storage API token for 'project add' and for KBAGENT_PROJECT_FROM_ENV.",
         secret=True,

@@ -60,6 +60,7 @@ from .routers import (
     auth,
     billing,
     branches,
+    cls,
     components,
     configs,
     data_apps,
@@ -77,6 +78,8 @@ from .routers import (
     notifications,
     org,
     projects,
+    rls,
+    rls_bindings,
     schedules,
     search,
     semantic_layer,
@@ -352,6 +355,30 @@ OPENAPI_TAGS: list[dict[str, str]] = [
             "semantic layer artifacts (datasets, metrics, "
             "relationships, constraints, glossary). "
             "Mirrors `kbagent semantic-layer *`."
+        ),
+    },
+    {
+        "name": "rls",
+        "description": (
+            "**Development.** "
+            "Row-level security policies (metastore-backed `rls-policy` "
+            "objects), authored at `targeted` scope unless `organization` is "
+            "asked for -- never `project` scope. Mirrors `kbagent rls list|detail|schema|"
+            "create|update|delete|bind|unbind|bindings|bindings-sweep` (`rls setup`'s "
+            "interactive picker has no "
+            "endpoint of its own, same carve-out as "
+            "`auth register-projects`)."
+        ),
+    },
+    {
+        "name": "cls",
+        "description": (
+            "**Development.** "
+            "Column-level security policies (metastore-backed `cls-policy` "
+            "objects: a per-principal `visible_columns` allowlist), authored "
+            "at `targeted` scope unless `organization` is asked for -- never "
+            "`project` scope. Mirrors `kbagent cls list|detail|schema|create|update|"
+            "delete`."
         ),
     },
     # ---- AI & Tools ----
@@ -1016,6 +1043,10 @@ def create_app(
     app.include_router(encrypt.router)
     app.include_router(search.router)
     app.include_router(semantic_layer.router)
+    # Before rls.router: GET /rls/{project}/{policy_id} would capture /rls/{project}/bindings.
+    app.include_router(rls_bindings.router)
+    app.include_router(rls.router)
+    app.include_router(cls.router)
     app.include_router(transformation.router)
     app.include_router(docs.router)
     app.include_router(org.router)

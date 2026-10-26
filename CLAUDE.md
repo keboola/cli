@@ -1406,6 +1406,84 @@ kbagent semantic-layer reference-data delete [--project P] --id ID [--yes]
 #   0.97.0)` cannot be written on these `# ` comment lines (check_version_gates.py parses them as
 #   ATX headings).
 
+kbagent rls list --project P
+kbagent rls detail --project P --policy-id ID
+kbagent rls schema --project P
+kbagent rls create --project P --table-id TABLE_ID --rules JSON|@file|- [--default JSON|@file|-] [--dialect snowflake|bigquery] [--scope targeted|organization] [--target-project ALIAS|ID ...] [--dry-run] [--yes]
+kbagent rls update --project P --policy-id ID [--table-id TABLE_ID] [--dialect snowflake|bigquery] [--rules JSON|@file|-] [--default JSON|@file|-] [--target-project ALIAS|ID ... | --clear-target-projects] [--dry-run] [--yes]
+kbagent rls delete --project P --policy-id ID [--dry-run] [--yes]
+kbagent rls setup --project P [--dialect snowflake|bigquery] [--rules JSON|@file|-] [--scope targeted|organization] [--target-project ALIAS|ID ...] [--yes]
+kbagent rls bind --project P --workspace-id ID [--rls-policy UUID ...] [--cls-policy UUID ...] [--stack-id STACK] [--dry-run]
+kbagent rls unbind --project P --workspace-id ID [--stack-id STACK] [--dry-run] [--yes]
+kbagent rls bindings --project P [--workspace-id ID]
+kbagent rls bindings-sweep --project P [--older-than DAYS] [--dry-run | --yes]
+# rls bind/unbind/bindings/bindings-sweep: a `policy-binding` metastore object restricts ONE governed
+#   workspace to some of the project's rls/cls policies; named by the workspace KID
+#   `KID:<stack>:project-<id>:workspace-<id>`. No binding = the workspace gets EVERY policy of the
+#   project; a binding only narrows, never grants; Query Service re-reads it on every governed query,
+#   so a change applies to the next query. `bind` is an idempotent upsert (PUT replaces both lists),
+#   validates first (>=1 policy, every UUID readable as an rls/cls policy of the project, the workspace
+#   exists in production or a dev branch; a non-governed login type is only a warning) and prints the
+#   KID. --stack-id (env KBAGENT_STACK_ID) is REQUIRED: no API exposes the stack segment, it must equal
+#   Query Service's QUERY_RLS_STACK_ID (AWS dev: dev-keboola-aws-eu-west-1); a wrong one writes a
+#   binding nothing reads, so the workspace silently keeps every policy. `unbind` is destructive-class
+#   (looks the binding up, then confirms). `bindings-sweep` only reports unless --yes (destructive via
+#   FLAG_ESCALATIONS): orphaned = a workspace KID of this project whose workspace 404s in production
+#   and every dev branch AND last updated more than --older-than days (default 30) ago; any other
+#   check error is a failed item (exit 1), never a delete; app KIDs are never swept. References to a
+#   binding cannot be checked first (no reverse-reference API); the metastore refuses (409) a delete
+#   a reference blocks. A bound policy cannot be deleted (onDelete restrict): `rls delete`/`cls delete`
+#   then names `rls bindings`. REST: GET /rls/{project}/bindings, PUT|DELETE
+#   /rls/{project}/bindings/{workspace_id} (stack_id required), POST /rls/{project}/bindings/sweep.
+#   Version gate lives in gotchas.md.
+# rls: row-level security policy authoring, metastore-backed (`rls-policy` object type,
+#   one object per protected table, named by it). SCOPE: `targeted` by default (the schema's own
+#   default: the owning project plus --target-project grants); `--scope organization` governs the
+#   table in EVERY project of the org (the enforcement applies every listed policy) and is
+#   destructive-class (FLAG_ESCALATIONS); there is no project scope. WHO: a project admin may
+#   write `targeted` policies of its own project without grants; grants and organization scope
+#   need the organization-admin role (403 otherwise). Enforced by Query Service on a governed
+#   workspace (`workspace create --governed`; Query Service always enforces a governed workspace), or by
+#   keboola-mcp-server `query_data` where the project has the `row-level-security` feature. Policy schema 1.1.0 (the metastore default): a rule selects
+#   identities by principal, principals or IdP `groups`; within a policy every rule matching one
+#   identity applies and the conditions combine with OR; several policies on one table combine
+#   with AND (an added policy only narrows); a reader with no identity is always refused;
+#   the wildcard `"*"` (sole entry of `principal`/`principals`/`groups`) matches every identified reader and is how a table is opened to everyone under default deny; in a governed workspace
+#   (the platform denies by default, admins never exempt) a table with no rls-policy is refused;
+#   `--default` is the condition for an identified reader no rule matches (absent = refused;
+#   {"false": true} = no rows; to remove a default, recreate the policy). Needs an MCP engine
+#   that reads 1.1.0 (keboola/mcp-server#709). Writes refuse a --dialect other than the project backend (it defaults to the
+#   backend; the enforcement would refuse every read of that table). --rules is a JSON array of
+#   {principal|principals|groups, condition}; condition is a declarative primitive tree
+#   (column/op/value comparisons, in/not_in, is_null/is_not_null, and/or nesting, {"true": true}
+#   or {"false": true}) -- never a free-text predicate; a null comparison is refused (use
+#   is_null); `value: {"$identity": "email"}` / `values: {"$identity": "groups"}` are resolved
+#   per reader by the enforcement. `update` reads the policy, validates the MERGED result, then PATCHes
+#   only the changed keys (grants first); the result is re-read. `delete` is destructive-class.
+#   `--dry-run` previews with columns quoted like the enforcement (keboola-mcp-server
+#   `query_data`), but it is not the enforcement. `rls setup` is interactive-terminal-only
+#   (under --json / no TTY: INVALID_ARGUMENT, exit 2) and has no REST route. REST: POST
+#   /rls/{project}, PATCH /rls/{project}/{policy_id}, DELETE ...?dry_run=; body field
+#   `target_projects` (alias or ID). A stack whose metastore predates the schemas answers
+#   NOT_FOUND. New error code: INVALID_RLS_POLICY. Version gate for this whole entry lives in
+#   gotchas.md -- a `(since vNEXT)` tag cannot be written on these `# ` comment lines
+#   (check_version_gates.py parses them as ATX markdown headings).
+
+kbagent cls list --project P
+kbagent cls detail --project P --policy-id ID
+kbagent cls schema --project P
+kbagent cls create --project P --table-id TABLE_ID --rules JSON|@file|- [--dialect snowflake|bigquery] [--scope targeted|organization] [--target-project ALIAS|ID ...] [--dry-run] [--yes]
+kbagent cls update --project P --policy-id ID [--table-id TABLE_ID] [--dialect snowflake|bigquery] [--rules JSON|@file|-] [--target-project ALIAS|ID ... | --clear-target-projects] [--dry-run] [--yes]
+kbagent cls delete --project P --policy-id ID [--dry-run] [--yes]
+# cls: column-level security policy authoring (`cls-policy` object type, one object per
+#   protected table), sibling of `rls`: same scope default, write permissions, dialect check,
+#   partial update and permission classes. --rules is a JSON array of
+#   {principal|principals|groups, visible_columns: [col, ...]} objects -- an allowlist projection
+#   (masking is not supported); within a policy an identity several rules match sees the union
+#   of their columns, several policies intersect; no `--default`. `--dry-run` prints each selector's projection. No `setup`
+#   wizard; the REST routes under /cls/{project} mirror /rls.
+#   New error code: INVALID_CLS_POLICY. Version gate lives in gotchas.md.
+
 kbagent http get PATH [--timeout SECONDS]
 kbagent http post PATH [--body JSON|@file|-] [--timeout SECONDS]
 kbagent http patch PATH [--body JSON|@file|-] [--timeout SECONDS]

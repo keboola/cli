@@ -146,6 +146,37 @@ Manage development branches
   kbagent changelog [--limit N] [--full]
     Show recent changelog (what changed in each version).
 """,
+    "cls": """\
+### cls
+
+Manage column-level security policies (metastore-backed, per-principal column
+allowlist). 'list'/'detail'/'schema' are read-only; 'create'/'update'/'delete'
+are gated as admin -- see CONTRIBUTING.md.
+
+  kbagent cls create --project PROJECT --table-id ID --rules RULES
+      [--dialect snowflake|bigquery] [--scope targeted|organization]
+      [--target-project PROJECT ...] [--dry-run] [--yes]
+    Create one CLS policy for one table (``targeted`` scope unless ``--scope
+    organization``).
+
+  kbagent cls delete --project PROJECT --policy-id ID [--dry-run] [--yes]
+    Delete a CLS policy -- its table's columns become unrestricted.
+
+  kbagent cls detail --project PROJECT --policy-id ID
+    Show one CLS policy's full rule set.
+
+  kbagent cls list --project PROJECT
+    List column-level security policies visible to a project.
+
+  kbagent cls schema --project PROJECT
+    Print the live ``cls-policy`` JSON Schema fetched from the metastore.
+
+  kbagent cls update --project PROJECT --policy-id ID [--table-id ID]
+      [--dialect snowflake|bigquery] [--rules RULES]
+      [--target-project PROJECT ...] [--clear-target-projects] [--dry-run]
+      [--yes]
+    Update an existing CLS policy.
+""",
     "component": """\
 ### component
 
@@ -830,6 +861,62 @@ Manage connected Keboola projects
 
   kbagent repl
     Start interactive REPL mode for kbagent.
+""",
+    "rls": """\
+### rls
+
+Manage row-level security policies (metastore-backed).
+'list'/'detail'/'schema' are read-only; 'create'/'update'/'setup'/'delete' are
+gated as admin -- see CONTRIBUTING.md.
+
+  kbagent rls bind --project PROJECT --workspace-id N
+      [--rls-policy POLICY ...] [--cls-policy POLICY ...] [--stack-id ID]
+      [--dry-run]
+    Bind policies to a governed workspace: it then gets only these policies.
+
+  kbagent rls bindings --project PROJECT [--workspace-id N]
+    List the policy bindings of a project and whether each workspace still
+    exists.
+
+  kbagent rls bindings-sweep --project PROJECT [--older-than N] [--dry-run]
+      [--yes]
+    Find the bindings whose workspace no longer exists; with --yes, delete
+    them.
+
+  kbagent rls create --project PROJECT --table-id ID --rules RULES
+      [--default DEFAULT] [--dialect snowflake|bigquery]
+      [--scope targeted|organization] [--target-project PROJECT ...]
+      [--dry-run] [--yes]
+    Create one RLS policy for one table (``targeted`` scope unless ``--scope
+    organization``).
+
+  kbagent rls delete --project PROJECT --policy-id ID [--dry-run] [--yes]
+    Delete an RLS policy -- its table's rows are no longer filtered.
+
+  kbagent rls detail --project PROJECT --policy-id ID
+    Show one RLS policy's full rule set.
+
+  kbagent rls list --project PROJECT
+    List row-level security policies visible to a project.
+
+  kbagent rls schema --project PROJECT
+    Print the live ``rls-policy`` JSON Schema fetched from the metastore.
+
+  kbagent rls setup --project PROJECT [--dialect snowflake|bigquery]
+      [--rules RULES] [--scope targeted|organization]
+      [--target-project PROJECT ...] [--yes]
+    Guided RLS setup: pick tables, build a condition, preview, then write.
+
+  kbagent rls unbind --project PROJECT --workspace-id N [--stack-id ID]
+      [--dry-run] [--yes]
+    Delete the policy binding of a workspace: it then gets every policy of the
+    project.
+
+  kbagent rls update --project PROJECT --policy-id ID [--table-id ID]
+      [--dialect snowflake|bigquery] [--rules RULES] [--default DEFAULT]
+      [--target-project PROJECT ...] [--clear-target-projects] [--dry-run]
+      [--yes]
+    Update an existing RLS policy.
 """,
     "schedule": """\
 ### schedule
