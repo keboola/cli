@@ -448,7 +448,7 @@ From the release of kbagent 1.0.0 until its migration date (28 days later), the 
   server-side). kbagent reclassifies exactly that 401 to
   `ErrorCode.MISSING_MASTER_TOKEN` with the remedy in the message. Fix:
   check `kbagent project info` -> `is_master_token`, and register a
-  project-admin token (`kbagent project edit --token-stdin`). Do NOT escalate
+  project-admin token (`kbagent project edit --project P --token-stdin`). Do NOT escalate
   this one to support -- it is by design.
   - **(updated 0.97.0 -- PSGO-282, go-monorepo#596):** the "every call"
     part above is now history. The Metastore no longer requires a master
@@ -640,7 +640,7 @@ From the release of kbagent 1.0.0 until its migration date (28 days later), the 
   the additive key `session_unsupported_features` (`auth status` does **not**
   carry it), so read it from there instead of reconstructing it from memory.
   The three entries are `kbagent kai`,
-  `kbagent semantic-layer token --encrypt (Metastore Service)`, and the
+  `kbagent semantic-layer token --project P --encrypt (Metastore Service)`, and the
   importable SDK (`keboola_agent_cli.Client`). `kai` needs the external
   `kai_client` library, which has no bearer path. `semantic-layer token
   --encrypt` encrypts the project's own token for reuse, and a sentinel is not a
@@ -1135,7 +1135,7 @@ Before this, only `sync init --adopt-existing` and `config new --push
 
 - A registered project without a stored `project_id` gets the ID from one
   token verification call. If that call fails, the command stops with
-  `CONFIG_ERROR` and names `kbagent project edit --token-stdin`.
+  `CONFIG_ERROR` and names `kbagent project edit --project P --token-stdin`.
 - A directory without a manifest behaves as before: `pull` initializes it,
   `diff` and `push` report `NOT_INITIALIZED`.
 - To copy configs from one project to another, use `sync clone`. The
@@ -1344,7 +1344,7 @@ nothing, and a later local edit UPDATEs that one dev copy (production is never
 touched). Configs the dev branch already has under the production id (the
 normal case: a branch starts as a copy of production) were never affected.
 Cleanup on an older kbagent: list the branch's configs and delete the extra
-copies with `kbagent config delete --branch <dev>`.
+copies with `kbagent config delete --project P --branch <dev>`.
 
 ## `sync push` / `sync pull` / `sync diff` accept `--branch <id>` for per-invocation dev-branch targeting
 
@@ -1767,7 +1767,7 @@ appends a `sandbox_annotation` block:
   "sandbox_annotation": {
     "sandbox_service_id": "1296392806",
     "storage_workspace_id": 2950518214,
-    "note": "`parameters.id` in a keboola.sandboxes config is the sandbox-service internal ID, NOT the Storage workspace ID. Use `storage_workspace_id` with `kbagent workspace detail --workspace-id ...`."
+    "note": "`parameters.id` in a keboola.sandboxes config is the sandbox-service internal ID, NOT the Storage workspace ID. Use `storage_workspace_id` with `kbagent workspace detail --project P --workspace-id ...`."
   }
 }
 ```
@@ -1802,7 +1802,7 @@ worker into debug execution: the component starts with the same configuration
 and inputs as a normal run, but its output stream is **not** written to the
 configured destination buckets. Instead the worker uploads the output bytes
 to a Storage File tagged `debug-<jobId>` (you can pull it down with
-`kbagent storage file-download --tag debug-<jobId>`). Useful for:
+`kbagent storage file-download --project P --tag debug-<jobId>`). Useful for:
 
 - **Dry-runs against production configs** -- reproduce a failing job exactly
   as it happened in prod without touching downstream tables, and inspect the
@@ -1977,7 +1977,7 @@ events and emits a final `done` SSE frame mirroring the same record.
   `inequality | equality | range | composition | exclusion | temporal | conditional`.
   It classifies the SHAPE of the constraint -- the actual expression is
   always a string.
-- `kbagent semantic-layer add constraint --rule "..."` enforces the
+- `kbagent semantic-layer add constraint --project P --rule "..."` enforces the
   string contract at the CLI layer; if a user pastes a `{bounds: ...}`
   object the CLI exits 2 / `VALIDATION_ERROR` with a hint pointing at
   this gotcha.
@@ -2000,12 +2000,12 @@ events and emits a final `done` SSE frame mirroring the same record.
   independently. kbagent's `semantic-layer validate` emits a warning
   when the suffix and the severity drift (e.g. a `_critical`-suffixed
   constraint with `severity: "info"`).
-- `kbagent semantic-layer add constraint --severity` only accepts the
+- `kbagent semantic-layer add constraint --project P --severity` only accepts the
   3 API values; the 4-band band lives in `--name` suffix.
 
 ## Metric rename auto-cascades through `CODE_METRIC`
 
-- `kbagent semantic-layer edit metric --new-name NEW` updates the metric
+- `kbagent semantic-layer edit metric --project P --new-name NEW` updates the metric
   and ALSO every constraint whose `metrics[]` referenced the old name
   (`metrics[]` rewritten to the new name). *(updated 0.97.0)* Each is an
   in-place `PUT` -- same id, scope, grants and revision history, and a failed
@@ -2050,7 +2050,7 @@ events and emits a final `done` SSE frame mirroring the same record.
 
 ## Removing a metric corrupts `DIM_METRIC_THRESHOLD` downstream
 
-- `kbagent semantic-layer remove metric --name N` runs a pre-deletion
+- `kbagent semantic-layer remove metric --project P --name N` runs a pre-deletion
   scan listing every constraint whose `metrics[]` includes N. Each
   such constraint becomes ORPHANED after the delete: it remains in
   the model but references a metric that no longer exists.
@@ -2752,9 +2752,9 @@ delete. Pass `--yes` to all of them in scripts.
 - **Live-validated** end-to-end (HTTP 200 on the resulting URL, no
   auth challenge; UI Authentication tab shows "None" pre-selected).
 - **Repairing existing v0.27.0 apps stuck at 503**: re-run
-  `kbagent data-app create --auth public ...` to mint a new app, OR
+  `kbagent data-app create --project P --auth public ...` to mint a new app, OR
   patch the existing config in-place via
-  `kbagent config update --component-id keboola.data-apps --config-id ID --set 'authorization=...'`
+  `kbagent config update --project P --component-id keboola.data-apps --config-id ID --set 'authorization=...'`
   with the shape above. The previous URL stays retired in either case
   (the proxy URL is bound to the deployment record, not the config).
 - **`--auth password` behaviour unchanged.** Mints a 20-char hex
@@ -3010,7 +3010,7 @@ delete. Pass `--yes` to all of them in scripts.
 
 ## `data-app deploy` is required after `config update` -- the running container does NOT auto-pick-up new config versions
 
-- `kbagent config update --component-id keboola.data-apps ...` bumps the
+- `kbagent config update --project P --component-id keboola.data-apps ...` bumps the
   Storage config version; the deployed container keeps running at the
   OLD version. The Data Science deployment record's `configVersion`
   field is a *pinned pointer* that does not auto-advance when Storage
@@ -3062,7 +3062,7 @@ delete. Pass `--yes` to all of them in scripts.
   is a different beast: it means the platform auto-suspended the
   container after `autoSuspendAfterSeconds` of inactivity. Hit the URL
   to wake it (auto-restart triggers a 30-60s cold boot) or run
-  `kbagent data-app start --app-id N`.
+  `kbagent data-app start --project P --app-id N`.
 ## `project invite` "already invited / already member" returns HTTP 400, not 422
 
 - Re-inviting a user the project already knows about returns HTTP **400** with
@@ -3183,7 +3183,7 @@ delete. Pass `--yes` to all of them in scripts.
   the same default row.
 - **`variables-clear` does NOT delete the backing variables config** -- it
   may be shared across multiple configs. To actually remove it, run
-  `kbagent config delete --component-id keboola.variables --config-id <id>`
+  `kbagent config delete --project P --component-id keboola.variables --config-id <id>`
   after verifying nothing else references it.
 - `--var #KEY=plain` -> encrypted via Encryption API before reaching Storage.
   Fail-closed: encryption failure aborts with `ENCRYPTION_FAILED`. Use
@@ -4042,9 +4042,9 @@ field as a branch's `description` attribute:
 
 - **Dashboard project description** = `KBC.projectDescription` metadata on the
   **default (main) branch**. Set via `kbagent project description-set` (or
-  generically `kbagent branch metadata-set --key KBC.projectDescription --branch default`)
+  generically `kbagent branch metadata-set --project P --key KBC.projectDescription --branch default`)
 - **Dev branch description** = the `description` field on a dev branch record.
-  Set via `kbagent branch create --description "..."`; visible in the branch
+  Set via `kbagent branch create --project P --description "..."`; visible in the branch
   switcher and synced as `description.md` by the kbc CLI
 
 They live at different endpoints in the Storage API
@@ -4242,7 +4242,7 @@ CLI hides via its four-bucket response, but they matter when interpreting result
 
 ## `schedule find --cron-window` is an hour-field approximation
 
-`kbagent schedule find --cron-window "02:00-04:00"` is an **audit helper, not a real cron evaluator**. It parses the *hour* field of the cron expression and asks whether every hour at which the cron fires falls inside the passed window. It deliberately does **not** account for minute precision, day-of-month restrictions, or day-of-week restrictions.
+`kbagent schedule find --project P --cron-window "02:00-04:00"` is an **audit helper, not a real cron evaluator**. It parses the *hour* field of the cron expression and asks whether every hour at which the cron fires falls inside the passed window. It deliberately does **not** account for minute precision, day-of-month restrictions, or day-of-week restrictions.
 
 - **Minutes in `--cron-window` are syntactic sugar, but still validated.** The spec `02:00-04:00` is accepted in the `HH:MM-HH:MM` format because it matches how people describe time windows; the matcher itself only uses the hour part. A cron expression `*/10 2-4 * * *` (every 10 minutes within hours 2-4) matches `--cron-window "02:30-04:30"` exactly the same as `--cron-window "02:00-04:00"`. Minute values outside `00-59` (e.g. `02:70-04:88`) are still rejected at parse time so obviously malformed inputs fail loudly.
 - **Hour field `*` (fires every hour) never matches a bounded window.** This is intentional: from an audit standpoint, "fires every hour" is the opposite of "confined to a 2-hour window". If you wanted to catch those, pass `--cron-window "00:00-23:00"` (or skip the window filter entirely).
@@ -4298,7 +4298,7 @@ The trade-off is deliberate: one big call avoids the O(unique-parents) round-tri
 
 ## `search` is a top-level command, not `config search`
 
-`kbagent search QUERY` searches across **all item types** (tables, buckets, configs, flows, data apps, transformations) via the Storage API global-search endpoint. It is distinct from `kbagent config search --query Q` which scans only configuration JSON bodies.
+`kbagent search QUERY` searches across **all item types** (tables, buckets, configs, flows, data apps, transformations) via the Storage API global-search endpoint. It is distinct from `kbagent config search --project P --query Q` which scans only configuration JSON bodies.
 - `search --search-type config-based` delegates to `config search` internally but exposes the unified results shape. It matches **case-insensitively** (since v0.84.0) while `config search --query` stays case-sensitive unless `-i` is passed -- the same logical table is often mixed-case in a row name and upper-case in `storage.input.tables[].source`, so a case-sensitive body scan answers "is this referenced anywhere?" with a false no.
 - Options (`--type`, `--project`, `--limit`) must come AFTER the QUERY argument: `kbagent search "text" --project P --type table --limit 10`.
 
@@ -4559,7 +4559,7 @@ real secret — e.g. to wire `OTEL_EXPORTER_OTLP_ENDPOINT` for a daemon:
 `kbagent --json stream detail SRC --project P --reveal`.
 
 Creating an OTLP source **via the raw Stream API** creates only the bare source
-— no sinks, no tables. So `kbagent stream create-source --type otlp` (matching
+— no sinks, no tables. So `kbagent stream create-source --project P --type otlp` (matching
 the Keboola UI) **auto-provisions the three sinks** logs/metrics/traces into
 bucket `in.c-otlp-<sourceId>`, mapping each record to `id` (uuid) + `datetime`
 (ingest time) + `body` (the full flattened OTLP record as JSON), so data lands
@@ -4870,7 +4870,7 @@ value for the new non-null column. Add `--default` when the table is non-empty.
 The Keboola Queue API `POST /jobs` accepts **no** client-supplied idempotency /
 dedup token -- verified against the live OpenAPI spec (v1.3.8) and the server
 source (an internal `deduplicationId` exists but is daemon-only, never read from
-the public create-job request). So `kbagent job run --idempotency-key KEY`
+the public create-job request). So `kbagent job run --project P --idempotency-key KEY`
 de-duplicates **client-side**: a `<config-dir>/job_idempotency.json` map of
 `key -> prior job`. Consequences to know:
 - Dedup only works where that file is shared -- it is per config-dir / per
@@ -4959,7 +4959,7 @@ ended up (`data-app list --branch <dev-id>` vs production).
 
 ### `search --regex` matches entity names only; `matched_columns` is textual-only
 
-`kbagent search --regex` opts into the Storage API `mode=regex` global-search
+`kbagent search --project P --regex` opts into the Storage API `mode=regex` global-search
 path. Three things verified live against a real stack (2026-07-02):
 - Regex is a **whole-term, case-insensitive** match — `report` will NOT match
   `monthly_report`; you must write `.*report.*`. An invalid pattern returns a
@@ -5169,7 +5169,7 @@ Both failed on **every** invocation on Windows, and both worked fine on
 macOS/Linux — so a failure report from a Windows user is not a project or
 permission problem, it is the platform.
 
-- **`kbagent job run --idempotency-key ...`** raised
+- **`kbagent job run --project P --idempotency-key ...`** raised
   `PermissionError: [WinError 5] Access is denied` before recording anything.
   The dedup store locked the same file it then renamed over, and Windows
   refuses to replace a file that still has an open handle. On kbagent older
@@ -6361,7 +6361,7 @@ whose manifest was lost or written again, a `main/` file that
   when the file has no such key, any difference from the remote. A scaffold
   with no local changes gets the remote version, as before.
 - **To resolve such a `conflict`:** keep a copy of the local edit if you need
-  it, run `kbagent sync pull --theirs` (the remote wins and the file becomes
+  it, run `kbagent sync pull --project P --theirs` (the remote wins and the file becomes
   tracked), apply the edit again, and push.
 - Pull protects only a file in the directory where pull writes that config. A
   file with the same config id in another directory stays a separate copy
@@ -6707,7 +6707,7 @@ appeared in human mode on a terminal.
 
 - With `--progress`, progress always goes to **stderr**, also with `--json`
   and with no terminal. stdout is untouched, so
-  `kbagent --json storage upload-table ... --progress > result.json 2> progress.log`
+  `kbagent --json storage upload-table --project P ... --progress > result.json 2> progress.log`
   keeps a parseable result.
 - On a terminal: a bar with percent, transferred/total, speed, elapsed and
   ETA. Otherwise: one plain line every 10 s plus a final line, e.g.

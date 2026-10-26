@@ -139,7 +139,7 @@ once `.kbagent/` exists, you can run from any subdirectory of the repo.
 kbagent config detail ... > /tmp/config.json
 # ... 10 minutes of editing ...
 # meanwhile someone (or you) pushed v106
-kbagent config update --configuration @/tmp/config.json
+kbagent config update --project prod --configuration @/tmp/config.json
 # Result: v107 is built from v105 + your edits, silently discarding v106.
 ```
 
@@ -147,7 +147,7 @@ kbagent config update --configuration @/tmp/config.json
 # GOOD: re-fetch immediately before each push
 kbagent config detail ... > /tmp/config.json   # fresh
 # ... edit ...
-kbagent config update --configuration @/tmp/config.json --merge --dry-run
+kbagent config update --project prod --configuration @/tmp/config.json --merge --dry-run
 # preview, confirm, then push without --dry-run
 ```
 
@@ -155,20 +155,20 @@ kbagent config update --configuration @/tmp/config.json --merge --dry-run
 
 ```bash
 # BAD: replaces the entire .configuration with what you sent
-kbagent config update ... --configuration "$(cat /tmp/full-config.json)"
+kbagent config update --project prod ... --configuration "$(cat /tmp/full-config.json)"
 # Result: any drift in storage.input.tables or parameters siblings is wiped.
 ```
 
 ```bash
 # GOOD: targeted change, deep-merged
-kbagent config update ... --set "parameters.query=SELECT 1"
+kbagent config update --project prod ... --set "parameters.query=SELECT 1"
 
 # GOOD: partial JSON merged into existing
-kbagent config update ... --configuration '{"parameters":{"query":"SELECT 1"}}' --merge
+kbagent config update --project prod ... --configuration '{"parameters":{"query":"SELECT 1"}}' --merge
 
 # GOOD: dedicated command for storage.output.default_bucket (preserves all siblings)
-kbagent config set-default-bucket ... --bucket in.c-preferred-name
-kbagent config set-default-bucket ... --clear
+kbagent config set-default-bucket --project prod ... --bucket in.c-preferred-name
+kbagent config set-default-bucket --project prod ... --clear
 ```
 
 ### Pushing then immediately running
@@ -181,7 +181,7 @@ kbagent job run ...   # do NOT chain
 
 ```bash
 # GOOD: push, report to user, wait for "yes, run it"
-kbagent config update ... --dry-run     # preview
+kbagent config update --project prod ... --dry-run     # preview
 kbagent config update ...               # after user confirms
 # stop here; tell user the new version is in. Wait for explicit run instruction.
 ```

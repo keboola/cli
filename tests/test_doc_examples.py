@@ -21,6 +21,7 @@ from typing import Any
 import typer.main
 
 from keboola_agent_cli.cli import app
+from keboola_agent_cli.commands._project_ref import target_project_param
 from keboola_agent_cli.commands.context import AGENT_CONTEXT
 from keboola_agent_cli.commands.repl import _is_group
 
@@ -178,3 +179,76 @@ def test_checker_reads_options_after_a_spaced_alternation() -> None:
     assert _problem(ex, root) == "agent test has no option --bogus"
     [(_, ex)] = _examples("```\nkbagent --json project list | jq .\n```\n", markdown=True)
     assert ex == "kbagent --json project list"
+
+
+# --------------------------------------------------------------------------- #
+# Agents pass --project on every command (docs/migrate-to-1.0.md, "Plugin"):
+# the active project is shared by every terminal, agent conversation and
+# `kbagent serve` of one configuration directory.
+# --------------------------------------------------------------------------- #
+
+# Options with which a command chooses its projects itself.
+_PROJECT_CHOICE = {"--project", "-p", "--all-projects", "--from-csv"}
+
+
+def _command_and_options(example: str, root: Any) -> tuple[Any, list[str]] | None:
+    """The leaf command of ``example`` and the tokens after its path, or None."""
+    ctx = type(root).context_class(root)
+    tokens = _QUOTED.sub(" VALUE ", example).split()[1:]
+    root_valued = {o for p in root.params if not getattr(p, "is_flag", False) for o in p.opts}
+    i = 0
+    while i < len(tokens) and tokens[i].startswith("-"):
+        i += 2 if tokens[i] in root_valued else 1
+    node = root
+    while _is_group(node) and i < len(tokens):
+        if not _WORD.fullmatch(tokens[i]):
+            return None
+        node = node.get_command(ctx, tokens[i])
+        if node is None:
+            return None
+        i += 1
+    if _is_group(node):
+        return None
+    return node, re.sub(r"[\[\]()|]", " ", " ".join(tokens[i:])).split()
+
+
+def _leaves_out_the_project(example: str, root: Any) -> bool:
+    found = _command_and_options(example, root)
+    if found is None:
+        return False
+    command, rest = found
+    if target_project_param(command) is None:
+        return False
+    # A command name in prose, a list of command names and a --help call are
+    # not examples to run.
+    if "--help" in rest or not any(token.startswith("-") for token in rest):
+        return False
+    if command.operation == "project.refresh" and "--all" in rest:
+        return False  # the deprecated name of --all-projects, the form 0.x knows
+    return not any(token.split("=")[0] in _PROJECT_CHOICE for token in rest)
+
+
+def test_agent_examples_name_the_project() -> None:
+    """An example in the plugin documents that shows options also shows --project.
+
+    A heading is skipped: other documents link to its anchor.
+    """
+    root = typer.main.get_command(app)
+    missing = []
+    for path in sorted((REPO_ROOT / "plugins" / "kbagent").rglob("*.md")):
+        text = path.read_text(encoding="utf-8")
+        lines = text.splitlines()
+        for n, ex in _examples(text, markdown=True):
+            if not lines[n - 1].startswith("#") and _leaves_out_the_project(ex, root):
+                missing.append(f"{path.relative_to(REPO_ROOT)}:{n}: {ex}")
+    assert not missing, "\n".join(missing)
+
+
+def test_checker_finds_an_example_without_the_project() -> None:
+    root = typer.main.get_command(app)
+    assert _leaves_out_the_project("kbagent --json config update --set a=b", root)
+    assert not _leaves_out_the_project("kbagent config update --project P --set a=b", root)
+    assert not _leaves_out_the_project("kbagent config list --all-projects", root)
+    assert not _leaves_out_the_project("kbagent config update", root)  # a command name
+    assert not _leaves_out_the_project("kbagent config update --help", root)
+    assert not _leaves_out_the_project("kbagent project add --alias x", root)  # a new alias

@@ -1,13 +1,13 @@
 # Creating New Configurations (Scaffold Workflow)
 
 > **Two modes, one command:**
-> - `kbagent config new --output-dir DIR` (this workflow) -- generate
+> - `kbagent config new --project ALIAS --output-dir DIR` (this workflow) -- generate
 >   scaffold files to disk, edit them, then push later with
 >   `kbagent sync push`. The "GitOps for configs" path.
 > - `kbagent config new --push --no-files --project P --name N` -- one-shot
 >   remote create via Storage API, no filesystem step. The FIIA "empty
 >   shell, then patch via `config update --set ...`" path. See
->   `gotchas.md` "`kbagent config new --push` is one-shot remote create"
+>   `gotchas.md` "`kbagent config new --project ALIAS --push` is one-shot remote create"
 >   for the full side-by-side and the schema-validation behavior.
 
 ## When to use

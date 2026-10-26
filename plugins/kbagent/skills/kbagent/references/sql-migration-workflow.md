@@ -127,7 +127,7 @@ failures:
 
 ## Auto-normalization of `script[]` (since 0.28.0, #245)
 
-When pushing a SQL transformation body via `kbagent config update --configuration`,
+When pushing a SQL transformation body via `kbagent config update --project P --configuration`,
 `--configuration-file`, or `--set parameters.blocks.0.codes.0.script=...`, the
 CLI normalizes any string `script` value to an array using the same
 state-machine splitter that powers `kbagent sync push`:

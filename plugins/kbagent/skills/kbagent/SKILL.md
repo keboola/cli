@@ -53,7 +53,7 @@ For any operation that modifies a Keboola config or storage object, follow this 
 
 1. **Fetch fresh** from the API (e.g. `kbagent --json config detail ...`) -- never reuse a local file from earlier in the session.
 2. **Compute the change** in memory or via `jq`/Python. Keep the diff small and targeted; prefer `--set path=value` or `--merge` over full-config replacement.
-3. **Preview with `--dry-run`** (e.g. `kbagent --json config update ... --dry-run`). Show the user what will change.
+3. **Preview with `--dry-run`** (e.g. `kbagent --json config update --project PROJECT ... --dry-run`). Show the user what will change.
 4. **Get user confirmation** before re-running the same command without `--dry-run`.
 5. **Verify** by re-fetching the config and inspecting the new version.
 6. **Stop**. Do NOT auto-trigger `job run`, transformation execution, or any side-effecting follow-up. The user decides when to run.
