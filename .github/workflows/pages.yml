@@ -1,0 +1,45 @@
+# Publishes site/ to GitHub Pages: https://keboola.github.io/cli/
+#
+# site/1.0/index.html is the overview of the changes in kbagent 1.0, for users.
+# The page is self-contained (inline CSS and script, fonts from Google Fonts), so
+# the job uploads the folder as it is, with no build step.
+#
+# One-time setup by a repository admin: Settings > Pages > Source: GitHub Actions.
+# Until then, the configure-pages step fails. After the setup, run this workflow by hand.
+name: pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # actions/checkout
+      pages: write # actions/deploy-pages
+      id-token: write # actions/deploy-pages
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+      - id: deployment
+        uses: actions/deploy-pages@v5
