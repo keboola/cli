@@ -452,7 +452,7 @@ footer {
   <header class="masthead">
     <div class="eyebrow">kbagent · 1.0 compared with 0.100</div>
     <h1>kbagent 1.0 at a glance</h1>
-    <p class="lede">kbagent 1.0 makes all commands follow the same rules. <strong>No command and no long option is removed or renamed.</strong> Some defaults, exit codes and messages change. The main changes come first, then the gaps that 0.x already closed, then the full list.</p>
+    <p class="lede">kbagent 1.0 makes all commands follow the same rules. <strong>No command and no long option is removed. Two options get a new name, and the old names keep working for now.</strong> Some defaults, exit codes and messages change. The main changes come first, then the gaps that 0.x already closed, then the full list.</p>
   </header>
 
   <section id="main" aria-labelledby="main-h">
@@ -463,16 +463,16 @@ footer {
         <h3>One rule for a missing <code>--project</code>, not three</h3>
         <dl class="ba">
           <div class="before"><dt>0.x</dt><dd>What a command did without <code>--project</code> depended on the command. 172 commands stopped with an error, 25 used your active project, and 19 worked on every registered project, for example <code>config list</code> and <code>job list</code>. <span class="risk">One of the 19 was <code>workspace gc</code>: without <code>--project</code> it deleted unused workspaces in every registered project.</span></dd></div>
-          <div class="after"><dt>1.0</dt><dd>No command works on every project unless you add <code>--all-projects</code>. The 18 read commands now use your active project, like the 25 others, and <code>workspace gc</code> stops until you give <code>--project</code> or <code>--all-projects</code>:
+          <div class="after"><dt>1.0</dt><dd>Every command uses your active project when you leave out <code>--project</code>. Only <code>--all-projects</code> works on every project:
             <div class="tiles">
               <div class="tile t-good"><b>19 → 0</b><span>commands that work on every project without being asked</span></div>
-              <div class="tile t-flag"><b>25 → 43</b><span>commands that use your active project</span></div>
-              <div class="tile t-stop"><b>172 → 173</b><span>commands that stop and ask for <code>--project</code></span></div>
+              <div class="tile t-flag"><b>25 → 223</b><span>commands that use your active project</span></div>
+              <div class="tile t-good"><b>172 → 0</b><span>commands that stop and ask for <code>--project</code></span></div>
             </div>
-            <p class="source">Counts from kbagent 0.99. Of the 19, the 18 read commands moved to the active project, and <code>workspace gc</code> moved to the commands that ask (since 0.100, see below).</p>
+            <p class="source">Counts from kbagent 0.99 and 1.0. Commands that delete still ask first. Three commands use <code>--project</code> for something else: <code>init</code>, <code>lineage show</code> and <code>agent prompt-improve</code>.</p>
           </dd></div>
         </dl>
-        <p class="todo"><b>What to do:</b> add <code>--project</code> or <code>--all-projects</code> to the 18 read commands. Both already work on 0.100.</p>
+        <p class="todo"><b>What to do:</b> choose your project once with <code>kbagent project use</code>. In scripts and agents, give <code>--project</code> on every command, because all your terminals and sessions share the active project. On the 18 read commands, <code>--project</code> and <code>--all-projects</code> already work on 0.100.</p>
       </article>
 
       <article class="card">
@@ -552,7 +552,7 @@ footer {
     </div>
 
     <ul class="same" aria-label="What stays the same">
-      <li>No command or long option removed or renamed</li>
+      <li>No command removed or renamed, no long option removed</li>
       <li>No JSON field removed or renamed</li>
       <li>No new exit codes (still 0 to 7 and 130)</li>
       <li>Python SDK unchanged</li>
@@ -651,17 +651,17 @@ footer {
 
       <div class="group" data-group="high"><span class="gname">Changes which project, branch or data a command uses</span><span class="gdesc">Check these first. Without a change, a script can work on other data than before, or stop.</span></div>
       <details class="item" id="default-project" data-group="high" data-who="scripts agents terminal">
-        <summary><span class="title">Read commands use your active project by default</span><span class="area">Project and branch</span><span class="who-cell hide-narrow">Scripts and CI, AI agents, terminal users</span></summary>
+        <summary><span class="title">Every command uses your active project by default</span><span class="area">Project and branch</span><span class="who-cell hide-narrow">Scripts and CI, AI agents, terminal users</span></summary>
         <div class="body">
-          <div class="before"><span class="tag">0.x</span>18 read commands, for example <code>config list</code>, <code>job list</code>, <code>storage buckets</code> and <code>search</code>, read all registered projects when you did not name one. 25 other commands used your active project.</div>
-          <div class="after"><span class="tag">1.0</span>They read one project: <code>--project</code>, else <code>KBAGENT_PROJECT</code>, else the one from <code>kbagent project use</code>, else your only project. <code>--all-projects</code> reads all.</div>
-          <p class="do"><b>What to do:</b> add <code>--project</code> or <code>--all-projects</code>. Both work on 0.100.</p>
+          <div class="before"><span class="tag">0.x</span>18 read commands, for example <code>config list</code>, <code>job list</code>, <code>storage buckets</code> and <code>search</code>, read all registered projects when you did not name one. 172 commands stopped with an error, and 25 used your active project.</div>
+          <div class="after"><span class="tag">1.0</span>Every command uses one project: <code>--project</code>, else <code>KBAGENT_PROJECT</code>, else the one from <code>kbagent project use</code>, else your only project. <code>--all-projects</code> works on all. Commands that delete still ask first.</div>
+          <p class="do"><b>What to do:</b> on the 18 read commands, add <code>--project</code> or <code>--all-projects</code>. Both work on 0.100. In scripts and agents, give <code>--project</code> on every command.</p>
         </div>
       </details>
       <details class="item" id="serve-project" data-group="high" data-who="serve">
-        <summary><span class="title">List routes use your active project</span><span class="area">kbagent serve</span><span class="who-cell hide-narrow">kbagent serve clients</span></summary>
+        <summary><span class="title">List routes, token refresh and workspace clean-up use your active project</span><span class="area">kbagent serve</span><span class="who-cell hide-narrow">kbagent serve clients</span></summary>
         <div class="body">
-          <div class="before"><span class="tag">0.x</span>A request without <code>project</code> read all projects.</div>
+          <div class="before"><span class="tag">0.x</span>A list request without <code>project</code> read all projects. <span class="risk"><code>POST /org/refresh</code> with an empty body replaced the tokens of all projects.</span> <code>POST /workspaces/gc</code> without <code>project</code> was refused.</div>
           <div class="after"><span class="tag">1.0</span>The active project, as on the command line. <code>all_projects=true</code> reads all.</div>
           <p class="do"><b>What to do:</b> send <code>project</code> or <code>all_projects=true</code>.</p>
         </div>
@@ -712,6 +712,22 @@ footer {
           <div class="before"><span class="tag">0.x</span><span class="risk">Both deleted at once, with no question, no <code>--yes</code> and no <code>--dry-run</code>.</span></div>
           <div class="after"><span class="tag">1.0</span>Both ask in a terminal, and take <code>--yes</code> and <code>--dry-run</code>.</div>
           <p class="do"><b>What to do:</b> in scripts, add <code>--yes</code> or use <code>--json</code>.</p>
+        </div>
+      </details>
+      <details class="item" id="remove-asks" data-group="high" data-who="scripts terminal">
+        <summary><span class="title"><code>project remove</code> asks first</span><span class="area">Confirmations</span><span class="who-cell hide-narrow">Scripts and CI, terminal users</span></summary>
+        <div class="body">
+          <div class="before"><span class="tag">0.x</span><span class="risk">It removed the project and its stored token at once, with no question and no <code>--dry-run</code>.</span></div>
+          <div class="after"><span class="tag">1.0</span>It asks in a terminal, and takes <code>--yes</code> and <code>--dry-run</code>. Without a terminal it stops with <code>CONFIRMATION_REQUIRED</code> unless you give <code>--yes</code> or <code>--json</code>.</div>
+          <p class="do"><b>What to do:</b> in scripts, add <code>--yes</code> or use <code>--json</code>.</p>
+        </div>
+      </details>
+      <details class="item" id="flow-schema-project" data-group="high" data-who="scripts agents">
+        <summary><span class="title"><code>flow schema --full</code> and <code>flow validate</code> use your active project</span><span class="area">Project and branch</span><span class="who-cell hide-narrow">Scripts and CI, AI agents</span></summary>
+        <div class="body">
+          <div class="before"><span class="tag">0.x</span>Without <code>--project</code>, they used the flow schema bundled with kbagent.</div>
+          <div class="after"><span class="tag">1.0</span>They download the current schema of your active project. With no project registered, they use the bundled schema as before. When the download fails, <code>flow schema --full</code> ends with an error and <code>flow validate</code> runs only its basic checks.</div>
+          <p class="do"><b>What to do:</b> nothing, unless a CI job has a registered project but no access to its stack.</p>
         </div>
       </details>
       <details class="item" id="short-flags-removed" data-group="high" data-who="scripts agents terminal">
@@ -779,6 +795,14 @@ footer {
           <p class="do"><b>What to do:</b> nothing for complete commands.</p>
         </div>
       </details>
+      <details class="item" id="branch-one-project" data-group="errors" data-who="scripts agents">
+        <summary><span class="title"><code>--branch</code> with several projects has one error code</span><span class="area">Errors</span><span class="who-cell hide-narrow">Scripts and CI, AI agents</span></summary>
+        <div class="body">
+          <div class="before"><span class="tag">0.x</span><code>sync pull</code>, <code>sync diff</code> and <code>sync push</code> with <code>--all-projects</code> and <code>--branch</code> gave <code>USAGE_ERROR</code>, the other commands <code>INVALID_ARGUMENT</code>.</div>
+          <div class="after"><span class="tag">1.0</span><code>INVALID_ARGUMENT</code> everywhere. The exit code stays 2.</div>
+          <p class="do"><b>What to do:</b> check scripts that look for <code>USAGE_ERROR</code> here.</p>
+        </div>
+      </details>
       <details class="item" id="serve-status" data-group="errors" data-who="serve">
         <summary><span class="title">HTTP status codes follow the error</span><span class="area">kbagent serve</span><span class="who-cell hide-narrow">kbagent serve clients</span></summary>
         <div class="body">
@@ -840,7 +864,38 @@ footer {
         </div>
       </details>
 
+      <details class="item" id="alias-option" data-group="deprecated" data-who="scripts agents terminal">
+        <summary><span class="title"><code>project add --project</code> becomes <code>--alias</code></span><span class="area">Options and input</span><span class="who-cell hide-narrow">Scripts and CI, AI agents, terminal users</span></summary>
+        <div class="body">
+          <div class="before"><span class="tag">0.x</span><code>project add</code> and <code>project create</code> took the name of the new project as <code>--project</code>, which names an existing project everywhere else.</div>
+          <div class="after"><span class="tag">1.0</span><code>--alias</code>. <code>--project</code> works with a warning.</div>
+          <p class="do"><b>What to do:</b> use <code>--alias</code> once you run 1.0.</p>
+        </div>
+      </details>
+      <details class="item" id="all-projects-refresh" data-group="deprecated" data-who="scripts serve">
+        <summary><span class="title"><code>project refresh --all</code> becomes <code>--all-projects</code></span><span class="area">Options and input</span><span class="who-cell hide-narrow">Scripts and CI, kbagent serve clients</span></summary>
+        <div class="body">
+          <div class="before"><span class="tag">0.x</span><code>project refresh --all</code>, and <code>refresh_all</code> in <code>POST /org/refresh</code>.</div>
+          <div class="after"><span class="tag">1.0</span><code>--all-projects</code> and <code>all_projects</code>, as everywhere else. The old names work with a warning.</div>
+          <p class="do"><b>What to do:</b> change the option once you run 1.0.</p>
+        </div>
+      </details>
+
       <div class="group" data-group="new"><span class="gname">New, nothing to change</span><span class="gdesc">Additions. Everything that worked before still works.</span></div>
+      <details class="item" id="admin-warning" data-group="new" data-who="agents scripts">
+        <summary><span class="title">A warning when a project setting changes in your active project</span><span class="area">JSON output</span><span class="who-cell hide-narrow">AI agents, Scripts and CI</span></summary>
+        <div class="body">
+          <div class="after only"><span class="tag">1.0</span>Commands that change project settings, such as <code>project edit</code> and <code>project remove</code>, add the same warning as deletes when the project comes from <code>project use</code>.</div>
+          <p class="do"><b>What to do:</b> nothing. Give <code>--project</code> to make the target explicit.</p>
+        </div>
+      </details>
+      <details class="item" id="member-dry-run" data-group="new" data-who="scripts agents">
+        <summary><span class="title"><code>--dry-run</code> on <code>project member-set-role</code> and <code>project invitation-cancel</code></span><span class="area">Options and input</span><span class="who-cell hide-narrow">Scripts and CI, AI agents</span></summary>
+        <div class="body">
+          <div class="after only"><span class="tag">1.0</span>Both show the member or invitation they would change, and change nothing.</div>
+          <p class="do"><b>What to do:</b> nothing.</p>
+        </div>
+      </details>
       <details class="item" id="flags-anywhere" data-group="new" data-who="scripts agents terminal">
         <summary><span class="title"><code>--json</code> works after the command, <code>-h</code> shows help</span><span class="area">Options and input</span><span class="who-cell hide-narrow">Everyone</span></summary>
         <div class="body">
@@ -860,7 +915,7 @@ footer {
       <details class="item" id="json-fields" data-group="new" data-who="scripts agents">
         <summary><span class="title">New fields in the JSON output</span><span class="area">JSON output</span><span class="who-cell hide-narrow">Scripts and CI, AI agents</span></summary>
         <div class="body">
-          <div class="after only"><span class="tag">1.0 adds</span><code>exit_code</code>, <code>schema_version</code>, where the project came from (<code>project_source</code>), a warning when a destructive command uses a project or branch saved with <code>project use</code> or <code>branch use</code>, and the error code of each failed item. Nothing is removed or renamed.</div>
+          <div class="after only"><span class="tag">1.0 adds</span><code>exit_code</code>, <code>schema_version</code>, where the project came from (<code>project_source</code>), a warning when a destructive or admin command uses a project or branch saved with <code>project use</code> or <code>branch use</code>, and the error code of each failed item. Nothing is removed or renamed.</div>
         </div>
       </details>
       <details class="item" id="serve-headers" data-group="new" data-who="serve">
