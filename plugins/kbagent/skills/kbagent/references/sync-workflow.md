@@ -207,7 +207,7 @@ now-real id are naturally idempotent.
 If a placeholder entry's `metadata` dict contains `KBC.configuration.*`
 keys, they are propagated to the metadata API immediately after the create
 call. The folder key `KBC.configuration.folderName` is the exception: since
-vNEXT it is sent on the create call as the configuration's `folder` field and
+1.0.0rc2 it is sent on the create call as the configuration's `folder` field and
 never written to the metadata API. This was the previous "set the folder via
 `config set-folder` after push" workaround for fresh-create flows; from
 v0.47.0 a single push handles it.

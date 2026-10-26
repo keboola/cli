@@ -29,7 +29,7 @@ From the release of kbagent 1.0.0 until its migration date (28 days later), the 
 
 ## One short flag per long option
 
-*(since vNEXT)* (#791, spec A2)
+*(since 1.0.0rc2)* (#791, spec A2)
 
 - **Every option with a long name in the short-flag table has its short flag**: `-p` `--project` (on all 228, before on 24), `-n` `--name`, `-t` `--type`, `-L` `--limit`, `-o` `--output`, `-e` `--email`, `-d` `--directory`, `-y` `--yes` and the others in `docs/cli-interface-spec.md` A2. A long name that is not in the table has no short flag.
 - **Removed short flags** (a usage error, exit 2): `-c` (`permissions list --category`, `lineage show --column`), `-r` (`search` and `config search --regex`, `project invite` and `project member-set-role --role`), `-d` on `http post/patch --body`, `permissions set --deny` and `token create --description`, `-f` on `lineage show --format`, `-l` on `search --limit` and `-n` on `changelog` and `kai history --limit` (use `-L`), `-m` on `permissions set --mode`, and `-v` on `changelog --full` (`-v` is the global `--verbose`).
@@ -37,7 +37,7 @@ From the release of kbagent 1.0.0 until its migration date (28 days later), the 
 
 ## `kbagent context <group>` prints one group
 
-*(since vNEXT)* (CLI-52, #791)
+*(since 1.0.0rc2)* (CLI-52, #791)
 
 - **`kbagent --json context storage`** prints only the `storage` section: the commands with their options and the first paragraph of their help, then the notes for the group. A top-level command (`search`, `serve`) or a hidden alias (`mr`, `sl`) works too. `data.group` names the section, or is null without an argument. `data.context` holds the text as before.
 - **An unknown group** is `INVALID_ARGUMENT` (exit 2), and the message lists the valid groups.
@@ -45,7 +45,7 @@ From the release of kbagent 1.0.0 until its migration date (28 days later), the 
 
 ## Config folder is the configuration's `folder` field, not the `KBC.configuration.folderName` metadata key
 
-*(since vNEXT)* (DMD-2348)
+*(since 1.0.0rc2)* (DMD-2348)
 
 - **`config set-folder`** (and `POST /configs/{project}/{component_id}/{config_id}/folder`
   over `kbagent serve`) writes the configuration's `folder` field with a config PUT. The
@@ -83,7 +83,7 @@ From the release of kbagent 1.0.0 until its migration date (28 days later), the 
 
 ## One JSON document for every exit, root flags after the subcommand, `-h`, repeated options
 
-*(since vNEXT)* (CLI-44, #791)
+*(since 1.0.0rc2)* (CLI-44, #791)
 
 - **The `--json` envelope has `schema_version` and, on success, `exit_code`.** Success: `{"status": "ok", "schema_version": "1.0", "exit_code": N, "targets"?, "warnings"?, "data"}`. Error: `{"status": "error", "schema_version": "1.0", "targets"?, "warnings"?, "error"}`, with no `exit_code`. `exit_code` equals the process exit code. `status: "ok"` with a non-zero `exit_code` is a negative answer (`flow validate`, `auth status`, `permissions check`, `data-app validate-repo`) or a failed item of a command that processes several items.
 - **stdout holds one JSON document for every exit code under `--json`.** A malformed command line (unknown option, missing required option) and a bare group (`kbagent --json storage`) give `USAGE_ERROR`, exit 2. A bad option value (wrong type, a value not in the allowed list, a value the command refuses) gives `INVALID_ARGUMENT`, exit 2, naming the option. A crash gives `INTERNAL_ERROR`, exit 1, with the traceback on stderr. Ctrl+C gives `INTERRUPTED` (exit 130). A crash after the success envelope is written leaves that envelope as the only document. A `--stream` command (`agent run --stream`, `agent test --stream`) keeps stdout NDJSON: an interrupt or crash after its first line adds one line `{"event": "error", "data": {"code": "INTERRUPTED"|"INTERNAL_ERROR", "message"}}`. Before, stdout was empty or held help text.
@@ -94,7 +94,7 @@ From the release of kbagent 1.0.0 until its migration date (28 days later), the 
 
 ## `auth login` notices on stderr, `--no-open`, one headline for multi-item commands, environment variables in `--help`
 
-*(since vNEXT)* (CLI-50, #791)
+*(since 1.0.0rc2)* (CLI-50, #791)
 
 - **`auth login` prints its notices on stderr in every mode.** The device-login panel (verification URL and user code), the wait and fallback notices, the `auth register-projects` hint and the picker question go to stderr. The login result stays on stdout. Before, human mode printed the notices on stdout. Capture `2>&1` when you relay the URL and code.
 - **`auth login --no-open`** uses the device-code flow and opens nothing; the result has `method: "device"` and `fallback_reason: "--no-open is set."`. Without it, `auth login` opens the browser as before, also under `--json` and without a terminal (an exception to the rule that a command opens no browser there). A foreground `--json auth login` blocks until the user approves in the browser (or on the device page with `--no-open`), so run it in a background shell and check `kbagent --json auth status`.
@@ -104,7 +104,7 @@ From the release of kbagent 1.0.0 until its migration date (28 days later), the 
 
 ## A confirmation without a terminal refuses, and `branch delete` and `workspace delete` ask
 
-*(since vNEXT)* (CLI-46, #791)
+*(since 1.0.0rc2)* (CLI-46, #791)
 
 - **Human mode without a terminal: a confirmation refuses unless `--yes`.** A command that asks before it changes something (the deletes, `token delete/refresh`, `job terminate`, `merge-request merge`, `auth logout`, `org setup`, `project refresh`, ...) now exits 2 with `CONFIRMATION_REQUIRED` when stdin or stderr is not a terminal and `--yes` is not given. The message names `--yes` and says "AI agents: ask the user before you retry with --yes." Before, the prompt read its answer from stdin, so a harness with an open stdin pipe (or `echo y |`) could answer it. Nothing changes under `--json`: `--json` is consent and there is no prompt. On a terminal the prompt now goes to stderr. A declined prompt still prints `Aborted.` and exits 0.
 - **Exceptions that keep their own prompt.** The non-safety questions of `init` (copy the global projects) and of the `auth login` / `auth register-projects` project picker. The guards of `semantic-layer add metric` (a dataset that is not in the model) and `semantic-layer edit metric` (a rename that changes constraints) are in the service: without a terminal they refuse with `VALIDATION_ERROR` (exit 2) unless `--yes`, and on a terminal they ask also under `--json`.
@@ -116,29 +116,29 @@ From the release of kbagent 1.0.0 until its migration date (28 days later), the 
 
 ## The fan-out reads use the active project, exit 1 when a project failed, and `targets` names the project source
 
-*(since vNEXT)* (CLI-45, #791)
+*(since 1.0.0rc2)* (CLI-45, #791)
 
 - **An omitted `--project` on the 18 fan-out reads uses the active project**, like every other command: `KBAGENT_PROJECT`, then `project use`, then the only registered project. With several projects and none of these, the read exits 5 with `CONFIG_ERROR` that names `--project`, `KBAGENT_PROJECT` and `project use`. The reads: `search`, `billing credits`, `component list`, `config list`, `config search`, `data-app list`, `job list`, `storage buckets`, `storage tables`, `sharing list`, `sharing edges`, `flow list`, `schedule list`, `schedule find`, `notification list`, `branch list`, `workspace list`, `project status`. Before, an omitted `--project` read all registered projects.
 - **All projects need `--all-projects`** (since 0.100.0). Write it in scripts and agent calls that want every project: it works on 0.100.0 and later. `--branch` with `--all-projects` is still `INVALID_ARGUMENT` (exit 2). `--branch` without `--project` now works when the active project resolves, because the read targets one project.
 - **A fan-out read exits 1 when a project failed**, after the full payload. The failure stays in `data.errors` (`project status`: a row with `status: "error"`), and the envelope has `exit_code: 1`. `PAYG_NOT_AVAILABLE` in `billing credits` is an answer, not a failure (exit 0). With no registered project the read exits 5 (`CONFIG_ERROR`), also with `--all-projects`. Before, these reads exited 0 and the failure was only in `data.errors`.
 - **Every record in `targets` has `project_source`**, next to `branch_source`: `explicit`, `env` (`KBAGENT_PROJECT`), `active_project` (`project use`), `sole` (the only registered project) or `all` (`--all-projects`). `explicit` means that the command line named the project: `--project`, or another project option such as `config clone --target-project`, `sync clone --target` or the `semantic-layer promote/diff` project options. Treat an unknown value like `active_project`. A project for which the command chose no branch gets one record with `branch_source: "none"` and `branch_id: null`.
 - **`project_source: null`** means that the command found the project in none of these ways (no project option, no `KBAGENT_PROJECT`, `project use` or sole-project fallback, no `--all-projects`). Every command with a `--project` option reports `explicit` when the option is given, and a command without `--project` that uses the chain reports the chain source. Treat null as unknown, like `active_project`.
-- **A destructive command under `--json` whose project or branch is the saved active choice adds a warning** (*(updated vNEXT)* an admin command too, for example `project edit` or `project remove`) `{"code": "TARGET_FROM_ACTIVE_CHOICE", "message", "hint"}` to the top-level `warnings[]`. The hint is the explicit flag (`--project prod`, `--branch 456`). The command still runs: `--json` is consent. Read and write commands, human mode and explicit flags give no such warning.
-- *(updated vNEXT -- CLI-49)* **The `kbagent serve` list routes follow the same rule.** `GET /configs`, `GET /jobs` and the other list routes without `project` read the active project. `all_projects=true` reads all registered projects. A route in which a project failed still answers HTTP 200 with the failure in `errors`.
-- *(updated vNEXT -- #791, spec T17)* **`POST /org/refresh` and `POST /workspaces/gc` follow it too.** Without a project (`aliases`, `project`) they use the active project. Before, `POST /org/refresh` with an empty body refreshed the tokens of all projects, and `POST /workspaces/gc` refused with HTTP 400. All projects need `all_projects=true`. The body field `refresh_all` is the deprecated name of `all_projects`, and `project refresh --all` the deprecated name of `--all-projects`.
-- *(updated vNEXT -- #791, spec T17)* **No command requires `--project`; without it, every command uses the active project, writes and deletes too.** Before, 171 commands required `--project` and exited 2 without it (for example `job detail`, `config update`, `storage delete-table`, `sync init`), and `sync pull/diff/push`, `workspace gc`, `project refresh`, `config detail`, `config new --push` and the single-shot `project invite` asked for it. A destructive command still asks on a terminal, and so does `project remove`, which also got `--yes` and `--dry-run` (use `kbagent --json project remove --project P`, which works on 0.x too). Under `--json`, a destructive or admin command adds the `TARGET_FROM_ACTIVE_CHOICE` warning. `workspace gc` and `sync pull/diff/push` without `--project` and `--all-projects` work on the active project only. `sync init` binds the directory to the active project and names it in its output. `project add` and `project create` take the new alias as `--alias`; `--project` still works there with a `DEPRECATED` warning, and it is the form that also works on 0.x. `flow schema --full` and `flow validate` use the live schema of the active project; when no project is registered or chosen they work offline (the bundled schema, semantic checks only). With a registered project a failed fetch (expired token, no network) is an error for `flow schema --full`; `flow validate` falls back to the semantic checks with a note. Exceptions, where `--project` names no target project: `init`, `agent prompt-improve` and `lineage show`. Options that name a second project keep their own rules: `sync clone --target` and the project options of `semantic-layer promote` are required, `config clone --target-project` defaults to the source project, and `semantic-layer diff` takes a project or a file for each side. kbagent checks the other options first, so a missing required option is still `USAGE_ERROR` (exit 2). When no project resolves, the command exits 5 with `CONFIG_ERROR`. Agents still pass `--project` on every command (rule above).
+- **A destructive command under `--json` whose project or branch is the saved active choice adds a warning** (*(updated 1.0.0rc2)* an admin command too, for example `project edit` or `project remove`) `{"code": "TARGET_FROM_ACTIVE_CHOICE", "message", "hint"}` to the top-level `warnings[]`. The hint is the explicit flag (`--project prod`, `--branch 456`). The command still runs: `--json` is consent. Read and write commands, human mode and explicit flags give no such warning.
+- *(updated 1.0.0rc2 -- CLI-49)* **The `kbagent serve` list routes follow the same rule.** `GET /configs`, `GET /jobs` and the other list routes without `project` read the active project. `all_projects=true` reads all registered projects. A route in which a project failed still answers HTTP 200 with the failure in `errors`.
+- *(updated 1.0.0rc2 -- #791, spec T17)* **`POST /org/refresh` and `POST /workspaces/gc` follow it too.** Without a project (`aliases`, `project`) they use the active project. Before, `POST /org/refresh` with an empty body refreshed the tokens of all projects, and `POST /workspaces/gc` refused with HTTP 400. All projects need `all_projects=true`. The body field `refresh_all` is the deprecated name of `all_projects`, and `project refresh --all` the deprecated name of `--all-projects`.
+- *(updated 1.0.0rc2 -- #791, spec T17)* **No command requires `--project`; without it, every command uses the active project, writes and deletes too.** Before, 171 commands required `--project` and exited 2 without it (for example `job detail`, `config update`, `storage delete-table`, `sync init`), and `sync pull/diff/push`, `workspace gc`, `project refresh`, `config detail`, `config new --push` and the single-shot `project invite` asked for it. A destructive command still asks on a terminal, and so does `project remove`, which also got `--yes` and `--dry-run` (use `kbagent --json project remove --project P`, which works on 0.x too). Under `--json`, a destructive or admin command adds the `TARGET_FROM_ACTIVE_CHOICE` warning. `workspace gc` and `sync pull/diff/push` without `--project` and `--all-projects` work on the active project only. `sync init` binds the directory to the active project and names it in its output. `project add` and `project create` take the new alias as `--alias`; `--project` still works there with a `DEPRECATED` warning, and it is the form that also works on 0.x. `flow schema --full` and `flow validate` use the live schema of the active project; when no project is registered or chosen they work offline (the bundled schema, semantic checks only). With a registered project a failed fetch (expired token, no network) is an error for `flow schema --full`; `flow validate` falls back to the semantic checks with a note. Exceptions, where `--project` names no target project: `init`, `agent prompt-improve` and `lineage show`. Options that name a second project keep their own rules: `sync clone --target` and the project options of `semantic-layer promote` are required, `config clone --target-project` defaults to the source project, and `semantic-layer diff` takes a project or a file for each side. kbagent checks the other options first, so a missing required option is still `USAGE_ERROR` (exit 2). When no project resolves, the command exits 5 with `CONFIG_ERROR`. Agents still pass `--project` on every command (rule above).
 - **"Active" is the one name for the saved choice.** `project use` prints `Active project: <alias>` (before: `Pinned: default project is <alias>`). The help texts, messages and REST summaries say "active project" and "active branch". The `--json` keys of `project current` (`pinned`, `source: "pin"`) and the `config.json` fields (`default_project`, `active_branch_id`) keep their names.
 
 ## `kbagent serve`: the active branch, `Kbagent-Targets`, the CLI error fields, `PATCH` for partial updates
 
-*(since vNEXT)* (CLI-49, #791)
+*(since 1.0.0rc2)* (CLI-49, #791)
 
 - **26 routes use the active branch when `branch_id` is omitted**, as their CLI commands do: the storage writes and `GET /storage/table-download/...`, `POST /jobs/{project}/run` and `/terminate` (filter form), the three `/transformations` routes, the `/configs/.../variables` routes and `POST /components/{component_id}/actions/{action}`. Before, they used production. Send `branch_id: 0` for production. The storage reads (`GET /storage/buckets`, `/tables`, `/table-detail/...`, `/files`, `/snapshots/...`) still read production.
 - **A response carries the `Kbagent-Targets` header** (the `targets` record of the request, JSON) and the `Kbagent-Warnings` header (JSON list of `{code, message, ...}`), each only when not empty. An error body has the same lists as `targets` and `warnings` keys. `kbagent http` prints only the body, so it does not show the headers.
 - **The REST `error` object has the CLI error fields:** `code`, `error_type`, `message`, `project`, `retryable`, `details`. The HTTP status follows `error_type`: `validation` and `configuration` 400, `authentication` 401, `authorization` 403, `not_found` 404, `conflict` 409, `api` and `network` 502 (400 for an `api` code that exits 2). Before, most codes answered 502 (for example `VALIDATION_ERROR`, `INVALID_TOKEN`, `FILE_NOT_FOUND`). Branch on `error.code`.
 - **`POST /projects/use/{alias}`, `POST /branches/{project}/use` and `/reset` change the saved choice for every CLI call** of the same configuration directory. The responses add `active_project_set`, `active_branch_set` or `active_branch_cleared` and a `Kbagent-Warnings` entry `ACTIVE_CHOICE_SHARED` with `config_dir`.
 - **A list route without `project` reads the active project**, as the CLI does: `GET /configs`, `/jobs`, `/storage/buckets`, `/storage/tables`, `/flows`, `/schedules`, `/data-apps`, `/workspaces`, `/branches`, `/components`, `/sharing`, `/notifications`, `/billing/credits`, `/search`, `/projects/status`, `/token/list` and the other routes that read several projects. Send `all_projects=true` for all projects. Before, an omitted `project` read all registered projects. With nothing to resolve the route answers HTTP 400 `CONFIG_ERROR`.
-- **A destructive route on the active branch adds `TARGET_FROM_ACTIVE_CHOICE`** to `Kbagent-Warnings` (hint `branch_id=<id>`), as a destructive CLI command under `--json` does (*(updated vNEXT)* an admin route too). Send `branch_id` to make the branch explicit. The route still runs.
+- **A destructive route on the active branch adds `TARGET_FROM_ACTIVE_CHOICE`** to `Kbagent-Warnings` (hint `branch_id=<id>`), as a destructive CLI command under `--json` does (*(updated 1.0.0rc2)* an admin route too). Send `branch_id` to make the branch explicit. The route still runs.
 - **Partial updates use `PATCH`:** `/semantic-layer/items/{kind}/{name}`, `/merge-requests/{project}/{merge_request_id}`, `/data-apps/{project}/{app_id}/secrets`, and the merge of `/configs/{project}/{component_id}/{config_id}/variables`. A `PATCH` body refuses an undeclared field (HTTP 422). The old `PUT` still works and adds a `DEPRECATED` entry (`replacement`, `remove_after: null`) to `Kbagent-Warnings`. `PUT .../variables` with `replace: true` is the full replace and gives no warning. Without it, it merges with the warning.
 
 ## `--branch 0` is production in `job terminate`, `swap-tables`, `clone-table` and `create-table --source-branch-id`
@@ -153,7 +153,7 @@ From the release of kbagent 1.0.0 until its migration date (28 days later), the 
 
 ## List options repeat, `@<file>` in free text is refused, a bad input value is `INVALID_ARGUMENT`
 
-*(since vNEXT)* (CLI-48, #791)
+*(since 1.0.0rc2)* (CLI-48, #791)
 
 - **Nine list options are repeatable and still take a comma list:** `org setup --project-ids`, `sharing share --target-project-ids` and `--target-users`, `semantic-layer add constraint --metrics`, `edit constraint --new-metrics`, `build --tables`, `import --types`, `promote --types` and `schema --type`. `--target-project-ids 11 --target-project-ids 22,33` shares with 11, 22 and 33. Before, the option kept only its last value (22,33). A value given twice is used once. `sharing share` adds `target_project_ids` or `target_users` to `data`.
 - **`--text` of `project description-set`, `storage describe-bucket`, `storage describe-table` and `branch metadata-set`, and `transformation create --sql`, refuse `@` followed by the path of an existing file** (a relative path is relative to the current directory): `INVALID_ARGUMENT`, exit 2, and the message names the file option (`--file`, `--sql-file`). Before, kbagent stored the text `@notes.md`. Pass the file with the file option. To store text that starts with `@` while a file of that name exists, write the text to a file and pass that file with the file option. `@` followed by anything that is not a file is still stored as text. Only these 5 options refuse `@<file>`; every other free-text option (`--description`, `--change-description`, `--prompt`, ...) still stores it as text.
@@ -177,7 +177,7 @@ From the release of kbagent 1.0.0 until its migration date (28 days later), the 
 
 ## The 1.x updater, and the first write after a major update
 
-*(since vNEXT)* (CLI-51, #791)
+*(since 1.0.0rc2)* (CLI-51, #791)
 
 - **A 1.x client reads the release list filtered by its own major.** Until M, `/releases/latest` names the newest 0.x release. When it names a lower major than the running one, the updater reads the first page of `/releases?per_page=100` and takes the highest stable release of the running major. Without `--beta` it never takes a pre-release: a 1.x pre-release client without `--beta` stays where it is until a stable 1.x release exists. With `--beta` it finds newer 1.x pre-releases and stable 1.x releases. A 0.x client still reads only `/releases/latest`.
 - **Own version cache per major.** A 1.x client keeps its version check in `version_cache_v1.json` (major N: `version_cache_v<N>.json`). 0.x keeps `version_cache.json`. A 0.x client older than 0.100.0 never reads a 1.x version there and installs it.
@@ -203,8 +203,8 @@ From the release of kbagent 1.0.0 until its migration date (28 days later), the 
 
 - **18 reads accept `--all-projects`:** `search`, `billing credits`, `component list`, `config list`, `config search`, `data-app list`, `job list`, `storage buckets`, `storage tables`, `sharing list`, `sharing edges`, `flow list`, `schedule list`, `schedule find`, `notification list`, `branch list`, `workspace list`, `project status`. On this version it does the same as an omitted `--project`: the same service call and the same output. `component list --query` uses the default project when `--project` is omitted, so with `--all-projects` it does too, and adds a warning that `--all-projects` has no effect there.
 - **Why it exists:** from 1.0.0 an omitted `--project` on these reads reads only the active project (`KBAGENT_PROJECT`, then `project use`, then the sole project), and all projects need `--all-projects`. A script that writes `--all-projects` now works unchanged on 1.0.0. On an older kbagent the option does not exist (exit 2).
-  - *(updated vNEXT -- CLI-45)* The 1.x line does this now: see "The fan-out reads use the active project" above.
-- **`--all-projects` together with `--project` is `USAGE_ERROR`, exit 2** ("Cannot use --project with --all-projects"), as in `workspace gc`. `config detail` has no `--all-projects`: it requires `--project` (*(since vNEXT)* without it, the active project). The `kbagent serve` routes of these reads do not change: they take no `all_projects` parameter.
+  - *(updated 1.0.0rc2 -- CLI-45)* The 1.x line does this now: see "The fan-out reads use the active project" above.
+- **`--all-projects` together with `--project` is `USAGE_ERROR`, exit 2** ("Cannot use --project with --all-projects"), as in `workspace gc`. `config detail` has no `--all-projects`: it requires `--project` (*(since 1.0.0rc2)* without it, the active project). The `kbagent serve` routes of these reads do not change: they take no `all_projects` parameter.
 - **The `--json` envelope has an optional top-level `warnings` key**, a list of entries with `code` and `message` (`code` is `WARNING` today); an entry can also carry `hint` and further fields, so read the keys you know and ignore the rest. It is in the success envelope (`status`, `targets`, `warnings`, `data`) and in the error envelope (`status`, `targets`, `warnings`, `error`), and only when a command gave a warning; without one the key is absent. Before, a warning in `--json` mode was dropped. Human mode is unchanged: warnings go to stderr.
 - **A warning after the envelope is written is dropped**, so stdout stays one JSON document. Some commands warn only after their output (for example the `merge-request` group); their warnings stay in `data.warnings`.
 - **Top-level `warnings` is not `data.warnings`.** Some commands return their own `warnings` inside `data` (`data-app deploy`, `sync clone`, `sync push`, `merge-request`, `flow new/update`, `project edit`, `lineage show`). That key is part of the command result and does not change. The top-level key is set by the output layer and has the same entry shape for every command. A command can fill both, or only one of them: read both.
@@ -376,7 +376,7 @@ From the release of kbagent 1.0.0 until its migration date (28 days later), the 
   fail) and puts the ambiguity message in the new `env_error` field.
 - **Not translated where `--project` is no registry lookup.** `project add
   --project` and `project create --project` take the value as the new alias
-  (*(since vNEXT)* the option is `--alias`, and `--project` is its deprecated
+  (*(since 1.0.0rc2)* the option is `--alias`, and `--project` is its deprecated
   name); `lineage show --project` filters the aliases inside an offline graph
   file.
 - **`project invite --from-csv` changed:** a `project` column value now
@@ -832,7 +832,7 @@ From the release of kbagent 1.0.0 until its migration date (28 days later), the 
   (`STACK_FEATURES__AGENT_PROVISIONING`), which is off on most stacks, so
   `kbagent project create --help` working tells you nothing about whether the
   stack will accept it. A stack without the feature answers 404, mapped to
-  `AUTH_NOT_SUPPORTED_ON_STACK` (exit 5 since vNEXT, exit 1 before); the message names the missing
+  `AUTH_NOT_SUPPORTED_ON_STACK` (exit 5 since 1.0.0rc2, exit 1 before); the message names the missing
   feature, the flag an operator flips to enable it, and how to connect an
   existing project instead. That is a stack capability, not a broken URL and
   not a credential problem -- do not retry it, do not go looking for a token,
@@ -1285,7 +1285,7 @@ Two follow-on contract notes:
 - **`KBC.configuration.*` metadata propagates on CREATE.** If a placeholder
   entry's `metadata` dict contains keys starting with `KBC.`, they are
   POSTed to the metadata API via `client.set_config_metadata` immediately
-  after the create call. (updated vNEXT) `KBC.configuration.folderName` is
+  after the create call. (updated 1.0.0rc2) `KBC.configuration.folderName` is
   sent as the create call's `folder` field instead, never to the metadata API.
   Bookkeeping keys (`pull_hash`, `pull_config_hash`, ...) are filtered
   out by the `KBC.` prefix check. `_push_update` does **not** propagate
@@ -1386,7 +1386,7 @@ stripping it, and reports `folder_lookup_failed: true` in the result. A `true`
 value means the folders were not refreshed this pull -- it separates "no folders
 configured" from "the lookup failed".
 
-- (updated vNEXT) Pull no longer makes the `search/component-configurations` call:
+- (updated 1.0.0rc2) Pull no longer makes the `search/component-configurations` call:
   the folder is the configuration's own `folder` field in the listing pull already
   reads, and push / clone send it on the create POST. `folder_lookup_failed: true`
   now means the listing carried no `folder` field. See "Config folder is the
@@ -2467,7 +2467,7 @@ response. Now:
   failed `--force-rerun`. An unknown outcome (a read timeout, a 5xx,
   exhausted retries, an expired login) keeps it, because the job may exist.
   A replay with the same key that
-  finds the pending entry exits 2 *(since vNEXT, exit 1 before)* with `INVALID_ARGUMENT` (HTTP 400 over
+  finds the pending entry exits 2 *(since 1.0.0rc2, exit 1 before)* with `INVALID_ARGUMENT` (HTTP 400 over
   `kbagent serve`) and creates nothing. Check with `kbagent job list
   --component-id C --config-id ID`. If no job started, run again with
   `--force-rerun`. `POST /jobs/{project}/run` now accepts `idempotency_key`
@@ -3313,7 +3313,7 @@ unknown -- do not try to parse a fallback message.
 | 7 | `JOB_TIMEOUT_TERMINATED` -- `job run --timeout` elapsed AND the remote job was successfully cancelled. Scripts can distinguish "we killed it" from "it failed on its own" (exit 1) from "it's still running" (exit 4). |
 | 130 | Interrupted (Ctrl-C) |
 
-Every error code has exactly one exit code and one `error.error_type` (since vNEXT). [docs/error-codes.md](https://github.com/keboola/cli/blob/main/docs/error-codes.md) lists them per code. Before vNEXT, an error code that reached `map_error_to_exit_code` without a dedicated mapping exited 1, so these codes exited 1 on some paths: `VALIDATION_ERROR`, `INVALID_ARGUMENT`, `INVALID_FORMAT`, `MISSING_PARAMETER`, `FILE_NOT_FOUND`, `DATA_APP_INVALID_SECRET` (now 2), `AUTH_MFA_INVALID` (now 3), `AUTH_NOT_SUPPORTED_ON_STACK` (now 5). Four command paths changed too: `transformation create` and `transformation edit` `VALIDATION_ERROR` (1, now 2), `lineage` `FILE_NOT_FOUND` for a missing cache file (1, now 2), `flow schema --full --project` (every failed fetch was `NOT_FOUND`, exit 4. Now a failed request keeps its own code, so a network failure is still exit 4, and only an answer without a usable schema is `NOT_FOUND`, exit 1), `http` `CONFIG_ERROR` (2, now 5; an invalid `--body` is now `INVALID_ARGUMENT`, still exit 2). `kai` and `semantic-layer` commands report the typed code of a configuration error (`AUTH_NOT_SUPPORTED_ON_STACK`, `FEATURE_NOT_ENABLED`) instead of `CONFIG_ERROR`, still exit 5.
+Every error code has exactly one exit code and one `error.error_type` (since 1.0.0rc2). [docs/error-codes.md](https://github.com/keboola/cli/blob/main/docs/error-codes.md) lists them per code. Before 1.0.0rc2, an error code that reached `map_error_to_exit_code` without a dedicated mapping exited 1, so these codes exited 1 on some paths: `VALIDATION_ERROR`, `INVALID_ARGUMENT`, `INVALID_FORMAT`, `MISSING_PARAMETER`, `FILE_NOT_FOUND`, `DATA_APP_INVALID_SECRET` (now 2), `AUTH_MFA_INVALID` (now 3), `AUTH_NOT_SUPPORTED_ON_STACK` (now 5). Four command paths changed too: `transformation create` and `transformation edit` `VALIDATION_ERROR` (1, now 2), `lineage` `FILE_NOT_FOUND` for a missing cache file (1, now 2), `flow schema --full --project` (every failed fetch was `NOT_FOUND`, exit 4. Now a failed request keeps its own code, so a network failure is still exit 4, and only an answer without a usable schema is `NOT_FOUND`, exit 1), `http` `CONFIG_ERROR` (2, now 5; an invalid `--body` is now `INVALID_ARGUMENT`, still exit 2). `kai` and `semantic-layer` commands report the typed code of a configuration error (`AUTH_NOT_SUPPORTED_ON_STACK`, `FEATURE_NOT_ENABLED`) instead of `CONFIG_ERROR`, still exit 5.
 
 ## `job run --wait` polling + log tail
 
@@ -4229,7 +4229,7 @@ CLI hides via its four-bucket response, but they matter when interpreting result
   read at runtime via the AI Service `configurationSchema` for `keboola.flow`
   (the same path `config new --push` uses). There is nothing vendored, pinned,
   or to re-sync. `flow schema --full` therefore **requires `--project`** (plain
-  `flow schema` is still the offline YAML template). *(updated vNEXT)* without
+  `flow schema` is still the offline YAML template). *(updated 1.0.0rc2)* without
   `--project` it uses the active project, and the bundled snapshot when no
   project is registered or chosen.
 - **Graceful semantic-only degradation.** If the live schema

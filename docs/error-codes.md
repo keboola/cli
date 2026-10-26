@@ -3,7 +3,7 @@
 All machine-readable codes emitted via `--json` output.  Every code is a member
 of `ErrorCode` in `src/keboola_agent_cli/errors.py`.
 
-This page is the one list of error codes, their exit codes and their error types *(since vNEXT)*. Other documents link here. `ERROR_CODE_TABLE` in `src/keboola_agent_cli/errors.py` holds the same pairs, and `make check-error-codes` fails when the two disagree ([CLI spec E1, E2](cli-interface-spec.md#E1)).
+This page is the one list of error codes, their exit codes and their error types *(since 1.0.0rc2)*. Other documents link here. `ERROR_CODE_TABLE` in `src/keboola_agent_cli/errors.py` holds the same pairs, and `make check-error-codes` fails when the two disagree ([CLI spec E1, E2](cli-interface-spec.md#E1)).
 
 ## Exit codes
 
@@ -65,7 +65,7 @@ A command that fails with an error code exits with the code's `Exit` value below
 | `INVALID_ARGUMENT` | 2 | `validation` | Caller supplied an invalid argument value |
 | `INVALID_FORMAT` | 2 | `api` | Input is not in the expected format |
 | `USAGE_ERROR` | 2 | `validation` | Incorrect CLI flag combination or missing required argument |
-| `CONFIRMATION_REQUIRED` | 2 | `validation` | A command that asks for confirmation ran in human mode without a terminal and without `--yes`. Nothing was changed. Run the command again with `--yes`. An AI agent asks the user first (since vNEXT) |
+| `CONFIRMATION_REQUIRED` | 2 | `validation` | A command that asks for confirmation ran in human mode without a terminal and without `--yes`. Nothing was changed. Run the command again with `--yes`. An AI agent asks the user first (since 1.0.0rc2) |
 | `MISSING_PARAMETER` | 2 | `validation` | A required parameter was not supplied |
 | `UNKNOWN_ERROR` | 1 | `api` | Catch-all for unclassified errors |
 | `UNEXPECTED_ERROR` | 1 | `api` | Per-project fallback in a multi-project command: that project raised an error carrying no code of its own. Other projects in the same run still report their own outcome |

@@ -6,7 +6,7 @@ surface is open-ended: agents can stamp their own keys to leave breadcrumbs for
 later runs (e.g. `agent.owner`, `agent.lastAudit`, `agent.domain`).
 
 The UI folder is **not** metadata any more: it is the configuration's own
-`folder` field (since vNEXT, DMD-2348), set with `config set-folder`. Do not
+`folder` field (since 1.0.0rc2, DMD-2348), set with `config set-folder`. Do not
 write the old `KBC.configuration.folderName` key with `set-metadata`.
 
 kbagent exposes the metadata CRUD surface plus the folder command on `kbagent config`:
