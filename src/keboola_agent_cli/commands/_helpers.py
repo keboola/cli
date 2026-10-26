@@ -717,22 +717,35 @@ def resolve_project_alias(
     return alias
 
 
-def validate_branch_requires_project(
-    formatter: OutputFormatter,
-    branch: int | None,
-    project: str | None,
-) -> None:
-    """Validate that --branch is always accompanied by --project.
+# T15: a branch ID belongs to one project, so --branch with several projects is refused.
+BRANCH_ONE_PROJECT_MESSAGE = (
+    "--branch needs one project: a branch ID belongs to one project, so it cannot be "
+    "used with several --project values or with --all-projects"
+)
 
-    Raises:
-        typer.Exit: With code 2 if branch is set but project is not.
+
+def resolve_project_alias_or_none(
+    ctx: typer.Context, formatter: OutputFormatter, explicit: str | None
+) -> str | None:
+    """Like :func:`resolve_project_alias`, but None when the T1 chain finds no project.
+
+    For a command that has an offline answer without a project (`flow schema
+    --full`, `flow validate`, spec T17): no registered project, or several and
+    none active, is None. A wrong choice (an unknown alias, a bad
+    ``KBAGENT_PROJECT``) is still ``CONFIG_ERROR`` with exit 5.
     """
-    if branch is not None and not project:
-        formatter.error(
-            message="--branch requires --project (branch ID is per-project)",
-            error_code=ErrorCode.INVALID_ARGUMENT,
-        )
-        raise typer.Exit(code=2) from None
+    from ..errors import ConfigError as _ConfigError
+    from ..services.base import NoImplicitProjectError
+
+    service = get_service(ctx, "project_service")
+    try:
+        alias, _source = service.resolve_pinned_alias(explicit=explicit)
+    except NoImplicitProjectError:
+        return None
+    except _ConfigError as exc:
+        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=5) from None
+    return alias
 
 
 def is_interactive_terminal() -> bool:
@@ -809,6 +822,29 @@ DEPRECATIONS: dict[str, Deprecation] = {
         hint="omit --yes (skip on conflict is the default)",
         replacement=None,
     ),
+    # T17: --project names the target project on every other command; here the
+    # value is the alias of the new project.
+    "project add --project": Deprecation(
+        message="project add --project is deprecated. Use --alias.",
+        hint="--alias",
+        replacement="--alias",
+    ),
+    "project create --project": Deprecation(
+        message="project create --project is deprecated. Use --alias.",
+        hint="--alias",
+        replacement="--alias",
+    ),
+    # T4: "all projects" is spelled --all-projects on every command.
+    "project refresh --all": Deprecation(
+        message="project refresh --all is deprecated. Use --all-projects.",
+        hint="--all-projects",
+        replacement="--all-projects",
+    ),
+    "POST /org/refresh refresh_all": Deprecation(
+        message="The refresh_all field of POST /org/refresh is deprecated. Use all_projects.",
+        hint="all_projects",
+        replacement="all_projects",
+    ),
     # V9: `kbagent serve` partial updates move from PUT to PATCH. A REST form
     # is keyed "METHOD /path"; its warning goes into the Kbagent-Warnings header.
     "PUT /semantic-layer/items/{kind}/{name}": Deprecation(
@@ -859,24 +895,31 @@ def warn_deprecated(formatter: OutputFormatter, form: str) -> None:
     formatter.warning(message, code=DEPRECATED_CODE, **extra)
 
 
-def deprecated_option(form: str, *param_decls: str) -> Any:
-    """A hidden flag for a deprecated form in ``DEPRECATIONS`` (spec C3).
+def deprecated_option(form: str, *param_decls: str, renamed_to: str | None = None) -> Any:
+    """A hidden option for a deprecated form in ``DEPRECATIONS`` (spec C3).
 
-    The vendored click has no option-level ``deprecated``. The flag keeps
-    working: the command reads its value (for an alias, ``yes = yes or
-    force``), and the callback adds the ``DEPRECATED`` warning when the
-    caller gives the flag.
+    The vendored click has no option-level ``deprecated``. The callback adds the
+    ``DEPRECATED`` warning when the caller gives the option. Without
+    ``renamed_to`` it is a flag, and the command reads its value (for an alias,
+    ``yes = yes or force``). With ``renamed_to`` it is the old name of an option
+    with a value: the callback passes the value on as the default of the
+    parameter ``renamed_to``. Click processes the given options first, so that
+    parameter, when the caller left it out, takes this value, also when it is
+    required.
     """
     if form not in DEPRECATIONS:
         raise KeyError(f"{form!r} has no DEPRECATIONS entry")
 
-    def _warn(ctx: typer.Context, value: bool) -> bool:
+    def _warn(ctx: typer.Context, value: Any) -> Any:
         formatter = (ctx.obj or {}).get("formatter")
         if value and formatter is not None and not ctx.resilient_parsing:
             warn_deprecated(formatter, form)
+        if value and renamed_to is not None:
+            ctx.default_map = {**(ctx.default_map or {}), renamed_to: value}
         return value
 
-    return typer.Option(False, *param_decls, hidden=True, callback=_warn)
+    default = None if renamed_to is not None else False
+    return typer.Option(default, *param_decls, hidden=True, callback=_warn)
 
 
 _CONFIRM_CODE_LENGTH = 4

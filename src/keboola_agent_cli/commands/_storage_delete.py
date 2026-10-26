@@ -19,6 +19,7 @@ from ._helpers import (
     get_service,
     map_error_to_exit_code,
 )
+from ._project_ref import PROJECT_HELP
 
 
 def register(app: typer.Typer) -> None:
@@ -27,12 +28,7 @@ def register(app: typer.Typer) -> None:
     @app.command("delete-bucket", rich_help_panel="Buckets")
     def storage_delete_bucket(
         ctx: typer.Context,
-        project: str = typer.Option(
-            ...,
-            "--project",
-            "-p",
-            help="Project alias",
-        ),
+        project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
         bucket_id: list[str] = typer.Option(
             ...,
             "--bucket-id",
@@ -117,12 +113,7 @@ def register(app: typer.Typer) -> None:
     @app.command("file-delete", rich_help_panel="Files")
     def storage_file_delete(
         ctx: typer.Context,
-        project: str = typer.Option(
-            ...,
-            "--project",
-            "-p",
-            help="Project alias",
-        ),
+        project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
         file_id: list[int] = typer.Option(
             ...,
             "--file-id",

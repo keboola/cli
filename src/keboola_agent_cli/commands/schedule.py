@@ -27,12 +27,14 @@ from ._all_projects import (
     finish_fanout,
 )
 from ._helpers import (
+    BRANCH_ONE_PROJECT_MESSAGE,
     check_cli_permission,
     emit_api_error,
     get_formatter,
     get_service,
     map_error_to_exit_code,
 )
+from ._project_ref import PROJECT_HELP
 
 logger = logging.getLogger(__name__)
 
@@ -155,7 +157,7 @@ def schedule_list(
 
     if branch is not None and (all_projects or len(project or []) > 1):
         formatter.error(
-            message="--branch requires exactly one --project",
+            message=BRANCH_ONE_PROJECT_MESSAGE,
             error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2) from None
@@ -190,7 +192,7 @@ def schedule_list(
 @schedule_app.command("detail")
 def schedule_detail(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     schedule_id: str = typer.Option(
         ..., "--schedule-id", help="keboola.scheduler configuration ID"
     ),
@@ -314,7 +316,7 @@ def schedule_find(
 
     if branch is not None and (all_projects or len(project or []) > 1):
         formatter.error(
-            message="--branch requires exactly one --project",
+            message=BRANCH_ONE_PROJECT_MESSAGE,
             error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2) from None

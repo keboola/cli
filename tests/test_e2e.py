@@ -747,7 +747,7 @@ class TestFullE2E:
                     "--json",
                     "project",
                     "add",
-                    "--project",
+                    "--alias",
                     self.alias,
                     "--url",
                     self.url,
@@ -773,7 +773,7 @@ class TestFullE2E:
         data = self._run_ok(
             "project",
             "add",
-            "--project",
+            "--alias",
             self.alias,
             "--url",
             self.url,
@@ -4835,7 +4835,7 @@ class TestE2EErrorHandling:
         result = self._run(
             "project",
             "add",
-            "--project",
+            "--alias",
             "bad-project",
             "--url",
             self.url,
@@ -4862,7 +4862,7 @@ class TestE2EErrorHandling:
         self._run(
             "project",
             "add",
-            "--project",
+            "--alias",
             "err-test",
             "--url",
             self.url,
@@ -4886,7 +4886,7 @@ class TestE2EErrorHandling:
         self._run(
             "project",
             "add",
-            "--project",
+            "--alias",
             "err-test2",
             "--url",
             self.url,
@@ -4908,7 +4908,7 @@ class TestE2EErrorHandling:
         self._run(
             "project",
             "add",
-            "--project",
+            "--alias",
             "err-test3",
             "--url",
             self.url,
@@ -4953,7 +4953,7 @@ class TestE2EJsonConsistency:
                 "--json",
                 "project",
                 "add",
-                "--project",
+                "--alias",
                 self.alias,
                 "--url",
                 self.url,
@@ -5048,7 +5048,7 @@ class TestE2ESyncWorkflow:
                 "--json",
                 "project",
                 "add",
-                "--project",
+                "--alias",
                 self.alias,
                 "--url",
                 self.url,
@@ -5907,7 +5907,7 @@ class TestE2EBillingCredits:
                 "--json",
                 "project",
                 "add",
-                "--project",
+                "--alias",
                 self.alias,
                 "--url",
                 self.url,
@@ -6022,7 +6022,7 @@ class TestE2ENotificationSubscriptions:
                 "--json",
                 "project",
                 "add",
-                "--project",
+                "--alias",
                 self.alias,
                 "--url",
                 self.url,
@@ -6408,7 +6408,7 @@ class TestE2EJobRunVariableValues:
                 "--json",
                 "project",
                 "add",
-                "--project",
+                "--alias",
                 self.alias,
                 "--url",
                 self.url,
@@ -6756,7 +6756,7 @@ class TestE2EJobRunMode:
                 "--json",
                 "project",
                 "add",
-                "--project",
+                "--alias",
                 self.alias,
                 "--url",
                 self.url,
@@ -6876,7 +6876,7 @@ class TestPinAndFirewallE2E:
         self._run(
             "project",
             "add",
-            "--project",
+            "--alias",
             self.alias_a,
             "--url",
             self.url,
@@ -6886,7 +6886,7 @@ class TestPinAndFirewallE2E:
         self._run(
             "project",
             "add",
-            "--project",
+            "--alias",
             self.alias_b,
             "--url",
             self.url,
@@ -6930,7 +6930,7 @@ class TestPinAndFirewallE2E:
         self._run(
             "project",
             "add",
-            "--project",
+            "--alias",
             self.alias_a,
             "--url",
             self.url,
@@ -6980,7 +6980,7 @@ class TestPinAndFirewallE2E:
         self._run(
             "project",
             "add",
-            "--project",
+            "--alias",
             self.alias_a,
             "--url",
             self.url,
@@ -7010,7 +7010,7 @@ class TestPinAndFirewallE2E:
         self._run(
             "project",
             "add",
-            "--project",
+            "--alias",
             self.alias_a,
             "--url",
             self.url,
@@ -7032,7 +7032,7 @@ class TestPinAndFirewallE2E:
         self._run(
             "project",
             "add",
-            "--project",
+            "--alias",
             self.alias_a,
             "--url",
             self.url,
@@ -7092,7 +7092,7 @@ class TestE2EFlowOperations:
                 "--json",
                 "project",
                 "add",
-                "--project",
+                "--alias",
                 self.alias,
                 "--url",
                 self.url,
@@ -7447,7 +7447,7 @@ class TestE2EScheduleOperations:
                 "--json",
                 "project",
                 "add",
-                "--project",
+                "--alias",
                 self.alias,
                 "--url",
                 self.url,
@@ -7693,7 +7693,7 @@ class TestE2EPR8ConfigMetadata:
                 "--json",
                 "project",
                 "add",
-                "--project",
+                "--alias",
                 self.alias,
                 "--url",
                 self.url,
@@ -7825,7 +7825,7 @@ class TestE2EPR8ConfigMetadata:
         assert custom_key not in remaining
 
     def test_set_folder_sugar(self) -> None:
-        """set-folder writes KBC.configuration.folderName metadata."""
+        """set-folder writes the configuration's ``folder`` field (DMD-2348)."""
         cfg = self.api.create_config(
             component_id=TEST_COMPONENT_ID,
             name=f"{RUN_ID}-folder-test",
@@ -7837,7 +7837,7 @@ class TestE2EPR8ConfigMetadata:
 
         folder_name = f"PR8-Folder-{RUN_ID}"
 
-        _step(1, "set-folder -- write KBC.configuration.folderName")
+        _step(1, "set-folder -- write the folder field")
         data = self._run_ok(
             "config",
             "set-folder",
@@ -7851,12 +7851,14 @@ class TestE2EPR8ConfigMetadata:
             folder_name,
         )
         assert data["data"]["folder"] == folder_name
+        # Frozen key of the metadata-era result shape.
         assert data["data"]["key"] == "KBC.configuration.folderName"
+        assert data["data"]["value"] == folder_name
 
-        _step(2, "metadata-list -- folder key is visible")
+        _step(2, "config detail -- folder field is set")
         data = self._run_ok(
             "config",
-            "metadata-list",
+            "detail",
             "--project",
             self.alias,
             "--component-id",
@@ -7864,12 +7866,23 @@ class TestE2EPR8ConfigMetadata:
             "--config-id",
             config_id,
         )
-        folder_entry = next(
-            (e for e in data["data"]["metadata"] if e.get("key") == "KBC.configuration.folderName"),
-            None,
+        assert data["data"]["folder"] == folder_name
+
+        _step(3, "set-folder --name '' -- clears the folder")
+        data = self._run_ok(
+            "config",
+            "set-folder",
+            "--project",
+            self.alias,
+            "--component-id",
+            TEST_COMPONENT_ID,
+            "--config-id",
+            config_id,
+            "--name",
+            "",
         )
-        assert folder_entry is not None
-        assert folder_entry["value"] == folder_name
+        assert data["data"]["folder"] == ""
+        assert data["data"]["result"]["folder"] is None
 
     def test_get_metadata_missing_key_exits_1(self) -> None:
         """get-metadata for a non-existent key returns exit code 1."""
@@ -7929,7 +7942,7 @@ class TestE2EPR8WorkspaceGC:
                 "--json",
                 "project",
                 "add",
-                "--project",
+                "--alias",
                 self.alias,
                 "--url",
                 self.url,
@@ -8058,7 +8071,7 @@ class TestE2EIssue304WorkspaceDiscoverability:
                 "--json",
                 "project",
                 "add",
-                "--project",
+                "--alias",
                 self.alias,
                 "--url",
                 self.url,
@@ -8358,7 +8371,7 @@ class TestE2EJobRunQueuePollingParity:
                 "--json",
                 "project",
                 "add",
-                "--project",
+                "--alias",
                 self.alias,
                 "--url",
                 self.url,
@@ -8638,7 +8651,7 @@ class TestE2ESyncAdoptExisting:
                 "--json",
                 "project",
                 "add",
-                "--project",
+                "--alias",
                 self.alias,
                 "--url",
                 self.url,
@@ -8798,7 +8811,7 @@ class TestE2EStorageNativeTypesAndBranchMaterialize:
                 "--json",
                 "project",
                 "add",
-                "--project",
+                "--alias",
                 self.alias,
                 "--url",
                 self.url,
@@ -8998,7 +9011,7 @@ class TestE2EStorageSwapTables:
                 "--json",
                 "project",
                 "add",
-                "--project",
+                "--alias",
                 self.alias,
                 "--url",
                 self.url,
@@ -9281,7 +9294,7 @@ class TestE2EStorageCloneTable:
                 "--json",
                 "project",
                 "add",
-                "--project",
+                "--alias",
                 self.alias,
                 "--url",
                 self.url,
@@ -9517,7 +9530,7 @@ class TestE2EDataAppLifecycle:
             [
                 "project",
                 "add",
-                "--project",
+                "--alias",
                 self.alias,
                 "--url",
                 self.url,
@@ -10307,7 +10320,7 @@ class TestE2EConfigUpdateNormalization:
                 "--json",
                 "project",
                 "add",
-                "--project",
+                "--alias",
                 self.alias,
                 "--url",
                 self.url,
@@ -10742,7 +10755,7 @@ def test_feature_flags_read_e2e(tmp_path: Path) -> None:
     add = _run(
         "project",
         "add",
-        "--project",
+        "--alias",
         alias,
         "--url",
         stack_url,
@@ -10798,7 +10811,7 @@ def test_stream_otlp_e2e(tmp_path: Path) -> None:
         )
 
     add = _run(
-        "project", "add", "--project", alias, "--url", stack_url, "--token", os.environ[ENV_TOKEN]
+        "project", "add", "--alias", alias, "--url", stack_url, "--token", os.environ[ENV_TOKEN]
     )
     assert add.exit_code == 0, add.output
 
@@ -10926,7 +10939,7 @@ class TestE2EMcpParityCommands:
                 "--json",
                 "project",
                 "add",
-                "--project",
+                "--alias",
                 self.alias,
                 "--url",
                 self.url,
@@ -11427,7 +11440,7 @@ class TestE2ESemanticLayerLifecycle:
             [
                 "project",
                 "add",
-                "--project",
+                "--alias",
                 self.alias,
                 "--url",
                 self.url,
@@ -12579,7 +12592,7 @@ class TestE2E_0_47_0_NewSurfaces:
                 "--json",
                 "project",
                 "add",
-                "--project",
+                "--alias",
                 self.alias,
                 "--url",
                 self.url,
@@ -12895,8 +12908,8 @@ class TestE2E_0_47_0_NewSurfaces:
           2. The manifest entry was updated in place (length stays at 1,
              not 2; placeholder id is now the assigned ULID; folderName
              metadata is preserved on the entry).
-          3. The remote configuration's metadata-list returns the
-             KBC.configuration.folderName key with the declared value.
+          3. The remote configuration's ``folder`` field carries the
+             declared value (sent on the create POST, DMD-2348).
           4. A second ``sync push`` against the same workspace is a no-op
              (``status=no_changes, created=0, errors=0``).
 
@@ -13052,13 +13065,13 @@ class TestE2E_0_47_0_NewSurfaces:
         assert matching[0].metadata.get("KBC.configuration.folderName") == folder_name
         assert len(post.configurations) == pre_push_n, "manifest must not grow on a single CREATE"
 
-        # Remote metadata: folderName landed via the metadata API.
-        meta_result = _invoke(
+        # Remote: the folder landed as the configuration's folder field.
+        detail_result = _invoke(
             self.config_dir,
             [
                 "--json",
                 "config",
-                "metadata-list",
+                "detail",
                 "--project",
                 self.alias,
                 "--component-id",
@@ -13069,10 +13082,9 @@ class TestE2E_0_47_0_NewSurfaces:
                 str(dev_branch_id),
             ],
         )
-        meta = _json_ok(meta_result)
-        meta_keys = {m.get("key"): m.get("value") for m in meta["data"]["metadata"]}
-        assert meta_keys.get("KBC.configuration.folderName") == folder_name, (
-            f"folderName missing or wrong on remote metadata-list: {meta_keys}"
+        detail = _json_ok(detail_result)
+        assert detail["data"].get("folder") == folder_name, (
+            f"folder missing or wrong on the remote config: {detail['data'].get('folder')!r}"
         )
 
         # Second push: idempotent (no_changes; create_config NOT called again).
@@ -13623,7 +13635,7 @@ class TestE2EConfigSecretEncryption:
                 "--json",
                 "project",
                 "add",
-                "--project",
+                "--alias",
                 self.alias,
                 "--url",
                 self.url,
@@ -13773,7 +13785,7 @@ class TestE2EDataAppManagedRepo:
                 "--json",
                 "project",
                 "add",
-                "--project",
+                "--alias",
                 self.alias,
                 "--url",
                 self.url,
@@ -13938,7 +13950,7 @@ class TestE2EDeviceEnrollmentPrimitives:
                 "--json",
                 "project",
                 "add",
-                "--project",
+                "--alias",
                 self.alias,
                 "--url",
                 self.url,
@@ -14371,7 +14383,7 @@ class TestE2EConfigState:
                 "--json",
                 "project",
                 "add",
-                "--project",
+                "--alias",
                 self.alias,
                 "--url",
                 self.url,
@@ -14734,7 +14746,7 @@ class TestE2EMergeRequestLifecycle:
                 "--json",
                 "project",
                 "add",
-                "--project",
+                "--alias",
                 self.alias,
                 "--url",
                 self.url,

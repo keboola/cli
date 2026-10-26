@@ -29,6 +29,7 @@ from ._helpers import (
     get_service,
     map_error_to_exit_code,
 )
+from ._project_ref import PROJECT_HELP
 
 _DESCRIBE = "Descriptions"
 
@@ -39,12 +40,7 @@ def register(app: typer.Typer) -> None:
     @app.command("describe-bucket", rich_help_panel=_DESCRIBE)
     def storage_describe_bucket(
         ctx: typer.Context,
-        project: str = typer.Option(
-            ...,
-            "--project",
-            "-p",
-            help="Project alias",
-        ),
+        project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
         bucket_id: str = typer.Option(
             ...,
             "--bucket-id",
@@ -113,12 +109,7 @@ def register(app: typer.Typer) -> None:
     @app.command("describe-table", rich_help_panel=_DESCRIBE)
     def storage_describe_table(
         ctx: typer.Context,
-        project: str = typer.Option(
-            ...,
-            "--project",
-            "-p",
-            help="Project alias",
-        ),
+        project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
         table_id: str = typer.Option(
             ...,
             "--table-id",
@@ -187,12 +178,7 @@ def register(app: typer.Typer) -> None:
     @app.command("describe-column", rich_help_panel=_DESCRIBE)
     def storage_describe_column(
         ctx: typer.Context,
-        project: str = typer.Option(
-            ...,
-            "--project",
-            "-p",
-            help="Project alias",
-        ),
+        project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
         table_id: str = typer.Option(
             ...,
             "--table-id",
@@ -293,12 +279,7 @@ def register(app: typer.Typer) -> None:
     @app.command("describe-batch", rich_help_panel=_DESCRIBE)
     def storage_describe_batch(
         ctx: typer.Context,
-        project: str = typer.Option(
-            ...,
-            "--project",
-            "-p",
-            help="Project alias",
-        ),
+        project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
         from_file: Path = typer.Option(
             ...,
             "--from-file",
@@ -439,12 +420,7 @@ def register(app: typer.Typer) -> None:
     @app.command("describe-migrate", rich_help_panel=_DESCRIBE)
     def storage_describe_migrate(
         ctx: typer.Context,
-        project: str = typer.Option(
-            ...,
-            "--project",
-            "-p",
-            help="Project alias",
-        ),
+        project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
         table_id: list[str] | None = typer.Option(
             None,
             "--table-id",

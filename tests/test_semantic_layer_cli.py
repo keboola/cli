@@ -152,14 +152,16 @@ class TestModelList:
         body = json.loads(result.output)
         assert body["error"]["code"] == "INVALID_TOKEN"
 
-    def test_missing_project_arg_exit_2(self, store: ConfigStore) -> None:
+    def test_omitted_project_uses_the_sole_project(self, store: ConfigStore) -> None:
         mock = MagicMock()
+        mock.list_models.return_value = {"project": "prod", "models": []}
         result = _invoke(
             ["--json", "semantic-layer", "model", "list"],
             store=store,
             sl_mock=mock,
         )
-        assert result.exit_code == 2
+        assert result.exit_code == 0, result.output
+        mock.list_models.assert_called_once_with(alias="prod")
 
 
 # ---------------------------------------------------------------------------

@@ -20,6 +20,8 @@ class :class:`LeafCommand`. Together they hold these rules of
 - A6, row 19: a single-value option given twice is a usage error on a
   ``write``, ``destructive`` or ``admin`` command and a ``warnings[]`` entry
   on a ``read`` command (:meth:`LeafCommand.parse_args`).
+- T17: a command with an omitted single ``--project`` uses the T1
+  chain (:meth:`LeafCommand.invoke`, ``commands/_project_ref.py``).
 
 ``-h`` (H5) is the root ``help_option_names`` context setting in ``cli.py``;
 every child context inherits it.
@@ -38,7 +40,7 @@ import typer
 from typer.core import TyperCommand, TyperGroup, TyperOption
 
 from . import telemetry
-from .commands._project_ref import ProjectRefGroup
+from .commands._project_ref import ProjectRefGroup, use_active_project
 from .errors import ErrorCode
 from .output import OutputFormatter
 from .permissions import OPERATION_REGISTRY
@@ -104,7 +106,10 @@ def protected_args(ctx: Any) -> list[str]:
 
 
 class LeafCommand(TyperCommand):
-    """The class of every command: reports a repeated single-value option (A6)."""
+    """The class of every command: reports a repeated single-value option (A6).
+
+    It also gives a command with an omitted ``--project`` the active project (T17).
+    """
 
     # The OPERATION_REGISTRY key, set by the tree walk of RootGroup.
     operation: str = ""
@@ -122,6 +127,7 @@ class LeafCommand(TyperCommand):
         formatter = root_obj.get("formatter") if isinstance(root_obj, dict) else None
         if formatter is not None:
             formatter.command_category = OPERATION_REGISTRY.get(self.operation, "write")
+            use_active_project(ctx, self)
         return super().invoke(ctx)
 
 

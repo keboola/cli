@@ -278,7 +278,7 @@ pre-fills the picker row. Each result carries a status:
 |---|---|
 | `registered` | Written to `config.json` under a session-sentinel token. |
 | `exists` | This project is already registered under exactly this alias; no write. |
-| `skipped` | The alias is taken -- by a different project, or by this project under another alias. Never overwritten; rename with `kbagent project edit --new-alias`. |
+| `skipped` | The alias is taken -- by a different project, or by this project under another alias. Never overwritten; rename with `kbagent project edit --project ALIAS --new-alias`. |
 
 Because the project id, not the alias string, identifies a registration, a
 project you already registered under a hand-picked alias is reported under
@@ -347,7 +347,7 @@ with `AUTH_NOT_SUPPORTED_ON_STACK`, naming the static-token fallback, instead
 of sending the sentinel string as if it were a real credential:
 
 - `kbagent kai` -- the external `kai_client` library has no bearer path.
-- `kbagent semantic-layer token --encrypt (Metastore Service)` -- it encrypts
+- `kbagent semantic-layer token --project my-project-alias --encrypt (Metastore Service)` -- it encrypts
   the project's own token for reuse, and a sentinel is not a reusable
   credential. The rest of the `semantic-layer` group works.
 - the importable SDK (`from keboola_agent_cli import Client`) -- stateless,

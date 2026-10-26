@@ -405,6 +405,43 @@ class TestInvitationCancel:
         assert result.exit_code == 0
         svc.cancel_invitation.assert_called_once()
 
+    def test_dry_run_needs_no_confirmation(self, tmp_path: Path) -> None:
+        """--dry-run cancels nothing, so it runs without --yes and without a terminal."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        _seed_store(config_dir)
+        svc = MagicMock()
+        svc.cancel_invitation.return_value = {
+            "status": "dry_run",
+            "alias": ALIAS,
+            "project_id": PROJECT_ID,
+            "email": "x@y.com",
+            "invitation_id": 99,
+        }
+
+        with (
+            patch("keboola_agent_cli.cli.MemberService", return_value=svc),
+            patch.dict(os.environ, {"KBC_MANAGE_API_TOKEN": MANAGE_TOKEN}),
+        ):
+            result = runner.invoke(
+                app,
+                [
+                    "--allow-env-manage-token",
+                    "--config-dir",
+                    str(config_dir),
+                    "project",
+                    "invitation-cancel",
+                    "--project",
+                    ALIAS,
+                    "--email",
+                    "x@y.com",
+                    "--dry-run",
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        assert "DRY RUN" in result.output
+        assert svc.cancel_invitation.call_args.kwargs["dry_run"] is True
+
 
 class TestMemberRemove:
     def test_destructive_yes(self, tmp_path: Path) -> None:
@@ -482,5 +519,5 @@ class TestMemberSetRole:
             )
         assert result.exit_code == 0, result.output
         svc.set_member_role.assert_called_once_with(
-            manage_token=MANAGE_TOKEN, alias=ALIAS, email="x@y.com", role="guest"
+            manage_token=MANAGE_TOKEN, alias=ALIAS, email="x@y.com", role="guest", dry_run=False
         )

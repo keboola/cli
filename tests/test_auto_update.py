@@ -777,7 +777,9 @@ class TestGetCachePath:
 
         from keboola_agent_cli import update_runner
 
-        real_dir = Path(platformdirs.user_config_dir("keboola-agent-cli")).resolve()
+        # `user_config_dir` itself is redirected by `_isolated_config_dir`; the
+        # PlatformDirs class still computes the machine's real directory.
+        real_dir = Path(platformdirs.PlatformDirs("keboola-agent-cli").user_config_dir).resolve()
         assert real_dir != auto_update_module._get_cache_path().resolve().parent
         # `update_runner.state_dir` resolves through the very same call and backs
         # the deferred-update marker / exit / log files. `should_defer()` is True

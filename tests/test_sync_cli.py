@@ -475,10 +475,10 @@ class TestSyncPullCli:
         formatter unless --verbose)."""
         # Otherwise up to date: the marker replaces "up to date".
         line = _pull_one_liner({"details": [], "folder_lookup_failed": True})
-        assert "folder lookup failed" in line
+        assert "folders not refreshed" in line
         assert "up to date" not in line
-        # A successful lookup is silent.
-        assert "folder lookup failed" not in _pull_one_liner(
+        # Known folders are silent.
+        assert "folders not refreshed" not in _pull_one_liner(
             {"details": [], "folder_lookup_failed": False}
         )
 
@@ -494,10 +494,8 @@ class TestSyncPullCli:
             )
 
         base = {"status": "pulled", "details": [], "storage": {}}
-        assert "config-folder lookup failed" in _printed({**base, "folder_lookup_failed": True})
-        assert "config-folder lookup failed" not in _printed(
-            {**base, "folder_lookup_failed": False}
-        )
+        assert "carries no folder field" in _printed({**base, "folder_lookup_failed": True})
+        assert "carries no folder field" not in _printed({**base, "folder_lookup_failed": False})
         # Absent flag (older result dicts) is silent, never a KeyError.
         assert "config-folder lookup failed" not in _printed(base)
 

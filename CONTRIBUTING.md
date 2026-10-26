@@ -968,6 +968,10 @@ is the `Date` header of the GitHub response, the same clock the clients use.
      on 0.x and 1.x: section "Plugin" of `docs/migrate-to-1.0.md`, and
      "Forms that work on 0.x and 1.x" in `gotchas.md`. The ai-kit PR of this
      release gives them to users who still run 0.x.
+   - The overview page `site/1.0/index.html` (published at
+     <https://keboola.github.io/cli/1.0/> by `.github/workflows/pages.yml`)
+     lists every change of section "Changes in 1.0.0" of
+     `docs/migrate-to-1.0.md`, and its claims match the final code.
 
    Merge it, and push the tag `v1.0.0`. Do not create the GitHub release by hand, not
    even as a draft: publishing a draft sets a new `published_at`. Never delete

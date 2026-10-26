@@ -687,6 +687,7 @@ YES_WITHOUT_OFFLINE_CASE: dict[str, str] = {
     "merge-request merge": "resolves the merge request first, then asks",
     "org setup": "needs the manage token first, then previews and asks",
     "project refresh": "needs the manage token first, then previews and asks",
+    "project remove": "checks that the alias is registered first, then asks",
     "semantic-layer add metric": "dataset guard in the service; refuses without a terminal",
     "semantic-layer edit metric": "rename-cascade guard in the service; refuses without a terminal",
     "semantic-layer import": "hidden deprecated --yes with no effect (C3)",

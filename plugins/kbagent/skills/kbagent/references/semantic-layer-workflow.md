@@ -431,7 +431,7 @@ kbagent --json semantic-layer build \
 # On failure: model + N children remain; error.details.rollback shows
 # {"attempted": false, "reason": "keep_on_failure", "posted_children": 3, ...}
 # Tear down by hand when done: `kbagent semantic-layer remove ...` per
-# child, then `kbagent semantic-layer model delete --yes`.
+# child, then `kbagent semantic-layer model delete --project prod --yes`.
 
 # Default: rollback runs automatically, no orphans left behind
 kbagent --json semantic-layer build \
@@ -526,6 +526,6 @@ Quick reminders:
   scope and grants, and a failed PUT changes nothing. Same five types are
   available under `remove`.
 - **`X-StorageApi-Token` is the only auth** -- no separate metastore
-  token. `kbagent semantic-layer token --encrypt` encrypts the
+  token. `kbagent semantic-layer token --project prod --encrypt` encrypts the
   STORAGE token for a `user_properties` slot named `#metastore_token`,
   which is just a convention the Python container reads at runtime.

@@ -24,6 +24,7 @@ from ..sync.code_extraction import merge_code_files, normalize_blocks_codes_scri
 from ..sync.config_format import local_config_to_api, local_row_to_api
 from ..sync.manifest import Manifest, ManifestConfiguration
 from ..sync.naming import sanitize_name
+from ._config_folder import FOLDER_NOT_SUPPORTED_MESSAGE
 from ._encryption import (
     SecretCache,
     collect_secrets,
@@ -33,7 +34,11 @@ from ._encryption import (
 from ._sync_baseline import apply_stamp, row_baseline
 from ._sync_data_app import create_synced_data_app
 from ._sync_workspace import SANDBOXES_COMPONENT_ID, warn_on_backend_size_change
-from ._sync_writeback import writeback_after_push, writeback_create_row_in_manifest
+from ._sync_writeback import (
+    manifest_folder,
+    writeback_after_push,
+    writeback_create_row_in_manifest,
+)
 from .data_app_service import DATA_APP_COMPONENT_ID, DEFAULT_TYPE
 
 if TYPE_CHECKING:
@@ -298,6 +303,29 @@ def _default_data_app_type_warning(*, config_path: str, type_: str) -> dict[str,
         "config_path": config_path,
         "message": message,
         "data_app_type": type_,
+    }
+
+
+def _folder_not_supported_warning(
+    *, component_id: str, config_id: str, config_path: str, folder: str
+) -> dict[str, Any]:
+    """Push-envelope warning: the create response carried no ``folder``.
+
+    A stack without the configuration folder field ignores the param, so the
+    config was created without its folder. The push itself succeeded.
+    """
+    message = (
+        f"{FOLDER_NOT_SUPPORTED_MESSAGE} Config {component_id}/{config_id} "
+        f"({config_path}) was created without its folder '{folder}'."
+    )
+    logger.warning("%s", message)
+    return {
+        "change_type": "folder_not_supported",
+        "component_id": component_id,
+        "config_id": config_id,
+        "config_path": config_path,
+        "folder": folder,
+        "message": message,
     }
 
 
@@ -618,6 +646,7 @@ def push_create(
     merge_code_files(component_id, local_data, config_dir)
 
     name, description, configuration = local_config_to_api(local_data)
+    folder = manifest_folder(manifest, component_id, branch_id, config_path_str)
 
     # Runtime-safety backstop on the assembled API body (issues #245/#274).
     configuration = guard_script_shape(
@@ -661,6 +690,7 @@ def push_create(
             configuration=configuration,
             branch_id=ds_branch_id,
             is_disabled=bool(local_data.get("is_disabled", False)),
+            folder=folder,
         )
         # create_synced_data_app set parameters.id on `configuration` to the new
         # app id. Persist it locally too, or the next push (an update) would send
@@ -678,9 +708,19 @@ def push_create(
             description=description,
             branch_id=branch_id,
             is_disabled=bool(local_data.get("is_disabled", False)),
+            folder=folder,
         )
     new_config_id = result.get("id", "")
     logger.info("Created config %s/%s (ID: %s)", component_id, name, new_config_id)
+    if folder and "folder" not in result and warnings is not None:
+        warnings.append(
+            _folder_not_supported_warning(
+                component_id=component_id,
+                config_id=str(new_config_id),
+                config_path=config_path_str,
+                folder=folder,
+            )
+        )
 
     # Write back: update local file with config_id + encrypted secrets. Use
     # pristine_data so blocks/code stay only in their code files.

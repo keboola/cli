@@ -91,7 +91,7 @@ CASES: dict[str, list[str]] = {
         "--config-id",
         "11",
     ],
-    "project_remove_success": ["project", "remove", "--project", "prod"],
+    "project_remove_success": ["project", "remove", "--project", "prod", "--yes"],
     "branch_merge_warning": ["branch", "merge", "--project", "prod", "--branch", "123"],
     "config_detail_api_error": [
         "config",

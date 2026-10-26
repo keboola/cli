@@ -60,13 +60,13 @@ class TestBuildPromptHelperMetaPrompt:
         prompt = build_prompt_helper_meta_prompt(goal="goal x", draft="   ")
         assert "(empty -- write the prompt from scratch.)" in prompt
 
-    def test_project_pinned_message(self) -> None:
+    def test_project_named_message(self) -> None:
         prompt = build_prompt_helper_meta_prompt(goal="g", project="padak")
-        assert "pinned project 'padak'" in prompt
+        assert "named project 'padak'" in prompt
 
     def test_no_project_falls_back_to_asking(self) -> None:
         prompt = build_prompt_helper_meta_prompt(goal="g", project=None)
-        assert "No project is pinned" in prompt
+        assert "named no project" in prompt
 
     def test_output_contract_is_present(self) -> None:
         """The whole point of the meta-prompt is the OUTPUT CONTRACT.

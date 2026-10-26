@@ -205,10 +205,12 @@ entry's id is updated to the API-assigned ULID. Re-pushes against the
 now-real id are naturally idempotent.
 
 If a placeholder entry's `metadata` dict contains `KBC.configuration.*`
-keys (e.g. `KBC.configuration.folderName`), they are propagated to the
-metadata API immediately after the create call. This was the previous
-"set folderName via `config set-folder` after push" workaround for
-fresh-create flows; from v0.47.0 a single push handles it.
+keys, they are propagated to the metadata API immediately after the create
+call. The folder key `KBC.configuration.folderName` is the exception: since
+vNEXT it is sent on the create call as the configuration's `folder` field and
+never written to the metadata API. This was the previous "set the folder via
+`config set-folder` after push" workaround for fresh-create flows; from
+v0.47.0 a single push handles it.
 
 **Variable links are resolved on fresh CREATE.** When the
 placeholder tree includes a `keboola.variables` config + default-values row and
@@ -733,7 +735,7 @@ Since 0.96.1 push also remaps a transformation's shared code (`shared_code_id`, 
 - `missing_task_target`: a flow or orchestrator task runs a config that is not in the tree, for example an ignored `keboola.sandboxes` config.
 - `encrypted_values_copied`: `KBC::` values that only the reference project can decrypt, as `_config.yml` paths. For `secret_keys` put the plaintext into the clone's `_config.yml` and run `sync push`. `unencryptable_keys` need `kbagent encrypt values`, `oauth_keys` a new authorization.
 - `data_app_not_deployed`: run `kbagent data-app deploy`.
-- `schedule_not_active`: clone never activates a schedule, so the new project starts no jobs by itself. `kbagent flow schedule --flow-id ...` activates it; with several schedules on one flow, use the Keboola UI.
+- `schedule_not_active`: clone never activates a schedule, so the new project starts no jobs by itself. `kbagent flow schedule --project new-customer-alias --flow-id ...` activates it; with several schedules on one flow, use the Keboola UI.
 
 **Idempotent:** re-running with an existing `--target-dir` skips the copy +
 overrides and just pushes, so a completed clone reports `no_changes` /

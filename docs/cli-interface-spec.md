@@ -89,6 +89,7 @@ Every rule with its level, the version from which it applies, and how it is chec
 | [T14](#T14) | MUST | now | review, unit tests |
 | [T15](#T15) | MUST | now | review |
 | [T16](#T16) | MUST | now | `tests/test_project_ref.py`, review, unit tests |
+| [T17](#T17) | MUST | 1.0.0 | `target.project-not-required`, `target.targets-reported` |
 | [O1](#O1) | MUST | 1.0.0 | `output.one-json-document`, `output.bare-group-exits-2` |
 | [O2](#O2) | MUST | `warnings` 0.x; `exit_code` and `schema_version` 1.0.0 | `output.envelope-schema` |
 | [O3](#O3) | MUST | 0.x | `output.envelope-schema`, `output.no-warning-after-output` |
@@ -191,7 +192,7 @@ Terms:
 - **Active project** and **active branch**: the choice that `project use` and `branch use` save. JSON values use `active_project` and `active_branch`. The `config.json` fields `default_project` and `active_branch_id` keep their names, because older kbagent versions read the same file.
 - **Source values** of a target: `explicit` (a flag), `env` (`KBAGENT_PROJECT`), `active_project` or `active_branch` (the saved choice), `sole` (the only registered project), `all` (fan-out), `production`, `git_mapping`, `manifest`, `merge_request`, and `none` (the command chose no branch). `project_source`, `branch_source` and `warnings[].code` are open enums: an agent treats an unknown source like `active_project`.
 - **Categories**: `read`, `write`, `destructive` and `admin`, from `OPERATION_REGISTRY` in `permissions.py`. A category is a static property of the command, so a rule that depends on it can run before any network call. An unknown operation is `write` (fail-closed).
-- **Fan-out reads**: the 18 reads that can read several projects: `search`, `billing credits`, `component list`, `config list`, `config search`, `data-app list`, `job list`, `storage buckets`, `storage tables`, `sharing list`, `sharing edges`, `flow list`, `schedule list`, `schedule find`, `notification list`, `branch list`, `workspace list` and `project status`.
+- **Fan-out reads**: the 20 reads that can read several projects: `search`, `billing credits`, `component list`, `config list`, `config search`, `data-app list`, `job list`, `storage buckets`, `storage tables`, `sharing list`, `sharing edges`, `flow list`, `schedule list`, `schedule find`, `notification list`, `branch list`, `workspace list`, `project status`, `sync pull` and `sync diff`.
 - **T0** is the time when the GitHub release `v1.0.0` is published. **M**, the migration instant, is its `published_at` plus 28 days (28 × 86,400 seconds), in UTC.
 
 What stays as it is:
@@ -201,7 +202,6 @@ What stays as it is:
 - The envelope `{status, data}` and `{status, error}` on stdout under `--json`, plus `targets`. A new key is added; no key is removed or renamed.
 - `project use` and `branch use`. Registering the first project sets the active project and says so.
 - `--yes` or `--json` means consent. The merge-request rule that requires an explicit target under `--json` stays.
-- A command with a required `--project` keeps it required.
 - The exit numbers 0–7 and 130.
 
 ## 2. Naming
@@ -329,24 +329,24 @@ Before 1.0.0, `-p` was on 24 of the 228 `--project` options, and seven short fla
 ## 5. Target selection
 
 <a id="T1"></a>
-**T1 · MUST · now.** A single-project command resolves its project in this order: `--project` > `KBAGENT_PROJECT` > active project > sole registered project > `CONFIG_ERROR` (exit 5). It uses `resolve_pinned_alias`. A command with a required `--project` does not use this chain. The value of `--project` and `KBAGENT_PROJECT` is an alias or a project ID (T16).
+**T1 · MUST · now.** A single-project command resolves its project in this order: `--project` > `KBAGENT_PROJECT` > active project > sole registered project > `CONFIG_ERROR` (exit 5). It uses `resolve_pinned_alias`. Every command that takes one project uses this chain when `--project` is omitted (T17). The value of `--project` and `KBAGENT_PROJECT` is an alias or a project ID (T16).
 
 - Checked by: review and unit tests.
 
 <a id="T2"></a>
-**T2 · MUST · 1.0.0.** The 18 fan-out reads use the T1 chain when no `--project` is given, like every other command. `--all-projects` reads all registered projects. Until 1.0.0, an omitted `--project` on these reads reads all registered projects.
+**T2 · MUST · 1.0.0.** The fan-out reads use the T1 chain when no `--project` is given, like every other command. `--all-projects` reads all registered projects. Until 1.0.0, an omitted `--project` reads all registered projects on 18 of them, and `sync pull` and `sync diff` refuse it.
 
 - Why: with E4, an implicit read of all projects would fail because of one expired token in another project.
 - The `kbagent serve` list routes that read several projects follow the same rule: without `project` they use the T1 chain (HTTP 400 `CONFIG_ERROR` when no project resolves), and `all_projects=true` reads all registered projects. `project` with `all_projects=true` is `USAGE_ERROR` (HTTP 400). A list route in which a project failed answers HTTP 200 with the failure in `errors`, because REST has no exit code.
-- Checked by: `target.project-help-states-default`, which checks only that the help states the class (for the 18 reads: the active project and `--all-projects`), and the `target.targets-reported` contract case, which checks the behavior.
+- Checked by: `target.project-help-states-default`, which checks only that the help states the class (for the fan-out reads: the active project and `--all-projects`), and the `target.targets-reported` contract case, which checks the behavior.
 
 <a id="T3"></a><a id="target.no-write-fanout"></a>
-**T3 · MUST · now.** A `write` or `destructive` command never reads or changes several projects implicitly. `workspace gc` requires `--project` or `--all-projects`, also in 1.0.0, and does not use the T1 chain.
+**T3 · MUST · now.** A `write` or `destructive` command never reads or changes several projects implicitly. `workspace gc` without `--project` and `--all-projects` cleans up only the project of the T1 chain (T17).
 
 - Checked by: `target.no-write-fanout`.
 
 <a id="T4"></a>
-**T4 · MUST · 0.x.** "All projects" is spelled `--all-projects`, and it conflicts with `--project`. The 18 fan-out reads get `--all-projects` in 0.x as an additive option, so one script works on 0.x and on 1.0; until 1.0.0 it behaves as an omitted `--project`. Today only `workspace gc` and `sync pull/diff/push` have it. `project refresh --all` is the one legacy spelling of "all projects"; it gets a hidden `--all-projects` alias. `auth register-projects --all` (every accessible project on the stack) and `semantic-layer schema --all` (every semantic type) keep their meanings.
+**T4 · MUST · 0.x.** "All projects" is spelled `--all-projects`, and it conflicts with `--project`. The fan-out reads have `--all-projects` since 0.x (18 of them got it in 0.100.0 as an additive option, so one script works on 0.x and on 1.0; until 1.0.0 it behaves as an omitted `--project` there), and so do `workspace gc` and `sync push`. `project refresh` takes `--all-projects` from 1.0.0; its old spelling `--all` is a hidden deprecated alias (C3). `auth register-projects --all` (every accessible project on the stack) and `semantic-layer schema --all` (every semantic type) keep their meanings.
 
 - Checked by: review.
 
@@ -386,7 +386,7 @@ Before 1.0.0, `-p` was on 24 of the 228 `--project` options, and seven short fla
 - Checked by: `target.project-help-states-default` for `--project` only; review for `--branch`.
 
 <a id="T12"></a>
-**T12 · MUST · 1.0.0.** A `destructive` command under `--json` whose project comes from the active project, or whose branch comes from the active branch, adds a `warnings[]` entry `TARGET_FROM_ACTIVE_CHOICE` with a hint that names the explicit flag. The command still runs, because `--json` stays consent. Over `kbagent serve`, a destructive route (its class in `server/route_permissions.py`, or a flag escalation) whose branch comes from the active branch adds the same entry to `Kbagent-Warnings`, with the hint `branch_id=<id>`. The project of a route is in its path, so only the branch half applies.
+**T12 · MUST · 1.0.0.** A `destructive` or `admin` command under `--json` whose project comes from the active project, or whose branch comes from the active branch, adds a `warnings[]` entry `TARGET_FROM_ACTIVE_CHOICE` with a hint that names the explicit flag. The command still runs, because `--json` stays consent. Over `kbagent serve`, a destructive or admin route (its class in `server/route_permissions.py`, or a flag escalation) whose branch comes from the active branch adds the same entry to `Kbagent-Warnings`, with the hint `branch_id=<id>`. The project of a route is in its path, so only the branch half applies.
 
 - Checked by: `target.targets-reported` (contract, `tests/test_target_selection.py`); the REST form by `serve.targets-reported` (`tests/test_server_response_meta.py`).
 
@@ -406,9 +406,15 @@ Before 1.0.0, `-p` was on 24 of the 228 `--project` options, and seven short fla
 - Checked by: review.
 
 <a id="T16"></a>
-**T16 · MUST · now.** An option that names a registered project takes its alias or its project ID: `--project` on every command, `KBAGENT_PROJECT`, `project use`, `sync clone --target`, `config clone --target-project`, `--stack` on the `auth` commands, the project options of `semantic-layer promote` and `semantic-layer diff`, and the project parameters in `kbagent serve` paths and queries. An alias wins; kbagent looks up the ID only when no alias matches. An alias that is also the ID of another registered project gives a warning on stderr. An ID that matches several registered projects is `CONFIG_ERROR` with the matching aliases, except when all matches are on one stack and exactly one of them has a session token. kbagent translates the ID to the alias once, before the command runs, and `targets` names the alias. An option whose value is a new alias (`project add --project`) takes no ID. A new option that names a target project that does not have to be registered takes a registered alias or a project ID, repeatable or as a comma list (A4). REST request bodies are not covered yet.
+**T16 · MUST · now.** An option that names a registered project takes its alias or its project ID: `--project` on every command, `KBAGENT_PROJECT`, `project use`, `sync clone --target`, `config clone --target-project`, `--stack` on the `auth` commands, the project options of `semantic-layer promote` and `semantic-layer diff`, and the project parameters in `kbagent serve` paths and queries. An alias wins; kbagent looks up the ID only when no alias matches. An alias that is also the ID of another registered project gives a warning on stderr. An ID that matches several registered projects is `CONFIG_ERROR` with the matching aliases, except when all matches are on one stack and exactly one of them has a session token. kbagent translates the ID to the alias once, before the command runs, and `targets` names the alias. An option whose value is a new alias (`project add --alias`) takes no ID. A new option that names a target project that does not have to be registered takes a registered alias or a project ID, repeatable or as a comma list (A4). REST request bodies are not covered yet.
 
 - Checked by: review and unit tests (`tests/test_project_ref.py`).
+
+<a id="T17"></a><a id="target.project-not-required"></a>
+**T17 · MUST · 1.0.0.** No command requires `--project`. When `--project` is omitted, the command uses the T1 chain, for reads and writes alike. The root command class resolves the project after Click checked the other options and before the command body runs (`use_active_project` in `commands/_project_ref.py`). So a missing required option is still `USAGE_ERROR` (exit 2), and a project that does not resolve is `CONFIG_ERROR` (exit 5). A destructive or admin command under `--json` then adds the T12 warning. A command with an all-projects option resolves its projects in its body: the 18 fan-out reads by T2, and `sync pull/diff/push`, `workspace gc` and `project refresh` use the T1 chain without `--project` and `--all-projects` (`--all` for `project refresh`). `config detail` and the single-shot `project invite` also resolve it in their body, and so do `flow schema --full` and `flow validate`: when the T1 chain finds no project (none registered, or several and none active), they work offline with the flow schema bundled with kbagent (`flow validate` runs the semantic checks only). `project add` and `project create` name the alias of the new project with `--alias`; their `--project` is its deprecated name (C3). Exceptions, where `--project` names no target project: `init` (the projects to copy), `agent prompt-improve` (a hint), and `lineage show` (a filter of a local graph file). Options that name a second project keep their own rules: `sync clone --target` and the project options of `semantic-layer promote` are required, `config clone --target-project` defaults to the source project, and `semantic-layer diff` takes a project or a file for each side. Over `kbagent serve`, `POST /org/refresh` and `POST /workspaces/gc` follow the same rule as the list routes of T2: without a project they use the T1 chain, and `all_projects=true` reads all registered projects. In 0.x and 1.0.0rc1, 171 commands require `--project` (and `project add` requires it as the new alias), and `sync pull/diff/push`, `workspace gc`, `project refresh`, `config detail`, `config new --push` and the single-shot `project invite` ask for it.
+
+- Why: a person types the project once with `project use`, like `kubectl` and `gcloud` use their current context or project. An agent passes `--project` on every command (plugin rule), because the active project is shared by every terminal, agent conversation and `kbagent serve` of the same configuration directory.
+- Checked by: `target.project-not-required` (no required `--project`), and the `target.targets-reported` contract case (every command with one `--project`, run without it, reports the active project as `project_source`).
 
 ## 6. Machine output
 

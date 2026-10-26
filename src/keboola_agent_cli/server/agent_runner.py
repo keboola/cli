@@ -173,9 +173,9 @@ def build_prompt_helper_meta_prompt(
     instead of inventing API calls.
     """
     project_hint = (
-        f"The user has pinned project '{project}'. Reference it explicitly in the prompt."
+        f"The user named project '{project}'. Reference it explicitly in the prompt."
         if project
-        else "No project is pinned in this serve; if the goal needs one, the prompt should ask for it."
+        else "The user named no project; if the goal needs one, the prompt should ask for it."
     )
     draft_block = (
         f"USER'S CURRENT DRAFT (preserve any concrete details from here):\n{draft.strip()}"

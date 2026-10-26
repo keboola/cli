@@ -29,13 +29,14 @@ from ._helpers import (
     get_formatter,
     get_service,
 )
+from ._project_ref import PROJECT_HELP
 from .config import _handle_config_service_error, _parse_json_input, config_app
 
 
 @config_app.command("state-get", rich_help_panel="State")
 def config_state_get(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     component_id: str = typer.Option(..., "--component-id", help="Component ID"),
     config_id: str = typer.Option(..., "--config-id", help="Configuration ID"),
     row_id: str | None = typer.Option(
@@ -82,7 +83,7 @@ def config_state_get(
 @config_app.command("state-set", rich_help_panel="State")
 def config_state_set(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     component_id: str = typer.Option(..., "--component-id", help="Component ID"),
     config_id: str = typer.Option(..., "--config-id", help="Configuration ID"),
     state: str = typer.Option(

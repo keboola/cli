@@ -26,6 +26,10 @@ from typer.testing import CliRunner
 
 from keboola_agent_cli.cli import app
 from keboola_agent_cli.commands._helpers import check_cli_operation
+from keboola_agent_cli.commands._project_ref import (
+    NOT_A_TARGET_COMMANDS,
+    OWN_PROJECT_DEFAULT_COMMANDS,
+)
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.constants import ENV_AUTO_UPDATE, ENV_KBAGENT_PROJECT
 from keboola_agent_cli.effective_branch import (
@@ -332,6 +336,104 @@ def test_every_project_option_reports_an_explicit_project(
     assert missing == []
 
 
+def _single_project_commands(root: Any) -> list[tuple[tuple[str, ...], Any]]:
+    """The commands that take one project and use the active project without --project (T17)."""
+    found = []
+    for path, command in _commands_with_project_option(root):
+        param = next(p for p in command.params if "--project" in p.opts)
+        if (
+            not param.multiple
+            and not any(p.name == "all_projects" for p in command.params)
+            and path not in EXPECTED_EXCLUDED | OWN_PROJECT_DEFAULT_COMMANDS | NOT_A_TARGET_COMMANDS
+        ):
+            found.append((path, command))
+    return found
+
+
+def _body_that_outputs(command: Any) -> Any:
+    """A command body that writes the value of the command's --project parameter."""
+    project_param = next(p.name for p in command.params if "--project" in p.opts)
+
+    def body(**params: Any) -> None:
+        _formatter_and_store()[0].output(params[project_param])
+
+    return body
+
+
+def test_every_single_project_command_uses_the_active_project(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A command that takes one project runs on the active project when --project is omitted (T17).
+
+    The command bodies are replaced by one that writes the project it received,
+    so the value and its `targets` record come from the root command class.
+    """
+    store = _store(tmp_path / "config", "prod", "other", active="prod")
+    existing_file = tmp_path / "input.txt"
+    existing_file.write_text("x")
+    root = typer.main.get_command(app)
+    commands = _single_project_commands(root)
+    # Every command with one --project but the 12 that resolve it in their
+    # body or take a new alias, plus the `sl` / `mr` copies.
+    assert len(commands) > 190
+
+    missing = []
+    for path, command in commands:
+        _replace_body(root, path, _body_that_outputs(command))
+        argv = _argv_for(command, None, "--project", existing_file)
+        result = _invoke_root(
+            root, ["--config-dir", str(store.config_dir), "--json", *path, *argv], capsys
+        )
+        envelope = json.loads(result.stdout) if result.stdout else {}
+        if (
+            result.exit_code != 0
+            or envelope.get("data") != "prod"
+            or _source_of(result) != {"prod": ("active_project", "none")}
+        ):
+            missing.append(f"{' '.join(path)} (exit {result.exit_code})")
+    assert missing == []
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        pytest.param(["job", "detail", "--job-id", "1"], id="read"),
+        pytest.param(["storage", "delete-table", "--table-id", "in.c-a.t"], id="destructive"),
+        # The commands that resolve an omitted --project in their body.
+        pytest.param(["config", "detail", "--component-id", "keboola.ex-x"], id="config-detail"),
+        pytest.param(["sync", "pull"], id="sync-pull"),
+        pytest.param(["sync", "diff"], id="sync-diff"),
+        pytest.param(["sync", "push"], id="sync-push"),
+        pytest.param(["workspace", "gc"], id="workspace-gc"),
+        pytest.param(["project", "refresh"], id="project-refresh"),
+        pytest.param(
+            ["project", "invite", "--email", "a@b.com", "--role", "guest"], id="project-invite"
+        ),
+    ],
+)
+def test_command_without_a_resolvable_project_is_config_error(
+    tmp_path: Path, args: list[str]
+) -> None:
+    """Several projects and no active one: CONFIG_ERROR (exit 5), never a demand for --project."""
+    store = _store(tmp_path, "prod", "dev")
+    with patch("keboola_agent_cli.cli.ConfigStore", return_value=store):
+        result = runner.invoke(app, ["--json", *args])
+
+    assert result.exit_code == 5, result.output
+    error = json.loads(result.stdout)["error"]
+    assert error["code"] == "CONFIG_ERROR"
+    assert "project use" in error["message"]
+
+
+def test_missing_required_option_wins_over_a_missing_project(tmp_path: Path) -> None:
+    store = _store(tmp_path, "prod", "dev")
+    with patch("keboola_agent_cli.cli.ConfigStore", return_value=store):
+        result = runner.invoke(app, ["--json", "job", "detail"])
+
+    assert result.exit_code == 2, result.output
+    assert json.loads(result.stdout)["error"]["code"] == "USAGE_ERROR"
+
+
 def test_branch_record_carries_the_project_source() -> None:
     store = MagicMock()
     store.get_project.return_value = _project(1, branch=456)
@@ -407,6 +509,27 @@ def test_destructive_command_warns_about_the_active_choice(
     assert "kbagent project use" in warnings[0]["message"]
     assert "kbagent branch use" in warnings[1]["message"]
     assert _source_of(result) == {"prod": ("active_project", "active_branch")}
+
+
+@pytest.mark.parametrize(
+    ("path", "argv"),
+    [
+        pytest.param(("storage", "delete-table"), ["--table-id", "in.c-a.t"], id="destructive"),
+        pytest.param(("branch", "delete"), ["--branch", "456"], id="destructive-branch"),
+        pytest.param(("project", "edit"), ["--new-alias", "renamed"], id="admin"),
+        pytest.param(("project", "remove"), [], id="admin-remove"),
+    ],
+)
+def test_destructive_or_admin_command_without_project_warns(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], path: tuple[str, ...], argv: list[str]
+) -> None:
+    """A destructive or admin command whose --project was required before 1.0.0 (T17) warns (T12)."""
+    result = _run_with_body(tmp_path, capsys, path, argv, "--json")
+
+    assert result.exit_code == 0, result.output
+    document = json.loads(result.stdout)
+    hints = [w["hint"] for w in document["warnings"] if w["code"] == TARGET_FROM_ACTIVE_CHOICE_CODE]
+    assert "--project prod" in hints
 
 
 def test_explicit_flags_give_no_warning(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

@@ -61,7 +61,7 @@ class TestProjectAdd:
                     "--json",
                     "project",
                     "add",
-                    "--project",
+                    "--alias",
                     "prod",
                     "--url",
                     "https://connection.keboola.com",
@@ -76,6 +76,47 @@ class TestProjectAdd:
         assert output["data"]["project_id"] == 5678
         # Token should be masked
         assert "55555" not in output["data"]["token"]
+
+    def _add(self, tmp_path: Path, *args: str) -> Any:
+        """Run `kbagent --json project add ARGS` against a mocked client."""
+        mock_client = make_mock_client(project_name="Prod Project", project_id=5678)
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockService,
+            patch.dict(os.environ, {"KBC_TOKEN": TEST_TOKEN}),
+        ):
+            store_instance = ConfigStore(config_dir=config_dir)
+            MockStore.return_value = store_instance
+            MockService.return_value = ProjectService(
+                config_store=store_instance, client_factory=lambda url, token: mock_client
+            )
+            return runner.invoke(app, ["--json", "project", "add", *args])
+
+    def test_project_add_deprecated_project_option_still_works(self, tmp_path: Path) -> None:
+        """`--project` is the deprecated name of `--alias` (spec T17, C3)."""
+        result = self._add(tmp_path, "-p", "prod", "--url", "https://connection.keboola.com")
+
+        assert result.exit_code == 0, result.output
+        output = json.loads(result.output)
+        assert output["data"]["alias"] == "prod"
+        [warning] = [w for w in output["warnings"] if w["code"] == "DEPRECATED"]
+        assert warning["replacement"] == "--alias"
+
+    def test_project_add_without_alias_is_usage_error(self, tmp_path: Path) -> None:
+        result = self._add(tmp_path, "--url", "https://connection.keboola.com")
+
+        assert result.exit_code == 2, result.output
+        error = json.loads(result.output)["error"]
+        assert error["code"] == "USAGE_ERROR"
+        assert "--alias" in error["message"]
+
+    def test_project_add_alias_and_a_different_project_is_usage_error(self, tmp_path: Path) -> None:
+        result = self._add(tmp_path, "--alias", "prod", "--project", "dev")
+
+        assert result.exit_code == 2, result.output
+        assert json.loads(result.output)["error"]["code"] == "USAGE_ERROR"
 
     def test_project_add_success_human(self, tmp_path: Path) -> None:
         """project add in human mode outputs success message."""
@@ -102,7 +143,7 @@ class TestProjectAdd:
                 [
                     "project",
                     "add",
-                    "--project",
+                    "--alias",
                     "test",
                     "--url",
                     "https://connection.keboola.com",
@@ -146,7 +187,7 @@ class TestProjectAdd:
                     "--json",
                     "project",
                     "add",
-                    "--project",
+                    "--alias",
                     "bad",
                 ],
             )
@@ -189,7 +230,7 @@ class TestProjectAdd:
                     "--json",
                     "project",
                     "add",
-                    "--project",
+                    "--alias",
                     "timeout",
                 ],
             )
@@ -246,7 +287,7 @@ class TestProjectList:
                 [
                     "project",
                     "add",
-                    "--project",
+                    "--alias",
                     "test",
                     "--url",
                     "https://connection.keboola.com",
@@ -288,7 +329,7 @@ class TestProjectList:
                 [
                     "project",
                     "add",
-                    "--project",
+                    "--alias",
                     "prod",
                     "--url",
                     "https://connection.keboola.com",
@@ -348,7 +389,7 @@ class TestProjectRemove:
                 [
                     "project",
                     "add",
-                    "--project",
+                    "--alias",
                     "test",
                 ],
             )
@@ -368,6 +409,50 @@ class TestProjectRemove:
         output = json.loads(result.output)
         assert output["status"] == "ok"
         assert output["data"]["alias"] == "test"
+
+    def _remove(self, tmp_path: Path, *args: str) -> tuple[Any, ConfigStore]:
+        """Register `test`, then run `kbagent project remove ARGS` without a terminal."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = ConfigStore(config_dir=config_dir)
+        store.add_project(
+            "test",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token=TEST_TOKEN,
+                project_name="Test",
+                project_id=1,
+            ),
+        )
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore", return_value=store),
+            patch(
+                "keboola_agent_cli.cli.ProjectService",
+                return_value=ProjectService(config_store=store),
+            ),
+        ):
+            return runner.invoke(app, ["project", "remove", *args]), store
+
+    def test_project_remove_without_a_terminal_refuses(self, tmp_path: Path) -> None:
+        """No terminal, no --yes, no --json: nothing answers the question (T17, row 38)."""
+        result, store = self._remove(tmp_path, "--project", "test")
+
+        assert result.exit_code == 2, result.output
+        assert "CONFIRMATION_REQUIRED" in result.output
+        assert store.get_project("test") is not None
+
+    def test_project_remove_yes_removes(self, tmp_path: Path) -> None:
+        result, store = self._remove(tmp_path, "--project", "test", "--yes")
+
+        assert result.exit_code == 0, result.output
+        assert store.get_project("test") is None
+
+    def test_project_remove_dry_run_keeps_the_project(self, tmp_path: Path) -> None:
+        result, store = self._remove(tmp_path, "--dry-run")
+
+        assert result.exit_code == 0, result.output
+        assert "would be removed" in result.output
+        assert store.get_project("test") is not None
 
     def test_project_remove_nonexistent_exit_code_5(self, tmp_path: Path) -> None:
         """project remove with nonexistent alias returns exit code 5."""
@@ -427,7 +512,7 @@ class TestProjectStatus:
                 [
                     "project",
                     "add",
-                    "--project",
+                    "--alias",
                     "prod",
                 ],
             )
@@ -467,7 +552,7 @@ class TestProjectStatus:
                 [
                     "project",
                     "add",
-                    "--project",
+                    "--alias",
                     "test",
                 ],
             )
@@ -638,7 +723,7 @@ class TestProjectUse:
                 client_factory=lambda url, token: mock_client,
             )
             for alias in aliases:
-                runner.invoke(app, ["project", "add", "--project", alias])
+                runner.invoke(app, ["project", "add", "--alias", alias])
 
     def test_project_use_pins_alias(self, tmp_path: Path) -> None:
         """project use ALIAS persists default_project to config.json."""
@@ -893,7 +978,7 @@ class TestActiveProjectStability:
         config_dir.mkdir()
         self._seed(config_dir, "prod", "stage")
 
-        result = self._invoke(config_dir, ["project", "remove", "--project", "prod"])
+        result = self._invoke(config_dir, ["project", "remove", "--project", "prod", "--yes"])
 
         assert result.exit_code == 0, result.output
         assert "Project 'prod' removed." in result.output
@@ -1018,7 +1103,7 @@ class TestFirewallFlags:
                 config_store=store,
                 client_factory=lambda url, token: mock_client,
             )
-            runner.invoke(app, ["project", "add", "--project", "prod"])
+            runner.invoke(app, ["project", "add", "--alias", "prod"])
 
     def test_deny_writes_blocks_project_add(self, tmp_path: Path) -> None:
         """--deny-writes blocks project.add (admin is a superset of cli:write)."""
@@ -1037,7 +1122,7 @@ class TestFirewallFlags:
                     "--json",
                     "project",
                     "add",
-                    "--project",
+                    "--alias",
                     "foo",
                     "--url",
                     "https://connection.keboola.com",
@@ -1223,7 +1308,7 @@ class TestFirewallFlags:
                     "--json",
                     "project",
                     "add",
-                    "--project",
+                    "--alias",
                     "newproj",
                 ],
             )
@@ -1257,7 +1342,7 @@ class TestFirewallFlags:
             MockStore.return_value = ConfigStore(config_dir=config_dir)
             result = runner.invoke(
                 app,
-                ["--deny-writes", "--json", "project", "add", "--project", "new"],
+                ["--deny-writes", "--json", "project", "add", "--alias", "new"],
             )
         assert result.exit_code == 6
 
@@ -1295,7 +1380,7 @@ class TestProjectEdit:
                 [
                     "project",
                     "add",
-                    "--project",
+                    "--alias",
                     "test",
                     "--url",
                     "https://old.keboola.com",
@@ -1345,7 +1430,7 @@ class TestProjectEdit:
                 [
                     "project",
                     "add",
-                    "--project",
+                    "--alias",
                     "test",
                 ],
             )
@@ -2917,8 +3002,8 @@ class TestConfigDetail:
         assert call.kwargs.get("with_state") is True
         assert call.kwargs.get("config_id") is None
 
-    def test_config_detail_requires_project(self, tmp_path: Path) -> None:
-        """config detail with no --project exits 2 (INVALID_ARGUMENT)."""
+    def test_config_detail_without_project_uses_the_active_project(self, tmp_path: Path) -> None:
+        """config detail with no --project reads the active project (spec T17)."""
         config_dir = tmp_path / "config"
         config_dir.mkdir()
 
@@ -2934,7 +3019,9 @@ class TestConfigDetail:
         ):
             MockStore.return_value = store
             MockProjService.return_value = ProjectService(config_store=store)
-            MockCfgService.return_value = ConfigService(config_store=store)
+            service = MagicMock()
+            service.get_config_detail.return_value = {"configs": [], "errors": []}
+            MockCfgService.return_value = service
 
             result = runner.invoke(
                 app,
@@ -2947,7 +3034,8 @@ class TestConfigDetail:
                 ],
             )
 
-        assert result.exit_code == 2
+        assert result.exit_code == 0, result.output
+        assert service.get_config_detail.call_args.kwargs["aliases"] == ["prod"]
 
     def test_config_detail_rejects_empty_component_id(self, tmp_path: Path) -> None:
         """M3: ``--component-id ""`` fails fast with INVALID_ARGUMENT (exit 2)."""
@@ -3842,8 +3930,8 @@ class TestJobRun:
             call_kwargs[1].get("branch_id") is None if call_kwargs[1] else True
         )
 
-    def test_job_run_branch_requires_project(self, tmp_path: Path) -> None:
-        """job run --branch 123 without --project is rejected (but --project is required anyway)."""
+    def test_job_run_branch_without_project_uses_the_active_project(self, tmp_path: Path) -> None:
+        """job run --branch 123 without --project runs in the active project (spec T17)."""
         config_dir = tmp_path / "config"
         config_dir.mkdir()
 
@@ -3863,9 +3951,10 @@ class TestJobRun:
             MockStore.return_value = store
             MockProjService.return_value = ProjectService(config_store=store)
             MockCfgService.return_value = ConfigService(config_store=store)
-            MockJobService.return_value = JobService(config_store=store)
+            job_service = MagicMock()
+            job_service.run_job.return_value = {"id": "1", "status": "created"}
+            MockJobService.return_value = job_service
 
-            # --project is required for job run, so missing it returns usage error
             result = runner.invoke(
                 app,
                 [
@@ -3881,8 +3970,8 @@ class TestJobRun:
                 ],
             )
 
-        # --project is required, so typer returns exit code 2 (usage error)
-        assert result.exit_code == 2
+        assert result.exit_code == 0, result.output
+        assert job_service.run_job.call_args.kwargs["alias"] == "prod"
 
     def test_job_run_explicit_variable_values_id_forwarded(self, tmp_path: Path) -> None:
         """--variable-values-id lands in service call as variable_values_id."""
@@ -5400,7 +5489,7 @@ class TestExitCodes:
                     "--json",
                     "project",
                     "add",
-                    "--project",
+                    "--alias",
                     "bad",
                 ],
             )
@@ -5441,7 +5530,7 @@ class TestExitCodes:
                     "--json",
                     "project",
                     "add",
-                    "--project",
+                    "--alias",
                     "unreachable",
                 ],
             )
@@ -5753,7 +5842,7 @@ class TestMissingRequiredArgs:
     """Tests for missing required arguments."""
 
     def test_project_add_missing_alias(self, tmp_path: Path) -> None:
-        """project add without --project shows error."""
+        """project add without --alias shows error."""
         config_dir = tmp_path / "config"
         config_dir.mkdir()
 
@@ -5795,7 +5884,7 @@ class TestMissingRequiredArgs:
                 [
                     "project",
                     "add",
-                    "--project",
+                    "--alias",
                     "test",
                 ],
             )
@@ -5886,7 +5975,7 @@ class TestProjectEditTokenReverify:
                 [
                     "project",
                     "add",
-                    "--project",
+                    "--alias",
                     "test",
                 ],
             )
@@ -5939,7 +6028,7 @@ class TestProjectAddTokenSecurity:
                     "--json",
                     "project",
                     "add",
-                    "--project",
+                    "--alias",
                     "envtest",
                     "--url",
                     "https://connection.keboola.com",
@@ -5986,7 +6075,7 @@ class TestProjectAddTokenSecurity:
                     "--json",
                     "project",
                     "add",
-                    "--project",
+                    "--alias",
                     "prompttest",
                     "--url",
                     "https://connection.keboola.com",
@@ -6029,7 +6118,7 @@ class TestProjectAddTokenSecurity:
                     "--json",
                     "project",
                     "add",
-                    "--project",
+                    "--alias",
                     "filetest",
                     "--token-file",
                     str(token_file),
@@ -6053,7 +6142,7 @@ class TestProjectAddTokenSecurity:
                     "--json",
                     "project",
                     "add",
-                    "--project",
+                    "--alias",
                     "keeptest",
                     "--token-file",
                     str(token_file),
@@ -6069,7 +6158,7 @@ class TestProjectAddTokenSecurity:
         with self._patched_add(tmp_path, make_mock_client(project_name="StdinProject")):
             result = runner.invoke(
                 app,
-                ["--json", "project", "add", "--project", "stdintest", "--token-stdin"],
+                ["--json", "project", "add", "--alias", "stdintest", "--token-stdin"],
                 input=f"{TEST_TOKEN}\n",
             )
 
@@ -6089,7 +6178,7 @@ class TestProjectAddTokenSecurity:
                     "--json",
                     "project",
                     "add",
-                    "--project",
+                    "--alias",
                     "namedenvtest",
                     "--token-env",
                     "CI_KBC_TOKEN",
@@ -6109,7 +6198,7 @@ class TestProjectAddTokenSecurity:
                 [
                     "project",
                     "add",
-                    "--project",
+                    "--alias",
                     "conflicttest",
                     "--token",
                     TEST_TOKEN,
@@ -6147,7 +6236,7 @@ class TestProjectAddTokenSecurity:
                     "--json",
                     "project",
                     "add",
-                    "--project",
+                    "--alias",
                     "insecure",
                     "--url",
                     "http://connection.keboola.com",
@@ -6182,7 +6271,7 @@ class TestProjectAddTokenSecurity:
                     "--json",
                     "project",
                     "add",
-                    "--project",
+                    "--alias",
                     "fileurl",
                     "--url",
                     "file:///etc/passwd",
@@ -6217,7 +6306,7 @@ class TestProjectAddTokenSecurity:
                     "--json",
                     "project",
                     "add",
-                    "--project",
+                    "--alias",
                     "secure",
                     "--url",
                     "https://connection.keboola.com",
@@ -8511,7 +8600,7 @@ class TestProjectRefresh:
                     "--json",
                     "project",
                     "refresh",
-                    "--all",
+                    "--all-projects",
                     "--yes",
                 ],
             )
@@ -8524,8 +8613,8 @@ class TestProjectRefresh:
         assert output["data"]["projects_refreshed"][0]["project_id"] == 258
         assert output["data"]["dry_run"] is False
 
-    def test_project_refresh_requires_project_or_all(self, tmp_path: Path) -> None:
-        """project refresh without --project or --all returns usage error."""
+    def test_project_refresh_without_project_or_all_uses_the_chain(self, tmp_path: Path) -> None:
+        """project refresh without --project or --all uses the T1 chain: no project, exit 5."""
         config_dir = tmp_path / "config"
         config_dir.mkdir()
         store = ConfigStore(config_dir=config_dir)
@@ -8546,10 +8635,9 @@ class TestProjectRefresh:
                 ],
             )
 
-        assert result.exit_code == 2, f"Exit code {result.exit_code}: {result.output}"
+        assert result.exit_code == 5, f"Exit code {result.exit_code}: {result.output}"
         output = json.loads(result.output)
-        assert output["status"] == "error"
-        assert "--project" in output["error"]["message"] or "--all" in output["error"]["message"]
+        assert output["error"]["code"] == "CONFIG_ERROR"
 
     def test_project_refresh_both_project_and_all(self, tmp_path: Path) -> None:
         """project refresh with both --project and --all returns usage error."""
@@ -8571,7 +8659,7 @@ class TestProjectRefresh:
                     "refresh",
                     "--project",
                     "prod",
-                    "--all",
+                    "--all-projects",
                     "--yes",
                 ],
             )
@@ -8582,7 +8670,10 @@ class TestProjectRefresh:
         assert "not both" in output["error"]["message"]
 
     def test_project_refresh_dry_run(self, tmp_path: Path) -> None:
-        """project refresh --all --dry-run --json shows preview without changes."""
+        """project refresh --all --dry-run --json shows preview without changes.
+
+        `--all` is the deprecated name of `--all-projects` (spec T4, C3): it still works.
+        """
         config_dir = tmp_path / "config"
         config_dir.mkdir()
         store = ConfigStore(config_dir=config_dir)
@@ -8618,6 +8709,9 @@ class TestProjectRefresh:
         assert output["data"]["dry_run"] is True
         assert len(output["data"]["projects_refreshed"]) == 1
         assert output["data"]["projects_refreshed"][0]["alias"] == "prod"
+        assert mock_service.refresh_tokens.call_args.kwargs["aliases"] is None
+        [warning] = [w for w in output["warnings"] if w["code"] == "DEPRECATED"]
+        assert warning["replacement"] == "--all-projects"
 
     def test_project_refresh_single_project(self, tmp_path: Path) -> None:
         """project refresh --project prod --json --yes refreshes a specific project."""
@@ -8708,7 +8802,7 @@ class TestProjectRefresh:
                     "--json",
                     "project",
                     "refresh",
-                    "--all",
+                    "--all-projects",
                     "--yes",
                 ],
             )
@@ -8744,7 +8838,7 @@ class TestProjectRefresh:
                     "--json",
                     "project",
                     "refresh",
-                    "--all",
+                    "--all-projects",
                     "--force",
                     "--yes",
                 ],

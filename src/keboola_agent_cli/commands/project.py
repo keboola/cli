@@ -22,7 +22,7 @@ from ..constants import (
     PROJECT_ROLES,
 )
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
-from ..output import format_item_error
+from ..output import OutputFormatter, format_item_error
 from ..services.project_service import AUTH_MODE_SESSION, AUTH_MODE_STATIC
 from ._all_projects import (
     FANOUT_ONE_PROJECT_HELP,
@@ -38,6 +38,7 @@ from ._helpers import (
     RefuseAtFile,
     _confirm_or_abort,
     check_cli_permission,
+    deprecated_option,
     discard_token_file,
     emit_api_error,
     finish_items,
@@ -45,12 +46,14 @@ from ._helpers import (
     get_service,
     map_error_to_exit_code,
     resolve_manage_token,
+    resolve_project_alias,
     resolve_storage_token_input,
     token_came_from_command_line,
 )
 from ._metadata_input import resolve_text_input
 from ._project_create import format_provision_result
 from ._project_pin import format_current_result, format_use_result, print_active_project_change
+from ._project_ref import PROJECT_DEFAULT, PROJECT_HELP
 
 
 class ProjectBackend(StrEnum):
@@ -177,10 +180,23 @@ def _format_status_table(console: Console, statuses: list[dict[str, Any]]) -> No
     console.print(table)
 
 
+def _refuse_two_aliases(formatter: OutputFormatter, alias: str | None, project: str | None) -> None:
+    """Refuse ``--alias`` with a different value of its deprecated name ``--project`` (T17)."""
+    if project and alias != project:
+        formatter.error(
+            message="Pass the alias of the new project once, with --alias.",
+            error_code=ErrorCode.USAGE_ERROR,
+        )
+        raise typer.Exit(code=2)
+
+
 @project_app.command("add")
 def project_add(
     ctx: typer.Context,
-    alias: str = typer.Option(..., "--project", "-p", help="Human-friendly name for this project"),
+    alias: str = typer.Option(..., "--alias", help="Alias of the new project"),
+    project: str | None = deprecated_option(
+        "project add --project", "--project", "-p", renamed_to="alias"
+    ),
     url: str = typer.Option(
         DEFAULT_STACK_URL,
         help="Keboola stack URL",
@@ -204,6 +220,7 @@ def project_add(
     --token keeps the value out of your shell history.
     """
     formatter = get_formatter(ctx)
+    _refuse_two_aliases(formatter, alias, project)
     service = get_service(ctx, "project_service")
     resolved_token = resolve_storage_token_input(
         token=token,
@@ -252,7 +269,10 @@ def project_create(
         help="Keboola stack URL to create the project on (required -- never guessed)",
     ),
     alias: str | None = typer.Option(
-        None, "--project", "-p", help="Local alias for the new project (default: from its name)"
+        None, "--alias", help="Local alias for the new project (default: from its name)"
+    ),
+    project: str | None = deprecated_option(
+        "project create --project", "--project", "-p", renamed_to="alias"
     ),
     name: str | None = typer.Option(None, "--name", "-n", help="Name for the new Keboola project"),
     backend: ProjectBackend | None = typer.Option(
@@ -280,6 +300,7 @@ def project_create(
     Keboola UI instead -- kbagent keeps one session per stack.
     """
     formatter = get_formatter(ctx)
+    _refuse_two_aliases(formatter, alias, project)
     service = get_service(ctx, "auth_service")
 
     try:
@@ -317,14 +338,31 @@ def project_list(ctx: typer.Context) -> None:
 @project_app.command("remove")
 def project_remove(
     ctx: typer.Context,
-    alias: str = typer.Option(..., "--project", "-p", help="Alias of the project to remove"),
+    alias: str = typer.Option(
+        None,
+        "--project",
+        "-p",
+        help=f"Alias or ID of the project to remove ({PROJECT_DEFAULT})",
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Show which project would be removed, without removing it"
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt"),
 ) -> None:
-    """Remove a Keboola project connection."""
+    """Remove a Keboola project connection and its stored token."""
     formatter = get_formatter(ctx)
     service = get_service(ctx, "project_service")
 
     try:
-        result = service.remove_project(alias=alias)
+        # The checks of the removal run first, so an unknown alias is never asked about.
+        result = service.remove_project(alias=alias, dry_run=True)
+        if not dry_run:
+            _confirm_or_abort(
+                formatter,
+                yes,
+                f"Remove project '{alias}' and its stored token from the configuration?",
+            )
+            result = service.remove_project(alias=alias)
         formatter.output(result, _format_remove_result)
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -332,6 +370,9 @@ def project_remove(
 
 
 def _format_remove_result(c: Console, d: dict[str, Any]) -> None:
+    if d.get("dry_run"):
+        c.print(f"[bold yellow]DRY RUN:[/bold yellow] {d['message']}")
+        return
     c.print(f"[bold green]Success:[/bold green] {d['message']}")
     print_active_project_change(c, None, d.get("active_project_cleared"))
 
@@ -339,7 +380,12 @@ def _format_remove_result(c: Console, d: dict[str, Any]) -> None:
 @project_app.command("edit")
 def project_edit(
     ctx: typer.Context,
-    alias: str = typer.Option(..., "--project", "-p", help="Alias of the project to edit"),
+    alias: str = typer.Option(
+        None,
+        "--project",
+        "-p",
+        help=f"Alias or ID of the project to edit ({PROJECT_DEFAULT})",
+    ),
     url: str | None = typer.Option(None, help="New Keboola stack URL"),
     token: str | None = typer.Option(
         None,
@@ -574,11 +620,15 @@ def project_status(
 def project_refresh(
     ctx: typer.Context,
     project: str | None = typer.Option(
-        None, "--project", "-p", help="Refresh token for a specific project"
+        None,
+        "--project",
+        "-p",
+        help=f"Project alias or ID ({PROJECT_DEFAULT}; --all-projects for all projects)",
     ),
     all_projects: bool = typer.Option(
-        False, "--all", help="Refresh all projects with invalid tokens"
+        False, "--all-projects", help="Refresh all projects with invalid tokens"
     ),
+    all_: bool = deprecated_option("project refresh --all", "--all"),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Preview what would be refreshed without making changes"
     ),
@@ -606,26 +656,24 @@ def project_refresh(
     \b
     Examples:
         kbagent project refresh --project prod
-        kbagent project refresh --all
-        kbagent project refresh --all --dry-run
-        kbagent project refresh --all --force
+        kbagent project refresh --all-projects
+        kbagent project refresh --all-projects --dry-run
+        kbagent project refresh --all-projects --force
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "org_service")
 
-    # Validate: must have --project or --all, not both, not neither
+    # --project and --all-projects name the projects in two ways; without either,
+    # the T1 chain picks one. --all is the deprecated name of --all-projects.
+    all_projects = all_projects or all_
     if project and all_projects:
         formatter.error(
-            message="Provide --project or --all, not both",
+            message="Provide --project or --all-projects, not both",
             error_code=ErrorCode.USAGE_ERROR,
         )
         raise typer.Exit(code=2)
     if not project and not all_projects:
-        formatter.error(
-            message="Provide --project or --all",
-            error_code=ErrorCode.USAGE_ERROR,
-        )
-        raise typer.Exit(code=2)
+        project = resolve_project_alias(ctx, formatter, None)
 
     manage_token = resolve_manage_token(allow_env=ctx.obj["allow_env_manage_token"])
 
@@ -743,12 +791,7 @@ def project_current(ctx: typer.Context) -> None:
 @project_app.command("description-get")
 def project_description_get(
     ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        "-p",
-        help="Project alias to query",
-    ),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
 ) -> None:
     """Get the Keboola dashboard project description.
 
@@ -781,10 +824,10 @@ def project_description_get(
 def project_description_set(
     ctx: typer.Context,
     project: str = typer.Option(
-        ...,
+        None,
         "--project",
         "-p",
-        help="Project alias to update",
+        help=f"Project alias or ID to update ({PROJECT_DEFAULT})",
     ),
     text: str | None = typer.Option(
         None, "--text", help="Inline description string", callback=RefuseAtFile("--file").callback
@@ -877,12 +920,7 @@ def _format_info_table(console: Console, data: dict[str, Any]) -> None:
 @project_app.command("info")
 def project_info(
     ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        "-p",
-        help="Project alias to query",
-    ),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
 ) -> None:
     """Show detailed project metadata.
 
@@ -1030,7 +1068,10 @@ def _format_invitation_list(console: Console, data: dict[str, Any]) -> None:
 def project_invite(
     ctx: typer.Context,
     project: str | None = typer.Option(
-        None, "--project", "-p", help="Project alias to invite the user to (single-shot mode)"
+        None,
+        "--project",
+        "-p",
+        help=f"Project alias or ID to invite the user to, single-shot mode ({PROJECT_DEFAULT})",
     ),
     email: str | None = typer.Option(
         None, "--email", "-e", help="Email address of the user to invite"
@@ -1080,13 +1121,15 @@ def project_invite(
             error_code=ErrorCode.USAGE_ERROR,
         )
         raise typer.Exit(code=2)
-    if not from_csv and not (project and email and role):
+    if not from_csv and not (email and role):
         formatter.error(
-            message="Provide --project, --email, and --role for single-shot invite "
+            message="Provide --email and --role for single-shot invite "
             "(or use --from-csv for bulk).",
             error_code=ErrorCode.USAGE_ERROR,
         )
         raise typer.Exit(code=2)
+    if not from_csv:
+        project = resolve_project_alias(ctx, formatter, project)
 
     manage_token = resolve_manage_token(allow_env=ctx.obj["allow_env_manage_token"])
     service = get_service(ctx, "member_service")
@@ -1141,7 +1184,7 @@ def project_invite(
 @project_app.command("member-list")
 def project_member_list(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias to list members for"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     include_pending: bool = typer.Option(
         False, "--include-pending", help="Also list pending (unaccepted) invitations"
     ),
@@ -1171,9 +1214,7 @@ def project_member_list(
 @project_app.command("invitation-list")
 def project_invitation_list(
     ctx: typer.Context,
-    project: str = typer.Option(
-        ..., "--project", "-p", help="Project alias to list pending invitations for"
-    ),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
 ) -> None:
     """List pending project invitations."""
     formatter = get_formatter(ctx)
@@ -1196,7 +1237,7 @@ def project_invitation_list(
 @project_app.command("invitation-cancel")
 def project_invitation_cancel(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     email: str = typer.Option(
         ...,
         "--email",
@@ -1208,12 +1249,16 @@ def project_invitation_cancel(
         "--invitation-id",
         help="Numeric invitation ID; bypass the email lookup",
     ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Look the invitation up without cancelling it"
+    ),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
 ) -> None:
     """Cancel a pending invitation."""
     formatter = get_formatter(ctx)
 
-    _confirm_or_abort(formatter, yes, f"Cancel pending invitation for {email} on {project}?")
+    if not dry_run:
+        _confirm_or_abort(formatter, yes, f"Cancel pending invitation for {email} on {project}?")
 
     manage_token = resolve_manage_token(allow_env=ctx.obj["allow_env_manage_token"])
     service = get_service(ctx, "member_service")
@@ -1223,6 +1268,7 @@ def project_invitation_cancel(
             alias=project,
             email=email,
             invitation_id=invitation_id,
+            dry_run=dry_run,
         )
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -1235,7 +1281,12 @@ def project_invitation_cancel(
     formatter.output(
         result,
         lambda c, d: c.print(
-            f"[bold green]Cancelled[/bold green] invitation_id={d.get('invitation_id')} "
+            (
+                "[bold yellow]DRY RUN:[/bold yellow] would cancel"
+                if d.get("status") == "dry_run"
+                else "[bold green]Cancelled[/bold green]"
+            )
+            + f" invitation_id={d.get('invitation_id')} "
             f"for {d.get('email')} on [cyan]{d.get('alias')}[/cyan]."
         ),
     )
@@ -1244,7 +1295,7 @@ def project_invitation_cancel(
 @project_app.command("member-remove")
 def project_member_remove(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     email: str = typer.Option(..., "--email", "-e", help="Email of the member to remove"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
 ) -> None:
@@ -1283,12 +1334,15 @@ def project_member_remove(
 @project_app.command("member-set-role")
 def project_member_set_role(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     email: str = typer.Option(..., "--email", "-e", help="Email of the member to update"),
     role: ProjectRole = typer.Option(
         ...,
         "--role",
         help="New role: " + " | ".join(PROJECT_ROLES),
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Look the member up without changing the role"
     ),
 ) -> None:
     """Change an existing member's role (PATCH)."""
@@ -1302,6 +1356,7 @@ def project_member_set_role(
             alias=project,
             email=email,
             role=role,
+            dry_run=dry_run,
         )
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -1317,7 +1372,12 @@ def project_member_set_role(
     formatter.output(
         result,
         lambda c, d: c.print(
-            f"[bold green]Updated[/bold green] {d.get('email')} role on "
+            (
+                "[bold yellow]DRY RUN:[/bold yellow] would update"
+                if d.get("status") == "dry_run"
+                else "[bold green]Updated[/bold green]"
+            )
+            + f" {d.get('email')} role on "
             f"[cyan]{d.get('alias')}[/cyan] -> [yellow]{d.get('role')}[/yellow]."
         ),
     )

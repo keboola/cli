@@ -49,6 +49,7 @@ from ._helpers import (
     get_service,
     map_error_to_exit_code,
 )
+from ._project_ref import PROJECT_HELP
 
 DELIVERED_TO_CLIPBOARD = "clipboard"
 DELIVERED_TO_STDOUT = "stdout"
@@ -502,7 +503,7 @@ def register_password_command(app: typer.Typer) -> None:
     @app.command("password")
     def data_app_password(
         ctx: typer.Context,
-        project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+        project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
         app_id: str = typer.Option(..., "--app-id", help="Data Science numeric app id"),
         copy: CopyOption = False,
         reveal: RevealOption = False,

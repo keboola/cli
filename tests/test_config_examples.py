@@ -246,9 +246,9 @@ class TestConfigExamplesCli:
         assert output["data"]["component_id"] == "keboola.ex-google-drive"
         assert "root_examples" not in output["data"]
         assert len(output["data"]["row_examples"]) == 1
-        # --project omitted -> service receives alias=None (first available)
+        # --project omitted -> the root command class passes the sole project (T17)
         mock_svc.get_config_examples.assert_called_once_with(
-            alias=None,
+            alias="prod",
             component_id="keboola.ex-google-drive",
         )
 
