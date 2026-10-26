@@ -699,6 +699,7 @@ YES_WITHOUT_OFFLINE_CASE: dict[str, str] = {
     "merge-request merge": "resolves the merge request first, then asks",
     "org setup": "needs the manage token first, then previews and asks",
     "project refresh": "needs the manage token first, then previews and asks",
+    "project remove": "checks that the alias is registered first, then asks",
     "rls bindings-sweep": "--yes deletes the orphaned bindings; it answers no question",
     "rls setup": "terminal-only wizard: without a terminal it exits 2 before any question",
     "rls unbind": "looks the binding up first, then asks",

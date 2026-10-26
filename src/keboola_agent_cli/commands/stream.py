@@ -31,6 +31,7 @@ from ._helpers import (
     get_service,
     map_error_to_exit_code,
 )
+from ._project_ref import PROJECT_HELP
 
 stream_app = typer.Typer(help="Data Streams (OTLP) source management")
 
@@ -150,7 +151,7 @@ def _format_delete_result(console: Console, data: dict[str, Any]) -> None:
 @stream_app.command("list")
 def stream_list(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     branch: str | None = typer.Option(
         None, "--branch", help="Branch ref (default: the project's default branch)"
     ),
@@ -169,7 +170,7 @@ def stream_list(
 @stream_app.command("create-source")
 def stream_create_source(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     name: str = typer.Option(..., "--name", "-n", help="Human-readable source name"),
     source_type: SourceType = typer.Option(
         SourceType.otlp, "--type", "-t", help="Source type (otlp | http)"
@@ -215,7 +216,7 @@ def stream_create_source(
 def stream_detail(
     ctx: typer.Context,
     source_id: str | None = typer.Argument(None, help="Source id (or use --name)"),
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     name: str | None = typer.Option(None, "--name", "-n", help="Look up the source by name"),
     branch: str | None = typer.Option(
         None, "--branch", help="Branch ref (default branch if unset)"
@@ -243,7 +244,7 @@ def stream_detail(
 def stream_delete(
     ctx: typer.Context,
     source_id: str = typer.Argument(..., help="Source id to delete"),
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     branch: str | None = typer.Option(
         None, "--branch", help="Branch ref (default branch if unset)"
     ),

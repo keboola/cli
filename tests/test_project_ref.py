@@ -42,9 +42,11 @@ def _project(project_id: int | None, *, stack: str = US, token: str = TOKEN) -> 
     return ProjectConfig(stack_url=stack, token=token, project_id=project_id)
 
 
-def _write_config(config_dir: Path, projects: dict[str, ProjectConfig]) -> ConfigStore:
+def _write_config(
+    config_dir: Path, projects: dict[str, ProjectConfig], active: str = ""
+) -> ConfigStore:
     store = ConfigStore(config_dir=config_dir)
-    store.save(AppConfig(projects=projects))
+    store.save(AppConfig(projects=projects, default_project=active))
     return store
 
 
@@ -141,7 +143,8 @@ EXPECTED_EXCLUDED = {("project", "add"), ("project", "create"), ("lineage", "sho
 # Options whose flag says project / alias / stack but that never name an
 # existing registered alias, so they are rightly NOT translated.
 NOT_AN_ALIAS: dict[str, str] = {
-    "--alias": "auth register-projects: ID=ALIAS names a NEW alias; dev-portal: an identity",
+    "--alias": "names a NEW alias (project add/create, auth register-projects ID=ALIAS); "
+    "dev-portal: an identity",
     "--new-alias": "names the NEW alias (project edit) or identity (dev-portal identity edit)",
     "alias": "dev-portal identity use: a developer-portal identity, not a project",
     "--project-id": "already a project ID (auth register-projects)",
@@ -277,7 +280,10 @@ class TestEveryProjectOptionIsTranslated:
     def test_every_table_entry_receives_the_alias(self, tmp_path: Path) -> None:
         """ALIAS_OPTIONS and ALIAS_ARGUMENTS: each entry must exist and get the alias."""
         config_dir = tmp_path / "config"
-        _write_config(config_dir, {"prod": _project(PROJECT_ID), "other": _project(1)})
+        # The omitted --project of a command such as `config clone` is the active project.
+        _write_config(
+            config_dir, {"prod": _project(PROJECT_ID), "other": _project(1)}, active="other"
+        )
         existing_file = tmp_path / "input.txt"
         existing_file.write_text("x")
         entries = [(path, flag) for path, flags in ALIAS_OPTIONS.items() for flag in sorted(flags)]

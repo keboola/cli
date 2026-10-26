@@ -19,6 +19,7 @@
     "input.content-option-refuses-at-file": true,
     "target.project-help-states-default": true,
     "target.no-write-fanout": true,
+    "target.project-not-required": true,
     "output.no-direct-print": true,
     "env.registry-complete": true,
     "output.ok-then-exit-declares-exit-code": true,
@@ -192,20 +193,8 @@
       "workspace query --sql"
     ],
     "target.project-help-states-default": [
-      "config new --project",
-      "flow schema --project",
-      "flow validate --project",
       "init --project",
-      "lineage show --project",
-      "project invite --project",
-      "project refresh --project",
-      "sync diff --project",
-      "sync pull --project",
-      "sync push --project",
-      "transformation create --project",
-      "transformation edit --project",
-      "transformation show --project",
-      "workspace gc --project"
+      "lineage show --project"
     ],
     "output.no-direct-print": [
       "commands/_helpers.py:_read_token_file typer.echo",

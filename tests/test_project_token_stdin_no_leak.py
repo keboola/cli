@@ -63,8 +63,8 @@ def _stored_token(config_dir: Path) -> str:
 # scenario id -> (command args, seed the project first, verify-token status or
 # None when the command makes no API call)
 SCENARIOS = {
-    "add-ok": (["project", "add", "--project", ALIAS, "--url", STACK], False, 200),
-    "add-rejected-token": (["project", "add", "--project", ALIAS, "--url", STACK], False, 401),
+    "add-ok": (["project", "add", "--alias", ALIAS, "--url", STACK], False, 200),
+    "add-rejected-token": (["project", "add", "--alias", ALIAS, "--url", STACK], False, 401),
     "edit-ok": (["project", "edit", "--project", ALIAS], True, 200),
     "edit-rejected-token": (["project", "edit", "--project", ALIAS], True, 401),
     "edit-dry-run": (["project", "edit", "--project", ALIAS, "--dry-run"], True, None),
@@ -227,7 +227,7 @@ def test_multi_line_token_is_refused_without_printing_it(
         "token": (["--token", multi_line], None, "--token"),
     }[source]
 
-    argv = ["--config-dir", str(config_dir), "project", "add", "--project", ALIAS, "--url", STACK]
+    argv = ["--config-dir", str(config_dir), "project", "add", "--alias", ALIAS, "--url", STACK]
     result = runner.invoke(app, [*argv, *flags], input=piped)
 
     assert result.exit_code == 2, result.output
@@ -250,7 +250,7 @@ def test_empty_token_stdin_is_refused_before_any_request(
     for name in ("KBC_TOKEN", "KBC_STORAGE_API_URL", "KBAGENT_PROJECT_FROM_ENV"):
         monkeypatch.delenv(name, raising=False)
 
-    argv = ["--config-dir", str(config_dir), "project", "add", "--project", ALIAS, "--url", STACK]
+    argv = ["--config-dir", str(config_dir), "project", "add", "--alias", ALIAS, "--url", STACK]
     result = runner.invoke(app, [*argv, "--token-stdin"], input=piped)
 
     assert result.exit_code == 2, result.output

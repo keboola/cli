@@ -164,50 +164,6 @@ class TestMapErrorCodeToType:
         assert map_error_code_to_type("UNKNOWN_ERROR") == "api"
 
 
-class TestValidateBranchRequiresProject:
-    """Tests for validate_branch_requires_project."""
-
-    def test_validate_branch_requires_project_passes_when_both_set(self) -> None:
-        """No error when both branch and project are provided."""
-        from unittest.mock import MagicMock
-
-        from keboola_agent_cli.commands._helpers import validate_branch_requires_project
-
-        formatter = MagicMock(json_mode=False)
-        formatter.err_console = MagicMock()
-        # Should not raise
-        validate_branch_requires_project(formatter, branch=123, project="prod")
-
-    def test_validate_branch_requires_project_raises_when_branch_without_project(
-        self,
-    ) -> None:
-        """Raises typer.Exit(code=2) when branch is set but project is not."""
-        from unittest.mock import MagicMock
-
-        import typer
-
-        from keboola_agent_cli.commands._helpers import validate_branch_requires_project
-
-        formatter = MagicMock(json_mode=False)
-        formatter.err_console = MagicMock()
-
-        with pytest.raises(typer.Exit) as exc_info:
-            validate_branch_requires_project(formatter, branch=123, project=None)
-        assert exc_info.value.exit_code == 2
-        formatter.error.assert_called_once()
-
-    def test_validate_branch_requires_project_passes_when_neither_set(self) -> None:
-        """No error when neither branch nor project are provided."""
-        from unittest.mock import MagicMock
-
-        from keboola_agent_cli.commands._helpers import validate_branch_requires_project
-
-        formatter = MagicMock(json_mode=False)
-        formatter.err_console = MagicMock()
-        # Should not raise
-        validate_branch_requires_project(formatter, branch=None, project=None)
-
-
 class TestResolveProjectAlias:
     """Tests for resolve_project_alias() (write-op precedence)."""
 

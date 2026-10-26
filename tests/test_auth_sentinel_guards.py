@@ -91,7 +91,7 @@ class TestRemedyText:
 
     Every caller of `require_static_token` generates this message, so it has to
     be true for all of them -- the earlier text told the user to
-    `project add --project <alias>`, which `add_project` rejects outright once
+    `project add --alias <alias>`, which `add_project` rejects outright once
     that alias exists (and it always does: the guard fires on a *registered*
     session project).
     """
@@ -101,14 +101,14 @@ class TestRemedyText:
 
         assert "project edit --project <alias> --token-stdin" in exc.message
         # `project add` is still mentioned, but scoped to the case it works for.
-        assert "project add --project <new-alias>" in exc.message
+        assert "project add --alias <new-alias>" in exc.message
         assert "rejects one that already exists" in exc.message
 
     def test_default_remedy_does_not_suggest_add_for_the_existing_alias(self) -> None:
         """The exact dead-end the previous wording produced."""
         exc = SessionAuthUnsupportedError("The importable SDK Client")
 
-        assert "project add --project <alias>" not in exc.message
+        assert "project add --alias <alias>" not in exc.message
 
     def test_caller_supplied_remedy_replaces_the_default(self) -> None:
         """A credential-type swap keeps the project registered, so the generic

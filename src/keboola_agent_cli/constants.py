@@ -1154,3 +1154,10 @@ ORCHESTRATION_JOB_COMPONENTS: frozenset[str] = frozenset(
         "keboola.orchestrator",
     }
 )
+
+# Legacy metadata key of a configuration's UI folder. The Storage API now has a
+# ``folder`` field on the configuration itself (DMD-2348), which is what kbagent
+# reads and writes. The key survives only as the name the sync manifest stores
+# the folder under (existing trees and scaffolds use it) and as the frozen
+# ``key`` of the `config set-folder` result. Never write it to the metadata API.
+FOLDER_METADATA_KEY: str = "KBC.configuration.folderName"

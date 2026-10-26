@@ -85,7 +85,7 @@ class TestSyncGitBranchingE2E:
                 "--json",
                 "project",
                 "add",
-                "--project",
+                "--alias",
                 self.alias,
                 "--url",
                 self.url,

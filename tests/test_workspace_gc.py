@@ -255,17 +255,21 @@ class TestWorkspaceGc:
         data = json.loads(result.output)
         assert data["data"]["count_deleted"] == 0
 
-    def test_gc_without_target_is_usage_error(self, tmp_path: Path) -> None:
-        """A bare `workspace gc` deletes nothing; it names both target options."""
+    def test_gc_without_target_cleans_only_the_active_project(self, tmp_path: Path) -> None:
+        """A bare `workspace gc` cleans up the active project, never every project (T3, T17)."""
         store = _setup_store(tmp_path)
         mock_ws = MagicMock()
+        mock_ws.gc_workspaces.return_value = {
+            "dry_run": False,
+            "deleted": [],
+            "errors": [],
+            "count_deleted": 0,
+            "count_errors": 0,
+            "message": "GC complete: 0 orphaned workspace(s) deleted.",
+        }
         result = _invoke(store, mock_ws, "--json", "workspace", "gc", "--yes")
-        assert result.exit_code == 2, result.output
-        error = json.loads(result.output)["error"]
-        assert error["code"] == "USAGE_ERROR"
-        assert "--project" in error["message"]
-        assert "--all-projects" in error["message"]
-        mock_ws.gc_workspaces.assert_not_called()
+        assert result.exit_code == 0, result.output
+        assert mock_ws.gc_workspaces.call_args.kwargs["aliases"] == ["prod"]
 
     def test_gc_project_with_all_projects_is_usage_error(self, tmp_path: Path) -> None:
         store = _setup_store(tmp_path)

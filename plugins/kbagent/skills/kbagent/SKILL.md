@@ -39,7 +39,7 @@ If kbagent is not installed or you need the full standalone reference, run `kbag
 1. **Always use `--json`**: `kbagent --json <command>` for parseable output
 2. **Set conversation ID**: pass `--conversation-id "<unique-id>"` (e.g. session UUID) on every kbagent call -- `kbagent --json --conversation-id <id> <command>`. All API requests include it as the `X-Conversation-ID` header for platform observability. **Do not use a standalone `export`**: agent harnesses (Claude Code included) do not persist shell state between tool calls, so the variable is gone by the next command -- and prefixing each command with `export ...` stops it matching a `Bash(kbagent ...)` permission allow-rule. For a whole session, set `KBAGENT_CONVERSATION_ID` in the harness's own env block (Claude Code: `settings.json` -> `env`) instead.
 3. **Multi-project reads**: pass `--all-projects` (0.100.0+) to read ALL registered projects in parallel -- no need to loop. Always give a fan-out read `--project P` or `--all-projects`: without either it reads all projects on 0.x and the active project on 1.x (since vNEXT)
-4. **Write commands need `--project`**: specify the target project alias
+4. **Always pass `--project P`** on every command that uses a project, reads and writes alike. Choose the project at the start of the task (ask the user when more than one is registered and the task names none), then pass it on every call. Never rely on the active project and never run `project use` to choose one: it is shared by every terminal, agent conversation and `kbagent serve` of the same configuration directory, so another session can change it between two commands. On 1.x a command without `--project` uses the active project without asking (since vNEXT)
 5. **Tokens are always masked** in output -- this is expected, not an error
 6. **Always fetch fresh before write**: configs change between commands and across users. Re-fetch from the API immediately before any update; never reuse a config dump from earlier in the session. Stale local files are how `vN+1` silently overwrites someone else's `vN` changes.
 7. **Always `--dry-run` first** for writes that have it (`config update`, `config delete`, `storage delete-*`, `sync push`). Show the user the diff and get explicit confirmation before applying. Some destructive commands have no `--dry-run` (`http delete`, and on 0.x `branch delete` and `workspace delete`). For these, describe the change and get confirmation first.
@@ -53,7 +53,7 @@ For any operation that modifies a Keboola config or storage object, follow this 
 
 1. **Fetch fresh** from the API (e.g. `kbagent --json config detail ...`) -- never reuse a local file from earlier in the session.
 2. **Compute the change** in memory or via `jq`/Python. Keep the diff small and targeted; prefer `--set path=value` or `--merge` over full-config replacement.
-3. **Preview with `--dry-run`** (e.g. `kbagent --json config update ... --dry-run`). Show the user what will change.
+3. **Preview with `--dry-run`** (e.g. `kbagent --json config update --project PROJECT ... --dry-run`). Show the user what will change.
 4. **Get user confirmation** before re-running the same command without `--dry-run`.
 5. **Verify** by re-fetching the config and inspecting the new version.
 6. **Stop**. Do NOT auto-trigger `job run`, transformation execution, or any side-effecting follow-up. The user decides when to run.
@@ -68,7 +68,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Update kbagent to the latest version | `kbagent update` |
 | Show recent changelog (what changed in each version) | `kbagent changelog` |
 | Launch the kbagent HTTP API server | `kbagent serve` |
-| Search for items (tables, buckets, configs, flows, …) by name or content | `kbagent search <QUERY>` |
+| Search for items (tables, buckets, configs, flows, …) by name or content | `kbagent search <QUERY> --project PROJECT` |
 | List all operations with their risk category and current allowed/denied status | `kbagent permissions list` |
 | Show the current active permission policy | `kbagent permissions show` |
 | Set the permission policy (firewall rules) | `kbagent permissions set --mode MODE` |
@@ -82,16 +82,16 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Add a new Keboola project connection | `kbagent project add --project ALIAS` |
 | Create a brand-new Keboola project -- no account, no token needed | `kbagent project create --url URL` |
 | List all connected Keboola projects | `kbagent project list` |
-| Remove a Keboola project connection | `kbagent project remove --project ALIAS` |
+| Remove a Keboola project connection and its stored token | `kbagent project remove --project ALIAS` |
 | Edit an existing Keboola project connection | `kbagent project edit --project ALIAS` |
-| Test connectivity to the active project, one project, or all projects | `kbagent project status` |
-| Refresh expired or invalid Storage API tokens | `kbagent project refresh` |
+| Test connectivity to the active project, one project, or all projects | `kbagent project status --project PROJECT` |
+| Refresh expired or invalid Storage API tokens | `kbagent project refresh --project PROJECT` |
 | Set <alias> as the active project for later commands | `kbagent project use <ALIAS>` |
 | Show the active project | `kbagent project current` |
 | Get the Keboola dashboard project description | `kbagent project description-get --project PROJECT` |
 | Set the Keboola dashboard project description (markdown) | `kbagent project description-set --project PROJECT` |
 | Show detailed project metadata | `kbagent project info --project PROJECT` |
-| Invite a user (or many users via CSV) to one or more projects | `kbagent project invite` |
+| Invite a user (or many users via CSV) to one or more projects | `kbagent project invite --project PROJECT` |
 | List active members of a project (and optionally pending invitations) | `kbagent project member-list --project PROJECT` |
 | List pending project invitations | `kbagent project invitation-list --project PROJECT` |
 | Cancel a pending invitation | `kbagent project invitation-cancel --project PROJECT --email EMAIL` |
@@ -109,24 +109,24 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | List the project's Storage API tokens (no secrets -- those are mint-only) | `kbagent token list --project PROJECT` |
 | Revoke a Storage API token immediately (destructive; only non-master tokens) | `kbagent token delete --project PROJECT --token-id TOKEN-ID` |
 | Rotate a token: generate a new value and invalidate the old one (secret shown once) | `kbagent token refresh --project PROJECT --token-id TOKEN-ID` |
-| Show the current PAYG credit balance for one or more projects | `kbagent billing credits` |
-| List the components of the active project, the given projects, or all projects | `kbagent component list` |
-| Show detailed information about a specific component | `kbagent component detail --component-id COMPONENT-ID` |
+| Show the current PAYG credit balance for one or more projects | `kbagent billing credits --project PROJECT` |
+| List the components of the active project, the given projects, or all projects | `kbagent component list --project PROJECT` |
+| Show detailed information about a specific component | `kbagent component detail --component-id COMPONENT-ID --project PROJECT` |
 | Run a synchronous component action such as testConnection | `kbagent component sync-action <ACTION-NAME> --component-id COMPONENT-ID --project PROJECT` |
-| List configurations of the active project, the given projects, or all projects | `kbagent config list` |
-| Show detailed information about one or many configurations | `kbagent config detail --component-id COMPONENT-ID` |
-| Show sample configuration JSON examples for a component | `kbagent config examples --component-id COMPONENT-ID` |
-| Search through configuration bodies for a string or pattern | `kbagent config search --query QUERY` |
+| List configurations of the active project, the given projects, or all projects | `kbagent config list --project PROJECT` |
+| Show detailed information about one or many configurations | `kbagent config detail --project PROJECT --component-id COMPONENT-ID` |
+| Show sample configuration JSON examples for a component | `kbagent config examples --component-id COMPONENT-ID --project PROJECT` |
+| Search through configuration bodies for a string or pattern | `kbagent config search --query QUERY --project PROJECT` |
 | Update a configuration's metadata and/or content | `kbagent config update --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Set or clear ``storage.output.default_bucket`` on a configuration | `kbagent config set-default-bucket --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Rename a configuration (update name via API + rename local sync directory) | `kbagent config rename --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID --name NAME` |
 | Soft-delete a configuration into the trash (restorable) | `kbagent config delete --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
-| Generate boilerplate configuration files for a Keboola component, optionally creating the config remotely in one shot | `kbagent config new --component-id COMPONENT-ID` |
+| Generate boilerplate configuration files for a Keboola component, optionally creating the config remotely in one shot | `kbagent config new --component-id COMPONENT-ID --project PROJECT` |
 | List all metadata entries on a configuration | `kbagent config metadata-list --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Read a single metadata value by key | `kbagent config get-metadata --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID --key KEY` |
 | Set a metadata key/value on a configuration (upsert) | `kbagent config set-metadata --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID --key KEY --value VALUE` |
 | Delete a configuration metadata entry by its numeric ID | `kbagent config delete-metadata --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID --metadata-id METADATA-ID` |
-| Set the folder (KBC.configuration.folderName) on a configuration | `kbagent config set-folder --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID --name NAME` |
+| Set the UI folder of a configuration (its `folder` field) | `kbagent config set-folder --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID --name NAME` |
 | Assign variables to a config (auto-creates backing keboola.variables on first call) | `kbagent config variables-set --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Read the current variable values attached to a config | `kbagent config variables-get --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Unlink variables from a config (does NOT delete the underlying keboola.variables) | `kbagent config variables-clear --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
@@ -139,7 +139,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Requires master token. | `kbagent config oauth-url --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Restore a configuration from the trash (undo of 'config delete') | `kbagent config restore --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | List configurations in the trash (restorable via 'config restore') | `kbagent config trash-list --project PROJECT` |
-| List data apps across one or more registered projects | `kbagent data-app list` |
+| List data apps across one or more registered projects | `kbagent data-app list --project PROJECT` |
 | Show merged Data Science + Storage detail for one data app | `kbagent data-app detail --project PROJECT --app-id APP-ID` |
 | Create a Keboola data app end-to-end (POST + encrypt + PUT + deploy) | `kbagent data-app create --project PROJECT --name NAME --slug SLUG` |
 | Deploy the latest Storage config (the §9 redeploy contract) | `kbagent data-app deploy --project PROJECT --app-id APP-ID` |
@@ -157,13 +157,13 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Show ONE key from parameters.dataApp.secrets | `kbagent data-app secrets-get --project PROJECT --app-id APP-ID --key KEY` |
 | Remove one or more app-runtime secrets. | `kbagent data-app secrets-remove --project PROJECT --app-id APP-ID --key KEY` |
 | Copy the password of a password-protected data app to the clipboard | `kbagent data-app password --project PROJECT --app-id APP-ID` |
-| List jobs of the active project, the given projects, or all projects | `kbagent job list` |
+| List jobs of the active project, the given projects, or all projects | `kbagent job list --project PROJECT` |
 | Show detailed information about a specific job | `kbagent job detail --project PROJECT --job-id JOB-ID` |
 | Run a job for a component configuration | `kbagent job run --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Terminate one or more Queue API jobs (use to stop runaway or stuck jobs) | `kbagent job terminate --project PROJECT` |
-| List storage buckets with sharing/linked bucket information | `kbagent storage buckets` |
+| List storage buckets with sharing/linked bucket information | `kbagent storage buckets --project PROJECT` |
 | Show detailed bucket info including backend-native direct access paths | `kbagent storage bucket-detail --project PROJECT --bucket-id BUCKET-ID` |
-| List storage tables from one or more projects | `kbagent storage tables` |
+| List storage tables from one or more projects | `kbagent storage tables --project PROJECT` |
 | Show detailed table info including columns, types and physical layout | `kbagent storage table-detail --project PROJECT --table-id TABLE-ID` |
 | Create a new storage bucket | `kbagent storage create-bucket --project PROJECT --stage STAGE --name NAME` |
 | Create a new storage table with typed columns | `kbagent storage create-table --project PROJECT --bucket-id BUCKET-ID --name NAME` |
@@ -199,46 +199,46 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Create an OTLP (or HTTP) source and return its endpoint | `kbagent stream create-source --project PROJECT --name NAME` |
 | Show a source's endpoints, protocol, and destination tables | `kbagent stream detail [SOURCE-ID] --project PROJECT` |
 | Delete a Data Streams source (destructive) | `kbagent stream delete <SOURCE-ID> --project PROJECT` |
-| List shared buckets available for linking | `kbagent sharing list` |
+| List shared buckets available for linking | `kbagent sharing list --project PROJECT` |
 | Enable sharing on a bucket | `kbagent sharing share --project PROJECT --bucket-id BUCKET-ID --type SHARING-TYPE` |
 | Disable sharing on a bucket | `kbagent sharing unshare --project PROJECT --bucket-id BUCKET-ID` |
 | Link a shared bucket into a project | `kbagent sharing link --project PROJECT --source-project-id SOURCE-PROJECT-ID --bucket-id BUCKET-ID` |
 | Remove a linked bucket from a project | `kbagent sharing unlink --project PROJECT --bucket-id BUCKET-ID` |
-| Show cross-project data flow edges via bucket sharing | `kbagent sharing edges` |
+| Show cross-project data flow edges via bucket sharing | `kbagent sharing edges --project PROJECT` |
 | Build column-level lineage graph from sync'd data | `kbagent lineage build --output OUTPUT` |
 | Show what's in a cached lineage graph | `kbagent lineage info --load LOAD` |
 | Query upstream/downstream dependencies from a cached lineage graph | `kbagent lineage show --load LOAD` |
 | Start a local web server with interactive lineage browser | `kbagent lineage server --load LOAD` |
-| Check Kai server health and MCP connection status | `kbagent kai ping` |
-| Ask Kai a one-shot question and get the full response | `kbagent kai ask --message MESSAGE` |
-| Send a message to Kai in a chat session | `kbagent kai chat --message MESSAGE` |
-| Check whether the configured token can use Kai (master token + AI Agent Chat) | `kbagent kai preflight` |
-| Fetch the full message history of a single Kai chat | `kbagent kai chat-detail --chat-id CHAT-ID` |
-| List recent Kai chat sessions | `kbagent kai history` |
-| Ask the Keboola documentation a natural language question | `kbagent docs query <QUESTION>` |
-| Create a SQL transformation from a SQL script | `kbagent transformation create --name NAME` |
-| Show a SQL transformation's block/code tree with positional IDs | `kbagent transformation show --config-id CONFIG-ID` |
-| Edit a SQL transformation's blocks/codes with positional operations | `kbagent transformation edit --config-id CONFIG-ID --change-description CHANGE-DESCRIPTION` |
-| List conditional flows (keboola.flow) across projects | `kbagent flow list` |
+| Check Kai server health and MCP connection status | `kbagent kai ping --project PROJECT` |
+| Ask Kai a one-shot question and get the full response | `kbagent kai ask --message MESSAGE --project PROJECT` |
+| Send a message to Kai in a chat session | `kbagent kai chat --message MESSAGE --project PROJECT` |
+| Check whether the configured token can use Kai (master token + AI Agent Chat) | `kbagent kai preflight --project PROJECT` |
+| Fetch the full message history of a single Kai chat | `kbagent kai chat-detail --chat-id CHAT-ID --project PROJECT` |
+| List recent Kai chat sessions | `kbagent kai history --project PROJECT` |
+| Ask the Keboola documentation a natural language question | `kbagent docs query <QUESTION> --project PROJECT` |
+| Create a SQL transformation from a SQL script | `kbagent transformation create --project PROJECT --name NAME` |
+| Show a SQL transformation's block/code tree with positional IDs | `kbagent transformation show --project PROJECT --config-id CONFIG-ID` |
+| Edit a SQL transformation's blocks/codes with positional operations | `kbagent transformation edit --project PROJECT --config-id CONFIG-ID --change-description CHANGE-DESCRIPTION` |
+| List conditional flows (keboola.flow) across projects | `kbagent flow list --project PROJECT` |
 | Show detailed conditional-flow information including phases and tasks | `kbagent flow detail --project PROJECT --flow-id FLOW-ID` |
-| Print the conditional-flow YAML template, or --full for the JSON Schema | `kbagent flow schema` |
+| Print the conditional-flow YAML template, or --full for the JSON Schema | `kbagent flow schema --project PROJECT` |
 | Show bundled example flow configurations (offline, no project needed) | `kbagent flow examples` |
-| Validate a conditional-flow definition (schema + semantic checks) | `kbagent flow validate --file FILE` |
+| Validate a conditional-flow definition (schema + semantic checks) | `kbagent flow validate --file FILE --project PROJECT` |
 | Create a new conditional-flow (keboola.flow) configuration | `kbagent flow new --project PROJECT --name NAME` |
 | Update a flow's name, description, or phases/tasks | `kbagent flow update --project PROJECT --flow-id FLOW-ID` |
 | Delete a conditional-flow (keboola.flow) configuration | `kbagent flow delete --project PROJECT --flow-id FLOW-ID` |
 | Bind a cron schedule to a flow (upsert: creates or updates) | `kbagent flow schedule --project PROJECT --flow-id FLOW-ID --cron CRON` |
 | Remove all schedules bound to a flow (deletes keboola.scheduler configs) | `kbagent flow schedule-remove --project PROJECT --flow-id FLOW-ID` |
 | Show every trigger kbagent can see for a flow (cron + table triggers) | `kbagent flow triggers --project PROJECT --flow-id FLOW-ID` |
-| List cron schedules (keboola.scheduler configs) across projects | `kbagent schedule list` |
+| List cron schedules (keboola.scheduler configs) across projects | `kbagent schedule list --project PROJECT` |
 | Show full detail for a single cron schedule | `kbagent schedule detail --project PROJECT --schedule-id SCHEDULE-ID` |
-| Audit schedules by cron window or job-freshness | `kbagent schedule find` |
-| List notification subscriptions (Flow Notifications tab) across projects | `kbagent notification list` |
+| Audit schedules by cron window or job-freshness | `kbagent schedule find --project PROJECT` |
+| List notification subscriptions (Flow Notifications tab) across projects | `kbagent notification list --project PROJECT` |
 | Show one notification subscription, including its raw filter list | `kbagent notification detail --project PROJECT --subscription-id SUBSCRIPTION-ID` |
 | Create a notification subscription | `kbagent notification create --project PROJECT --event EVENT --channel CHANNEL --address ADDRESS` |
 | Delete a notification subscription | `kbagent notification delete --project PROJECT --subscription-id SUBSCRIPTION-ID` |
 | Replace a subscription's recipient | `kbagent notification replace-recipient --project PROJECT --subscription-id SUBSCRIPTION-ID --address ADDRESS` |
-| List development branches of the active project, the given projects, or all projects | `kbagent branch list` |
+| List development branches of the active project, the given projects, or all projects | `kbagent branch list --project PROJECT` |
 | Create a new development branch and auto-activate it | `kbagent branch create --project PROJECT --name NAME` |
 | Set an existing development branch as active | `kbagent branch use --project PROJECT --branch BRANCH` |
 | Reset the active branch back to main/production | `kbagent branch reset --project PROJECT` |
@@ -248,44 +248,44 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Read a single metadata value by key | `kbagent branch metadata-get --project PROJECT --key KEY` |
 | Set a metadata key/value on a branch | `kbagent branch metadata-set --project PROJECT --key KEY` |
 | Delete a branch metadata entry by its numeric ID | `kbagent branch metadata-delete --project PROJECT --metadata-id METADATA-ID` |
-| List the project's merge requests, newest first | `kbagent merge-request list` |
-| Show one merge request: readiness, blockers, reviewers, change log, conflicts | `kbagent merge-request detail` |
-| List the configurations changed on both sides (computed live by the backend) | `kbagent merge-request conflicts` |
-| Three-way diff of one conflicting configuration, classified per path | `kbagent merge-request diff --component-id COMPONENT-ID --config-id CONFIG-ID` |
-| Open a merge request from a development branch into production | `kbagent merge-request create --title TITLE` |
-| Change a merge request's title, description, reviewers or external id | `kbagent merge-request update` |
-| Send the merge request for review (destructive: it moves the MR toward production) | `kbagent merge-request request-review` |
-| Add your approval (destructive: the last approval is what a merge waits for) | `kbagent merge-request approve` |
-| Send the merge request back to development; existing approvals are removed | `kbagent merge-request request-changes` |
-| Arm or disarm automatic merging of this merge request (destructive) | `kbagent merge-request auto-merge --strategy STRATEGY` |
-| Merge the merge request into production and delete its source branch | `kbagent merge-request merge` |
-| Resolve one conflicting configuration (destructive: it removes a merge blocker) | `kbagent merge-request resolve --component-id COMPONENT-ID --config-id CONFIG-ID` |
-| List the project's merge requests, newest first | `kbagent mr list` |
-| Show one merge request: readiness, blockers, reviewers, change log, conflicts | `kbagent mr detail` |
-| List the configurations changed on both sides (computed live by the backend) | `kbagent mr conflicts` |
-| Three-way diff of one conflicting configuration, classified per path | `kbagent mr diff --component-id COMPONENT-ID --config-id CONFIG-ID` |
-| Open a merge request from a development branch into production | `kbagent mr create --title TITLE` |
-| Change a merge request's title, description, reviewers or external id | `kbagent mr update` |
-| Send the merge request for review (destructive: it moves the MR toward production) | `kbagent mr request-review` |
-| Add your approval (destructive: the last approval is what a merge waits for) | `kbagent mr approve` |
-| Send the merge request back to development; existing approvals are removed | `kbagent mr request-changes` |
-| Arm or disarm automatic merging of this merge request (destructive) | `kbagent mr auto-merge --strategy STRATEGY` |
-| Merge the merge request into production and delete its source branch | `kbagent mr merge` |
-| Resolve one conflicting configuration (destructive: it removes a merge blocker) | `kbagent mr resolve --component-id COMPONENT-ID --config-id CONFIG-ID` |
+| List the project's merge requests, newest first | `kbagent merge-request list --project PROJECT` |
+| Show one merge request: readiness, blockers, reviewers, change log, conflicts | `kbagent merge-request detail --project PROJECT` |
+| List the configurations changed on both sides (computed live by the backend) | `kbagent merge-request conflicts --project PROJECT` |
+| Three-way diff of one conflicting configuration, classified per path | `kbagent merge-request diff --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
+| Open a merge request from a development branch into production | `kbagent merge-request create --project PROJECT --title TITLE` |
+| Change a merge request's title, description, reviewers or external id | `kbagent merge-request update --project PROJECT` |
+| Send the merge request for review (destructive: it moves the MR toward production) | `kbagent merge-request request-review --project PROJECT` |
+| Add your approval (destructive: the last approval is what a merge waits for) | `kbagent merge-request approve --project PROJECT` |
+| Send the merge request back to development; existing approvals are removed | `kbagent merge-request request-changes --project PROJECT` |
+| Arm or disarm automatic merging of this merge request (destructive) | `kbagent merge-request auto-merge --project PROJECT --strategy STRATEGY` |
+| Merge the merge request into production and delete its source branch | `kbagent merge-request merge --project PROJECT` |
+| Resolve one conflicting configuration (destructive: it removes a merge blocker) | `kbagent merge-request resolve --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
+| List the project's merge requests, newest first | `kbagent mr list --project PROJECT` |
+| Show one merge request: readiness, blockers, reviewers, change log, conflicts | `kbagent mr detail --project PROJECT` |
+| List the configurations changed on both sides (computed live by the backend) | `kbagent mr conflicts --project PROJECT` |
+| Three-way diff of one conflicting configuration, classified per path | `kbagent mr diff --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
+| Open a merge request from a development branch into production | `kbagent mr create --project PROJECT --title TITLE` |
+| Change a merge request's title, description, reviewers or external id | `kbagent mr update --project PROJECT` |
+| Send the merge request for review (destructive: it moves the MR toward production) | `kbagent mr request-review --project PROJECT` |
+| Add your approval (destructive: the last approval is what a merge waits for) | `kbagent mr approve --project PROJECT` |
+| Send the merge request back to development; existing approvals are removed | `kbagent mr request-changes --project PROJECT` |
+| Arm or disarm automatic merging of this merge request (destructive) | `kbagent mr auto-merge --project PROJECT --strategy STRATEGY` |
+| Merge the merge request into production and delete its source branch | `kbagent mr merge --project PROJECT` |
+| Resolve one conflicting configuration (destructive: it removes a merge blocker) | `kbagent mr resolve --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Create a new workspace | `kbagent workspace create --project PROJECT` |
-| List workspaces of the active project, the given projects, or all projects | `kbagent workspace list` |
+| List workspaces of the active project, the given projects, or all projects | `kbagent workspace list --project PROJECT` |
 | Show workspace details (password NOT included) | `kbagent workspace detail --project PROJECT --workspace-id WORKSPACE-ID` |
 | Delete a workspace | `kbagent workspace delete --project PROJECT --workspace-id WORKSPACE-ID` |
 | Reset workspace password and show the new one | `kbagent workspace password --project PROJECT --workspace-id WORKSPACE-ID` |
 | Load tables into a workspace | `kbagent workspace load --project PROJECT --workspace-id WORKSPACE-ID --tables TABLES` |
 | Execute SQL query in a workspace via Query Service | `kbagent workspace query --project PROJECT --workspace-id WORKSPACE-ID` |
-| Garbage-collect orphaned workspaces | `kbagent workspace gc` |
+| Garbage-collect orphaned workspaces | `kbagent workspace gc --project PROJECT` |
 | Create a workspace from a transformation config | `kbagent workspace from-transformation --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Initialize a sync working directory for a Keboola project | `kbagent sync init --project PROJECT` |
-| Download configurations from a Keboola project to local files | `kbagent sync pull` |
+| Download configurations from a Keboola project to local files | `kbagent sync pull --project PROJECT` |
 | Show which local configurations have been modified, added, or deleted | `kbagent sync status` |
-| Show detailed diff between local and remote configurations | `kbagent sync diff` |
-| Push local configuration changes to a Keboola project | `kbagent sync push` |
+| Show detailed diff between local and remote configurations | `kbagent sync diff --project PROJECT` |
+| Push local configuration changes to a Keboola project | `kbagent sync push --project PROJECT` |
 | Clone a reference project into a fresh target, parameterised by overrides | `kbagent sync clone --source SOURCE --target TARGET --target-dir TARGET-DIR` |
 | Link the current git branch to a Keboola development branch | `kbagent sync branch-link --project PROJECT` |
 | Remove the branch mapping for the current git branch | `kbagent sync branch-unlink` |
@@ -621,7 +621,7 @@ kbagent auth logout --remove-projects --yes # also drop session-registered alias
 Use `--json` or `--yes` so the command does not stop on the confirmation
 prompt. `--remove-projects` only removes aliases backed by this session's
 sentinel token; a static-token project is never touched -- remove those with
-`kbagent project remove --project ALIAS`. Because the session is shared, a
+`kbagent --json project remove --project ALIAS`. Because the session is shared, a
 logout signs the user out of every client at once.
 
 ### Installing this plugin

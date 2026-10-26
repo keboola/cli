@@ -4312,3 +4312,43 @@ class TestUploadToCloudErrorDiagnostics:
         )
         client._upload_to_cloud(GCS_UPLOAD_INFO, str(test_file))
         client.close()
+
+
+class TestConfigFolderWireFormat:
+    """``folder`` reaches the form body of the create/update requests (DMD-2348)."""
+
+    STACK = "https://connection.keboola.com"
+    TOKEN = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
+    CONFIGS = "https://connection.keboola.com/v2/storage/components/keboola.ex-db/configs"
+
+    @staticmethod
+    def _form(request: httpx.Request) -> dict[str, list[str]]:
+        return parse_qs(request.content.decode(), keep_blank_values=True)
+
+    def test_create_config_sends_folder(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            method="POST", url=self.CONFIGS, json={"id": "1", "folder": "Extractors"}
+        )
+        client = KeboolaClient(stack_url=self.STACK, token=self.TOKEN)
+        client.create_config("keboola.ex-db", name="A", configuration={}, folder="Extractors")
+        client.close()
+
+        assert self._form(httpx_mock.get_request())["folder"] == ["Extractors"]
+
+    def test_create_config_without_folder_sends_no_field(self, httpx_mock) -> None:
+        httpx_mock.add_response(method="POST", url=self.CONFIGS, json={"id": "1", "folder": None})
+        client = KeboolaClient(stack_url=self.STACK, token=self.TOKEN)
+        client.create_config("keboola.ex-db", name="A", configuration={})
+        client.close()
+
+        assert "folder" not in self._form(httpx_mock.get_request())
+
+    def test_update_config_sends_empty_folder_to_clear(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            method="PUT", url=f"{self.CONFIGS}/42", json={"id": "42", "folder": None}
+        )
+        client = KeboolaClient(stack_url=self.STACK, token=self.TOKEN)
+        client.update_config("keboola.ex-db", "42", folder="")
+        client.close()
+
+        assert self._form(httpx_mock.get_request()) == {"folder": [""]}

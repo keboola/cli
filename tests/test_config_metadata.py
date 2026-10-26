@@ -16,7 +16,7 @@ from typer.testing import CliRunner
 
 from keboola_agent_cli.cli import app
 from keboola_agent_cli.config_store import ConfigStore
-from keboola_agent_cli.errors import ConfigError, KeboolaApiError
+from keboola_agent_cli.errors import ConfigError, FeatureNotEnabledError, KeboolaApiError
 from keboola_agent_cli.models import ProjectConfig
 from keboola_agent_cli.services.config_service import ConfigService
 from keboola_agent_cli.services.job_service import JobService
@@ -274,6 +274,30 @@ class TestConfigGetMetadata:
         assert result.exit_code == 5
         data = json.loads(result.output)
         assert data["error"]["code"] == "CONFIG_ERROR"
+
+    def test_set_folder_unsupported_stack_exits_5_feature_not_enabled(self, tmp_path: Path) -> None:
+        """A stack without the folder field is an error, never a success line."""
+        store = _setup_store(tmp_path)
+        mock_svc = MagicMock()
+        mock_svc.set_config_folder.side_effect = FeatureNotEnabledError("no folder field")
+        result = _invoke(
+            store,
+            mock_svc,
+            "--json",
+            "config",
+            "set-folder",
+            "--project",
+            "prod",
+            "--component-id",
+            COMP_ID,
+            "--config-id",
+            CFG_ID,
+            "--name",
+            "Folder",
+        )
+        assert result.exit_code == 5
+        data = json.loads(result.output)
+        assert data["error"]["code"] == "FEATURE_NOT_ENABLED"
 
 
 # ── set-metadata ───────────────────────────────────────────────────────
@@ -647,16 +671,46 @@ class TestConfigServiceMetadata:
         mock_client.delete_config_metadata.assert_called_once_with(COMP_ID, CFG_ID, 7, branch_id=1)
         mock_client.close.assert_called_once()
 
-    def test_set_config_folder_uses_correct_key(self, tmp_path: Path) -> None:
+    def test_set_config_folder_writes_the_folder_field(self, tmp_path: Path) -> None:
+        """set-folder PUTs the config's ``folder`` field, never the metadata key."""
         svc, mock_client = self._make_service(tmp_path)
-        mock_client.set_config_metadata.return_value = [
-            {"id": 9, "key": "KBC.configuration.folderName", "value": "My Group"}
-        ]
-        result = svc.set_config_folder("prod", COMP_ID, CFG_ID, folder_name="My Group")
-        assert result["folder"] == "My Group"
-        mock_client.set_config_metadata.assert_called_once_with(
-            COMP_ID,
-            CFG_ID,
-            entries=[("KBC.configuration.folderName", "My Group")],
+        mock_client.update_config.return_value = {
+            "id": CFG_ID,
+            "name": "Cfg",
+            "folder": "My Group",
+        }
+        result = svc.set_config_folder("prod", COMP_ID, CFG_ID, folder_name=" My Group ")
+        mock_client.update_config.assert_called_once_with(
+            component_id=COMP_ID,
+            config_id=CFG_ID,
+            folder=" My Group ",
             branch_id=1,
         )
+        mock_client.set_config_metadata.assert_not_called()
+        # The keys of the metadata-era result are kept; key is frozen.
+        assert result["folder"] == "My Group"
+        assert result["key"] == "KBC.configuration.folderName"
+        assert result["value"] == "My Group"
+        # result stays list-shaped like the metadata POST response it replaced.
+        assert result["result"] == [{"key": "KBC.configuration.folderName", "value": "My Group"}]
+        assert result["configuration"] == {"id": CFG_ID, "name": "Cfg", "folder": "My Group"}
+        assert result["branch_id"] == 1
+
+    def test_set_config_folder_clear_reports_empty_value(self, tmp_path: Path) -> None:
+        """An empty name clears the folder: the API answers null, value is ''."""
+        svc, mock_client = self._make_service(tmp_path)
+        mock_client.update_config.return_value = {"id": CFG_ID, "name": "Cfg", "folder": None}
+        result = svc.set_config_folder("prod", COMP_ID, CFG_ID, folder_name="")
+        assert mock_client.update_config.call_args.kwargs["folder"] == ""
+        assert result["folder"] == ""
+        assert result["value"] == ""
+        assert result["result"] == [{"key": "KBC.configuration.folderName", "value": ""}]
+        assert "cleared" in result["message"]
+
+    def test_set_config_folder_fails_when_response_has_no_folder(self, tmp_path: Path) -> None:
+        """A stack without the field ignores the param: no false success, no metadata write."""
+        svc, mock_client = self._make_service(tmp_path)
+        mock_client.update_config.return_value = {"id": CFG_ID, "name": "Cfg"}
+        with pytest.raises(FeatureNotEnabledError, match="folder field"):
+            svc.set_config_folder("prod", COMP_ID, CFG_ID, folder_name="My Group")
+        mock_client.set_config_metadata.assert_not_called()

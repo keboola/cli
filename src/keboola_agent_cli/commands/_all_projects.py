@@ -21,16 +21,15 @@ from ..errors import ConfigError, ErrorCode
 from ..output import OutputFormatter
 from ..services.base import resolve_fanout_aliases
 from ._helpers import finish_items
+from ._project_ref import PROJECT_DEFAULT
 
 ALL_PROJECTS_HELP = "Read all registered projects. Cannot be used with --project."
 
-# T11: the --project help of a fan-out read states the omitted default.
-_OMITTED_PROJECT = (
-    "Omitted: the active project (KBAGENT_PROJECT, then 'kbagent project use', "
-    "then the only registered project). Use --all-projects for all projects."
-)
-FANOUT_PROJECT_HELP = f"Project alias or ID, repeatable. {_OMITTED_PROJECT}"
-FANOUT_ONE_PROJECT_HELP = f"Project alias or ID. {_OMITTED_PROJECT}"
+# T11: the --project help of a fan-out read states the omitted default, in the
+# words of every other --project help, and --all-projects.
+_OMITTED_PROJECT = f"{PROJECT_DEFAULT}; --all-projects for all projects"
+FANOUT_PROJECT_HELP = f"Project alias or ID, repeatable ({_OMITTED_PROJECT})"
+FANOUT_ONE_PROJECT_HELP = f"Project alias or ID ({_OMITTED_PROJECT})"
 
 AllProjectsOption = Annotated[bool, typer.Option("--all-projects", help=ALL_PROJECTS_HELP)]
 

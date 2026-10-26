@@ -184,7 +184,7 @@ with Client(url=os.environ["KBC_URL"], token=os.environ["KBC_TOKEN"]) as kbc:
 
 ```bash
 # Connect a project (Storage API token from Keboola UI, typed at a hidden prompt)
-kbagent project add --project prod \
+kbagent project add --alias prod \
   --url https://connection.keboola.com --token-stdin
 
 # Find anything (table / config / flow / data app) across ALL projects in one call
@@ -236,10 +236,10 @@ the token-based options are the ones to use for CI and anything unattended.
 
 **Single project** — you have a Storage API token from the UI. `--token-stdin` shows a hidden prompt on a terminal and reads a pipe otherwise, so the token stays out of your shell history:
 ```bash
-kbagent project add --project prod --url https://connection.keboola.com --token-stdin
+kbagent project add --alias prod --url https://connection.keboola.com --token-stdin
 
 # CI / non-interactive: pipe the token in
-printf '%s' "$KBC_TOKEN" | kbagent project add --project prod --url https://connection.keboola.com --token-stdin
+printf '%s' "$KBC_TOKEN" | kbagent project add --alias prod --url https://connection.keboola.com --token-stdin
 ```
 
 **Many projects by ID** — you have a Manage API or Personal Access Token + the project IDs:
@@ -352,6 +352,7 @@ kbagent             init | context | doctor | version | update | changelog
 | [Build a REST client](docs/build-your-own-client.md) | The `kbagent serve` HTTP API spec for non-Python callers (JS, Go, Slack bots, Web UIs). |
 | [MCP migration](docs/mcp-migration.md) | Migrating off the removed MCP passthrough (v0.85.0): the tool-to-command map, what to do with persisted `mcp_tool` agent tasks, and how to keep `keboola-mcp-server` fresh yourself. |
 | [Migrating to 1.0](docs/migrate-to-1.0.md) | When kbagent 1.0.0 reaches each kind of install, how to move early or stay on 0.x, and what changes in 1.0.0 (draft). |
+| [kbagent 1.0 at a glance](https://keboola.github.io/cli/1.0/) | The main changes in 1.0 in plain words, and every change grouped by impact. Source: [`site/1.0/index.html`](site/1.0/index.html). |
 | [Contributing](CONTRIBUTING.md) | Architecture, coding style, adding commands, testing checklist |
 
 ## Telemetry

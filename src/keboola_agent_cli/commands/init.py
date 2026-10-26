@@ -30,8 +30,8 @@ def init_command(
         None,
         "--project",
         "-p",
-        help="Copy only the named project(s) from the global config (repeatable). "
-        "Implies --from-global. Without it, all global projects are copied.",
+        help="Projects to copy from the global config, repeatable (implies --from-global; "
+        "without it, all global projects are copied)",
     ),
     read_only: bool = typer.Option(
         False,

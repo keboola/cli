@@ -46,7 +46,7 @@ settings.json -> env). The flag takes precedence over the env var.
 
   # Add a single project -- --token-stdin prompts (hidden) on a TTY and reads
   # a pipe otherwise, so the token stays out of the shell history
-  kbagent --json project add --project my-project --url https://connection.keboola.com --token-stdin
+  kbagent --json project add --alias my-project --url https://connection.keboola.com --token-stdin
 
   # Or bulk-onboard all projects from an organization
   KBC_MANAGE_API_TOKEN=xxx kbagent --allow-env-manage-token --json org setup --org-id 123 --url https://connection.keboola.com --yes
@@ -494,12 +494,12 @@ needs an `rls-policy`.
         fan-out (one API call per project, not per config).
     --with-state attaches the runtime state dict. Single: dedicated get_config_state
     call. Bulk: include=state ridesalong (no N+1, still one call per project).
-    --branch requires exactly one --project (branch IDs are per-project).
+    --branch needs one project: a branch ID belongs to one project.
     Sandbox annotation (since v0.42.0, single-config mode only):
     --component-id keboola.sandboxes adds a sandbox_annotation block with
     sandbox_service_id (the misleading parameters.id) and storage_workspace_id
     (the actual Storage workspace ID -- resolved via workspace list lookup).
-    Use storage_workspace_id with `kbagent workspace detail --workspace-id ID`,
+    Use storage_workspace_id with `kbagent workspace detail --project P --workspace-id ID`,
     NOT parameters.id (which 404s).
 
   config update
@@ -549,7 +549,7 @@ needs an `rls-policy`.
   config new
     Default: generate boilerplate config from component schema (scaffold to --output-dir or stdout).
     With --push (0.33.0+): also create the config remotely via Storage API in one shot.
-    --push requires --project AND a non-empty --name. --no-files skips the filesystem step
+    --push requires a non-empty --name. --no-files skips the filesystem step
     entirely for FIIA-style one-shot creates. Schema validation runs by default when an explicit
     --configuration body is given (fail-closed; --no-validate opts out). Default body is {}
     (empty shell, validation auto-skipped). Works for ALL component types including
@@ -611,8 +611,11 @@ needs an `rls-policy`.
     Delete a configuration metadata entry by numeric ID (from metadata-list).
 
   config set-folder
-    Sugar: writes KBC.configuration.folderName metadata. Groups the config in the Keboola UI.
-    Pass --name "" to remove the folder assignment.
+    Sets the configuration's `folder` field (no new version). Groups the config in the Keboola UI.
+    Pass --name "" to remove the folder assignment. Do not write the KBC.configuration.folderName
+    metadata key with set-metadata: the folder is a configuration field now. A stack without
+    the field: set-folder exits 5 FEATURE_NOT_ENABLED; sync push/clone add a
+    `folder_not_supported` entry to warnings[].
 
   config row-create
     Create a new configuration row. Returns the new row ID. Optional --configuration accepts JSON inline, @file, or stdin. #-prefixed secrets auto-encrypt before write (fail-closed; since 0.54.0).
@@ -1462,7 +1465,9 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     is the project id, which has its own column.
 
   project remove
-    Remove a project connection. Removing the active project clears it; it
+    Remove a project connection and its stored token. It asks on a terminal;
+    --yes or --json skips the question, --dry-run shows the project it would
+    remove. Removing the active project clears it; it
     is not moved to another alias (since 0.100.0). The result carries
     `active_project_cleared` (the alias, or null). Commands without
     --project then resolve KBAGENT_PROJECT > active project > sole project,
@@ -1493,8 +1498,9 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     `project list`, including on an ERROR row.
 
   project refresh
-  kbagent project refresh --all [--dry-run] [--force] [--yes] [--token-description ...] [--token-expires-in N]
-    Refresh project tokens via Manage API. --all refreshes all projects. --force replaces non-expiring tokens.
+  kbagent project refresh --all-projects [--dry-run] [--force] [--yes] [--token-description ...] [--token-expires-in N]
+    Refresh project tokens via Manage API. --all-projects refreshes all projects (--all is its deprecated name);
+    without --project and --all-projects, the active project. --force replaces non-expiring tokens.
     Browser-login (session) projects are reported under "skipped" with the
     reason that there is no static token to replace -- their access token
     rotates on its own from auth.json. --force does NOT convert them either;
@@ -1684,7 +1690,7 @@ the `row-level-security` feature and needs an engine that reads schema 1.1.0
     ('report' != 'monthly_report'; use '.*report.*'). Textual only (error with --search-type config-based);
     regex does NOT match columns, so matched_columns stays empty under --regex. In textual mode, tables
     matched via a column name carry matched_columns (JSON) / a "Matched columns" column.
-    BOTH modes match case-insensitively; use `kbagent config search --query` for a case-sensitive
+    BOTH modes match case-insensitively; use `kbagent config search --project P --query` for a case-sensitive
     body scan (it has its own --ignore-case).
 """,
     "semantic-layer": """\
@@ -2106,7 +2112,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
     --progress (since 0.98.0): ALWAYS report progress on stderr, also with --json and without a terminal: a bar on
     a terminal, else one line every 10 s + a final line, e.g.
     `upload big.csv: 42.0% 4.20/10.00 GiB, 67.30 MiB/s, elapsed 0:01:03, ETA 0:01:27`. stdout stays clean JSON.
-    For long runs: `kbagent --json storage upload-table ... --progress 2>progress.log`, then read the log.
+    For long runs: `kbagent --json storage upload-table --project P ... --progress 2>progress.log`, then read the log.
 
   storage download-table
     Export table data to a local CSV file. Async export with streaming download.
@@ -2609,7 +2615,8 @@ remain branch-aware because modifying a dev branch is the expected intent.
 
   workspace gc
     Garbage-collect orphaned workspaces (keboola.sandboxes config missing). Use --dry-run to preview.
-    Needs --project or --all-projects (neither or both = USAGE_ERROR, exit 2). A project whose
+    Without --project and --all-projects it cleans up the active project (both = USAGE_ERROR,
+    exit 2). A project whose
     sandbox configs cannot be listed goes to errors[]; nothing is deleted there.
     A NOT_FOUND listing counts as "no sandbox configs" only when the branch component listing confirms it.
 """,
@@ -2702,9 +2709,10 @@ _FOOTER = """\
    a request body still needs the alias. Output names the resolved alias
    (`targets`, `project_alias`). When a digits-only alias is also another
    project's ID, the alias is used and a warning names that project on stderr
-   (in --json mode too). `project add` / `project create` take --project as a
-   NEW alias, never an ID; `lineage show --project` filters an offline graph
-   and is not translated either.
+   (in --json mode too). `project add` / `project create` take --alias, a
+   NEW alias, never an ID (their --project is the deprecated name of --alias);
+   `lineage show --project` filters an offline graph and is not translated
+   either.
 
 4. Tokens are always masked in output (e.g. 901-...XXXX) -- expected behavior.
 

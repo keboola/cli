@@ -158,6 +158,7 @@ def create_synced_data_app(
     configuration: dict[str, Any],
     branch_id: int | None,
     is_disabled: bool = False,
+    folder: str | None = None,
 ) -> dict[str, Any]:
     """Create a ``keboola.data-apps`` config together with its Data Science
     deployment record, carrying the runtime ``type_`` (CLI-8).
@@ -246,6 +247,7 @@ def create_synced_data_app(
             change_description="Created via kbagent sync",
             branch_id=branch_id,
             is_disabled=is_disabled,
+            folder=folder,
         )
     except Exception:
         # The DS record and its bare Storage config exist, but the full body

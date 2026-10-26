@@ -236,7 +236,7 @@ for the full mapping from the old `secrets.KBC_SAPI_TOKEN_*` / `vars.KBC_*` sche
   `kbagent sync branch-link`. For PR-based promotion this is usually *better*:
   a PR branch links to a Keboola dev branch, `main` pushes to production. This
   is a per-project runtime choice, not something the generator needs to know
-  about — run `kbagent sync init --git-branching` and walk the user through
+  about — run `kbagent sync init --project ALIAS --git-branching` and walk the user through
   `branch-link` if they want per-PR isolated dev branches (see
   [references/branching-model.md](references/branching-model.md)). If they
   want to keep the simple single-branch (production) model, leave

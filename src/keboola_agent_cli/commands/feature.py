@@ -27,6 +27,7 @@ from ._helpers import (
     map_error_to_exit_code,
     resolve_manage_token,
 )
+from ._project_ref import PROJECT_DEFAULT, PROJECT_HELP
 
 feature_app = typer.Typer(help="Feature flag management (requires super-admin Manage API token)")
 
@@ -134,7 +135,10 @@ def _format_write_result(console: Console, data: dict[str, Any]) -> None:
 def feature_list(
     ctx: typer.Context,
     project: str = typer.Option(
-        ..., "--project", "-p", help="Project alias (used to resolve the stack URL)"
+        None,
+        "--project",
+        "-p",
+        help=f"Project alias or ID, used to find the stack ({PROJECT_DEFAULT})",
     ),
 ) -> None:
     """List all feature flags defined on the stack."""
@@ -154,7 +158,7 @@ def feature_list(
 @feature_app.command("project-show")
 def feature_project_show(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
 ) -> None:
     """Show feature flags assigned to a project."""
     formatter = get_formatter(ctx)
@@ -170,7 +174,7 @@ def feature_project_show(
 @feature_app.command("project-add")
 def feature_project_add(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     feature: str = typer.Option(..., "--feature", "-f", help="Feature name to enable"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview without making changes"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
@@ -193,7 +197,7 @@ def feature_project_add(
 @feature_app.command("project-remove")
 def feature_project_remove(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     feature: str = typer.Option(..., "--feature", "-f", help="Feature name to disable"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview without making changes"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
@@ -224,7 +228,10 @@ def feature_project_remove(
 def feature_user_show(
     ctx: typer.Context,
     project: str = typer.Option(
-        ..., "--project", "-p", help="Project alias (used to resolve the stack URL)"
+        None,
+        "--project",
+        "-p",
+        help=f"Project alias or ID, used to find the stack ({PROJECT_DEFAULT})",
     ),
     email: str = typer.Option(..., "--email", "-e", help="User email address"),
 ) -> None:
@@ -243,7 +250,10 @@ def feature_user_show(
 def feature_user_add(
     ctx: typer.Context,
     project: str = typer.Option(
-        ..., "--project", "-p", help="Project alias (used to resolve the stack URL)"
+        None,
+        "--project",
+        "-p",
+        help=f"Project alias or ID, used to find the stack ({PROJECT_DEFAULT})",
     ),
     email: str = typer.Option(..., "--email", "-e", help="User email address"),
     feature: str = typer.Option(..., "--feature", "-f", help="Feature name to enable"),
@@ -269,7 +279,10 @@ def feature_user_add(
 def feature_user_remove(
     ctx: typer.Context,
     project: str = typer.Option(
-        ..., "--project", "-p", help="Project alias (used to resolve the stack URL)"
+        None,
+        "--project",
+        "-p",
+        help=f"Project alias or ID, used to find the stack ({PROJECT_DEFAULT})",
     ),
     email: str = typer.Option(..., "--email", "-e", help="User email address"),
     feature: str = typer.Option(..., "--feature", "-f", help="Feature name to disable"),

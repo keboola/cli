@@ -48,6 +48,7 @@ from ._helpers import (
     get_service,
     map_error_to_exit_code,
 )
+from ._project_ref import PROJECT_HELP
 from ._url_copy import LINK_STYLE
 
 # Canonical Keboola help-doc references appended to each --help epilog so
@@ -161,7 +162,7 @@ def data_app_list(
 @data_app_app.command("detail")
 def data_app_detail(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     app_id: str = typer.Option(..., "--app-id", help="Data Science numeric app id"),
     branch: int | None = typer.Option(
         None,
@@ -260,7 +261,7 @@ def _print_create_result(console: Console, result: dict[str, Any]) -> None:
 @data_app_app.command("create")
 def data_app_create(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     name: str = typer.Option(..., "--name", "-n", help="Display name shown in the Keboola UI"),
     description: str = typer.Option(
         "",
@@ -543,7 +544,7 @@ def _run_lifecycle(
 @data_app_app.command("deploy")
 def data_app_deploy(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     app_id: str = typer.Option(..., "--app-id", help="Data Science numeric app id"),
     config_version: str | None = typer.Option(
         None,
@@ -599,7 +600,7 @@ def data_app_deploy(
 @data_app_app.command("start")
 def data_app_start(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     app_id: str = typer.Option(..., "--app-id", help="Data Science numeric app id"),
     wait: bool = typer.Option(
         False, "--wait", help="Block until running or error. Default: no wait."
@@ -624,7 +625,7 @@ def data_app_start(
 @data_app_app.command("stop")
 def data_app_stop(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     app_id: str = typer.Option(..., "--app-id", help="Data Science numeric app id"),
     wait: bool = typer.Option(False, "--wait", help="Block until stopped. Default: no wait."),
     timeout: float = typer.Option(
@@ -652,7 +653,7 @@ def data_app_stop(
 @data_app_app.command("delete")
 def data_app_delete(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     app_id: str = typer.Option(..., "--app-id", help="Data Science numeric app id"),
     yes: bool = typer.Option(
         False,
@@ -695,7 +696,7 @@ def data_app_delete(
 @data_app_app.command("logs")
 def data_app_logs(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     app_id: str = typer.Option(..., "--app-id", help="Data Science numeric app id"),
     lines: int | None = typer.Option(
         None,
@@ -813,7 +814,7 @@ def data_app_logs(
 @data_app_app.command("runs")
 def data_app_runs(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     app_id: str = typer.Option(..., "--app-id", help="Data Science numeric app id"),
     limit: int = typer.Option(5, "--limit", "-L", help="Max runs to return (newest first)."),
 ) -> None:

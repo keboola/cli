@@ -16,6 +16,7 @@ Versioning convention:
 From the release of kbagent 1.0.0 until its migration date (28 days later), the user can run 0.x (0.100.0 and later) or 1.x. Write every command so it works on both. `kbagent --version` tells which one runs. The migration page is `docs/migrate-to-1.0.md` in the repository.
 
 - **Fan-out reads** (`search`, `billing credits`, `component list`, `config list`, `config search`, `data-app list`, `job list`, `storage buckets`, `storage tables`, `sharing list`, `sharing edges`, `flow list`, `schedule list`, `schedule find`, `notification list`, `branch list`, `workspace list`, `project status`): always give `--project P`, or `--all-projects` for every project. An omitted `--project` reads all projects on 0.x and only the active project on 1.x.
+- **Every command that uses a project gets `--project P`**, reads and writes alike. On 0.x most commands require it, and on 1.x a command without it silently uses the active project, which another terminal or agent conversation can change. This rule stays after the migration date too.
 - **Root flags** (`--json`, `--deny-writes`, `--deny-destructive`) go before the subcommand: `kbagent --json config list --project P`. 0.x refuses them after it.
 - **Help**: `--help`, not `-h`. Never run a bare group (`kbagent storage`): 0.x exits 0 with no output, 1.x exits 2.
 - **Options**: never give a single-value option twice (1.x refuses it on write, destructive and admin commands). A list option such as `sharing share --target-project-ids` gets one comma list (`11,22`): 0.x keeps only the last of repeated values.
@@ -41,6 +42,44 @@ From the release of kbagent 1.0.0 until its migration date (28 days later), the 
 - **`kbagent --json context storage`** prints only the `storage` section: the commands with their options and the first paragraph of their help, then the notes for the group. A top-level command (`search`, `serve`) or a hidden alias (`mr`, `sl`) works too. `data.group` names the section, or is null without an argument. `data.context` holds the text as before.
 - **An unknown group** is `INVALID_ARGUMENT` (exit 2), and the message lists the valid groups.
 - **The command lists are generated from the command manifest**, so they always match `--help`. On 0.x, `kbagent context` takes no argument and prints the whole hand-written text.
+
+## Config folder is the configuration's `folder` field, not the `KBC.configuration.folderName` metadata key
+
+*(since vNEXT)* (DMD-2348)
+
+- **`config set-folder`** (and `POST /configs/{project}/{component_id}/{config_id}/folder`
+  over `kbagent serve`) writes the configuration's `folder` field with a config PUT. The
+  Storage API trims the name, rejects one over 400 characters (HTTP 400), stores an empty one
+  as "no folder", and creates no configuration version. The `--json` result keeps its keys:
+  `folder`, `value` (the folder as stored, `""` when cleared), `key` (frozen at
+  `"KBC.configuration.folderName"`), and `result` (still a list, now `[{key, value}]`). The
+  new `configuration` key holds `{id, name, folder}` from the PUT response.
+- **`config list`** reads `folder` from the components listing it already fetches. The
+  `search/component-configurations` call (and the `dev-branches` lookup it needed) is gone,
+  so one project costs one request instead of three.
+- **`sync pull`** reads the folder the same way and stores it in the manifest under the old
+  key name `KBC.configuration.folderName`, so existing trees and scaffolds keep working.
+  When the listing carries no `folder` field at all (a stack without it), pull keeps each
+  config's folder from the previous pull and reports `folder_lookup_failed: true`.
+- **`sync push` / `sync clone`** send the manifest folder as the create POST's `folder`
+  field. They no longer POST `KBC.configuration.folderName` to the metadata API; other
+  `KBC.*` manifest keys still go there. Only the create path carries the folder: a plain
+  push does not change the folder of an existing config, and `config clone` (server-side
+  copy) does not copy it -- use `config set-folder` for both.
+- Do not write `KBC.configuration.folderName` with `config set-metadata` any more. The
+  metadata API keeps working for that key server-side (the `folder` column mirrors it),
+  but first-party clients no longer read or write it.
+- **Stack requirement:** the field comes with keboola/connection DMD-2347. A stack
+  without it accepts and ignores the `folder` param, so kbagent checks the response:
+  `config set-folder` fails with `FEATURE_NOT_ENABLED` (exit 5; HTTP 400 over
+  `kbagent serve`) and changes nothing, `sync push` / `sync clone` still create the
+  config but add a `folder_not_supported` entry to `warnings[]` (with `config_id` and
+  `folder`), `sync pull` keeps the previous folders (`folder_lookup_failed: true`), and
+  `config list` shows every folder as `""`. kbagent never falls back to the metadata key.
+- The `result` of `config set-folder --json` is still a one-entry list, but its entry is
+  now only `{key, value}`: the metadata-only fields (`id` of the metadata entry,
+  `provider`, `timestamp`) are gone because no metadata is written. Read
+  `configuration.id` for the configuration id.
 
 ## One JSON document for every exit, root flags after the subcommand, `-h`, repeated options
 
@@ -84,8 +123,10 @@ From the release of kbagent 1.0.0 until its migration date (28 days later), the 
 - **A fan-out read exits 1 when a project failed**, after the full payload. The failure stays in `data.errors` (`project status`: a row with `status: "error"`), and the envelope has `exit_code: 1`. `PAYG_NOT_AVAILABLE` in `billing credits` is an answer, not a failure (exit 0). With no registered project the read exits 5 (`CONFIG_ERROR`), also with `--all-projects`. Before, these reads exited 0 and the failure was only in `data.errors`.
 - **Every record in `targets` has `project_source`**, next to `branch_source`: `explicit`, `env` (`KBAGENT_PROJECT`), `active_project` (`project use`), `sole` (the only registered project) or `all` (`--all-projects`). `explicit` means that the command line named the project: `--project`, or another project option such as `config clone --target-project`, `sync clone --target` or the `semantic-layer promote/diff` project options. Treat an unknown value like `active_project`. A project for which the command chose no branch gets one record with `branch_source: "none"` and `branch_id: null`.
 - **`project_source: null`** means that the command found the project in none of these ways (no project option, no `KBAGENT_PROJECT`, `project use` or sole-project fallback, no `--all-projects`). Every command with a `--project` option reports `explicit` when the option is given, and a command without `--project` that uses the chain reports the chain source. Treat null as unknown, like `active_project`.
-- **A destructive command under `--json` whose project or branch is the saved active choice adds a warning** `{"code": "TARGET_FROM_ACTIVE_CHOICE", "message", "hint"}` to the top-level `warnings[]`. The hint is the explicit flag (`--project prod`, `--branch 456`). The command still runs: `--json` is consent. Read and write commands, human mode and explicit flags give no such warning.
+- **A destructive command under `--json` whose project or branch is the saved active choice adds a warning** (*(updated vNEXT)* an admin command too, for example `project edit` or `project remove`) `{"code": "TARGET_FROM_ACTIVE_CHOICE", "message", "hint"}` to the top-level `warnings[]`. The hint is the explicit flag (`--project prod`, `--branch 456`). The command still runs: `--json` is consent. Read and write commands, human mode and explicit flags give no such warning.
 - *(updated vNEXT -- CLI-49)* **The `kbagent serve` list routes follow the same rule.** `GET /configs`, `GET /jobs` and the other list routes without `project` read the active project. `all_projects=true` reads all registered projects. A route in which a project failed still answers HTTP 200 with the failure in `errors`.
+- *(updated vNEXT -- #791, spec T17)* **`POST /org/refresh` and `POST /workspaces/gc` follow it too.** Without a project (`aliases`, `project`) they use the active project. Before, `POST /org/refresh` with an empty body refreshed the tokens of all projects, and `POST /workspaces/gc` refused with HTTP 400. All projects need `all_projects=true`. The body field `refresh_all` is the deprecated name of `all_projects`, and `project refresh --all` the deprecated name of `--all-projects`.
+- *(updated vNEXT -- #791, spec T17)* **No command requires `--project`; without it, every command uses the active project, writes and deletes too.** Before, 171 commands required `--project` and exited 2 without it (for example `job detail`, `config update`, `storage delete-table`, `sync init`), and `sync pull/diff/push`, `workspace gc`, `project refresh`, `config detail`, `config new --push` and the single-shot `project invite` asked for it. A destructive command still asks on a terminal, and so does `project remove`, which also got `--yes` and `--dry-run` (use `kbagent --json project remove --project P`, which works on 0.x too). Under `--json`, a destructive or admin command adds the `TARGET_FROM_ACTIVE_CHOICE` warning. `workspace gc` and `sync pull/diff/push` without `--project` and `--all-projects` work on the active project only. `sync init` binds the directory to the active project and names it in its output. `project add` and `project create` take the new alias as `--alias`; `--project` still works there with a `DEPRECATED` warning, and it is the form that also works on 0.x. `flow schema --full` and `flow validate` use the live schema of the active project; when no project is registered or chosen they work offline (the bundled schema, semantic checks only). With a registered project a failed fetch (expired token, no network) is an error for `flow schema --full`; `flow validate` falls back to the semantic checks with a note. Exceptions, where `--project` names no target project: `init`, `agent prompt-improve` and `lineage show`. Options that name a second project keep their own rules: `sync clone --target` and the project options of `semantic-layer promote` are required, `config clone --target-project` defaults to the source project, and `semantic-layer diff` takes a project or a file for each side. kbagent checks the other options first, so a missing required option is still `USAGE_ERROR` (exit 2). When no project resolves, the command exits 5 with `CONFIG_ERROR`. Agents still pass `--project` on every command (rule above).
 - **"Active" is the one name for the saved choice.** `project use` prints `Active project: <alias>` (before: `Pinned: default project is <alias>`). The help texts, messages and REST summaries say "active project" and "active branch". The `--json` keys of `project current` (`pinned`, `source: "pin"`) and the `config.json` fields (`default_project`, `active_branch_id`) keep their names.
 
 ## `kbagent serve`: the active branch, `Kbagent-Targets`, the CLI error fields, `PATCH` for partial updates
@@ -97,7 +138,7 @@ From the release of kbagent 1.0.0 until its migration date (28 days later), the 
 - **The REST `error` object has the CLI error fields:** `code`, `error_type`, `message`, `project`, `retryable`, `details`. The HTTP status follows `error_type`: `validation` and `configuration` 400, `authentication` 401, `authorization` 403, `not_found` 404, `conflict` 409, `api` and `network` 502 (400 for an `api` code that exits 2). Before, most codes answered 502 (for example `VALIDATION_ERROR`, `INVALID_TOKEN`, `FILE_NOT_FOUND`). Branch on `error.code`.
 - **`POST /projects/use/{alias}`, `POST /branches/{project}/use` and `/reset` change the saved choice for every CLI call** of the same configuration directory. The responses add `active_project_set`, `active_branch_set` or `active_branch_cleared` and a `Kbagent-Warnings` entry `ACTIVE_CHOICE_SHARED` with `config_dir`.
 - **A list route without `project` reads the active project**, as the CLI does: `GET /configs`, `/jobs`, `/storage/buckets`, `/storage/tables`, `/flows`, `/schedules`, `/data-apps`, `/workspaces`, `/branches`, `/components`, `/sharing`, `/notifications`, `/billing/credits`, `/search`, `/projects/status`, `/token/list` and the other routes that read several projects. Send `all_projects=true` for all projects. Before, an omitted `project` read all registered projects. With nothing to resolve the route answers HTTP 400 `CONFIG_ERROR`.
-- **A destructive route on the active branch adds `TARGET_FROM_ACTIVE_CHOICE`** to `Kbagent-Warnings` (hint `branch_id=<id>`), as a destructive CLI command under `--json` does. Send `branch_id` to make the branch explicit. The route still runs.
+- **A destructive route on the active branch adds `TARGET_FROM_ACTIVE_CHOICE`** to `Kbagent-Warnings` (hint `branch_id=<id>`), as a destructive CLI command under `--json` does (*(updated vNEXT)* an admin route too). Send `branch_id` to make the branch explicit. The route still runs.
 - **Partial updates use `PATCH`:** `/semantic-layer/items/{kind}/{name}`, `/merge-requests/{project}/{merge_request_id}`, `/data-apps/{project}/{app_id}/secrets`, and the merge of `/configs/{project}/{component_id}/{config_id}/variables`. A `PATCH` body refuses an undeclared field (HTTP 422). The old `PUT` still works and adds a `DEPRECATED` entry (`replacement`, `remove_after: null`) to `Kbagent-Warnings`. `PUT .../variables` with `replace: true` is the full replace and gives no warning. Without it, it merges with the warning.
 
 ## `--branch 0` is production in `job terminate`, `swap-tables`, `clone-table` and `create-table --source-branch-id`
@@ -163,7 +204,7 @@ From the release of kbagent 1.0.0 until its migration date (28 days later), the 
 - **18 reads accept `--all-projects`:** `search`, `billing credits`, `component list`, `config list`, `config search`, `data-app list`, `job list`, `storage buckets`, `storage tables`, `sharing list`, `sharing edges`, `flow list`, `schedule list`, `schedule find`, `notification list`, `branch list`, `workspace list`, `project status`. On this version it does the same as an omitted `--project`: the same service call and the same output. `component list --query` uses the default project when `--project` is omitted, so with `--all-projects` it does too, and adds a warning that `--all-projects` has no effect there.
 - **Why it exists:** from 1.0.0 an omitted `--project` on these reads reads only the active project (`KBAGENT_PROJECT`, then `project use`, then the sole project), and all projects need `--all-projects`. A script that writes `--all-projects` now works unchanged on 1.0.0. On an older kbagent the option does not exist (exit 2).
   - *(updated vNEXT -- CLI-45)* The 1.x line does this now: see "The fan-out reads use the active project" above.
-- **`--all-projects` together with `--project` is `USAGE_ERROR`, exit 2** ("Cannot use --project with --all-projects"), as in `workspace gc`. `config detail` has no `--all-projects`: it requires `--project`. The `kbagent serve` routes of these reads do not change: they take no `all_projects` parameter.
+- **`--all-projects` together with `--project` is `USAGE_ERROR`, exit 2** ("Cannot use --project with --all-projects"), as in `workspace gc`. `config detail` has no `--all-projects`: it requires `--project` (*(since vNEXT)* without it, the active project). The `kbagent serve` routes of these reads do not change: they take no `all_projects` parameter.
 - **The `--json` envelope has an optional top-level `warnings` key**, a list of entries with `code` and `message` (`code` is `WARNING` today); an entry can also carry `hint` and further fields, so read the keys you know and ignore the rest. It is in the success envelope (`status`, `targets`, `warnings`, `data`) and in the error envelope (`status`, `targets`, `warnings`, `error`), and only when a command gave a warning; without one the key is absent. Before, a warning in `--json` mode was dropped. Human mode is unchanged: warnings go to stderr.
 - **A warning after the envelope is written is dropped**, so stdout stays one JSON document. Some commands warn only after their output (for example the `merge-request` group); their warnings stay in `data.warnings`.
 - **Top-level `warnings` is not `data.warnings`.** Some commands return their own `warnings` inside `data` (`data-app deploy`, `sync clone`, `sync push`, `merge-request`, `flow new/update`, `project edit`, `lineage show`). That key is part of the command result and does not change. The top-level key is set by the output layer and has the same entry shape for every command. A command can fill both, or only one of them: read both.
@@ -334,8 +375,10 @@ From the release of kbagent 1.0.0 until its migration date (28 days later), the 
   typed, reports `env_points_to_configured_project: false` (commands using it
   fail) and puts the ambiguity message in the new `env_error` field.
 - **Not translated where `--project` is no registry lookup.** `project add
-  --project` and `project create --project` take the value as the new alias;
-  `lineage show --project` filters the aliases inside an offline graph file.
+  --project` and `project create --project` take the value as the new alias
+  (*(since vNEXT)* the option is `--alias`, and `--project` is its deprecated
+  name); `lineage show --project` filters the aliases inside an offline graph
+  file.
 - **`project invite --from-csv` changed:** a `project` column value now
   follows the same rules -- an alias wins over a project ID, and an ID
   registered more than once fails that row with the list of aliases. Before,
@@ -405,7 +448,7 @@ From the release of kbagent 1.0.0 until its migration date (28 days later), the 
   server-side). kbagent reclassifies exactly that 401 to
   `ErrorCode.MISSING_MASTER_TOKEN` with the remedy in the message. Fix:
   check `kbagent project info` -> `is_master_token`, and register a
-  project-admin token (`kbagent project edit --token-stdin`). Do NOT escalate
+  project-admin token (`kbagent project edit --project P --token-stdin`). Do NOT escalate
   this one to support -- it is by design.
   - **(updated 0.97.0 -- PSGO-282, go-monorepo#596):** the "every call"
     part above is now history. The Metastore no longer requires a master
@@ -597,7 +640,7 @@ From the release of kbagent 1.0.0 until its migration date (28 days later), the 
   the additive key `session_unsupported_features` (`auth status` does **not**
   carry it), so read it from there instead of reconstructing it from memory.
   The three entries are `kbagent kai`,
-  `kbagent semantic-layer token --encrypt (Metastore Service)`, and the
+  `kbagent semantic-layer token --project P --encrypt (Metastore Service)`, and the
   importable SDK (`keboola_agent_cli.Client`). `kai` needs the external
   `kai_client` library, which has no bearer path. `semantic-layer token
   --encrypt` encrypts the project's own token for reuse, and a sentinel is not a
@@ -1092,7 +1135,7 @@ Before this, only `sync init --adopt-existing` and `config new --push
 
 - A registered project without a stored `project_id` gets the ID from one
   token verification call. If that call fails, the command stops with
-  `CONFIG_ERROR` and names `kbagent project edit --token-stdin`.
+  `CONFIG_ERROR` and names `kbagent project edit --project P --token-stdin`.
 - A directory without a manifest behaves as before: `pull` initializes it,
   `diff` and `push` report `NOT_INITIALIZED`.
 - To copy configs from one project to another, use `sync clone`. The
@@ -1240,13 +1283,14 @@ Two follow-on contract notes:
   reports `status: no_changes, created: 0`. No more "every fresh-create
   emit doubles the manifest" workaround needed.
 - **`KBC.configuration.*` metadata propagates on CREATE.** If a placeholder
-  entry's `metadata` dict contains keys starting with `KBC.` (e.g.
-  `KBC.configuration.folderName`), they are POSTed to the metadata API
-  via `client.set_config_metadata` immediately after the create call.
+  entry's `metadata` dict contains keys starting with `KBC.`, they are
+  POSTed to the metadata API via `client.set_config_metadata` immediately
+  after the create call. (updated vNEXT) `KBC.configuration.folderName` is
+  sent as the create call's `folder` field instead, never to the metadata API.
   Bookkeeping keys (`pull_hash`, `pull_config_hash`, ...) are filtered
   out by the `KBC.` prefix check. `_push_update` does **not** propagate
-  metadata — use `kbagent config set-metadata` (or `config set-folder`)
-  for that.
+  metadata — use `kbagent config set-metadata` (or `config set-folder`
+  for the folder) for that.
 
 If a downstream consumer has been working around the duplication by
 post-processing the manifest, drop that workaround. The single-entry
@@ -1300,7 +1344,7 @@ nothing, and a later local edit UPDATEs that one dev copy (production is never
 touched). Configs the dev branch already has under the production id (the
 normal case: a branch starts as a copy of production) were never affected.
 Cleanup on an older kbagent: list the branch's configs and delete the extra
-copies with `kbagent config delete --branch <dev>`.
+copies with `kbagent config delete --project P --branch <dev>`.
 
 ## `sync push` / `sync pull` / `sync diff` accept `--branch <id>` for per-invocation dev-branch targeting
 
@@ -1341,6 +1385,12 @@ non-dict body), pull keeps each config's folder from the previous pull instead o
 stripping it, and reports `folder_lookup_failed: true` in the result. A `true`
 value means the folders were not refreshed this pull -- it separates "no folders
 configured" from "the lookup failed".
+
+- (updated vNEXT) Pull no longer makes the `search/component-configurations` call:
+  the folder is the configuration's own `folder` field in the listing pull already
+  reads, and push / clone send it on the create POST. `folder_lookup_failed: true`
+  now means the listing carried no `folder` field. See "Config folder is the
+  configuration's `folder` field" at the top.
 
 ## `storage create-table --if-not-exists` returns `action: skipped` instead of raising on duplicate display name
 
@@ -1732,7 +1782,7 @@ appends a `sandbox_annotation` block:
   "sandbox_annotation": {
     "sandbox_service_id": "1296392806",
     "storage_workspace_id": 2950518214,
-    "note": "`parameters.id` in a keboola.sandboxes config is the sandbox-service internal ID, NOT the Storage workspace ID. Use `storage_workspace_id` with `kbagent workspace detail --workspace-id ...`."
+    "note": "`parameters.id` in a keboola.sandboxes config is the sandbox-service internal ID, NOT the Storage workspace ID. Use `storage_workspace_id` with `kbagent workspace detail --project P --workspace-id ...`."
   }
 }
 ```
@@ -1767,7 +1817,7 @@ worker into debug execution: the component starts with the same configuration
 and inputs as a normal run, but its output stream is **not** written to the
 configured destination buckets. Instead the worker uploads the output bytes
 to a Storage File tagged `debug-<jobId>` (you can pull it down with
-`kbagent storage file-download --tag debug-<jobId>`). Useful for:
+`kbagent storage file-download --project P --tag debug-<jobId>`). Useful for:
 
 - **Dry-runs against production configs** -- reproduce a failing job exactly
   as it happened in prod without touching downstream tables, and inspect the
@@ -1942,7 +1992,7 @@ events and emits a final `done` SSE frame mirroring the same record.
   `inequality | equality | range | composition | exclusion | temporal | conditional`.
   It classifies the SHAPE of the constraint -- the actual expression is
   always a string.
-- `kbagent semantic-layer add constraint --rule "..."` enforces the
+- `kbagent semantic-layer add constraint --project P --rule "..."` enforces the
   string contract at the CLI layer; if a user pastes a `{bounds: ...}`
   object the CLI exits 2 / `VALIDATION_ERROR` with a hint pointing at
   this gotcha.
@@ -1965,12 +2015,12 @@ events and emits a final `done` SSE frame mirroring the same record.
   independently. kbagent's `semantic-layer validate` emits a warning
   when the suffix and the severity drift (e.g. a `_critical`-suffixed
   constraint with `severity: "info"`).
-- `kbagent semantic-layer add constraint --severity` only accepts the
+- `kbagent semantic-layer add constraint --project P --severity` only accepts the
   3 API values; the 4-band band lives in `--name` suffix.
 
 ## Metric rename auto-cascades through `CODE_METRIC`
 
-- `kbagent semantic-layer edit metric --new-name NEW` updates the metric
+- `kbagent semantic-layer edit metric --project P --new-name NEW` updates the metric
   and ALSO every constraint whose `metrics[]` referenced the old name
   (`metrics[]` rewritten to the new name). *(updated 0.97.0)* Each is an
   in-place `PUT` -- same id, scope, grants and revision history, and a failed
@@ -2015,7 +2065,7 @@ events and emits a final `done` SSE frame mirroring the same record.
 
 ## Removing a metric corrupts `DIM_METRIC_THRESHOLD` downstream
 
-- `kbagent semantic-layer remove metric --name N` runs a pre-deletion
+- `kbagent semantic-layer remove metric --project P --name N` runs a pre-deletion
   scan listing every constraint whose `metrics[]` includes N. Each
   such constraint becomes ORPHANED after the delete: it remains in
   the model but references a metric that no longer exists.
@@ -2717,9 +2767,9 @@ delete. Pass `--yes` to all of them in scripts.
 - **Live-validated** end-to-end (HTTP 200 on the resulting URL, no
   auth challenge; UI Authentication tab shows "None" pre-selected).
 - **Repairing existing v0.27.0 apps stuck at 503**: re-run
-  `kbagent data-app create --auth public ...` to mint a new app, OR
+  `kbagent data-app create --project P --auth public ...` to mint a new app, OR
   patch the existing config in-place via
-  `kbagent config update --component-id keboola.data-apps --config-id ID --set 'authorization=...'`
+  `kbagent config update --project P --component-id keboola.data-apps --config-id ID --set 'authorization=...'`
   with the shape above. The previous URL stays retired in either case
   (the proxy URL is bound to the deployment record, not the config).
 - **`--auth password` behaviour unchanged.** Mints a 20-char hex
@@ -2975,7 +3025,7 @@ delete. Pass `--yes` to all of them in scripts.
 
 ## `data-app deploy` is required after `config update` -- the running container does NOT auto-pick-up new config versions
 
-- `kbagent config update --component-id keboola.data-apps ...` bumps the
+- `kbagent config update --project P --component-id keboola.data-apps ...` bumps the
   Storage config version; the deployed container keeps running at the
   OLD version. The Data Science deployment record's `configVersion`
   field is a *pinned pointer* that does not auto-advance when Storage
@@ -3027,7 +3077,7 @@ delete. Pass `--yes` to all of them in scripts.
   is a different beast: it means the platform auto-suspended the
   container after `autoSuspendAfterSeconds` of inactivity. Hit the URL
   to wake it (auto-restart triggers a 30-60s cold boot) or run
-  `kbagent data-app start --app-id N`.
+  `kbagent data-app start --project P --app-id N`.
 ## `project invite` "already invited / already member" returns HTTP 400, not 422
 
 - Re-inviting a user the project already knows about returns HTTP **400** with
@@ -3148,7 +3198,7 @@ delete. Pass `--yes` to all of them in scripts.
   the same default row.
 - **`variables-clear` does NOT delete the backing variables config** -- it
   may be shared across multiple configs. To actually remove it, run
-  `kbagent config delete --component-id keboola.variables --config-id <id>`
+  `kbagent config delete --project P --component-id keboola.variables --config-id <id>`
   after verifying nothing else references it.
 - `--var #KEY=plain` -> encrypted via Encryption API before reaching Storage.
   Fail-closed: encryption failure aborts with `ENCRYPTION_FAILED`. Use
@@ -4007,9 +4057,9 @@ field as a branch's `description` attribute:
 
 - **Dashboard project description** = `KBC.projectDescription` metadata on the
   **default (main) branch**. Set via `kbagent project description-set` (or
-  generically `kbagent branch metadata-set --key KBC.projectDescription --branch default`)
+  generically `kbagent branch metadata-set --project P --key KBC.projectDescription --branch default`)
 - **Dev branch description** = the `description` field on a dev branch record.
-  Set via `kbagent branch create --description "..."`; visible in the branch
+  Set via `kbagent branch create --project P --description "..."`; visible in the branch
   switcher and synced as `description.md` by the kbc CLI
 
 They live at different endpoints in the Storage API
@@ -4194,7 +4244,9 @@ CLI hides via its four-bucket response, but they matter when interpreting result
   read at runtime via the AI Service `configurationSchema` for `keboola.flow`
   (the same path `config new --push` uses). There is nothing vendored, pinned,
   or to re-sync. `flow schema --full` therefore **requires `--project`** (plain
-  `flow schema` is still the offline YAML template).
+  `flow schema` is still the offline YAML template). *(updated vNEXT)* without
+  `--project` it uses the active project, and the bundled snapshot when no
+  project is registered or chosen.
 - **Graceful semantic-only degradation.** If the live schema
   fetch fails (network error, or the AI Service returns no `configurationSchema`),
   `flow new`/`flow update`/`flow validate --project` do **not** block: structural
@@ -4205,7 +4257,7 @@ CLI hides via its four-bucket response, but they matter when interpreting result
 
 ## `schedule find --cron-window` is an hour-field approximation
 
-`kbagent schedule find --cron-window "02:00-04:00"` is an **audit helper, not a real cron evaluator**. It parses the *hour* field of the cron expression and asks whether every hour at which the cron fires falls inside the passed window. It deliberately does **not** account for minute precision, day-of-month restrictions, or day-of-week restrictions.
+`kbagent schedule find --project P --cron-window "02:00-04:00"` is an **audit helper, not a real cron evaluator**. It parses the *hour* field of the cron expression and asks whether every hour at which the cron fires falls inside the passed window. It deliberately does **not** account for minute precision, day-of-month restrictions, or day-of-week restrictions.
 
 - **Minutes in `--cron-window` are syntactic sugar, but still validated.** The spec `02:00-04:00` is accepted in the `HH:MM-HH:MM` format because it matches how people describe time windows; the matcher itself only uses the hour part. A cron expression `*/10 2-4 * * *` (every 10 minutes within hours 2-4) matches `--cron-window "02:30-04:30"` exactly the same as `--cron-window "02:00-04:00"`. Minute values outside `00-59` (e.g. `02:70-04:88`) are still rejected at parse time so obviously malformed inputs fail loudly.
 - **Hour field `*` (fires every hour) never matches a bounded window.** This is intentional: from an audit standpoint, "fires every hour" is the opposite of "confined to a 2-hour window". If you wanted to catch those, pass `--cron-window "00:00-23:00"` (or skip the window filter entirely).
@@ -4261,7 +4313,7 @@ The trade-off is deliberate: one big call avoids the O(unique-parents) round-tri
 
 ## `search` is a top-level command, not `config search`
 
-`kbagent search QUERY` searches across **all item types** (tables, buckets, configs, flows, data apps, transformations) via the Storage API global-search endpoint. It is distinct from `kbagent config search --query Q` which scans only configuration JSON bodies.
+`kbagent search QUERY` searches across **all item types** (tables, buckets, configs, flows, data apps, transformations) via the Storage API global-search endpoint. It is distinct from `kbagent config search --project P --query Q` which scans only configuration JSON bodies.
 - `search --search-type config-based` delegates to `config search` internally but exposes the unified results shape. It matches **case-insensitively** (since v0.84.0) while `config search --query` stays case-sensitive unless `-i` is passed -- the same logical table is often mixed-case in a row name and upper-case in `storage.input.tables[].source`, so a case-sensitive body scan answers "is this referenced anywhere?" with a false no.
 - Options (`--type`, `--project`, `--limit`) must come AFTER the QUERY argument: `kbagent search "text" --project P --type table --limit 10`.
 
@@ -4522,7 +4574,7 @@ real secret — e.g. to wire `OTEL_EXPORTER_OTLP_ENDPOINT` for a daemon:
 `kbagent --json stream detail SRC --project P --reveal`.
 
 Creating an OTLP source **via the raw Stream API** creates only the bare source
-— no sinks, no tables. So `kbagent stream create-source --type otlp` (matching
+— no sinks, no tables. So `kbagent stream create-source --project P --type otlp` (matching
 the Keboola UI) **auto-provisions the three sinks** logs/metrics/traces into
 bucket `in.c-otlp-<sourceId>`, mapping each record to `id` (uuid) + `datetime`
 (ingest time) + `body` (the full flattened OTLP record as JSON), so data lands
@@ -4833,7 +4885,7 @@ value for the new non-null column. Add `--default` when the table is non-empty.
 The Keboola Queue API `POST /jobs` accepts **no** client-supplied idempotency /
 dedup token -- verified against the live OpenAPI spec (v1.3.8) and the server
 source (an internal `deduplicationId` exists but is daemon-only, never read from
-the public create-job request). So `kbagent job run --idempotency-key KEY`
+the public create-job request). So `kbagent job run --project P --idempotency-key KEY`
 de-duplicates **client-side**: a `<config-dir>/job_idempotency.json` map of
 `key -> prior job`. Consequences to know:
 - Dedup only works where that file is shared -- it is per config-dir / per
@@ -4922,7 +4974,7 @@ ended up (`data-app list --branch <dev-id>` vs production).
 
 ### `search --regex` matches entity names only; `matched_columns` is textual-only
 
-`kbagent search --regex` opts into the Storage API `mode=regex` global-search
+`kbagent search --project P --regex` opts into the Storage API `mode=regex` global-search
 path. Three things verified live against a real stack (2026-07-02):
 - Regex is a **whole-term, case-insensitive** match — `report` will NOT match
   `monthly_report`; you must write `.*report.*`. An invalid pattern returns a
@@ -5132,7 +5184,7 @@ Both failed on **every** invocation on Windows, and both worked fine on
 macOS/Linux — so a failure report from a Windows user is not a project or
 permission problem, it is the platform.
 
-- **`kbagent job run --idempotency-key ...`** raised
+- **`kbagent job run --project P --idempotency-key ...`** raised
   `PermissionError: [WinError 5] Access is denied` before recording anything.
   The dedup store locked the same file it then renamed over, and Windows
   refuses to replace a file that still has an open handle. On kbagent older
@@ -6324,7 +6376,7 @@ whose manifest was lost or written again, a `main/` file that
   when the file has no such key, any difference from the remote. A scaffold
   with no local changes gets the remote version, as before.
 - **To resolve such a `conflict`:** keep a copy of the local edit if you need
-  it, run `kbagent sync pull --theirs` (the remote wins and the file becomes
+  it, run `kbagent sync pull --project P --theirs` (the remote wins and the file becomes
   tracked), apply the edit again, and push.
 - Pull protects only a file in the directory where pull writes that config. A
   file with the same config id in another directory stays a separate copy
@@ -6670,7 +6722,7 @@ appeared in human mode on a terminal.
 
 - With `--progress`, progress always goes to **stderr**, also with `--json`
   and with no terminal. stdout is untouched, so
-  `kbagent --json storage upload-table ... --progress > result.json 2> progress.log`
+  `kbagent --json storage upload-table --project P ... --progress > result.json 2> progress.log`
   keeps a parseable result.
 - On a terminal: a bar with percent, transferred/total, speed, elapsed and
   ETA. Otherwise: one plain line every 10 s plus a final line, e.g.

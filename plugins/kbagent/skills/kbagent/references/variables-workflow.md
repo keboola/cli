@@ -249,7 +249,7 @@ empty-bindings silent failure.
 
 | Code | When | Recovery |
 |---|---|---|
-| `NO_VARIABLE_ROWS` | Linked `keboola.variables` config exists but has zero rows | `kbagent config variables-set --var KEY=VALUE` |
+| `NO_VARIABLE_ROWS` | Linked `keboola.variables` config exists but has zero rows | `kbagent config variables-set --project prod --var KEY=VALUE` |
 | `MALFORMED_VARIABLES_ROW` | Storage API returned a first row without a usable `id` | Inspect the backing config; fix or pin a specific row via `--variable-values-id` |
 | `INVALID_ARGUMENT` | Mutually-exclusive flags, empty `--variable-values-id ""` | Fix CLI args |
 

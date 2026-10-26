@@ -32,6 +32,7 @@ from ._all_projects import (
     finish_fanout,
 )
 from ._helpers import (
+    BRANCH_ONE_PROJECT_MESSAGE,
     _confirm_or_abort,
     check_cli_permission,
     emit_api_error,
@@ -40,7 +41,9 @@ from ._helpers import (
     get_service,
     map_error_to_exit_code,
     parse_json_arg,
+    resolve_project_alias_or_none,
 )
+from ._project_ref import PROJECT_DEFAULT, PROJECT_HELP
 
 logger = logging.getLogger(__name__)
 
@@ -185,10 +188,7 @@ def flow_list(
     service = get_service(ctx, "flow_service")
 
     if branch is not None and (all_projects or len(project or []) > 1):
-        formatter.error(
-            message="--branch requires exactly one --project",
-            error_code=ErrorCode.INVALID_ARGUMENT,
-        )
+        formatter.error(message=BRANCH_ONE_PROJECT_MESSAGE, error_code=ErrorCode.INVALID_ARGUMENT)
         raise typer.Exit(code=2)
 
     project = fanout_projects(ctx, formatter, project, all_projects)
@@ -264,7 +264,7 @@ def _format_flows_table(
 @flow_app.command("detail")
 def flow_detail(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     flow_id: str = typer.Option(..., "--flow-id", help="Flow configuration ID"),
     branch: int | None = typer.Option(None, "--branch", help="Dev branch ID"),
 ) -> None:
@@ -395,30 +395,32 @@ def flow_schema(
         False,
         "--full",
         help=(
-            "Dump the conditional-flow JSON Schema: live from the stack with "
-            "--project, bundled snapshot without it."
+            "Dump the conditional-flow JSON Schema: live from the stack of the "
+            "project, the bundled snapshot when no project is registered or chosen."
         ),
     ),
     project: str | None = typer.Option(
         None,
         "--project",
         "-p",
-        help="Project alias -- with --full, fetch the live schema from this stack.",
+        help=f"Project alias or ID whose stack gives the live schema for --full ({PROJECT_DEFAULT})",
     ),
 ) -> None:
     """Print the conditional-flow YAML template, or --full for the JSON Schema.
 
     The plain template is offline. ``--full`` dumps the keboola.flow JSON
-    Schema: with ``--project`` it is fetched live from the stack's component
-    registry; without it the bundled snapshot (vendored at build time, see
-    ``kbagent flow examples`` for matching examples) is served offline.
+    Schema of the project (``--project``, else the T1 chain): it is fetched
+    live from the stack's component registry. When no project is registered
+    or chosen, the bundled snapshot (vendored at build time, see ``kbagent
+    flow examples`` for matching examples) is served offline.
     """
     formatter = get_formatter(ctx)
     if full:
+        project = resolve_project_alias_or_none(ctx, formatter, project)
         if not project:
             if not formatter.json_mode:
                 formatter.console.print(
-                    "[dim]Bundled conditional-flow JSON Schema snapshot (offline). "
+                    "[dim]Bundled conditional-flow JSON Schema snapshot (offline): no project. "
                     "Pass --project ALIAS to fetch the live schema from the stack.[/dim]"
                 )
             _print_json_schema(formatter, get_bundled_flow_schema(FLOW_COMPONENT_ID), "bundled")
@@ -537,18 +539,19 @@ def flow_validate(
         "--project",
         "-p",
         help=(
-            "Project alias -- fetch the live JSON Schema from the stack for full "
-            "structural + semantic validation. Without it, only semantic checks run."
+            f"Project alias or ID whose stack gives the live JSON Schema ({PROJECT_DEFAULT}; "
+            "without any project, only the semantic checks run)"
         ),
     ),
 ) -> None:
     """Validate a conditional-flow definition (schema + semantic checks).
 
-    With ``--project`` the live keboola.flow JSON Schema is fetched from the
-    stack and structural validation runs alongside the semantic checks; a fetch
-    failure degrades gracefully (semantic-only + a warning). Without
-    ``--project`` only the semantic checks run and a note records that
-    structural schema validation was skipped (no schema source).
+    The live keboola.flow JSON Schema is fetched from the stack of the project
+    (``--project``, else the T1 chain) and structural validation runs alongside
+    the semantic checks; a fetch failure degrades gracefully (semantic-only + a
+    warning). When no project is registered or chosen, only the semantic checks
+    run and a note records that structural schema validation was skipped (no
+    schema source).
 
     Exit 0 when valid (warnings still printed), exit 2 when there are errors.
     """
@@ -567,6 +570,7 @@ def flow_validate(
 
     schema: dict[str, Any] | None = None
     notes: list[str] = []
+    project = resolve_project_alias_or_none(ctx, formatter, project)
     if project:
         service = get_service(ctx, "flow_service")
         try:
@@ -579,7 +583,7 @@ def flow_validate(
             notes.append(f"structural schema validation skipped: {fetch.reason}")
     else:
         notes.append(
-            "structural schema validation skipped: no schema source "
+            "structural schema validation skipped: no project is registered or chosen "
             "(pass --project ALIAS to fetch the live schema from the stack)"
         )
 
@@ -630,7 +634,7 @@ def _load_flow_yaml(raw: str) -> dict[str, Any]:
 @flow_app.command("new")
 def flow_new(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     name: str = typer.Option(..., "--name", "-n", help="Flow name"),
     description: str = typer.Option("", "--description", help="Optional description"),
     file: str | None = typer.Option(
@@ -704,7 +708,7 @@ def flow_new(
 @flow_app.command("update")
 def flow_update(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     flow_id: str = typer.Option(..., "--flow-id", help="Flow configuration ID"),
     name: str | None = typer.Option(None, "--name", "-n", help="New flow name"),
     description: str | None = typer.Option(None, "--description", help="New description"),
@@ -786,7 +790,7 @@ def flow_update(
 @flow_app.command("delete")
 def flow_delete(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     flow_id: str = typer.Option(..., "--flow-id", help="Flow configuration ID"),
     branch: int | None = typer.Option(None, "--branch", help="Dev branch ID"),
     dry_run: bool = typer.Option(
@@ -855,7 +859,7 @@ def flow_delete(
 @flow_app.command("schedule")
 def flow_schedule(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     flow_id: str = typer.Option(..., "--flow-id", help="Flow configuration ID"),
     cron: str = typer.Option(..., "--cron", help="Cron expression (e.g. '0 6 * * *')"),
     timezone: str = typer.Option("UTC", "--timezone", help="IANA timezone (default: UTC)"),
@@ -939,7 +943,7 @@ def _print_schedule_list(formatter: Any, schedules: list[dict[str, Any]]) -> Non
 @flow_app.command("schedule-remove")
 def flow_schedule_remove(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     flow_id: str = typer.Option(..., "--flow-id", help="Flow configuration ID"),
     branch: int | None = typer.Option(None, "--branch", help="Dev branch ID"),
     dry_run: bool = typer.Option(

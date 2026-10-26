@@ -88,8 +88,8 @@ rebasing each listed configuration is sufficient (no re-validate step).
 kbagent mr conflicts --project P                                     # what is in conflict
 kbagent mr diff --project P --component-id C --config-id I            # per path: both / only you / only production
 kbagent mr resolve --project P --component-id C --config-id I --take ours     # keep your content
-kbagent mr resolve ... --take theirs                                   # adopt production's
-kbagent mr resolve ... --take delete                                   # drop the configuration
+kbagent mr resolve --project P ... --take theirs                                   # adopt production's
+kbagent mr resolve --project P ... --take delete                                   # drop the configuration
 ```
 
 For a hand-made three-way merge, the git-mergetool loop with a file as the third pane:

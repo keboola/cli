@@ -19,6 +19,7 @@ from ._helpers import (
     map_error_to_exit_code,
     parse_json_arg,
 )
+from ._project_ref import PROJECT_HELP
 
 encrypt_app = typer.Typer(
     help="Encrypt secret values via Keboola Encryption API (one-way, no decrypt)"
@@ -33,12 +34,7 @@ def _encrypt_permission_check(ctx: typer.Context) -> None:
 @encrypt_app.command("values")
 def encrypt_values(
     ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        "-p",
-        help="Project alias",
-    ),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     component_id: str = typer.Option(
         ...,
         "--component-id",

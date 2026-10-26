@@ -23,6 +23,7 @@ from ._all_projects import (
     finish_fanout,
 )
 from ._helpers import (
+    BRANCH_ONE_PROJECT_MESSAGE,
     _confirm_or_abort,
     check_cli_permission,
     emit_api_error,
@@ -33,6 +34,7 @@ from ._helpers import (
     map_error_to_exit_code,
 )
 from ._progress import ProgressOption, transfer_progress
+from ._project_ref import PROJECT_HELP
 from ._storage_jobs import (
     ImportTimeoutOption,
     ImportWaitOption,
@@ -105,12 +107,9 @@ def storage_buckets(
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
 
-    # --branch requires exactly one --project
+    # T15: --branch needs one project (a branch ID belongs to one project).
     if branch is not None and (all_projects or len(project or []) > 1):
-        formatter.error(
-            message="--branch requires exactly one --project (branch ID is per-project)",
-            error_code=ErrorCode.INVALID_ARGUMENT,
-        )
+        formatter.error(message=BRANCH_ONE_PROJECT_MESSAGE, error_code=ErrorCode.INVALID_ARGUMENT)
         raise typer.Exit(code=2)
 
     project = fanout_projects(ctx, formatter, project, all_projects)
@@ -173,12 +172,7 @@ def storage_buckets(
 @storage_app.command("bucket-detail", rich_help_panel=_BUCKETS)
 def storage_bucket_detail(
     ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        "-p",
-        help="Project alias",
-    ),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     bucket_id: str = typer.Option(
         ...,
         "--bucket-id",
@@ -325,13 +319,10 @@ def storage_tables(
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
 
-    # --branch requires exactly one --project (branch ID is per-project).
+    # T15: --branch needs one project (a branch ID belongs to one project).
     # Mirrors the validation used by `storage buckets` and `config list`.
     if branch is not None and (all_projects or len(project or []) > 1):
-        formatter.error(
-            message="--branch requires exactly one --project (branch ID is per-project)",
-            error_code=ErrorCode.INVALID_ARGUMENT,
-        )
+        formatter.error(message=BRANCH_ONE_PROJECT_MESSAGE, error_code=ErrorCode.INVALID_ARGUMENT)
         raise typer.Exit(code=2)
 
     project = fanout_projects(ctx, formatter, project, all_projects)
@@ -374,12 +365,7 @@ def storage_tables(
 @storage_app.command("table-detail", rich_help_panel=_TABLES)
 def storage_table_detail(
     ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        "-p",
-        help="Project alias",
-    ),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     table_id: str = typer.Option(
         ...,
         "--table-id",
@@ -439,12 +425,7 @@ def storage_table_detail(
 @storage_app.command("create-bucket", rich_help_panel=_BUCKETS)
 def storage_create_bucket(
     ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        "-p",
-        help="Project alias",
-    ),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     stage: str = typer.Option(
         ...,
         "--stage",
@@ -512,12 +493,7 @@ def storage_create_bucket(
 @storage_app.command("create-table", rich_help_panel=_TABLES)
 def storage_create_table(
     ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        "-p",
-        help="Project alias",
-    ),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     bucket_id: str = typer.Option(
         ...,
         "--bucket-id",
@@ -765,12 +741,7 @@ def storage_create_table(
 @storage_app.command("upload-table", rich_help_panel=_TABLES)
 def storage_upload_table(
     ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        "-p",
-        help="Project alias",
-    ),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     table_id: str = typer.Option(
         ...,
         "--table-id",
@@ -884,12 +855,7 @@ def storage_upload_table(
 @storage_app.command("download-table", rich_help_panel=_TABLES)
 def storage_download_table(
     ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        "-p",
-        help="Project alias",
-    ),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     table_id: str = typer.Option(
         ...,
         "--table-id",
@@ -1027,12 +993,7 @@ def storage_download_table(
 @storage_app.command("delete-table", rich_help_panel=_TABLES)
 def storage_delete_table(
     ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        "-p",
-        help="Project alias",
-    ),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     table_id: list[str] = typer.Option(
         ...,
         "--table-id",
@@ -1124,12 +1085,7 @@ def storage_delete_table(
 @storage_app.command("truncate-table", rich_help_panel=_TABLES)
 def storage_truncate_table(
     ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        "-p",
-        help="Project alias",
-    ),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     table_id: list[str] = typer.Option(
         ...,
         "--table-id",
@@ -1225,12 +1181,7 @@ def storage_truncate_table(
 @storage_app.command("add-column", rich_help_panel=_TABLES)
 def storage_add_column(
     ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        "-p",
-        help="Project alias",
-    ),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     table_id: str = typer.Option(
         ...,
         "--table-id",
@@ -1303,12 +1254,7 @@ def storage_add_column(
 @storage_app.command("delete-column", rich_help_panel=_TABLES)
 def storage_delete_column(
     ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        "-p",
-        help="Project alias",
-    ),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     table_id: str = typer.Option(
         ...,
         "--table-id",
@@ -1403,12 +1349,7 @@ def storage_delete_column(
 @storage_app.command("swap-tables", rich_help_panel=_TABLES)
 def storage_swap_tables(
     ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        "-p",
-        help="Project alias",
-    ),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     table_id: str = typer.Option(
         ...,
         "--table-id",
@@ -1545,12 +1486,7 @@ def storage_swap_tables(
 @storage_app.command("clone-table", rich_help_panel=_TABLES)
 def storage_clone_table(
     ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        "-p",
-        help="Project alias",
-    ),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     table_id: str = typer.Option(
         ...,
         "--table-id",
@@ -1657,12 +1593,7 @@ def _format_file_size(size_bytes: int | None) -> str:
 @storage_app.command("files", rich_help_panel=_FILES)
 def storage_file_list(
     ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        "-p",
-        help="Project alias",
-    ),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     tag: list[str] | None = typer.Option(
         None,
         "--tag",
@@ -1755,12 +1686,7 @@ def storage_file_list(
 @storage_app.command("file-detail", rich_help_panel=_FILES)
 def storage_file_info(
     ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        "-p",
-        help="Project alias",
-    ),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     file_id: int = typer.Option(
         ...,
         "--file-id",
@@ -1803,12 +1729,7 @@ def storage_file_info(
 @storage_app.command("file-upload", rich_help_panel=_FILES)
 def storage_file_upload(
     ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        "-p",
-        help="Project alias",
-    ),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     file: str = typer.Option(
         ...,
         "--file",
@@ -1894,12 +1815,7 @@ def storage_file_upload(
 @storage_app.command("file-download", rich_help_panel=_FILES)
 def storage_file_download(
     ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        "-p",
-        help="Project alias",
-    ),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     file_id: int | None = typer.Option(
         None,
         "--file-id",
@@ -1974,12 +1890,7 @@ def storage_file_download(
 @storage_app.command("file-tag", rich_help_panel=_FILES)
 def storage_file_tag(
     ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        "-p",
-        help="Project alias",
-    ),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     file_id: int = typer.Option(
         ...,
         "--file-id",
@@ -2048,12 +1959,7 @@ def storage_file_tag(
 @storage_app.command("load-file", rich_help_panel=_FILES)
 def storage_load_file(
     ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        "-p",
-        help="Project alias",
-    ),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     file_id: int = typer.Option(
         ...,
         "--file-id",
@@ -2139,12 +2045,7 @@ def storage_load_file(
 @storage_app.command("unload-table", rich_help_panel=_FILES)
 def storage_unload_table(
     ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        "-p",
-        help="Project alias",
-    ),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     table_id: str = typer.Option(
         ...,
         "--table-id",

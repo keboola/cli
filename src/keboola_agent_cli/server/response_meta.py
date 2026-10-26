@@ -12,10 +12,10 @@ and its ``error`` object has the fields of the CLI error object (spec V4):
 The HTTP status of an error follows the error-code table in ``errors.py``
 (:func:`http_status_for`), so one code has one status on every route.
 
-A destructive request (its route key or a flag escalation, see
+A destructive or admin request (its route key or a flag escalation, see
 :func:`note_operation`) whose branch came from the active branch gets a
-``TARGET_FROM_ACTIVE_CHOICE`` warning, as a destructive CLI command under
-``--json`` does (spec T12).
+``TARGET_FROM_ACTIVE_CHOICE`` warning, as such a CLI command under ``--json``
+does (spec T12).
 """
 
 from __future__ import annotations
@@ -44,10 +44,10 @@ ACTIVE_CHOICE_SHARED_CODE = "ACTIVE_CHOICE_SHARED"
 
 @dataclass
 class _RequestMeta:
-    """The warnings of one request, and whether the request is destructive (spec T12)."""
+    """The warnings of one request, and whether it is destructive or admin (spec T12)."""
 
     warnings: list[dict[str, Any]] = field(default_factory=list)
-    destructive: bool = False
+    warn_active_choice: bool = False
 
 
 _REQUEST_META: ContextVar[_RequestMeta | None] = ContextVar("kbagent_request_meta", default=None)
@@ -116,17 +116,17 @@ def _targets() -> list[dict[str, Any]]:
 def note_operation(operation: str) -> None:
     """Note an operation key that the request was checked for (route table, inline, flag).
 
-    A ``destructive`` key (``FLAG_ESCALATIONS`` first) makes the request
-    destructive, so its active-branch targets get a warning (spec T12).
+    A ``destructive`` or ``admin`` key (``FLAG_ESCALATIONS`` first) makes the
+    active-branch targets of the request get a warning (spec T12).
     """
     meta = _REQUEST_META.get()
     category = FLAG_ESCALATIONS.get(operation) or OPERATION_REGISTRY.get(operation)
-    if meta is not None and category == "destructive":
-        meta.destructive = True
+    if meta is not None and category in ("destructive", "admin"):
+        meta.warn_active_choice = True
 
 
 def _warnings() -> list[dict[str, Any]]:
-    """The request's warnings, plus T12: a destructive request on the active branch.
+    """The request's warnings, plus T12: a destructive or admin request on the active branch.
 
     The project of a REST route is in its path or query, so only the branch
     half of the CLI warning applies. The hint names the explicit parameter.
@@ -135,7 +135,7 @@ def _warnings() -> list[dict[str, Any]]:
     if meta is None:
         return []
     found = list(meta.warnings)
-    if meta.destructive:
+    if meta.warn_active_choice:
         for target in recorded_targets():
             if target.role == "target" and target.branch_source == "active_branch":
                 found.append(

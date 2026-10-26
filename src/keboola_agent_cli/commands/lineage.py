@@ -264,7 +264,7 @@ def lineage_show(
         None,
         "--project",
         "-p",
-        help="Project alias filter for queries.",
+        help="Project alias filter for queries",
     ),
     depth: int | None = typer.Option(
         None, "--depth", help="Max traversal depth (default: 3 for --format html, else 10)."

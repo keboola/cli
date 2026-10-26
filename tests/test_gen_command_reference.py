@@ -53,10 +53,11 @@ class TestGenCommandReference:
             assert f"`{flag}`" in reference
 
     def test_required_flags_marked(self, reference: str) -> None:
-        """job run's --project row carries the required marker."""
+        """job run's --component-id row carries the required marker; --project is optional (T17)."""
         section = reference.split("### `kbagent job run`", 1)[1].split("### ", 1)[0]
-        project_row = next(line for line in section.splitlines() if "`--project`" in line)
-        assert "| yes |" in project_row
+        rows = section.splitlines()
+        assert "| yes |" in next(line for line in rows if "`--component-id`" in line)
+        assert "| yes |" not in next(line for line in rows if "`--project`" in line)
 
     def test_hidden_alias_excluded(self, reference: str) -> None:
         """The hidden `sl` alias (and its subtree) is not documented."""

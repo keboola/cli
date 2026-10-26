@@ -337,8 +337,8 @@ class TestEncryptValuesErrors:
         assert output["error"]["code"] == "INPUT_ERROR"
         mock_enc.encrypt.assert_not_called()
 
-    def test_encrypt_values_missing_project(self, tmp_path: Path) -> None:
-        """Missing --project gives exit code 2 (Typer required option)."""
+    def test_encrypt_values_without_project_uses_the_active_project(self, tmp_path: Path) -> None:
+        """Without --project the values are encrypted for the active project (spec T17)."""
         config_dir = tmp_path / "config"
         config_dir.mkdir()
 
@@ -351,7 +351,9 @@ class TestEncryptValuesErrors:
         ):
             MockStore.return_value = store
             MockProjService.return_value = ProjectService(config_store=store)
-            MockEncService.return_value = _make_encrypt_mock()
+            mock_enc = _make_encrypt_mock()
+            mock_enc.encrypt.return_value = {"#x": "KBC::ProjectSecure::enc"}
+            MockEncService.return_value = mock_enc
 
             result = runner.invoke(
                 app,
@@ -366,7 +368,8 @@ class TestEncryptValuesErrors:
                 ],
             )
 
-        assert result.exit_code == 2
+        assert result.exit_code == 0, result.output
+        assert mock_enc.encrypt.call_args.kwargs["alias"] == "prod"
 
     def test_encrypt_values_validation_error(self, tmp_path: Path) -> None:
         """ConfigError from service gives exit code 5 with CONFIG_ERROR."""
