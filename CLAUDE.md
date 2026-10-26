@@ -490,7 +490,7 @@ kbagent auth register-projects [--stack URL|alias] [--all] [--project-id ID ...]
 #   starts the server and blocks every destructive route (none of them under `/auth/*`).
 #   See docs/web-server.md.
 
-kbagent project create --url URL [--project ALIAS] [--name NAME] [--backend snowflake|bigquery] [--sync-backend-init]
+kbagent project create --url URL [--project|--alias ALIAS] [--name NAME] [--backend snowflake|bigquery] [--sync-backend-init]
 # project create (since 0.95.0, DMD-1940): the ONLY kbagent command that works from nothing --
 #   no account, no token, no `auth login`. POSTs the unauthenticated provisioning endpoint
 #   (`/manage/programmatic-projects`, gated by the `agent-provisioning` stack feature
@@ -515,13 +515,13 @@ kbagent project create --url URL [--project ALIAS] [--name NAME] [--backend snow
 #   delivered and may have succeeded (retryable:false, message says not to repeat -- check
 #   `auth status`, whose stored session + claim link is the evidence). `--sync-backend-init`
 #   raises that call's read timeout to 300s, which can outlast an agent's foreground shell.
-kbagent project add --project NAME --url URL [--token-stdin | --token-file PATH [--keep-token-file] | --token-env NAME | --token TOKEN]
+kbagent project add --project|--alias NAME --url URL [--token-stdin | --token-file PATH [--keep-token-file] | --token-env NAME | --token TOKEN]
 kbagent project list
 kbagent project remove --project NAME
 kbagent project edit --project NAME [--url URL] [--token-stdin | --token-file PATH [--keep-token-file] | --token-env NAME | --token TOKEN] [--new-alias NEW]
 kbagent project status [--project NAME | --all-projects]
 kbagent project refresh --project ALIAS [--dry-run] [--force] [--yes] [--token-description DESC] [--token-expires-in N]
-kbagent project refresh --all [--dry-run] [--force] [--yes] [--token-description DESC] [--token-expires-in N]
+kbagent project refresh --all|--all-projects [--dry-run] [--force] [--yes] [--token-description DESC] [--token-expires-in N]
 kbagent project description-get --project NAME
 kbagent project description-set --project NAME [--text STR | --file PATH | --stdin]
 kbagent project use ALIAS

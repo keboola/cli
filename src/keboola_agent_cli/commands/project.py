@@ -172,7 +172,9 @@ def _format_status_table(console: Console, statuses: list[dict[str, Any]]) -> No
 @project_app.command("add")
 def project_add(
     ctx: typer.Context,
-    alias: str = typer.Option(..., "--project", help="Human-friendly name for this project"),
+    alias: str = typer.Option(
+        ..., "--project", "--alias", help="Human-friendly name for this project"
+    ),
     url: str = typer.Option(
         DEFAULT_STACK_URL,
         help="Keboola stack URL",
@@ -244,7 +246,10 @@ def project_create(
         help="Keboola stack URL to create the project on (required -- never guessed)",
     ),
     alias: str | None = typer.Option(
-        None, "--project", help="Local alias for the new project (default: from its name)"
+        None,
+        "--project",
+        "--alias",
+        help="Local alias for the new project (default: from its name)",
     ),
     name: str | None = typer.Option(None, "--name", help="Name for the new Keboola project"),
     backend: ProjectBackend | None = typer.Option(
@@ -574,7 +579,7 @@ def project_refresh(
         None, "--project", "-p", help="Refresh token for a specific project"
     ),
     all_projects: bool = typer.Option(
-        False, "--all", help="Refresh all projects with invalid tokens"
+        False, "--all", "--all-projects", help="Refresh all projects with invalid tokens"
     ),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Preview what would be refreshed without making changes"
