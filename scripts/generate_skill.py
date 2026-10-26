@@ -20,6 +20,8 @@ import click
 import typer.main
 
 from keboola_agent_cli.cli import app
+from keboola_agent_cli.commands._helpers import DEPRECATIONS
+from keboola_agent_cli.commands._project_ref import target_project_param
 from keboola_agent_cli.commands.repl import _is_group
 from keboola_agent_cli.root_command import is_root_flag_copy
 
@@ -63,11 +65,14 @@ def _first_sentence(text: str) -> str:
     return first_para.rstrip(".")
 
 
-def _format_param(param: click.Parameter) -> str:
+def _format_param(
+    param: click.Parameter, *, shown: bool = False, old_names: dict[str, str] | None = None
+) -> str:
     """Format a single Click parameter for the command column.
 
     Required params get a placeholder value (e.g. --alias NAME).
-    Optional params are omitted from the compact command string.
+    Optional params are omitted from the compact command string, unless ``shown``.
+    ``old_names`` maps a renamed option to the deprecated name that it replaced.
     """
     # Use param_type_name (not isinstance against click.Argument/Option): Typer >=0.25
     # vendors its own Click, so a command's params are not standalone click.* instances.
@@ -76,10 +81,11 @@ def _format_param(param: click.Parameter) -> str:
         return f"<{human_name}>" if param.required else f"[{human_name}]"
 
     if param.param_type_name == "option":
-        if not param.required:
+        if not param.required and not shown:
             return ""
         # Use the longest option string (e.g. --alias over -a)
         opt_str = max(param.opts, key=lambda o: len(o))
+        opt_str = (old_names or {}).get(opt_str, opt_str)
         # Convert underscores to hyphens for display
         opt_str = opt_str.replace("_", "-")
         human_name = param.human_readable_name.upper().replace("_", "-")
@@ -140,8 +146,22 @@ def _collect_commands(
                 commands.extend(_collect_commands(cmd, sub_ctx, prefix=full_name))
         else:
             help_text = cmd.help or cmd.short_help or ""
-            # Build param string from required params
-            param_parts = [_format_param(p) for p in cmd.params if p.name not in ("help", "ctx")]
+            # Build param string from required params, plus a --project that names
+            # the target project: no command requires it, but agents pass it on
+            # every command (plugin rule in docs/migrate-to-1.0.md, "Plugin").
+            project = target_project_param(cmd)
+            # Until M the plugin documents also run on 0.x, so an option that
+            # 1.0.0 renamed keeps its deprecated old name, which works on both.
+            old_names = {
+                entry.replacement: form.rsplit(" ", 1)[1]
+                for form, entry in DEPRECATIONS.items()
+                if entry.replacement and form.rsplit(" ", 1)[0] == full_name
+            }
+            param_parts = [
+                _format_param(p, shown=p is project, old_names=old_names)
+                for p in cmd.params
+                if p.name not in ("help", "ctx")
+            ]
             param_str = " ".join(p for p in param_parts if p)
             cmd_str = f"kbagent {full_name}"
             if param_str:

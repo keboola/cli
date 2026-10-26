@@ -72,7 +72,7 @@ class TestBulkPromptOnce:
         ):
             MockStore.return_value = store
             MockOrgService.return_value = mock_org
-            result = runner.invoke(app, ["--json", "project", "refresh", "--all", "--yes"])
+            result = runner.invoke(app, ["--json", "project", "refresh", "--all-projects", "--yes"])
 
         assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
         # The contract: exactly one resolver call regardless of project count.

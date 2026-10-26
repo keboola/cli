@@ -22,6 +22,7 @@ from ._helpers import (
     get_service,
     split_multi,
 )
+from ._project_ref import PROJECT_HELP
 from ._semantic_layer_helpers import (
     ScopeChoice,
     _handle_service_call,
@@ -79,7 +80,7 @@ def _print_item_added(label: str):  # type: ignore[no-untyped-def]
 @add_app.command("metric")
 def add_metric(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     model: str | None = typer.Option(None, "--model", help="Model name or UUID"),
     name: str = typer.Option(..., "--name", "-n", help="Metric name"),
     sql: str = typer.Option(..., "--sql", help="SQL expression for the metric"),
@@ -121,7 +122,7 @@ def add_metric(
 @add_app.command("dataset")
 def add_dataset(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     model: str | None = typer.Option(None, "--model", help="Model name or UUID"),
     name: str = typer.Option(..., "--name", "-n", help="Dataset name"),
     table_id: str = typer.Option(
@@ -180,7 +181,7 @@ def add_dataset(
 @add_app.command("relationship")
 def add_relationship(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     model: str | None = typer.Option(None, "--model", help="Model name or UUID"),
     name: str = typer.Option(..., "--name", "-n", help="Relationship name"),
     from_: str = typer.Option(..., "--from", help="Source dataset tableId"),
@@ -220,7 +221,7 @@ def add_relationship(
 @add_app.command("constraint")
 def add_constraint(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     model: str | None = typer.Option(None, "--model", help="Model name or UUID"),
     name: str = typer.Option(
         ...,
@@ -289,7 +290,7 @@ def add_constraint(
 @add_app.command("glossary")
 def add_glossary(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     model: str | None = typer.Option(None, "--model", help="Model name or UUID"),
     term: str = typer.Option(..., "--term", help="Glossary term"),
     definition: str = typer.Option(
@@ -384,7 +385,7 @@ def _print_edit_result(label: str):  # type: ignore[no-untyped-def]
 @edit_app.command("metric")
 def edit_metric(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     model: str | None = typer.Option(None, "--model", help="Model name or UUID"),
     name: str = typer.Option(..., "--name", "-n", help="Current metric name"),
     new_name: str | None = typer.Option(
@@ -431,7 +432,7 @@ def edit_metric(
 @edit_app.command("dataset")
 def edit_dataset(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     model: str | None = typer.Option(None, "--model", help="Model name or UUID"),
     name: str = typer.Option(..., "--name", "-n", help="Current dataset name"),
     new_name: str | None = typer.Option(None, "--new-name", help="Rename to this name"),
@@ -459,7 +460,7 @@ def edit_dataset(
 @edit_app.command("constraint")
 def edit_constraint(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     model: str | None = typer.Option(None, "--model", help="Model name or UUID"),
     name: str = typer.Option(..., "--name", "-n", help="Current constraint name"),
     new_name: str | None = typer.Option(
@@ -498,7 +499,7 @@ def edit_constraint(
 @edit_app.command("relationship")
 def edit_relationship(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     model: str | None = typer.Option(None, "--model", help="Model name or UUID"),
     name: str = typer.Option(..., "--name", "-n", help="Current relationship name"),
     new_name: str | None = typer.Option(None, "--new-name", help="Rename to this name"),
@@ -530,7 +531,7 @@ def edit_relationship(
 @edit_app.command("glossary")
 def edit_glossary(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     model: str | None = typer.Option(None, "--model", help="Model name or UUID"),
     term: str = typer.Option(..., "--term", help="Current glossary term"),
     new_term: str | None = typer.Option(
@@ -672,7 +673,7 @@ def _run_remove(
 @remove_app.command("metric")
 def remove_metric(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     model: str | None = typer.Option(None, "--model", help="Model name or UUID"),
     name: str = typer.Option(..., "--name", "-n", help="Metric name"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirm prompt"),
@@ -684,7 +685,7 @@ def remove_metric(
 @remove_app.command("dataset")
 def remove_dataset(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     model: str | None = typer.Option(None, "--model", help="Model name or UUID"),
     name: str = typer.Option(..., "--name", "-n", help="Dataset name"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirm prompt"),
@@ -696,7 +697,7 @@ def remove_dataset(
 @remove_app.command("constraint")
 def remove_constraint(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     model: str | None = typer.Option(None, "--model", help="Model name or UUID"),
     name: str = typer.Option(..., "--name", "-n", help="Constraint name"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirm prompt"),
@@ -708,7 +709,7 @@ def remove_constraint(
 @remove_app.command("relationship")
 def remove_relationship(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     model: str | None = typer.Option(None, "--model", help="Model name or UUID"),
     name: str = typer.Option(..., "--name", "-n", help="Relationship name"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirm prompt"),
@@ -720,7 +721,7 @@ def remove_relationship(
 @remove_app.command("glossary")
 def remove_glossary(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     model: str | None = typer.Option(None, "--model", help="Model name or UUID"),
     term: str = typer.Option(..., "--term", help="Glossary term"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirm prompt"),

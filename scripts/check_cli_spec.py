@@ -186,7 +186,7 @@ _PROJECT_DEFAULT_WORDS = re.compile(
     re.IGNORECASE,
 )
 _COMMA_LIST = re.compile(r"comma[- ]separated|comma-delimited", re.IGNORECASE)
-# T2, T11: the 18 fan-out reads (spec "Fan-out reads"). Their `--project` help
+# T2, T11: the 20 fan-out reads (spec "Fan-out reads"). Their `--project` help
 # must name the active project as the omitted default and `--all-projects`.
 FANOUT_READS: frozenset[str] = frozenset(
     {
@@ -208,6 +208,8 @@ FANOUT_READS: frozenset[str] = frozenset(
         "branch list",
         "workspace list",
         "project status",
+        "sync pull",
+        "sync diff",
     }
 )
 _FANOUT_DEFAULT_WORDS = ("active project", "--all-projects")
@@ -773,7 +775,10 @@ def r_project_help_default(c: Context) -> Violations:
     found = {}
     for lf in c.tree.leaves:
         p = param_with(lf, "--project")
-        if p is None or (p.required and not getattr(p, "multiple", False)):
+        # A hidden --project is a deprecated name (C3) that no help shows.
+        if p is None or getattr(p, "hidden", False):
+            continue
+        if p.required and not getattr(p, "multiple", False):
             continue
         text = getattr(p, "help", None) or ""
         if not _PROJECT_DEFAULT_WORDS.search(text):
@@ -797,6 +802,16 @@ def r_no_write_fanout(c: Context) -> Violations:
             and "--all-projects" not in opt_names(lf)
         ):
             found[lf.name] = f"{lf.category} command fans out without --all-projects"
+    return found
+
+
+def r_project_not_required(c: Context) -> Violations:
+    """T17: no command requires --project; an omitted one is the active project."""
+    found = {}
+    for lf in c.tree.leaves:
+        p = param_with(lf, "--project")
+        if p is not None and p.required:
+            found[f"{lf.name} --project"] = "required --project"
     return found
 
 
@@ -1440,6 +1455,12 @@ RULES: tuple[Rule, ...] = (
         "tree",
         "a write or destructive command with an optional repeatable --project has --all-projects",
         r_no_write_fanout,
+    ),
+    Rule(
+        "target.project-not-required",
+        "tree",
+        "no command requires --project; an omitted one is the active project (T17)",
+        r_project_not_required,
     ),
     Rule(
         "output.no-direct-print",

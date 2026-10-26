@@ -791,7 +791,7 @@ class AuthClient(BaseHttpClient):
                     "ask the stack operator to enable it, or use another stack. To use a "
                     f"project that already exists: create one at {self._base_url} in a "
                     f"browser, then connect it with `kbagent auth login --stack "
-                    f"{self._base_url}` or `kbagent project add --project <alias> --url "
+                    f"{self._base_url}` or `kbagent project add --alias <alias> --url "
                     f"{self._base_url} --token-stdin`."
                 ),
                 status_code=404,
@@ -969,7 +969,7 @@ class AuthClient(BaseHttpClient):
                 message=(
                     f"Browser login is not enabled on this Keboola stack yet "
                     f"({self._base_url}). Use a static Storage token instead: "
-                    "kbagent project add --project <alias> --url <stack> --token-stdin."
+                    "kbagent project add --alias <alias> --url <stack> --token-stdin."
                 ),
                 status_code=404,
                 error_code=ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK,
@@ -1042,7 +1042,7 @@ class AuthClient(BaseHttpClient):
                 message=(
                     f"Programmatic auth is not enabled on this Keboola stack yet "
                     f"({self._base_url}). Use a static Storage token instead: "
-                    "kbagent project add --project <alias> --url <stack> --token-stdin."
+                    "kbagent project add --alias <alias> --url <stack> --token-stdin."
                 ),
                 status_code=404,
                 error_code=ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK,

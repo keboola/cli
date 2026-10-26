@@ -4,12 +4,37 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+import platformdirs
 import pytest
 from rich.console import Console
 
 from keboola_agent_cli import output
 from keboola_agent_cli.config_store import ConfigStore
+from keboola_agent_cli.constants import ENV_CONFIG_DIR, ENV_KBAGENT_PROJECT
 from keboola_agent_cli.output import OutputFormatter
+
+
+@pytest.fixture(autouse=True)
+def _isolated_config_dir(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every test starts with an empty configuration directory, never the developer's own.
+
+    A command without --project uses the active project (spec T17), so a test
+    that chooses no configuration would otherwise read, and could change, the
+    projects registered on the machine that runs it. A test that removes
+    KBAGENT_CONFIG_DIR falls back to the global directory, so that one points
+    to an empty directory too; a test that needs a global configuration patches
+    ``platformdirs.user_config_dir`` itself.
+    """
+    monkeypatch.setenv(ENV_CONFIG_DIR, str(tmp_path_factory.mktemp("kbagent-config")))
+    monkeypatch.delenv(ENV_KBAGENT_PROJECT, raising=False)
+    user_config = tmp_path_factory.mktemp("user-config")
+    monkeypatch.setattr(
+        platformdirs,
+        "user_config_dir",
+        lambda appname=None, *_args, **_kwargs: str(user_config / (appname or "")),
+    )
 
 
 @pytest.fixture(autouse=True)

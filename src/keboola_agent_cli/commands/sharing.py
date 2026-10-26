@@ -25,6 +25,7 @@ from ._helpers import (
     split_int_multi,
     split_multi,
 )
+from ._project_ref import PROJECT_DEFAULT
 
 sharing_app = typer.Typer(
     help=(
@@ -102,10 +103,10 @@ def sharing_list(
 def sharing_share(
     ctx: typer.Context,
     project: str = typer.Option(
-        ...,
+        None,
         "--project",
         "-p",
-        help="Project alias that owns the bucket to share.",
+        help=f"Project alias or ID that owns the bucket to share ({PROJECT_DEFAULT})",
     ),
     bucket_id: str = typer.Option(
         ...,
@@ -197,10 +198,10 @@ def sharing_share(
 def sharing_unshare(
     ctx: typer.Context,
     project: str = typer.Option(
-        ...,
+        None,
         "--project",
         "-p",
-        help="Project alias that owns the shared bucket.",
+        help=f"Project alias or ID that owns the shared bucket ({PROJECT_DEFAULT})",
     ),
     bucket_id: str = typer.Option(
         ...,
@@ -236,10 +237,10 @@ def sharing_unshare(
 def sharing_link(
     ctx: typer.Context,
     project: str = typer.Option(
-        ...,
+        None,
         "--project",
         "-p",
-        help="Target project alias where the linked bucket will be created.",
+        help=f"Target project alias or ID where the linked bucket will be created ({PROJECT_DEFAULT})",
     ),
     source_project_id: int = typer.Option(
         ...,
@@ -310,10 +311,10 @@ def sharing_link(
 def sharing_unlink(
     ctx: typer.Context,
     project: str = typer.Option(
-        ...,
+        None,
         "--project",
         "-p",
-        help="Project alias containing the linked bucket.",
+        help=f"Project alias or ID containing the linked bucket ({PROJECT_DEFAULT})",
     ),
     bucket_id: str = typer.Option(
         ...,

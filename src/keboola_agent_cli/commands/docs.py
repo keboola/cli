@@ -17,6 +17,7 @@ from ._helpers import (
     get_service,
     map_error_to_exit_code,
 )
+from ._project_ref import PROJECT_HELP
 
 docs_app = typer.Typer(help="Ask the Keboola documentation natural-language questions")
 
@@ -55,12 +56,7 @@ def docs_query(
         ...,
         help="Natural language question about the Keboola platform",
     ),
-    project: str | None = typer.Option(
-        None,
-        "--project",
-        "-p",
-        help="Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)",
-    ),
+    project: str | None = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
 ) -> None:
     """Ask the Keboola documentation a natural language question."""
     formatter = get_formatter(ctx)

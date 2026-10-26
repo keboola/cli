@@ -13,6 +13,12 @@ command body runs. The command and its services therefore only ever see the
 alias. The rules are in :mod:`keboola_agent_cli.project_ref`;
 ``tests/test_project_ref.py`` invokes every command with ``--project``, and
 every table entry, to prove the translation reaches it.
+
+A command whose single ``--project`` is omitted gets the project of the T1
+chain from :func:`use_active_project` (spec T17), which the root command
+class calls after Click checked every parameter and before the command body
+runs. Such a command declares ``project: str = typer.Option(None, ...)``: the
+body always receives an alias. No command requires ``--project``.
 """
 
 from collections.abc import Callable
@@ -24,11 +30,17 @@ from typer.core import TyperGroup
 from ..effective_branch import record_project
 from ..errors import ConfigError, ErrorCode
 from ..project_ref import alias_shadow_notice, is_project_id, resolve_project_ref
+from ..services.base import BaseService
+
+# T11, T17: what an omitted --project means, in the words of every --project help.
+PROJECT_DEFAULT = "default: KBAGENT_PROJECT, then the active project, then the sole project"
+PROJECT_HELP = f"Project alias or ID ({PROJECT_DEFAULT})"
 
 # Commands whose --project is NOT a lookup in the registered projects, so it
 # is never translated:
-# - `project add` / `project create`: the value is the NEW alias. Translating
-#   an ID would register the project under another project's alias.
+# - `project add` / `project create`: the deprecated --project is the old name
+#   of --alias, the NEW alias. Translating an ID would register the project
+#   under another project's alias.
 # - `lineage show`: the value filters the aliases inside an offline graph
 #   file; the command needs no config at all.
 NO_LOOKUP_COMMANDS: frozenset[tuple[str, ...]] = frozenset(
@@ -36,6 +48,30 @@ NO_LOOKUP_COMMANDS: frozenset[tuple[str, ...]] = frozenset(
         ("project", "add"),
         ("project", "create"),
         ("lineage", "show"),
+    }
+)
+
+# Commands whose --project names a registered project but not the project the
+# command works in, so an omitted one stays omitted:
+# - `agent prompt-improve`: a hint in the improved prompt.
+# - `init`: the projects to copy from the global configuration.
+NOT_A_TARGET_COMMANDS: frozenset[tuple[str, ...]] = frozenset(
+    {
+        ("agent", "prompt-improve"),
+        ("init",),
+    }
+)
+
+# Commands that decide in their body what an omitted single --project means:
+# - `flow schema` / `flow validate`: the T1 chain, but when it finds no
+#   project they work offline (the bundled schema, the semantic checks).
+# - `project invite`: with --from-csv the projects come from the file, and
+#   --project is refused; without it, the body uses the T1 chain.
+OWN_PROJECT_DEFAULT_COMMANDS: frozenset[tuple[str, ...]] = frozenset(
+    {
+        ("flow", "schema"),
+        ("flow", "validate"),
+        ("project", "invite"),
     }
 )
 
@@ -110,6 +146,52 @@ def _translate_and_record(ctx: Any, param: Any, value: Any) -> Any:
     value = _translate_project_ref(ctx, param, value)
     _record_explicit(ctx, param, value)
     return value
+
+
+def target_project_param(command: Any) -> Any | None:
+    """The ``--project`` of ``command`` when it names the target project, or None.
+
+    None for the commands of ``NO_LOOKUP_COMMANDS`` and ``NOT_A_TARGET_COMMANDS``:
+    their ``--project`` is a new alias, a filter or a hint. ``command.operation``
+    is the canonical path that the root command class set.
+    """
+    path = tuple(command.operation.split("."))
+    if path in NO_LOOKUP_COMMANDS or path in NOT_A_TARGET_COMMANDS:
+        return None
+    return next((p for p in command.params if "--project" in p.opts), None)
+
+
+def active_project_param(command: Any) -> Any | None:
+    """The ``--project`` that :func:`use_active_project` fills when it is omitted, or None.
+
+    That is the single target ``--project`` of every command, except a command
+    with an all-projects option, which resolves its projects in its body (T2),
+    and the commands of ``OWN_PROJECT_DEFAULT_COMMANDS``.
+    """
+    param = target_project_param(command)
+    if param is None or param.multiple:
+        return None
+    if tuple(command.operation.split(".")) in OWN_PROJECT_DEFAULT_COMMANDS:
+        return None
+    return None if any(p.name == "all_projects" for p in command.params) else param
+
+
+def use_active_project(ctx: Any, command: Any) -> None:
+    """Fill an omitted single ``--project`` from the T1 chain (spec T17).
+
+    ``KBAGENT_PROJECT`` > active project > sole registered project, recorded
+    with its source in ``targets``; no project is ``CONFIG_ERROR`` (exit 5).
+    """
+    param = active_project_param(command)
+    if param is None or ctx.params.get(param.name) is not None:
+        return
+    obj = ctx.find_root().obj
+    try:
+        alias, _source = BaseService(obj["config_store"]).resolve_pinned_alias()
+    except ConfigError as exc:
+        obj["formatter"].error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=5) from None
+    ctx.params[param.name] = alias
 
 
 def _record_explicit(ctx: Any, param: Any, value: Any) -> None:

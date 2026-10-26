@@ -29,6 +29,7 @@ from ._helpers import (
     get_service,
     split_multi,
 )
+from ._project_ref import PROJECT_DEFAULT, PROJECT_HELP
 from ._semantic_layer_crud import add_app, edit_app, remove_app
 from ._semantic_layer_helpers import (
     ScopeChoice,
@@ -116,7 +117,7 @@ def _print_models_table(console: Console, data: dict) -> None:
 @model_app.command("list")
 def model_list(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
 ) -> None:
     """List all semantic-layer models in a project."""
     formatter = get_formatter(ctx)
@@ -128,7 +129,7 @@ def model_list(
 @model_app.command("create")
 def model_create(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     name: str = typer.Option(..., "--name", "-n", help="Model name (unique within project)"),
     description: str = typer.Option("", "--description", help="Optional description"),
     sql_dialect: str = typer.Option(
@@ -197,7 +198,7 @@ semantic_layer_app.add_typer(scope_app, name="scope")
 @model_app.command("delete")
 def model_delete(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     model: str = typer.Option(..., "--model", help="Model name or UUID"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt"),
 ) -> None:
@@ -420,7 +421,7 @@ def semantic_layer_token(
     encrypt: bool = typer.Option(
         False, "--encrypt", help="Encrypt the project token for `user_properties` (required)"
     ),
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     component_id: str = typer.Option(
         ...,
         "--component-id",
@@ -471,7 +472,12 @@ def semantic_layer_token(
 @semantic_layer_app.command("build")
 def semantic_layer_build(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Target project alias"),
+    project: str = typer.Option(
+        None,
+        "--project",
+        "-p",
+        help=f"Target project alias or ID ({PROJECT_DEFAULT})",
+    ),
     model: str | None = typer.Option(
         None,
         "--model",
@@ -660,7 +666,12 @@ def semantic_layer_promote(
 @semantic_layer_app.command("import")
 def semantic_layer_import(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Target project alias"),
+    project: str = typer.Option(
+        None,
+        "--project",
+        "-p",
+        help=f"Target project alias or ID ({PROJECT_DEFAULT})",
+    ),
     file: Path = typer.Option(
         ..., "--file", help="Snapshot JSON file (output of `semantic-layer export`)"
     ),
@@ -729,7 +740,7 @@ def semantic_layer_import(
 @semantic_layer_app.command("show")
 def semantic_layer_show(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     model: str | None = typer.Option(
         None,
         "--model",
@@ -785,7 +796,7 @@ def _print_schemas(console: Console, data: dict) -> None:
 @semantic_layer_app.command("schema")
 def semantic_layer_schema(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     types: list[str] | None = typer.Option(
         None,
         "--type",
@@ -885,7 +896,7 @@ def _print_export(console: Console, data: dict) -> None:
 @semantic_layer_app.command("export")
 def semantic_layer_export(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     model: str | None = typer.Option(
         None, "--model", help="Model name or UUID (optional if project has one model)."
     ),
@@ -1002,7 +1013,7 @@ def semantic_layer_diff(
 @semantic_layer_app.command("validate")
 def semantic_layer_validate(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     model: str | None = typer.Option(
         None, "--model", help="Model name or UUID (optional if project has one model)."
     ),
@@ -1088,7 +1099,7 @@ def _print_get_context(console: Console, data: dict) -> None:
 @semantic_layer_app.command("search-context")
 def semantic_layer_search_context(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     pattern: list[str] = typer.Option(
         ["*"],
         "--pattern",
@@ -1136,7 +1147,7 @@ def semantic_layer_search_context(
 @semantic_layer_app.command("get-context")
 def semantic_layer_get_context(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     context_id: str = typer.Option(
         ...,
         "--context-id",
