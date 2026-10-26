@@ -479,7 +479,7 @@ GROUP_NOTES: dict[str, str] = {
     --component-id keboola.sandboxes adds a sandbox_annotation block with
     sandbox_service_id (the misleading parameters.id) and storage_workspace_id
     (the actual Storage workspace ID -- resolved via workspace list lookup).
-    Use storage_workspace_id with `kbagent workspace detail --workspace-id ID`,
+    Use storage_workspace_id with `kbagent workspace detail --project P --workspace-id ID`,
     NOT parameters.id (which 404s).
 
   config update
@@ -1590,7 +1590,7 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     ('report' != 'monthly_report'; use '.*report.*'). Textual only (error with --search-type config-based);
     regex does NOT match columns, so matched_columns stays empty under --regex. In textual mode, tables
     matched via a column name carry matched_columns (JSON) / a "Matched columns" column.
-    BOTH modes match case-insensitively; use `kbagent config search --query` for a case-sensitive
+    BOTH modes match case-insensitively; use `kbagent config search --project P --query` for a case-sensitive
     body scan (it has its own --ignore-case).
 """,
     "semantic-layer": """\
@@ -2012,7 +2012,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
     --progress (since 0.98.0): ALWAYS report progress on stderr, also with --json and without a terminal: a bar on
     a terminal, else one line every 10 s + a final line, e.g.
     `upload big.csv: 42.0% 4.20/10.00 GiB, 67.30 MiB/s, elapsed 0:01:03, ETA 0:01:27`. stdout stays clean JSON.
-    For long runs: `kbagent --json storage upload-table ... --progress 2>progress.log`, then read the log.
+    For long runs: `kbagent --json storage upload-table --project P ... --progress 2>progress.log`, then read the log.
 
   storage download-table
     Export table data to a local CSV file. Async export with streaming download.

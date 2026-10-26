@@ -61,7 +61,7 @@ Per-signal endpoints are the base URL + `/v1/logs`, `/v1/traces`, `/v1/metrics`
 ## Destination tables
 
 The raw Stream API `POST /sources` creates only the bare source — no sinks. So
-`kbagent stream create-source --type otlp` (matching the UI) **auto-provisions
+`kbagent stream create-source --project P --type otlp` (matching the UI) **auto-provisions
 three table sinks** — logs / metrics / traces — into bucket
 `in.c-otlp-<sourceName>` (tables `logs` / `metrics` / `traces`). Each record is
 mapped to `id` (uuid), `datetime` (ingest time), and `body` (the full flattened

@@ -24,7 +24,7 @@ there is no isolated staging copy inside Keboola. Review happens in git, not in 
 ### Model B — Git-branching (Keboola dev-branch isolation)
 - `sync init --git-branching` creates `.keboola/branch-mapping.json`.
 - Each **git branch** links to a **Keboola development branch** (an isolated server-
-  side copy) via `kbagent sync branch-link --branch-name <git-branch>`.
+  side copy) via `kbagent sync branch-link --project <alias> --branch-name <git-branch>`.
 - Work on a PR branch → `push` lands in its Keboola dev branch (safe, isolated);
   merge to `main` → `push` lands in production.
 - `kbagent sync branch-status` shows the mapping; `branch-unlink` detaches.

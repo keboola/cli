@@ -74,7 +74,7 @@ Keboola dev branches have an isolated storage namespace: a production bucket
 is readable from a branch (transparent fallback) but a branch-scoped **write**
 against an unmaterialized bucket returns `Bucket not found`.
 
-`kbagent storage create-table --branch <ID>` handles this automatically:
+`kbagent storage create-table --project prod --branch <ID>` handles this automatically:
 
 1. Check bucket existence in the branch (`GET /v2/storage/branch/{id}/buckets/{bucket_id}`).
 2. On 404, create the bucket in the branch with the same stage+name
@@ -249,8 +249,8 @@ kbagent workspace create --project prod
 # Default auto-picks clone (fast, any size) when eligible, else copy --
 # on a large table that falls back to copy, --json refuses without --force.
 # See workspace-workflow.md "Load types" for the full clone/copy/view rules.
-kbagent workspace load --workspace-id W --tables in.c-foo.data
-kbagent workspace query --workspace-id W --sql "
+kbagent workspace load --project prod --workspace-id W --tables in.c-foo.data
+kbagent workspace query --project prod --workspace-id W --sql "
   CREATE TABLE \"in.c-foo.data_change_log\" AS
   SELECT id::VARCHAR(40) AS id, amount::NUMBER(18,2) AS amount
   FROM \"in.c-foo.data\"

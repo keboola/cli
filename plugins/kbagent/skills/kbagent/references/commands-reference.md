@@ -54,7 +54,7 @@ Three features still fail fast on a sentinel-token project with
 in-code copy. `auth login` and `auth register-projects` print it and both ship
 it in `--json` as the additive key `session_unsupported_features` (`auth status`
 does **not** carry it): `kbagent kai`,
-`kbagent semantic-layer token --encrypt (Metastore Service)`, and the importable
+`kbagent semantic-layer token --project NAME --encrypt (Metastore Service)`, and the importable
 SDK (`keboola_agent_cli.Client`). Everything else now works on a session,
 including the Scheduler (`flow schedule`, `flow schedule-remove`), Data Streams
 (`stream`), Data Science (`data-app`), the rest of `semantic-layer`, the AI
@@ -332,7 +332,7 @@ Requires the project to be added with its **master ('owner') Storage API token**
 
 ## Flows (Conditional Flows -- keboola.flow only)
 - `flow examples [--component-id keboola.flow|keboola.orchestrator]` -- bundled example flow configs (vendored from keboola-mcp-server), fully offline; default `keboola.flow`; `keboola.orchestrator` examples are informational-only (kbagent cannot create/edit orchestrator flows). Ports the `get_flow_examples` MCP tool.
-> Since 0.57.0 the `flow` group targets `keboola.flow` (Conditional Flows) ONLY; `keboola.orchestrator` is dropped and `--component-id` is removed from every subcommand. IDs are **strings**; phases use `next[].goto` (a phase id or `null`) + optional `condition`; tasks are typed (`job`/`notification`/`variable`). The old `dependsOn` template is invalid. Execute a flow with `kbagent job run --component-id keboola.flow --config-id ID`. See `flow-workflow.md`.
+> Since 0.57.0 the `flow` group targets `keboola.flow` (Conditional Flows) ONLY; `keboola.orchestrator` is dropped and `--component-id` is removed from every subcommand. IDs are **strings**; phases use `next[].goto` (a phase id or `null`) + optional `condition`; tasks are typed (`job`/`notification`/`variable`). The old `dependsOn` template is invalid. Execute a flow with `kbagent job run --project NAME --component-id keboola.flow --config-id ID`. See `flow-workflow.md`.
 - `flow list [--project NAME | --all-projects] [--branch ID] [--with-schedules]` -- list conditional flows (keboola.flow) across one or all projects. Legacy keboola.orchestrator configs are NOT listed; their total appears as `legacy_orchestrator_count` (+ a warning). `--with-schedules` enriches each row with `schedules: [{schedule_id, cron, timezone, enabled}, ...]` via one extra keboola.scheduler list call per project (not per flow)
 - `flow detail --project NAME --flow-id ID [--branch ID]` -- full phase/task breakdown; per-phase transitions (`→ goto [condition | default]`), typed-task badges, retry info; JSON is the raw body unchanged
 - `flow schema [--full [--project NAME]]` -- plain form prints the offline conditional-flow YAML template (string ids, `next[].goto`, typed tasks). `--full` with `--project` fetches and dumps the **live** JSON Schema from the stack (AI Service `configurationSchema` for `keboola.flow`, `source: "live"`); `--full` without `--project` serves the bundled authoritative snapshot (`source: "bundled"`, since 0.73.0 -- previously exit 2)
