@@ -483,11 +483,13 @@ class TestCliSchema:
         # The JSON schema body is rendered inside the panels.
         assert "semantic-metric" in result.output
 
-    def test_missing_project_arg_exit_2(self, store: ConfigStore) -> None:
+    def test_omitted_project_uses_the_sole_project(self, store: ConfigStore) -> None:
         mock = MagicMock()
+        mock.get_schema.return_value = {"project": "prod", "schemas": []}
         result = _invoke(
             ["--json", "semantic-layer", "schema", "--type", "metric"],
             store=store,
             sl_mock=mock,
         )
-        assert result.exit_code == 2
+        assert result.exit_code == 0, result.output
+        mock.get_schema.assert_called_once_with(alias="prod", types=["metric"])

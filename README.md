@@ -184,7 +184,7 @@ with Client(url=os.environ["KBC_URL"], token=os.environ["KBC_TOKEN"]) as kbc:
 
 ```bash
 # Connect a project (Storage API token from Keboola UI, typed at a hidden prompt)
-kbagent project add --project prod \
+kbagent project add --alias prod \
   --url https://connection.keboola.com --token-stdin
 
 # Find anything (table / config / flow / data app) across ALL projects in one call
@@ -236,10 +236,10 @@ the token-based options are the ones to use for CI and anything unattended.
 
 **Single project** — you have a Storage API token from the UI. `--token-stdin` shows a hidden prompt on a terminal and reads a pipe otherwise, so the token stays out of your shell history:
 ```bash
-kbagent project add --project prod --url https://connection.keboola.com --token-stdin
+kbagent project add --alias prod --url https://connection.keboola.com --token-stdin
 
 # CI / non-interactive: pipe the token in
-printf '%s' "$KBC_TOKEN" | kbagent project add --project prod --url https://connection.keboola.com --token-stdin
+printf '%s' "$KBC_TOKEN" | kbagent project add --alias prod --url https://connection.keboola.com --token-stdin
 ```
 
 **Many projects by ID** — you have a Manage API or Personal Access Token + the project IDs:

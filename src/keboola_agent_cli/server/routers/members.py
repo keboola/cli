@@ -29,6 +29,7 @@ class InviteOne(BaseModel):
 class CancelInvitation(BaseModel):
     email: str
     invitation_id: int | None = None
+    dry_run: bool = False
 
 
 class RemoveMember(BaseModel):
@@ -38,6 +39,7 @@ class RemoveMember(BaseModel):
 class SetRole(BaseModel):
     email: str
     role: str
+    dry_run: bool = False
 
 
 def _require_manage(token: str | None) -> str:
@@ -128,6 +130,7 @@ def cancel_invitation(
         alias=project,
         email=body.email,
         invitation_id=body.invitation_id,
+        dry_run=body.dry_run,
     )
 
 
@@ -167,4 +170,5 @@ def set_role(
         alias=project,
         email=body.email,
         role=body.role,
+        dry_run=body.dry_run,
     )

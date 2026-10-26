@@ -402,7 +402,7 @@ class TestStorageTablesCli:
 
         # Per CONTRIBUTING.md exit code 2 = usage/argument validation
         assert result.exit_code == 2, result.output
-        assert "--branch requires exactly one --project" in result.output
+        assert "--branch needs one project" in result.output
 
     def test_branch_with_all_projects_rejected(self, tmp_path: Path) -> None:
         """--branch with --all-projects is also a usage error (T15)."""

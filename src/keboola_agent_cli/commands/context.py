@@ -46,7 +46,7 @@ settings.json -> env). The flag takes precedence over the env var.
 
   # Add a single project -- --token-stdin prompts (hidden) on a TTY and reads
   # a pipe otherwise, so the token stays out of the shell history
-  kbagent --json project add --project my-project --url https://connection.keboola.com --token-stdin
+  kbagent --json project add --alias my-project --url https://connection.keboola.com --token-stdin
 
   # Or bulk-onboard all projects from an organization
   KBC_MANAGE_API_TOKEN=xxx kbagent --allow-env-manage-token --json org setup --org-id 123 --url https://connection.keboola.com --yes
@@ -474,7 +474,7 @@ GROUP_NOTES: dict[str, str] = {
         fan-out (one API call per project, not per config).
     --with-state attaches the runtime state dict. Single: dedicated get_config_state
     call. Bulk: include=state ridesalong (no N+1, still one call per project).
-    --branch requires exactly one --project (branch IDs are per-project).
+    --branch needs one project: a branch ID belongs to one project.
     Sandbox annotation (since v0.42.0, single-config mode only):
     --component-id keboola.sandboxes adds a sandbox_annotation block with
     sandbox_service_id (the misleading parameters.id) and storage_workspace_id
@@ -529,7 +529,7 @@ GROUP_NOTES: dict[str, str] = {
   config new
     Default: generate boilerplate config from component schema (scaffold to --output-dir or stdout).
     With --push (0.33.0+): also create the config remotely via Storage API in one shot.
-    --push requires --project AND a non-empty --name. --no-files skips the filesystem step
+    --push requires a non-empty --name. --no-files skips the filesystem step
     entirely for FIIA-style one-shot creates. Schema validation runs by default when an explicit
     --configuration body is given (fail-closed; --no-validate opts out). Default body is {}
     (empty shell, validation auto-skipped). Works for ALL component types including
@@ -1442,7 +1442,9 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     is the project id, which has its own column.
 
   project remove
-    Remove a project connection. Removing the active project clears it; it
+    Remove a project connection and its stored token. It asks on a terminal;
+    --yes or --json skips the question, --dry-run shows the project it would
+    remove. Removing the active project clears it; it
     is not moved to another alias (since 0.100.0). The result carries
     `active_project_cleared` (the alias, or null). Commands without
     --project then resolve KBAGENT_PROJECT > active project > sole project,
@@ -1473,8 +1475,9 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     `project list`, including on an ERROR row.
 
   project refresh
-  kbagent project refresh --all [--dry-run] [--force] [--yes] [--token-description ...] [--token-expires-in N]
-    Refresh project tokens via Manage API. --all refreshes all projects. --force replaces non-expiring tokens.
+  kbagent project refresh --all-projects [--dry-run] [--force] [--yes] [--token-description ...] [--token-expires-in N]
+    Refresh project tokens via Manage API. --all-projects refreshes all projects (--all is its deprecated name);
+    without --project and --all-projects, the active project. --force replaces non-expiring tokens.
     Browser-login (session) projects are reported under "skipped" with the
     reason that there is no static token to replace -- their access token
     rotates on its own from auth.json. --force does NOT convert them either;
@@ -2508,7 +2511,8 @@ remain branch-aware because modifying a dev branch is the expected intent.
 
   workspace gc
     Garbage-collect orphaned workspaces (keboola.sandboxes config missing). Use --dry-run to preview.
-    Needs --project or --all-projects (neither or both = USAGE_ERROR, exit 2). A project whose
+    Without --project and --all-projects it cleans up the active project (both = USAGE_ERROR,
+    exit 2). A project whose
     sandbox configs cannot be listed goes to errors[]; nothing is deleted there.
     A NOT_FOUND listing counts as "no sandbox configs" only when the branch component listing confirms it.
 """,
@@ -2601,9 +2605,10 @@ _FOOTER = """\
    a request body still needs the alias. Output names the resolved alias
    (`targets`, `project_alias`). When a digits-only alias is also another
    project's ID, the alias is used and a warning names that project on stderr
-   (in --json mode too). `project add` / `project create` take --project as a
-   NEW alias, never an ID; `lineage show --project` filters an offline graph
-   and is not translated either.
+   (in --json mode too). `project add` / `project create` take --alias, a
+   NEW alias, never an ID (their --project is the deprecated name of --alias);
+   `lineage show --project` filters an offline graph and is not translated
+   either.
 
 4. Tokens are always masked in output (e.g. 901-...XXXX) -- expected behavior.
 

@@ -776,5 +776,4 @@ def test_fanout_reads_are_the_reads_with_all_projects(tree: Any) -> None:
         for lf in tree.leaves
         if lf.category == "read" and "--all-projects" in spec_check.opt_names(lf)
     }
-    # `sync diff` and `sync pull` have their own --all-projects (one tree per project).
-    assert reads - {"sync diff", "sync pull"} == spec_check.FANOUT_READS
+    assert reads == spec_check.FANOUT_READS

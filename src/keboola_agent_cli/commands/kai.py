@@ -14,6 +14,7 @@ from ._helpers import (
     get_service,
     map_error_to_exit_code,
 )
+from ._project_ref import PROJECT_HELP
 
 kai_app = typer.Typer(
     help=(
@@ -33,12 +34,7 @@ def _kai_permission_check(ctx: typer.Context) -> None:
 @kai_app.command("ping")
 def kai_ping(
     ctx: typer.Context,
-    project: str | None = typer.Option(
-        None,
-        "--project",
-        "-p",
-        help="Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project).",
-    ),
+    project: str | None = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
 ) -> None:
     """Check Kai server health and MCP connection status."""
     formatter = get_formatter(ctx)
@@ -75,12 +71,7 @@ def kai_ask(
         "-m",
         help="Question to ask Kai about your project.",
     ),
-    project: str | None = typer.Option(
-        None,
-        "--project",
-        "-p",
-        help="Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project).",
-    ),
+    project: str | None = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
 ) -> None:
     """Ask Kai a one-shot question and get the full response.
 
@@ -123,12 +114,7 @@ def kai_chat(
         "--chat-id",
         help="Continue an existing chat session.",
     ),
-    project: str | None = typer.Option(
-        None,
-        "--project",
-        "-p",
-        help="Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project).",
-    ),
+    project: str | None = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
 ) -> None:
     """Send a message to Kai in a chat session.
 
@@ -160,12 +146,7 @@ def kai_chat(
 @kai_app.command("preflight")
 def kai_preflight(
     ctx: typer.Context,
-    project: str | None = typer.Option(
-        None,
-        "--project",
-        "-p",
-        help="Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project).",
-    ),
+    project: str | None = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
 ) -> None:
     """Check whether the configured token can use Kai (master token + AI Agent Chat).
 
@@ -216,12 +197,7 @@ def kai_chat_detail(
         "--chat-id",
         help="Kai chat ID (UUID, from `kai history` or `kai chat`).",
     ),
-    project: str | None = typer.Option(
-        None,
-        "--project",
-        "-p",
-        help="Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project).",
-    ),
+    project: str | None = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
 ) -> None:
     """Fetch the full message history of a single Kai chat.
 
@@ -267,12 +243,7 @@ def kai_chat_detail(
 @kai_app.command("history")
 def kai_history(
     ctx: typer.Context,
-    project: str | None = typer.Option(
-        None,
-        "--project",
-        "-p",
-        help="Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project).",
-    ),
+    project: str | None = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     limit: int = typer.Option(
         10,
         "--limit",

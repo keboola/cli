@@ -252,16 +252,21 @@ class MemberService:
         alias: str,
         email: str,
         invitation_id: int | None = None,
+        dry_run: bool = False,
     ) -> dict[str, Any]:
-        """Cancel a pending invitation. Resolves by email if no ID is supplied."""
+        """Cancel a pending invitation. Resolves by email if no ID is supplied.
+
+        ``dry_run`` looks the invitation up and cancels nothing.
+        """
         stack_url, project_id = self._resolve_alias(alias)
         manage_client = self._manage_client_factory(stack_url, manage_token)
         try:
             if invitation_id is None:
                 invitation_id = self._resolve_invitation_id(manage_client, project_id, email)
-            manage_client.cancel_project_invitation(project_id, invitation_id)
+            if not dry_run:
+                manage_client.cancel_project_invitation(project_id, invitation_id)
             return {
-                "status": "cancelled",
+                "status": "dry_run" if dry_run else "cancelled",
                 "alias": alias,
                 "project_id": project_id,
                 "email": email,
@@ -300,16 +305,24 @@ class MemberService:
         alias: str,
         email: str,
         role: str,
+        dry_run: bool = False,
     ) -> dict[str, Any]:
-        """Change an existing member's role via PATCH."""
+        """Change an existing member's role via PATCH.
+
+        ``dry_run`` looks the member up and changes nothing.
+        """
         self._validate_role(role)
         stack_url, project_id = self._resolve_alias(alias)
         manage_client = self._manage_client_factory(stack_url, manage_token)
         try:
             user_id = self._resolve_member_id(manage_client, project_id, email)
-            updated = manage_client.update_project_member_role(project_id, user_id, role)
+            updated = (
+                {}
+                if dry_run
+                else manage_client.update_project_member_role(project_id, user_id, role)
+            )
             return {
-                "status": "updated",
+                "status": "dry_run" if dry_run else "updated",
                 "alias": alias,
                 "project_id": project_id,
                 "email": email,

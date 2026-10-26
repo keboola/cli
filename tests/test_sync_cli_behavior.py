@@ -3,10 +3,9 @@
 These tests pin the *command behaviors* that make sync safe and that distinguish
 the kbagent orchestrator model from kbc's cwd-per-folder model:
 
-  1. ``sync pull/diff/push`` REQUIRE ``--project ALIAS`` or ``--all-projects``
-     (kbagent resolves projects from a central config store, it does not act on
-     the current directory implicitly). Missing/contradictory selection is a
-     usage error (exit 2) and must NOT reach the service.
+  1. ``sync pull/diff/push`` take ``--project ALIAS`` or ``--all-projects``;
+     without either they use the active project from the central config store
+     (spec T17), never a project read from the current directory.
   2. ``--project`` and ``--all-projects`` are mutually exclusive.
   3. ``--branch`` is per-project, so it cannot combine with ``--all-projects``.
   4. ``sync push --dry-run`` must call the service in dry-run mode and never
@@ -25,6 +24,7 @@ from pathlib import Path
 from typing import NamedTuple
 from unittest.mock import MagicMock, patch
 
+import pytest
 from typer.testing import CliRunner
 
 from keboola_agent_cli.cli import app
@@ -72,26 +72,15 @@ def _invoke(args: list[str], tmp_path: Path) -> InvokeResult:
     return InvokeResult(result.exit_code, mock_sync)
 
 
-class TestProjectSelectionRequired:
-    """pull/diff/push must be told WHICH project(s) — no implicit cwd target."""
+class TestOmittedProjectIsTheActiveProject:
+    """pull/diff/push without --project and --all-projects use the active project (T17)."""
 
-    def test_pull_without_project_is_usage_error(self, tmp_path: Path) -> None:
-        code, mock = _invoke(["sync", "pull", "--directory", str(tmp_path)], tmp_path)
-        assert code == 2
-        mock.pull.assert_not_called()
-        mock.pull_all.assert_not_called()
-
-    def test_diff_without_project_is_usage_error(self, tmp_path: Path) -> None:
-        code, mock = _invoke(["sync", "diff", "--directory", str(tmp_path)], tmp_path)
-        assert code == 2
-        mock.diff.assert_not_called()
-        mock.diff_all.assert_not_called()
-
-    def test_push_without_project_is_usage_error(self, tmp_path: Path) -> None:
-        code, mock = _invoke(["sync", "push", "--directory", str(tmp_path)], tmp_path)
-        assert code == 2
-        mock.push.assert_not_called()
-        mock.push_all.assert_not_called()
+    @pytest.mark.parametrize("operation", ["pull", "diff", "push"])
+    def test_without_project_uses_the_active_project(self, tmp_path: Path, operation: str) -> None:
+        code, mock = _invoke(["--json", "sync", operation, "--directory", str(tmp_path)], tmp_path)
+        assert getattr(mock, operation).call_args.kwargs["alias"] == "prod"
+        getattr(mock, f"{operation}_all").assert_not_called()
+        assert code == 0
 
 
 class TestMutuallyExclusiveSelection:

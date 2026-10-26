@@ -899,7 +899,15 @@ def agent_prompt_improve(
     goal: str = typer.Option(..., "--goal", help="Plain-English goal to polish."),
     draft: str = typer.Option("", "--draft", help="Optional half-baked prompt to refine."),
     cli: str = typer.Option("claude", "--cli", help="AI CLI to invoke: claude|codex|gemini."),
-    project: str | None = typer.Option(None, "--project", "-p", help="Pinned project alias hint."),
+    project: str | None = typer.Option(
+        None,
+        "--project",
+        "-p",
+        help=(
+            "Project alias to name in the improved prompt, a hint and not a target "
+            "(omitted: the prompt asks for a project when the task needs one)"
+        ),
+    ),
     extra_arg: list[str] = typer.Option([], "--extra-arg", help="Extra args for the AI CLI."),
     stream: bool = typer.Option(
         True, "--stream/--no-stream", help="Stream events as they arrive (default: on)."

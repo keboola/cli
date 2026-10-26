@@ -70,9 +70,11 @@ def bulk_delete_projects(
 
 
 @router.delete("/{alias}", summary="Remove a project")
-def remove_project(alias: str, registry: ServiceRegistry = Depends(get_registry)) -> dict[str, Any]:
-    """Remove a project by alias. Mirrors `kbagent project remove`."""
-    return registry.project.remove_project(alias)
+def remove_project(
+    alias: str, dry_run: bool = False, registry: ServiceRegistry = Depends(get_registry)
+) -> dict[str, Any]:
+    """Remove a project by alias. Pass `dry_run=true` to preview. Mirrors `kbagent project remove`."""
+    return registry.project.remove_project(alias, dry_run=dry_run)
 
 
 @router.patch("/{alias}", summary="Edit a project")

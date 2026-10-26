@@ -30,6 +30,7 @@ from ._helpers import (
     read_text_arg,
     resolve_project_alias,
 )
+from ._project_ref import PROJECT_HELP
 
 # Max characters of SQL shown per code in human mode (MCP structure_summary parity).
 SQL_SNIPPET_MAX_CHARS = 150
@@ -99,7 +100,7 @@ def _render_blocks_human(console: Console, data: dict[str, Any]) -> None:
 @transformation_app.command("create")
 def transformation_create(
     ctx: typer.Context,
-    project: str | None = typer.Option(None, "--project", "-p", help="Project alias"),
+    project: str | None = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     name: str = typer.Option(..., "--name", "-n", help="Transformation name"),
     sql: str | None = typer.Option(
         None,
@@ -218,7 +219,7 @@ def transformation_create(
 @transformation_app.command("show")
 def transformation_show(
     ctx: typer.Context,
-    project: str | None = typer.Option(None, "--project", "-p", help="Project alias"),
+    project: str | None = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     config_id: str = typer.Option(..., "--config-id", help="Configuration ID"),
     component_id: str | None = typer.Option(
         None,
@@ -265,7 +266,7 @@ def transformation_show(
 @transformation_app.command("edit")
 def transformation_edit(
     ctx: typer.Context,
-    project: str | None = typer.Option(None, "--project", "-p", help="Project alias"),
+    project: str | None = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     config_id: str = typer.Option(..., "--config-id", help="Configuration ID"),
     component_id: str | None = typer.Option(
         None,

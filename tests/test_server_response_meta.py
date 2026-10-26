@@ -687,13 +687,20 @@ def test_variables_patch_merges_and_put_with_replace_replaces(app: Any) -> None:
 
 
 def test_every_rest_deprecation_names_a_live_route(app: Any) -> None:
-    paths = app.openapi()["paths"]
+    """A deprecated REST form is a method (PUT, replaced by PATCH) or a body field of a live route."""
+    spec = app.openapi()
+    paths = spec["paths"]
     rest_forms = [form for form in DEPRECATIONS if form.split()[0].isupper()]
-    assert len(rest_forms) == 4
+    assert len(rest_forms) == 5
     for form in rest_forms:
-        method, path = form.split()
+        method, path, *field = form.split()
         assert method.lower() in paths[path], form
-        assert "patch" in paths[path], form
+        if field:
+            ref = paths[path][method.lower()]["requestBody"]["content"]["application/json"]
+            schema = spec["components"]["schemas"][ref["schema"]["$ref"].rsplit("/", 1)[1]]
+            assert field[0] in schema["properties"], form
+        else:
+            assert "patch" in paths[path], form
 
 
 def test_variables_patch_dry_run_writes_nothing(app: Any) -> None:

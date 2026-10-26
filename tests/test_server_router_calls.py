@@ -2834,25 +2834,57 @@ def test_config_trash_list_route(tmp_path: Path) -> None:
     assert cfg_svc.list_config_trash.call_args.kwargs["component_id"] == COMPONENT
 
 
-@pytest.mark.parametrize(
-    "query",
-    ["", "?dry_run=true", f"?project={PROJECT}&all_projects=true"],
-    ids=["no-target", "no-target-dry-run", "both"],
-)
-def test_workspace_gc_route_needs_one_target(tmp_path: Path, query: str) -> None:
-    """POST /workspaces/gc refuses like `kbagent workspace gc`: no implicit fan-out.
-
-    INVALID_ARGUMENT answers 400, the REST twin of the CLI's USAGE_ERROR exit 2.
-    """
+def test_workspace_gc_route_refuses_project_with_all_projects(tmp_path: Path) -> None:
+    """`project` together with `all_projects=true` is USAGE_ERROR (HTTP 400), as on the list routes."""
     ws_svc = MagicMock()
     app = _make_app_with_registry(tmp_path, _mock_registry(workspace=ws_svc))
 
     with TestClient(app) as client:
-        res = client.post(f"/workspaces/gc{query}", headers=AUTH)
+        res = client.post(f"/workspaces/gc?project={PROJECT}&all_projects=true", headers=AUTH)
 
     assert res.status_code == 400, res.text
-    assert res.json()["error"]["code"] == "INVALID_ARGUMENT"
+    assert res.json()["error"]["code"] == "USAGE_ERROR"
     ws_svc.gc_workspaces.assert_not_called()
+
+
+def test_workspace_gc_route_without_project_uses_the_active_project(tmp_path: Path) -> None:
+    """No `project` and no `all_projects`: the T1 chain picks one project (T17), never all."""
+    ws_svc = MagicMock()
+    ws_svc.gc_workspaces.return_value = {"dry_run": True, "would_delete": [], "errors": []}
+    app = _make_app_with_registry(tmp_path, _mock_registry(workspace=ws_svc))
+
+    with TestClient(app) as client:
+        res = client.post("/workspaces/gc?dry_run=true", headers=AUTH)
+
+    assert res.status_code == 200, res.text
+    ws_svc.gc_workspaces.assert_called_once_with(aliases=[PROJECT], dry_run=True)
+
+
+@pytest.mark.parametrize(
+    ("body", "aliases", "deprecated"),
+    [
+        ({}, [PROJECT], False),
+        ({"aliases": ["other"]}, ["other"], False),
+        ({"all_projects": True}, None, False),
+        ({"refresh_all": True}, None, True),
+    ],
+    ids=["active-project", "aliases", "all-projects", "deprecated-refresh-all"],
+)
+def test_org_refresh_route_targets(
+    tmp_path: Path, body: dict[str, Any], aliases: list[str] | None, deprecated: bool
+) -> None:
+    """An empty body refreshes the active project only (T17); all needs `all_projects`."""
+    org_svc = MagicMock()
+    org_svc.refresh_tokens.return_value = {"refreshed": [], "skipped": [], "failed": []}
+    app = _make_app_with_registry(tmp_path, _mock_registry(org=org_svc))
+    app.dependency_overrides[get_manage_token] = lambda: "mgmt-tok"
+
+    with TestClient(app) as client:
+        res = client.post("/org/refresh", headers=AUTH, json=body)
+
+    assert res.status_code == 200, res.text
+    assert org_svc.refresh_tokens.call_args.kwargs["aliases"] == aliases
+    assert ("DEPRECATED" in res.headers.get("Kbagent-Warnings", "")) is deprecated
 
 
 @pytest.mark.parametrize(

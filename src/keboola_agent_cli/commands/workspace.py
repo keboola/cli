@@ -28,6 +28,7 @@ from ._all_projects import (
     finish_fanout,
 )
 from ._helpers import (
+    BRANCH_ONE_PROJECT_MESSAGE,
     _confirm_or_abort,
     check_cli_permission,
     emit_api_error,
@@ -37,7 +38,9 @@ from ._helpers import (
     is_interactive_terminal,
     map_error_to_exit_code,
     read_text_arg,
+    resolve_project_alias,
 )
+from ._project_ref import PROJECT_DEFAULT, PROJECT_HELP
 
 workspace_app = typer.Typer(help="Workspace lifecycle for SQL debugging")
 
@@ -89,10 +92,10 @@ def _workspace_permission_check(ctx: typer.Context) -> None:
 def workspace_create(
     ctx: typer.Context,
     project: str = typer.Option(
-        ...,
+        None,
         "--project",
         "-p",
-        help="Project alias to create the workspace in",
+        help=f"Project alias or ID to create the workspace in ({PROJECT_DEFAULT})",
     ),
     name: str = typer.Option(
         "",
@@ -211,7 +214,7 @@ def workspace_list(
 
     if branch is not None and (all_projects or len(project or []) > 1):
         formatter.error(
-            message="--branch requires exactly one --project (branch ID is per-project)",
+            message=BRANCH_ONE_PROJECT_MESSAGE,
             error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2)
@@ -242,12 +245,7 @@ def workspace_list(
 @workspace_app.command("detail")
 def workspace_detail(
     ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        "-p",
-        help="Project alias",
-    ),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     workspace_id: int = typer.Option(
         ...,
         "--workspace-id",
@@ -315,12 +313,7 @@ def _print_delete_result(console: Console, data: dict[str, Any]) -> None:
 @workspace_app.command("delete")
 def workspace_delete(
     ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        "-p",
-        help="Project alias",
-    ),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     workspace_id: int = typer.Option(
         ...,
         "--workspace-id",
@@ -357,12 +350,7 @@ def workspace_delete(
 @workspace_app.command("password")
 def workspace_password(
     ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        "-p",
-        help="Project alias",
-    ),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     workspace_id: int = typer.Option(
         ...,
         "--workspace-id",
@@ -394,12 +382,7 @@ def workspace_password(
 @workspace_app.command("load")
 def workspace_load(
     ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        "-p",
-        help="Project alias",
-    ),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     workspace_id: int = typer.Option(
         ...,
         "--workspace-id",
@@ -503,12 +486,7 @@ def workspace_load(
 @workspace_app.command("query")
 def workspace_query(
     ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        "-p",
-        help="Project alias",
-    ),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     workspace_id: int = typer.Option(
         ...,
         "--workspace-id",
@@ -606,7 +584,7 @@ def workspace_gc(
         None,
         "--project",
         "-p",
-        help="Project alias to clean up (can be repeated). Required unless --all-projects.",
+        help=FANOUT_PROJECT_HELP,
     ),
     all_projects: bool = typer.Option(
         False,
@@ -647,11 +625,7 @@ def workspace_gc(
         )
         raise typer.Exit(code=2)
     if not all_projects and not project:
-        formatter.error(
-            message="Specify --project ALIAS or --all-projects",
-            error_code=ErrorCode.USAGE_ERROR,
-        )
-        raise typer.Exit(code=2)
+        project = [resolve_project_alias(ctx, formatter, None)]
 
     # Name each project's branch before the prompt; the service resolves the same one.
     try:
@@ -717,12 +691,7 @@ def workspace_gc(
 @workspace_app.command("from-transformation")
 def workspace_from_transformation(
     ctx: typer.Context,
-    project: str = typer.Option(
-        ...,
-        "--project",
-        "-p",
-        help="Project alias",
-    ),
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     component_id: str = typer.Option(
         ...,
         "--component-id",
