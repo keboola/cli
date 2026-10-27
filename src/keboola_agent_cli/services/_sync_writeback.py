@@ -62,6 +62,7 @@ def stamp_created_config(
         new_id=new_id,
         file_hash=hashes.file_hash,
         cfg_hash=stamp.cfg_hash,
+        extra_hashes=hashes.extra_hashes,
     )
     apply_stamp(writeback.entry.metadata, stamp)
     return writeback
@@ -113,6 +114,7 @@ def stamp_updated_config(
         new_id=config_id,
         file_hash=hashes.file_hash,
         cfg_hash=stamp.cfg_hash,
+        extra_hashes=hashes.extra_hashes,
     ).entry
     apply_stamp(entry.metadata, stamp)
 
@@ -126,6 +128,7 @@ def writeback_create_config_in_manifest(
     new_id: str,
     file_hash: str,
     cfg_hash: str,
+    extra_hashes: dict[str, str],
 ) -> WritebackResult:
     """Record a freshly-created config in the manifest.
 
@@ -155,13 +158,18 @@ def writeback_create_config_in_manifest(
             entry.id = new_id
             entry.metadata["pull_hash"] = file_hash
             entry.metadata["pull_config_hash"] = cfg_hash
+            entry.metadata["pull_extra_hashes"] = extra_hashes
             return WritebackResult(entry=entry, previous_id=previous_id)
     new_entry = ManifestConfiguration(
         branchId=target_branch,
         componentId=component_id,
         id=new_id,
         path=config_path_str,
-        metadata={"pull_hash": file_hash, "pull_config_hash": cfg_hash},
+        metadata={
+            "pull_hash": file_hash,
+            "pull_config_hash": cfg_hash,
+            "pull_extra_hashes": extra_hashes,
+        },
     )
     manifest.configurations.append(new_entry)
     return WritebackResult(entry=new_entry, previous_id="")
