@@ -8,13 +8,12 @@ description: >
   Storage tables/files/snapshots, large (200 GB) file uploads, data apps,
   flows/schedules, invitations,
   feature flags, OTLP data streams, scoped Storage tokens, semantic
-  layer, Developer Portal, OAuth broker consumers and Entra secret rotation,
+  layer, Developer Portal,
   first-time setup and logout.
   Triggers: kbagent, Keboola, keboola
   config, keboola job, keboola lineage, keboola sync, gitops, dev branch,
   merge request,
   data app, python-js app, semantic layer, sl, dev-portal,
-  oauth consumer, oauth broker, rotate client secret, expiring Azure secret,
   data stream, OTLP, scoped token, encrypt secrets,
   feature flag, flow schedule, invite member, SQL transformation edit,
   sync action, keboola docs, table snapshot, auth, login, sign in,
