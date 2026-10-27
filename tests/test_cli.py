@@ -10,6 +10,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
+import typer.main
 from typer.testing import CliRunner
 
 from helpers import make_mock_client
@@ -112,9 +113,10 @@ class TestProjectAdd:
 
     def test_project_create_takes_alias_option(self) -> None:
         """project create accepts --alias, the 1.x name of its --project."""
-        result = runner.invoke(app, ["project", "create", "--help"], env={"COLUMNS": "200"})
-        assert result.exit_code == 0, result.output
-        assert re.search(r"--project\s*,\s*--alias", result.output), result.output
+        root: Any = typer.main.get_command(app)
+        create = root.commands["project"].commands["create"]
+        alias = next(p for p in create.params if p.name == "alias")
+        assert alias.opts == ["--project", "--alias"]
 
     def test_project_add_success_human(self, tmp_path: Path) -> None:
         """project add in human mode outputs success message."""
