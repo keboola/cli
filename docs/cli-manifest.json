@@ -4089,7 +4089,7 @@
         {"kind": "option", "name": "backend", "opts": ["--backend"], "type": "text", "default": null, "help": "Workspace backend (auto-detected from project if omitted)"},
         {"kind": "option", "name": "read_only", "opts": ["--read-only"], "secondary_opts": ["--no-read-only"], "type": "boolean", "is_flag": true, "default": true, "help": "Whether the workspace has read-only storage access"},
         {"kind": "option", "name": "ui", "opts": ["--ui"], "type": "boolean", "is_flag": true, "default": false, "help": "Fails on current SaaS stacks: the keboola.sandboxes component no longer provisions SQL workspaces, so the job ends in WORKSPACE_NOT_FOUND and the attempt is rolled back (#755). Works only on stacks where that component still provisions them: creates via Queue job (~15s), visible in the Keboola UI"},
-        {"kind": "option", "name": "governed", "opts": ["--governed"], "type": "boolean", "is_flag": true, "default": false, "help": "Create a governed workspace (Snowflake only, not with --ui): it has no login and no credentials, only Query Service reads it and the row- and column-level policies of the project apply. Needs a stack whose Connection accepts loginType 'governed' (no project feature is needed)."}
+        {"kind": "option", "name": "governed", "opts": ["--governed"], "type": "boolean", "is_flag": true, "default": false, "help": "Create a governed workspace (Snowflake or BigQuery, not with --ui): it has no login and no credentials, only Query Service reads it and the row- and column-level policies of the project apply. Needs a stack whose Connection accepts loginType 'governed' (no project feature is needed)."}
       ]
     },
     {

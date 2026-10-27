@@ -20,6 +20,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from ..client import _collect_inline_results
 from ..constants import (
     BIGQUERY_WORKSPACE_LOGIN_TYPE,
+    GOVERNED_WORKSPACE_BACKENDS,
     GOVERNED_WORKSPACE_LOGIN_TYPE,
     QUERY_RESULTS_DEFAULT_LIMIT,
     QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES,
@@ -382,7 +383,7 @@ class WorkspaceService(BaseService):
             backend: Workspace backend. Auto-detected from project if None.
             read_only: Whether the workspace has read-only storage access.
             ui_mode: If True, create via Queue job (visible in Keboola UI).
-            governed: If True, create a governed workspace (Snowflake only, headless only):
+            governed: If True, create a governed workspace (Snowflake or BigQuery, headless only):
                 it has no login and no credentials, only Query Service reads it.
 
         Returns:
@@ -391,7 +392,7 @@ class WorkspaceService(BaseService):
 
         Raises:
             KeboolaApiError: INVALID_ARGUMENT for ``governed`` with ``ui_mode`` or on a backend
-                other than Snowflake.
+                other than Snowflake and BigQuery.
         """
         if governed and ui_mode:
             raise _governed_usage_error(
@@ -406,10 +407,11 @@ class WorkspaceService(BaseService):
         client = self._client_factory(project.stack_url, project.token)
         try:
             effective_backend = backend or self._detect_backend(client)
-            if governed and effective_backend.lower() != "snowflake":
+            if governed and effective_backend.lower() not in GOVERNED_WORKSPACE_BACKENDS:
                 # Before the sandbox config exists, so nothing is left to roll back.
                 raise _governed_usage_error(
-                    f"--governed is supported only on Snowflake; the backend is '{effective_backend}'."
+                    "--governed is supported only on Snowflake and BigQuery; "
+                    f"the backend is '{effective_backend}'."
                 )
             # Step 1: Create keboola.sandboxes config (in the correct branch)
             sandbox_config = client.create_sandbox_config(

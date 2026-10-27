@@ -112,7 +112,7 @@ kbagent --json workspace query \
 A workspace with no credentials that only Query Service reads, with the project's row- and column-level policies:
 
 ```bash
-kbagent --json workspace create --project ALIAS --name "governed-ws" --governed   # Snowflake only
+kbagent --json workspace create --project ALIAS --name "governed-ws" --governed   # Snowflake or BigQuery
 kbagent --json workspace detail --project ALIAS --workspace-id WS_ID              # login_type: governed
 ```
 
