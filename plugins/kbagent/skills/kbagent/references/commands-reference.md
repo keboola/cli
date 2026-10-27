@@ -380,7 +380,9 @@ Requires the project to be added with its **master ('owner') Storage API token**
 ## Encryption
 - `encrypt values --project ALIAS --component-id ID --input JSON|@file|- [--output-file PATH]` -- encrypt #-prefixed secrets via Keboola Encryption API (one-way, no decrypt). Scope: project-scoped ProjectSecure cipher, bound to this project + component; the prefix is cloud-specific (`KBC::ProjectSecure::` AWS, `KBC::ProjectSecureGKMS::` GCP, `KBC::ProjectSecureKV::` Azure). Use when ciphertext must exist before a `config update` / `config new` / `config clone` write.
 
-## OAuth broker (since vNEXT)
+## OAuth broker
+
+*(since vNEXT)*
 
 Talks to `oauth.<stack>/manage` with a Manage **application** token whose only scope is `oauth:manage`, kept in the macOS keychain. **Reads are agent-safe (macOS asks the human for the login password to release the token); writes need a human to type a random code at a terminal (no `--yes`, exit 6 without one).** macOS only, no `serve` route. Workflow: [oauth-broker-workflow.md](oauth-broker-workflow.md).
 
