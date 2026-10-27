@@ -2,6 +2,8 @@
 
 Getting an OAuth-based component (`keboola.ex-facebook-ads-v2`, `keboola.ex-google-analytics-v4`, ...) authorized for a configuration.
 
+To register or rotate the component's OAuth app itself (the broker consumer and its client secret), see [oauth-broker-workflow.md](oauth-broker-workflow.md).
+
 ## Steps
 
 1. `kbagent config oauth-url --project NAME --component-id ID --config-id ID`

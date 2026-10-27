@@ -994,6 +994,23 @@ def deprecated_option(form: str, *param_decls: str, renamed_to: str | None = Non
 _CONFIRM_CODE_LENGTH = 4
 
 
+def assert_tty_for_write(action_description: str) -> None:
+    """Refuse at once without a terminal; the first guard of a random-code write.
+
+    Called before any payload I/O or credential read, so CI shells and AI
+    agents are rejected before anything happens. The random-code prompt
+    (``require_random_code_confirmation``) fires later, after the preview.
+    """
+    is_tty = hasattr(sys.stdin, "isatty") and sys.stdin.isatty()
+    if not is_tty:
+        sys.stderr.write(
+            f"\nRefusing to {action_description}: this action requires a "
+            "real terminal so a human can type the confirmation code. "
+            "There is no --yes bypass by design.\n"
+        )
+        raise typer.Exit(code=EXIT_PERMISSION_DENIED)
+
+
 def require_random_code_confirmation(action_description: str) -> None:
     """Require the user to type a random hex code to confirm a high-risk action.
 

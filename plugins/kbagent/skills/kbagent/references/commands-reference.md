@@ -380,6 +380,15 @@ Requires the project to be added with its **master ('owner') Storage API token**
 ## Encryption
 - `encrypt values --project ALIAS --component-id ID --input JSON|@file|- [--output-file PATH]` -- encrypt #-prefixed secrets via Keboola Encryption API (one-way, no decrypt). Scope: project-scoped ProjectSecure cipher, bound to this project + component; the prefix is cloud-specific (`KBC::ProjectSecure::` AWS, `KBC::ProjectSecureGKMS::` GCP, `KBC::ProjectSecureKV::` Azure). Use when ciphertext must exist before a `config update` / `config new` / `config clone` write.
 
+## OAuth broker (since vNEXT)
+
+Talks to `oauth.<stack>/manage` with a Manage **application** token whose only scope is `oauth:manage`, kept in the macOS keychain. **Reads are agent-safe (macOS asks the human for the login password to release the token); writes need a human to type a random code at a terminal (no `--yes`, exit 6 without one).** macOS only, no `serve` route. Workflow: [oauth-broker-workflow.md](oauth-broker-workflow.md).
+
+- `oauth identity add --stack HOST` -- hidden prompt for the token (terminal required; no option, pipe or env var). Refuses anything but an `oauth:manage`-only application token (`OAUTH_TOKEN_TOO_BROAD`), probes `GET /manage`, then stores it in a keychain item that trusts no app.
+- `oauth identity verify --stack HOST` -- re-checks keychain protection (`OAUTH_KEYCHAIN_UNPROTECTED` after "Always Allow"), scopes and broker access.
+- `oauth consumer get --stack HOST --component ID` -- one consumer; `appSecret` / `appSecretDocker` show as `<encrypted>`.
+- `oauth rotate-azure-secret --stack HOST --component ID --app-id APP --op-vault VAULT [--expires-in-days N (1-730, default 730)] [--dry-run]` -- adds an Entra client secret named after the component (`az ad app credential reset --append`), saves it in a new 1Password Password item, PATCHes `appSecret` on the consumer, then verifies (broker ciphertext changed, `appKey` unchanged, Entra client-credentials sign-in). Never removes the old secret. Preflight (`--dry-run` stops here): consumer `appKey` must equal `--app-id`, `az` must read the app in the signed-in tenant, `op` must be signed in. Result `status`: `rotated` (exit 0) or `rotated_unverified` (exit 1); a failed write is `OAUTH_ROTATION_INCOMPLETE` with `details.stage`.
+
 ## Developer Portal (since v0.49.0; admin routing in v0.51.1)
 
 Talks to `apps-api.keboola.com`. **Reads are unrestricted; writes always require a human to type a random hex code on a real TTY (no `--yes`, no env bypass, exit 6 on non-TTY).** Use `--dry-run` for the agent-safe preview path.

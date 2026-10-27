@@ -7,7 +7,6 @@ bypass and no env-var override.
 
 from __future__ import annotations
 
-import sys
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
@@ -282,25 +281,8 @@ import json  # noqa: E402
 from dataclasses import asdict  # noqa: E402
 from pathlib import Path  # noqa: E402
 
-from ..constants import EXIT_PERMISSION_DENIED  # noqa: E402
+from ._helpers import assert_tty_for_write as _assert_tty  # noqa: E402
 from ._helpers import require_random_code_confirmation  # noqa: E402
-
-
-def _assert_tty(action_description: str) -> None:
-    """Refuse immediately on non-TTY; called before any payload I/O.
-
-    This is the *first* guard in every write command so that CI/CD shells
-    and AI agents are rejected before any file or stdin access happens.
-    The full random-code prompt fires later (after the preview) on TTY.
-    """
-    is_tty = hasattr(sys.stdin, "isatty") and sys.stdin.isatty()
-    if not is_tty:
-        sys.stderr.write(
-            f"\nRefusing to {action_description}: this action requires a "
-            "real terminal so a human can type the confirmation code. "
-            "There is no --yes bypass by design.\n"
-        )
-        raise typer.Exit(code=EXIT_PERMISSION_DENIED)
 
 
 def _load_payload(formatter: OutputFormatter, data: str) -> dict:

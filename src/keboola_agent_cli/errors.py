@@ -147,6 +147,13 @@ class ErrorCode(StrEnum):
     DP_PUBLISH_REQUIREMENTS_MISSING = "DP_PUBLISH_REQUIREMENTS_MISSING"
     DP_ICON_UPLOAD_FAILED = "DP_ICON_UPLOAD_FAILED"
 
+    # OAuth broker maintenance (since vNEXT)
+    OAUTH_IDENTITY_MISSING = "OAUTH_IDENTITY_MISSING"
+    OAUTH_TOKEN_TOO_BROAD = "OAUTH_TOKEN_TOO_BROAD"
+    OAUTH_KEYCHAIN_UNPROTECTED = "OAUTH_KEYCHAIN_UNPROTECTED"
+    OAUTH_PREFLIGHT_FAILED = "OAUTH_PREFLIGHT_FAILED"
+    OAUTH_ROTATION_INCOMPLETE = "OAUTH_ROTATION_INCOMPLETE"
+
     # Programmatic auth / browser login (since 0.80.0)
     AUTH_NOT_SUPPORTED_ON_STACK = "AUTH_NOT_SUPPORTED_ON_STACK"
     AUTH_FLOW_TIMEOUT = "AUTH_FLOW_TIMEOUT"
@@ -501,6 +508,12 @@ ERROR_CODE_TABLE: dict[str, ErrorClass] = {
     ErrorCode.DP_APP_NOT_FOUND: ErrorClass("not_found", 1),
     ErrorCode.DP_PUBLISH_REQUIREMENTS_MISSING: ErrorClass("validation", 1),
     ErrorCode.DP_ICON_UPLOAD_FAILED: ErrorClass("api", 1),
+    # OAuth broker maintenance
+    ErrorCode.OAUTH_IDENTITY_MISSING: ErrorClass("configuration", 5),
+    ErrorCode.OAUTH_TOKEN_TOO_BROAD: ErrorClass("authorization", EXIT_PERMISSION_DENIED),
+    ErrorCode.OAUTH_KEYCHAIN_UNPROTECTED: ErrorClass("authorization", EXIT_PERMISSION_DENIED),
+    ErrorCode.OAUTH_PREFLIGHT_FAILED: ErrorClass("validation", 2),
+    ErrorCode.OAUTH_ROTATION_INCOMPLETE: ErrorClass("api", 1),
     # Programmatic auth / browser login. `kbagent auth login` is the remedy for
     # the session codes that exit 3.
     ErrorCode.AUTH_NOT_SUPPORTED_ON_STACK: ErrorClass("configuration", 5),

@@ -720,6 +720,26 @@ write, 'delete' as destructive.
       --subscription-id ID --address ADDRESS [--channel CHANNEL] [--yes]
     Replace a subscription's recipient.
 """,
+    "oauth": """\
+### oauth
+
+OAuth broker maintenance: stored oauth:manage identities, consumer reads,
+Entra secret rotation. Writes need a typed code at a terminal; no --yes.
+
+  kbagent oauth consumer get --stack STACK --component COMPONENT
+    Show one broker consumer. appSecret and appSecretDocker show as
+    <encrypted>.
+
+  kbagent oauth identity add --stack STACK
+    Store an oauth:manage application token for a stack in the macOS keychain.
+
+  kbagent oauth identity verify --stack STACK
+    Check the stored token again: keychain protection, scopes, broker access.
+
+  kbagent oauth rotate-azure-secret --stack STACK --component COMPONENT
+      --app-id ID --op-vault VAULT [--expires-in-days N] [--dry-run]
+    Rotate an Entra client secret behind one broker consumer.
+""",
     "org": """\
 ### org
 

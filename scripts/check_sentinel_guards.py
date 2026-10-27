@@ -150,6 +150,7 @@ BEARER_CAPABLE_CLIENTS = {
     "ManageClient",  # Manage: the supported bearer path
     "AuthClient",  # talks to the auth service itself, token=""
     "DeveloperPortalClient",  # own username/password identity, never a project token
+    "OAuthBrokerClient",  # own keychain oauth:manage token, never a project token
     # CLI-13: these reach their backend over a bearer via
     # make_session_aware_client_factory; the backends accept OAuth tokens.
     "SchedulerClient",

@@ -155,6 +155,7 @@ NOT_AN_ALIAS: dict[str, str] = {
         "semantic-layer: alias OR numeric ID resolved by the service itself (a target need not "
         "be registered); config clone's --target-project is in ALIAS_OPTIONS"
     ),
+    "--stack": "oauth: a stack host (connection.<stack> / oauth.<stack>), not an alias",
     "--all-projects": "a boolean flag",
     "--register-projects": "a boolean flag",
     "--remove-projects": "a boolean flag",

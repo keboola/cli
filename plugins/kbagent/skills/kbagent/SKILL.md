@@ -8,12 +8,13 @@ description: >
   Storage tables/files/snapshots, large (200 GB) file uploads, data apps,
   flows/schedules, invitations,
   feature flags, OTLP data streams, scoped Storage tokens, semantic
-  layer, Developer Portal,
+  layer, Developer Portal, OAuth broker consumers and Entra secret rotation,
   first-time setup and logout.
   Triggers: kbagent, Keboola, keboola
   config, keboola job, keboola lineage, keboola sync, gitops, dev branch,
   merge request,
   data app, python-js app, semantic layer, sl, dev-portal,
+  oauth consumer, oauth broker, rotate client secret, expiring Azure secret,
   data stream, OTLP, scoped token, encrypt secrets,
   feature flag, flow schedule, invite member, SQL transformation edit,
   sync action, keboola docs, table snapshot, auth, login, sign in,
@@ -400,6 +401,10 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Set the default Developer Portal identity | `kbagent dev-portal identity use <ALIAS>` |
 | Show the alias of the default Developer Portal identity | `kbagent dev-portal identity current` |
 | Probe a Developer Portal identity by logging in | `kbagent dev-portal identity verify` |
+| Rotate an Entra client secret behind one broker consumer | `kbagent oauth rotate-azure-secret --stack STACK --component COMPONENT --app-id APP-ID --op-vault OP-VAULT` |
+| Store an oauth:manage application token for a stack in the macOS keychain | `kbagent oauth identity add --stack STACK` |
+| Check the stored token again: keychain protection, scopes, broker access | `kbagent oauth identity verify --stack STACK` |
+| Show one broker consumer. | `kbagent oauth consumer get --stack STACK --component COMPONENT` |
 <!-- END AUTO-GENERATED COMMANDS -->
 
 ### Sync pull notable flags
@@ -467,6 +472,7 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | **Semantic layer (metastore)** -- models, metrics, datasets, constraints, glossary; validate / export / diff / promote / build / token | [semantic-layer-workflow](references/semantic-layer-workflow.md) |
 | **Share a semantic-layer item across projects / make it org-wide** -- `--scope`, `--target-project`, `scope get\|add\|remove\|set\|request-*` | [metastore-scope-workflow](references/metastore-scope-workflow.md) |
 | **Developer Portal** (identity CRUD, list/get apps, create/patch/upload-icon/publish/deprecate; TTY-confirm on writes) | [dev-portal-workflow](references/dev-portal-workflow.md) |
+| **OAuth broker** (oauth:manage identity in the keychain, consumer get, Entra secret rotation; TTY code on writes) | [oauth-broker-workflow](references/oauth-broker-workflow.md) |
 | **Config metadata** (list/get/set/delete arbitrary key-value metadata on a configuration) | [config-metadata-workflow](references/config-metadata-workflow.md) |
 | **Storage descriptions** (describe bucket / table / column, batch from YAML) | [storage-describe-workflow](references/storage-describe-workflow.md) |
 | **Deep column-level lineage** (`lineage build --ai`, column graph, ER + HTML output) | [lineage-deep-workflow](references/lineage-deep-workflow.md) |
