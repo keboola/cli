@@ -359,9 +359,10 @@ class World:
         cfgdir = tmp / f"{name}-cfg"
         cfgdir.mkdir()
         self.store = setup_single_project(cfgdir)
-        self.svc = SyncService(
-            config_store=self.store, client_factory=lambda url, token: self.api.client()
-        )
+        self.svc = SyncService(config_store=self.store, client_factory=self._client)
+
+    def _client(self, url: str, token: str) -> Any:
+        return self.api.client()
 
     def init(self) -> None:
         self.svc.init_sync(alias="prod", project_root=self.root)
@@ -606,13 +607,21 @@ def check(world: World, tmp: Path, branch: int | None) -> None:
 # ===========================================================================
 
 
-def _seeded(tmp: Path, variant: Variant) -> tuple[World, str]:
+@dataclass(frozen=True)
+class Seeded:
+    """A pulled World and the id of the config the variant seeded."""
+
+    world: World
+    config_id: str
+
+
+def _seeded(tmp: Path, variant: Variant) -> Seeded:
     w = World(tmp)
     cid = w.api.seed(variant)
     w.init()
     w.pull()
     _W[tmp] = w
-    return w, cid
+    return Seeded(world=w, config_id=cid)
 
 
 def _replace_token(obj: Any, new: str) -> Any:
@@ -641,7 +650,8 @@ def sc_pull(tmp: Path, v: Variant) -> int | None:
 
 def sc_pull_remote_update(tmp: Path, v: Variant) -> int | None:
     """sync pull after a remote change -- sync_service.pull, rewrite branch."""
-    w, cid = _seeded(tmp, v)
+    seeded = _seeded(tmp, v)
+    w, cid = seeded.world, seeded.config_id
     _remote_edit(w.api, PROD, (v.component_id, cid))
     w.pull()
     _W[tmp] = w
@@ -649,7 +659,8 @@ def sc_pull_remote_update(tmp: Path, v: Variant) -> int | None:
 
 
 def sc_pull_force_remote_update(tmp: Path, v: Variant) -> int | None:
-    w, cid = _seeded(tmp, v)
+    seeded = _seeded(tmp, v)
+    w, cid = seeded.world, seeded.config_id
     _remote_edit(w.api, PROD, (v.component_id, cid))
     w.pull(force=True)
     _W[tmp] = w
@@ -658,7 +669,8 @@ def sc_pull_force_remote_update(tmp: Path, v: Variant) -> int | None:
 
 def sc_pull_theirs_over_local_edits(tmp: Path, v: Variant) -> int | None:
     """sync pull --theirs after editing every local file."""
-    w, cid = _seeded(tmp, v)
+    seeded = _seeded(tmp, v)
+    w, cid = seeded.world, seeded.config_id
     d = w.config_dir(cid)
     for f in (CONFIG_FILE, *EXTRA_FILES):
         if (d / f).exists():
@@ -672,7 +684,7 @@ def sc_pull_theirs_over_local_edits(tmp: Path, v: Variant) -> int | None:
 
 def sc_pull_idempotent(tmp: Path, v: Variant) -> int | None:
     """Second pull with nothing changed -- the remote_unchanged reuse branch."""
-    w, _ = _seeded(tmp, v)
+    w = _seeded(tmp, v).world
     w.pull()
     _W[tmp] = w
     return None
@@ -704,7 +716,7 @@ def sc_push_create_promote_dev(tmp: Path, v: Variant) -> int | None:
 
 def sc_promote_pulled_to_dev(tmp: Path, v: Variant) -> int | None:
     """A pulled production config pushed to an (empty) dev branch -- create on DEV."""
-    w, _ = _seeded(tmp, v)
+    w = _seeded(tmp, v).world
     w.push(branch=DEV)
     _W[tmp] = w
     return DEV
@@ -712,7 +724,8 @@ def sc_promote_pulled_to_dev(tmp: Path, v: Variant) -> int | None:
 
 def sc_promote_edit_to_branched_dev(tmp: Path, v: Variant) -> int | None:
     """Realistic dev branch (copy of prod, same ids): edit in main/, push --branch DEV."""
-    w, cid = _seeded(tmp, v)
+    seeded = _seeded(tmp, v)
+    w, cid = seeded.world, seeded.config_id
     w.api.branch_from_prod()
     semantic_edit(w.config_dir(cid) / CONFIG_FILE)
     w.push(branch=DEV)
@@ -722,7 +735,8 @@ def sc_promote_edit_to_branched_dev(tmp: Path, v: Variant) -> int | None:
 
 def sc_push_update_config_yml(tmp: Path, v: Variant) -> int | None:
     """push after editing _config.yml -- stamp_updated_config."""
-    w, cid = _seeded(tmp, v)
+    seeded = _seeded(tmp, v)
+    w, cid = seeded.world, seeded.config_id
     semantic_edit(w.config_dir(cid) / CONFIG_FILE)
     assert w.push()["updated"] >= 1
     _W[tmp] = w
@@ -731,7 +745,8 @@ def sc_push_update_config_yml(tmp: Path, v: Variant) -> int | None:
 
 def sc_push_update_companion(tmp: Path, v: Variant) -> int | None:
     """push after editing every companion file (code, packages, description)."""
-    w, cid = _seeded(tmp, v)
+    seeded = _seeded(tmp, v)
+    w, cid = seeded.world, seeded.config_id
     d = w.config_dir(cid)
     for f in EXTRA_FILES:
         if (d / f).exists():
@@ -759,7 +774,8 @@ def _with_disabled(data: dict[str, Any]) -> dict[str, Any]:
 
 def sc_push_disable(tmp: Path, v: Variant) -> int | None:
     """push of ``is_disabled: true`` added to _config.yml."""
-    w, cid = _seeded(tmp, v)
+    seeded = _seeded(tmp, v)
+    w, cid = seeded.world, seeded.config_id
     f = w.config_dir(cid) / CONFIG_FILE
     data = _with_disabled(yaml.safe_load(f.read_text()))
     f.write_text(dump_config_yaml(data), encoding="utf-8", newline="")
@@ -771,7 +787,8 @@ def sc_push_disable(tmp: Path, v: Variant) -> int | None:
 
 def sc_push_rename_in_yaml(tmp: Path, v: Variant) -> int | None:
     """push of a ``name:`` change (directory keeps its old name)."""
-    w, cid = _seeded(tmp, v)
+    seeded = _seeded(tmp, v)
+    w, cid = seeded.world, seeded.config_id
     f = w.config_dir(cid) / CONFIG_FILE
     data = yaml.safe_load(f.read_text())
     data["name"] = "Renamed"
@@ -783,7 +800,8 @@ def sc_push_rename_in_yaml(tmp: Path, v: Variant) -> int | None:
 
 def sc_push_remove_description(tmp: Path, v: Variant) -> int | None:
     """push after deleting _description.md (clear the description)."""
-    w, cid = _seeded(tmp, v)
+    seeded = _seeded(tmp, v)
+    w, cid = seeded.world, seeded.config_id
     (w.config_dir(cid) / "_description.md").unlink()
     assert w.push()["updated"] >= 1
     assert w.api.get(PROD, v.component_id, cid)["description"] == ""
@@ -796,7 +814,8 @@ def sc_adopt_by_id_then_pull(tmp: Path, v: Variant) -> int | None:
     sync pull re-adopts it. (Adopt + EDIT without a base hash is a conflict by
     design, #792 E; adopt + edit WITH a base hash is ``scaffold_then_push``,
     which drives stamp_updated_config's register-the-adopted-entry branch.)"""
-    w, cid = _seeded(tmp, v)
+    seeded = _seeded(tmp, v)
+    w, cid = seeded.world, seeded.config_id
     manifest = load_manifest(w.root)
     manifest.configurations = [c for c in manifest.configurations if c.id != cid]
     save_manifest(w.root, manifest)
@@ -806,7 +825,8 @@ def sc_adopt_by_id_then_pull(tmp: Path, v: Variant) -> int | None:
 
 def sc_promote_row_create_to_branched_dev(tmp: Path, v: Variant) -> int | None:
     """Realistic dev branch (copy of prod): add a row dir in main/, push --branch DEV."""
-    w, cid = _seeded(tmp, v)
+    seeded = _seeded(tmp, v)
+    w, cid = seeded.world, seeded.config_id
     w.api.branch_from_prod()
     author_row(w.config_dir(cid), v, {**_rows()[0], "name": "Row 3"})
     assert w.push(branch=DEV)["created"] == 1
@@ -859,7 +879,8 @@ def sc_scaffold_then_pull(tmp: Path, v: Variant) -> int | None:
 def sc_config_rename_command_then_pull(tmp: Path, v: Variant) -> int | None:
     """``kbagent config rename --directory`` (pops pull_hash/pull_config_hash)
     followed by sync pull."""
-    w, cid = _seeded(tmp, v)
+    seeded = _seeded(tmp, v)
+    w, cid = seeded.world, seeded.config_id
     ConfigService(
         config_store=w.store,
         client_factory=lambda url, token: w.api.client(),
@@ -891,7 +912,8 @@ def sc_clone(tmp: Path, v: Variant) -> int | None:
 
 def sc_row_create(tmp: Path, v: Variant) -> int | None:
     """New row dir under a tracked config -- _push_create_row."""
-    w, cid = _seeded(tmp, v)
+    seeded = _seeded(tmp, v)
+    w, cid = seeded.world, seeded.config_id
     author_row(w.config_dir(cid), v, {**_rows()[0], "name": "Row 3"})
     assert w.push()["created"] == 1
     _W[tmp] = w
@@ -900,7 +922,8 @@ def sc_row_create(tmp: Path, v: Variant) -> int | None:
 
 def sc_row_update(tmp: Path, v: Variant) -> int | None:
     """Edited row file -- push_update_row."""
-    w, cid = _seeded(tmp, v)
+    seeded = _seeded(tmp, v)
+    w, cid = seeded.world, seeded.config_id
     (rf, *_) = sorted(w.config_dir(cid).glob("rows/*/_config.yml"))
     semantic_edit(rf)
     assert w.push()["updated"] == 1
@@ -912,7 +935,9 @@ def sc_row_delete(tmp: Path, v: Variant) -> int | None:
     """Deleted row dir, push --force -- _push_delete_row."""
     import shutil
 
-    w, cid = _seeded(tmp, v)
+    seeded = _seeded(tmp, v)
+
+    w, cid = seeded.world, seeded.config_id
     (rf, *_) = sorted(w.config_dir(cid).glob("rows/*/_config.yml"))
     shutil.rmtree(rf.parent)
     assert w.push(force=True)["deleted"] == 1
@@ -922,7 +947,8 @@ def sc_row_delete(tmp: Path, v: Variant) -> int | None:
 
 def sc_row_remote_delete_pull(tmp: Path, v: Variant) -> int | None:
     """Row deleted remotely, then pull -- sweep_stale_rows."""
-    w, cid = _seeded(tmp, v)
+    seeded = _seeded(tmp, v)
+    w, cid = seeded.world, seeded.config_id
     w.api.get(PROD, v.component_id, cid)["rows"].pop(0)
     w.pull()
     _W[tmp] = w
@@ -931,7 +957,8 @@ def sc_row_remote_delete_pull(tmp: Path, v: Variant) -> int | None:
 
 def sc_row_disable(tmp: Path, v: Variant) -> int | None:
     """``is_disabled: true`` added to a row file, pushed."""
-    w, cid = _seeded(tmp, v)
+    seeded = _seeded(tmp, v)
+    w, cid = seeded.world, seeded.config_id
     (rf, *_) = sorted(w.config_dir(cid).glob("rows/*/_config.yml"))
     data = _with_disabled(yaml.safe_load(rf.read_text()))
     rf.write_text(dump_config_yaml(data), encoding="utf-8", newline="")
@@ -1176,7 +1203,8 @@ def _rows_variant() -> Variant:
 )
 def test_promote_edit_to_dev_then_prod_pull_keeps_local_edit(tmp_path: Path) -> None:
     v = VARIANTS["sql"]
-    w, cid = _seeded(tmp_path, v)
+    seeded = _seeded(tmp_path, v)
+    w, cid = seeded.world, seeded.config_id
     w.api.branch_from_prod()
     cfg = w.config_dir(cid) / CONFIG_FILE
     semantic_edit(cfg)
@@ -1198,7 +1226,8 @@ def test_promote_edit_to_dev_then_prod_pull_keeps_local_edit(tmp_path: Path) -> 
 )
 def test_promote_new_row_to_dev_then_prod_pull_keeps_row(tmp_path: Path) -> None:
     v = _rows_variant()
-    w, cid = _seeded(tmp_path, v)
+    seeded = _seeded(tmp_path, v)
+    w, cid = seeded.world, seeded.config_id
     w.api.branch_from_prod()
     row_dir = author_row(w.config_dir(cid), v, {**_rows()[0], "name": "Row 3"})
     w.push(branch=DEV)
@@ -1284,7 +1313,7 @@ def test_edit_after_promote_create_is_not_a_conflict(tmp_path: Path) -> None:
 )
 def test_promote_pulled_config_with_rows_to_dev_without_it(tmp_path: Path) -> None:
     v = _rows_variant()
-    w, _ = _seeded(tmp_path, v)
+    w = _seeded(tmp_path, v).world
     result = w.svc.push(alias="prod", project_root=w.root, branch_override=DEV)
     assert result["errors"] == []
     ((_, cfg),) = w.api.remote[DEV].items()
@@ -1302,7 +1331,8 @@ def test_promote_pulled_config_with_rows_to_dev_without_it(tmp_path: Path) -> No
 )
 def test_prod_pull_after_promote_to_dev_keeps_the_config_dir(tmp_path: Path) -> None:
     v = VARIANTS["extractor"]
-    w, cid = _seeded(tmp_path, v)
+    seeded = _seeded(tmp_path, v)
+    w, cid = seeded.world, seeded.config_id
     before = w.config_dir(cid)
     w.push(branch=DEV)
     _remote_edit(w.api, PROD, (v.component_id, cid))

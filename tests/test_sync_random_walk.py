@@ -58,6 +58,7 @@ import random
 import re
 import shutil
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -264,14 +265,26 @@ class FakeApi:
         return copy.deepcopy(self._row(component_id, config_id, row_id, branch_id))
 
 
-def make_service(tmp: Path, api: FakeApi) -> tuple[SyncService, Path]:
+@dataclass(frozen=True)
+class ServiceFixture:
+    """A SyncService bound to *api* and the sync working tree it operates on."""
+
+    svc: SyncService
+    root: Path
+
+
+def make_service(tmp: Path, api: FakeApi) -> ServiceFixture:
     root = tmp / "project"
     root.mkdir(parents=True)
     cfgdir = tmp / "cfg"
     cfgdir.mkdir()
     store = setup_single_project(cfgdir)
-    svc = SyncService(config_store=store, client_factory=lambda url, token: api.client())
-    return svc, root
+
+    def client_factory(url: str, token: str) -> Any:
+        return api.client()
+
+    svc = SyncService(config_store=store, client_factory=client_factory)
+    return ServiceFixture(svc=svc, root=root)
 
 
 # ===========================================================================
@@ -449,7 +462,8 @@ class Sim:
         # Known findings whose trigger the walk steers around (see MASKS).
         self.masks = masks
         self.api = FakeApi()
-        self.svc, self.root = make_service(tmp, self.api)
+        fixture = make_service(tmp, self.api)
+        self.svc, self.root = fixture.svc, fixture.root
         self._tok = itertools.count(1)
         # Plain (no --branch) commands target production: there is no
         # `branch use` in this model.
@@ -1068,6 +1082,15 @@ class Sim:
                     "phantom_drift",
                     f"{rel} ({cid}) equals branch {branch} but diff lists {sorted(phantom)}",
                 )
+        # A config that exists only on the remote (created in the UI, not
+        # pulled yet) must show up in diff too, not only local directories.
+        local_ids = {dir_identity(d)[1] for d in config_dirs(tree)}
+        for comp, cid in remote:
+            if cid not in local_ids and cid not in listed_ids:
+                raise Violation(
+                    "invisible_remote_config",
+                    f"{comp}/{cid} exists only on branch {branch} but diff is silent",
+                )
 
     def step(self, step: Step) -> None:
         name, a, b, c = step
@@ -1099,6 +1122,13 @@ def run_walk(
             except Violation as v:
                 v.step_index = i
                 return v, sim.log
+        # The per-step checks run diff only after sync commands; one final
+        # diff covers edits made after the last of them.
+        try:
+            sim.check_consistency("end", sim.plain_branch())
+        except Violation as v:
+            v.step_index = len(steps)
+            return v, sim.log
         return None, sim.log
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
