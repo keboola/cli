@@ -160,8 +160,8 @@ class TestCreateWorkspace:
 
     @pytest.mark.parametrize(
         ("backend", "read_only"),
-        [("snowflake", True), ("Snowflake", False)],
-        ids=["ro", "rw-cased"],
+        [("snowflake", True), ("Snowflake", False), ("bigquery", False)],
+        ids=["ro", "rw-cased", "bigquery"],
     )
     def test_create_workspace_governed(
         self, tmp_config_dir: Path, backend: str, read_only: bool
@@ -174,7 +174,7 @@ class TestCreateWorkspace:
             "id": 77,
             "name": "gov-ws",
             "connection": {
-                "backend": "snowflake",
+                "backend": backend.lower(),
                 "host": "account.snowflakecomputing.com",
                 "schema": "WORKSPACE_77",
                 "user": "",
@@ -225,12 +225,12 @@ class TestCreateWorkspace:
     @pytest.mark.parametrize(
         ("backend", "default_backend", "ui_mode", "expected"),
         [
-            ("bigquery", None, False, "only on Snowflake"),
-            (None, "bigquery", False, "only on Snowflake"),
+            ("synapse", None, False, "only on Snowflake and BigQuery"),
+            (None, "exasol", False, "only on Snowflake and BigQuery"),
             ("snowflake", None, True, "cannot be combined with --ui"),
             ("bigquery", None, True, "cannot be combined with --ui"),
         ],
-        ids=["bigquery", "detected-bigquery", "ui", "ui-wins-over-backend"],
+        ids=["synapse", "detected-exasol", "ui", "ui-wins-over-backend"],
     )
     def test_create_workspace_governed_refused_before_anything_is_created(
         self,

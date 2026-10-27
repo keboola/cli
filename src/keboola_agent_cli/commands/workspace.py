@@ -150,7 +150,7 @@ def workspace_create(
         False,
         "--governed",
         help=(
-            "Create a governed workspace (Snowflake only, not with --ui): it has no login and no "
+            "Create a governed workspace (Snowflake or BigQuery, not with --ui): it has no login and no "
             "credentials, only Query Service reads it and the row- and column-level policies of "
             "the project apply. Needs a stack whose Connection accepts loginType 'governed' (no "
             "project feature is needed)."

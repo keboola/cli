@@ -1052,10 +1052,10 @@ kbagent merge-request resolve --component-id C --config-id I (--take ours|theirs
 #   its hint-next respects it.
 
 kbagent workspace create [--project ALIAS] [--name NAME] [--backend TYPE] [--ui] [--read-only/--no-read-only] [--governed]
-# workspace create --governed (AJDA-3460): requests loginType `governed` -- a Snowflake workspace with no login
+# workspace create --governed (AJDA-3460): requests loginType `governed` -- a Snowflake or BigQuery workspace with no login
 #   and no credentials (no private_key, empty password) that only Query Service reads, with the
-#   project's row- and column-level policies applied. Snowflake and headless only (`--governed` with `--ui`
-#   and on a non-Snowflake backend are INVALID_ARGUMENT, exit 2; nothing is created in
+#   project's row- and column-level policies applied. Snowflake or BigQuery and headless only (`--governed` with `--ui`
+#   and on another backend are INVALID_ARGUMENT, exit 2; nothing is created in
 #   either case). Needs a stack whose Connection accepts the type; no project feature is needed. The result
 #   carries `governed` and `login_type`; `POST /workspaces/{project}` takes `governed: true`. Version gate
 #   for this entry lives in gotchas.md.
