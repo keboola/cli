@@ -13,7 +13,7 @@ Versioning convention:
 
 ## `--alias` on `project add` and `project create`, `--all-projects` on `project refresh`
 
-*(since vNEXT)* (#791)
+*(since 0.100.3)* (#791)
 
 - **`project add` and `project create` take the alias of the new project as `--alias`.** `--alias` is a second name of their `--project`. On every other command, `--project` names a project that is already registered.
 - **`project refresh` takes `--all-projects`** as a second name of `--all`, as the fan-out reads do.
