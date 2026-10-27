@@ -1,4 +1,4 @@
-# CLAUDE.md - Development Context for Claude Code
+# CLAUDE.md / AGENTS.md - Development Context for AI Coding Agents
 
 > **Contributors**: Read [CONTRIBUTING.md](CONTRIBUTING.md) before submitting a PR.
 > It covers coding style, security principles, Keboola API best practices,
