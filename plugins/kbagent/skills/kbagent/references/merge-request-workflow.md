@@ -18,7 +18,7 @@ kbagent mr merge --project P                               # prompt -> merge -> 
 ```
 
 Every command except `list` / `create` finds its merge request **from the active branch** when
-`--merge-request-id` is omitted (*(updated vNEXT)* 1.0.0 removes its old name `--id`) -- a branch has at most one merge request, ever.
+`--merge-request-id` is omitted (*(updated 1.0.0rc3)* 1.0.0 removes its old name `--id`) -- a branch has at most one merge request, ever.
 `--branch B` names another branch; `--merge-request-id N` names the MR directly; both at once
 is exit 2. `--project` is single-project (the `project use` pin works).
 
@@ -157,7 +157,7 @@ goes to **every project member**. Pass reviewer ids (from `project member-list`)
 
 ## `branch merge` is removed
 
-*(since vNEXT)* 1.0.0 removes `branch merge`. It only built a UI URL and reset the active
+*(since 1.0.0rc3)* 1.0.0 removes `branch merge`. It only built a UI URL and reset the active
 branch. On 1.x it is `USAGE_ERROR` (exit 2), and the message names `kbagent merge-request`.
 Use this group, or merge in the Keboola UI on a project without the feature. On 0.x it still
 works, but do not use it.

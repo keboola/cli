@@ -6,7 +6,7 @@ surface is open-ended: agents can stamp their own keys to leave breadcrumbs for
 later runs (e.g. `agent.owner`, `agent.lastAudit`, `agent.domain`).
 
 The UI folder is **not** metadata any more: it is the configuration's own
-`folder` field (since vNEXT, DMD-2348), set with `config set-folder`. Do not
+`folder` field (since 1.0.0rc3, DMD-2348), set with `config set-folder`. Do not
 write the old `KBC.configuration.folderName` key with `set-metadata`.
 
 kbagent exposes the metadata CRUD surface plus the folder command on `kbagent config`:
@@ -185,7 +185,7 @@ human-readable `message`. `set-folder` additionally returns `folder` (the
 folder as stored, `""` when cleared) so callers don't have to re-parse the
 message string. It also returns `configuration` (`{id, name, folder}` from the
 config PUT). The keys `key`, `value` and `result` from the time it wrote the
-metadata key are removed (since vNEXT). Read `folder` instead.
+metadata key are removed (since 1.0.0rc3). Read `folder` instead.
 
 ## Provider semantics
 

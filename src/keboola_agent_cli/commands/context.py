@@ -73,7 +73,7 @@ command list, with every visible option and the first paragraph of the help, is
 generated from the command manifest (docs/cli-manifest.json). The `####` notes
 after it are hand-written workflow guidance.
 `kbagent context <group>` prints one section, for example
-`kbagent context storage` (since vNEXT). A hidden alias such as `mr` works too.
+`kbagent context storage` (since 1.0.0rc3). A hidden alias such as `mr` works too.
 
 """
 
@@ -91,7 +91,7 @@ GROUP_NOTES: dict[str, str] = {
   Every subcommand below that takes TASK_ID / RUN_ID accepts it either
   positionally (`agent show TASK_ID`) or via flag (`--task-id`, plus
   `--run-id` for run-detail / run-events) -- the flag form matches the
-  rest of the CLI (`--job-id`, `--config-id`, ...). Since vNEXT `--id` is
+  rest of the CLI (`--job-id`, `--config-id`, ...). Since 1.0.0rc3 `--id` is
   removed (usage error, exit 2).
 
   agent list
@@ -159,7 +159,7 @@ GROUP_NOTES: dict[str, str] = {
   it when its harness has a background shell: run `auth login --device-code
   --stack URL --register-projects` in a BACKGROUND shell capturing stdout
   and stderr (the verification URL and user code go to stderr in every mode,
-  since vNEXT; before, to stdout in human mode), relay the
+  since 1.0.0rc3; before, to stdout in human mode), relay the
   URL + code printed before polling starts, then confirm with `auth status`
   (exit 0 = signed in, exit 3 = not yet). NEVER run it in a FOREGROUND tool
   shell -- a ~120s timeout kills the flow mid-flight and the kill tells you
@@ -204,14 +204,14 @@ GROUP_NOTES: dict[str, str] = {
     failure (no loopback browser, callback timeout, SSH/container/WSL
     detected) -- once the browser callback succeeds there is no fallback.
     The browser opens also with --json and without a terminal, as before;
-    --no-open uses the device flow and opens nothing (since vNEXT). A
+    --no-open uses the device flow and opens nothing (since 1.0.0rc3). A
     foreground `--json auth login` blocks until the user approves, so run
     it in a background shell and check `auth status`.
     Notices, the device panel and hints go to stderr, the result to stdout
-    (since vNEXT; before, notices went to stdout in human mode). Every
+    (since 1.0.0rc3; before, notices went to stdout in human mode). Every
     command that processes several items, the fan-out reads included, ends
     with one `Success:` or `Failed: N of M` line on stdout, after its result
-    (since vNEXT), e.g. `Failed: 1 of 3 projects. 2 project(s) read.`
+    (since 1.0.0rc3), e.g. `Failed: 1 of 3 projects. 2 project(s) read.`
     Before the browser wait, login prints a notice on stderr: it
     waits up to 115 s. If the browser shows the project list and not
     "Login complete", the sign-in cannot return; the way out is Ctrl+C and
@@ -343,7 +343,7 @@ GROUP_NOTES: dict[str, str] = {
   AUTH_STATE_MISMATCH, SESSION_EXPIRED, SESSION_NOT_FOUND. Exit codes:
   SESSION_EXPIRED / SESSION_NOT_FOUND / AUTH_FLOW_DENIED -> 3 (auth error);
   AUTH_FLOW_TIMEOUT -> 4 (network error); AUTH_NOT_SUPPORTED_ON_STACK -> 5
-  (config error since vNEXT, before: 1 from `auth login`); others -> 1. A session refresh that
+  (config error since 1.0.0rc3, before: 1 from `auth login`); others -> 1. A session refresh that
   times out or cannot reach the auth service reports TIMEOUT /
   CONNECTION_ERROR -> 4, never a session/config error: a slow auth service is
   a network problem, so do NOT treat it as "log in again". The refresh is a
@@ -365,7 +365,7 @@ GROUP_NOTES: dict[str, str] = {
   billing credits
     Read-only PAYG (pay-as-you-go) credit balance of the active project.
     --project (repeatable) names projects, --all-projects reads all of them
-    in parallel (since vNEXT, before that an omitted --project read all). Per-project failures degrade individually
+    in parallel (since 1.0.0rc3, before that an omitted --project read all). Per-project failures degrade individually
     and never abort the run -- check the "errors" array in --json output.
     A project without the `pay-as-you-go` owner.features flag never touches
     the billing host (it can be NXDOMAIN on non-PAYG stacks) -- it gets a
@@ -397,12 +397,12 @@ GROUP_NOTES: dict[str, str] = {
     Reset to main/production branch.
 
   branch delete
-    Delete branch (async). Auto-resets to main if it was active. Since vNEXT it
+    Delete branch (async). Auto-resets to main if it was active. Since 1.0.0rc3 it
     asks for confirmation unless --yes or --json. --dry-run reads the branch and
     deletes nothing.
 
   branch merge
-    Removed since vNEXT (deprecated since 0.94.0): it only built a Keboola UI merge
+    Removed since 1.0.0rc3 (deprecated since 0.94.0): it only built a Keboola UI merge
     URL. Merge with `merge-request create` + `merge-request merge` below, or in the
     Keboola UI.
 
@@ -631,7 +631,7 @@ GROUP_NOTES: dict[str, str] = {
 """,
     "context": """\
   context
-    Without GROUP: this whole reference. With GROUP (since vNEXT): one
+    Without GROUP: this whole reference. With GROUP (since 1.0.0rc3): one
     section, for example `kbagent context storage` -- a top-level group or
     command, or a hidden alias such as `mr` or `sl`. An unknown GROUP is
     INVALID_ARGUMENT (exit 2) and the message lists the valid ones. Under
@@ -1043,7 +1043,7 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     `kbagent http` calls the serve directly so you always see the same config
     the operator configured (not the global ~/.config one). Outside a serve
     subprocess context the command refuses to run.
-    Serve routes (since vNEXT): a route that takes `branch_id` uses the active
+    Serve routes (since 1.0.0rc3): a route that takes `branch_id` uses the active
     branch (`branch use`) when it is omitted, as the CLI does. Send
     `branch_id: 0` for production. A list route (GET /configs, /jobs, ...)
     without `project` reads the active project. Pass all_projects=true for
@@ -1052,7 +1052,7 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     error fields (code, error_type, message, project, retryable). Its HTTP
     status follows error_type. The four partial updates use PATCH (PUT
     /semantic-layer/items/..., /merge-requests/{project}/{id},
-    /data-apps/.../secrets, the merge of /configs/.../variables). Since vNEXT the
+    /data-apps/.../secrets, the merge of /configs/.../variables). Since 1.0.0rc3 the
     old PUT answers HTTP 405, and the message names PATCH. `kbagent http`
     prints only the body, not the Kbagent-Targets / Kbagent-Warnings headers.
 """,
@@ -1379,7 +1379,7 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     (STACK_FEATURES__AGENT_PROVISIONING), which is OFF on most stacks. The
     command is always registered, so its presence in --help proves nothing
     about the stack; without the feature the stack answers 404 and the command
-    exits 5 (since vNEXT, 1 before) with AUTH_NOT_SUPPORTED_ON_STACK, naming the flag an operator
+    exits 5 (since 1.0.0rc3, 1 before) with AUTH_NOT_SUPPORTED_ON_STACK, naming the flag an operator
     flips and how to connect an existing project instead.
     What it does in one call: provisions the project, stores the returned
     project-pinned session in auth.json, and registers the project in
@@ -1480,7 +1480,7 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
 
   project refresh
   kbagent project refresh --all-projects [--dry-run] [--force] [--yes] [--token-description ...] [--token-expires-in N]
-    Refresh project tokens via Manage API. --all-projects refreshes all projects (since vNEXT --all is removed);
+    Refresh project tokens via Manage API. --all-projects refreshes all projects (since 1.0.0rc3 --all is removed);
     without --project and --all-projects, the active project. --force replaces non-expiring tokens.
     Browser-login (session) projects are reported under "skipped" with the
     reason that there is no static token to replace -- their access token
@@ -1557,7 +1557,7 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
   schedule list
     Fleet-wide list of every keboola.scheduler config across one, many, or all
     projects (no --project means the active project, --all-projects means all,
-    since vNEXT). Each row shows
+    since 1.0.0rc3). Each row shows
     project_alias, schedule_id, schedule_name, parent_component_id, parent_config_id,
     parent_name, cron, timezone, and enabled. Use --enabled-only to hide disabled
     schedules. Answers issue #195: "which flows are on cron triggers across N projects?".
@@ -1728,7 +1728,7 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
 
   semantic-layer import
     Replay a snapshot. Default: skip on conflict. --yes never had an effect here,
-    and since vNEXT it is removed (usage error, exit 2). --overwrite opts into
+    and since 1.0.0rc3 it is removed (usage error, exit 2). --overwrite opts into
     an in-place update (keeps the existing item's scope). Dependency-ordered push (datasets -> metrics -> relationships
     -> glossary -> constraints).
 
@@ -2181,7 +2181,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
     by default; pass --reveal to print it (e.g. to wire OTEL_EXPORTER_OTLP_ENDPOINT).
   stream delete
     Delete a source (destructive, async task polled to completion). Use --yes to
-    skip the confirmation. Since vNEXT its old name --force is removed (usage
+    skip the confirmation. Since 1.0.0rc3 its old name --force is removed (usage
     error, exit 2).
   Notes: uses the per-project Storage token (no manage token). Control plane = stream.<region>
   derived from connection.<region>. The OTLP ingest host is stream-in.<region>, returned in
@@ -2453,7 +2453,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
     hint, current_version, next_version, released_at, migration_at, url).
     AGENTS: when `kbagent --version` is 0.x and this notice appears, ASK THE
     USER before you run `kbagent update --major`. Never run it on your own.
-    After an automatic update to a higher major (since vNEXT): the first
+    After an automatic update to a higher major (since 1.0.0rc3): the first
     write or destructive command is refused once with UPDATED_ACROSS_MAJOR
     (exit 6, details.url = migration page). Reads before it get a warnings[]
     entry with that code. Then every command runs. Not after `update --major`,
@@ -2491,7 +2491,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Without --branch uses the alias's active branch (`branch use`), else production.
 
   workspace delete
-    Delete workspace. They also expire automatically. Since vNEXT it asks for
+    Delete workspace. They also expire automatically. Since 1.0.0rc3 it asks for
     confirmation unless --yes or --json. --dry-run reads the workspace and
     deletes nothing.
 
@@ -2541,7 +2541,7 @@ _FOOTER = """\
 
 1. ALWAYS use --json flag for reliable, parseable output:
      kbagent --json project list
-   Confirmations (since vNEXT): --yes and --json mean consent, so a command
+   Confirmations (since 1.0.0rc3): --yes and --json mean consent, so a command
    that asks for confirmation does not ask under them. In human mode without a
    terminal it refuses with CONFIRMATION_REQUIRED (exit 2) and names --yes. A
    piped "y" does not confirm. Ask the user before you retry with --yes.
@@ -2569,7 +2569,7 @@ _FOOTER = """\
    "warnings" key = no warning. It is not the "warnings" key some commands put
    inside "data" (data-app deploy, sync clone, merge-request, ...): that one is
    part of the result and stays where it was; read both.
-   Since vNEXT: the success envelope also has "schema_version" ("1.0") and
+   Since 1.0.0rc3: the success envelope also has "schema_version" ("1.0") and
    "exit_code" (the process exit code). "status": "ok" with a non-zero
    "exit_code" is a negative answer (flow validate, auth status, permissions
    check, data-app validate-repo) or a failed item. The error envelope has
@@ -2578,9 +2578,9 @@ _FOOTER = """\
    (exit 2, help on stderr), a bad option value is INVALID_ARGUMENT (exit 2,
    names the option), a crash is INTERNAL_ERROR (exit 1, traceback on stderr).
    --json/-j, --deny-writes and --deny-destructive also work after the
-   subcommand, and -h works as --help (since vNEXT). A single-value option
+   subcommand, and -h works as --help (since 1.0.0rc3). A single-value option
    given twice is USAGE_ERROR on a write, destructive or admin command, and
-   a REPEATED_OPTION entry in "warnings" on a read command (since vNEXT).
+   a REPEATED_OPTION entry in "warnings" on a read command (since 1.0.0rc3).
 
 3. Multi-project: most read commands accept repeatable --project flag.
    An omitted --project uses the active project, like every other command:
@@ -2589,14 +2589,14 @@ _FOOTER = """\
    parallel on search, billing credits, component list, config list/search,
    data-app list, job list, storage buckets/tables, sharing list/edges, flow
    list, schedule list/find, notification list, branch list, workspace list
-   and project status (since vNEXT, on 0.x an omitted --project read all
+   and project status (since 1.0.0rc3, on 0.x an omitted --project read all
    projects, and --all-projects exists since 0.100.0). --all-projects with
    --project is USAGE_ERROR (exit 2). Every record in "targets" carries
    "project_source" (explicit / env / active_project / sole / all) next to
    "branch_source". A record without a branch has "branch_source": "none"
-   (since vNEXT). A destructive command whose project or branch comes from
+   (since 1.0.0rc3). A destructive command whose project or branch comes from
    `project use` or `branch use` adds a TARGET_FROM_ACTIVE_CHOICE entry to
-   "warnings" whose "hint" is the explicit flag (since vNEXT).
+   "warnings" whose "hint" is the explicit flag (since 1.0.0rc3).
    --project takes an alias or a registered project's numeric ID (since 0.96.1).
    An alias wins over an ID. An ID registered under several aliases fails with
    CONFIG_ERROR (exit 5) and lists them -- unless all are on one stack and
@@ -2611,7 +2611,7 @@ _FOOTER = """\
    (`targets`, `project_alias`). When a digits-only alias is also another
    project's ID, the alias is used and a warning names that project on stderr
    (in --json mode too). `project add` / `project create` take --alias, a
-   NEW alias, never an ID (since vNEXT their old name --project is removed);
+   NEW alias, never an ID (since 1.0.0rc3 their old name --project is removed);
    `lineage show --project` filters an offline graph and is not translated
    either.
 
@@ -2695,7 +2695,7 @@ _FOOTER = """\
      - Default download path: ./{project_alias}/{table_id}.parquet/ -- override with --output.
      - CSV concat logic is never used for parquet; slices have their own footers.
 
-11. Input values (since vNEXT):
+11. Input values (since 1.0.0rc3):
    - A list option is repeatable, and an option of IDs or fixed values also
      takes a comma list: `--target-project-ids 11 --target-project-ids 22,33`
      gives 11, 22 and 33. This now also holds for org setup --project-ids,
@@ -2716,7 +2716,7 @@ _FOOTER = """\
   0    Success
   1    General error
   2    Usage or validation error (invalid arguments), or a confirmation refused
-       without a terminal (CONFIRMATION_REQUIRED, since vNEXT)
+       without a terminal (CONFIRMATION_REQUIRED, since 1.0.0rc3)
   3    Authentication error (invalid or expired token)
   4    Network error (timeout, unreachable server), or a local wait that timed
        out while the server job keeps running
@@ -2726,7 +2726,7 @@ _FOOTER = """\
   130  Interrupted (Ctrl-C)
 
 When you receive a non-zero exit code, use --json to get structured error details.
-Each error code has one exit code and one error.error_type (since vNEXT). The
+Each error code has one exit code and one error.error_type (since 1.0.0rc3). The
 list of codes with both is docs/error-codes.md:
 https://github.com/keboola/cli/blob/main/docs/error-codes.md
 
@@ -2735,7 +2735,7 @@ item fails exit 1 when at least one item failed: sync push, sync
 push/pull/diff --all-projects, sync clone, org setup, project refresh,
 project invite --from-csv, workspace gc, semantic-layer
 import/promote/build/edit metric, storage describe-batch, flow
-schedule-remove. Since vNEXT every command that processes several items (these,
+schedule-remove. Since 1.0.0rc3 every command that processes several items (these,
 the bulk storage commands, job terminate, auth register-projects, token list
 --with-last-used, config detail with several --project and the fan-out reads)
 prints each failed item as one "Error: <item>: <message>" line on stdout
@@ -2754,7 +2754,7 @@ item, like the real run. sync diff --all-projects also exits 1 when a project
 failed.
 The 18 fan-out reads (billing credits, job list, schedule list, notification
 list, ...) exit 1 too when a project failed, after the full payload with its
-"errors" array, and exit 5 when no project is registered (since vNEXT, before
+"errors" array, and exit 5 when no project is registered (since 1.0.0rc3, before
 that they exited 0). PAYG_NOT_AVAILABLE in billing credits is an answer, not a
 failure.
 

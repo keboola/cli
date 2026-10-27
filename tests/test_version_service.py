@@ -429,6 +429,11 @@ def _github(
 class TestReleaseParsing:
     """How the gate reads the release answers within the running major (0.x here)."""
 
+    @pytest.fixture(autouse=True)
+    def _running_0x(self):
+        with patch("keboola_agent_cli.services.version_service.__version__", "0.41.0"):
+            yield
+
     @patch("keboola_agent_cli.services.version_service.httpx.get")
     def test_stable_reads_releases_latest_not_the_list(self, mock_get: MagicMock) -> None:
         mock_get.side_effect = _github("v0.42.0")

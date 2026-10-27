@@ -110,19 +110,19 @@ firewall applies to every route" below.
 
 Auto-generated OpenAPI spec at `/openapi.json`, Swagger UI at `/docs`.
 
-A kbagent failure goes through one global handler. Since vNEXT its HTTP
+A kbagent failure goes through one global handler. Since 1.0.0rc3 its HTTP
 status follows the `error_type` of the code in the error-code table
 ([error-codes.md](error-codes.md)): `validation` and `configuration` 400,
 `authentication` 401 (an expired or missing browser session too),
 `authorization` 403, `not_found` 404, `conflict` 409, `api` and `network` 502,
-and 400 for an `api` code that exits 2. Before vNEXT a `NOT_FOUND` answered
+and 400 for an `api` code that exits 2. Before 1.0.0rc3 a `NOT_FOUND` answered
 404 (since 0.90.0), a session code 401, and every other `KeboolaApiError` 502.
 The body is the `{"status": "error", "targets", "warnings", "error": {"code",
 "error_type", "message", "project", "retryable"}}` envelope (spec V4), so the
 `error.code` — not the HTTP status alone — is what a client should branch on.
 A success response carries the request's `targets` record in the
 `Kbagent-Targets` header and its warnings in `Kbagent-Warnings` (spec V3).
-Since vNEXT a list route that reads several projects (`GET /configs`,
+Since 1.0.0rc3 a list route that reads several projects (`GET /configs`,
 `GET /jobs`, ...) reads the active project when `project` is omitted, as the
 CLI does. Send `all_projects=true` for all registered projects. A project
 that failed stays in `errors` with HTTP 200. `GET /components/{id}` in particular no longer 404s for a
@@ -683,7 +683,7 @@ Limits:
 - The multipart upload routes (`POST /storage/tables/{project}/upload`, `POST /storage/files/upload`) are checked on the query string only. The check never reads their body, so the file still streams to a temp file as before.
 - For a route with a JSON body, the check reuses the body that FastAPI already parsed.
 - For a route with no body parameter, nothing else reads the body. The check reads it only when the `Content-Type` is JSON and `Content-Length` is present and at most 1 MiB. A larger body, or one without `Content-Length`, is not checked. JSON that does not parse, or is nested too deeply to parse, is also left alone, and the route runs as before.
-- One route takes a free-form JSON object as the body: `POST /semantic-layer/items/{kind}`. Since vNEXT `PUT /semantic-layer/items/{kind}/{name}` is removed, and its `PATCH` refuses every undeclared key. A top-level key named `dry_run` in that entity definition is now refused, unless its value is false.
+- One route takes a free-form JSON object as the body: `POST /semantic-layer/items/{kind}`. Since 1.0.0rc3 `PUT /semantic-layer/items/{kind}/{name}` is removed, and its `PATCH` refuses every undeclared key. A top-level key named `dry_run` in that entity definition is now refused, unless its value is false.
 
 ### Manage tokens are per-request
 

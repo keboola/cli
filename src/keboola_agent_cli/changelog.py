@@ -28,6 +28,208 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "1.0.0rc3": [
+        "Note: this is the third release candidate of kbagent 1.0.0, which changes the "
+        "command-line interface. It follows 1.0.0rc2 and removes every form and JSON key that "
+        "0.x kept only for compatibility (see the notes for #915 and #918). The BREAKING notes "
+        "below list the changes, and each note tells you what to change. To install it on "
+        "kbagent 0.100.0 or later, run `kbagent update --beta --major`. On 1.0.0rc1 or "
+        "1.0.0rc2, run `kbagent update --beta`. This works for an install that updates itself "
+        "(`install.sh`, "
+        "`uv tool`). PyPI and the native packages do not get pre-releases. To go back to 0.x, "
+        "run `uv tool install --force 'keboola-cli[server]<1'` and set "
+        "`KBAGENT_AUTO_UPDATE=false`. Migration guide: "
+        "https://github.com/keboola/cli/blob/main/docs/migrate-to-1.0.md",
+        "BREAKING (#881, #882): the 18 commands that read all projects now read only the active "
+        "project when you do not give `--project`. Examples are `config list`, `job list`, "
+        "`storage buckets` and `search`. The project comes from `KBAGENT_PROJECT`, then from "
+        "`kbagent project use`, then from the only registered project. These commands now exit 1 "
+        "when a project failed, and 5 when no project is registered. `config detail` with "
+        "several `--project` and `token list --with-last-used` also exit 1 after a failure. "
+        "Migration: give `--project` or `--all-projects`. Both work on 0.100.0 too.",
+        "BREAKING (#905, #910): every command now uses the active project when you do not give "
+        "`--project`, also a command that writes or deletes. Before, 171 commands stopped with "
+        "`USAGE_ERROR` (exit 2) without it, for example `job detail`, `config update` and "
+        "`storage delete-table`. `sync pull`, `sync diff`, `sync push`, `workspace gc`, "
+        "`project refresh`, `config detail`, `config new --push` and `project invite` also use "
+        "the active project now. The project comes from `KBAGENT_PROJECT`, then from `kbagent "
+        "project use`, then from the only registered project. When no project is found, the "
+        "command exits 5 with `CONFIG_ERROR`. The kbagent plugin tells agents to give "
+        "`--project` on every command. Migration: give `--project` in scripts. It works on "
+        "0.100.0 too.",
+        "BREAKING (#905, #918): `project add` and `project create` now take the alias of the "
+        "new project as `--alias`. Before, `--project` named the new project here, and an "
+        "existing project on every other command. `project refresh` now takes `--all-projects` "
+        "instead of `--all`, and `POST /org/refresh` takes `all_projects` instead of "
+        "`refresh_all`. The old names are removed. Each is a usage error whose message names the "
+        "new name, and `refresh_all` answers HTTP 422. Migration: use the new names. They work "
+        "on 0.100.3 and later too.",
+        "BREAKING (#905): `project remove` now asks before it removes a project, and takes "
+        "`--yes` and `--dry-run`. Without a terminal and without `--yes` or `--json`, it refuses "
+        "with `CONFIRMATION_REQUIRED` (exit 2). Over REST, `DELETE /projects/{alias}` takes "
+        "`dry_run`. Migration: add `--yes` to scripts that remove projects.",
+        "BREAKING (#905): `POST /org/refresh` of `kbagent serve` without `aliases` now refreshes "
+        "the token of the active project only. Before, it refreshed the tokens of all projects. "
+        "`POST /workspaces/gc` without `project` now uses the active project. Before, it "
+        "refused with HTTP 400. Migration: send `all_projects=true` for all projects.",
+        "BREAKING (#884): `kbagent serve` routes now use the active project and the active "
+        "branch, as the CLI does. A list route without `project` reads only the active project. "
+        "Send `all_projects=true` to read all projects. 26 routes, for example `POST "
+        "/jobs/{project}/run` and the storage writes, now use the active branch when "
+        "`branch_id` is not given. Before, they used production. The `Kbagent-Targets` header "
+        "shows the project and the branch of each response. Migration: send `project` or "
+        "`all_projects=true`, and send `branch_id: 0` for production.",
+        "BREAKING (#884): REST errors of `kbagent serve` now get their HTTP status from the error "
+        "type. Before, most error codes answered 502. Now a validation error answers 400, an "
+        "invalid token 401, a missing file 404 and `ALREADY_EXISTS` 409. The `error` object "
+        "also has `error_type`, `project` and `retryable`, as in the CLI. Migration: check "
+        "`error.code`, not only the HTTP status.",
+        "BREAKING (#884, #918): 4 REST routes that change part of an item now use `PATCH` instead of "
+        "`PUT`. These are the semantic-layer item edit, the merge-request update, the data-app "
+        "secrets and the merge of configuration variables. The `PUT` form answers HTTP 405, "
+        "and the message names `PATCH`. `PUT` of the configuration variables with `replace: "
+        "true` is still the full replace. A `PATCH` body refuses fields that the route does not "
+        "know (HTTP 422). Migration: use `PATCH`.",
+        "BREAKING (#874, #883): under `--json`, every exit now writes one JSON document to "
+        "stdout, also a usage error, a bad option value and a crash. A malformed command line "
+        "is `USAGE_ERROR` and a bad option value is `INVALID_ARGUMENT`, both with exit 2. A "
+        "crash is `INTERNAL_ERROR` (exit 1) and Ctrl+C is `INTERRUPTED` (exit 130). A bare "
+        "group such as `kbagent storage` now exits 2 and prints its help on stderr. Migration: "
+        "read the JSON document on stdout for every exit code.",
+        "BREAKING (#874): a single-value option that you give twice is now an error on write, "
+        "destructive and admin commands. Before, the last value won with no message, so "
+        "`storage delete-bucket --project x ... --project test` acted on `test`. On read "
+        "commands the last value still wins, with a `REPEATED_OPTION` warning. Migration: give "
+        "each such option once.",
+        "BREAKING (#876): without a terminal, a confirmation prompt now refuses with "
+        "`CONFIRMATION_REQUIRED` (exit 2) unless you give `--yes`. Before, the prompt read the "
+        "answer from stdin, so `echo y | kbagent ...` confirmed it. `--json` still counts as "
+        "consent. Migration: add `--yes` to scripts that confirm in human mode.",
+        "BREAKING (#876): `branch delete` and `workspace delete` now ask before they delete. "
+        "Both commands take the new `--yes` and `--dry-run` options. Without a terminal and "
+        "without `--yes` or `--json`, they refuse with `CONFIRMATION_REQUIRED`. Migration: add "
+        "`--yes`, or run them with `--json`.",
+        "BREAKING (#876, #918): `stream delete --force` and `semantic-layer import --yes` are "
+        "removed. Each is a usage error whose message names the replacement. Migration: use "
+        "`stream delete --yes`, and run `semantic-layer import` without `--yes`. Both forms "
+        "work on 0.x too.",
+        "BREAKING (#875, #884): every error code now has one exit code and one error type, "
+        "listed in `docs/error-codes.md`. Some commands exit with a new code. For example, "
+        "`transformation create` and `edit` exit 2 for `VALIDATION_ERROR` (was 1), and `search` "
+        "exits with the code of its error (was always 1). `kai` and `semantic-layer` report "
+        "`AUTH_NOT_SUPPORTED_ON_STACK` or `FEATURE_NOT_ENABLED` instead of `CONFIG_ERROR`. "
+        "`error_type` changes for some codes, for example to `conflict` for `ALREADY_EXISTS`. "
+        "Migration: check your exit codes and error codes against `docs/error-codes.md`.",
+        "BREAKING (#877): 9 list options now take repeated values, for example `sharing share "
+        "--target-project-ids 11 --target-project-ids 22`. Before, a repeated option kept only "
+        "the last value. A comma list still works. The options are `org setup --project-ids`, "
+        "`sharing share --target-project-ids` and `--target-users`, and 6 `semantic-layer` "
+        "options. Migration: check scripts that give one of these options more than once.",
+        "BREAKING (#877): `transformation create --sql` and `--text` of 4 commands now refuse "
+        "`@<file>` when the file exists. Before, they stored the literal text. The 4 commands "
+        "are `project description-set`, `storage describe-bucket`, `storage describe-table` "
+        "and `branch metadata-set`. The error is `INVALID_ARGUMENT` (exit 2). A bad input "
+        "value, for example an unreadable file, now also gets `INVALID_ARGUMENT` with exit 2. "
+        "Before, it could end in a Python traceback. A configuration JSON that is not an object gets `VALIDATION_ERROR`. "
+        "Migration: use `--file` or `--sql-file` for text from a file.",
+        "BREAKING (#879): after an automatic update from 0.x to 1.x, kbagent refuses the first "
+        "write or destructive command once. The error is `UPDATED_ACROSS_MAJOR` (exit 6) and "
+        "links the migration guide. Reads before it run with a warning. After the refusal, "
+        "every command runs. An update with `kbagent update --major` causes no refusal. "
+        "Migration: check the command against the migration guide, then run it again.",
+        "BREAKING (#882, #881): the human output of `auth login`, of failed items and of "
+        "`project use` changed. `auth login` prints its notices on stderr. Every failed item "
+        "is one `Error: <item>: <message>` line on stdout, before a final `Failed: N of M` "
+        "line. Before, some commands printed failed items as warnings on stderr. `project use` "
+        "prints `Active project: <alias>`. The `--json` output does not change. Migration: "
+        "read failed items from stdout, or use `--json`.",
+        "BREAKING (#902): short flags with a second meaning are removed, for example `-c`, `-r` "
+        "and `-n` on `--limit`. The removed short flags are `-c`, `-r`, `-d` on `--body`, "
+        "`--deny` and `--description`, `-f` on `--format`, `-l` and `-n` on `--limit`, `-m` on "
+        "`--mode`, and `-v` on `changelog --full`. A removed short flag is a usage error (exit "
+        "2). Migration: use the long option name. For `--limit`, `-L` works on 1.x.",
+        "BREAKING (#871, #915): under `--json`, `config set-folder` returns `folder` and the new "
+        "`configuration` key (`id`, `name`, `folder`). The metadata keys `key`, `value` and "
+        "`result` are removed, because kbagent writes no metadata. Migration: read the folder "
+        "from `folder`. It works on 0.x too.",
+        "BREAKING (#915, #918): the `--json` output no longer has the keys that 0.x kept only as "
+        "copies of other keys. A failed item in `failed[]` or `errors[]` has no `error` or "
+        "`reason` with the error text. Read `message`, which is shorter for an unexpected error. "
+        "`semantic-layer model delete` has no `orphaned_children` (read `cascade.deleted`), "
+        "`lineage show --column` has no `column_filter` (read `column`), and `permissions show` "
+        "has no top-level `mode`, `allow` and `deny` (read `persisted`). `kbagent doctor` and "
+        "`GET /permissions/show` have no `inert_since` and `inert_since_version`. Migration: "
+        "read the other keys. Except `message`, they work on 0.x too.",
+        "BREAKING (#915): `project use` and `project current` report the saved active project as "
+        '`source: "active_project"`. Before, the value was `"pin"`. `resolved_source` and '
+        "`targets[].project_source` use the same name. Migration: compare `source` with "
+        '`"active_project"`.',
+        "BREAKING (#918): `branch merge` is removed, with its REST route `GET "
+        "/branches/{project}/merge-url`. It only printed the merge URL of the Keboola UI and "
+        "reset the active branch. The error names the replacement. Migration: merge a dev "
+        "branch with `kbagent merge-request`, or in the Keboola UI.",
+        "BREAKING (#918): `--id` is removed from the 10 `merge-request` commands and the 7 "
+        "`agent` commands. The error names the replacement. Migration: use `--merge-request-id` "
+        "or `--task-id`. Both work on 0.x too.",
+        "New (#902): every option of a long name now has the same short flag, for example `-p` "
+        "for `--project` on all 228 commands (before 24). The others are `-n` for `--name`, `-t` "
+        "for `--type`, `-L` for `--limit`, `-o` for `--output` and `-e` for `--email`. On 0.x, "
+        "use the long names.",
+        "New (#874): `--json`, `--deny-writes` and `--deny-destructive` now also work after the "
+        "subcommand, and `-h` works as `--help`. For example, `kbagent config list --project "
+        "prod --json` works. On 0.x, give these flags before the subcommand. The `--json` "
+        "success output now has `exit_code` and `schema_version`.",
+        "New (#881, #905): each record in `targets` now has `project_source`, which tells where "
+        "the project came from. The values are `explicit`, `env`, `active_project`, `sole` and "
+        "`all`. A destructive or admin command under `--json` adds a `TARGET_FROM_ACTIVE_CHOICE` "
+        "warning when its project or branch comes from `project use` or `branch use`.",
+        "New (#882): `auth login --no-open` logs in with a device code and opens no browser. "
+        "Every command that processes several items now ends its human output with one "
+        "`Success:` or `Failed:` line. The help of each command with `--wait` now shows the "
+        "wait and timeout defaults.",
+        "New (#885): `kbagent context <group>` prints the part of one command group, for "
+        "example `kbagent context storage`. The command part of `kbagent context` now comes "
+        "from the commands themselves, so it matches `--help`. An unknown group exits 2 and "
+        "lists the valid groups.",
+        "New (#875): a failed item in `failed[]` or `errors[]` now has `error_code`, "
+        "`retryable` and `message`.",
+        "New (#905): `project member-set-role` and `project invitation-cancel` take `--dry-run`, "
+        "which shows the change and makes none. Over REST, their routes take `dry_run`.",
+        "Change (#879): a 1.x install now finds 1.x updates also while GitHub marks a 0.x "
+        "release as the latest. 1.x keeps its update check in `version_cache_v1.json`, so 0.x "
+        "never reads a 1.x version from the cache. The notice after an update lists the "
+        "BREAKING notes of every version that the update crossed.",
+        "Change (#905): `flow schema --full` and `flow validate` now use the live schema of the "
+        "active project. When no project is registered or chosen, they work offline as before. "
+        "When the schema fetch fails, `flow schema --full` exits with an error, and `flow "
+        "validate` does only the semantic checks and adds a note.",
+        "Change (#871): `config set-folder` now writes the `folder` field of the configuration "
+        "instead of the `KBC.configuration.folderName` metadata key. `config list` and `sync "
+        "pull` read the folder from the configuration list, so `config list` needs one API "
+        "request per project instead of three. `sync push` and `sync clone` send the folder "
+        "when they create a configuration. On a stack whose Storage API does not have this "
+        "field yet, `config set-folder` changes nothing and exits 5 with `FEATURE_NOT_ENABLED`. "
+        "`sync push` and `sync clone` then add a `folder_not_supported` warning.",
+        "Fix (#901): after a deferred update, the notice `Updated kbagent to ...` names the "
+        "version that runs. Before, it named the version that the update installed, also when "
+        "a later install had replaced it.",
+        "Fix (#895): `kbagent update --beta` no longer installs pre-release versions of the "
+        "dependencies of kbagent. With 1.0.0b1, uv installed `httpx 1.0.dev6`, and every "
+        "command then failed at import. kbagent now also requires `httpx` below 1.",
+        "Fix (#917): `sync push` now sends an edit to `transform.sql` or another code file of a "
+        "config that a push created. Before, it found no change in such a file (`transform.sql`, "
+        "`transform.py`, `code.py`, `pyproject.toml`, `_description.md`): `sync diff` said in "
+        "sync, `sync push` said there was nothing to push, and the job kept running the old "
+        "code. With the same gap, `sync pull --force` could replace such an edit with the remote "
+        "code. It now stops with `SYNC_CONFLICT`. An edit to `_config.yml` was always detected. "
+        "A tree written by an older version is fixed by one `sync pull`. Copy edited code files "
+        "aside before it.",
+        'Security (#886): kbagent no longer trusts the root certificate "emSign ECC Root CA - G3". '
+        "Intermediate CA keys under this root are compromised. kbagent checks HTTPS servers "
+        "against the certificate bundle of the certifi package, and certifi removed this root.",
+        "Note (#872, #873, #880, #890, #891, #893, #894, #900, #903, #906, #913, #916, #921): "
+        "housekeeping with no user-facing change. It includes an update of the filelock package.",
+    ],
     "0.100.4": [
         "Fix (#919, backport of #917): `sync push` now sends an edit to `transform.sql` or another code file "
         "of a config that a push created. Before, it found no change in such a file "
