@@ -27,7 +27,7 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
     "0.100.4": [
-        "Fix (#917): `sync push` now sends an edit to `transform.sql` or another code file "
+        "Fix (#919, backport of #917): `sync push` now sends an edit to `transform.sql` or another code file "
         "of a config that a push created. Before, it found no change in such a file "
         "(`transform.sql`, `transform.py`, `code.py`, `pyproject.toml`, `_description.md`): "
         "`sync diff` said in sync, `sync push` said there was nothing to push, and the job "
