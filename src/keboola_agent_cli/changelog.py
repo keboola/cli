@@ -28,6 +28,14 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.100.3": [
+        "New (#911): `project add` and `project create` also take the alias of the new project "
+        "as `--alias`, and `project refresh` also takes `--all-projects`. These are the names of "
+        "kbagent 1.0.0, which removes `--project` from these two commands and `--all` from "
+        "`project refresh`. A script with the new names works on 0.100.3 and on 1.x. On 0.x, "
+        "`--project` and `--all` keep working.",
+        "Note (#912): housekeeping with no user-facing change. It updates the filelock package.",
+    ],
     "0.100.2": [
         "Fix (#898): `kbagent update --beta` now allows a pre-release of kbagent itself, not of "
         "the Python packages that kbagent uses. Before, it allowed pre-releases of every package, "
