@@ -89,7 +89,7 @@ def _policy_item(
             "dialect": dialect,
             "rules": rules
             if rules is not None
-            else [{"principal": "a@x.com", "condition": {"true": True}}],
+            else [{"subjects": ["https://idp.example.com|a"], "condition": {"true": True}}],
         },
         "meta": {
             "scope": scope,
@@ -100,7 +100,12 @@ def _policy_item(
     }
 
 
-_RULES = [{"principal": "a@x.com", "condition": {"column": "region", "op": "eq", "value": "EU"}}]
+_RULES = [
+    {
+        "subjects": ["https://idp.example.com|a"],
+        "condition": {"column": "region", "op": "eq", "value": "EU"},
+    }
+]
 
 # `1 == True` and any non-True value would otherwise read as "true": only `{"true": true}` is the sentinel.
 _BAD_TRUE_SENTINELS = [
@@ -142,7 +147,9 @@ class TestGetPolicy:
         result = service.get_policy("prod", "p-1")
 
         mock.get_item.assert_called_once_with("rls-policy", "p-1")
-        assert result["rules"] == [{"principal": "a@x.com", "condition": {"true": True}}]
+        assert result["rules"] == [
+            {"subjects": ["https://idp.example.com|a"], "condition": {"true": True}}
+        ]
         assert result["revision"] == 1
 
 
@@ -346,8 +353,19 @@ class TestCreatePolicy:
     @pytest.mark.parametrize(
         "bad_rules",
         [
-            [{"principal": "a@x.com", "condition": {"column": "x", "op": "bogus", "value": 1}}],
-            [{"principal": "a@x.com", "principals": ["b@x.com"], "condition": {"true": True}}],
+            [
+                {
+                    "subjects": ["https://idp.example.com|a"],
+                    "condition": {"column": "x", "op": "bogus", "value": 1},
+                }
+            ],
+            [
+                {
+                    "subjects": ["https://idp.example.com|a"],
+                    "groups": ["g"],
+                    "condition": {"true": True},
+                }
+            ],
         ],
     )
     def test_malformed_rules_are_rejected_before_any_write(
@@ -395,14 +413,20 @@ class TestSchema110:
         mock.get_schema.side_effect = KeboolaApiError(message="n/a", status_code=404)
         mock.post_item.return_value = _policy_item()
         rules = [
-            {"principal": "a@x.com", "condition": {"column": "r", "op": "eq", "value": "EU"}},
-            {"principals": ["A@X.com"], "condition": {"column": "r", "op": "eq", "value": "US"}},
+            {
+                "subjects": ["https://idp.example.com|a"],
+                "condition": {"column": "r", "op": "eq", "value": "EU"},
+            },
+            {
+                "subjects": ["https://idp.example.com|A"],
+                "condition": {"column": "r", "op": "eq", "value": "US"},
+            },
         ]
 
         service.create_policy("prod", table="t.x", rules=rules)
 
         mock.post_item.assert_called_once()
-        mock.list_items.assert_not_called()  # no cross-policy principal scan any more
+        mock.list_items.assert_not_called()  # no cross-policy scan of the selected readers
 
     @pytest.mark.parametrize(
         "rule",
@@ -799,7 +823,7 @@ class TestValidateConditionOps:
     def test_a_false_sentinel_is_rejected_before_any_write(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
         service, mock = _make_service(store)
-        rules = [{"principal": "a@x.com", "condition": {"true": False}}]
+        rules = [{"subjects": ["https://idp.example.com|a"], "condition": {"true": False}}]
 
         with pytest.raises(KeboolaApiError) as excinfo:
             service.create_policy("prod", table="t", dialect="snowflake", rules=rules)
@@ -829,23 +853,39 @@ class TestValidateRulesLocal:
     def test_non_list_rejected(self) -> None:
         assert validate_rules_local("not-a-list") != []
 
-    def test_valid_single_principal(self) -> None:
-        assert validate_rules_local([{"principal": "a@x.com", "condition": {"true": True}}]) == []
+    def test_valid_single_subject(self) -> None:
+        assert (
+            validate_rules_local(
+                [{"subjects": ["https://idp.example.com|a"], "condition": {"true": True}}]
+            )
+            == []
+        )
 
-    def test_valid_principals_list(self) -> None:
-        rules = [{"principals": ["a@x.com", "b@x.com"], "condition": {"true": True}}]
+    def test_valid_subjects_list(self) -> None:
+        rules = [
+            {
+                "subjects": ["https://idp.example.com|a", "https://idp.example.com|b"],
+                "condition": {"true": True},
+            }
+        ]
         assert validate_rules_local(rules) == []
 
-    def test_neither_principal_nor_principals_rejected(self) -> None:
+    def test_no_selector_rejected(self) -> None:
         errors = validate_rules_local([{"condition": {"true": True}}])
         assert errors
 
-    def test_both_principal_and_principals_rejected(self) -> None:
-        rules = [{"principal": "a@x.com", "principals": ["b@x.com"], "condition": {"true": True}}]
+    def test_both_subjects_and_groups_rejected(self) -> None:
+        rules = [
+            {
+                "subjects": ["https://idp.example.com|a"],
+                "groups": ["g"],
+                "condition": {"true": True},
+            }
+        ]
         assert validate_rules_local(rules)
 
     def test_missing_condition_rejected(self) -> None:
-        errors = validate_rules_local([{"principal": "a@x.com"}])
+        errors = validate_rules_local([{"subjects": ["https://idp.example.com|a"]}])
         assert errors
 
 
@@ -954,7 +994,9 @@ class TestPrimitiveShape:
     def test_a_malformed_rule_never_reaches_the_preview_or_the_write(self, tmp_path: Path) -> None:
         service, mock = _make_service(_make_store(tmp_path))
         mock.get_schema.side_effect = KeboolaApiError(message="no schema", status_code=404)
-        rules = [{"principal": "a@x.com", "condition": {"column": "", "op": "eq"}}]
+        rules = [
+            {"subjects": ["https://idp.example.com|a"], "condition": {"column": "", "op": "eq"}}
+        ]
 
         with pytest.raises(KeboolaApiError) as excinfo:
             service.create_policy("prod", table="t", dialect="snowflake", rules=rules, dry_run=True)
@@ -1014,7 +1056,7 @@ class TestCompositionAndKeysAreExact:
         mock.get_schema.side_effect = KeboolaApiError(message="no schema", status_code=404)
         rules = [
             {
-                "principal": "a@x.com",
+                "subjects": ["https://idp.example.com|a"],
                 "condition": {"and": [self._LEAF, self._LEAF], "or": [self._LEAF, self._LEAF]},
             }
         ]
@@ -1026,32 +1068,59 @@ class TestCompositionAndKeysAreExact:
         mock.post_item.assert_not_called()
 
 
-class TestPrincipalFieldsAreValidatedByValueNotTruthiness:
+class TestSelectorFieldsAreValidatedByValueNotTruthiness:
     _COND: ClassVar[dict[str, Any]] = {"true": True}
 
     @pytest.mark.parametrize(
         ("rule", "fragment"),
         [
-            ({"principal": "a", "principals": [], "condition": _COND}, "exactly one of"),
-            ({"principal": "", "principals": ["b"], "condition": _COND}, "exactly one of"),
-            ({"principal": 1, "condition": _COND}, "principal must be a non-empty string"),
-            ({"principal": "", "condition": _COND}, "principal must be a non-empty string"),
-            ({"principal": None, "condition": _COND}, "principal must be a non-empty string"),
-            ({"principal": ["a"], "condition": _COND}, "principal must be a non-empty string"),
-            ({"principals": [], "condition": _COND}, "principals must be a non-empty list"),
-            ({"principals": "a@x.com", "condition": _COND}, "principals must be a non-empty list"),
-            ({"principals": ["a", ""], "condition": _COND}, "principals must be a non-empty list"),
-            ({"principals": ["a", 2], "condition": _COND}, "principals must be a non-empty list"),
-            ({"condition": _COND}, "exactly one of"),
-            # The wildcard must be the sole entry of its list (schema 1.1.0).
-            ({"principals": ["*", "a@x.com"], "condition": _COND}, "must be the only entry"),
-            ({"principals": ["a@x.com", "*"], "condition": _COND}, "must be the only entry"),
-            ({"principals": ["*", "*"], "condition": _COND}, "must be the only entry"),
+            (
+                {"subjects": ["https://idp.example.com|a"], "groups": [], "condition": _COND},
+                "exactly one of",
+            ),
+            ({"subjects": [], "groups": ["b"], "condition": _COND}, "exactly one of"),
+            ({"subjects": [], "condition": _COND}, "subjects must be a non-empty list"),
+            (
+                {"subjects": "https://idp.example.com|a", "condition": _COND},
+                "subjects must be a non-empty list",
+            ),
+            (
+                {"subjects": ["https://idp.example.com|a", ""], "condition": _COND},
+                "subjects must be a non-empty list",
+            ),
+            (
+                {"subjects": ["https://idp.example.com|a", 2], "condition": _COND},
+                "subjects must be a non-empty list",
+            ),
+            ({"condition": _COND}, "exactly one of subjects/groups"),
+            # An email, a bare name, a subject without an issuer or without a sub, and a space in the issuer.
+            ({"subjects": ["a@x.com"], "condition": _COND}, "must be '<idp>|<sub>'"),
+            ({"subjects": ["|sub"], "condition": _COND}, "must be '<idp>|<sub>'"),
+            (
+                {"subjects": ["https://idp.example.com|"], "condition": _COND},
+                "must be '<idp>|<sub>'",
+            ),
+            ({"subjects": ["my idp|sub"], "condition": _COND}, "must be '<idp>|<sub>'"),
+            ({"subjects": ["i|" + "s" * 1024], "condition": _COND}, "must be '<idp>|<sub>'"),
+            # The wildcard must be the sole entry of its list.
+            (
+                {"subjects": ["*", "https://idp.example.com|a"], "condition": _COND},
+                "must be the only entry",
+            ),
+            (
+                {"subjects": ["https://idp.example.com|a", "*"], "condition": _COND},
+                "must be the only entry",
+            ),
+            ({"subjects": ["*", "*"], "condition": _COND}, "must be the only entry"),
             ({"groups": ["*", "sales"], "condition": _COND}, "must be the only entry"),
             ({"groups": [], "condition": _COND}, "groups must be a non-empty list"),
+            # A stored legacy selector is still checked structurally.
+            ({"principal": 1, "condition": _COND}, "principal must be a non-empty string"),
+            ({"principals": [], "condition": _COND}, "principals must be a non-empty list"),
+            ({"principal": "a", "groups": ["g"], "condition": _COND}, "exactly one of"),
         ],
     )
-    def test_malformed_principal_fields_are_rejected_locally(
+    def test_malformed_selector_fields_are_rejected_locally(
         self, rule: dict, fragment: str
     ) -> None:
         errors = validate_rules_local([rule])
@@ -1060,42 +1129,58 @@ class TestPrincipalFieldsAreValidatedByValueNotTruthiness:
     @pytest.mark.parametrize(
         "rule",
         [
+            {"subjects": ["https://idp.example.com|a"], "condition": _COND},
+            {
+                "subjects": ["https://idp.example.com|a", "https://idp.example.com|b"],
+                "condition": _COND,
+            },
+            {"subjects": ["https://idp.example.com/|user name with spaces"], "condition": _COND},
+            {"subjects": ["keboola|123"], "condition": _COND},
+            {"subjects": ["*"], "condition": _COND},
+            {"groups": ["*"], "condition": _COND},
+            # Stored 1.0.0/1.1.0 rules are read as before (they are never authored: see TestEmailSelectors).
             {"principal": "a@x.com", "condition": _COND},
             {"principals": ["a@x.com", "b@x.com"], "condition": _COND},
-            {"principal": "*", "condition": _COND},
-            {"principals": ["*"], "condition": _COND},
-            {"groups": ["*"], "condition": _COND},
         ],
     )
-    def test_well_formed_principal_fields_pass(self, rule: dict) -> None:
+    def test_well_formed_selector_fields_pass(self, rule: dict) -> None:
         assert validate_rules_local([rule]) == []
 
     @pytest.mark.parametrize(
-        ("schema_version", "blocked"),
-        [("1.0.0", True), ("1.1.0", False), ("1.2.0", False), (None, False), ("v1", False)],
+        ("selector", "schema_version", "blocked"),
+        [
+            ({"groups": ["*"]}, "1.0.0", "needs rls-policy schema 1.1.0"),
+            ({"groups": ["*"]}, "1.1.0", None),
+            ({"subjects": ["*"]}, "1.1.0", "needs rls-policy schema 1.2.0"),
+            ({"subjects": ["keboola|1"]}, "1.1.0", "needs rls-policy schema 1.2.0"),
+            ({"subjects": ["*"]}, "1.2.0", None),
+            ({"subjects": ["keboola|1"]}, None, None),
+            ({"subjects": ["keboola|1"]}, "v1", None),
+        ],
     )
-    def test_wildcard_is_refused_on_a_schema_older_than_1_1_0(
-        self, tmp_path: Path, schema_version: str | None, blocked: bool
+    def test_a_selector_is_refused_on_a_schema_that_predates_it(
+        self, tmp_path: Path, selector: dict, schema_version: str | None, blocked: str | None
     ) -> None:
-        """In a 1.0.0 object `*` is a literal no email equals: it would silently match nobody."""
+        """In a 1.0.0 object `*` is a literal no email equals; a 1.1.0 metastore has no `subjects`: both would
+        silently match nobody (or be refused by the metastore with a less helpful error)."""
         service, mock = _make_service(_make_store(tmp_path))
         schema: dict[str, Any] = {"type": "object"}
         if schema_version:
             schema["version"] = schema_version
         mock.get_schema.return_value = schema
         mock.post_item.return_value = _policy_item()
-        rules = [{"principal": "*", "condition": self._COND}]
+        rules = [{**selector, "condition": self._COND}]
 
         if blocked:
             with pytest.raises(KeboolaApiError) as excinfo:
                 service.create_policy("prod", table="t.x", rules=rules)
-            assert "needs rls-policy schema 1.1.0" in excinfo.value.message
+            assert blocked in excinfo.value.message
             mock.post_item.assert_not_called()
         else:
             service.create_policy("prod", table="t.x", rules=rules)
             mock.post_item.assert_called_once()
 
-    def test_a_policy_without_a_wildcard_is_not_blocked_by_an_old_schema(
+    def test_a_policy_without_a_wildcard_or_subjects_is_not_blocked_by_an_old_schema(
         self, tmp_path: Path
     ) -> None:
         service, mock = _make_service(_make_store(tmp_path))
@@ -1103,12 +1188,12 @@ class TestPrincipalFieldsAreValidatedByValueNotTruthiness:
         mock.post_item.return_value = _policy_item()
 
         service.create_policy(
-            "prod", table="t.x", rules=[{"principal": "a@x.com", "condition": self._COND}]
+            "prod", table="t.x", rules=[{"groups": ["sales"], "condition": self._COND}]
         )
 
         mock.post_item.assert_called_once()
 
-    def test_a_malformed_principal_never_reaches_a_write_when_the_schema_is_unavailable(
+    def test_a_malformed_selector_never_reaches_a_write_when_the_schema_is_unavailable(
         self, tmp_path: Path
     ) -> None:
         service, mock = _make_service(_make_store(tmp_path))
@@ -1119,11 +1204,59 @@ class TestPrincipalFieldsAreValidatedByValueNotTruthiness:
                 "prod",
                 table="t",
                 dialect="snowflake",
-                rules=[{"principal": 1, "condition": self._COND}],
+                rules=[{"subjects": 1, "condition": self._COND}],
             )
 
         assert excinfo.value.error_code == ErrorCode.INVALID_RLS_POLICY
         mock.post_item.assert_not_called()
+
+
+class TestEmailSelectorsAreRefused:
+    """A new policy selects by subjects or groups: an email selector is a usage error (exit 2) before anything is
+    read or written; the stored legacy rules of an update that keeps them are untouched."""
+
+    _COND: ClassVar[dict[str, Any]] = {"true": True}
+
+    @pytest.mark.parametrize(
+        "selector",
+        [{"principal": "a@x.com"}, {"principals": ["a@x.com", "b@x.com"]}, {"principal": "*"}],
+    )
+    def test_create_refuses_an_email_selector(self, tmp_path: Path, selector: dict) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.create_policy(
+                "prod", table="t.x", rules=[{**selector, "condition": self._COND}]
+            )
+
+        assert excinfo.value.error_code == ErrorCode.INVALID_ARGUMENT
+        assert "'subjects'" in excinfo.value.message
+        assert "keboola|<user id>" in excinfo.value.message
+        mock.post_item.assert_not_called()
+        mock.get_schema.assert_not_called()
+
+    def test_update_refuses_an_email_selector_in_the_new_rules(self, tmp_path: Path) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.update_policy(
+                "prod", "p-1", rules=[{"principal": "a@x.com", "condition": self._COND}]
+            )
+
+        assert excinfo.value.error_code == ErrorCode.INVALID_ARGUMENT
+        mock.patch_item.assert_not_called()
+
+    def test_update_that_keeps_the_stored_legacy_rules_is_not_refused(self, tmp_path: Path) -> None:
+        """Changing only the `default` of a 1.1.0 policy must not trip over its stored email rules."""
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.get_item.return_value = _policy_item(
+            rules=[{"principal": "a@x.com", "condition": self._COND}], scope="targeted"
+        )
+        mock.get_schema.side_effect = KeboolaApiError(message="n/a", status_code=404)
+
+        service.update_policy("prod", "p-1", default={"false": True}, dry_run=True)
+
+        mock.patch_item.assert_not_called()
 
 
 class TestUnresolvedVersionListing:

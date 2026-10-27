@@ -1444,17 +1444,18 @@ kbagent rls bindings-sweep --project P [--older-than DAYS] [--dry-run | --yes]
 #   write `targeted` policies of its own project without grants; grants and organization scope
 #   need the organization-admin role (403 otherwise). Enforced by Query Service on a governed
 #   workspace (`workspace create --governed`; Query Service always enforces a governed workspace), or by
-#   keboola-mcp-server `query_data` where the project has the `row-level-security` feature. Policy schema 1.1.0 (the metastore default): a rule selects
-#   identities by principal, principals or IdP `groups`; within a policy every rule matching one
+#   keboola-mcp-server `query_data` where the project has the `row-level-security` feature. Policy schema 1.2.0 (the metastore default where deployed; AJDA-3680): a rule selects
+#   readers by `subjects` (`<idp>|<sub>`; an administrator behind a Storage token is `keboola|<user id>`) or IdP `groups`,
+#   never by email (`principal`/`principals` are refused with INVALID_ARGUMENT, exit 2; stored 1.0.0/1.1.0 policies still show them, flagged legacy); within a policy every rule matching one
 #   identity applies and the conditions combine with OR; several policies on one table combine
 #   with AND (an added policy only narrows); a reader with no identity is always refused;
-#   the wildcard `"*"` (sole entry of `principal`/`principals`/`groups`) matches every identified reader and is how a table is opened to everyone under default deny; in a governed workspace
+#   the wildcard `"*"` (sole entry of `subjects`/`groups`) matches every identified reader and is how a table is opened to everyone under default deny; in a governed workspace
 #   (the platform denies by default, admins never exempt) a table with no rls-policy is refused;
 #   `--default` is the condition for an identified reader no rule matches (absent = refused;
 #   {"false": true} = no rows; to remove a default, recreate the policy). Needs an MCP engine
 #   that reads 1.1.0 (keboola/mcp-server#709). Writes refuse a --dialect other than the project backend (it defaults to the
 #   backend; the enforcement would refuse every read of that table). --rules is a JSON array of
-#   {principal|principals|groups, condition}; condition is a declarative primitive tree
+#   {subjects|groups, condition}; condition is a declarative primitive tree
 #   (column/op/value comparisons, in/not_in, is_null/is_not_null, and/or nesting, {"true": true}
 #   or {"false": true}) -- never a free-text predicate; a null comparison is refused (use
 #   is_null); `value: {"$identity": "email"}` / `values: {"$identity": "groups"}` are resolved
@@ -1478,7 +1479,7 @@ kbagent cls delete --project P --policy-id ID [--dry-run] [--yes]
 # cls: column-level security policy authoring (`cls-policy` object type, one object per
 #   protected table), sibling of `rls`: same scope default, write permissions, dialect check,
 #   partial update and permission classes. --rules is a JSON array of
-#   {principal|principals|groups, visible_columns: [col, ...]} objects -- an allowlist projection
+#   {subjects|groups, visible_columns: [col, ...]} objects -- an allowlist projection
 #   (masking is not supported); within a policy an identity several rules match sees the union
 #   of their columns, several policies intersect; no `--default`. `--dry-run` prints each selector's projection. No `setup`
 #   wizard; the REST routes under /cls/{project} mirror /rls.

@@ -3774,12 +3774,12 @@ class TestFullE2E:
         table = f"in.c-kbagent-e2e-rls.policy_crud_{uuid.uuid4().hex[:8]}"
         samples = {
             "rls": (
-                '[{"principal":"e2e@example.com","condition":{"column":"id","op":"eq","value":"x"}}]',
-                '[{"principal":"e2e-2@example.com","condition":{"column":"id","op":"eq","value":"y"}}]',
+                '[{"groups":["e2e-sales"],"condition":{"column":"id","op":"eq","value":"x"}}]',
+                '[{"groups":["e2e-support"],"condition":{"column":"id","op":"eq","value":"y"}}]',
             ),
             "cls": (
-                '[{"principal":"e2e@example.com","visible_columns":["id"]}]',
-                '[{"principal":"e2e-2@example.com","visible_columns":["id"]}]',
+                '[{"groups":["e2e-sales"],"visible_columns":["id"]}]',
+                '[{"groups":["e2e-support"],"visible_columns":["id"]}]',
             ),
         }
         for group, (rules, new_rules) in samples.items():
@@ -3804,7 +3804,7 @@ class TestFullE2E:
                     group, "update", "--project", self.alias, "--policy-id", policy_id,
                     "--rules", new_rules,
                 )  # fmt: skip
-                assert updated["data"]["rules"][0]["principal"] == "e2e-2@example.com"
+                assert updated["data"]["rules"][0]["groups"] == ["e2e-support"]
                 assert updated["data"]["table"] == table  # the partial update kept the table
                 previewed = self._run_ok(
                     group, "delete", "--project", self.alias, "--policy-id", policy_id, "--dry-run"

@@ -21,7 +21,9 @@ from keboola_agent_cli.errors import ConfigError, ErrorCode, KeboolaApiError
 from keboola_agent_cli.models import ProjectConfig
 
 runner = CliRunner()
-RULES_JSON = json.dumps([{"principal": "a@x.com", "visible_columns": ["id", "region"]}])
+RULES_JSON = json.dumps(
+    [{"subjects": ["https://idp.example.com|a"], "visible_columns": ["id", "region"]}]
+)
 CREATE_ARGS = [
     "cls",
     "create",
@@ -79,7 +81,9 @@ def _preview(**overrides: Any) -> dict[str, Any]:
         "table": "in.c-crm.invoices",
         "dialect": "snowflake",
         "scope": "organization",
-        "preview": [{"principal": "a@x.com", "visible_columns": ["id", "region"]}],
+        "preview": [
+            {"subjects": ["https://idp.example.com|a"], "visible_columns": ["id", "region"]}
+        ],
         **overrides,
     }
 
@@ -131,7 +135,10 @@ class TestDetail:
     def test_json_and_human(self, tmp_path: Path) -> None:
         service = MagicMock()
         service.get_policy.return_value = _row(
-            rules=[{"principal": "a@x.com", "visible_columns": ["id", "region"]}], revision=3
+            rules=[
+                {"subjects": ["https://idp.example.com|a"], "visible_columns": ["id", "region"]}
+            ],
+            revision=3,
         )
 
         as_json = _run(
@@ -144,7 +151,7 @@ class TestDetail:
         )
 
         assert json.loads(as_json.output)["data"]["revision"] == 3
-        assert "a@x.com: id, region" in human.output
+        assert "subjects: https://idp.example.com|a: id, region" in human.output
         service.get_policy.assert_called_with(alias="prod", policy_id="p-1")
 
 
@@ -202,7 +209,7 @@ class TestCreate:
         result = _run([*CREATE_ARGS, "--dry-run"], tmp_path, service)
 
         assert result.exit_code == 0, result.output
-        assert "a@x.com: SELECT id, region" in result.output
+        assert "subjects: https://idp.example.com|a: SELECT id, region" in result.output
         assert service.create_policy.call_args.kwargs["dry_run"] is True
 
     @pytest.mark.usefixtures("interactive_terminal")
@@ -250,7 +257,9 @@ class TestCreate:
         assert result.exit_code == 2
         service.create_policy.assert_not_called()
 
-    @pytest.mark.parametrize("bad_rules", ["not json", '{"principal": "a@x.com"}'])
+    @pytest.mark.parametrize(
+        "bad_rules", ["not json", '{"subjects": ["https://idp.example.com|a"]}']
+    )
     def test_invalid_rules_exit_2(self, tmp_path: Path, bad_rules: str) -> None:
         service = MagicMock()
         args = [*CREATE_ARGS[:-1], bad_rules]
@@ -259,7 +268,7 @@ class TestCreate:
 
         assert result.exit_code == 2
         if bad_rules.startswith("{"):
-            assert "{principal|principals, visible_columns}" in result.output
+            assert "{subjects|groups, visible_columns}" in result.output
         service.create_policy.assert_not_called()
 
     def test_validation_error_surfaces_cls_code(self, tmp_path: Path) -> None:
@@ -301,7 +310,7 @@ class TestUpdate:
         kwargs = service.update_policy.call_args.kwargs
         assert kwargs["table"] is None
         assert kwargs["dialect"] is None
-        assert kwargs["rules"][0]["principal"] == "a@x.com"
+        assert kwargs["rules"][0]["subjects"] == ["https://idp.example.com|a"]
 
     @pytest.mark.usefixtures("interactive_terminal")
     def test_declined_prompt_aborts(self, tmp_path: Path) -> None:

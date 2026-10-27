@@ -149,7 +149,7 @@ Manage development branches
     "cls": """\
 ### cls
 
-Manage column-level security policies (metastore-backed, per-principal column
+Manage column-level security policies (metastore-backed, per-reader column
 allowlist). 'list'/'detail'/'schema' are read-only; 'create'/'update'/'delete'
 are gated as admin -- see CONTRIBUTING.md.
 

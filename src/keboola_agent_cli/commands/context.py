@@ -429,18 +429,18 @@ GROUP_NOTES: dict[str, str] = {
 
 Author `cls-policy` metastore objects: one object per protected table, a
 `visible_columns` allowlist per rule (unlisted columns are omitted from
-that identity's result; masking is not supported). Rules select by
-principal, principals or `groups`; within a policy an identity several rules
+that reader's result; masking is not supported). Rules select by
+`subjects` (`<idp>|<sub>`) or `groups`, never by email; within a policy an identity several rules
 match sees the union of their columns, several policies intersect; there is
 no `default`. Sibling of RLS -- same scope default, permissions, checks,
 partial update and enforcement paths (Query Service on a governed workspace,
 or `keboola-mcp-server`'s `query_data`, which composes RLS and CLS); no
-`setup` wizard. A principal with no rule for a governed table is refused. A
+`setup` wizard. A reader with no rule for a governed table is refused. A
 `cls-policy` alone never grants rows: in a governed workspace the table also
 needs an `rls-policy`.
 
   cls create
-    --rules is a JSON array of {principal|principals|groups,
+    --rules is a JSON array of {subjects|groups,
     visible_columns: [col, ...]} objects. --dry-run prints each selector's
     allowed projection without writing.
 """,
@@ -1575,11 +1575,11 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
 
 Author `rls-policy` metastore objects: one object per protected table, a
 declarative condition primitive per rule (never free-text SQL). Policy schema
-1.1.0: a rule selects identities by principal, principals or IdP `groups`;
+1.2.0: a rule selects readers by `subjects` (`<idp>|<sub>`; an administrator behind a Storage token is `keboola|<user id>`) or IdP `groups`, never by email (principal/principals are refused, exit 2; stored legacy policies are still shown);
 within a policy every rule matching one identity applies and the conditions
 combine with OR; several policies on one table combine with AND (an added
 policy only narrows); a reader with no identity is always refused; the
-wildcard `"*"` (sole entry of `principal`/`principals`/`groups`) matches every
+wildcard `"*"` (sole entry of `subjects`/`groups`) matches every
 identified reader and is how a table is opened to everyone under default deny.
 In a governed workspace (the platform denies by default, admins never exempt)
 a table with no rls-policy is refused. An optional policy `default` covers an
@@ -1607,7 +1607,7 @@ the `row-level-security` feature and needs an engine that reads schema 1.1.0
     Policies visible to -- and applied in -- a project (id, table, dialect,
     rule_count, scope, owner_project_id, target_project_ids).
   rls create
-    --rules is a JSON array of {principal|principals|groups, condition}
+    --rules is a JSON array of {subjects|groups, condition}
     objects -- condition is a primitive tree (column/op/value, in/not_in,
     is_null/is_not_null, and/or nesting, `{"true": true}` or
     `{"false": true}`), never a raw predicate string; use is_null, never

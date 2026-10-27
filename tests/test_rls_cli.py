@@ -143,7 +143,7 @@ class TestRlsDetailCli:
         service = MagicMock()
         service.get_policy.return_value = {
             **_policy_row(),
-            "rules": [{"principal": "a@x.com", "condition": {"true": True}}],
+            "rules": [{"subjects": ["https://idp.example.com|a"], "condition": {"true": True}}],
         }
 
         result = _run(
@@ -152,7 +152,7 @@ class TestRlsDetailCli:
 
         assert result.exit_code == 0
         payload = json.loads(result.output)["data"]
-        assert payload["rules"][0]["principal"] == "a@x.com"
+        assert payload["rules"][0]["subjects"] == ["https://idp.example.com|a"]
         service.get_policy.assert_called_once_with(alias="prod", policy_id="p-1")
 
 
@@ -245,7 +245,7 @@ class TestRlsDefaultOption:
 
 
 class TestRlsCreateCli:
-    _RULES_JSON = '[{"principal": "a@x.com", "condition": {"true": true}}]'
+    _RULES_JSON = '[{"subjects": ["https://idp.example.com|a"], "condition": {"true": true}}]'
 
     def test_json_output_no_confirm_needed(self, tmp_path: Path) -> None:
         store = _setup_config(tmp_path / "cfg", {"prod": {}})
@@ -651,7 +651,7 @@ class TestRlsReviewFixes:
         result = _run(
             [
                 "rls", "create", "--project", "prod", "--table-id", "in.c-crm.invoices", "--dialect", "snowflake",
-                "--rules", '[{"principal":"a@x.com","condition":{"true":true}}]', "--yes",
+                "--rules", '[{"subjects":["https://idp.example.com|a"],"condition":{"true":true}}]', "--yes",
             ],
             store,
             service,
@@ -682,7 +682,7 @@ class TestRlsSetupReviewFixes:
         }
         return storage
 
-    RULES = '[{"principal":"a@x.com","condition":{"true":true}}]'
+    RULES = '[{"subjects":["https://idp.example.com|a"],"condition":{"true":true}}]'
 
     def test_an_invalid_dialect_is_rejected_before_any_api_call(self, tmp_path: Path) -> None:
         store = _setup_config(tmp_path / "cfg", {"prod": {}})
@@ -873,7 +873,7 @@ class TestRlsSetupReviewFixes:
 class TestScopeAndDestructiveGates:
     """`--scope organization` and `delete` are destructive-class: `--deny-destructive` blocks them."""
 
-    RULES = '[{"principal":"a@x.com","condition":{"true":true}}]'
+    RULES = '[{"subjects":["https://idp.example.com|a"],"condition":{"true":true}}]'
 
     @pytest.mark.parametrize(("extra", "exit_code"), [([], 0), (["--scope", "organization"], 6)])
     def test_deny_destructive_blocks_only_organization_scope(
@@ -1002,3 +1002,70 @@ class TestScopeAndDestructiveGates:
         assert envelope["status"] == "error"
         assert envelope["error"]["code"] == "INVALID_ARGUMENT"
         assert "rls create" in envelope["error"]["message"]
+
+
+# ---------------------------------------------------------------------------
+# selectors: display of stored rules and the guided prompt
+# ---------------------------------------------------------------------------
+
+
+class TestSelectors:
+    @pytest.mark.parametrize(
+        ("item", "expected"),
+        [
+            (
+                {"subjects": ["https://idp.example.com|a", "keboola|7"]},
+                "subjects: https://idp.example.com|a, keboola|7",
+            ),
+            ({"subjects": ["*"]}, "subjects: every identified reader"),
+            ({"groups": ["sales", "Sales EU"]}, "groups: sales, Sales EU"),
+            ({"groups": ["*"]}, "groups: every identified reader"),
+            # a stored 1.0.0/1.1.0 policy is still shown, flagged as legacy
+            (
+                {"principal": "a@x.com"},
+                "legacy email selector (not allowed in a new policy): a@x.com",
+            ),
+            (
+                {"principals": ["a@x.com", "b@x.com"]},
+                "legacy email selector (not allowed in a new policy): a@x.com, b@x.com",
+            ),
+            (
+                {"principal": "*"},
+                "legacy email selector (not allowed in a new policy): every identified reader",
+            ),
+        ],
+    )
+    def test_selector_text(self, item: dict, expected: str) -> None:
+        from keboola_agent_cli.commands.rls import _selector_text
+
+        assert _selector_text(item) == expected
+
+    @pytest.mark.parametrize(
+        ("answers", "expected"),
+        [
+            (
+                ["subjects", "https://idp.example.com|a, keboola|7"],
+                {"subjects": ["https://idp.example.com|a", "keboola|7"]},
+            ),
+            (["groups", "sales"], {"groups": ["sales"]}),
+            (["everyone"], {"groups": ["*"]}),
+        ],
+        ids=["subjects", "groups", "everyone"],
+    )
+    def test_guided_selector_never_asks_for_an_email(
+        self, monkeypatch: pytest.MonkeyPatch, answers: list[str], expected: dict
+    ) -> None:
+        from keboola_agent_cli.commands import rls as rls_module
+
+        asked: list[str] = []
+        replies = iter(answers)
+
+        def fake_prompt(text: str, default: str | None = None) -> str:
+            asked.append(text)
+            return next(replies)
+
+        monkeypatch.setattr(rls_module.typer, "prompt", fake_prompt)
+        formatter = MagicMock()
+
+        assert rls_module._prompt_selector(formatter) == expected
+        assert not any("email" in text.lower() and "Selector" not in text for text in asked)

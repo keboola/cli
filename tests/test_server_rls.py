@@ -130,7 +130,7 @@ def test_create_policy_passes_kwargs(tmp_path: Path) -> None:
     body = {
         "table_id": "in.c-crm.invoices",
         "dialect": "snowflake",
-        "rules": [{"principal": "a@x.com", "condition": {"true": True}}],
+        "rules": [{"subjects": ["https://idp.example.com|a"], "condition": {"true": True}}],
         "target_projects": [999, "analytics"],
         "default": {"false": True},
         "dry_run": False,
@@ -189,7 +189,7 @@ def test_target_projects_with_organization_scope_is_400(tmp_path: Path) -> None:
     app = _make_app_with_registry(tmp_path, _mock_registry(rls=rls_svc))
     body = {
         "table_id": "t.x",
-        "rules": [{"principal": "a@x.com", "condition": {"true": True}}],
+        "rules": [{"subjects": ["https://idp.example.com|a"], "condition": {"true": True}}],
         "scope": "organization",
         "target_projects": [7],
     }
@@ -246,7 +246,9 @@ class TestPermissionGating:
                 json={
                     "table_id": "t",
                     "dialect": "snowflake",
-                    "rules": [{"principal": "a@x.com", "condition": {"true": True}}],
+                    "rules": [
+                        {"subjects": ["https://idp.example.com|a"], "condition": {"true": True}}
+                    ],
                 },
             )
 
@@ -277,7 +279,7 @@ class TestPermissionGating:
         app = _make_app_with_registry(tmp_path, _mock_registry(rls=rls_svc))
         body = {
             "table_id": "t.x",
-            "rules": [{"principal": "a@x.com", "condition": {"true": True}}],
+            "rules": [{"subjects": ["https://idp.example.com|a"], "condition": {"true": True}}],
             "scope": scope,
         }
 

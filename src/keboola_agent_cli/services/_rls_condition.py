@@ -8,8 +8,9 @@ The condition/rules shape mirrored here is the one defined in
 storage" section) -- kbagent never invents its own shape, it authors exactly
 what the enforcement engine (that repo's ``rls.py::_compile_primitive``,
 sqlglot-based) expects to read back from the metastore. The checks follow the policy
-schema 1.1.0 (go-monorepo ``rls-policy_schema_1.1.0.json``): a rule selects identities by
-``principal``, ``principals`` or IdP ``groups``; within a policy every rule matching one identity
+schema 1.2.0 (go-monorepo ``rls-policy_schema_1.2.0.json``): a rule selects identities by
+``subjects`` (``<idp>|<sub>``) or IdP ``groups``, never by email (AJDA-3680; the legacy 1.0.0/1.1.0
+``principal`` / ``principals`` still exist in stored policies and are read, not authored); within a policy every rule matching one identity
 applies (the conditions combine with OR; policies on one table combine with AND); ``{"false": true}`` matches no row; a literal may be the
 ``{"$identity": ...}`` placeholder the engine resolves per reader.
 
@@ -51,19 +52,27 @@ class Dialect(StrEnum):
 
 RLS_DIALECTS: tuple[str, ...] = tuple(Dialect)
 
-# The enforcement's principal pattern (mcp-server ``rls.py``): no whitespace or control characters.
+# The legacy (schema 1.0.0/1.1.0) principal pattern: no whitespace or control characters.
 _PRINCIPAL_RE = re.compile(r"^[^\s\x00-\x1f\x7f]+$")
+# A subject is `<idp>|<sub>`: the issuer of the identity provider, a `|`, the user's `sub` (the 1.2.0 schema pattern).
+_SUBJECT_RE = re.compile(r"^[^|\s]+\|\S.*$")
+_SUBJECT_MAX_LENGTH = 1024
 # IdP group names may contain spaces ("Sales EU"); only control characters are refused.
 _GROUP_RE = re.compile(r"^[^\x00-\x1f\x7f]+$")
 
-# The rule selectors of schema 1.1.0 -- each rule names exactly one.
-SELECTORS: tuple[str, ...] = ("principal", "principals", "groups")
+# The rule selectors a NEW policy may use (schema 1.2.0) -- each rule names exactly one. The legacy selectors
+# of 1.0.0/1.1.0 objects are only read (stored policies, an update that keeps their rules), never authored.
+SELECTORS: tuple[str, ...] = ("subjects", "groups")
+LEGACY_SELECTORS: tuple[str, ...] = ("principal", "principals")
+ALL_SELECTORS: tuple[str, ...] = (*LEGACY_SELECTORS, *SELECTORS)
 
-# Schema 1.1.0 wildcard selector: matches every IDENTIFIED reader (never an anonymous one). It must be the
-# only entry of a `principals` / `groups` list, and exists only from schema 1.1.0: in a 1.0.0 object it is a
-# literal that no email equals, so it matches nobody.
+# Wildcard selector: matches every IDENTIFIED reader (never an anonymous one). It must be the only entry of a
+# `subjects` / `groups` (or legacy `principals`) list; it exists from schema 1.1.0 (in a 1.0.0 object it is a
+# literal that no email equals, so it matches nobody).
 WILDCARD = "*"
 WILDCARD_MIN_SCHEMA_VERSION = (1, 1, 0)
+# `subjects` exist from schema 1.2.0; an older metastore would refuse the key (or, worse, never match it).
+SUBJECTS_MIN_SCHEMA_VERSION = (1, 2, 0)
 
 # The `$identity` placeholders: `value` may be the reader's email, `values` the reader's groups.
 IDENTITY_EMAIL = {"$identity": "email"}
@@ -164,14 +173,15 @@ def validate_condition_ops(condition: Any) -> list[str]:
     return errors
 
 
-def validate_principal_fields(rule: dict[Any, Any], index: int) -> list[str]:
-    """Each rule names exactly one selector: ``principal``, ``principals`` or ``groups``.
+def validate_selector_fields(rule: dict[Any, Any], index: int) -> list[str]:
+    """Each rule names exactly one selector: ``subjects`` or ``groups`` (or a stored legacy ``principal`` /
+    ``principals``, which authoring refuses separately, see :func:`legacy_selector_errors`).
 
     Shared by the RLS and CLS (``cls_service``) local checks -- both policy types use the identical
     selector shape. Key PRESENCE decides "exactly one" (a truthiness test would let
-    ``{"principal": "a", "principals": []}`` through); the value is then checked on its own.
+    ``{"subjects": ["a|b"], "groups": []}`` through); the value is then checked on its own.
     """
-    present = [key for key in SELECTORS if key in rule]
+    present = [key for key in ALL_SELECTORS if key in rule]
     if len(present) != 1:
         return [f"rules[{index}] must set exactly one of {'/'.join(SELECTORS)}"]
     key = present[0]
@@ -189,6 +199,14 @@ def validate_principal_fields(rule: dict[Any, Any], index: int) -> list[str]:
         return [
             f"rules[{index}].{key}: {WILDCARD!r} (every identified reader) must be the only entry"
         ]
+    if key == "subjects":
+        return [
+            f"rules[{index}]: subjects entry {name!r} must be '<idp>|<sub>' (the issuer of the "
+            "identity provider, a '|', the user's sub) or '*'"
+            for name in names
+            if name != WILDCARD
+            and (not _SUBJECT_RE.fullmatch(name) or len(name) > _SUBJECT_MAX_LENGTH)
+        ]
     pattern, problem = (
         (_GROUP_RE, "control characters")
         if key == "groups"
@@ -201,23 +219,37 @@ def validate_principal_fields(rule: dict[Any, Any], index: int) -> list[str]:
     ]
 
 
+def legacy_selector_errors(rules: Any) -> list[str]:
+    """One error per rule that names an email selector (``principal`` / ``principals``): a new policy selects by
+    ``subjects`` or ``groups`` (AJDA-3680)."""
+    if not isinstance(rules, list):
+        return []
+    return [
+        f"rules[{index}] uses {'/'.join(key for key in LEGACY_SELECTORS if key in rule)}: an email is "
+        "no longer allowed as a selector in a new policy; use 'subjects' (<idp>|<sub>, an administrator "
+        "behind a Storage token is keboola|<user id>) or 'groups'"
+        for index, rule in enumerate(rules)
+        if isinstance(rule, dict) and any(key in rule for key in LEGACY_SELECTORS)
+    ]
+
+
 def rules_use_wildcard(rules: Any) -> bool:
-    """Whether any rule selects by the ``"*"`` wildcard (``principal``, ``principals`` or ``groups``)."""
+    """Whether any rule selects by the ``"*"`` wildcard (``subjects``, ``groups`` or a legacy email selector)."""
     if not isinstance(rules, list):
         return False
     return any(
         isinstance(rule, dict)
         and any(
             (rule[key] == WILDCARD) if key == "principal" else (WILDCARD in (rule[key] or []))
-            for key in SELECTORS
+            for key in ALL_SELECTORS
             if key in rule and isinstance(rule[key], str | list)
         )
         for rule in rules
     )
 
 
-def schema_lacks_wildcard(schema: dict[str, Any]) -> str | None:
-    """The schema's ``version`` when it is older than the one that defines ``"*"``, else ``None``.
+def schema_older_than(schema: dict[str, Any], minimum: tuple[int, int, int]) -> str | None:
+    """The schema's ``version`` when it is older than ``minimum``, else ``None``.
 
     An unreadable or absent ``version`` is not proof of anything, so it returns ``None`` (the caller's
     structural validation against the live schema still runs).
@@ -227,19 +259,32 @@ def schema_lacks_wildcard(schema: dict[str, Any]) -> str | None:
         parsed = tuple(int(part) for part in str(version).split(".")[:3])
     except ValueError:
         return None
-    return str(version) if parsed < WILDCARD_MIN_SCHEMA_VERSION else None
+    return str(version) if parsed < minimum else None
+
+
+def schema_lacks_wildcard(schema: dict[str, Any]) -> str | None:
+    """The schema's ``version`` when it is older than the one that defines ``"*"``, else ``None``."""
+    return schema_older_than(schema, WILDCARD_MIN_SCHEMA_VERSION)
+
+
+def rules_use_subjects(rules: Any) -> bool:
+    """Whether any rule selects by ``subjects``."""
+    return isinstance(rules, list) and any(
+        isinstance(rule, dict) and "subjects" in rule for rule in rules
+    )
 
 
 def rule_selector(rule: dict[str, Any]) -> dict[str, Any]:
-    """The rule's selector as written (``{"principal": ...}``, ``{"principals": [...]}`` or ``{"groups": [...]}``)."""
-    return {key: rule[key] for key in SELECTORS if key in rule}
+    """The rule's selector as written (``{"subjects": [...]}``, ``{"groups": [...]}`` or, in a stored policy, a legacy
+    ``{"principal": ...}`` / ``{"principals": [...]}``)."""
+    return {key: rule[key] for key in ALL_SELECTORS if key in rule}
 
 
 def validate_rules_local(rules: Any) -> list[str]:
     """Semantic checks on ``rules`` that hold regardless of schema availability.
 
     Runs even when the live schema fetch degraded (see ``RlsService._fetch_schema``): each rule names
-    exactly one selector (:func:`validate_principal_fields`) and a well-formed ``condition``
+    exactly one selector (:func:`validate_selector_fields`) and a well-formed ``condition``
     (:func:`validate_condition_ops`). Rules naming the same identity are fine -- the engine ORs them.
     Returns human-readable error strings (empty = valid).
     """
@@ -250,7 +295,7 @@ def validate_rules_local(rules: Any) -> list[str]:
         if not isinstance(rule, dict):
             errors.append(f"rules[{index}] must be an object")
             continue
-        errors.extend(validate_principal_fields(rule, index))
+        errors.extend(validate_selector_fields(rule, index))
         condition = rule.get("condition")
         if condition is None:
             errors.append(f"rules[{index}] is missing 'condition'")

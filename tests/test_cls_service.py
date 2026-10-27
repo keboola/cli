@@ -20,7 +20,7 @@ from keboola_agent_cli.services.cls_service import ClsService
 from .test_rls_service import _make_store, storage_client_factory
 
 TEST_TOKEN = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
-_RULES = [{"principal": "a@x.com", "visible_columns": ["id", "region"]}]
+_RULES = [{"subjects": ["https://idp.example.com|a"], "visible_columns": ["id", "region"]}]
 
 
 def _make_service(tmp_path: Path) -> tuple[ClsService, MagicMock]:
@@ -61,21 +61,37 @@ class TestLocalRuleValidation:
             (None, "non-empty array"),
             ([], "non-empty array"),
             (["x"], "must be an object"),
-            ([{"visible_columns": ["id"]}], "exactly one of principal/principals/groups"),
+            ([{"visible_columns": ["id"]}], "exactly one of subjects/groups"),
+            ([{"subjects": ["a@x.com"], "visible_columns": ["id"]}], "must be '<idp>|<sub>'"),
             (
-                [{"principal": "a@x.com", "principals": ["b@x.com"], "visible_columns": ["id"]}],
-                "exactly one of principal/principals/groups",
+                [
+                    {
+                        "subjects": ["https://idp.example.com|a"],
+                        "groups": ["g"],
+                        "visible_columns": ["id"],
+                    }
+                ],
+                "exactly one of subjects/groups",
             ),
-            ([{"principal": "a@x.com"}], "non-empty 'visible_columns'"),
-            ([{"principal": "a@x.com", "visible_columns": []}], "non-empty 'visible_columns'"),
-            ([{"principal": "a@x.com", "visible_columns": "id"}], "non-empty 'visible_columns'"),
+            ([{"subjects": ["https://idp.example.com|a"]}], "non-empty 'visible_columns'"),
             (
-                [{"principal": "a@x.com", "visible_columns": ["id; DROP"]}],
+                [{"subjects": ["https://idp.example.com|a"], "visible_columns": []}],
+                "non-empty 'visible_columns'",
+            ),
+            (
+                [{"subjects": ["https://idp.example.com|a"], "visible_columns": "id"}],
+                "non-empty 'visible_columns'",
+            ),
+            (
+                [{"subjects": ["https://idp.example.com|a"], "visible_columns": ["id; DROP"]}],
                 "not a valid column name",
             ),
-            ([{"principal": "a@x.com", "visible_columns": [1]}], "not a valid column name"),
             (
-                [{"principals": ["*", "a@x.com"], "visible_columns": ["id"]}],
+                [{"subjects": ["https://idp.example.com|a"], "visible_columns": [1]}],
+                "not a valid column name",
+            ),
+            (
+                [{"subjects": ["*", "https://idp.example.com|a"], "visible_columns": ["id"]}],
                 "must be the only entry",
             ),
             ([{"groups": ["*", "sales"], "visible_columns": ["id"]}], "must be the only entry"),
@@ -92,9 +108,7 @@ class TestLocalRuleValidation:
         assert exc.value.message.startswith("CLS policy is invalid")
         mock.post_item.assert_not_called()
 
-    @pytest.mark.parametrize(
-        "selector", [{"principal": "*"}, {"principals": ["*"]}, {"groups": ["*"]}]
-    )
+    @pytest.mark.parametrize("selector", [{"subjects": ["*"]}, {"groups": ["*"]}])
     def test_accepts_the_wildcard_selector_alone(self, tmp_path: Path, selector: dict) -> None:
         service, _ = _make_service(tmp_path)
 
@@ -108,16 +122,24 @@ class TestLocalRuleValidation:
 
         assert result["preview"] == [{**selector, "visible_columns": ["id"]}]
 
-    def test_accepts_principals_list(self, tmp_path: Path) -> None:
+    def test_accepts_a_subjects_list(self, tmp_path: Path) -> None:
         service, _ = _make_service(tmp_path)
-        rules = [{"principals": ["a@x.com", "b@x.com"], "visible_columns": ["id"]}]
+        rules = [
+            {
+                "subjects": ["https://idp.example.com|a", "https://idp.example.com|b"],
+                "visible_columns": ["id"],
+            }
+        ]
 
         result = service.create_policy(
             "prod", table="in.c-crm.t", dialect="snowflake", rules=rules, dry_run=True
         )
 
         assert result["preview"] == [
-            {"principals": ["a@x.com", "b@x.com"], "visible_columns": ["id"]}
+            {
+                "subjects": ["https://idp.example.com|a", "https://idp.example.com|b"],
+                "visible_columns": ["id"],
+            }
         ]
 
     def test_accepts_groups_and_rejects_default(self, tmp_path: Path) -> None:
@@ -237,7 +259,9 @@ class TestCreate:
             target_project_ids=None,
             conflict_hint=ANY,
         )
-        assert result["preview"] == [{"principal": "a@x.com", "visible_columns": ["id", "region"]}]
+        assert result["preview"] == [
+            {"subjects": ["https://idp.example.com|a"], "visible_columns": ["id", "region"]}
+        ]
 
     def test_target_projects_are_granted_in_the_create_request(self, tmp_path: Path) -> None:
         service, mock = _make_service(tmp_path)
@@ -254,7 +278,7 @@ class TestCreate:
         """1.1.0: an identity several rules match sees the union of their columns."""
         service, mock = _make_service(tmp_path)
         mock.post_item.return_value = _item()
-        rules = [*_RULES, {"principal": "A@x.com", "visible_columns": ["id"]}]
+        rules = [*_RULES, {"subjects": ["https://idp.example.com|A"], "visible_columns": ["id"]}]
 
         service.create_policy("prod", table="in.c-crm.t", rules=rules)
 
@@ -274,7 +298,7 @@ class TestUpdate:
     def test_patches_only_the_given_fields(self, tmp_path: Path) -> None:
         service, mock = _make_service(tmp_path)
         mock.get_item.return_value = _item()
-        new_rules = [{"principal": "b@x.com", "visible_columns": ["id"]}]
+        new_rules = [{"subjects": ["https://idp.example.com|b"], "visible_columns": ["id"]}]
 
         service.update_policy("prod", "p-1", rules=new_rules)
 
@@ -305,7 +329,9 @@ class TestUpdate:
         mock.get_item.return_value = _item()
 
         with pytest.raises(KeboolaApiError) as exc:
-            service.update_policy("prod", "p-1", rules=[{"principal": "a@x.com"}])
+            service.update_policy(
+                "prod", "p-1", rules=[{"subjects": ["https://idp.example.com|a"]}]
+            )
 
         assert exc.value.error_code == ErrorCode.INVALID_CLS_POLICY
         mock.patch_item.assert_not_called()
@@ -318,3 +344,26 @@ def test_delete_uses_cls_item_type(tmp_path: Path) -> None:
 
     mock.delete_item.assert_called_once_with("cls-policy", "p-1")
     assert result == {"project": "prod", "policy_id": "p-1", "deleted": True}
+
+
+class TestEmailSelectorsAreRefused:
+    """A new policy selects by subjects or groups: an email selector is a usage error before anything is read."""
+
+    @pytest.mark.parametrize(
+        "selector", [{"principal": "a@x.com"}, {"principals": ["a@x.com", "b@x.com"]}]
+    )
+    def test_create_refuses_an_email_selector(self, tmp_path: Path, selector: dict) -> None:
+        service, mock = _make_service(tmp_path)
+
+        with pytest.raises(KeboolaApiError) as exc:
+            service.create_policy(
+                "prod",
+                table="in.c-crm.t",
+                dialect="snowflake",
+                rules=[{**selector, "visible_columns": ["id"]}],
+            )
+
+        assert exc.value.error_code == ErrorCode.INVALID_ARGUMENT
+        assert "subjects" in exc.value.message
+        assert "email" in exc.value.message
+        mock.post_item.assert_not_called()
