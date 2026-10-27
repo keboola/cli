@@ -63,7 +63,7 @@ These lists keep `error`, because their entries are not failed items with an err
 
 ## A code edit after `sync push` created the config is pushed
 
-*(since vNEXT)*
+*(since 0.100.4)*
 
 - **`sync push` that CREATES a config** (a new local config, a promote push from `main/`
   to a dev branch, `sync clone`) now records the hashes of its code files (`transform.sql`,
