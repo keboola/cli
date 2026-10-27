@@ -11,6 +11,24 @@ Versioning convention:
   behavior; the inline `(updated vX.Y.Z)` records when the refinement landed.
 -->
 
+## A code edit after `sync push` created the config is pushed
+
+*(since vNEXT)*
+
+- **`sync push` that CREATES a config** (a new local config, a promote push from `main/`
+  to a dev branch, `sync clone`) now records the hashes of its code files (`transform.sql`,
+  `transform.py`, `code.py`, `pyproject.toml`, `_description.md`) in the manifest, as
+  `sync pull` does. Before, it recorded `_config.yml` only, so a later edit to one of those
+  files diffed as unchanged: `sync diff` said "in sync", `sync push` said "No changes to
+  push" with exit 0, and the remote kept the old code. An edit to `_config.yml` itself was
+  always detected. The same gap let `sync pull --force` replace an edited code file with
+  the remote code when the config had also changed remotely; that is now `SYNC_CONFLICT`.
+- **On an older version**, run `kbagent sync pull` (with `--branch` for a dev branch) after
+  every push that created a config, before you edit its code files. The pull records the
+  missing hashes. `sync pull --branch <id>` writes the branch's configs to that branch's
+  own folder (not `main/`), so edit the files there. If you already edited code files after
+  such a push, copy them aside first: a pull that takes a remote change overwrites them.
+
 ## `--alias` on `project add` and `project create`, `--all-projects` on `project refresh`
 
 *(since 0.100.3)* (#791)
