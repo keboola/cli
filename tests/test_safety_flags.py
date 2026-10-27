@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -378,11 +379,17 @@ def test_removed_form_is_a_usage_error_that_names_the_replacement(
     assert replacement in error["message"]
 
 
+_ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+_BOX = re.compile(r"[\u2500-\u257f]")
+
+
 def test_removed_form_in_human_mode_names_the_replacement(tmp_path: Path) -> None:
     result = runner.invoke(app, ["--config-dir", str(tmp_path), "project", "refresh", "--all"])
 
     assert result.exit_code == 2
-    assert "project refresh --all was removed in 1.0.0. Use --all-projects." in result.stderr
+    # Without color codes, Rich box lines and line wrapping (CI forces color).
+    stderr = " ".join(_BOX.sub(" ", _ANSI.sub("", result.stderr)).split())
+    assert "project refresh --all was removed in 1.0.0. Use --all-projects." in stderr
 
 
 def test_unknown_option_without_a_removed_form_keeps_the_click_message(tmp_path: Path) -> None:
