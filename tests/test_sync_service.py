@@ -3194,6 +3194,7 @@ class TestFreshCreateWriteback:
             new_id="123456789",
             file_hash="abc123",
             cfg_hash="def456",
+            extra_hashes={"transform.sql": "sql789"},
         )
 
         entry = writeback.entry
@@ -3205,6 +3206,7 @@ class TestFreshCreateWriteback:
         assert entry.branch_id == 12345
         assert entry.metadata["pull_hash"] == "abc123"
         assert entry.metadata["pull_config_hash"] == "def456"
+        assert entry.metadata["pull_extra_hashes"] == {"transform.sql": "sql789"}
         assert entry.metadata["KBC.configuration.folderName"] == "FI Pipeline", (
             "user-declared KBC.* metadata must survive the writeback"
         )
@@ -3238,6 +3240,7 @@ class TestFreshCreateWriteback:
             new_id="dev-id-002",
             file_hash="h1",
             cfg_hash="h2",
+            extra_hashes={},
         )
 
         entry = writeback.entry
@@ -3269,6 +3272,7 @@ class TestFreshCreateWriteback:
             new_id="999",
             file_hash="h1",
             cfg_hash="h2",
+            extra_hashes={},
         )
 
         entry = writeback.entry
@@ -3276,7 +3280,11 @@ class TestFreshCreateWriteback:
         assert len(manifest.configurations) == 1
         assert manifest.configurations[0] is entry
         assert entry.id == "999"
-        assert entry.metadata == {"pull_hash": "h1", "pull_config_hash": "h2"}
+        assert entry.metadata == {
+            "pull_hash": "h1",
+            "pull_config_hash": "h2",
+            "pull_extra_hashes": {},
+        }
 
     def test_propagate_kbc_metadata_calls_set_config_metadata(self, tmp_config_dir: Path) -> None:
         """KBC.* keys are POSTed via client.set_config_metadata; bookkeeping
