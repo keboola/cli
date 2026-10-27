@@ -54,6 +54,9 @@ class FakeKeychain:
         self.trusted: list[str] | None = [] if trusted is None else trusted
         self.stored: dict[str, str] = {}
 
+    def require_supported(self) -> None:
+        pass
+
     def find(self, host: str) -> Any:
         return object() if self.token is not None else None
 
@@ -433,6 +436,8 @@ def test_keychain_store_passes_token_on_stdin_only() -> None:
         calls.append((args, kwargs.get("input")))
         if args[1] == "find-generic-password":
             return _completed('    "icmt"<blob>="token 42"\n')
+        if args[1] == "dump-keychain":
+            return _completed(DUMP_SAFE)
         return _completed()
 
     OAuthKeychain(runner=run, platform="darwin").store("oauth.keboola.com", TOKEN, "token 42")
@@ -526,3 +531,188 @@ def test_check_client_secret_gives_up() -> None:
         sleep=lambda s: None,
     )
     assert not result.ok and "401" in result.detail
+
+
+# ----- review findings -----
+
+
+@pytest.mark.parametrize(
+    "stack",
+    [
+        "https://connection.keboola.com@evil.com",
+        "keboola.com@evil.com",
+        "connection.evil.com",
+        "connection.keboola.com.evil.com",
+        "connection.keboola.com\nadd-generic-password",
+        'connection.keboola.com" -A',
+    ],
+)
+def test_stack_hosts_refuses_non_keboola_hosts(stack: str) -> None:
+    with pytest.raises(KeboolaApiError) as err:
+        stack_hosts(stack)
+    assert err.value.error_code == ErrorCode.INVALID_ARGUMENT
+
+
+def test_keychain_store_neutralises_comment_injection() -> None:
+    sent: list[str] = []
+
+    def run(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if args[1:] == ["-i"]:
+            sent.append(kwargs["input"])
+        if args[1] == "find-generic-password":
+            return _completed('    "icmt"<blob>="c"\n')
+        if args[1] == "dump-keychain":
+            return _completed(DUMP_SAFE)
+        return _completed()
+
+    evil = 'x"\nadd-generic-password -s kbagent-oauth -a evil -A -w stolen\\'
+    OAuthKeychain(runner=run, platform="darwin").store("oauth.keboola.com", TOKEN, evil)
+    line = sent[0]
+    # One command line, six quoted values, and the comment cannot escape its quotes.
+    assert line.count("\n") == 1 and line.endswith("\n")
+    assert line.count('"') == 12
+    assert "\\" not in line
+    comment = line.split('-j "', 1)[1].split('"', 1)[0]
+    assert "stolen" in comment  # kept as inert text inside the quotes
+
+
+def test_keychain_store_rejects_bad_host() -> None:
+    keychain = OAuthKeychain(runner=lambda *a, **k: _completed(), platform="darwin")
+    with pytest.raises(KeychainError):
+        keychain.store('oauth.keboola.com" -A', TOKEN, "c")
+
+
+def test_keychain_store_deletes_an_item_that_trusts_an_app() -> None:
+    deleted: list[str] = []
+
+    def run(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if args[1] == "delete-generic-password":
+            deleted.append(args[-1])
+        if args[1] == "find-generic-password":
+            return _completed('    "icmt"<blob>="c"\n')
+        if args[1] == "dump-keychain":
+            return _completed(DUMP_ALWAYS_ALLOWED)
+        return _completed()
+
+    with pytest.raises(KeychainError) as err:
+        OAuthKeychain(runner=run, platform="darwin").store("oauth.keboola.com", TOKEN, "c")
+    assert err.value.error_code == ErrorCode.OAUTH_KEYCHAIN_UNPROTECTED
+    assert len(deleted) == 2
+
+
+def test_decrypt_entry_apps_fails_closed() -> None:
+    block = DUMP_SAFE.split("keychain: ")[1]
+    no_decrypt = block.replace("decrypt derive", "derive")
+    assert _decrypt_entry_apps(no_decrypt) is None
+    unparsed = block.replace("applications (0):\n    entry 2", "applications (2):\n    entry 2", 1)
+    assert _decrypt_entry_apps(unparsed) == ["<2 unparsed applications>"]
+    second = block + (
+        "    entry 3:\n        authorizations (1): decrypt\n        applications: <null>\n"
+    )
+    assert _decrypt_entry_apps(second) == ["<any application>"]
+
+
+def test_keychain_denied_dialog_is_permission_denied() -> None:
+    keychain = OAuthKeychain(runner=lambda *a, **k: _completed(returncode=128), platform="darwin")
+    with pytest.raises(KeychainError) as err:
+        keychain.read("oauth.keboola.com")
+    assert err.value.error_code == ErrorCode.PERMISSION_DENIED
+
+
+def test_keychain_timeout_is_a_keychain_error() -> None:
+    def run(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        raise subprocess.TimeoutExpired(args, 1)
+
+    with pytest.raises(KeychainError):
+        OAuthKeychain(runner=run, platform="darwin").find("oauth.keboola.com")
+
+
+def test_add_identity_checks_platform_before_sending_the_token() -> None:
+    class LinuxKeychain(FakeKeychain):
+        def require_supported(self) -> None:
+            raise KeychainError("not macOS")
+
+    manage_calls: list[str] = []
+    service = OAuthService(
+        keychain=cast(Any, LinuxKeychain()),
+        manage_client_factory=cast(Any, lambda url, token: manage_calls.append(url)),
+    )
+    with pytest.raises(KeychainError):
+        service.add_identity("keboola.com", TOKEN)
+    assert manage_calls == []
+
+
+def test_broker_error_echoing_the_secret_is_not_passed_on() -> None:
+    broker = FakeBroker(
+        {"componentId": COMPONENT, "appKey": APP_ID, "appSecret": "KBC::old"},
+        patch_error=KeboolaApiError(
+            f"Invalid payload {{'appSecret': '{SECRET}'}}",
+            status_code=422,
+            details={"api_error_params": {"appSecret": SECRET}},
+        ),
+    )
+    service = _service(broker=broker)
+    plan = service.prepare_rotation("keboola.com", COMPONENT, APP_ID, "vault", 730)
+    with pytest.raises(KeboolaApiError) as err:
+        service.apply_rotation(plan)
+    assert SECRET not in err.value.message
+    assert SECRET not in json.dumps(err.value.details)
+    assert "refused" in err.value.message
+
+
+def test_broker_timeout_says_the_outcome_is_unknown() -> None:
+    broker = FakeBroker(
+        {"componentId": COMPONENT, "appKey": APP_ID, "appSecret": "KBC::old"},
+        patch_error=KeboolaApiError("read timeout", status_code=0),
+    )
+    service = _service(broker=broker)
+    plan = service.prepare_rotation("keboola.com", COMPONENT, APP_ID, "vault", 730)
+    with pytest.raises(KeboolaApiError) as err:
+        service.apply_rotation(plan)
+    assert "unknown" in err.value.message
+
+
+def test_failed_read_back_is_unverified_not_incomplete() -> None:
+    class FlakyGetBroker(FakeBroker):
+        def __init__(self) -> None:
+            super().__init__({"componentId": COMPONENT, "appKey": APP_ID, "appSecret": "KBC::old"})
+            self.gets = 0
+
+        def get_consumer(self, component_id: str) -> dict[str, Any]:
+            self.gets += 1
+            if self.gets > 1:
+                raise KeboolaApiError("HTTP 502", status_code=502)
+            return super().get_consumer(component_id)
+
+    broker = FlakyGetBroker()
+    service = _service(broker=broker)
+    plan = service.prepare_rotation("keboola.com", COMPONENT, APP_ID, "vault", 730)
+    result = service.apply_rotation(plan)
+    assert result["status"] == "rotated_unverified"
+    assert result["broker_secret_changed"] is None
+    assert broker.patches == [{"appSecret": SECRET}]
+
+
+def test_interrupt_during_1password_names_the_stage() -> None:
+    class InterruptedOp(FakeOp):
+        def create_password_item(self, vault: str, title: str, secret: str, notes: str) -> str:
+            raise KeyboardInterrupt
+
+    service = _service(op=InterruptedOp())
+    plan = service.prepare_rotation("keboola.com", COMPONENT, APP_ID, "vault", 730)
+    with pytest.raises(KeboolaApiError) as err:
+        service.apply_rotation(plan)
+    assert err.value.details["stage"] == "1password"
+
+
+def test_unknown_key_id_gives_a_list_hint_not_a_bogus_command() -> None:
+    class SilentAzure(FakeAzure):
+        def add_password(self, app_id: str, display_name: str, end_date: str) -> str:
+            return SECRET  # no new credential appears in the list
+
+    service = _service(azure=SilentAzure(), op=FakeOp(create_error=ToolError("op", "locked")))
+    plan = service.prepare_rotation("keboola.com", COMPONENT, APP_ID, "vault", 730)
+    with pytest.raises(KeboolaApiError) as err:
+        service.apply_rotation(plan)
+    assert "--key-id unknown" not in err.value.message
+    assert "newest secret" in err.value.message

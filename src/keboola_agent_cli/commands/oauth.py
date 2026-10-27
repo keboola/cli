@@ -21,11 +21,12 @@ from typing import Any, NoReturn
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 
 from ..errors import ConfigError, ErrorCode, KeboolaApiError, exit_code_for
 from ..output import OutputFormatter
 from ..services._oauth_keychain import OAuthKeychain
-from ..services.oauth_service import MAX_SECRET_DAYS, OAuthService
+from ..services.oauth_service import MAX_SECRET_DAYS, OAuthService, stack_hosts
 from ._helpers import (
     assert_tty_for_write,
     check_cli_permission,
@@ -96,7 +97,16 @@ def identity_add(
     """
     assert_tty_for_write(f"store an OAuth token for {stack}")
     formatter = get_formatter(ctx)
-    token = getpass.getpass("Manage API application token (oauth:manage): ").strip()
+    try:
+        hosts = stack_hosts(stack)
+    except KeboolaApiError as exc:
+        _fail(formatter, exc)
+    # The agent may have chosen --stack: show the human where the token will go.
+    formatter.err_console.print(
+        f"The token will be checked at {escape(hosts.connection_url)} and "
+        f"{escape(hosts.oauth_url)}, then stored in the macOS keychain."
+    )
+    token = getpass.getpass(f"oauth:manage application token for {hosts.connection_url}: ").strip()
     if not token:
         raise typer.BadParameter("No token entered.", param_hint="--stack")
     try:
@@ -151,10 +161,10 @@ def consumer_get(
 
 def _render_consumer(console: Console, data: dict[str, Any]) -> None:
     consumer = data["consumer"]
-    console.print(f"[bold]{consumer.get('componentId')}[/bold] on {data['stack']}")
+    console.print(f"[bold]{escape(str(consumer.get('componentId')))}[/bold] on {data['stack']}")
     for key, value in consumer.items():
         if key != "componentId":
-            console.print(f"  {key}: {value}")
+            console.print(f"  {escape(str(key))}: {escape(str(value))}")
 
 
 # ----- rotate-azure-secret -----

@@ -45,6 +45,8 @@ def _run_json(run: Runner, tool: str, args: list[str], stdin: str | None = None)
         )
     except FileNotFoundError:
         raise ToolError(tool, f"`{tool}` is not installed or not on PATH.") from None
+    except OSError as exc:
+        raise ToolError(tool, f"`{tool}` could not be started ({type(exc).__name__}).") from None
     except subprocess.TimeoutExpired:
         raise ToolError(tool, f"`{tool} {args[0]}` timed out.") from None
     if result.returncode != 0:
@@ -183,7 +185,8 @@ def check_client_secret(
                 body = response.json()
             except ValueError:
                 body = {}
-            detail = f"HTTP {response.status_code} {body.get('error', '')}".strip()
+            error = body.get("error", "") if isinstance(body, dict) else ""
+            detail = f"HTTP {response.status_code} {error}".strip()
         if waited >= wait_seconds:
             return SecretCheck(ok=False, detail=detail)
         sleep(delay)

@@ -20,6 +20,7 @@ Safety model (see the group's help and gotchas.md):
 from __future__ import annotations
 
 import hashlib
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -43,7 +44,10 @@ REQUIRED_SCOPES = ["oauth:manage"]
 APPLICATION_TOKEN_TYPE = "super"
 SECRET_FIELDS = ("appSecret", "appSecretDocker")
 REDACTED = "<encrypted>"
+UNKNOWN_KEY_ID = "unknown"
 MAX_SECRET_DAYS = 730
+STACK_DOMAINS = ("keboola.com", "keboola.cloud", "keboola.dev")
+_HOST_RE = re.compile(r"^[a-z0-9-]+(\.[a-z0-9-]+)+$")
 
 ManageClientFactory = Callable[[str, str], ManageClient]
 BrokerClientFactory = Callable[[str, str], OAuthBrokerClient]
@@ -64,6 +68,10 @@ def stack_hosts(stack: str) -> StackHosts:
     ``connection.keboola.com``, ``https://oauth.keboola.com/manage`` and
     ``keboola.com`` all give ``oauth.keboola.com``. Works for
     ``*.keboola.cloud`` single-tenant stacks, Azure and GCP alike.
+
+    The host must end in a Keboola domain (``STACK_DOMAINS``): ``identity add``
+    sends the token to it, so an agent-chosen ``--stack`` must not be able to
+    point the human's token at another host.
     """
     raw = stack.strip()
     host = (urlparse(raw).hostname if "://" in raw else raw.split("/")[0]) or ""
@@ -72,9 +80,11 @@ def stack_hosts(stack: str) -> StackHosts:
         if host.startswith(prefix):
             host = host[len(prefix) :]
             break
-    if "." not in host:
+    on_keboola = any(host == d or host.endswith(f".{d}") for d in STACK_DOMAINS)
+    if not _HOST_RE.match(host) or not on_keboola:
         raise KeboolaApiError(
-            f"'{stack}' is not a stack host (expected e.g. connection.keboola.com).",
+            f"'{stack}' is not a Keboola stack host (expected e.g. connection.keboola.com or "
+            f"connection.<name>.keboola.cloud; allowed domains: {', '.join(STACK_DOMAINS)}).",
             error_code=ErrorCode.INVALID_ARGUMENT,
         )
     return StackHosts(
@@ -207,6 +217,7 @@ class OAuthService:
 
     def add_identity(self, stack: str, token: str) -> dict[str, Any]:
         """Check the token (scope + broker probe), then store it in the keychain."""
+        self._keychain.require_supported()
         hosts = stack_hosts(stack)
         info = self._verify_token(hosts, token)
         with self._broker(hosts.oauth_url, token) as broker:
@@ -304,18 +315,21 @@ class OAuthService:
         """Run the writes in order: Entra, 1Password, broker; then verify.
 
         1Password comes before the broker so the broker never holds a secret
-        that is saved nowhere. The old secret is never removed here.
+        that is saved nowhere. The old secret is never removed here. Any
+        failure after the Entra write becomes OAUTH_ROTATION_INCOMPLETE naming
+        the stage; no message ever carries the secret (``_scrub``).
         """
         before = {c.key_id for c in self._azure.password_credentials(plan.app_id)}
         try:
             secret = self._azure.add_password(plan.app_id, plan.component_id, plan.end_date)
-        except ToolError as exc:
+        except (Exception, KeyboardInterrupt) as exc:
             raise _incomplete(
                 "entra",
                 plan,
                 "unknown",
-                f"{exc.message}. Check `az ad app credential list --id {plan.app_id}` for a new "
-                f"secret named '{plan.component_id}'; 1Password and the broker were not changed.",
+                f"{_describe(exc)}. Check `az ad app credential list --id {plan.app_id}` for a "
+                f"new secret named '{plan.component_id}'; 1Password and the broker were not "
+                "changed.",
             ) from None
         new_key_id = self._find_new_key_id(plan.app_id, before)
         try:
@@ -325,34 +339,49 @@ class OAuthService:
                 secret,
                 _item_notes(plan, new_key_id, self._today().isoformat()),
             )
-        except ToolError as exc:
+        except (Exception, KeyboardInterrupt) as exc:
             raise _incomplete(
                 "1password",
                 plan,
                 new_key_id,
-                f"{exc.message}. The new secret {new_key_id} exists in Entra but is saved "
-                f"nowhere. Delete it: az ad app credential delete --id {plan.app_id} "
-                f"--key-id {new_key_id}. Then run the rotation again.",
+                _scrub(
+                    f"{_describe(exc)}. The new secret exists in Entra but is saved nowhere. "
+                    f"{_delete_hint(plan, new_key_id)} Then run the rotation again.",
+                    secret,
+                ),
             ) from None
         try:
             with self._broker(plan.hosts.oauth_url, plan.token) as broker:
                 broker.patch_consumer(plan.component_id, {"appSecret": secret})
-                after = broker.get_consumer(plan.component_id)
-        except KeboolaApiError as exc:
+        except (Exception, KeyboardInterrupt) as exc:
+            # Never pass the broker's own message on: a 4xx body may echo the request.
+            outcome = (
+                "The PATCH outcome is unknown (no HTTP answer): check it with "
+                f"`kbagent oauth consumer get --stack {plan.hosts.key} --component "
+                f"{plan.component_id}` -- a changed appSecret means it went through."
+                if getattr(exc, "status_code", 0) == 0
+                else "The broker refused the PATCH and still uses the old secret, which stays valid."
+            )
             raise _incomplete(
                 "broker",
                 plan,
                 new_key_id,
-                f"{exc.message}. The new secret is in Entra and in 1Password item {item_id}; "
-                "the broker still uses the old secret, which stays valid. Patch the broker "
-                "with the value from that item.",
+                f"Broker PATCH failed ({_describe(exc, with_message=False)}). {outcome} "
+                f"The new secret is in Entra and in 1Password item {item_id}.",
                 op_item_id=item_id,
             ) from None
+        after = self._read_back(plan)
         check = self._check_secret(plan.tenant_id, plan.app_id, secret)
         del secret
-        broker_changed = _fingerprint(after.get("appSecret")) != plan.secret_fingerprint
-        app_key_same = str(after.get("appKey", "")).lower() == plan.app_id.lower()
-        verified = broker_changed and app_key_same and check.ok
+        broker_changed = (
+            None
+            if after is None
+            else _fingerprint(after.get("appSecret")) != plan.secret_fingerprint
+        )
+        app_key_same = (
+            None if after is None else str(after.get("appKey", "")).lower() == plan.app_id.lower()
+        )
+        verified = bool(broker_changed and app_key_same and check.ok)
         return {
             "status": "rotated" if verified else "rotated_unverified",
             "stack": plan.hosts.key,
@@ -368,13 +397,21 @@ class OAuthService:
             "old_secrets_still_valid": [c.key_id for c in plan.current_for_component],
         }
 
+    def _read_back(self, plan: RotationPlan) -> dict[str, Any] | None:
+        """GET the consumer after the PATCH; None when the read fails (unverified)."""
+        try:
+            with self._broker(plan.hosts.oauth_url, plan.token) as broker:
+                return broker.get_consumer(plan.component_id)
+        except Exception:
+            return None
+
     def _find_new_key_id(self, app_id: str, before: set[str]) -> str:
         try:
             after = self._azure.password_credentials(app_id)
-        except ToolError:
-            return "unknown"
+        except Exception:
+            return UNKNOWN_KEY_ID
         new = [c.key_id for c in after if c.key_id not in before]
-        return new[0] if len(new) == 1 else "unknown"
+        return new[0] if len(new) == 1 else UNKNOWN_KEY_ID
 
 
 def _item_notes(plan: RotationPlan, key_id: str, today: str) -> str:
@@ -388,6 +425,30 @@ def _item_notes(plan: RotationPlan, key_id: str, today: str) -> str:
             f"Created by kbagent oauth rotate-azure-secret on {today} ({plan.az_user}).",
         ]
     )
+
+
+def _delete_hint(plan: RotationPlan, key_id: str) -> str:
+    if key_id == UNKNOWN_KEY_ID:
+        return (
+            f"Run `az ad app credential list --id {plan.app_id}` and delete the newest secret "
+            f"named '{plan.component_id}' (`az ad app credential delete --key-id ...`)."
+        )
+    return f"Delete it: az ad app credential delete --id {plan.app_id} --key-id {key_id}."
+
+
+def _describe(exc: BaseException, *, with_message: bool = True) -> str:
+    """Error text for a rotation stage. ToolError messages are ours (stderr of az/op)."""
+    if isinstance(exc, KeyboardInterrupt):
+        return "Interrupted"
+    status = getattr(exc, "status_code", 0)
+    label = f"{type(exc).__name__}" + (f", HTTP {status}" if status else "")
+    if with_message and isinstance(exc, ToolError):
+        return exc.message
+    return label
+
+
+def _scrub(text: str, secret: str) -> str:
+    return text.replace(secret, "<redacted>") if secret else text
 
 
 def _preflight(message: str) -> KeboolaApiError:

@@ -98,7 +98,7 @@ src/keboola_agent_cli/
 
   commands/             # LAYER 1 -- thin Typer commands, one file per group (31 modules):
                         #   project config job storage flow branch workspace data_app
-                        #   sync semantic_layer agent stream feature dev_portal kai
+                        #   sync semantic_layer agent stream feature dev_portal oauth kai
                         #   sharing lineage schedule search org component encrypt
                         #   permissions serve http_client repl init doctor version
                         #   changelog context
