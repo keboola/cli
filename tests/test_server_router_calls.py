@@ -543,14 +543,14 @@ def test_data_app_password_reveal_returns_the_password(tmp_path: Path) -> None:
 
 
 def test_config_variables_set_no_dry_run_kwarg(tmp_path: Path) -> None:
-    """PUT /variables router must NOT pass dry_run= to VariablesService.set_variables."""
+    """PATCH /variables router must NOT pass dry_run= to VariablesService.set_variables."""
     variables_svc = MagicMock()
     variables_svc.set_variables.return_value = {"variables": []}
     registry = _mock_registry(variables=variables_svc)
     app = _make_app_with_registry(tmp_path, registry)
 
     with TestClient(app) as client:
-        res = client.put(
+        res = client.patch(
             f"/configs/{PROJECT}/{COMPONENT}/{CONFIG_ID}/variables",
             headers=AUTH,
             json={"variables": {"KEY": "val"}},
@@ -2861,17 +2861,16 @@ def test_workspace_gc_route_without_project_uses_the_active_project(tmp_path: Pa
 
 
 @pytest.mark.parametrize(
-    ("body", "aliases", "deprecated"),
+    ("body", "aliases"),
     [
-        ({}, [PROJECT], False),
-        ({"aliases": ["other"]}, ["other"], False),
-        ({"all_projects": True}, None, False),
-        ({"refresh_all": True}, None, True),
+        ({}, [PROJECT]),
+        ({"aliases": ["other"]}, ["other"]),
+        ({"all_projects": True}, None),
     ],
-    ids=["active-project", "aliases", "all-projects", "deprecated-refresh-all"],
+    ids=["active-project", "aliases", "all-projects"],
 )
 def test_org_refresh_route_targets(
-    tmp_path: Path, body: dict[str, Any], aliases: list[str] | None, deprecated: bool
+    tmp_path: Path, body: dict[str, Any], aliases: list[str] | None
 ) -> None:
     """An empty body refreshes the active project only (T17); all needs `all_projects`."""
     org_svc = MagicMock()
@@ -2884,7 +2883,20 @@ def test_org_refresh_route_targets(
 
     assert res.status_code == 200, res.text
     assert org_svc.refresh_tokens.call_args.kwargs["aliases"] == aliases
-    assert ("DEPRECATED" in res.headers.get("Kbagent-Warnings", "")) is deprecated
+
+
+def test_org_refresh_refuses_the_removed_refresh_all(tmp_path: Path) -> None:
+    """`refresh_all` was removed in 1.0.0 (C3): the error names `all_projects`, nothing runs."""
+    org_svc = MagicMock()
+    app = _make_app_with_registry(tmp_path, _mock_registry(org=org_svc))
+    app.dependency_overrides[get_manage_token] = lambda: "mgmt-tok"
+
+    with TestClient(app) as client:
+        res = client.post("/org/refresh", headers=AUTH, json={"refresh_all": True})
+
+    assert res.status_code == 422, res.text
+    assert "Use all_projects" in res.text
+    org_svc.refresh_tokens.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -3226,7 +3238,7 @@ def test_merge_request_create_forwards_every_kwarg(tmp_path: Path) -> None:
 def test_merge_request_update_refuses_an_empty_body(tmp_path: Path) -> None:
     svc = MagicMock()
     with _mr_client(tmp_path, svc) as client:
-        res = client.put(f"/merge-requests/{PROJECT}/{MR_ID}", json={}, headers=AUTH)
+        res = client.patch(f"/merge-requests/{PROJECT}/{MR_ID}", json={}, headers=AUTH)
     assert res.status_code == 400, res.text
     svc.update_merge_request.assert_not_called()
 
@@ -3235,7 +3247,7 @@ def test_merge_request_update_forwards_kwargs(tmp_path: Path) -> None:
     svc = MagicMock()
     svc.update_merge_request.return_value = {"id": MR_ID}
     with _mr_client(tmp_path, svc) as client:
-        res = client.put(
+        res = client.patch(
             f"/merge-requests/{PROJECT}/{MR_ID}", json={"description": ""}, headers=AUTH
         )
     assert res.status_code == 200, res.text
@@ -3459,7 +3471,7 @@ def test_merge_request_write_routes_pass_under_deny_destructive(tmp_path: Path) 
             == 200
         )
         assert (
-            client.put(
+            client.patch(
                 f"/merge-requests/{PROJECT}/{MR_ID}", json={"title": "T2"}, headers=AUTH
             ).status_code
             == 200
@@ -3500,13 +3512,15 @@ def test_merge_request_create_and_update_bodies_have_no_auto_merge_field(tmp_pat
             json={"branch_from_id": 123, "title": "T", "auto_merge_strategy": "immediately"},
             headers=AUTH,
         )
-        client.put(
+        update = client.patch(
             f"/merge-requests/{PROJECT}/{MR_ID}",
             json={"title": "T", "auto_merge_strategy": "immediately"},
             headers=AUTH,
         )
     assert "auto_merge_strategy" not in svc.create_merge_request.call_args.kwargs
-    assert "auto_merge_strategy" not in svc.update_merge_request.call_args.kwargs
+    # PATCH refuses a field it does not declare (V9), so nothing is updated.
+    assert update.status_code == 422, update.text
+    svc.update_merge_request.assert_not_called()
 
 
 def test_data_app_validate_repo_route_reaches_its_handler(tmp_path: Path) -> None:

@@ -89,9 +89,10 @@ GROUP_NOTES: dict[str, str] = {
   work offline; cron firing still requires the live server.
 
   Every subcommand below that takes TASK_ID / RUN_ID accepts it either
-  positionally (`agent show TASK_ID`) or via flag (`--id` / `--task-id`,
-  plus `--run-id` for run-detail / run-events) -- the flag form matches
-  the rest of the CLI (`--job-id`, `--config-id`, ...).
+  positionally (`agent show TASK_ID`) or via flag (`--task-id`, plus
+  `--run-id` for run-detail / run-events) -- the flag form matches the
+  rest of the CLI (`--job-id`, `--config-id`, ...). Since vNEXT `--id` is
+  removed (usage error, exit 2).
 
   agent list
     List all registered tasks (id, name, cron, type, state, last/next run).
@@ -401,9 +402,9 @@ GROUP_NOTES: dict[str, str] = {
     deletes nothing.
 
   branch merge
-    DEPRECATED (since 0.94.0): builds a KBC UI merge URL (does NOT merge via API) and
-    resets the active branch. On a project with merge requests enabled use
-    `merge-request create` + `merge-request merge` below.
+    Removed since vNEXT (deprecated since 0.94.0): it only built a Keboola UI merge
+    URL. Merge with `merge-request create` + `merge-request merge` below, or in the
+    Keboola UI.
 
   branch metadata-list
     List all metadata entries on a branch (id, key, value, provider, timestamp).
@@ -1051,8 +1052,8 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     error fields (code, error_type, message, project, retryable). Its HTTP
     status follows error_type. The four partial updates use PATCH (PUT
     /semantic-layer/items/..., /merge-requests/{project}/{id},
-    /data-apps/.../secrets, the merge of /configs/.../variables). The old PUT
-    adds a DEPRECATED warning in the Kbagent-Warnings header. `kbagent http`
+    /data-apps/.../secrets, the merge of /configs/.../variables). Since vNEXT the
+    old PUT answers HTTP 405, and the message names PATCH. `kbagent http`
     prints only the body, not the Kbagent-Targets / Kbagent-Warnings headers.
 """,
     "init": """\
@@ -1187,7 +1188,7 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
 #### Merge Requests (Branches 2.0, non-SOX)
 
   Merge a dev branch into production with review. Hidden alias: `mr`. Every command
-  except list/create takes [--merge-request-id N | --id N] [--branch B]; omitted, the
+  except list/create takes [--merge-request-id N] [--branch B]; omitted, the
   target is the merge request OF the active branch (`branch use`). A branch has at most
   one merge request, ever. Both flags at once -> exit 2. Status is the DERIVED state the
   web UI shows (in_development|in_review|approved|in_merge|merged|closed|rejected).
@@ -1479,7 +1480,7 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
 
   project refresh
   kbagent project refresh --all-projects [--dry-run] [--force] [--yes] [--token-description ...] [--token-expires-in N]
-    Refresh project tokens via Manage API. --all-projects refreshes all projects (--all is its deprecated name);
+    Refresh project tokens via Manage API. --all-projects refreshes all projects (since vNEXT --all is removed);
     without --project and --all-projects, the active project. --force replaces non-expiring tokens.
     Browser-login (session) projects are reported under "skipped" with the
     reason that there is no static token to replace -- their access token
@@ -1726,8 +1727,8 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
     `remove glossary` identifies the entity by --term, not --name.
 
   semantic-layer import
-    Replay a snapshot. Default: skip on conflict. --yes never had an effect here.
-    Since vNEXT it is hidden and adds a DEPRECATED warning. --overwrite opts into
+    Replay a snapshot. Default: skip on conflict. --yes never had an effect here,
+    and since vNEXT it is removed (usage error, exit 2). --overwrite opts into
     an in-place update (keeps the existing item's scope). Dependency-ordered push (datasets -> metrics -> relationships
     -> glossary -> constraints).
 
@@ -2179,9 +2180,9 @@ remain branch-aware because modifying a dev branch is the expected intent.
     and destination bucket/tables (from sinks). The secret embedded in the OTLP URL is MASKED
     by default; pass --reveal to print it (e.g. to wire OTEL_EXPORTER_OTLP_ENDPOINT).
   stream delete
-    Delete a source (destructive, async task polled to completion). --force is a
-    hidden deprecated alias of --yes since vNEXT: it still works and adds a
-    DEPRECATED warning. Use --yes.
+    Delete a source (destructive, async task polled to completion). Use --yes to
+    skip the confirmation. Since vNEXT its old name --force is removed (usage
+    error, exit 2).
   Notes: uses the per-project Storage token (no manage token). Control plane = stream.<region>
   derived from connection.<region>. The OTLP ingest host is stream-in.<region>, returned in
   source.otlp.url -- never derived. The raw Stream API does not auto-create sinks, so kbagent
@@ -2268,7 +2269,8 @@ remain branch-aware because modifying a dev branch is the expected intent.
     one id are both conflicts (since 0.99.0, #792 E). sync pull keeps such a file with
     local changes (skipped, "locally modified, not tracked in the manifest"); --theirs
     overwrites it. Fix a non-zero summary.orphaned with `sync pull`; promote dev-only
-    configs with `branch merge`, never by pushing them to production.
+    configs with a branch merge (merge-request, or the Keboola UI), never by pushing
+    them to production.
     Ignored components (since 0.91.0, #689) are excluded from BOTH sides of the comparison,
     so a stale manifest entry or leftover dir for one of them contributes nothing --
     not added, not deleted, not orphaned. Push builds on this diff, so it plans nothing
@@ -2543,8 +2545,8 @@ _FOOTER = """\
    that asks for confirmation does not ask under them. In human mode without a
    terminal it refuses with CONFIRMATION_REQUIRED (exit 2) and names --yes. A
    piped "y" does not confirm. Ask the user before you retry with --yes.
-   A DEPRECATED entry in "warnings" names the replacement of an old flag
-   ("replacement"). Its "remove_after" is null until the removal date is known.
+   A removed old flag or command is USAGE_ERROR (exit 2), and its message
+   names the replacement.
 
 2. JSON response format:
      Success: {"status": "ok", "data": ...}
@@ -2609,7 +2611,7 @@ _FOOTER = """\
    (`targets`, `project_alias`). When a digits-only alias is also another
    project's ID, the alias is used and a warning names that project on stderr
    (in --json mode too). `project add` / `project create` take --alias, a
-   NEW alias, never an ID (their --project is the deprecated name of --alias);
+   NEW alias, never an ID (since vNEXT their old name --project is removed);
    `lineage show --project` filters an offline graph and is not translated
    either.
 

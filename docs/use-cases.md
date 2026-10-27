@@ -145,8 +145,9 @@ kbagent workspace query --project analytics --workspace-id 98765 \
 git add -A && git commit -m "fix: deduplicate orders before aggregation"
 git push -u origin feature/order-dedup
 
-# 8. Merge the Keboola dev branch (returns URL for review in Keboola UI)
-kbagent branch merge --project analytics
+# 8. Merge the Keboola dev branch (merge request; or merge it in the Keboola UI)
+kbagent merge-request create --project analytics --branch BRANCH_ID --title "Deduplicate orders"
+kbagent merge-request merge --project analytics --branch BRANCH_ID
 
 # 9. Clean up: merge git, pull merged state, unlink branch
 git checkout main && git merge feature/order-dedup
@@ -350,7 +351,7 @@ Expired tokens clean themselves up. No manual rotation needed.
 uv pip install keboola-cli
 
 # Add your first project
-kbagent project add --project analytics \
+kbagent project add --alias analytics \
   --url https://connection.keboola.com \
   --token-stdin
 

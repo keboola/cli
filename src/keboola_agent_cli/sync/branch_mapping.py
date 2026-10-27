@@ -145,7 +145,7 @@ def cleanup_branch_id_from_mapping(branch_id: int) -> dict[str, Any] | None:
     nearest enclosing sync workspace, if one exists.
 
     Designed to be a best-effort cleanup hook for ``branch delete`` and
-    ``branch merge``: locates ``.keboola/branch-mapping.json`` via
+    ``merge-request merge``: locates ``.keboola/branch-mapping.json`` via
     :func:`find_sync_workspace`, removes any entries whose ``keboola_id``
     equals *branch_id*, and persists the change. Returns a dict
     describing what was unlinked, or ``None`` if no workspace was found
@@ -156,10 +156,7 @@ def cleanup_branch_id_from_mapping(branch_id: int) -> dict[str, Any] | None:
         return None
     try:
         mapping = load_branch_mapping(project_root)
-    except (FileNotFoundError, ConfigError, ValueError):
-        # ValueError preserved for backward compat with callers that may
-        # still trigger it via custom paths; ConfigError is the new shape
-        # raised by load_branch_mapping itself.
+    except (FileNotFoundError, ConfigError):
         return None
 
     removed: list[str] = []

@@ -4310,9 +4310,9 @@ class TestIssue649ProductionDiffAfterBranchPull:
             assert item["reason"] == "tracked_on_other_branch"
             assert item["component_id"] == "keboola.ex-http"
             assert item["path"]
-        # cfg-900 lives only on the dev branch -> the hint points at branch merge.
+        # cfg-900 lives only on the dev branch -> the hint points at a merge of its branch.
         assert by_id["cfg-900"]["exists_on_target"] is False
-        assert "branch merge" in by_id["cfg-900"]["hint"]
+        assert "kbagent merge-request" in by_id["cfg-900"]["hint"]
         assert by_id["cfg-001"]["exists_on_target"] is True
         assert "sync pull" in by_id["cfg-001"]["hint"]
 

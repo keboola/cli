@@ -3349,23 +3349,6 @@ class TestFullE2E:
         status = data["data"][0]
         assert status["active_branch_id"] is None
 
-        # Try branch merge
-        merge_result = self._run(
-            "branch",
-            "merge",
-            "--project",
-            self.alias,
-            "--branch",
-            str(branch_id),
-        )
-        # branch merge returns a URL for UI-based merge; it doesn't
-        # auto-merge via API. We verify the command succeeds, then delete.
-        if merge_result.exit_code == 0:
-            merge_data = json.loads(merge_result.output)
-            assert merge_data["status"] == "ok"
-            # The response contains a URL to the branch overview
-            assert "url" in merge_data["data"] or "message" in merge_data["data"]
-
         # Clean up: delete the branch
         self._run_ok(
             "branch",

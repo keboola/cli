@@ -98,16 +98,6 @@ def delete(
     return registry.branch.delete_branch(alias=project, branch_id=branch_id, dry_run=dry_run)
 
 
-@router.get("/{project}/merge-url", summary="Get the branch merge URL")
-def merge_url(
-    project: str,
-    branch_id: int | None = None,
-    registry: ServiceRegistry = Depends(get_registry),
-) -> dict[str, Any]:
-    """UI URL for merging a branch into main. Mirrors `kbagent branch merge`."""
-    return registry.branch.get_merge_url(alias=project, branch_id=branch_id)
-
-
 @router.get("/{project}/metadata", summary="List branch metadata")
 def metadata_list(
     project: str,

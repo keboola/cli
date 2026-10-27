@@ -690,7 +690,6 @@ YES_WITHOUT_OFFLINE_CASE: dict[str, str] = {
     "project remove": "checks that the alias is registered first, then asks",
     "semantic-layer add metric": "dataset guard in the service; refuses without a terminal",
     "semantic-layer edit metric": "rename-cascade guard in the service; refuses without a terminal",
-    "semantic-layer import": "hidden deprecated --yes with no effect (C3)",
     "semantic-layer remove constraint": "reads the orphaned constraints first, then asks",
     "semantic-layer remove dataset": "reads the orphaned constraints first, then asks",
     "semantic-layer remove glossary": "reads the orphaned constraints first, then asks",

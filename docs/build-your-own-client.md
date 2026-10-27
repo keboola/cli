@@ -249,8 +249,8 @@ message text — it is informational and may be improved between releases.
 
 A successful 2xx response body is the bare payload of the endpoint. Since
 vNEXT the project and branch that the request used are in the
-`Kbagent-Targets` response header, and its warnings (for example a
-`DEPRECATED` route form) in the `Kbagent-Warnings` header. Both are JSON
+`Kbagent-Targets` response header, and its warnings (for example
+`TARGET_FROM_ACTIVE_CHOICE`) in the `Kbagent-Warnings` header. Both are JSON
 lists in the shape of `targets` and `warnings[]` of the CLI `--json`
 envelope, and each is left out when its list is empty. A route that takes an
 optional `branch_id` uses the active branch (`kbagent branch use`) when it is

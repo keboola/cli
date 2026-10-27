@@ -40,6 +40,7 @@ import typer
 from typer.core import TyperCommand, TyperGroup, TyperOption
 
 from . import telemetry
+from .commands._helpers import removed_form
 from .commands._project_ref import ProjectRefGroup, use_active_project
 from .errors import ErrorCode
 from .output import OutputFormatter
@@ -50,6 +51,7 @@ _click: Any = getattr(typer.core, "_click", None) or getattr(typer.core, "click"
 UsageError = _click.exceptions.UsageError
 BadParameter = _click.exceptions.BadParameter
 MissingParameter = _click.exceptions.MissingParameter
+NoSuchOption = _click.exceptions.NoSuchOption
 
 # Root parameter name -> its option names. A hidden copy of each goes on every
 # group and command (O7).
@@ -119,7 +121,15 @@ class LeafCommand(TyperCommand):
             if not args and self.no_args_is_help:
                 raise MissingCommandError("Missing arguments.", ctx)
             _report_repeated_options(self, ctx, args)
-        return super().parse_args(ctx, args)
+        try:
+            return super().parse_args(ctx, args)
+        except NoSuchOption as exc:
+            entry = removed_form(_command_names(ctx), exc.option_name)
+            if entry is not None:
+                # C3: the error of a removed option names its replacement.
+                exc.message = f"No such option: {exc.option_name}. {entry.message}"
+                exc.possibilities = None
+            raise
 
     def invoke(self, ctx: Any) -> Any:
         # The formatter needs the category for the T12 warning in --json.
@@ -139,6 +149,25 @@ class CommandGroup(TyperGroup):
         if not protected_args(ctx) and not ctx.resilient_parsing:
             raise MissingCommandError("Missing command.", ctx)
         return rest
+
+    def resolve_command(self, ctx: Any, args: list[str]) -> Any:
+        try:
+            return super().resolve_command(ctx, args)
+        except UsageError:
+            # C3: the error of a removed command names its replacement.
+            entry = removed_form([*_command_names(ctx), args[0]])
+            if entry is None:
+                raise
+            raise UsageError(f"No such command '{args[0]}'. {entry.message}", ctx) from None
+
+
+def _command_names(ctx: Any) -> list[str]:
+    """The command path of ``ctx`` without the root, as typed."""
+    names: list[str] = []
+    while ctx.parent is not None:
+        names.append(ctx.info_name)
+        ctx = ctx.parent
+    return names[::-1]
 
 
 def _single_value(param: Any) -> bool:

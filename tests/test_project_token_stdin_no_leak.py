@@ -275,7 +275,8 @@ def test_explicit_empty_token_flag_is_refused(
     if command == "edit":
         _seed_project(config_dir)
 
-    argv = ["--config-dir", str(config_dir), "project", command, "--project", ALIAS]
+    option = "--alias" if command == "add" else "--project"
+    argv = ["--config-dir", str(config_dir), "project", command, option, ALIAS]
     result = runner.invoke(app, [*argv, "--url", new_url, "--token", ""])
 
     assert result.exit_code == 2, result.output

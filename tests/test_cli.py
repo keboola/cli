@@ -94,16 +94,6 @@ class TestProjectAdd:
             )
             return runner.invoke(app, ["--json", "project", "add", *args])
 
-    def test_project_add_deprecated_project_option_still_works(self, tmp_path: Path) -> None:
-        """`--project` is the deprecated name of `--alias` (spec T17, C3)."""
-        result = self._add(tmp_path, "-p", "prod", "--url", "https://connection.keboola.com")
-
-        assert result.exit_code == 0, result.output
-        output = json.loads(result.output)
-        assert output["data"]["alias"] == "prod"
-        [warning] = [w for w in output["warnings"] if w["code"] == "DEPRECATED"]
-        assert warning["replacement"] == "--alias"
-
     def test_project_add_without_alias_is_usage_error(self, tmp_path: Path) -> None:
         result = self._add(tmp_path, "--url", "https://connection.keboola.com")
 
@@ -7931,98 +7921,6 @@ class TestBranchDelete:
         )
 
 
-class TestBranchMerge:
-    """Tests for `kbagent branch merge` command."""
-
-    def test_branch_merge_json(self, tmp_path: Path) -> None:
-        """branch merge --json returns structured JSON with merge URL."""
-        config_dir = tmp_path / "config"
-        config_dir.mkdir()
-
-        store = _setup_config_test(
-            config_dir,
-            {"prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"}},
-        )
-
-        with (
-            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
-            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
-            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
-            patch("keboola_agent_cli.cli.JobService") as MockJobService,
-            patch("keboola_agent_cli.cli.BranchService") as MockBranchService,
-        ):
-            MockStore.return_value = store
-            MockProjService.return_value = ProjectService(config_store=store)
-            MockCfgService.return_value = ConfigService(config_store=store)
-            MockJobService.return_value = JobService(config_store=store)
-
-            mock_branch = MagicMock()
-            mock_branch.get_merge_url.return_value = {
-                "project_alias": "prod",
-                "branch_id": 456,
-                "url": "https://connection.keboola.com/admin/projects/1234/branch/456/development-overview",
-                "message": (
-                    "Open this URL to review and merge branch 456 "
-                    "in project 'prod'. Active branch has been reset to main."
-                ),
-            }
-            MockBranchService.return_value = mock_branch
-
-            result = runner.invoke(
-                app,
-                ["--json", "branch", "merge", "--project", "prod", "--branch", "456"],
-            )
-
-        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
-        output = json.loads(result.output)
-        assert output["status"] == "ok"
-        assert output["data"]["branch_id"] == 456
-        assert "connection.keboola.com" in output["data"]["url"]
-        assert "/branch/456/" in output["data"]["url"]
-        assert output["data"]["project_alias"] == "prod"
-        mock_branch.get_merge_url.assert_called_once_with(alias="prod", branch_id=456)
-
-    def test_branch_merge_no_branch(self, tmp_path: Path) -> None:
-        """branch merge with no active branch and no --branch returns exit code 5."""
-        config_dir = tmp_path / "config"
-        config_dir.mkdir()
-
-        store = _setup_config_test(
-            config_dir,
-            {"prod": {"token": "901-55555-fakeTestTokenDoNotUseXXXXXXXX"}},
-        )
-
-        with (
-            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
-            patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
-            patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
-            patch("keboola_agent_cli.cli.JobService") as MockJobService,
-            patch("keboola_agent_cli.cli.BranchService") as MockBranchService,
-        ):
-            MockStore.return_value = store
-            MockProjService.return_value = ProjectService(config_store=store)
-            MockCfgService.return_value = ConfigService(config_store=store)
-            MockJobService.return_value = JobService(config_store=store)
-
-            mock_branch = MagicMock()
-            mock_branch.get_merge_url.side_effect = ConfigError(
-                "No branch specified and no active branch set for project 'prod'. "
-                "Use --branch ID or set an active branch with 'kbagent branch use'."
-            )
-            MockBranchService.return_value = mock_branch
-
-            result = runner.invoke(
-                app,
-                ["--json", "branch", "merge", "--project", "prod"],
-            )
-
-        assert result.exit_code == 5
-        output = json.loads(result.output)
-        assert output["status"] == "error"
-        assert output["error"]["code"] == "CONFIG_ERROR"
-        assert "No branch specified" in output["error"]["message"]
-
-
 # ---------------------------------------------------------------------------
 # Tool auto-resolve active branch
 # ---------------------------------------------------------------------------
@@ -8698,7 +8596,7 @@ class TestProjectRefresh:
                     "--json",
                     "project",
                     "refresh",
-                    "--all",
+                    "--all-projects",
                     "--dry-run",
                 ],
             )
@@ -8710,8 +8608,7 @@ class TestProjectRefresh:
         assert len(output["data"]["projects_refreshed"]) == 1
         assert output["data"]["projects_refreshed"][0]["alias"] == "prod"
         assert mock_service.refresh_tokens.call_args.kwargs["aliases"] is None
-        [warning] = [w for w in output["warnings"] if w["code"] == "DEPRECATED"]
-        assert warning["replacement"] == "--all-projects"
+        assert "warnings" not in output
 
     def test_project_refresh_single_project(self, tmp_path: Path) -> None:
         """project refresh --project prod --json --yes refreshes a specific project."""

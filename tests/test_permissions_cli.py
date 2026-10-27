@@ -227,9 +227,9 @@ class TestPermissionsShow:
             MockStore.return_value = store
             result = runner.invoke(app, ["permissions", "show"])
         assert result.exit_code == 0
-        assert "inert pattern(s) since v0.85.0" in result.output
+        assert "inert pattern(s) match no known operation" in result.output
         assert "tool:read" in result.output
-        assert "docs/mcp-migration.md" in result.output
+        assert "kbagent permissions list" in result.output
 
     def test_show_warns_for_a_typo_pattern_not_just_tool_namespace(self, tmp_path: Path) -> None:
         """Generalized detection (issue #688): a plain typo is flagged too.

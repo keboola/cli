@@ -7,7 +7,7 @@ on: ``docs/merge-requests-notes.md``.
 
 What this module decides that the service leaves to the caller:
 
-- **Target resolution.** ``--merge-request-id`` (alias ``--id``) is optional on
+- **Target resolution.** ``--merge-request-id`` is optional on
   every command that takes one: omitted, the branch is resolved the house way
   (``--branch`` -> ``active_branch_id``) and the service maps it to its MR. A
   branch has at most one MR ever, so this cannot be ambiguous. See

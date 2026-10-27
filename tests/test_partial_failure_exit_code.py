@@ -727,7 +727,7 @@ class TestProjectRefresh:
                     *args,
                     "project",
                     "refresh",
-                    "--all",
+                    "--all-projects",
                     *(["--dry-run"] if dry_run else []),
                 ],
             )

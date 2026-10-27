@@ -17,12 +17,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends
 
-from ...permissions import (
-    INERT_PATTERN_HINT,
-    INERT_SINCE_VERSION,
-    PermissionEngine,
-    find_inert_patterns,
-)
+from ...permissions import UNMATCHED_PATTERN_HINT, PermissionEngine, find_inert_patterns
 from ..dependencies import get_permission_engine
 
 router = APIRouter(prefix="/permissions", tags=["permissions"])
@@ -57,7 +52,6 @@ def show(engine: PermissionEngine = Depends(get_permission_engine)) -> dict[str,
     inert = find_inert_patterns(policy)
     if inert:
         payload["inert_patterns"] = inert
-        payload["inert_since_version"] = INERT_SINCE_VERSION
-        payload["inert_hint"] = INERT_PATTERN_HINT
+        payload["inert_hint"] = UNMATCHED_PATTERN_HINT
 
     return payload

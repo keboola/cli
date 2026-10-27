@@ -373,7 +373,7 @@ If your workflow needs one of those, register the same project again under
 a different alias with a static Storage token:
 
 ```
-kbagent project add --project my-project-static --url <stack> --token-stdin
+kbagent project add --alias my-project-static --url <stack> --token-stdin
 ```
 
 The two aliases can coexist; only the sentinel-token one is guarded.

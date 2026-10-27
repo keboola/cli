@@ -683,7 +683,7 @@ Limits:
 - The multipart upload routes (`POST /storage/tables/{project}/upload`, `POST /storage/files/upload`) are checked on the query string only. The check never reads their body, so the file still streams to a temp file as before.
 - For a route with a JSON body, the check reuses the body that FastAPI already parsed.
 - For a route with no body parameter, nothing else reads the body. The check reads it only when the `Content-Type` is JSON and `Content-Length` is present and at most 1 MiB. A larger body, or one without `Content-Length`, is not checked. JSON that does not parse, or is nested too deeply to parse, is also left alone, and the route runs as before.
-- Two routes take a free-form JSON object as the body: `POST /semantic-layer/items/{kind}` and `PUT /semantic-layer/items/{kind}/{name}` (deprecated since vNEXT: its `PATCH` refuses every undeclared key). A top-level key named `dry_run` in that entity definition is now refused, unless its value is false.
+- One route takes a free-form JSON object as the body: `POST /semantic-layer/items/{kind}`. Since vNEXT `PUT /semantic-layer/items/{kind}/{name}` is removed, and its `PATCH` refuses every undeclared key. A top-level key named `dry_run` in that entity definition is now refused, unless its value is false.
 
 ### Manage tokens are per-request
 

@@ -33,12 +33,6 @@ from ._project_ref import PROJECT_DEFAULT, PROJECT_HELP
 
 branch_app = typer.Typer(help="Manage development branches")
 
-_MERGE_DEPRECATION = (
-    "`branch merge` is deprecated: it only builds a UI URL (and resets the active branch). "
-    "If this project has merge requests enabled ('branches-merge-requests'), use "
-    "`kbagent merge-request create` + `kbagent merge-request merge` to merge from the CLI."
-)
-
 
 @branch_app.callback(invoke_without_command=True)
 def _branch_permission_check(ctx: typer.Context) -> None:
@@ -236,49 +230,6 @@ def branch_delete(
         exit_code = map_error_to_exit_code(exc)
         emit_api_error(formatter, exc)
         raise typer.Exit(code=exit_code) from None
-    except ConfigError as exc:
-        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
-        raise typer.Exit(code=5) from None
-
-
-@branch_app.command("merge")
-def branch_merge(
-    ctx: typer.Context,
-    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
-    branch: int | None = typer.Option(
-        None,
-        "--branch",
-        help="Branch ID to merge (uses active branch if not set)",
-    ),
-) -> None:
-    """[DEPRECATED] Get the KBC UI merge URL for a development branch.
-
-    Does NOT perform the merge via API -- it builds the URL to the Keboola
-    UI and then resets the active branch to main. Deprecated since 0.94.0:
-    on a project with merge requests enabled ('branches-merge-requests'),
-    use `kbagent merge-request create` and `kbagent merge-request merge`,
-    which merge from the CLI and delete the source branch. This command
-    keeps working unchanged (it also serves projects without that feature).
-    """
-    formatter = get_formatter(ctx)
-    service = get_service(ctx, "branch_service")
-
-    try:
-        result = service.get_merge_url(alias=project, branch_id=branch)
-        # Deprecate-with-pointer (precedent: the #390 tool-group removal):
-        # the pointer is CONDITIONAL because this command is not a 1:1
-        # replacement -- it works on any project, merge-request needs the
-        # feature. Behaviour is unchanged, including the active-branch reset.
-        result["deprecation"] = _MERGE_DEPRECATION
-        if not formatter.json_mode:
-            formatter.warning(_MERGE_DEPRECATION)
-        formatter.output(
-            result,
-            lambda c, d: (
-                c.print(f"\n[bold]Merge URL:[/bold] {d['url']}"),
-                c.print(f"\n{d['message']}"),
-            ),
-        )
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None

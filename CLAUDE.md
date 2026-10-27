@@ -312,9 +312,8 @@ Full author checklist: see `CONTRIBUTING.md` > "Releasing a beta (pre-release) v
     also takes a project ID; the root command group
     (`commands/_project_ref.py`) translates it to the alias before the command
     runs. A new command gets this without extra code. A new command whose
-    `--project` is not a registry lookup (a NEW alias like `project add`, an
-    offline filter like `lineage show`) must be added to `NO_LOOKUP_COMMANDS`
-    there, and an option with another name that takes an existing alias (like
+    `--project` is not a registry lookup (an offline filter like `lineage
+    show`, the only entry now) must be added to `NO_LOOKUP_COMMANDS` there, and an option with another name that takes an existing alias (like
     `config clone --target-project`) to `ALIAS_OPTIONS`.
     `tests/test_project_ref.py` fails on a new option whose flag contains
     `project`, `alias` or `stack` until it is in `ALIAS_OPTIONS` or in the
@@ -417,8 +416,12 @@ plugins/kbagent/
 #   on a terminal under --json). `branch delete` and `workspace delete` now ask too, and take --yes and a read-only --dry-run
 #   (REST: `dry_run` query parameter, no prompt). Deprecated flags (spec C3) are hidden options from
 #   `deprecated_option()` with a `DEPRECATIONS` entry. They add a DEPRECATED warning (`replacement`,
-#   `remove_after`): `stream delete --force` (use --yes) and `semantic-layer import --yes` (no effect).
-#   Version gate lives in gotchas.md.
+#   `remove_after`). None exists now. 1.0.0 removed every old form (#791): `stream delete --force` (use
+#   --yes), `semantic-layer import --yes`/-y (no effect), `project add/create --project`/-p (use --alias),
+#   `project refresh --all` (use --all-projects), `--id` on merge-request and agent commands, and
+#   `branch merge`. Each keeps a `DEPRECATIONS` entry with removed_in="1.0.0". `removed_form()` looks it
+#   up, and LeafCommand/CommandGroup in root_command.py put its message into the USAGE_ERROR (exit 2),
+#   so the error names the replacement. Version gate lives in gotchas.md.
 # --conversation-id ID (#716): sets the X-Conversation-ID observability header for the
 #   invocation; equivalent to KBAGENT_CONVERSATION_ID and takes precedence over it. Exists because an
 #   agent harness does not persist shell state between tool calls, so the documented one-time `export`
@@ -433,7 +436,7 @@ plugins/kbagent/
 #   session alias. Same for KBAGENT_PROJECT, `project use`, `config clone --target-project`,
 #   `sync clone --target`, the `semantic-layer promote/diff` project options, `auth * --stack`, and
 #   serve's {project} / ?project= / ?stack= (path and query only, not request bodies). Not for
-#   `project add` / `project create` (new alias) or `lineage show` (offline filter). Version gate in
+#   `project add --alias` / `project create --alias` (new alias) or `lineage show` (offline filter). Version gate in
 #   gotchas.md.
 # Headless / token-only (0.50.0+): export KBAGENT_PROJECT_FROM_ENV=1 + KBC_TOKEN + KBC_STORAGE_API_URL to synthesize an in-memory `__env__` project (no `project add`, no config.json on disk; token never persisted). Use `--project __env__`. Same env setup also powers `kbagent serve`.
 
@@ -981,17 +984,16 @@ kbagent branch use [--project ALIAS] --branch ID
 #   project_source since CLI-45). Version gate in gotchas.md (#766).
 kbagent branch reset [--project ALIAS]
 kbagent branch delete [--project ALIAS] --branch ID [--dry-run] [--yes]
-kbagent branch merge [--project ALIAS] [--branch ID]
 kbagent branch metadata-list [--project NAME] [--branch ID|default]
 kbagent branch metadata-get [--project NAME] --key KEY [--branch ID|default]
 kbagent branch metadata-set [--project NAME] --key KEY [--text STR | --file PATH | --stdin] [--branch ID|default]
 kbagent branch metadata-delete [--project NAME] --metadata-id ID [--branch ID|default]
-# branch merge is DEPRECATED (since 0.94.0): it only builds a UI URL and resets the active branch. On a
-#   project with `branches-merge-requests` use the merge-request group below; the command keeps working
-#   (it also serves projects without the feature) and now carries `deprecation` in --json.
+# branch merge was removed in 1.0.0 (deprecated since 0.94.0; it only built a UI URL and reset the
+#   active branch), with its REST route GET /branches/{project}/merge-url. Merge with the merge-request
+#   group below, or in the Keboola UI. The usage error names `kbagent merge-request`.
 
 # merge-request (since 0.94.0, DMD-1900): the non-SOX Branches 2.0 lifecycle. Hidden alias `mr`. Every
-#   command except list/create takes `[--merge-request-id N | --id N] [--branch B]`: omitted, the target is
+#   command except list/create takes `[--merge-request-id N] [--branch B]` (1.0.0 removed `--id`): omitted, the target is
 #   the merge request OF the active branch (`branch use`) -- a branch has at most one MR, ever. Both flags at
 #   once -> exit 2. `--project` is single-project (never fans out). Status is the DERIVED state the web UI
 #   shows (in_development|in_review|approved|in_merge|merged|closed|rejected), never the raw one.
@@ -1425,8 +1427,9 @@ kbagent agent prompt-improve --goal "..." [--draft "..."] [--cli claude|codex|ge
 # tasks still requires `kbagent serve` running. Two action flavours
 # (ai_agent / cli_command) mirror the /agents REST surface
 # byte-for-byte. Every subcommand taking TASK_ID / RUN_ID accepts it
-# positionally OR via flag (--id / --task-id; --run-id for run-detail /
-# run-events) -- the flag form matches the rest of the CLI (--job-id, ...).
+# positionally OR via flag (--task-id; --run-id for run-detail /
+# run-events; 1.0.0 removed --id) -- the flag form matches the rest of the
+# CLI (--job-id, ...).
 
 kbagent kai ping [--project NAME]
 kbagent kai preflight [--project NAME]
@@ -1625,9 +1628,10 @@ kbagent serve [--host HOST] [--port PORT] [--ui] [--ui-dist PATH] [--reload] [--
 #   error body adds targets, warnings and error_type/project/retryable, and its HTTP status comes from
 #   ERROR_CODE_TABLE (http_status_for). project use / branch use / branch reset add active_project_set /
 #   active_branch_set / active_branch_cleared and an ACTIVE_CHOICE_SHARED warning. PATCH for semantic-layer
-#   items, merge-request update, data-app secrets and the variables merge (extra fields -> 422). The old
-#   PUT is a DEPRECATIONS form (DEPRECATED in Kbagent-Warnings). PUT .../variables with replace: true stays
-#   the full replace. List routes that read several projects take all_projects=true; without it and
+#   items, merge-request update, data-app secrets and the variables merge (extra fields -> 422). 1.0.0
+#   removed the old PUT: it answers HTTP 405, and the message (a DEPRECATIONS entry with removed_in,
+#   removed_route_message / removed_form_error in response_meta.py) names PATCH. PUT .../variables with
+#   replace: true stays the full replace. `refresh_all` in POST /org/refresh answers 422 naming all_projects. List routes that read several projects take all_projects=true; without it and
 #   without project they use services/base.resolve_fanout_aliases (the T1 chain, shared with the CLI
 #   fanout_projects). A destructive or admin route (route class or flag escalation, response_meta.note_operation)
 #   on the active branch adds TARGET_FROM_ACTIVE_CHOICE (hint branch_id=<id>). Version gate in gotchas.md.

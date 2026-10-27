@@ -128,7 +128,6 @@ OPERATION_REGISTRY: dict[str, str] = {
     "branch.use": "write",
     "branch.reset": "write",
     "branch.delete": "destructive",
-    "branch.merge": "write",
     "branch.metadata-list": "read",
     "branch.metadata-get": "read",
     "branch.metadata-set": "write",
@@ -500,19 +499,10 @@ SERVE_ONLY_OPERATIONS: frozenset[str] = frozenset(
 )
 
 
-# The operation namespace that disappeared with the MCP passthrough, and the
-# version that removed it. A pattern aimed at it can no longer match anything.
-INERT_PATTERN_PREFIX = "tool:"
-INERT_SINCE_VERSION = "0.85.0"
-
-# Single wording for the "your policy carries dead rules" hint, so `permissions
-# show` and `kbagent doctor` cannot drift apart.
-INERT_PATTERN_HINT = "Rewrite the intent with cli:* categories -- see docs/mcp-migration.md."
-
-# Generic hint for a pattern that matches nothing for a reason other than the
-# retired `tool:` namespace (most commonly a typo). Kept distinct from
-# INERT_PATTERN_HINT so `permissions show` / `doctor` can point at the right
-# fix instead of always mentioning the MCP migration.
+# The hint for a pattern that matches no known operation (a typo, or the
+# `tool:` namespace removed with the MCP passthrough in 0.85.0). One wording,
+# so `permissions show`, `GET /permissions/show` and `kbagent doctor` cannot
+# drift apart.
 UNMATCHED_PATTERN_HINT = (
     "Check for typos against `kbagent permissions list`, or use a cli:* category "
     "(cli:read, cli:write, cli:destructive, cli:admin)."

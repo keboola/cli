@@ -79,7 +79,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Show the programmatic-auth session health for a stack | `kbagent auth status` |
 | Revoke and clear the local programmatic-auth session for a stack | `kbagent auth logout` |
 | Register accessible projects from the current session as local aliases | `kbagent auth register-projects` |
-| Add a new Keboola project connection | `kbagent project add --project ALIAS` |
+| Add a new Keboola project connection | `kbagent project add --alias ALIAS` |
 | Create a brand-new Keboola project -- no account, no token needed | `kbagent project create --url URL` |
 | List all connected Keboola projects | `kbagent project list` |
 | Remove a Keboola project connection and its stored token | `kbagent project remove --project ALIAS` |
@@ -243,7 +243,6 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Set an existing development branch as active | `kbagent branch use --project PROJECT --branch BRANCH` |
 | Reset the active branch back to main/production | `kbagent branch reset --project PROJECT` |
 | Delete a development branch | `kbagent branch delete --project PROJECT --branch BRANCH` |
-| [DEPRECATED] Get the KBC UI merge URL for a development branch | `kbagent branch merge --project PROJECT` |
 | List all metadata entries on a branch | `kbagent branch metadata-list --project PROJECT` |
 | Read a single metadata value by key | `kbagent branch metadata-get --project PROJECT --key KEY` |
 | Set a metadata key/value on a branch | `kbagent branch metadata-set --project PROJECT --key KEY` |
@@ -569,7 +568,7 @@ credentials:
 ```bash
 # Single project. The token goes in on stdin, never as a --token value (that lands in the
 # shell history). The person runs it and types the token at the hidden prompt; a script pipes it in:
-printf '%s' "$KBC_TOKEN" | kbagent --json project add --project prod --url https://connection.keboola.com --token-stdin
+printf '%s' "$KBC_TOKEN" | kbagent --json project add --alias prod --url https://connection.keboola.com --token-stdin
 
 # Or bulk-onboard from organization (org admin)
 # Manage token: interactive prompt by default; for CI add --allow-env-manage-token

@@ -183,7 +183,8 @@ kbagent sync diff --project prod                  # target: production
   does not send it *(since 0.99.0, #792)*; see "Files with a config id and no
   manifest entry" below.
 - Configs that exist **only** on the dev branch are excluded entirely. Promote
-  them with `kbagent branch merge`, never by pushing them to production.
+  them with a merge of the dev branch (`kbagent merge-request`, or the Keboola
+  UI), never by pushing them to production.
 - `--json` carries the full list under `orphaned` (`component_id`, `config_id`,
   `path`, `branch_id`, `branch_path`, `exists_on_target`, `reason`, `hint`) plus
   a `summary.orphaned` counter; human mode previews the first 10.
@@ -334,8 +335,9 @@ kbagent sync pull --project prod --force
 # Edit configs in fix-etl/, push changes
 kbagent sync push --project prod
 
-# When done, merge and switch back
-kbagent --json branch merge --project prod   # returns merge URL
+# When done, merge (project feature branches-merge-requests; else merge in the Keboola UI)
+kbagent --json merge-request create --project prod --title "Fix ETL"
+kbagent --json merge-request merge --project prod --merge-request-id 42
 kbagent sync pull --project prod --force      # refresh main/
 ```
 
@@ -408,7 +410,7 @@ Stored in `.keboola/branch-mapping.json`:
 
 ### Merge back to production
 
-1. Merge in Keboola UI: `kbagent branch merge --project prod` (returns URL)
+1. Merge the dev branch: `kbagent merge-request` (see [merge-request-workflow.md](merge-request-workflow.md)), or in the Keboola UI
 2. Git merge: `git checkout main && git merge feature/new-etl`
 3. Sync merged state: `kbagent --json sync pull --project prod`
 4. Cleanup: `kbagent sync branch-unlink` + delete git branch
