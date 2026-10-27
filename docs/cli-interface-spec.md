@@ -228,7 +228,7 @@ What stays as it is:
 - Checked by: `naming.alias-parity`, `naming.hidden-leaf-has-canonical`.
 
 <a id="N5"></a>
-**N5 · MUST · now for new text; 1.0.0 for existing text.** Help texts, messages, `--json` keys and REST summaries call the saved choice of project and branch "active" ("active project", "active branch"). New text uses "active" now. The existing texts that say "pin" or "default project" (for example the help of `project use`) change in 1.0.0. The `project current` keys `pinned` and `source: "pin"` and the `config.json` field names stay.
+**N5 · MUST · now for new text; 1.0.0 for existing text.** Help texts, messages, `--json` keys and REST summaries call the saved choice of project and branch "active" ("active project", "active branch"). New text uses "active" now. The existing texts that say "pin" or "default project" (for example the help of `project use`) change in 1.0.0. The `project current` key `pinned` and the `config.json` field names stay. The `source` value `"pin"` of `project use` and `project current` becomes `"active_project"` in 1.0.0.
 
 - Checked by: review.
 
@@ -525,7 +525,7 @@ Shape of the success envelope in 1.0.0 (`storage delete-table --project prod`, a
 - Checked by: `errors.fanout-exit` (contract, `tests/test_target_selection.py`) and unit tests.
 
 <a id="E5"></a>
-**E5 · SHOULD · now.** A per-item failure entry keeps its existing keys (`error`, `message`, `reason`) and adds `error_code`, `retryable`, and `message` where it is missing.
+**E5 · SHOULD · now.** A per-item failure entry has `error_code`, `retryable`, and `message`. `message` is the error text. Since 1.0.0 the entry has no `error` or `reason` copy of it. A `reason` that names a category (for example `delete_failed`) is not an error text and stays.
 
 - Checked by: review.
 

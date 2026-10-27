@@ -175,7 +175,7 @@ class SnapshotService:
                     client.delete_snapshot(sid)
                     deleted.append(sid)
                 except KeboolaApiError as exc:
-                    failed.append(item_failure(exc, id=sid, error=exc.message))
+                    failed.append(item_failure(exc, id=sid))
         finally:
             client.close()
 

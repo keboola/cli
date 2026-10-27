@@ -791,7 +791,7 @@ class TestProjectUse:
         assert result.exit_code == 0
         data = json.loads(result.output)["data"]
         assert data["alias"] == "prod"
-        assert data["source"] == "pin"
+        assert data["source"] == "active_project"
         assert data["env_override"] is None
 
     def test_project_current_env_overrides_pin(self, tmp_path: Path) -> None:
@@ -1033,7 +1033,7 @@ class TestActiveProjectStability:
         result = self._invoke(config_dir, ["--json", "project", "current"])
 
         data = json.loads(result.output)["data"]
-        assert data["source"] == "pin"
+        assert data["source"] == "active_project"
         assert data["resolved_alias"] == "prod"
         assert data["resolved_source"] == "active_project"
 

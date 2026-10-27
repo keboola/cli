@@ -46,13 +46,11 @@ def cascade_delete_model(
 
     On any child-DELETE failure the parent is preserved and a
     :class:`KeboolaApiError` is raised carrying ``details.cascade =
-    {attempted, deleted, failures: [{type, id, name, error}],
-    parent_deleted: False, model_uuid}``.
+    {attempted, deleted, failures: [{type, id, name, error_code,
+    retryable, message}], parent_deleted: False, model_uuid}``.
 
     On success returns the standard envelope with ``cascade.parent_deleted
-    = True``. The legacy ``orphaned_children`` top-level key aliases
-    ``cascade.deleted`` for back-compat and is deprecated; removal
-    scheduled for v0.42.0.
+    = True``.
     """
     deleted_counts: dict[str, int] = {plural: 0 for plural, _ in PUSH_ORDER}
     failures: list[dict[str, str]] = []
@@ -76,20 +74,14 @@ def cascade_delete_model(
                 # (httpx transport error, etc.) must not abort the
                 # cascade or mask sibling failures. Collect, log at
                 # warning level, continue.
-                err = (
-                    exc.message
-                    if isinstance(exc, KeboolaApiError)
-                    else str(exc) or type(exc).__name__
-                )
-                failures.append(
-                    item_failure(exc, type=type_slug, id=child_id, name=child_name, error=err)
-                )
+                failure = item_failure(exc, type=type_slug, id=child_id, name=child_name)
+                failures.append(failure)
                 logger.warning(
                     "Cascade DELETE failed for %s id=%s name=%s: %s",
                     type_slug,
                     child_id,
                     child_name,
-                    err,
+                    failure["message"],
                 )
 
     if failures:
@@ -129,15 +121,4 @@ def cascade_delete_model(
             "failures": [],
             "parent_deleted": True,
         },
-        # Back-compat: the key existed before #306 was fixed as a count
-        # of *leaked* children. After the fix it counts *cascaded*
-        # children. Same shape, opposite meaning — JSON consumers see
-        # zeros instead of leaks on the happy path, which is the
-        # behavior they always wanted.
-        # DEPRECATED (since 0.43.4): scheduled for removal in a future
-        # minor release (not before 0.44.0). New callers should read
-        # `cascade.deleted` (plus `cascade.attempted` /
-        # `cascade.parent_deleted` / `cascade.failures` for the
-        # partial-failure path). See changelog 0.43.4 + gotchas.md.
-        "orphaned_children": deleted_counts,
     }

@@ -24,8 +24,24 @@ From the release of kbagent 1.0.0 until its migration date (28 days later), the 
 - **Text from a file**: `--file` / `--sql-file`, never `--text @file` (1.x refuses it when the file exists, 0.x stores the literal text).
 - **Long option names**: write `--project`, `--limit`, `--column`, not short flags. On 0.x most commands have no `-p`, and 1.x removes the short flags listed in "One short flag per long option" below.
 - **Results**: read failed items and the outcome from `--json` (`errors[]`, `failed[]`, `exit_code`, `error.code`), not from human output or the exit code alone. The `Error:` lines, the headline and several exit codes differ between the majors (migration page, rows 15, 21 and 31).
+- **Removed keys**: read the error text of a failed item from `message` and fall back to `error` (0.x has only `error` or `reason`). Treat `source` `"pin"` (0.x) and `"active_project"` (1.x) of `project current` as the same. The other removed keys are in "Keys removed from `--json` output in 1.0.0" below.
 - **REST** (`kbagent http`, `kbagent serve`): send `project=` or `all_projects=true` on list routes, and `branch_id` on the routes that use the active branch on 1.x. Keep `PUT` on the 4 partial-update routes until 0.x is gone: 1.x still accepts it with a `DEPRECATED` warning, 0.x has no `PATCH` there.
 - **Updates**: `kbagent update` stays on the running major. Ask the user before `kbagent update --major`.
+
+## Keys removed from `--json` output in 1.0.0
+
+*(since vNEXT)*
+
+1.0.0 removes the `--json` keys that 0.x kept only for compatibility, and renames one value. Read the replacement:
+
+- `semantic-layer model delete`: `orphaned_children` is removed. Read `cascade.deleted`.
+- `lineage show --column`: `column_filter` is removed. Read `column`.
+- `permissions show`: the top-level `mode`, `allow` and `deny` are removed. Read `persisted.mode`, `persisted.allow` and `persisted.deny`. `GET /permissions/show` does not change.
+- `config set-folder` and `POST /configs/{project}/{component_id}/{config_id}/folder`: `key`, `value` and `result` are removed. Read `folder` (`""` when cleared) and `configuration` (`{id, name, folder}`).
+- A failed item or project in `failed[]`, `errors[]` or a similar list (`cascade.failures`, `cascaded_constraints`, `type_resolution_errors`, `bucket_errors`, `projects_failed`, the `projects` map of `sync push --all-projects`): `error` and `reason` with the error text are removed. Read `message`, with `error_code` and `retryable`. The `message` of an unexpected error is truncated. A `reason` that names a category stays (`skipped[]` of `storage describe` and `storage describe-migrate`: `orphan`, `conflict`, `delete_failed`).
+- `project use` and `project current`: `source: "pin"` is `source: "active_project"`, the name that `resolved_source` and `targets[].project_source` use. `pinned` does not change.
+
+These lists keep `error`, because their entries are not failed items with an error code: `fetch_errors` of `semantic-layer build`, `errors[]` of `flow schedule-remove`, `details.rollback.failed_deletes` of a failed semantic-layer push, the `error` of a `project status` row, and the `projects` map of `sync pull --all-projects` and `sync diff --all-projects`.
 
 ## One short flag per long option
 
@@ -50,10 +66,10 @@ From the release of kbagent 1.0.0 until its migration date (28 days later), the 
 - **`config set-folder`** (and `POST /configs/{project}/{component_id}/{config_id}/folder`
   over `kbagent serve`) writes the configuration's `folder` field with a config PUT. The
   Storage API trims the name, rejects one over 400 characters (HTTP 400), stores an empty one
-  as "no folder", and creates no configuration version. The `--json` result keeps its keys:
-  `folder`, `value` (the folder as stored, `""` when cleared), `key` (frozen at
-  `"KBC.configuration.folderName"`), and `result` (still a list, now `[{key, value}]`). The
-  new `configuration` key holds `{id, name, folder}` from the PUT response.
+  as "no folder", and creates no configuration version. The `--json` result has `folder`
+  (the folder as stored, `""` when cleared). The new `configuration` key holds
+  `{id, name, folder}` from the PUT response. The keys `key`, `value` and `result` are
+  removed in 1.0.0 (see "Keys removed from `--json` output in 1.0.0").
 - **`config list`** reads `folder` from the components listing it already fetches. The
   `search/component-configurations` call (and the `dev-branches` lookup it needed) is gone,
   so one project costs one request instead of three.
@@ -76,10 +92,9 @@ From the release of kbagent 1.0.0 until its migration date (28 days later), the 
   config but add a `folder_not_supported` entry to `warnings[]` (with `config_id` and
   `folder`), `sync pull` keeps the previous folders (`folder_lookup_failed: true`), and
   `config list` shows every folder as `""`. kbagent never falls back to the metadata key.
-- The `result` of `config set-folder --json` is still a one-entry list, but its entry is
-  now only `{key, value}`: the metadata-only fields (`id` of the metadata entry,
-  `provider`, `timestamp`) are gone because no metadata is written. Read
-  `configuration.id` for the configuration id.
+- `config set-folder --json` no longer returns the metadata entry (`id` of the metadata
+  entry, `provider`, `timestamp`) because no metadata is written. Read `configuration.id`
+  for the configuration id.
 
 ## One JSON document for every exit, root flags after the subcommand, `-h`, repeated options
 
@@ -127,7 +142,7 @@ From the release of kbagent 1.0.0 until its migration date (28 days later), the 
 - *(updated vNEXT -- CLI-49)* **The `kbagent serve` list routes follow the same rule.** `GET /configs`, `GET /jobs` and the other list routes without `project` read the active project. `all_projects=true` reads all registered projects. A route in which a project failed still answers HTTP 200 with the failure in `errors`.
 - *(updated vNEXT -- #791, spec T17)* **`POST /org/refresh` and `POST /workspaces/gc` follow it too.** Without a project (`aliases`, `project`) they use the active project. Before, `POST /org/refresh` with an empty body refreshed the tokens of all projects, and `POST /workspaces/gc` refused with HTTP 400. All projects need `all_projects=true`. The body field `refresh_all` is the deprecated name of `all_projects`, and `project refresh --all` the deprecated name of `--all-projects`.
 - *(updated vNEXT -- #791, spec T17)* **No command requires `--project`; without it, every command uses the active project, writes and deletes too.** Before, 171 commands required `--project` and exited 2 without it (for example `job detail`, `config update`, `storage delete-table`, `sync init`), and `sync pull/diff/push`, `workspace gc`, `project refresh`, `config detail`, `config new --push` and the single-shot `project invite` asked for it. A destructive command still asks on a terminal, and so does `project remove`, which also got `--yes` and `--dry-run` (use `kbagent --json project remove --project P`, which works on 0.x too). Under `--json`, a destructive or admin command adds the `TARGET_FROM_ACTIVE_CHOICE` warning. `workspace gc` and `sync pull/diff/push` without `--project` and `--all-projects` work on the active project only. `sync init` binds the directory to the active project and names it in its output. `project add` and `project create` take the new alias as `--alias`; `--project` still works there with a `DEPRECATED` warning, and it is the form that also works on 0.x. `flow schema --full` and `flow validate` use the live schema of the active project; when no project is registered or chosen they work offline (the bundled schema, semantic checks only). With a registered project a failed fetch (expired token, no network) is an error for `flow schema --full`; `flow validate` falls back to the semantic checks with a note. Exceptions, where `--project` names no target project: `init`, `agent prompt-improve` and `lineage show`. Options that name a second project keep their own rules: `sync clone --target` and the project options of `semantic-layer promote` are required, `config clone --target-project` defaults to the source project, and `semantic-layer diff` takes a project or a file for each side. kbagent checks the other options first, so a missing required option is still `USAGE_ERROR` (exit 2). When no project resolves, the command exits 5 with `CONFIG_ERROR`. Agents still pass `--project` on every command (rule above).
-- **"Active" is the one name for the saved choice.** `project use` prints `Active project: <alias>` (before: `Pinned: default project is <alias>`). The help texts, messages and REST summaries say "active project" and "active branch". The `--json` keys of `project current` (`pinned`, `source: "pin"`) and the `config.json` fields (`default_project`, `active_branch_id`) keep their names.
+- **"Active" is the one name for the saved choice.** `project use` prints `Active project: <alias>` (before: `Pinned: default project is <alias>`). The help texts, messages and REST summaries say "active project" and "active branch". The `--json` key `pinned` of `project current` and the `config.json` fields (`default_project`, `active_branch_id`) keep their names. The `source` value `"pin"` of `project use` and `project current` is `"active_project"` (see "Keys removed from `--json` output in 1.0.0").
 
 ## `kbagent serve`: the active branch, `Kbagent-Targets`, the CLI error fields, `PATCH` for partial updates
 
@@ -1872,7 +1887,8 @@ will be deleted.
   abort the cascade.
 - If ANY child fails, the parent is **preserved** and a `KeboolaApiError`
   is raised with `details.cascade = {attempted, deleted, failures: [{type,
-  id, name, error}], parent_deleted: False, model_uuid}`.
+  id, name, error_code, retryable, message}], parent_deleted: False,
+  model_uuid}`.
 - Re-run `kbagent semantic-layer model delete --project P --model <uuid>`
   after fixing the underlying error to finish the cascade.
 
@@ -1880,23 +1896,14 @@ will be deleted.
 
 - New top-level `cascade` block on success: `{attempted, deleted: {datasets,
   metrics, relationships, glossary, constraints}, failures: [], parent_deleted}`.
-- Legacy `orphaned_children` top-level key kept for back-compat with the
-  shape unchanged, but its **meaning** flips from 'leaked count' to
-  'cascaded count'. Happy-path JSON consumers always saw zeros on this key
-  before — the only way to populate it was the bug.
-
-**Deprecation:** `orphaned_children` is deprecated as of v0.43.4 and
-scheduled for **removal in a future minor release** (not before v0.44.0).
-Read `cascade.deleted` instead — it carries the same per-type counts plus
-the explicit `attempted` / `parent_deleted` / `failures` fields that
-disambiguate happy-path from partial-failure responses. JSON callers
-should migrate now; the field name is the only thing that changes.
+- The legacy `orphaned_children` top-level key copied `cascade.deleted`.
+  It was deprecated in v0.43.4. *(since vNEXT)* it is removed. Read
+  `cascade.deleted` instead (see "Keys removed from `--json` output in
+  1.0.0").
 
 **Implication for AI agents / scripts:** Scripts that called `model delete`
 and then assumed they had to teardown children manually can drop that
-follow-up. Scripts that scraped `orphaned_children` to detect the bug now
-see the same zeros they always wanted — but should switch to
-`cascade.deleted` ahead of v0.42.0.
+follow-up.
 
 ## Web UI `Kai Chat` is gone — replaced by `Local AI`
 

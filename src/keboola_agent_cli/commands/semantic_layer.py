@@ -316,7 +316,7 @@ def _print_import_result(console: Console, data: dict) -> None:
     for plural, per in (data.get("imported") or {}).items():
         for f in per.get("failed", []):
             console.print(
-                format_item_error(f"{plural}.{f.get('name')}", f.get("reason")), soft_wrap=True
+                format_item_error(f"{plural}.{f.get('name')}", f.get("message")), soft_wrap=True
             )
 
 
@@ -357,7 +357,7 @@ def _print_promote_result(console: Console, data: dict) -> None:
             console.print(f"  [yellow]~ {plural}.{key}[/yellow] ([dim]{keys}[/dim])")
         for f in per.get("failed", []):
             console.print(
-                format_item_error(f"{plural}.{f.get('name')}", f.get("reason")), soft_wrap=True
+                format_item_error(f"{plural}.{f.get('name')}", f.get("message")), soft_wrap=True
             )
 
 
@@ -401,7 +401,7 @@ def _print_build_result(console: Console, data: dict) -> None:
             f"\n[bold yellow]Type resolution: {len(type_errs)} table(s) unresolved[/bold yellow]"
         )
         for e in type_errs:
-            console.print(f"  [yellow]![/yellow] {e['table_id']} — {e['error']}")
+            console.print(f"  [yellow]![/yellow] {e['table_id']} — {e['message']}")
     if data.get("created"):
         console.print(f"\nCreated: {data['created']}")
     elif data.get("dry_run"):

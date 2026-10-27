@@ -3586,5 +3586,5 @@ def test_storage_delete_buckets_force_keeps_shared_bucket(tmp_path: Path) -> Non
     body = res.json()
     assert body["deleted"] == ["in.c-full"]
     assert body["failed"][0]["id"] == "in.c-shared"
-    assert "kbagent sharing unshare" in body["failed"][0]["error"]
+    assert "kbagent sharing unshare" in body["failed"][0]["message"]
     api.delete_bucket.assert_called_once_with("in.c-full", force=True, branch_id=None)

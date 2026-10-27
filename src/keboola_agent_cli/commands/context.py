@@ -1502,8 +1502,8 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     shell/session. An explicit --project flag overrides both.
 
   project current
-    Print the active project and its source (env / pin / none, where "pin"
-    is the saved active project). Resolution order: --project > KBAGENT_PROJECT >
+    Print the active project and its source (env / active_project / none;
+    "pin" before 1.0.0). Resolution order: --project > KBAGENT_PROJECT >
     active project > sole project. `resolved_alias` / `resolved_source` (env / active_project /
     sole / none) name the project a command without --project would use
     (since 0.100.0).

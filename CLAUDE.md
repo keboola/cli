@@ -577,8 +577,8 @@ kbagent project current
 #   --remove-projects`) CLEARS the active project instead of moving it to the next alias; `init --project`
 #   that leaves it out clears it too. Results carry `active_project_cleared` / `active_project_set`
 #   (project use/add, org setup, auth registration, project create). `project current` adds
-#   `resolved_alias` + `resolved_source` (env|active_project|sole|none). Existing keys and the `pin`
-#   source value are unchanged. Version gate lives in gotchas.md.
+#   `resolved_alias` + `resolved_source` (env|active_project|sole|none). In 1.0.0 the `source` value
+#   `pin` of `project use` / `project current` is `active_project`. Version gate lives in gotchas.md.
 kbagent project info [--project NAME]
 kbagent project invite [--project ALIAS] --email EMAIL --role admin|guest|readOnly|share [--reason TEXT] [--dry-run]
 kbagent project invite --from-csv FILE [--default-role ROLE] [--workers N] [--dry-run]
@@ -617,9 +617,9 @@ kbagent config set-folder [--project NAME] --component-id ID --config-id ID --na
 #   --name clears it. kbagent no longer reads or writes the KBC.configuration.folderName metadata key:
 #   `config list` and `sync pull` read `folder` from the listing they already fetch (no extra
 #   search/component-configurations call), `sync push` / `sync clone` send it on the create POST.
-#   The sync manifest still stores the folder under that key name. The set-folder JSON keeps
-#   `key` (frozen), `value` and `result` (still a list: [{key, value}]); the PUT response
-#   subset {id, name, folder} is the new `configuration` key.
+#   The sync manifest still stores the folder under that key name. The set-folder JSON has
+#   `folder` and `configuration` (the PUT response subset {id, name, folder}). The metadata-era
+#   keys `key`, `value` and `result` are removed in 1.0.0.
 #   Needs keboola/connection DMD-2347 on the stack: without it set-folder fails FEATURE_NOT_ENABLED
 #   (exit 5) and push/clone add a `folder_not_supported` warnings[] entry. No metadata fallback.
 #   Version gate in gotchas.md.

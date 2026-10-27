@@ -511,8 +511,8 @@ class TestCopiedItemsTakeTheTargetModelsScope:
         snapshot = {"glossary": [_child_item("semantic-glossary", "src", {"term": "t"})]}
         result = service.import_snapshot_from_dict("prod", snapshot=snapshot)
         (failure,) = result["imported"]["glossary"]["failed"]
-        assert "organization-admin token" in failure["reason"]
-        assert "--scope project" in failure["reason"]
+        assert "organization-admin token" in failure["message"]
+        assert "--scope project" in failure["message"]
 
     def test_promote_creates_new_items_at_the_target_models_scope(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
@@ -647,7 +647,7 @@ class TestCopyScopeOverride:
         assert (kwargs["scope"], kwargs["target_project_ids"]) == ("project", None)
         mock.get_item.assert_not_called()  # an explicit scope needs no model lookup
         (failure,) = result["imported"]["glossary"]["failed"]
-        assert failure["reason"] == "Access denied"  # explicit scope: no inherited-scope hint
+        assert failure["message"] == "Access denied"  # explicit scope: no inherited-scope hint
 
     def test_promote_targeted_scope_resolves_the_target_projects(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)

@@ -98,15 +98,14 @@ def item_failure(
 ) -> dict[str, Any]:
     """One failed item of a command that processes several items or projects (spec E5).
 
-    ``keys`` are the entry's identity and the keys it always had (``error``,
-    ``reason``). ``error_code``, ``retryable`` and ``message`` are added, so a
-    ``--json`` consumer reads one shape. A code the exception carries is kept.
-    A plain ``ConfigError`` gets ``CONFIG_ERROR``. Any other exception gets
-    ``fallback_code``, and its message is truncated
+    ``keys`` are the entry's identity. ``error_code``, ``retryable`` and
+    ``message`` are added, so a ``--json`` consumer reads one shape. A code the
+    exception carries is kept. A plain ``ConfigError`` gets ``CONFIG_ERROR``.
+    Any other exception gets ``fallback_code``, and its message is truncated
     (:func:`sanitize_unexpected_error`, CWE-209) because its content is unknown.
 
-    ``message`` is the field to show or log. The old ``error`` and ``reason``
-    keys keep their previous raw text for compatibility.
+    ``message`` is the field to show or log. 1.0.0 removed the old ``error``
+    and ``reason`` copies of it.
     """
     code = getattr(exc, "error_code", None)
     if code is None and isinstance(exc, ConfigError):
@@ -276,7 +275,7 @@ def resolve_implicit_alias(
     """Pick the project a command uses when no project was named on it.
 
     The one copy of the implicit cascade: ``KBAGENT_PROJECT`` (``env``), then
-    the persisted ``default_project`` pin (``pin``), then the only registered
+    the persisted ``default_project`` pin (``active_project``), then the only registered
     project (``sole``). :meth:`BaseService.resolve_pinned_alias` and the
     `auth` stack resolver both call it, so they cannot drift apart.
 
@@ -323,7 +322,7 @@ def resolve_implicit_alias(
                 f"Active project '{pinned}' is not registered. "
                 "Run 'kbagent project use <alias>' to repair."
             )
-        return pinned, "pin"
+        return pinned, "active_project"
 
     if len(config.projects) == 1:
         (sole,) = config.projects.keys()

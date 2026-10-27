@@ -370,7 +370,7 @@ def _print_edit_result(label: str):  # type: ignore[no-untyped-def]
             status = entry.get("status", "?")
             name = entry.get("constraint", "?")
             if status == "failed":
-                reason = entry.get("error") or entry.get("reason") or "cascade failed"
+                reason = entry.get("message") or "cascade failed"
                 c.print(format_item_error(f"constraint {name}", reason), soft_wrap=True)
             else:
                 c.print(f"  [green]cascade {status}[/green] constraint [cyan]{name}[/cyan]")

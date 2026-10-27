@@ -37,7 +37,7 @@ def _print_clone_buckets(formatter: Any, result: dict[str, Any]) -> None:
             f"bucket {link.get('source_bucket_id')}"
         )
     for berr in result.get("bucket_errors", []):
-        formatter.item_error(f"bucket {berr.get('bucket_id')}", berr.get("error") or "")
+        formatter.item_error(f"bucket {berr.get('bucket_id')}", berr.get("message") or "")
 
 
 def clone_summary(result: dict[str, Any]) -> str:

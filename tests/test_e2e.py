@@ -3964,14 +3964,14 @@ class TestFullE2E:
         # Pre-condition: first-added is already the default. Verify via current.
         data = self._run_ok("project", "current")
         assert data["data"]["alias"] == self.alias
-        assert data["data"]["source"] == "pin"
+        assert data["data"]["source"] == "active_project"
 
         # Explicit `project use` is a no-op in value but confirms it persists.
         data = self._run_ok("project", "use", self.alias)
         assert data["data"]["alias"] == self.alias
-        # source is always "pin" on use (the field describes where the new
+        # source is always "active_project" on use (the field describes where the new
         # pin ended up, not how it arrived).
-        assert data["data"]["source"] == "pin"
+        assert data["data"]["source"] == "active_project"
 
         # `project use nonexistent` fails with exit 5 (CONFIG_ERROR).
         result = self._run("project", "use", "does-not-exist-alias")
@@ -3989,7 +3989,7 @@ class TestFullE2E:
 
         # After unsetting, pin is restored as the effective alias.
         data = self._run_ok("project", "current")
-        assert data["data"]["source"] == "pin"
+        assert data["data"]["source"] == "active_project"
         assert data["data"]["alias"] == self.alias
 
         # --- --deny-writes blocks writes, allows reads --------------------
@@ -6899,7 +6899,7 @@ class TestPinAndFirewallE2E:
         assert current.exit_code == 0
         data = _json_ok(current)
         assert data["data"]["alias"] == self.alias_a
-        assert data["data"]["source"] == "pin"
+        assert data["data"]["source"] == "active_project"
 
         # `project use` switches the pin; persistence survives next invocation.
         use_result = self._run("project", "use", self.alias_b)
@@ -6909,7 +6909,7 @@ class TestPinAndFirewallE2E:
 
         after = _json_ok(self._run("project", "current"))
         assert after["data"]["alias"] == self.alias_b
-        assert after["data"]["source"] == "pin"
+        assert after["data"]["source"] == "active_project"
 
         # Unknown alias -> exit 5.
         bad = self._run("project", "use", "does-not-exist")
@@ -7851,9 +7851,7 @@ class TestE2EPR8ConfigMetadata:
             folder_name,
         )
         assert data["data"]["folder"] == folder_name
-        # Frozen key of the metadata-era result shape.
-        assert data["data"]["key"] == "KBC.configuration.folderName"
-        assert data["data"]["value"] == folder_name
+        assert data["data"]["configuration"]["folder"] == folder_name
 
         _step(2, "config detail -- folder field is set")
         data = self._run_ok(
@@ -7882,7 +7880,7 @@ class TestE2EPR8ConfigMetadata:
             "",
         )
         assert data["data"]["folder"] == ""
-        assert data["data"]["result"]["folder"] is None
+        assert data["data"]["configuration"]["folder"] is None
 
     def test_get_metadata_missing_key_exits_1(self) -> None:
         """get-metadata for a non-existent key returns exit code 1."""
@@ -12400,10 +12398,7 @@ class TestE2ESemanticLayerLifecycle:
             assert counts["datasets"] >= 2, f"datasets cascaded: {counts}"
             assert counts["metrics"] >= 1, f"metrics cascaded: {counts}"
             assert counts["constraints"] >= 1, f"constraints cascaded: {counts}"
-            # Back-compat alias: orphaned_children == cascade.deleted (deprecated v0.42.0).
-            assert envelope["orphaned_children"] == counts, (
-                "orphaned_children back-compat alias should equal cascade.deleted"
-            )
+            assert "orphaned_children" not in envelope, "removed alias is back"
 
             # The cascade succeeded — model A's children are gone.
             # Drop the cleanup token so the finally block doesn't try to delete it again.

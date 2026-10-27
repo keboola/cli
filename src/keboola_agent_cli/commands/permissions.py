@@ -188,15 +188,6 @@ def permissions_show(
     if inert_patterns:
         policy_data["inert_patterns"] = inert_patterns
 
-    # Keep legacy top-level keys when a persisted policy exists so existing
-    # JSON consumers that read policy_data["mode"] / ["allow"] / ["deny"]
-    # remain compatible. Clients that need the new session-layer view read
-    # ``session_flags`` and ``persisted``.
-    if persisted is not None:
-        policy_data["mode"] = persisted.mode
-        policy_data["allow"] = persisted.allow
-        policy_data["deny"] = persisted.deny
-
     if formatter.json_mode:
         formatter.output(policy_data)
         return

@@ -2263,7 +2263,7 @@
       "kind": "command",
       "hidden": false,
       "category": "read",
-      "help": "Show the active project.\n\nReports whether the value comes from the ``KBAGENT_PROJECT`` env var\n(``env``) or the saved active project (``pin``). Prints nothing but a hint if\nneither is set. ``resolved_alias`` / ``resolved_source`` name the project\na command without ``--project`` would use (``env``, ``active_project``,\n``sole``, or ``none``).",
+      "help": "Show the active project.\n\nReports whether the value comes from the ``KBAGENT_PROJECT`` env var\n(``env``) or the saved active project (``active_project``). Prints nothing but a hint if\nneither is set. ``resolved_alias`` / ``resolved_source`` name the project\na command without ``--project`` would use (``env``, ``active_project``,\n``sole``, or ``none``).",
       "params": []
     },
     {

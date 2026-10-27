@@ -1272,7 +1272,6 @@ class TestCreateBucketsFromExport:
         assert result.errors == [
             {
                 "bucket_id": "in.c-bad",
-                "error": "boom",
                 "error_code": "API_ERROR",
                 "retryable": False,
                 "message": "boom",
@@ -1336,7 +1335,6 @@ class TestCreateBucketsFromExport:
         assert result.errors == [
             {
                 "bucket_id": "in.c-shared",
-                "error": "not shared",
                 "error_code": "STORAGE_JOB_FAILED",
                 "retryable": False,
                 "message": "not shared",
@@ -1358,10 +1356,9 @@ class TestCreateBucketsFromExport:
         assert result.errors == [
             {
                 "bucket_id": "",
-                "error": "Cannot list buckets: denied",
                 "error_code": "API_ERROR",
                 "retryable": False,
-                "message": "denied",
+                "message": "Cannot list buckets: denied",
             }
         ]
 
@@ -1382,7 +1379,7 @@ class TestCreateBucketsFromExport:
         client.create_bucket.assert_not_called()
         assert result.created == []
         assert len(result.errors) == 1
-        assert "older kbagent pull" in result.errors[0]["error"]
+        assert "older kbagent pull" in result.errors[0]["message"]
 
     def test_no_export_returns_empty_without_listing(self, tmp_path: Path) -> None:
         client = MagicMock()

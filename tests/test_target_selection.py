@@ -439,7 +439,7 @@ def test_branch_record_carries_the_project_source() -> None:
     store.get_project.return_value = _project(1, branch=456)
     with record_targets(lambda _target: None):
         resolve_branch(store, "prod", None)
-        record_project("prod", "pin", _project(1, branch=456))
+        record_project("prod", "active_project", _project(1, branch=456))
         record_project("prod", "explicit", _project(1, branch=456))  # the first source wins
         record_project("dev", "all", _project(2))
         record_branch(store, "prod", None, "production", role="source")
