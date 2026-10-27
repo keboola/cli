@@ -1,7 +1,7 @@
 # RLS / CLS Workflow -- Row- and Column-Level Security Policies
 
 Row-level security in Keboola is authored as metastore `rls-policy` objects
--- one object per protected table, holding a list of per-principal condition
+-- one object per protected table, holding a list of per-reader condition
 primitives (never a hand-written SQL predicate). `kbagent` only **authors**
 these objects; enforcement (the actual SQL rewrite on a query) happens
 outside kbagent, in one of two readers: Query Service on a governed workspace
@@ -41,15 +41,32 @@ enforces, in every project and with no per-project switch, and a table no
 only by the MCP server, to decide that its own workspace is created governed
 (see [The MCP server's workspace](#the-mcp-servers-workspace)).
 
-**How rules combine (policy schema 1.1.0, the metastore default; since vNEXT).** A
-rule selects identities by `principal`, `principals` or IdP `groups`. Within a
+**Who a rule selects (policy schema 1.2.0; since vNEXT).** A rule selects readers
+by `subjects` -- `<idp>|<sub>` entries, the issuer of the identity provider, a `|`
+and the user's `sub` -- or by IdP `groups`, exactly one of the two per rule; an
+email is **not** a selector in a new policy (an identity provider can assert any
+email), and `kbagent rls|cls create|update` refuse `principal` / `principals`
+with a usage error (exit 2) before anything is written. An administrator
+behind a Storage token (kbagent, MCP, a script) is `keboola|<user id>`, where the
+id is the member `id` of `kbagent project member-list` (needs a Manage token). An
+app user is `<idp>|<sub>` exactly as apps-proxy sends it (for GitHub the login,
+which another account can take over after a rename: accepted risk K13 of the Query
+Service RFC); an author cannot read it off the identity provider, so **group rules
+and `["*"]` are the practical selectors** until user discovery exists. `["*"]`
+(in `subjects` or `groups`) is every identified reader. Needs a metastore whose
+`rls-policy` / `cls-policy` schema is 1.2.0 (go-monorepo #668): on an older one
+`--dry-run` says so and nothing is written. Policies already stored with
+`principal` / `principals` (1.0.0 / 1.1.0) are still read by the enforcement and
+shown by `list`/`detail` flagged as legacy; to change their rules, recreate the policy
+with `subjects`/`groups`.
+
+**How rules combine (all schema versions).** Within a
 policy, every rule that matches the reader applies: RLS conditions combine with
 OR, CLS `visible_columns` are united. An RLS policy may set a `default` condition
 for an identified reader no rule matches; without one, the policy refuses the
 read. Several policies on one table combine with AND (CLS: intersection), so an
 added policy can only narrow access, never widen it. A reader with no identity
-is always refused. 1.1.0 is a superset of 1.0.0 -- every older policy keeps its
-meaning. Needs a `keboola-mcp-server` whose engine reads schema 1.1.0 (keboola/mcp-server#709): an older engine refuses a policy that uses `groups`, `$identity`, a `default` or `{"false": true}`, and refuses every query of the project when one principal has two rules.
+is always refused. Each stored policy is read by the rules of its own schema version.
 
 **Dialect.** A policy whose `dialect` differs from the reading workspace makes
 the enforcement refuse every read of that table. `--dialect` defaults to the
@@ -106,10 +123,10 @@ kbagent --json workspace create --project prod --name "governed-ws" --governed
 #    Under default deny a table with no rls-policy is refused, so give every
 #    reader a rule -- including the identity you will query with in step 4.
 kbagent --json rls create --project prod --table-id in.c-crm.invoices \
-  --rules '[{"principal": "eu-analyst@example.com",
+  --rules '[{"groups": ["eu-analysts"],
              "condition": {"column": "region", "op": "eq", "value": "EU"}}]'
 kbagent --json cls create --project prod --table-id in.c-crm.invoices \
-  --rules '[{"principal": "eu-analyst@example.com",
+  --rules '[{"groups": ["eu-analysts"],
              "visible_columns": ["id", "region", "amount"]}]'
 
 # 3. Read it through Query Service -- the only way into a governed workspace.
@@ -223,12 +240,13 @@ kbagent rls setup --project prod
 #    enter to confirm, 'q'/esc/ctrl-c to cancel.
 
 # 3. For the rules, either:
-#    (a) build interactively -- it prompts for principal(s), then a small
+#    (a) build interactively -- it prompts for a selector (subjects, groups or
+#        everyone; never an email), then a small
 #        menu: comparison / IN-NOT_IN / IS NULL-IS NOT NULL / always-true,
 #        with an "add another rule?" loop. A typed value is read as JSON when
 #        it is one (42, 4.5, true); quote it ("42") to keep a string. Or
 #    (b) skip the builder entirely with a prepared --rules file for
-#        anything beyond a single simple comparison per principal:
+#        anything beyond a single simple comparison per selector:
 kbagent rls setup --project prod --rules @rls_rules.json
 
 # 4. It prints a compiled-condition preview per selected table, then a
@@ -249,11 +267,11 @@ for structured input (see e.g. `config update --configuration`).
 cat > rls_rules.json <<'EOF'
 [
   {
-    "principal": "eu-analyst@example.com",
+    "groups": ["eu-analysts"],
     "condition": {"column": "region", "op": "eq", "value": "EU"}
   },
   {
-    "principals": ["us-analyst@example.com", "us-lead@example.com"],
+    "subjects": ["keboola|1234", "https://login.example.com|user-5678"],
     "condition": {"column": "region", "op": "eq", "value": "US"}
   }
 ]
@@ -269,8 +287,8 @@ kbagent --json rls create \
   --dry-run
 # -> {"table": "in.c-crm.invoices", "dialect": "snowflake",
 #     "scope": "targeted", "target_project_ids": [], "preview": [
-#       {"principal": "eu-analyst@example.com", "condition": "\"region\" = 'EU'"},
-#       {"principals": ["us-analyst@example.com", "us-lead@example.com"],
+#       {"groups": ["eu-analysts"], "condition": "\"region\" = 'EU'"},
+#       {"subjects": ["keboola|1234", "https://login.example.com|user-5678"],
 #        "condition": "\"region\" = 'US'"}
 #     ], "dry_run": true}
 
@@ -282,9 +300,9 @@ kbagent --json rls create --project prod --table-id in.c-crm.invoices --rules @r
 A caller with no rule on a governed table is refused, not silently returned
 empty -- fail-closed is the enforcement engine's whole design point (see the
 RFC in `keboola-mcp-server`). Before protecting a table, make sure every
-principal who legitimately needs access has a matching rule, including
-yourself if you plan to verify the result (`query_data` or a governed workspace). A principal is the
-user's email, matched case-insensitively.
+reader who legitimately needs access has a matching rule, including
+yourself if you plan to verify the result (`query_data` or a governed workspace): your own
+subject is `keboola|<your user id>`, matched exactly (case-sensitive, the issuer's trailing `/` aside).
 
 ## Workflow 3 -- Inspect existing policies before making a change
 
@@ -335,7 +353,7 @@ live, authoritative JSON Schema; this is the quick-reference version.
   {"column": "region", "op": "eq", "value": "US"}
 ]}
 
-// Always applies (no filtering for this principal -- use sparingly, this
+// Always applies (no filtering for this reader -- use sparingly, this
 // is the escape hatch for "this admin sees everything")
 {"true": true}
 ```
@@ -367,7 +385,7 @@ cat > orders_rules.json <<'EOF'
    "condition": {"column": "region", "op": "in", "values": ["EU"]}},
   {"groups": ["sales-reps"],
    "condition": {"column": "owner_email", "op": "eq", "value": {"$identity": "email"}}},
-  {"principals": ["auditor@example.com"],
+  {"subjects": ["keboola|4321"],
    "condition": {"true": true}}
 ]
 EOF
@@ -400,19 +418,19 @@ are not exempt. An admin who sees no data has not authored the policies yet --
 author them before switching RLS/CLS on.
 
 To open a table to every identified reader, use the wildcard selector `"*"`
-(`principal`, `principals` or `groups`, schema 1.1.0) with an explicit condition:
+(`subjects` or `groups`, schema 1.2.0; `groups` from 1.1.0) with an explicit condition:
 
 ```bash
 kbagent --json rls create --project prod --table-id in.c-ref.countries \
-  --rules '[{"principal": "*", "condition": {"true": true}}]' --dry-run
+  --rules '[{"subjects": ["*"], "condition": {"true": true}}]' --dry-run
 ```
 
-- `"*"` must be the **only** entry of a `principals` / `groups` list
-  (`["*", "a@example.com"]` is refused locally); it never matches a reader with
+- `"*"` must be the **only** entry of a `subjects` / `groups` list
+  (`["*", "keboola|1234"]` is refused locally); it never matches a reader with
   no identity; it cannot widen a stricter policy on the same table (policies
   AND together).
-- It needs a metastore whose `rls-policy` schema is 1.1.0 or later: on a 1.0.0
-  schema `"*"` is a literal that matches nobody, so kbagent refuses it.
+- It needs a metastore whose `rls-policy` schema is 1.1.0 or later for `groups` and 1.2.0 for
+  `subjects`: on a 1.0.0 schema `"*"` is a literal that matches nobody, so kbagent refuses it.
 - A debug or "see everything" user is a normal rule (for example
   `{"groups": ["debug"], "condition": {"true": true}}`), not a bypass flag.
 - A `cls-policy` alone never grants rows: a table needs an `rls-policy` (the
@@ -525,7 +543,7 @@ kbagent --json rls schema --project prod
 ## Column-Level Security (CLS)
 
 `kbagent cls` authors `cls-policy` objects: one per protected table, each rule a selector
-(`principal`, `principals` or IdP `groups`) and the `visible_columns` those readers may see
+(`subjects` or IdP `groups`, never an email) and the `visible_columns` those readers may see
 (an allowlist -- unlisted columns are omitted from the result; masking is not supported).
 It mirrors `rls` (`list`, `detail`, `schema`, `create`, `update`, `delete`) with the same
 scope rule and default, the same write permissions, dialect check, `--dry-run`/`--yes`
@@ -538,10 +556,10 @@ the `row-level-security` feature).
 kbagent --json cls schema --project prod            # live shape
 kbagent --json cls list --project prod              # expect [] on a fresh project
 
-# Dry-run first: prints each principal's projection, writes nothing.
+# Dry-run first: prints each selector's projection, writes nothing.
 kbagent cls create --project prod --table-id in.c-crm.customers \
-  --rules '[{"principal":"analyst@example.com","visible_columns":["id","region","amount"]},
-            {"principals":["a@example.com","b@example.com"],"visible_columns":["id"]}]' --dry-run
+  --rules '[{"groups":["analysts"],"visible_columns":["id","region","amount"]},
+            {"subjects":["keboola|1234","keboola|5678"],"visible_columns":["id"]}]' --dry-run
 
 kbagent cls create --project prod --table-id in.c-crm.customers --rules @cls_rules.json --yes
 kbagent --json cls update --project prod --policy-id <id> --rules @cls_rules_v2.json
@@ -549,7 +567,7 @@ kbagent cls delete --project prod --policy-id <id> --yes
 ```
 
 - A table can carry both an `rls-policy` and a `cls-policy`; author them separately.
-- `INVALID_CLS_POLICY` -- the policy failed validation (exactly one of `principal`/`principals`/
+- `INVALID_CLS_POLICY` -- the policy failed validation (exactly one of `subjects`/
   `groups` per rule, non-empty `visible_columns` of `[A-Za-z0-9_]+` names, the dialect check,
   no `default`, plus the live JSON Schema). Nothing was written.
 - Within one CLS policy, an identity several rules match sees the union of their

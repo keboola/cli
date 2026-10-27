@@ -2,7 +2,7 @@
 
 Thin CLI layer over :class:`ClsService`, the column-level sibling of
 ``kbagent rls``. Six subcommands (no interactive ``setup`` wizard -- a CLS
-rule is just a principal plus a column allowlist, so ``create`` covers it):
+rule is just a selector plus a column allowlist, so ``create`` covers it):
 
 - ``cls list`` -- policies visible to a project.
 - ``cls detail`` -- one policy's full rules.
@@ -11,8 +11,9 @@ rule is just a principal plus a column allowlist, so ``create`` covers it):
 - ``cls update`` -- partial (PATCH) update of an existing policy (write).
 - ``cls delete`` -- remove a policy (destructive).
 
-Each rule is ``{principal|principals, visible_columns: [...]}``: the listed
-columns are the only ones that principal can read (allowlist projection;
+Each rule is ``{subjects|groups, visible_columns: [...]}`` (``subjects`` are ``<idp>|<sub>``, an
+email is not a selector): the listed
+columns are the only ones the selected readers can read (allowlist projection;
 masking is not supported). As with ``rls``, every write is authored at
 ``targeted`` scope unless ``--scope organization`` is passed -- never
 ``project``. Enforcement happens in Query Service on a governed workspace
@@ -47,7 +48,7 @@ from .rls import (
 
 cls_app = typer.Typer(
     help=(
-        "Manage column-level security policies (metastore-backed, per-principal column "
+        "Manage column-level security policies (metastore-backed, per-reader column "
         "allowlist). 'list'/'detail'/'schema' are read-only; 'create'/'update'/'delete' "
         "are gated as admin -- see CONTRIBUTING.md."
     )
@@ -55,7 +56,7 @@ cls_app = typer.Typer(
 
 CLS = PolicyGroup(
     name="cls",
-    rules_shape="{principal|principals, visible_columns}",
+    rules_shape="{subjects|groups, visible_columns}",
     rule_text=lambda rule: ", ".join(rule.get("visible_columns") or []),
     preview_text=lambda entry: f"SELECT {', '.join(entry.get('visible_columns') or [])}",
 )
@@ -113,7 +114,7 @@ def cls_create(
         "--rules",
         help=(
             f"JSON|@file|- array of {CLS.rules_shape} objects; visible_columns is the "
-            "allowlist of columns that principal can read"
+            "allowlist of columns the selected readers can read"
         ),
     ),
     dialect: Dialect | None = typer.Option(None, "--dialect", help=DIALECT_HELP),

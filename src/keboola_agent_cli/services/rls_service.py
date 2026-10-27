@@ -19,8 +19,9 @@ admin role) may create/update/delete ``targeted`` policies of its own project
 WITHOUT target projects; granting target projects and ``organization`` scope
 need the organization-admin role.
 
-Policy schema 1.1.0 (the metastore default): a rule selects identities by
-``principal``, ``principals`` or IdP ``groups``; within a policy every rule
+Policy schema 1.2.0 (the metastore default where it is deployed): a rule selects identities by
+``subjects`` (``<idp>|<sub>``) or IdP ``groups``, never by email (AJDA-3680); the legacy 1.0.0/1.1.0
+``principal`` / ``principals`` of stored policies are read, not authored; within a policy every rule
 matching one identity applies and the conditions combine with OR (so one
 identity in several rules is fine); several policies on one table combine
 with AND, so an added policy can only narrow access; an RLS ``default``
@@ -243,6 +244,16 @@ class RlsService(BaseService):
         if not fetch.schema:
             return PolicyValidation([], [f"Live schema validation was skipped: {fetch.reason}"])
         errors = draft7_errors(policy, fetch.schema)
+        if _rls_condition.rules_use_subjects(policy["rules"]) and (
+            old := _rls_condition.schema_older_than(
+                fetch.schema, _rls_condition.SUBJECTS_MIN_SCHEMA_VERSION
+            )
+        ):
+            errors.append(
+                f"'subjects' needs {self.item_type} schema 1.2.0 or later; this metastore serves "
+                f"{old}, which selects by email only (the Query Service release with subject "
+                "rules and the Metastore migration are not deployed on this stack yet)"
+            )
         if _rls_condition.rules_use_wildcard(policy["rules"]) and (
             old := _rls_condition.schema_lacks_wildcard(fetch.schema)
         ):
@@ -251,6 +262,13 @@ class RlsService(BaseService):
                 f"this metastore serves {old}, where it is a literal that matches nobody"
             )
         return PolicyValidation(errors, [])
+
+    def _refuse_legacy_selectors(self, rules: Any) -> None:
+        """A usage error (exit 2) for ``rules`` that select by email: the rules a caller supplies are written to a
+        new policy version, which selects by ``subjects`` or ``groups`` only. The stored rules of an update that
+        keeps them are not checked here: they may be legacy and stay as they are."""
+        if errors := _rls_condition.legacy_selector_errors(rules):
+            self._raise_usage("; ".join(errors))
 
     def _local_rule_errors(self, rules: Any) -> list[str]:
         """Schema-independent checks on ``rules`` (hook for :class:`ClsService`)."""
@@ -364,6 +382,7 @@ class RlsService(BaseService):
         grants in the same transaction (and needs the organization-admin role). ``dry_run=True``
         returns the preview without calling the write endpoint.
         """
+        self._refuse_legacy_selectors(rules)
         if scope not in tuple(PolicyScope):
             self._raise_usage(f"scope must be one of {tuple(PolicyScope)}, got {scope!r}")
         if target_projects and scope != "targeted":
@@ -425,6 +444,7 @@ class RlsService(BaseService):
         The result is re-read after the write, so it shows the grants as they now are. ``default``
         replaces the RLS default condition; a PATCH cannot remove it (recreate the policy for that).
         """
+        self._refuse_legacy_selectors(rules)
         changes = {
             key: value
             for key, value in (

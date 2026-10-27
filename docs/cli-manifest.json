@@ -423,7 +423,7 @@
       "path": "cls",
       "kind": "group",
       "hidden": false,
-      "help": "Manage column-level security policies (metastore-backed, per-principal column allowlist). 'list'/'detail'/'schema' are read-only; 'create'/'update'/'delete' are gated as admin -- see CONTRIBUTING.md."
+      "help": "Manage column-level security policies (metastore-backed, per-reader column allowlist). 'list'/'detail'/'schema' are read-only; 'create'/'update'/'delete' are gated as admin -- see CONTRIBUTING.md."
     },
     {
       "path": "cls create",
@@ -434,7 +434,7 @@
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "required": true, "default": null, "help": "Project alias -- the project that owns the policy"},
         {"kind": "option", "name": "table_id", "opts": ["--table-id"], "type": "text", "required": true, "default": null, "help": "Storage table ID, e.g. in.c-crm.invoices"},
-        {"kind": "option", "name": "rules", "opts": ["--rules"], "type": "text", "required": true, "default": null, "help": "JSON|@file|- array of {principal|principals, visible_columns} objects; visible_columns is the allowlist of columns that principal can read"},
+        {"kind": "option", "name": "rules", "opts": ["--rules"], "type": "text", "required": true, "default": null, "help": "JSON|@file|- array of {subjects|groups, visible_columns} objects; visible_columns is the allowlist of columns the selected readers can read"},
         {"kind": "option", "name": "dialect", "opts": ["--dialect"], "type": "choice", "choices": ["snowflake", "bigquery"], "default": null, "help": "Workspace SQL dialect; must match the project backend (default: the backend)"},
         {"kind": "option", "name": "scope", "opts": ["--scope"], "type": "choice", "choices": ["targeted", "organization"], "default": "targeted", "help": "targeted (default): the owning project plus --target-project grants. organization: EVERY project of the organization -- an explicit, organization-admin-only choice, gated as destructive."},
         {"kind": "option", "name": "target_project", "opts": ["--target-project"], "type": "text", "multiple": true, "default": null, "help": "Project alias or ID the policy also applies to (repeatable or comma-separated; --scope targeted only; granting needs the organization-admin role)"},
@@ -2599,7 +2599,7 @@
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "required": true, "default": null, "help": "Project alias -- the project that owns the policy"},
         {"kind": "option", "name": "table_id", "opts": ["--table-id"], "type": "text", "required": true, "default": null, "help": "Storage table ID, e.g. in.c-crm.invoices"},
-        {"kind": "option", "name": "rules", "opts": ["--rules"], "type": "text", "required": true, "default": null, "help": "JSON|@file|- array of {principal|principals|groups, condition} objects; rules matching one identity combine with OR (see rls-workflow.md for the condition shape)"},
+        {"kind": "option", "name": "rules", "opts": ["--rules"], "type": "text", "required": true, "default": null, "help": "JSON|@file|- array of {subjects|groups, condition} objects (subjects are '<idp>|<sub>', an administrator behind a Storage token is 'keboola|<user id>'; '[\"*\"]' is every identified reader; an email is not allowed); rules matching one identity combine with OR (see rls-workflow.md for the condition shape)"},
         {"kind": "option", "name": "default", "opts": ["--default"], "type": "text", "default": null, "help": "JSON|@file|- condition for identities no rule matches, e.g. '{\"false\": true}' (no rows); omitted, their reads are refused"},
         {"kind": "option", "name": "dialect", "opts": ["--dialect"], "type": "choice", "choices": ["snowflake", "bigquery"], "default": null, "help": "Workspace SQL dialect; must match the project backend (default: the backend)"},
         {"kind": "option", "name": "scope", "opts": ["--scope"], "type": "choice", "choices": ["targeted", "organization"], "default": "targeted", "help": "targeted (default): the owning project plus --target-project grants. organization: EVERY project of the organization -- an explicit, organization-admin-only choice, gated as destructive."},

@@ -102,7 +102,7 @@ class PolicyGroup:
 
 RLS = PolicyGroup(
     name="rls",
-    rules_shape="{principal|principals, condition}",
+    rules_shape="{subjects|groups, condition}",
     rule_text=lambda rule: str(rule.get("condition")),
     preview_text=lambda entry: f"WHERE {entry.get('condition')}",
 )
@@ -137,13 +137,18 @@ def gate_scope(
         raise typer.Exit(code=2)
 
 
-def _principal_text(item: dict[str, Any]) -> str:
-    """A rule's (or preview entry's) selector: ``a@x.com``, ``a@x.com, b@x.com`` or ``groups: g1, g2``."""
-    if "groups" in item:
-        return "groups: " + ", ".join(item["groups"])
+def _selector_text(item: dict[str, Any]) -> str:
+    """A rule's (or preview entry's) selector: ``subjects: idp|sub, ...``, ``groups: g1, g2`` or, for a stored
+    1.0.0/1.1.0 policy, the legacy email selector flagged as such."""
+    for key in ("subjects", "groups"):
+        if key in item:
+            names = item[key]
+            text = ", ".join(names)
+            return f"{key}: every identified reader" if text == "*" else f"{key}: {text}"
     principal = item.get("principal") or item.get("principals") or []
     text = principal if isinstance(principal, str) else ", ".join(principal)
-    return f"{text} (every identified reader)" if text == "*" else text
+    label = "legacy email selector (not allowed in a new policy)"
+    return f"{label}: every identified reader" if text == "*" else f"{label}: {text}"
 
 
 def _format_policy_table(formatter: Any, policies: list[dict[str, Any]]) -> None:
@@ -186,7 +191,7 @@ def _print_policy(formatter: Any, group: PolicyGroup, row: dict[str, Any]) -> No
     rules = row.get("rules") or []
     formatter.console.print(f"  Rules ({len(rules)}):")
     for rule in rules:
-        formatter.console.print(f"    - {_principal_text(rule)}: {group.rule_text(rule)}")
+        formatter.console.print(f"    - {_selector_text(rule)}: {group.rule_text(rule)}")
     if row.get("default") is not None:
         formatter.console.print(f"  Default:          {row['default']}")
 
@@ -197,7 +202,7 @@ def _print_preview(formatter: Any, group: PolicyGroup, result: dict[str, Any]) -
         f"[dim]({result.get('dialect', '')}, scope={result.get('scope', '')})[/dim]"
     )
     for entry in result.get("preview", []):
-        formatter.console.print(f"  {_principal_text(entry)}: {group.preview_text(entry)}")
+        formatter.console.print(f"  {_selector_text(entry)}: {group.preview_text(entry)}")
     if result.get("default_preview") is not None:
         formatter.console.print(f"  (anyone else): WHERE {result['default_preview']}")
 
@@ -454,8 +459,10 @@ def rls_create(
         ...,
         "--rules",
         help=(
-            "JSON|@file|- array of {principal|principals|groups, condition} objects; rules "
-            "matching one identity combine with OR (see rls-workflow.md for the condition shape)"
+            "JSON|@file|- array of {subjects|groups, condition} objects (subjects are '<idp>|<sub>', "
+            "an administrator behind a Storage token is 'keboola|<user id>'; '[\"*\"]' is every identified "
+            "reader; an email is not allowed); rules matching one identity combine with OR "
+            "(see rls-workflow.md for the condition shape)"
         ),
     ),
     default: str | None = typer.Option(None, "--default", help=DEFAULT_HELP),
@@ -569,7 +576,7 @@ _CONDITION_MENU = (
     "  1) column comparison (=, !=, >, >=, <, <=)\n"
     "  2) column IN / NOT IN a list of values\n"
     "  3) column IS NULL / IS NOT NULL\n"
-    "  4) always true (no filtering for this principal)"
+    "  4) always true (no filtering for this reader)"
 )
 
 _COMPARISON_OPS = tuple(COMPARISON_SQL)  # eq, ne, gt, gte, lt, lte
@@ -618,20 +625,33 @@ def _prompt_condition(formatter: Any) -> dict[str, Any]:
     return {"column": column, "op": op}
 
 
+_SELECTOR_MENU = (
+    "  subjects: '<idp>|<sub>' entries (an administrator behind a Storage token is 'keboola|<user id>')\n"
+    "  groups:   IdP group names, matched exactly as the identity provider delivers them\n"
+    "  everyone: every identified reader\n"
+    "An email is not a selector. The sub of an app user is what apps-proxy sends (for GitHub the login) "
+    "and cannot be read off the identity provider by an author: group rules and 'everyone' are the "
+    "practical choices."
+)
+
+
+def _prompt_selector(formatter: Any) -> dict[str, Any]:
+    """One rule's selector: ``subjects``, ``groups`` or ``["*"]`` (never an email)."""
+    formatter.err_console.print(_SELECTOR_MENU, markup=False, highlight=False)
+    kind = _prompt_choice(
+        formatter, "Selector", ("subjects", "groups", "everyone"), default="groups"
+    )
+    if kind == "everyone":
+        return {"groups": ["*"]}
+    raw = typer.prompt(f"{kind.capitalize()} (comma-separated)")
+    return {kind: [name.strip() for name in raw.split(",") if name.strip()]}
+
+
 def _build_rules_interactively(formatter: Any) -> list[dict[str, Any]]:
     rules: list[dict[str, Any]] = []
     while True:
-        principal = typer.prompt(
-            "Principal (user email, comma-separated list for a group, or * for every identified reader)"
-        )
-        principals = [p.strip() for p in principal.split(",") if p.strip()]
-        condition = _prompt_condition(formatter)
-        rule: dict[str, Any] = {"condition": condition}
-        if len(principals) == 1:
-            rule["principal"] = principals[0]
-        else:
-            rule["principals"] = principals
-        rules.append(rule)
+        selector = _prompt_selector(formatter)
+        rules.append({**selector, "condition": _prompt_condition(formatter)})
         if (
             _prompt_choice(formatter, "Add another rule to this policy? (y/n)", ("y", "n"), "n")
             == "n"

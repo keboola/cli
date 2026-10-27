@@ -6837,12 +6837,24 @@ governed-workspace flow.
   governed workspace Query Service always enforces (every project, no switch), and the identity running
   `workspace query` needs a matching rule (default deny). The MCP server's own workspace is created governed in
   a project with the feature; it gets every policy unless bound (see `rls-workflow.md`, "The MCP server's workspace").
-- **Policy schema 1.1.0 (the metastore default) is a superset of 1.0.0.** A rule selects identities by
+- **Rules select readers by `subjects` or `groups`, never by email (since vNEXT, schema 1.2.0).** A new
+  `rls-policy` / `cls-policy` rule has exactly one of `subjects` (`<idp>|<sub>` entries, matched exactly)
+  or `groups` (exact strings, any listed group matches); `["*"]` as the sole entry is every identified
+  reader. `principal` / `principals` in `rls|cls create|update --rules` are refused with `INVALID_ARGUMENT`
+  (exit 2) before anything is read or written, naming `subjects`; the stored rules of an `update` that
+  keeps them (for example a change of `--default` only) are not refused. An administrator behind a Storage
+  token is `keboola|<user id>` (the member `id` of `project member-list`); an app user is `<idp>|<sub>` as
+  apps-proxy sends it and cannot be read off the identity provider, so group rules and `["*"]` are the
+  practical selectors. `subjects` needs a metastore at schema 1.2.0 (go-monorepo #668): on an older one the
+  write is refused locally and says so. Policies stored at 1.0.0/1.1.0 with `principal`/`principals` keep
+  working in the enforcement and are listed flagged as legacy; recreate them to change their rules. The
+  older 1.1.0 behaviour below still describes how stored policies combine.
+- **Policy schema 1.1.0 is a superset of 1.0.0.** A rule selects identities by
   `principal`, `principals` or IdP `groups` (exact strings, any listed group matches). Within a policy,
   every rule matching one identity applies: RLS conditions combine with OR, CLS `visible_columns` are
   united -- so one identity in several rules is no longer an error. Several policies on one table combine
   with AND (CLS: intersection), so an added policy can only narrow access; a reader with no identity is
-  always refused. Needs a `keboola-mcp-server` whose engine reads schema 1.1.0 (keboola/mcp-server#709): an older engine refuses a policy that uses `groups`, `$identity`, a `default` or `{"false": true}`, and refuses every query of the project when one principal has two rules. RLS `--default` is the condition for
+  always refused. RLS `--default` is the condition for
   identities no rule matches (absent = refused; `{"false": true}` = no rows); an `update` cannot remove a
   default (recreate the policy). `value: {"$identity": "email"}` and `values: {"$identity": "groups"}` are
   resolved per reader by the enforcement. `dialect` is optional in the schema; kbagent still sends the
@@ -6892,7 +6904,7 @@ governed-workspace flow.
   same for `/cls`. Every route is permission-gated; `scope: "organization"` is also checked as
   `<group>.create --scope organization`.
 - **`cls` is the column-level sibling of `rls`.** `kbagent cls list|detail|schema|create|update|delete`
-  author `cls-policy` objects (`{table, dialect, rules: [{principal|principals|groups, visible_columns}]}`)
+  author `cls-policy` objects (`{table, dialect, rules: [{subjects|groups, visible_columns}]}`)
   with the same scope, permissions, checks and partial `update` as `rls`. Differences: `visible_columns` is
   a non-empty allowlist of `[A-Za-z0-9_]+` names (masking is not supported), `--dry-run` prints each
   selector's projection, validation failures raise `INVALID_CLS_POLICY`, there is no `default`, and there

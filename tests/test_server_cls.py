@@ -30,7 +30,7 @@ from keboola_agent_cli.server.dependencies import ServiceRegistry, get_registry
 AUTH = {"Authorization": "Bearer test-token"}
 PROJECT = "prod"
 POLICY_ID = "p-1"
-RULES = [{"principal": "a@x.com", "visible_columns": ["id"]}]
+RULES = [{"subjects": ["https://idp.example.com|a"], "visible_columns": ["id"]}]
 
 
 def _app(tmp_path: Path, cls_svc: MagicMock) -> Any:

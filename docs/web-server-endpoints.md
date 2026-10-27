@@ -447,7 +447,7 @@ Row-level security policies (metastore-backed `rls-policy` objects), authored at
 
 ### `cls` (6 operations)
 
-Column-level security policies (metastore-backed `cls-policy` objects: a per-principal `visible_columns` allowlist), authored at `targeted` scope unless `organization` is asked for -- never `project` scope. Mirrors `kbagent cls list|detail|schema|create|update|delete`.
+Column-level security policies (metastore-backed `cls-policy` objects: a per-reader `visible_columns` allowlist), authored at `targeted` scope unless `organization` is asked for -- never `project` scope. Mirrors `kbagent cls list|detail|schema|create|update|delete`.
 
 | Method | Path | Summary |
 |---|---|---|

@@ -2,7 +2,7 @@
 
 The ``cls-policy`` metastore object is the column-level sibling of
 ``rls-policy``: one object per protected table, ``{table, dialect, rules}``,
-where each rule selects identities (``principal``, ``principals`` or IdP
+where each rule selects identities (``subjects`` (``<idp>|<sub>``) or IdP
 ``groups``) and the columns they may see (``visible_columns`` -- an allowlist
 projection; masking is not supported). Under schema 1.1.0 an identity several
 rules match sees the union of their columns; there is no ``default``.
@@ -40,7 +40,7 @@ class ClsService(RlsService):
     invalid_error_code = ErrorCode.INVALID_CLS_POLICY
 
     def _local_rule_errors(self, rules: Any) -> list[str]:
-        """Principal shape + a non-empty identifier allowlist per rule (schema-independent)."""
+        """Selector shape + a non-empty identifier allowlist per rule (schema-independent)."""
         if not isinstance(rules, list) or not rules:
             return ["'rules' must be a non-empty array"]
         errors: list[str] = []
@@ -48,7 +48,7 @@ class ClsService(RlsService):
             if not isinstance(rule, dict):
                 errors.append(f"rules[{index}] must be an object")
                 continue
-            errors.extend(_rls_condition.validate_principal_fields(rule, index))
+            errors.extend(_rls_condition.validate_selector_fields(rule, index))
             columns = rule.get("visible_columns")
             if not isinstance(columns, list) or not columns:
                 errors.append(f"rules[{index}] needs a non-empty 'visible_columns' array")
