@@ -268,7 +268,7 @@ Use `kbagent <command> --help` for full flag details and examples.
 
 ### Project Management
 
-  kbagent project create --url URL [--project ALIAS] [--name NAME]
+  kbagent project create --url URL [--project|--alias ALIAS] [--name NAME]
                          [--backend snowflake|bigquery] [--sync-backend-init]
     Create a BRAND-NEW Keboola project from a machine with no Keboola
     identity -- no account, no token, no `auth login` first. The only command
@@ -300,7 +300,7 @@ Use `kbagent <command> --help` for full flag details and examples.
     the stack finish it in the background (the async default warns that the
     first Storage command may fail until it lands).
 
-  kbagent project add --project NAME --url URL [--token-stdin | --token-file PATH | --token-env NAME | --token TOKEN]
+  kbagent project add --project|--alias NAME --url URL [--token-stdin | --token-file PATH | --token-env NAME | --token TOKEN]
     Add a new project connection. Token verified against API.
     See "Getting a Storage token in" below before you pick a flag.
 
@@ -374,8 +374,8 @@ Use `kbagent <command> --help` for full flag details and examples.
     `project list`, including on an ERROR row.
 
   kbagent project refresh --project ALIAS [--dry-run] [--force] [--yes] [--token-description ...] [--token-expires-in N]
-  kbagent project refresh --all [--dry-run] [--force] [--yes] [--token-description ...] [--token-expires-in N]
-    Refresh project tokens via Manage API. --all refreshes all projects. --force replaces non-expiring tokens.
+  kbagent project refresh --all|--all-projects [--dry-run] [--force] [--yes] [--token-description ...] [--token-expires-in N]
+    Refresh project tokens via Manage API. --all (or --all-projects) refreshes all projects. --force replaces non-expiring tokens.
     Browser-login (session) projects are reported under "skipped" with the
     reason that there is no static token to replace -- their access token
     rotates on its own from auth.json. --force does NOT convert them either;

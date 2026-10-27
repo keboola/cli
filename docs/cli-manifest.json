@@ -2228,7 +2228,7 @@
       "category": "admin",
       "help": "Add a new Keboola project connection.\n\nThe token comes from --token-stdin, --token-file, --token-env, --token,\nthe KBC_TOKEN env var, or an interactive prompt. Every source other than\n--token keeps the value out of your shell history.",
       "params": [
-        {"kind": "option", "name": "alias", "opts": ["--project"], "type": "text", "required": true, "default": null, "help": "Human-friendly name for this project"},
+        {"kind": "option", "name": "alias", "opts": ["--project", "--alias"], "type": "text", "required": true, "default": null, "help": "Human-friendly name for this project"},
         {"kind": "option", "name": "url", "opts": ["--url"], "type": "text", "envvar": "KBC_STORAGE_API_URL", "default": "https://connection.keboola.com", "help": "Keboola stack URL"},
         {"kind": "option", "name": "token", "opts": ["--token"], "type": "text", "envvar": "KBC_TOKEN", "default": null, "help": "Storage API token. Also settable via KBC_TOKEN. Prefer --token-stdin: a token passed here lands in your shell history and in a process listing."},
         {"kind": "option", "name": "token_stdin", "opts": ["--token-stdin"], "type": "boolean", "is_flag": true, "default": false, "help": "Read the token from stdin instead of --token. On a TTY this is a hidden prompt (Enter to confirm); on a pipe it reads until EOF (e.g. `printf '%s' \"$TOKEN\" | kbagent project edit --project P --token-stdin`). The token stays out of your shell history and out of a process listing."},
@@ -2245,7 +2245,7 @@
       "help": "Create a brand-new Keboola project -- no account, no token needed.\n\nThe only kbagent command that works from nothing: the stack provisions a\nproject, kbagent stores the resulting session and registers the project as\na local alias, and the printed confirmation link is how a human takes\nownership of it. Confirming REVOKES this session, so the last step is\nalways `kbagent auth login`.\n\nNeeds the `agent-provisioning` stack feature; a stack without it says so\nand exits non-zero. On a stack where you already have a session, use the\nKeboola UI instead -- kbagent keeps one session per stack.",
       "params": [
         {"kind": "option", "name": "url", "opts": ["--url"], "type": "text", "required": true, "default": null, "help": "Keboola stack URL to create the project on (required -- never guessed)"},
-        {"kind": "option", "name": "alias", "opts": ["--project"], "type": "text", "default": null, "help": "Local alias for the new project (default: from its name)"},
+        {"kind": "option", "name": "alias", "opts": ["--project", "--alias"], "type": "text", "default": null, "help": "Local alias for the new project (default: from its name)"},
         {"kind": "option", "name": "name", "opts": ["--name"], "type": "text", "default": null, "help": "Name for the new Keboola project"},
         {"kind": "option", "name": "backend", "opts": ["--backend"], "type": "choice", "choices": ["snowflake", "bigquery"], "default": null, "help": "Storage backend (default: the stack's own default)"},
         {"kind": "option", "name": "sync_backend_init", "opts": ["--sync-backend-init"], "type": "boolean", "is_flag": true, "default": false, "help": "Wait for the storage backend to be initialized before answering, instead of letting the stack finish it in the background"}
@@ -2401,7 +2401,7 @@
       "help": "Refresh expired or invalid Storage API tokens.\n\nCreates new tokens via the Manage API and updates the local config.\nRequires a Manage API token: interactive hidden prompt by default\n(since 0.28.0); pass top-level --allow-env-manage-token to read\nKBC_MANAGE_API_TOKEN from env (CI/CD).\n\n\b\nExamples:\n    kbagent project refresh --project prod\n    kbagent project refresh --all\n    kbagent project refresh --all --dry-run\n    kbagent project refresh --all --force",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Refresh token for a specific project"},
-        {"kind": "option", "name": "all_projects", "opts": ["--all"], "type": "boolean", "is_flag": true, "default": false, "help": "Refresh all projects with invalid tokens"},
+        {"kind": "option", "name": "all_projects", "opts": ["--all", "--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Refresh all projects with invalid tokens"},
         {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Preview what would be refreshed without making changes"},
         {"kind": "option", "name": "force", "opts": ["--force"], "type": "boolean", "is_flag": true, "default": false, "help": "Refresh even if token is valid"},
         {"kind": "option", "name": "yes", "opts": ["--yes", "-y"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip confirmation prompt"},

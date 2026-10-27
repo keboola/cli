@@ -10,6 +10,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
+import typer.main
 from typer.testing import CliRunner
 
 from helpers import make_mock_client
@@ -74,6 +75,48 @@ class TestProjectAdd:
         assert output["data"]["project_id"] == 5678
         # Token should be masked
         assert "55555" not in output["data"]["token"]
+
+    def test_project_add_alias_option(self, tmp_path: Path) -> None:
+        """--alias is the 1.x name of --project here, so one command works on 0.x and 1.x."""
+        mock_client = make_mock_client(project_name="Prod Project", project_id=5678)
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.ProjectService") as MockService,
+            patch.dict(os.environ, {"KBC_TOKEN": TEST_TOKEN}),
+        ):
+            store_instance = ConfigStore(config_dir=config_dir)
+            MockStore.return_value = store_instance
+            MockService.return_value = ProjectService(
+                config_store=store_instance,
+                client_factory=lambda url, token: mock_client,
+            )
+
+            result = runner.invoke(
+                app,
+                [
+                    "--json",
+                    "project",
+                    "add",
+                    "--alias",
+                    "prod",
+                    "--url",
+                    "https://connection.keboola.com",
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        assert json.loads(result.output)["data"]["alias"] == "prod"
+        assert "prod" in store_instance.load().projects
+
+    def test_project_create_takes_alias_option(self) -> None:
+        """project create accepts --alias, the 1.x name of its --project."""
+        root: Any = typer.main.get_command(app)
+        create = root.commands["project"].commands["create"]
+        alias = next(p for p in create.params if p.name == "alias")
+        assert alias.opts == ["--project", "--alias"]
 
     def test_project_add_success_human(self, tmp_path: Path) -> None:
         """project add in human mode outputs success message."""
@@ -8518,6 +8561,27 @@ class TestProjectRefresh:
         assert result.exit_code == 2, f"Exit code {result.exit_code}: {result.output}"
         output = json.loads(result.output)
         assert output["status"] == "error"
+        assert "not both" in output["error"]["message"]
+
+    def test_project_refresh_all_projects_is_the_all_option(self, tmp_path: Path) -> None:
+        """--all-projects is the 1.x name of --all: with --project it is the same usage error."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = ConfigStore(config_dir=config_dir)
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.OrgService"),
+        ):
+            MockStore.return_value = store
+
+            result = runner.invoke(
+                app,
+                ["--json", "project", "refresh", "--project", "prod", "--all-projects", "--yes"],
+            )
+
+        assert result.exit_code == 2, f"Exit code {result.exit_code}: {result.output}"
+        output = json.loads(result.output)
         assert "not both" in output["error"]["message"]
 
     def test_project_refresh_dry_run(self, tmp_path: Path) -> None:

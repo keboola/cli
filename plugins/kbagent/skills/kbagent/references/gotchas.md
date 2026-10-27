@@ -11,6 +11,14 @@ Versioning convention:
   behavior; the inline `(updated vX.Y.Z)` records when the refinement landed.
 -->
 
+## `--alias` on `project add` and `project create`, `--all-projects` on `project refresh`
+
+*(since vNEXT)* (#791)
+
+- **`project add` and `project create` take the alias of the new project as `--alias`.** `--alias` is a second name of their `--project`. On every other command, `--project` names a project that is already registered.
+- **`project refresh` takes `--all-projects`** as a second name of `--all`, as the fan-out reads do.
+- kbagent 1.0.0 removes `project add --project`, `project create --project` and `project refresh --all`. A command with `--alias` or `--all-projects` works on this version and on 1.x. On 0.x, `--project` and `--all` keep working.
+
 ## `--branch 0` is production in `job terminate`, `swap-tables`, `clone-table` and `create-table --source-branch-id`
 
 *(since 0.100.0)* (CLI-21, #791)
