@@ -616,12 +616,11 @@ kbagent sync push --project padak-2-0
 ### 7.3 Merging back to production
 
 ```bash
-# Get the Keboola UI merge URL for the dev branch
-kbagent branch merge --project padak-2-0
-# -> https://connection.keboola.com/admin/projects/10539/dev-branches/1294xxx
-
-# Click the URL, confirm the merge in the Keboola UI.
-# The dev branch is now merged into production and auto-deleted.
+# Merge the dev branch with a merge request (project feature branches-merge-requests).
+# Without the feature, merge the dev branch in the Keboola UI.
+kbagent merge-request create --project padak-2-0 --branch 1294xxx --title "Update ETL"
+kbagent merge-request merge --project padak-2-0 --branch 1294xxx
+# The dev branch is now merged into production and deleted.
 
 # Locally: merge the git branch, unlink, refresh main/
 git checkout main
@@ -1033,7 +1032,7 @@ shapes, see
 | `org setup` exits 2 with `Warning: KBC_MANAGE_API_TOKEN found in environment but ignored` | Default-deny since v0.29.0 -- pass `--allow-env-manage-token` (top-level flag) to opt in to env resolution, or run interactively to use the prompt. |
 | `org setup` fails with `401 Unauthorized` | Your manage token is wrong for this stack or role. Manage tokens are stack-specific and require the right scope. |
 | `org setup --org-id` fails with `403` | You are not an org admin. Use `--project-ids` with a Personal Access Token instead (works for any project member). |
-| Changes from `kbagent config update` do not show in UI | You are on a dev branch. Run `kbagent branch list` and `kbagent project current` to verify the active branch; changes in a dev branch merge to production only via the UI merge step (`kbagent branch merge` returns the merge URL). |
+| Changes from `kbagent config update` do not show in UI | You are on a dev branch. Run `kbagent branch list` and `kbagent project current` to verify the active branch; changes in a dev branch reach production only through a merge (`kbagent merge-request`, or the Keboola UI). |
 | The specialist subagent does not spawn when I type `/keboola X` | Plugin is not installed or is outdated. Run `kbagent doctor` and follow the reported commands. |
 
 ---

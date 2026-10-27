@@ -21,15 +21,16 @@ does (spec T12).
 from __future__ import annotations
 
 import json
+import re
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 from starlette.datastructures import MutableHeaders
 
-from ..commands._helpers import DEPRECATED_CODE, deprecation_entry
+from ..commands._helpers import DEPRECATED_CODE, DEPRECATIONS, deprecation_entry
 from ..effective_branch import open_request_record, recorded_targets
 from ..errors import ErrorCode, classify_error_code
 from ..output import TARGET_FROM_ACTIVE_CHOICE_CODE, WARNING_CODE
@@ -96,6 +97,27 @@ def warn_deprecated(form: str) -> None:
     """Add the ``DEPRECATED`` warning of a ``DEPRECATIONS`` entry (spec C3) to the request."""
     message, extra = deprecation_entry(form)
     add_warning(message, code=DEPRECATED_CODE, **extra)
+
+
+def removed_route_message(method: str, path: str) -> str | None:
+    """The error message of the removed route that ``method`` and ``path`` name, or None (C3).
+
+    A removed route form is a ``DEPRECATIONS`` key "METHOD /path/{param}"
+    with ``removed_in``. Its request answers 404 or 405, and the error names
+    the replacement.
+    """
+    for form, entry in DEPRECATIONS.items():
+        verb, _, template = form.partition(" ")
+        if entry.removed_in and verb == method and " " not in template:
+            pattern = re.sub(r"\\\{[^/]+?\\\}", "[^/]+", re.escape(template))
+            if re.fullmatch(pattern, path):
+                return entry.message
+    return None
+
+
+def removed_form_error(form: str) -> HTTPException:
+    """HTTP 405 for a request in a removed form of a live route; the message names its replacement."""
+    return HTTPException(status_code=405, detail=DEPRECATIONS[form].message)
 
 
 def warn_active_choice_shared(config_dir: object, what: str) -> None:

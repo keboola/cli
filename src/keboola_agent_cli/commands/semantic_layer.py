@@ -23,7 +23,6 @@ from ..services.semantic_layer_service import SCHEMA_TYPE_ALIAS
 from ._helpers import (
     _confirm_or_abort,
     check_cli_permission,
-    deprecated_option,
     finish_items,
     get_formatter,
     get_service,
@@ -690,7 +689,6 @@ def semantic_layer_import(
     overwrite: bool = typer.Option(
         False, "--overwrite", help="Update conflicting items in place (default: skip)"
     ),
-    yes: bool = deprecated_option("semantic-layer import --yes", "--yes", "-y"),
     scope: ScopeChoice | None = typer.Option(None, "--scope", help=_COPY_SCOPE_HELP),
     target_project: list[str] = typer.Option(
         [], "--target-project", help=_COPY_TARGET_PROJECT_HELP
@@ -699,8 +697,6 @@ def semantic_layer_import(
     """Replay a snapshot into a project. Default: skip on conflict (no surprise overwrites)."""
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
-    # The deprecated --yes has no effect; its callback adds the DEPRECATED warning (C3).
-    _ = yes
     type_list = split_multi(types) if types else None
     target_projects = resolve_scope_targets(
         ctx,

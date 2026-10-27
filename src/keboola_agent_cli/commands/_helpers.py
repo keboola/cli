@@ -12,7 +12,7 @@ import json
 import os
 import secrets
 import sys
-from collections.abc import Callable, Iterable, Sized
+from collections.abc import Callable, Iterable, Sequence, Sized
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -31,6 +31,7 @@ from ..errors import ErrorCode, KeboolaApiError, PermissionDeniedError, exit_cod
 from ..output import OutputFormatter
 from ..permissions import FLAG_ESCALATIONS
 from ..update_crossing import print_held_warning, refusal_for
+from ._context_commands import ALIASES
 
 
 def resolve_manage_token(*, allow_env: bool = False) -> str:
@@ -793,84 +794,152 @@ DEPRECATED_CODE = "DEPRECATED"
 
 @dataclass(frozen=True)
 class Deprecation:
-    """One deprecated command-line form (spec C3).
+    """One deprecated or removed command-line form (spec C3).
 
     ``replacement`` is the form to use instead, or None when the old form
     has no effect and the caller only drops it. ``remove_after`` is the ISO
-    date after which a minor release may remove the old form. It is None
-    while that date is unknown: the window of a form that 1.0.0 hides
-    starts at the migration time M, which exists only once v1.0.0 is
-    published.
+    date after which a minor release may remove a deprecated form.
+    ``removed_in`` is the version that removed the form: the form is an
+    error, and the error says ``message``. ``other_names`` are further option
+    names of the form, such as its short flag.
     """
 
     message: str
     hint: str
     replacement: str | None
     remove_after: str | None = None
+    removed_in: str | None = None
+    other_names: tuple[str, ...] = ()
 
 
-# C3: every deprecated form, keyed by its command path and option. A removed
-# form stays here, so that its error can name the replacement.
+# C3: every deprecated or removed form, keyed by its command path and option,
+# or by its command path alone for a removed command. A key of a group and an
+# option ("agent --id") covers every command of the group. A removed form
+# stays here, so that its error can name the replacement. 1.0.0 removed the
+# forms that 0.x and the 1.0 pre-releases kept for compatibility (#791).
 DEPRECATIONS: dict[str, Deprecation] = {
     "stream delete --force": Deprecation(
-        message="stream delete --force is deprecated. Use --yes to skip the confirmation.",
+        message="stream delete --force was removed in 1.0.0. Use --yes to skip the confirmation.",
         hint="--yes",
         replacement="--yes",
+        removed_in="1.0.0",
     ),
     "semantic-layer import --yes": Deprecation(
-        message="semantic-layer import --yes is deprecated and has no effect. Omit it.",
+        message="semantic-layer import --yes was removed in 1.0.0. It had no effect: omit it.",
         hint="omit --yes (skip on conflict is the default)",
         replacement=None,
+        removed_in="1.0.0",
+        other_names=("-y",),
     ),
     # T17: --project names the target project on every other command; here the
     # value is the alias of the new project.
     "project add --project": Deprecation(
-        message="project add --project is deprecated. Use --alias.",
+        message="project add --project was removed in 1.0.0. Use --alias for the alias of "
+        "the new project.",
         hint="--alias",
         replacement="--alias",
+        removed_in="1.0.0",
+        other_names=("-p",),
     ),
     "project create --project": Deprecation(
-        message="project create --project is deprecated. Use --alias.",
+        message="project create --project was removed in 1.0.0. Use --alias for the alias of "
+        "the new project.",
         hint="--alias",
         replacement="--alias",
+        removed_in="1.0.0",
+        other_names=("-p",),
     ),
     # T4: "all projects" is spelled --all-projects on every command.
     "project refresh --all": Deprecation(
-        message="project refresh --all is deprecated. Use --all-projects.",
+        message="project refresh --all was removed in 1.0.0. Use --all-projects.",
         hint="--all-projects",
         replacement="--all-projects",
+        removed_in="1.0.0",
+    ),
+    # A3: an identifier option names its object.
+    "merge-request --id": Deprecation(
+        message="--id was removed in 1.0.0. Use --merge-request-id.",
+        hint="--merge-request-id",
+        replacement="--merge-request-id",
+        removed_in="1.0.0",
+    ),
+    "agent --id": Deprecation(
+        message="--id was removed in 1.0.0. Use --task-id or the TASK_ID argument.",
+        hint="--task-id",
+        replacement="--task-id",
+        removed_in="1.0.0",
+    ),
+    "branch merge": Deprecation(
+        message="branch merge was removed in 1.0.0. It only printed the merge URL of the "
+        "Keboola UI. Merge a dev branch with `kbagent merge-request`, or in the Keboola UI.",
+        hint="kbagent merge-request",
+        replacement="merge-request",
+        removed_in="1.0.0",
+    ),
+    "GET /branches/{project}/merge-url": Deprecation(
+        message="GET /branches/{project}/merge-url was removed in 1.0.0. Merge a dev branch "
+        "with the /merge-requests routes, or in the Keboola UI.",
+        hint="/merge-requests",
+        replacement="/merge-requests",
+        removed_in="1.0.0",
     ),
     "POST /org/refresh refresh_all": Deprecation(
-        message="The refresh_all field of POST /org/refresh is deprecated. Use all_projects.",
+        message="The refresh_all field of POST /org/refresh was removed in 1.0.0. Use "
+        "all_projects.",
         hint="all_projects",
         replacement="all_projects",
+        removed_in="1.0.0",
     ),
-    # V9: `kbagent serve` partial updates move from PUT to PATCH. A REST form
-    # is keyed "METHOD /path"; its warning goes into the Kbagent-Warnings header.
+    # V9: `kbagent serve` partial updates moved from PUT to PATCH. A REST form
+    # is keyed "METHOD /path".
     "PUT /semantic-layer/items/{kind}/{name}": Deprecation(
-        message="PUT /semantic-layer/items/{kind}/{name} is deprecated. Use PATCH.",
+        message="PUT /semantic-layer/items/{kind}/{name} was removed in 1.0.0. Use PATCH.",
         hint="PATCH /semantic-layer/items/{kind}/{name}",
         replacement="PATCH /semantic-layer/items/{kind}/{name}",
+        removed_in="1.0.0",
     ),
     "PUT /merge-requests/{project}/{merge_request_id}": Deprecation(
-        message="PUT /merge-requests/{project}/{merge_request_id} is deprecated. Use PATCH.",
+        message="PUT /merge-requests/{project}/{merge_request_id} was removed in 1.0.0. Use PATCH.",
         hint="PATCH /merge-requests/{project}/{merge_request_id}",
         replacement="PATCH /merge-requests/{project}/{merge_request_id}",
+        removed_in="1.0.0",
     ),
     "PUT /data-apps/{project}/{app_id}/secrets": Deprecation(
-        message="PUT /data-apps/{project}/{app_id}/secrets is deprecated. Use PATCH.",
+        message="PUT /data-apps/{project}/{app_id}/secrets was removed in 1.0.0. Use PATCH.",
         hint="PATCH /data-apps/{project}/{app_id}/secrets",
         replacement="PATCH /data-apps/{project}/{app_id}/secrets",
+        removed_in="1.0.0",
     ),
-    # Only the merge is deprecated: PUT with `replace: true` stays the full replace.
+    # Only the merge was removed: PUT with `replace: true` stays the full replace.
     "PUT /configs/{project}/{component_id}/{config_id}/variables": Deprecation(
-        message="PUT .../variables without replace: true merges the variables, which is "
-        "deprecated. Use PATCH to merge, or PUT with replace: true to replace all variables. "
-        "After the window, a PUT without replace: true is refused, never run as a replace.",
+        message="PUT .../variables without replace: true was removed in 1.0.0. Use PATCH to "
+        "merge, or PUT with replace: true to replace all variables.",
         hint="PATCH /configs/{project}/{component_id}/{config_id}/variables",
         replacement="PATCH /configs/{project}/{component_id}/{config_id}/variables",
+        removed_in="1.0.0",
     ),
 }
+
+
+def removed_form(path: Sequence[str], option: str | None = None) -> Deprecation | None:
+    """The removed form that a command path, or a command path and an option, names (C3).
+
+    ``path`` is the command path without the root, as typed (a hidden alias
+    group such as ``mr`` counts as its group). Without ``option``, ``path``
+    names a removed command. With it, the longest key wins, so a key of a
+    group covers the commands of the group.
+    """
+    names = [ALIASES.get(path[0], path[0]), *path[1:]] if path else []
+    if option is None:
+        entry = DEPRECATIONS.get(" ".join(names))
+        return entry if entry is not None and entry.removed_in else None
+    for end in range(len(names), 0, -1):
+        prefix = " ".join(names[:end])
+        for form, entry in DEPRECATIONS.items():
+            command, _, name = form.rpartition(" ")
+            if entry.removed_in and command == prefix and option in (name, *entry.other_names):
+                return entry
+    return None
 
 
 def deprecation_entry(form: str) -> tuple[str, dict[str, Any]]:
@@ -879,7 +948,7 @@ def deprecation_entry(form: str) -> tuple[str, dict[str, Any]]:
     when = (
         f"It can be removed after {entry.remove_after}."
         if entry.remove_after
-        else "It keeps working until at least 28 days after the 1.0 migration date."
+        else "It keeps working for at least 28 days."
     )
     extra = {
         "hint": entry.hint,
@@ -907,8 +976,8 @@ def deprecated_option(form: str, *param_decls: str, renamed_to: str | None = Non
     parameter, when the caller left it out, takes this value, also when it is
     required.
     """
-    if form not in DEPRECATIONS:
-        raise KeyError(f"{form!r} has no DEPRECATIONS entry")
+    if form not in DEPRECATIONS or DEPRECATIONS[form].removed_in:
+        raise KeyError(f"{form!r} has no DEPRECATIONS entry of a deprecated form")
 
     def _warn(ctx: typer.Context, value: Any) -> Any:
         formatter = (ctx.obj or {}).get("formatter")

@@ -34,16 +34,14 @@ from ._project_ref import PROJECT_HELP
 # -- Shared option declarations ------------------------------------------------
 #
 # Reused across commands so the help text and the flag names cannot drift
-# between them. `--merge-request-id`/`--id`: a merge request is the OBJECT the
-# command acts on, hence `--<noun>-id` like --config-id/--table-id (the bare
-# nouns --project/--branch are the CONTEXT you work in); `--id` is the short
-# alias the `agent` group already established beside `--task-id`.
+# between them. `--merge-request-id`: a merge request is the OBJECT the command
+# acts on, hence `--<noun>-id` like --config-id/--table-id (the bare nouns
+# --project/--branch are the CONTEXT you work in).
 
 _PROJECT_OPT = typer.Option(None, "--project", "-p", help=PROJECT_HELP)
 _MERGE_REQUEST_ID_OPT = typer.Option(
     None,
     "--merge-request-id",
-    "--id",
     help=(
         "Merge request ID. Omit to use the merge request of --branch, or of the "
         "active branch (`branch use`)"

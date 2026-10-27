@@ -199,7 +199,7 @@ output:
 - New field added? Confirm safe defaults for old consumers (False / [] / None / not-raising). Search downstream: `grep -rn '"<field_name>"' tests/ plugins/ docs/`. New field with no consumers is fine; new REQUIRED field that breaks old payload validators is BLOCKING.
 - Field removed/renamed? `grep -rn '<old_name>' src/ tests/ plugins/ docs/`. Any hits remaining = BLOCKING.
 - Exit code changed? Cross-check `errors.py` `ErrorCode` enum and `commands/_helpers.py::map_error_to_exit_code`.
-- Command or flag renamed or removed? Check that the old form follows the deprecation rule of `docs/cli-interface-spec.md` (C3: it keeps working with a `DEPRECATED` warning for at least 28 days), or that the change may ship at once (C4).
+- Command or flag renamed or removed? Check that the old form follows the deprecation rule of `docs/cli-interface-spec.md` (C3: inside a major version it keeps working with a `DEPRECATED` warning for at least 28 days. A new major version removes it, and its `DEPRECATIONS` entry stays so that the error names the replacement), or that the change may ship at once (C4).
 
 ### Step 3.8 — Convention compliance (cheap but high-signal)
 

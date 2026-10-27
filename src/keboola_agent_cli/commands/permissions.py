@@ -21,9 +21,6 @@ from ..constants import EXIT_PERMISSION_DENIED
 from ..errors import ErrorCode
 from ..models import PermissionPolicy
 from ..permissions import (
-    INERT_PATTERN_HINT,
-    INERT_PATTERN_PREFIX,
-    INERT_SINCE_VERSION,
     UNMATCHED_PATTERN_HINT,
     PermissionEngine,
     find_inert_patterns,
@@ -204,31 +201,10 @@ def permissions_show(
         if persisted.deny:
             formatter.console.print(f"[bold]Deny:[/bold] {', '.join(persisted.deny)}")
         if inert_patterns:
-            # Generalized (issue #688): ANY pattern matching no known operation
-            # is reported here, not only the retired `tool:` namespace. The
-            # `tool:`-specific MCP-migration hint is appended only when at
-            # least one offending pattern starts with that prefix; the
-            # generic typo hint is appended whenever any other kind is
-            # present too -- both can show up together in a mixed policy.
-            has_tool_prefix = any(p.startswith(INERT_PATTERN_PREFIX) for p in inert_patterns)
-            has_other = any(not p.startswith(INERT_PATTERN_PREFIX) for p in inert_patterns)
-            since_clause = (
-                f" since v{INERT_SINCE_VERSION} (the 'tool:' namespace was removed "
-                "with the MCP passthrough)"
-                if has_tool_prefix
-                else ""
-            )
-            hints = [
-                h
-                for h, present in (
-                    (INERT_PATTERN_HINT, has_tool_prefix),
-                    (UNMATCHED_PATTERN_HINT, has_other),
-                )
-                if present
-            ]
+            # Issue #688: ANY pattern matching no known operation is reported.
             formatter.console.print(
-                f"[yellow]{len(inert_patterns)} inert pattern(s){since_clause} match no "
-                f"known operation: {', '.join(inert_patterns)}. {' '.join(hints)}[/yellow]"
+                f"[yellow]{len(inert_patterns)} inert pattern(s) match no known operation: "
+                f"{', '.join(inert_patterns)}. {UNMATCHED_PATTERN_HINT}[/yellow]"
             )
     else:
         formatter.console.print("[dim]No persisted permission policy (config.json is clean).[/dim]")

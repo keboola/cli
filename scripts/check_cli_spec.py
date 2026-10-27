@@ -118,8 +118,6 @@ FORCE_MEANINGS: dict[str, str] = {
     "storage delete-column": "the guard for a column that table aliases reference",
     "storage delete-table": "the guard for a table with aliases in other projects "
     "(deletes the aliases)",
-    "stream delete": "none: hidden deprecated alias of --yes until its DEPRECATIONS "
-    "remove_after date (C3)",
     "sync pull": "legacy meaning: pull again, keep local changes, abort on a conflict",
     "sync push": "the guard that holds back remote deletions of configs and rows",
     "workspace load": "the size guard that asks before a COPY larger than 1 GB",

@@ -267,7 +267,7 @@ for the full mapping from the old `secrets.KBC_SAPI_TOKEN_*` / `vars.KBC_*` sche
   tree.** `--all-projects` (`sync pull --all-projects` / `sync push --all-projects`)
   is hard-coded to a `<directory>/<alias>/` layout for *every* registered project
   alias (`_sync_bulk.py`) — it is not "operate on whatever is in this directory."
-  Confirmed live: registering a persistent alias with `kbagent project add --project
+  Confirmed live: registering a persistent alias with `kbagent project add --alias
   153 ...` (needed for ad-hoc `config update`/`config detail` maintenance work
   outside the CI flow) and then running `sync pull --all-projects` in a directory
   that already had a flat manifest at `./.keboola/manifest.json` silently

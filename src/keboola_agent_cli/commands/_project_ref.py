@@ -38,18 +38,9 @@ PROJECT_HELP = f"Project alias or ID ({PROJECT_DEFAULT})"
 
 # Commands whose --project is NOT a lookup in the registered projects, so it
 # is never translated:
-# - `project add` / `project create`: the deprecated --project is the old name
-#   of --alias, the NEW alias. Translating an ID would register the project
-#   under another project's alias.
 # - `lineage show`: the value filters the aliases inside an offline graph
 #   file; the command needs no config at all.
-NO_LOOKUP_COMMANDS: frozenset[tuple[str, ...]] = frozenset(
-    {
-        ("project", "add"),
-        ("project", "create"),
-        ("lineage", "show"),
-    }
-)
+NO_LOOKUP_COMMANDS: frozenset[tuple[str, ...]] = frozenset({("lineage", "show")})
 
 # Commands whose --project names a registered project but not the project the
 # command works in, so an omitted one stays omitted:

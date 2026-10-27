@@ -138,7 +138,7 @@ class TestResolveProjectRef:
 
 # Commands whose --project is not a registry lookup (a new alias, an offline
 # graph filter), so an ID must reach them unchanged.
-EXPECTED_EXCLUDED = {("project", "add"), ("project", "create"), ("lineage", "show")}
+EXPECTED_EXCLUDED = {("lineage", "show")}
 
 # Options whose flag says project / alias / stack but that never name an
 # existing registered alias, so they are rightly NOT translated.

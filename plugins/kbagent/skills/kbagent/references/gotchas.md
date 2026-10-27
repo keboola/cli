@@ -25,7 +25,9 @@ From the release of kbagent 1.0.0 until its migration date (28 days later), the 
 - **Long option names**: write `--project`, `--limit`, `--column`, not short flags. On 0.x most commands have no `-p`, and 1.x removes the short flags listed in "One short flag per long option" below.
 - **Results**: read failed items and the outcome from `--json` (`errors[]`, `failed[]`, `exit_code`, `error.code`), not from human output or the exit code alone. The `Error:` lines, the headline and several exit codes differ between the majors (migration page, rows 15, 21 and 31).
 - **Removed keys**: read the error text of a failed item from `message` and fall back to `error` (0.x has only `error` or `reason`). Treat `source` `"pin"` (0.x) and `"active_project"` (1.x) of `project current` as the same. The other removed keys are in "Keys removed from `--json` output in 1.0.0" below.
-- **REST** (`kbagent http`, `kbagent serve`): send `project=` or `all_projects=true` on list routes, and `branch_id` on the routes that use the active branch on 1.x. Keep `PUT` on the 4 partial-update routes until 0.x is gone: 1.x still accepts it with a `DEPRECATED` warning, 0.x has no `PATCH` there.
+- **REST** (`kbagent http`, `kbagent serve`): send `project=` or `all_projects=true` on list routes, and `branch_id` on the routes that use the active branch on 1.x. The 4 partial-update routes have no form that works on both: 0.x has only `PUT` there, and 1.x has only `PATCH` (*(updated vNEXT)* its `PUT` answers HTTP 405). Check `kbagent --version` first. `PUT .../variables` with `replace: true` (the full replace) works on both.
+- **Project alias and all projects**: `project add --alias A`, `project create --alias A` and `project refresh --all-projects` work on 0.100.3 and later and on 1.x. *(updated vNEXT)* 1.x removes the old names `--project` / `-p` and `--all`. On 0.100.0 to 0.100.2, ask the user to update to the newest 0.x release (`kbagent update`) first.
+- **Removed forms** *(updated vNEXT)*: never use `stream delete --force`, `semantic-layer import --yes`, `--id` on `merge-request` or `agent` commands, or `branch merge`. See "1.0.0 removes the deprecated forms" below.
 - **Updates**: `kbagent update` stays on the running major. Ask the user before `kbagent update --major`.
 
 ## Keys removed from `--json` output in 1.0.0
@@ -126,7 +128,7 @@ These lists keep `error`, because their entries are not failed items with an err
 - **`semantic-layer edit glossary --new-term`, `semantic-layer remove *` and `semantic-layer reference-data delete` refuse under `--json` too.** For these `--json` is no consent: without a terminal and without `--yes` they refuse with `VALIDATION_ERROR` under `--json` (as before) and with `CONFIRMATION_REQUIRED` in human mode. Both exit 2.
 - **`storage delete-bucket` and `storage file-delete` without a terminal now refuse too.** Before, they deleted without asking when no terminal was attached. Give `--yes` (or `--json`).
 - **`branch delete` and `workspace delete` ask for confirmation and take `--yes` / `-y` and `--dry-run`.** `--dry-run` reads the branch (`GET /v2/storage/dev-branches`) or the workspace (one `GET`) and deletes nothing. A missing branch or workspace is `NOT_FOUND`. Over `kbagent serve`, `DELETE /branches/{project}/{branch_id}` and `DELETE /workspaces/{project}/{workspace_id}` accept `dry_run=true` and never prompt. On older versions these two commands deleted without a prompt and had neither flag: on both, `kbagent --json branch delete ...` works without a prompt.
-- **`stream delete --force` is a hidden deprecated alias of `--yes`, and `semantic-layer import --yes` is hidden and has no effect.** Both still work and add a `warnings[]` entry `{"code": "DEPRECATED", "replacement": "--yes" | null, "remove_after": null, "hint": ...}` (one stderr line in human mode). `remove_after` stays null until the removal date is known: at least 28 days after the 1.0 migration date. Use `stream delete --yes`, and drop `--yes` from `semantic-layer import`.
+- *(updated vNEXT)* **`stream delete --force` and `semantic-layer import --yes` are removed.** On 1.x they are `USAGE_ERROR` (exit 2), and the message names the replacement. On 0.x `--force` is an alias of `--yes`, and `semantic-layer import --yes` has no effect. Use `stream delete --yes` (it works on both), and drop `--yes` from `semantic-layer import`.
 - **`workspace load` without a terminal does not ask about a large COPY.** It refuses with `WORKSPACE_LOAD_COPY_TOO_LARGE` and names `--force`, as under `--json`.
 
 ## The fan-out reads use the active project, exit 1 when a project failed, and `targets` names the project source
@@ -140,8 +142,8 @@ These lists keep `error`, because their entries are not failed items with an err
 - **`project_source: null`** means that the command found the project in none of these ways (no project option, no `KBAGENT_PROJECT`, `project use` or sole-project fallback, no `--all-projects`). Every command with a `--project` option reports `explicit` when the option is given, and a command without `--project` that uses the chain reports the chain source. Treat null as unknown, like `active_project`.
 - **A destructive command under `--json` whose project or branch is the saved active choice adds a warning** (*(updated vNEXT)* an admin command too, for example `project edit` or `project remove`) `{"code": "TARGET_FROM_ACTIVE_CHOICE", "message", "hint"}` to the top-level `warnings[]`. The hint is the explicit flag (`--project prod`, `--branch 456`). The command still runs: `--json` is consent. Read and write commands, human mode and explicit flags give no such warning.
 - *(updated vNEXT -- CLI-49)* **The `kbagent serve` list routes follow the same rule.** `GET /configs`, `GET /jobs` and the other list routes without `project` read the active project. `all_projects=true` reads all registered projects. A route in which a project failed still answers HTTP 200 with the failure in `errors`.
-- *(updated vNEXT -- #791, spec T17)* **`POST /org/refresh` and `POST /workspaces/gc` follow it too.** Without a project (`aliases`, `project`) they use the active project. Before, `POST /org/refresh` with an empty body refreshed the tokens of all projects, and `POST /workspaces/gc` refused with HTTP 400. All projects need `all_projects=true`. The body field `refresh_all` is the deprecated name of `all_projects`, and `project refresh --all` the deprecated name of `--all-projects`.
-- *(updated vNEXT -- #791, spec T17)* **No command requires `--project`; without it, every command uses the active project, writes and deletes too.** Before, 171 commands required `--project` and exited 2 without it (for example `job detail`, `config update`, `storage delete-table`, `sync init`), and `sync pull/diff/push`, `workspace gc`, `project refresh`, `config detail`, `config new --push` and the single-shot `project invite` asked for it. A destructive command still asks on a terminal, and so does `project remove`, which also got `--yes` and `--dry-run` (use `kbagent --json project remove --project P`, which works on 0.x too). Under `--json`, a destructive or admin command adds the `TARGET_FROM_ACTIVE_CHOICE` warning. `workspace gc` and `sync pull/diff/push` without `--project` and `--all-projects` work on the active project only. `sync init` binds the directory to the active project and names it in its output. `project add` and `project create` take the new alias as `--alias`; `--project` still works there with a `DEPRECATED` warning, and it is the form that also works on 0.x. `flow schema --full` and `flow validate` use the live schema of the active project; when no project is registered or chosen they work offline (the bundled schema, semantic checks only). With a registered project a failed fetch (expired token, no network) is an error for `flow schema --full`; `flow validate` falls back to the semantic checks with a note. Exceptions, where `--project` names no target project: `init`, `agent prompt-improve` and `lineage show`. Options that name a second project keep their own rules: `sync clone --target` and the project options of `semantic-layer promote` are required, `config clone --target-project` defaults to the source project, and `semantic-layer diff` takes a project or a file for each side. kbagent checks the other options first, so a missing required option is still `USAGE_ERROR` (exit 2). When no project resolves, the command exits 5 with `CONFIG_ERROR`. Agents still pass `--project` on every command (rule above).
+- *(updated vNEXT -- #791, spec T17)* **`POST /org/refresh` and `POST /workspaces/gc` follow it too.** Without a project (`aliases`, `project`) they use the active project. Before, `POST /org/refresh` with an empty body refreshed the tokens of all projects, and `POST /workspaces/gc` refused with HTTP 400. All projects need `all_projects=true`. *(updated vNEXT)* The body field `refresh_all` and `project refresh --all` are removed: `refresh_all` answers HTTP 422 naming `all_projects`, and `--all` is `USAGE_ERROR` (exit 2) naming `--all-projects`.
+- *(updated vNEXT -- #791, spec T17)* **No command requires `--project`; without it, every command uses the active project, writes and deletes too.** Before, 171 commands required `--project` and exited 2 without it (for example `job detail`, `config update`, `storage delete-table`, `sync init`), and `sync pull/diff/push`, `workspace gc`, `project refresh`, `config detail`, `config new --push` and the single-shot `project invite` asked for it. A destructive command still asks on a terminal, and so does `project remove`, which also got `--yes` and `--dry-run` (use `kbagent --json project remove --project P`, which works on 0.x too). Under `--json`, a destructive or admin command adds the `TARGET_FROM_ACTIVE_CHOICE` warning. `workspace gc` and `sync pull/diff/push` without `--project` and `--all-projects` work on the active project only. `sync init` binds the directory to the active project and names it in its output. `project add` and `project create` take the new alias as `--alias`. *(updated vNEXT)* Their `--project` is removed (`USAGE_ERROR`, exit 2, naming `--alias`). `--alias` also works on 0.100.3 and later. `flow schema --full` and `flow validate` use the live schema of the active project; when no project is registered or chosen they work offline (the bundled schema, semantic checks only). With a registered project a failed fetch (expired token, no network) is an error for `flow schema --full`; `flow validate` falls back to the semantic checks with a note. Exceptions, where `--project` names no target project: `init`, `agent prompt-improve` and `lineage show`. Options that name a second project keep their own rules: `sync clone --target` and the project options of `semantic-layer promote` are required, `config clone --target-project` defaults to the source project, and `semantic-layer diff` takes a project or a file for each side. kbagent checks the other options first, so a missing required option is still `USAGE_ERROR` (exit 2). When no project resolves, the command exits 5 with `CONFIG_ERROR`. Agents still pass `--project` on every command (rule above).
 - **"Active" is the one name for the saved choice.** `project use` prints `Active project: <alias>` (before: `Pinned: default project is <alias>`). The help texts, messages and REST summaries say "active project" and "active branch". The `--json` key `pinned` of `project current` and the `config.json` fields (`default_project`, `active_branch_id`) keep their names. The `source` value `"pin"` of `project use` and `project current` is `"active_project"` (see "Keys removed from `--json` output in 1.0.0").
 
 ## `kbagent serve`: the active branch, `Kbagent-Targets`, the CLI error fields, `PATCH` for partial updates
@@ -154,7 +156,23 @@ These lists keep `error`, because their entries are not failed items with an err
 - **`POST /projects/use/{alias}`, `POST /branches/{project}/use` and `/reset` change the saved choice for every CLI call** of the same configuration directory. The responses add `active_project_set`, `active_branch_set` or `active_branch_cleared` and a `Kbagent-Warnings` entry `ACTIVE_CHOICE_SHARED` with `config_dir`.
 - **A list route without `project` reads the active project**, as the CLI does: `GET /configs`, `/jobs`, `/storage/buckets`, `/storage/tables`, `/flows`, `/schedules`, `/data-apps`, `/workspaces`, `/branches`, `/components`, `/sharing`, `/notifications`, `/billing/credits`, `/search`, `/projects/status`, `/token/list` and the other routes that read several projects. Send `all_projects=true` for all projects. Before, an omitted `project` read all registered projects. With nothing to resolve the route answers HTTP 400 `CONFIG_ERROR`.
 - **A destructive route on the active branch adds `TARGET_FROM_ACTIVE_CHOICE`** to `Kbagent-Warnings` (hint `branch_id=<id>`), as a destructive CLI command under `--json` does (*(updated vNEXT)* an admin route too). Send `branch_id` to make the branch explicit. The route still runs.
-- **Partial updates use `PATCH`:** `/semantic-layer/items/{kind}/{name}`, `/merge-requests/{project}/{merge_request_id}`, `/data-apps/{project}/{app_id}/secrets`, and the merge of `/configs/{project}/{component_id}/{config_id}/variables`. A `PATCH` body refuses an undeclared field (HTTP 422). The old `PUT` still works and adds a `DEPRECATED` entry (`replacement`, `remove_after: null`) to `Kbagent-Warnings`. `PUT .../variables` with `replace: true` is the full replace and gives no warning. Without it, it merges with the warning.
+- **Partial updates use `PATCH`:** `/semantic-layer/items/{kind}/{name}`, `/merge-requests/{project}/{merge_request_id}`, `/data-apps/{project}/{app_id}/secrets`, and the merge of `/configs/{project}/{component_id}/{config_id}/variables`. A `PATCH` body refuses an undeclared field (HTTP 422). *(updated vNEXT)* The old `PUT` form is removed: it answers HTTP 405, and the error message names `PATCH`. `PUT .../variables` with `replace: true` is still the full replace. Without `replace: true` it answers HTTP 405. On 0.x only `PUT` exists on these routes.
+
+## 1.0.0 removes the deprecated forms
+
+*(since vNEXT)* (#791, spec C3)
+
+- **A removed form is `USAGE_ERROR` (exit 2), and the message names the replacement.** Example: `No such option: --force. stream delete --force was removed in 1.0.0. Use --yes to skip the confirmation.` There is no hidden alias and no `DEPRECATED` warning for these forms.
+- **Removed options and their replacements:**
+  - `project add --project` / `-p` and `project create --project` / `-p`: use `--alias`.
+  - `project refresh --all`: use `--all-projects`.
+  - `stream delete --force`: use `--yes`.
+  - `semantic-layer import --yes` / `-y`: it had no effect. Omit it.
+  - `--id` on the 10 `merge-request` commands that take a merge request: use `--merge-request-id`.
+  - `--id` on the 7 `agent` commands that take a task: use `--task-id` or the positional `TASK_ID`.
+- **`branch merge` is removed.** It only printed the merge URL of the Keboola UI and reset the active branch. Use `kbagent merge-request` (a project with the `branches-merge-requests` feature), or merge in the Keboola UI. Over `kbagent serve`, `GET /branches/{project}/merge-url` is removed too.
+- **REST:** `PUT` on `/semantic-layer/items/{kind}/{name}`, `/merge-requests/{project}/{merge_request_id}` and `/data-apps/{project}/{app_id}/secrets` answers HTTP 405, and the error message names `PATCH`. `PUT .../variables` without `replace: true` answers HTTP 405 too (use `PATCH` to merge). The body field `refresh_all` of `POST /org/refresh` answers HTTP 422 naming `all_projects`.
+- **Forms that work on 0.x and 1.x:** `--alias` and `--all-projects` (0.100.3 and later), `stream delete --yes`, `semantic-layer import` without `--yes`, `--merge-request-id` and `--task-id`.
 
 ## `--branch 0` is production in `job terminate`, `swap-tables`, `clone-table` and `create-table --source-branch-id`
 
@@ -303,7 +321,7 @@ These lists keep `error`, because their entries are not failed items with an err
     or `(from .keboola/manifest.json)` -- `sync` without an active branch.
   - `Source:` names the branch that a command reads from or merges from:
     the source project of `config clone`, the branch of a merge request
-    (`merge-request *`, `branch merge`), the branch notification commands
+    (`merge-request *`, and `branch merge` before 1.0.0), the branch notification commands
     read config names from, and the source table branch of `storage
     create-table --source-branch-id` / `storage clone-table` (production).
     `merge-request merge` and an armed `merge-request auto-merge` also print
@@ -389,11 +407,11 @@ These lists keep `error`, because their entries are not failed items with an err
 - **`project current` with an ambiguous `KBAGENT_PROJECT`** keeps the value as
   typed, reports `env_points_to_configured_project: false` (commands using it
   fail) and puts the ambiguity message in the new `env_error` field.
-- **Not translated where `--project` is no registry lookup.** `project add
-  --project` and `project create --project` take the value as the new alias
-  (*(since vNEXT)* the option is `--alias`, and `--project` is its deprecated
-  name); `lineage show --project` filters the aliases inside an offline graph
-  file.
+- **Not translated where `--project` is no registry lookup.** On 0.x,
+  `project add --project` and `project create --project` take the value as
+  the new alias. *(updated vNEXT)* The option is `--alias` (also on 0.100.3
+  and later), and 1.0.0 removes `--project` of these two commands.
+  `lineage show --project` filters the aliases inside an offline graph file.
 - **`project invite --from-csv` changed:** a `project` column value now
   follows the same rules -- an alias wins over a project ID, and an ID
   registered more than once fails that row with the list of aliases. Before,
@@ -667,7 +685,7 @@ These lists keep `error`, because their entries are not failed items with an err
   `flow new`/`update`/`validate`), and Storage bucket `sharing` (the Storage API
   enforces the master privilege). If a task needs one of the three static-only
   features, register the same project again with a static Storage token
-  (`project add --project <alias2> --token-stdin`) instead of fighting the guard.
+  (`project add --alias <alias2> --token-stdin`, 0.100.3 and later) instead of fighting the guard.
 - **`dev-portal` is not on the list either.** It authenticates with its own
   Developer Portal identity (`dev-portal identity add`), never a project token,
   so a session project changes nothing there. And `flow` no longer splits:
@@ -5802,8 +5820,9 @@ documented multi-branch pull was enough (issue #649).
   `reason: "stale_branch_tree"` and acted on in no way at all.
 - **A config that exists only on the dev branch** is reported with
   `reason: "tracked_on_other_branch"` and `exists_on_target: false`; its hint
-  points at `kbagent branch merge`. Pushing it to production would have created
-  a second, unrelated config there.
+  says to merge the dev branch first. *(updated vNEXT)* `branch merge` is
+  removed in 1.0.0: merge with `kbagent merge-request` or in the Keboola UI.
+  Pushing it to production would have created a second, unrelated config there.
 - **Production is spelled three ways** in manifests in the wild -- `None` (CLI
   `--branch` absent), `0` (`branchId: branch_id or 0` from a git-branching
   pull) and the default branch's numeric id (plain pull). All three normalize to
@@ -6084,11 +6103,13 @@ was silent, and the only way to notice was reading `permissions show` (or
   way.** Both used to flag only the retired `tool:*` namespace (see the MCP
   removal gotcha above); they now flag ANY persisted pattern matching zero
   known operations, so a policy written before this gate existed (or one
-  edited directly in `config.json`) still surfaces its typos. The `tool:`
+  edited directly in `config.json`) still reports its typos. On 0.x the `tool:`
   patterns keep their specific "MCP passthrough removed, see
   docs/mcp-migration.md" hint; every other dead pattern gets a generic
   "check for typos against `kbagent permissions list`" hint instead. A policy
-  mixing both kinds shows both hints.
+  mixing both kinds shows both hints. *(updated vNEXT)* 1.x gives every inert
+  pattern, `tool:` included, the one generic hint: check for typos against
+  `kbagent permissions list`, or use a `cli:*` category.
 - **`PermissionEngine` itself stays lenient at evaluation time** -- a dead
   pattern already on disk is a silent no-op when the policy is enforced, not
   a crash. Only `permissions set` is strict; this preserves backward
@@ -6103,6 +6124,8 @@ was silent, and the only way to notice was reading `permissions show` (or
   `tool:`-prefixed** (since 0.91.0) -- a purely typo'd policy (e.g.
   `stroage.upload-table`) omits the key entirely, so JSON consumers must not
   assume `inert_since` is always present on `status: "warn"`.
+  *(updated vNEXT)* 1.x removes the key: `doctor` has no `details.inert_since`,
+  and `GET /permissions/show` has no `inert_since_version`.
 
 ## `keboola.mcp-server-tool` is now always excluded from sync; `ignoredComponents` is live
 
@@ -6279,8 +6302,9 @@ It carries the command name, the outcome, and the duration -- never argument val
 - **`cleanup_skipped: true` on a merge result** means the source branch id could not be read and
   the local active-branch reset / sync unlink did NOT run (`branch_from_id_raw` echoes the value).
   Key on the flag; recover with `kbagent branch reset` + `kbagent sync branch-unlink`.
-- **`branch merge` is deprecated** (still works, carries `deprecation` in `--json`): it only
-  builds a UI URL and resets the active branch.
+- **`branch merge` is deprecated on 0.x** (still works, carries `deprecation` in `--json`): it
+  only builds a UI URL and resets the active branch. *(updated vNEXT)* 1.0.0 removes it: use
+  `merge-request` or the Keboola UI.
 
 ## `sync pull` no longer deletes a re-created config or a locally edited directory (#792)
 

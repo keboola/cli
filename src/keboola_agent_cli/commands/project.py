@@ -22,7 +22,7 @@ from ..constants import (
     PROJECT_ROLES,
 )
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
-from ..output import OutputFormatter, format_item_error
+from ..output import format_item_error
 from ..services.project_service import AUTH_MODE_SESSION, AUTH_MODE_STATIC
 from ._all_projects import (
     FANOUT_ONE_PROJECT_HELP,
@@ -38,7 +38,6 @@ from ._helpers import (
     RefuseAtFile,
     _confirm_or_abort,
     check_cli_permission,
-    deprecated_option,
     discard_token_file,
     emit_api_error,
     finish_items,
@@ -180,23 +179,10 @@ def _format_status_table(console: Console, statuses: list[dict[str, Any]]) -> No
     console.print(table)
 
 
-def _refuse_two_aliases(formatter: OutputFormatter, alias: str | None, project: str | None) -> None:
-    """Refuse ``--alias`` with a different value of its deprecated name ``--project`` (T17)."""
-    if project and alias != project:
-        formatter.error(
-            message="Pass the alias of the new project once, with --alias.",
-            error_code=ErrorCode.USAGE_ERROR,
-        )
-        raise typer.Exit(code=2)
-
-
 @project_app.command("add")
 def project_add(
     ctx: typer.Context,
     alias: str = typer.Option(..., "--alias", help="Alias of the new project"),
-    project: str | None = deprecated_option(
-        "project add --project", "--project", "-p", renamed_to="alias"
-    ),
     url: str = typer.Option(
         DEFAULT_STACK_URL,
         help="Keboola stack URL",
@@ -220,7 +206,6 @@ def project_add(
     --token keeps the value out of your shell history.
     """
     formatter = get_formatter(ctx)
-    _refuse_two_aliases(formatter, alias, project)
     service = get_service(ctx, "project_service")
     resolved_token = resolve_storage_token_input(
         token=token,
@@ -271,9 +256,6 @@ def project_create(
     alias: str | None = typer.Option(
         None, "--alias", help="Local alias for the new project (default: from its name)"
     ),
-    project: str | None = deprecated_option(
-        "project create --project", "--project", "-p", renamed_to="alias"
-    ),
     name: str | None = typer.Option(None, "--name", "-n", help="Name for the new Keboola project"),
     backend: ProjectBackend | None = typer.Option(
         None, "--backend", help="Storage backend (default: the stack's own default)"
@@ -300,7 +282,6 @@ def project_create(
     Keboola UI instead -- kbagent keeps one session per stack.
     """
     formatter = get_formatter(ctx)
-    _refuse_two_aliases(formatter, alias, project)
     service = get_service(ctx, "auth_service")
 
     try:
@@ -628,7 +609,6 @@ def project_refresh(
     all_projects: bool = typer.Option(
         False, "--all-projects", help="Refresh all projects with invalid tokens"
     ),
-    all_: bool = deprecated_option("project refresh --all", "--all"),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Preview what would be refreshed without making changes"
     ),
@@ -664,8 +644,7 @@ def project_refresh(
     service = get_service(ctx, "org_service")
 
     # --project and --all-projects name the projects in two ways; without either,
-    # the T1 chain picks one. --all is the deprecated name of --all-projects.
-    all_projects = all_projects or all_
+    # the T1 chain picks one.
     if project and all_projects:
         formatter.error(
             message="Provide --project or --all-projects, not both",

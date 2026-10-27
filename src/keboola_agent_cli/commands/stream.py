@@ -25,7 +25,6 @@ from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._helpers import (
     _confirm_or_abort,
     check_cli_permission,
-    deprecated_option,
     emit_api_error,
     get_formatter,
     get_service,
@@ -248,7 +247,6 @@ def stream_delete(
     branch: str | None = typer.Option(
         None, "--branch", help="Branch ref (default branch if unset)"
     ),
-    force: bool = deprecated_option("stream delete --force", "--force"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview without deleting"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
 ) -> None:
@@ -256,10 +254,9 @@ def stream_delete(
     formatter = get_formatter(ctx)
     report_branch_ref(ctx.obj["config_store"], project, branch)
     if not dry_run:
-        # The deprecated --force is an alias of --yes (C3).
         _confirm_or_abort(
             formatter,
-            yes or force,
+            yes,
             f"Delete source '{source_id}' from project {project}? This is destructive.",
         )
     service = get_service(ctx, "stream_service")

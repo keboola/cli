@@ -171,7 +171,7 @@ def scope_manifest(
         remote_keys: Config keys that exist on the TARGET branch remote. Used
             only to word the orphan hint -- an entry that exists on the target
             needs a ``sync pull`` to re-target the manifest, one that does not
-            needs ``branch merge`` to be promoted first.
+            needs a merge of its branch first.
         ignored_components: Effective ignored-component set for this operation
             (``ALWAYS_IGNORED_COMPONENTS`` plus the manifest's
             ``ignoredComponents``). Entries for these components are dropped
@@ -302,8 +302,8 @@ def _other_branch_record(
     else:
         hint = (
             f"tracked on branch {cfg.branch_id} ('{tree_path}/') and does not exist on the "
-            f"target branch -- use 'kbagent branch merge' to promote it, or run "
-            f"'kbagent sync pull' to re-target the manifest"
+            f"target branch -- merge its branch first ('kbagent merge-request' or the "
+            f"Keboola UI), or run 'kbagent sync pull' to re-target the manifest"
         )
     return {
         "component_id": cfg.component_id,

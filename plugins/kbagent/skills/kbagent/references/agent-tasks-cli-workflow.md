@@ -101,7 +101,7 @@ kbagent agent show <task_id>
 
 > **ID forms:** every subcommand that takes a task/run ID
 > accepts it positionally (`agent show <task_id>`) or via a named flag
-> (`--id` / `--task-id`, plus `--run-id` for `run-detail` / `run-events`) --
+> (`--task-id`, plus `--run-id` for `run-detail` / `run-events`) --
 > matching the rest of the CLI (`--job-id`, `--config-id`, ...). Examples
 > below use the positional form for brevity.
 

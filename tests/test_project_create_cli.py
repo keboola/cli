@@ -101,24 +101,6 @@ class TestProjectCreate:
             sync_backend_init=True,
         )
 
-    def test_deprecated_project_option_names_the_alias(self, tmp_path: Path) -> None:
-        """`--project` is the deprecated name of `--alias` (spec T17, C3)."""
-        config_dir = tmp_path / "c"
-        config_dir.mkdir()
-        svc = MagicMock()
-        svc.provision_project.return_value = _result()
-
-        result = _invoke(
-            config_dir,
-            svc,
-            ["--json", "project", "create", "--url", STACK_URL, "--project", "scratch"],
-        )
-
-        assert result.exit_code == 0, result.output
-        assert svc.provision_project.call_args.kwargs["alias"] == "scratch"
-        warnings = json.loads(result.output)["warnings"]
-        assert [w["replacement"] for w in warnings if w["code"] == "DEPRECATED"] == ["--alias"]
-
     def test_defaults_leave_the_stack_to_decide(self, tmp_path: Path) -> None:
         """An omitted --backend must reach the service as None, not a guess:
         None is what keeps the stack maintainer's own default."""

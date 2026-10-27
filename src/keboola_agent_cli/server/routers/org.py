@@ -5,11 +5,11 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
+from ...commands._helpers import DEPRECATIONS
 from ...services.base import resolve_fanout_aliases
 from ..dependencies import ServiceRegistry, get_manage_token, get_registry
-from ..response_meta import warn_deprecated
 
 router = APIRouter(prefix="/org", tags=["org"])
 
@@ -32,12 +32,18 @@ class OrgSetup(BaseModel):
 class OrgRefresh(BaseModel):
     aliases: list[str] | None = None
     all_projects: bool = False
-    # The deprecated name of all_projects (spec C3).
-    refresh_all: bool = False
     token_description: str = "kbagent"
     dry_run: bool = False
     force: bool = False
     token_expires_in: int | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _refuse_refresh_all(cls, data: Any) -> Any:
+        # C3: the error of the removed field names its replacement.
+        if isinstance(data, dict) and "refresh_all" in data:
+            raise ValueError(DEPRECATIONS["POST /org/refresh refresh_all"].message)
+        return data
 
 
 @router.post("/setup", summary="Onboard org / project list", openapi_extra=_NEEDS_MANAGE_TOKEN)
@@ -88,12 +94,8 @@ def refresh(
             status_code=401,
             detail="Missing X-Manage-Token header. Refresh requires a manage token.",
         )
-    if body.refresh_all:
-        warn_deprecated("POST /org/refresh refresh_all")
     # The service reads aliases=None as every registered project.
-    aliases = resolve_fanout_aliases(
-        registry.config_store, body.aliases, body.all_projects or body.refresh_all
-    )
+    aliases = resolve_fanout_aliases(registry.config_store, body.aliases, body.all_projects)
     return registry.org.refresh_tokens(
         manage_token=manage_token,
         aliases=aliases,

@@ -119,7 +119,7 @@ Steps 21-27 are wrapped in try/except -- if workspace API is unavailable on the 
 
 | Step | Command | What is verified |
 |-----:|---------|------------------|
-| 35 | `branch list`, `branch create`, `branch use`, `branch reset`, `branch merge`, `branch delete` | Main branch exists, dev branch created (auto-activates), use/reset toggle active branch in project status, merge returns URL, branch deleted and gone from list |
+| 35 | `branch list`, `branch create`, `branch use`, `branch reset`, `branch delete` | Main branch exists, dev branch created (auto-activates), use/reset toggle active branch in project status, branch deleted and gone from list |
 
 ### Phase 11: Permissions
 

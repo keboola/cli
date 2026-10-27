@@ -68,8 +68,8 @@
       "category": "destructive",
       "help": "Remove a task. Run history on disk is preserved.\n\nDisabled tasks should be deleted with this command (not just disabled),\nwhen they will never run again -- a long history of disabled tasks\nclutters the UI / list output.",
       "params": [
-        {"kind": "argument", "name": "task_id", "opts": ["task_id"], "type": "text", "default": null, "help": "Task ID to delete. Or use --id."},
-        {"kind": "option", "name": "task_id_opt", "opts": ["--id", "--task-id"], "type": "text", "default": null, "help": "Task ID (alias for the positional argument)."},
+        {"kind": "argument", "name": "task_id", "opts": ["task_id"], "type": "text", "default": null, "help": "Task ID to delete. Or use --task-id."},
+        {"kind": "option", "name": "task_id_opt", "opts": ["--task-id"], "type": "text", "default": null, "help": "Task ID (alias for the positional argument)."},
         {"kind": "option", "name": "yes", "opts": ["--yes", "-y"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip confirmation prompt."}
       ]
     },
@@ -103,8 +103,8 @@
       "category": "write",
       "help": "Trigger a task immediately (does not wait for the next cron firing).\n\nBy default blocks until the run finishes and prints the AgentRun\nrecord. Use ``--stream`` to render live events as they arrive (one\nline per event in human mode, NDJSON in --json mode).\n\n``--runtime-prompt`` is a shortcut for ai_agent tasks (most common\nuse case for manual tasks). For full control over the runtime merge,\npass ``--runtime-input '{\"key\": \"value\"}'``.",
       "params": [
-        {"kind": "argument", "name": "task_id", "opts": ["task_id"], "type": "text", "default": null, "help": "Task ID to run. Or use --id."},
-        {"kind": "option", "name": "task_id_opt", "opts": ["--id", "--task-id"], "type": "text", "default": null, "help": "Task ID (alias for the positional argument)."},
+        {"kind": "argument", "name": "task_id", "opts": ["task_id"], "type": "text", "default": null, "help": "Task ID to run. Or use --task-id."},
+        {"kind": "option", "name": "task_id_opt", "opts": ["--task-id"], "type": "text", "default": null, "help": "Task ID (alias for the positional argument)."},
         {"kind": "option", "name": "stream", "opts": ["--stream"], "type": "boolean", "is_flag": true, "default": false, "help": "Stream events live (each event on its own line / NDJSON in --json mode)."},
         {"kind": "option", "name": "runtime_prompt", "opts": ["--runtime-prompt"], "type": "text", "default": null, "help": "ai_agent: ad-hoc text appended to the persisted prompt for this run only."},
         {"kind": "option", "name": "runtime_input", "opts": ["--runtime-input"], "type": "text", "default": null, "help": "JSON input merged into the action params for this run only. Inline, @path, or -."}
@@ -117,9 +117,9 @@
       "category": "read",
       "help": "Show a single AgentRun record (status, summary, output, error).",
       "params": [
-        {"kind": "argument", "name": "task_id", "opts": ["task_id"], "type": "text", "default": null, "help": "Task ID. Or use --id/--task-id."},
+        {"kind": "argument", "name": "task_id", "opts": ["task_id"], "type": "text", "default": null, "help": "Task ID. Or use --task-id."},
         {"kind": "argument", "name": "run_id", "opts": ["run_id"], "type": "text", "default": null, "help": "Run ID (12-char hex). Or use --run-id."},
-        {"kind": "option", "name": "task_id_opt", "opts": ["--id", "--task-id"], "type": "text", "default": null, "help": "Task ID (alias for the positional argument)."},
+        {"kind": "option", "name": "task_id_opt", "opts": ["--task-id"], "type": "text", "default": null, "help": "Task ID (alias for the positional argument)."},
         {"kind": "option", "name": "run_id_opt", "opts": ["--run-id"], "type": "text", "default": null, "help": "Run ID (alias for the positional argument)."}
       ]
     },
@@ -130,9 +130,9 @@
       "category": "read",
       "help": "Replay the persisted event timeline of an ai_agent run (line-by-line).",
       "params": [
-        {"kind": "argument", "name": "task_id", "opts": ["task_id"], "type": "text", "default": null, "help": "Task ID. Or use --id/--task-id."},
+        {"kind": "argument", "name": "task_id", "opts": ["task_id"], "type": "text", "default": null, "help": "Task ID. Or use --task-id."},
         {"kind": "argument", "name": "run_id", "opts": ["run_id"], "type": "text", "default": null, "help": "Run ID. Or use --run-id."},
-        {"kind": "option", "name": "task_id_opt", "opts": ["--id", "--task-id"], "type": "text", "default": null, "help": "Task ID (alias for the positional argument)."},
+        {"kind": "option", "name": "task_id_opt", "opts": ["--task-id"], "type": "text", "default": null, "help": "Task ID (alias for the positional argument)."},
         {"kind": "option", "name": "run_id_opt", "opts": ["--run-id"], "type": "text", "default": null, "help": "Run ID (alias for the positional argument)."}
       ]
     },
@@ -143,8 +143,8 @@
       "category": "read",
       "help": "Show the run history of a task (most recent first).",
       "params": [
-        {"kind": "argument", "name": "task_id", "opts": ["task_id"], "type": "text", "default": null, "help": "Task ID whose history to show. Or use --id."},
-        {"kind": "option", "name": "task_id_opt", "opts": ["--id", "--task-id"], "type": "text", "default": null, "help": "Task ID (alias for the positional argument)."},
+        {"kind": "argument", "name": "task_id", "opts": ["task_id"], "type": "text", "default": null, "help": "Task ID whose history to show. Or use --task-id."},
+        {"kind": "option", "name": "task_id_opt", "opts": ["--task-id"], "type": "text", "default": null, "help": "Task ID (alias for the positional argument)."},
         {"kind": "option", "name": "limit", "opts": ["--limit", "-L"], "type": "integer", "default": 50, "help": "Max rows to return."}
       ]
     },
@@ -155,8 +155,8 @@
       "category": "read",
       "help": "Show one task's full configuration.",
       "params": [
-        {"kind": "argument", "name": "task_id", "opts": ["task_id"], "type": "text", "default": null, "help": "Task ID (12-char hex). Or use --id."},
-        {"kind": "option", "name": "task_id_opt", "opts": ["--id", "--task-id"], "type": "text", "default": null, "help": "Task ID (alias for the positional argument)."}
+        {"kind": "argument", "name": "task_id", "opts": ["task_id"], "type": "text", "default": null, "help": "Task ID (12-char hex). Or use --task-id."},
+        {"kind": "option", "name": "task_id_opt", "opts": ["--task-id"], "type": "text", "default": null, "help": "Task ID (alias for the positional argument)."}
       ]
     },
     {
@@ -184,8 +184,8 @@
       "category": "write",
       "help": "Patch one or more fields on a task. Omitted flags leave the field unchanged.",
       "params": [
-        {"kind": "argument", "name": "task_id", "opts": ["task_id"], "type": "text", "default": null, "help": "Task ID to update. Or use --id."},
-        {"kind": "option", "name": "task_id_opt", "opts": ["--id", "--task-id"], "type": "text", "default": null, "help": "Task ID (alias for the positional argument)."},
+        {"kind": "argument", "name": "task_id", "opts": ["task_id"], "type": "text", "default": null, "help": "Task ID to update. Or use --task-id."},
+        {"kind": "option", "name": "task_id_opt", "opts": ["--task-id"], "type": "text", "default": null, "help": "Task ID (alias for the positional argument)."},
         {"kind": "option", "name": "name", "opts": ["--name", "-n"], "type": "text", "default": null},
         {"kind": "option", "name": "description", "opts": ["--description"], "type": "text", "default": null},
         {"kind": "option", "name": "cron", "opts": ["--cron"], "type": "text", "default": null},
@@ -323,17 +323,6 @@
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "multiple": true, "default": null, "help": "Project alias or ID, repeatable (default: KBAGENT_PROJECT, then the active project, then the sole project; --all-projects for all projects)"},
         {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Cannot be used with --project."}
-      ]
-    },
-    {
-      "path": "branch merge",
-      "kind": "command",
-      "hidden": false,
-      "category": "write",
-      "help": "[DEPRECATED] Get the KBC UI merge URL for a development branch.\n\nDoes NOT perform the merge via API -- it builds the URL to the Keboola\nUI and then resets the active branch to main. Deprecated since 0.94.0:\non a project with merge requests enabled ('branches-merge-requests'),\nuse `kbagent merge-request create` and `kbagent merge-request merge`,\nwhich merge from the CLI and delete the source branch. This command\nkeeps working unchanged (it also serves projects without that feature).",
-      "params": [
-        {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
-        {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Branch ID to merge (uses active branch if not set)"}
       ]
     },
     {
@@ -1912,7 +1901,7 @@
       "help": "Add your approval (destructive: the last approval is what a merge waits for).\n\nOnly possible while the merge request is `in_review`. On a non-SOX project\nwith 0 required approvals (the default) that state is never reached --\n`request-review` jumps straight to `approved` -- so this command answers\n422 there. It exists for projects that require approvals. Under --json the\ntarget must be explicit.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
-        {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id", "--id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
+        {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID whose merge request to use (default: the active branch set via `branch use`). Mutually exclusive with --merge-request-id"}
       ]
     },
@@ -1924,7 +1913,7 @@
       "help": "Arm or disarm automatic merging of this merge request (destructive).\n\nA backend scheduler runs every `approved` merge request whose strategy is\n`immediately` (or `scheduled` and due) through the same merge processor\n`merge` uses -- on its own, retrying until it lands, with `merge` never\ncalled. Arming is therefore a delayed production merge and its own,\nconsciously taken step: it is not a flag on `create` or `update`. Under\n--json the target must be explicit.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
-        {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id", "--id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
+        {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID whose merge request to use (default: the active branch set via `branch use`). Mutually exclusive with --merge-request-id"},
         {"kind": "option", "name": "strategy", "opts": ["--strategy"], "type": "text", "required": true, "default": null, "help": "immediately | scheduled | none. `immediately` and `scheduled` ARM: once the merge request is approved, the backend merges it into production on its own -- no `merge` call involved. `none` disarms"},
         {"kind": "option", "name": "at", "opts": ["--at"], "type": "text", "default": null, "help": "When to auto-merge (ISO 8601); required with --strategy scheduled"},
@@ -1939,7 +1928,7 @@
       "help": "List the configurations changed on both sides (computed live by the backend).\n\nConflicts are re-validated on every call and on every merge attempt, so\nrebasing each listed configuration (`merge-request resolve`) is sufficient\n-- there is no separate re-validate step.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
-        {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id", "--id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
+        {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID whose merge request to use (default: the active branch set via `branch use`). Mutually exclusive with --merge-request-id"}
       ]
     },
@@ -1966,7 +1955,7 @@
       "help": "Show one merge request: readiness, blockers, reviewers, change log, conflicts.\n\nReadiness (`mergeable` / `merge_blockers`) is informational -- the merge\nitself stays the authority. The change log is empty until the merge\nrequest is sent for review; that is the backend's behaviour, not a gap.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
-        {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id", "--id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
+        {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID whose merge request to use (default: the active branch set via `branch use`). Mutually exclusive with --merge-request-id"},
         {"kind": "option", "name": "activity_log", "opts": ["--activity-log"], "type": "boolean", "is_flag": true, "default": false, "help": "Include the merge request's activity log"}
       ]
@@ -1979,7 +1968,7 @@
       "help": "Three-way diff of one conflicting configuration, classified per path.\n\nEach differing path is tagged by who changed it: both (the actual\nconflict), only you, or only production. Deletions are not paths -- a\nside deleted wholesale is reported as such, with the resolution to pick.\nThe branch is the merge request's own; there is no --branch of the diff.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
-        {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id", "--id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
+        {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID whose merge request to use (default: the active branch set via `branch use`). Mutually exclusive with --merge-request-id"},
         {"kind": "option", "name": "component_id", "opts": ["--component-id"], "type": "text", "required": true, "default": null, "help": "Component ID"},
         {"kind": "option", "name": "config_id", "opts": ["--config-id"], "type": "text", "required": true, "default": null, "help": "Configuration ID"},
@@ -2006,7 +1995,7 @@
       "help": "Merge the merge request into production and delete its source branch.\n\nWaits for the merge job (up to 10 minutes). Works straight from\n`development` when approvals are satisfied. The source branch is always\ndeleted afterwards (a separate async job). Under --json the target must be\nexplicit: pass --merge-request-id or --branch.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
-        {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id", "--id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
+        {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID whose merge request to use (default: the active branch set via `branch use`). Mutually exclusive with --merge-request-id"},
         {"kind": "option", "name": "yes", "opts": ["--yes", "-y"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip confirmation prompt"}
       ]
@@ -2019,7 +2008,7 @@
       "help": "Send the merge request back to development; existing approvals are removed.\n\nThis is also the closest thing to closing a merge request: the API has no\ncancel, and the web UI's \"cancel\" is exactly this call made by the\ncreator. The merge request stays open in `development` and can be\nresubmitted; deleting the branch is the terminal outcome.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
-        {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id", "--id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
+        {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID whose merge request to use (default: the active branch set via `branch use`). Mutually exclusive with --merge-request-id"},
         {"kind": "option", "name": "reason", "opts": ["--reason"], "type": "text", "default": null, "help": "Why (max 1000 characters)"}
       ]
@@ -2032,7 +2021,7 @@
       "help": "Send the merge request for review (destructive: it moves the MR toward production).\n\nOn a non-SOX project with 0 required approvals (the default) the backend\nfinishes the review itself and the merge request lands directly in\n`approved` -- where an armed auto-merge fires, and `merge` needs nothing\nmore. `merge` works straight from `development` there, so this step is\noptional. Note: with no reviewers selected, the review-requested email\ngoes to every project member. Under --json the target must be explicit.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
-        {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id", "--id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
+        {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID whose merge request to use (default: the active branch set via `branch use`). Mutually exclusive with --merge-request-id"}
       ]
     },
@@ -2044,7 +2033,7 @@
       "help": "Resolve one conflicting configuration (destructive: it removes a merge blocker).\n\nEvery mode replaces the configuration in your branch; the previous content\nstays in its version history. Rebasing each listed conflict makes the merge\nrequest mergeable -- there is no re-validate step, and on an armed MR the\nlast resolution is what lets the backend merge. There is deliberately no\n--all: conflicts are meant to be walked, not waved away. Under --json the\ntarget must be explicit.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
-        {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id", "--id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
+        {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID whose merge request to use (default: the active branch set via `branch use`). Mutually exclusive with --merge-request-id"},
         {"kind": "option", "name": "component_id", "opts": ["--component-id"], "type": "text", "required": true, "default": null, "help": "Component ID"},
         {"kind": "option", "name": "config_id", "opts": ["--config-id"], "type": "text", "required": true, "default": null, "help": "Configuration ID"},
@@ -2061,7 +2050,7 @@
       "help": "Change a merge request's title, description, reviewers or external id.\n\nOmitted fields stay as they are; an empty string clears --description /\n--external-id. --reviewer-id replaces the whole reviewer set. Auto-merge\nis not a field here -- it is the destructive `merge-request auto-merge`.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
-        {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id", "--id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
+        {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID whose merge request to use (default: the active branch set via `branch use`). Mutually exclusive with --merge-request-id"},
         {"kind": "option", "name": "title", "opts": ["--title"], "type": "text", "default": null, "help": "Merge request title"},
         {"kind": "option", "name": "description", "opts": ["--description"], "type": "text", "default": null, "help": "Description (on update: an empty string clears it)"},
@@ -2234,7 +2223,6 @@
       "help": "Add a new Keboola project connection.\n\nThe token comes from --token-stdin, --token-file, --token-env, --token,\nthe KBC_TOKEN env var, or an interactive prompt. Every source other than\n--token keeps the value out of your shell history.",
       "params": [
         {"kind": "option", "name": "alias", "opts": ["--alias"], "type": "text", "required": true, "default": null, "help": "Alias of the new project"},
-        {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "hidden": true, "default": null},
         {"kind": "option", "name": "url", "opts": ["--url"], "type": "text", "envvar": "KBC_STORAGE_API_URL", "default": "https://connection.keboola.com", "help": "Keboola stack URL"},
         {"kind": "option", "name": "token", "opts": ["--token"], "type": "text", "envvar": "KBC_TOKEN", "default": null, "help": "Storage API token. Also settable via KBC_TOKEN. Prefer --token-stdin: a token passed here lands in your shell history and in a process listing."},
         {"kind": "option", "name": "token_stdin", "opts": ["--token-stdin"], "type": "boolean", "is_flag": true, "default": false, "help": "Read the token from stdin instead of --token. On a TTY this is a hidden prompt (Enter to confirm); on a pipe it reads until EOF (e.g. `printf '%s' \"$TOKEN\" | kbagent project edit --project P --token-stdin`). The token stays out of your shell history and out of a process listing."},
@@ -2252,7 +2240,6 @@
       "params": [
         {"kind": "option", "name": "url", "opts": ["--url"], "type": "text", "required": true, "default": null, "help": "Keboola stack URL to create the project on (required -- never guessed)"},
         {"kind": "option", "name": "alias", "opts": ["--alias"], "type": "text", "default": null, "help": "Local alias for the new project (default: from its name)"},
-        {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "hidden": true, "default": null},
         {"kind": "option", "name": "name", "opts": ["--name", "-n"], "type": "text", "default": null, "help": "Name for the new Keboola project"},
         {"kind": "option", "name": "backend", "opts": ["--backend"], "type": "choice", "choices": ["snowflake", "bigquery"], "default": null, "help": "Storage backend (default: the stack's own default)"},
         {"kind": "option", "name": "sync_backend_init", "opts": ["--sync-backend-init"], "type": "boolean", "is_flag": true, "default": false, "help": "Wait for the storage backend to be initialized before answering, instead of letting the stack finish it in the background"}
@@ -2411,7 +2398,6 @@
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project; --all-projects for all projects)"},
         {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Refresh all projects with invalid tokens"},
-        {"kind": "option", "name": "all_", "opts": ["--all"], "type": "boolean", "is_flag": true, "hidden": true, "default": false},
         {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Preview what would be refreshed without making changes"},
         {"kind": "option", "name": "force", "opts": ["--force"], "type": "boolean", "is_flag": true, "default": false, "help": "Refresh even if token is valid"},
         {"kind": "option", "name": "yes", "opts": ["--yes", "-y"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip confirmation prompt"},
@@ -2779,7 +2765,6 @@
         {"kind": "option", "name": "types", "opts": ["--types"], "type": "text", "multiple": true, "default": null, "help": "Item type to import (repeatable or comma-separated): datasets, metrics, relationships, glossary, constraints"},
         {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Plan the import without calling any write API"},
         {"kind": "option", "name": "overwrite", "opts": ["--overwrite"], "type": "boolean", "is_flag": true, "default": false, "help": "Update conflicting items in place (default: skip)"},
-        {"kind": "option", "name": "yes", "opts": ["--yes", "-y"], "type": "boolean", "is_flag": true, "hidden": true, "default": false},
         {"kind": "option", "name": "scope", "opts": ["--scope"], "type": "choice", "choices": ["project", "organization", "targeted"], "default": null, "help": "Visibility of the NEW items: 'project', 'organization' or 'targeted'. Omitted: the target model's own scope, as with `add <kind>`."},
         {"kind": "option", "name": "target_project", "opts": ["--target-project"], "type": "text", "multiple": true, "default": [], "help": "Project alias or ID that can see the new items (repeatable or comma-separated; --scope targeted only)."}
       ]
@@ -3774,7 +3759,6 @@
         {"kind": "argument", "name": "source_id", "opts": ["source_id"], "type": "text", "required": true, "default": null, "help": "Source id to delete"},
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "text", "default": null, "help": "Branch ref (default branch if unset)"},
-        {"kind": "option", "name": "force", "opts": ["--force"], "type": "boolean", "is_flag": true, "hidden": true, "default": false},
         {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Preview without deleting"},
         {"kind": "option", "name": "yes", "opts": ["--yes", "-y"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip confirmation prompt"}
       ]
