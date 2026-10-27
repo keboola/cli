@@ -139,9 +139,13 @@ class TestPermissionsShow:
         assert result.exit_code == 0
         data = json.loads(result.output)["data"]
         assert data["active"] is True
-        assert data["mode"] == "allow"
-        assert "cli:write" in data["deny"]
-        assert "cli:destructive" in data["deny"]
+        assert data["persisted"]["mode"] == "allow"
+        assert "cli:write" in data["persisted"]["deny"]
+        assert "cli:destructive" in data["persisted"]["deny"]
+        # The legacy top-level copies are removed since 1.0.0.
+        assert "mode" not in data
+        assert "allow" not in data
+        assert "deny" not in data
 
     def test_show_reports_session_flags_without_persisted_policy(self, tmp_path: Path) -> None:
         """--deny-writes with no persisted policy must still report 'active'."""
@@ -156,10 +160,7 @@ class TestPermissionsShow:
         )
         assert data["persisted"] is None
         assert "--deny-writes" in data["session_flags"]
-        # Defensive: legacy top-level keys (mode/allow/deny) must NOT be
-        # present when there is no persisted policy. Downstream consumers
-        # that historically used `data["mode"]` should KeyError here and
-        # be forced to read the new `session_flags` / `persisted` shape.
+        # The legacy top-level keys (mode/allow/deny) are removed since 1.0.0.
         assert "mode" not in data
         assert "allow" not in data
         assert "deny" not in data
@@ -182,9 +183,9 @@ class TestPermissionsShow:
             )
         assert result.exit_code == 0
         data = json.loads(result.output)["data"]
-        # Persisted policy still present + legacy top-level keys still there.
+        # Persisted policy still present, no legacy top-level copy.
         assert data["persisted"]["deny"] == ["branch.delete"]
-        assert data["deny"] == ["branch.delete"]  # legacy consumer compatibility
+        assert "deny" not in data
         # Session flags both reported.
         assert data["session_flags"] == ["--deny-writes", "--deny-destructive"]
 

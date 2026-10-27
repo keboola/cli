@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..constants import FOLDER_METADATA_KEY
 from ..errors import FeatureNotEnabledError
 
 # Shared by set-folder and the sync push warning: a stack without the field
@@ -31,11 +30,9 @@ def set_config_folder_method(
     """Set the UI folder of a configuration; an empty name clears it.
 
     Writes the configuration's ``folder`` field (PUT, creates no version),
-    never the ``KBC.configuration.folderName`` metadata key (DMD-2348). The
-    result keeps the keys and shapes it had when it wrote that key: ``key``
-    is frozen, ``value`` is the folder as stored ('' when cleared), and
-    ``result`` stays a one-entry list of ``{key, value}`` (it was the metadata
-    POST response). The PUT response subset is the new ``configuration``.
+    never the ``KBC.configuration.folderName`` metadata key (DMD-2348).
+    ``folder`` is the folder as stored ('' when cleared). ``configuration`` is
+    the PUT response subset.
 
     Raises:
         FeatureNotEnabledError: the PUT response has no ``folder`` key. A stack
@@ -68,9 +65,6 @@ def set_config_folder_method(
         "component_id": component_id,
         "config_id": config_id,
         "branch_id": effective_branch_id,
-        "key": FOLDER_METADATA_KEY,
-        "value": folder,
-        "result": [{"key": FOLDER_METADATA_KEY, "value": folder}],
         "configuration": {
             "id": response.get("id", config_id),
             "name": response.get("name"),

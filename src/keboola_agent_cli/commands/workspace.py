@@ -665,14 +665,14 @@ def workspace_gc(
                 formatter.console.print(
                     f"  [green]deleted[/green] workspace {ws['id']} in '{escape(ws['project_alias'])}'"
                 )
-        # Listing failures carry `message`, delete failures carry `workspace_id` and `error`.
+        # Delete failures carry `workspace_id`, listing failures do not.
         for err in result.get("errors", []):
             target = (
                 f"workspace {err['workspace_id']} in '{err['project_alias']}'"
                 if "workspace_id" in err
                 else f"project '{err.get('project_alias', '?')}'"
             )
-            formatter.item_error(target, err.get("error") or err.get("message") or "")
+            formatter.item_error(target, err.get("message") or "")
 
     # Items are workspaces to delete and projects to list.
     done = len(result.get("would_delete" if dry_run else "deleted", []))

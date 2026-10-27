@@ -1077,7 +1077,7 @@ def storage_delete_table(
         for tid in result["deleted"]:
             formatter.console.print(f"[bold green]Deleted:[/bold green] {tid}")
         for f_item in result["failed"]:
-            formatter.item_error(f_item["id"], f_item["error"])
+            formatter.item_error(f_item["id"], f_item["message"])
 
     finish_bulk(formatter, result, result["deleted"], "table", "deleted", render)
 
@@ -1173,7 +1173,7 @@ def storage_truncate_table(
                 f"({entry['rows_before']} -> 0 rows)"
             )
         for f_item in result["failed"]:
-            formatter.item_error(f_item["id"], f_item["error"])
+            formatter.item_error(f_item["id"], f_item["message"])
 
     finish_bulk(formatter, result, result["truncated"], "table", "truncated", render)
 
@@ -1341,7 +1341,7 @@ def storage_delete_column(
         for col in result["deleted"]:
             formatter.console.print(f"[bold green]Deleted:[/bold green] {col} from {table_id}")
         for f_item in result["failed"]:
-            formatter.item_error(f_item["column"], f_item["error"])
+            formatter.item_error(f_item["column"], f_item["message"])
 
     finish_bulk(formatter, result, result["deleted"], "column", "deleted", render)
 
@@ -1941,7 +1941,7 @@ def storage_file_tag(
         for tag_name in result["removed"]:
             formatter.console.print(f"[bold yellow]Removed tag:[/bold yellow] {tag_name}")
         for err in result["errors"]:
-            formatter.item_error(f"{err['action']} tag '{err['tag']}'", err["error"])
+            formatter.item_error(f"{err['action']} tag '{err['tag']}'", err["message"])
 
     added, removed = len(result["added"]), len(result["removed"])
     failed = len(result["errors"])

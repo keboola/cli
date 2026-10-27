@@ -439,7 +439,7 @@ def run_import_loop(
             attrs["modelUUID"] = target_model_uuid  # rewrite
             key = attrs.get(id_key, "")
             if not key:
-                per_type["failed"].append({"name": "?", "reason": f"missing {id_key} on item"})
+                per_type["failed"].append({"name": "?", "message": f"missing {id_key} on item"})
                 continue
 
             if key in existing_by_name:
@@ -453,7 +453,7 @@ def run_import_loop(
                     client.put_item(type_slug, existing_by_name[key]["id"], key, attrs)
                     per_type["overwritten"] += 1
                 except KeboolaApiError as exc:
-                    per_type["failed"].append(item_failure(exc, name=key, reason=exc.message))
+                    per_type["failed"].append(item_failure(exc, name=key))
                 continue
 
             if dry_run:
@@ -473,7 +473,7 @@ def run_import_loop(
                 )
                 per_type["created"] += 1
             except KeboolaApiError as exc:
-                per_type["failed"].append(item_failure(exc, name=key, reason=exc.message))
+                per_type["failed"].append(item_failure(exc, name=key))
 
         imported[plural] = per_type
     return imported
@@ -522,7 +522,7 @@ def run_promote_loop(
             src_attrs["modelUUID"] = target_model_uuid  # rewrite
             key = src_attrs.get(id_key, "")
             if not key:
-                stats["failed"].append({"name": "?", "reason": f"missing {id_key} on source item"})
+                stats["failed"].append({"name": "?", "message": f"missing {id_key} on source item"})
                 continue
 
             if key in tgt_by_key:
@@ -539,7 +539,7 @@ def run_promote_loop(
                     stats["overwritten"] += 1
                     stats["changes"].append({id_key: key, "diff_keys": diff_keys})
                 except KeboolaApiError as exc:
-                    stats["failed"].append(item_failure(exc, name=key, reason=exc.message))
+                    stats["failed"].append(item_failure(exc, name=key))
                 continue
 
             if dry_run:
@@ -559,7 +559,7 @@ def run_promote_loop(
                 )
                 stats["new"] += 1
             except KeboolaApiError as exc:
-                stats["failed"].append(item_failure(exc, name=key, reason=exc.message))
+                stats["failed"].append(item_failure(exc, name=key))
 
         result[plural] = stats
     return result
@@ -935,7 +935,7 @@ def enrich_schemas_with_workspace_types(
     the caller, or one auto-picked per backend. Returning ``None`` means no
     suitable workspace, and the table is reported as unresolved.
 
-    Returns a list of ``{"table_id", "error"}`` for tables that could not be
+    Returns a list of ``{"table_id", "message"}`` for tables that could not be
     (fully) resolved. These are non-fatal and surfaced in the build result.
     """
     unresolved: list[dict[str, str]] = []
@@ -953,7 +953,7 @@ def enrich_schemas_with_workspace_types(
             unresolved.append(
                 {
                     "table_id": tid,
-                    "error": (
+                    "message": (
                         f"type resolution unsupported for backend {backend!r} "
                         f"with backendPath {detail.get('backend_path', [])!r}"
                     ),
@@ -965,19 +965,19 @@ def enrich_schemas_with_workspace_types(
             unresolved.append(
                 {
                     "table_id": tid,
-                    "error": f"no workspace available to read {backend!r} types",
+                    "message": f"no workspace available to read {backend!r} types",
                 }
             )
             continue
         try:
             result = execute_query(alias, workspace_id, sql)
         except (KeboolaApiError, ConfigError) as exc:
-            unresolved.append(item_failure(exc, table_id=tid, error=str(exc)))
+            unresolved.append(item_failure(exc, table_id=tid))
             continue
         type_map = _parse_information_schema_result(result)
         if not type_map:
             unresolved.append(
-                {"table_id": tid, "error": "INFORMATION_SCHEMA returned no column types"}
+                {"table_id": tid, "message": "INFORMATION_SCHEMA returned no column types"}
             )
             continue
         for col in cols:
@@ -988,7 +988,7 @@ def enrich_schemas_with_workspace_types(
         missing = [col.get("name", "") for col in cols if not col.get("type")]
         if missing:
             unresolved.append(
-                {"table_id": tid, "error": f"no type found for column(s): {', '.join(missing)}"}
+                {"table_id": tid, "message": f"no type found for column(s): {', '.join(missing)}"}
             )
     return unresolved
 

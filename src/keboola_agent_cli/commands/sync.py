@@ -507,8 +507,11 @@ def _format_all_results(
         proj_result = projects[alias]
         # A push with per-config errors[] is a failed project, not "OK" (#745).
         mark = "[red]x[/red]" if proj_result.get("errors") else "[green]OK[/green]"
-        if "error" in proj_result:
-            formatter.item_error(f"project '{alias}'", proj_result["error"])
+        # A failed push carries `message` (item_failure); pull and diff carry `error`.
+        if "error_code" in proj_result or "error" in proj_result:
+            formatter.item_error(
+                f"project '{alias}'", proj_result.get("message") or proj_result["error"]
+            )
         elif verbose and per_project_formatter:
             formatter.console.print(f"\n[bold]{alias}:[/bold]")
             per_project_formatter(formatter, proj_result)

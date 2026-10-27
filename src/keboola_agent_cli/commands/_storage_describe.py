@@ -403,7 +403,7 @@ def register(app: typer.Typer) -> None:
                 else:
                     formatter.console.print(f"  [green]✓[/green] {obj_type} {obj_id}")
             for item in result["errors"]:
-                formatter.item_error(f"{item['type']} {item['id']}", item["error"])
+                formatter.item_error(f"{item['type']} {item['id']}", item["message"])
 
         applied = result.get("applied_count", 0)
         failed = len(result.get("errors") or [])
@@ -527,7 +527,7 @@ def register(app: typer.Typer) -> None:
                     f"  [dim]Pruned orphan {item['table_id']}.{item['column']}[/dim]"
                 )
             for item in result["errors"]:
-                formatter.item_error(item["table_id"], item["error"])
+                formatter.item_error(item["table_id"], item["message"])
 
         done_as = "would be migrated" if result["dry_run"] else "migrated"
         migrated, failed = len(result["migrated"]), len(result["errors"])

@@ -140,7 +140,7 @@ def edit_metric_with_cascade(
             cascaded_item = client.put_item("semantic-constraint", c["id"], cname, cattrs)
             cascaded.append({"constraint": cname, "status": "updated", "id": cascaded_item["id"]})
         except KeboolaApiError as exc:
-            cascaded.append(item_failure(exc, constraint=cname, status="failed", error=exc.message))
+            cascaded.append(item_failure(exc, constraint=cname, status="failed"))
 
     failed_cascades = [entry for entry in cascaded if entry["status"] == "failed"]
     partial_state = bool(failed_cascades)

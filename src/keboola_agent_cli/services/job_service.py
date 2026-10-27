@@ -944,7 +944,7 @@ class JobService(BaseService):
                     elif disposition["bucket"] == "not_found":
                         not_found.append(jid)
                     else:
-                        failed.append(item_failure(exc, id=jid, error=exc.message))
+                        failed.append(item_failure(exc, id=jid))
         finally:
             client.close()
 

@@ -701,7 +701,7 @@ def job_terminate(
         for jid in result["not_found"]:
             formatter.console.print(f"[bold red]Not found:[/bold red] {jid}")
         for f_item in result["failed"]:
-            formatter.item_error(f_item["id"], f_item["error"])
+            formatter.item_error(f_item["id"], f_item["message"])
 
     killed, failed = len(result["killed"]), len(result["failed"])
     finished, not_found = len(result["already_finished"]), len(result["not_found"])

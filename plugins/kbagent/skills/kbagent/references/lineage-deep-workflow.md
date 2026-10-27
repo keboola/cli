@@ -110,7 +110,8 @@ kbagent lineage show -l lineage.json --downstream "my-project:in.c-main.users" -
   `ambiguous_output_table` (the config writes several tables with that column
   name; `candidates` lists them) or `output_table_unknown`.
 - JSON edges carry `source_column` / `target_column` and only the relevant
-  mapping entry; the result has `column` (and the legacy `column_filter`).
+  mapping entry; the result has `column`. The legacy `column_filter` key is
+  removed (since vNEXT).
 
 Before 0.99.1 `--column` kept every edge without column info and dropped edges whose
 column list lacked the name, so unrelated branches stayed and real hops vanished.

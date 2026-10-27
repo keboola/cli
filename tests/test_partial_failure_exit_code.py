@@ -51,11 +51,11 @@ def _store(config_dir: Path) -> ConfigStore:
 ORG_SETUP_FAILED: dict[str, Any] = {
     "projects_added": [],
     "projects_skipped": [],
-    "projects_failed": [{"project_id": 7, "project_name": "broken", "error": "403"}],
+    "projects_failed": [{"project_id": 7, "project_name": "broken", "message": "403"}],
 }
-REFRESH_FAILED_ENTRY = {"alias": "prod", "project_name": "prod", "error": "Error checking token"}
-SL_FAILED_ITEM = {"name": "revenue", "reason": "HTTP 409"}
-BATCH_ERROR = {"type": "table", "id": "in.c-a.t1", "error": "denied"}
+REFRESH_FAILED_ENTRY = {"alias": "prod", "project_name": "prod", "message": "Error checking token"}
+SL_FAILED_ITEM = {"name": "revenue", "message": "HTTP 409"}
+BATCH_ERROR = {"type": "table", "id": "in.c-a.t1", "message": "denied"}
 
 
 def _push_error(config_id: str) -> dict[str, str]:
@@ -449,7 +449,7 @@ class TestSyncClone:
 
     def test_bucket_error_exits_1_without_success_line(self, tmp_path: Path) -> None:
         clone_result = self._clone_result(4, [])
-        clone_result["bucket_errors"] = [{"bucket_id": "in.c-data", "error": "denied"}]
+        clone_result["bucket_errors"] = [{"bucket_id": "in.c-data", "message": "denied"}]
         result = self._invoke_clone(tmp_path, clone_result)
         assert result.exit_code == 1
         assert "Success:" not in result.output
@@ -462,7 +462,7 @@ class TestSyncClone:
             "status": "no_changes",
             "target_alias": "prod",
             "errors": [],
-            "bucket_errors": [{"bucket_id": "in.c-data", "error": "denied"}],
+            "bucket_errors": [{"bucket_id": "in.c-data", "message": "denied"}],
         }
         result = self._invoke_clone(tmp_path, clone_result)
         assert result.exit_code == 1
@@ -818,7 +818,7 @@ class TestWorkspaceGc:
             {
                 "dry_run": False,
                 "deleted": [],
-                "errors": [{"workspace_id": 7, "project_alias": "prod", "error": "denied"}],
+                "errors": [{"workspace_id": 7, "project_alias": "prod", "message": "denied"}],
                 "message": "GC complete: 0 orphaned workspace(s) deleted, 1 error(s).",
             },
             ["--yes"],
@@ -1062,7 +1062,7 @@ class TestSemanticLayerEditMetricCascade:
     def test_failed_cascade_exits_1(self, tmp_path: Path) -> None:
         cascaded = [
             {"constraint": "c1", "status": "updated", "id": "c-9"},
-            {"constraint": "c2", "status": "failed", "error": "HTTP 500"},
+            {"constraint": "c2", "status": "failed", "message": "HTTP 500"},
         ]
         result = self._invoke(tmp_path, cascaded)
         assert result.exit_code == 1
@@ -1114,7 +1114,7 @@ class TestStorageDescribeBatchAndMigrate:
             "tables_scanned": 2,
             "skipped": [],
             "pruned_orphans": [],
-            "errors": [{"table_id": "in.c-a.t2", "error": "denied"}],
+            "errors": [{"table_id": "in.c-a.t2", "message": "denied"}],
         }
         args = ["storage", "describe-migrate", "--project", "prod", "--yes"]
         result = _invoke_with(tmp_path, "StorageService", mock, args)

@@ -225,7 +225,7 @@ class TestBulkRemoveProjects:
         assert result["removed"] == ["a", "b"]
         assert len(result["failed"]) == 1
         assert result["failed"][0]["alias"] == "ghost"
-        assert "not found" in result["failed"][0]["error"].lower()
+        assert "not found" in result["failed"][0]["message"].lower()
         assert service._config_store.get_project("a") is None
         assert service._config_store.get_project("b") is None
 
@@ -280,7 +280,7 @@ class TestBulkRemoveProjects:
         # ...but must not be reported as removable.
         assert result["removed"] == []
         assert [f["alias"] for f in result["failed"]] == ["__env__"]
-        assert "environment" in result["failed"][0]["error"].lower()
+        assert "environment" in result["failed"][0]["message"].lower()
 
 
 class TestEditProject:
@@ -951,7 +951,7 @@ class TestUseAndCurrentProject:
 
         assert result["alias"] == "stage"
         assert result["previous"] == "prod"
-        assert result["source"] == "pin"
+        assert result["source"] == "active_project"
         # Persistence check
         assert ConfigStore(config_dir=tmp_config_dir).load().default_project == "stage"
 
@@ -968,7 +968,7 @@ class TestUseAndCurrentProject:
 
         result = service.current_project()
         assert result["alias"] == "prod"
-        assert result["source"] == "pin"
+        assert result["source"] == "active_project"
         assert result["env_override"] is None
 
     def test_current_project_env_override(self, tmp_config_dir: Path, monkeypatch) -> None:
@@ -1029,7 +1029,7 @@ class TestUseAndCurrentProject:
 
         alias, source = service.resolve_pinned_alias()
         assert alias == "prod"
-        assert source == "pin"
+        assert source == "active_project"
 
     def test_resolve_sole_project_fallback(self, tmp_config_dir: Path, monkeypatch) -> None:
         monkeypatch.delenv("KBAGENT_PROJECT", raising=False)
@@ -4492,7 +4492,6 @@ class TestJobServiceTerminateJobs:
         assert result["failed"] == [
             {
                 "id": "1",
-                "error": "Token expired",
                 "error_code": "INVALID_TOKEN",
                 "retryable": False,
                 "message": "Token expired",
@@ -4519,7 +4518,6 @@ class TestJobServiceTerminateJobs:
         assert result["failed"] == [
             {
                 "id": "bad",
-                "error": "Boom",
                 "error_code": "API_ERROR",
                 "retryable": False,
                 "message": "Boom",

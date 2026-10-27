@@ -183,10 +183,9 @@ Returns `NOT_FOUND` (exit 1) when the key is absent -- there is no sentinel
 Each returns `project_alias`, `component_id`, `config_id`, `branch_id`, and a
 human-readable `message`. `set-folder` additionally returns `folder` (the
 folder as stored, `""` when cleared) so callers don't have to re-parse the
-message string. It also keeps `key` (frozen at `"KBC.configuration.folderName"`),
-`value` (same as `folder`) and `result` (still a list, `[{key, value}]`) from
-the time it wrote the metadata key, and adds `configuration` (`{id, name,
-folder}` from the config PUT).
+message string. It also returns `configuration` (`{id, name, folder}` from the
+config PUT). The keys `key`, `value` and `result` from the time it wrote the
+metadata key are removed (since vNEXT). Read `folder` instead.
 
 ## Provider semantics
 

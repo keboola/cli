@@ -76,10 +76,10 @@ def pull_all(
             # `--all-projects --json` can tell a merge conflict apart from any
             # other error and read the conflicting configs -- the single-project
             # path emits the same code + conflicts.
-            results[alias] = item_failure(exc, error=exc.message, conflicts=exc.conflicts)
+            results[alias] = item_failure(exc, conflicts=exc.conflicts)
             failed_count += 1
         except Exception as exc:
-            results[alias] = item_failure(exc, error=str(exc))
+            results[alias] = item_failure(exc)
             failed_count += 1
 
     max_workers = min(len(projects), service._resolve_max_workers()) if projects else 1

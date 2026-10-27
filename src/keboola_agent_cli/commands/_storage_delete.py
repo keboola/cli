@@ -104,7 +104,7 @@ def register(app: typer.Typer) -> None:
                 for bid in result["deleted"]:
                     formatter.console.print(f"[bold green]Deleted:[/bold green] {bid}")
             for f_item in result["failed"]:
-                formatter.item_error(f_item["id"], f_item["error"])
+                formatter.item_error(f_item["id"], f_item["message"])
 
         done = result.get("would_delete", []) if dry_run else result["deleted"]
         done_as = "would be deleted" if dry_run else "deleted"
@@ -161,7 +161,7 @@ def register(app: typer.Typer) -> None:
                 for fid in result["deleted"]:
                     formatter.console.print(f"[bold green]Deleted:[/bold green] file ID {fid}")
             for f_err in result["failed"]:
-                formatter.item_error(f"file ID {f_err['id']}", f_err["error"])
+                formatter.item_error(f"file ID {f_err['id']}", f_err["message"])
 
         done = result.get("would_delete", []) if dry_run else result["deleted"]
         done_as = "would be deleted" if dry_run else "deleted"

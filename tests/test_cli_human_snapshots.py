@@ -173,7 +173,7 @@ DELETE_RESULTS: dict[str, dict[str, Any]] = {
     },
     "storage_delete_table_headline_failed": {
         "deleted": ["in.c-main.orders"],
-        "failed": [{"id": "in.c-main.items", "error": "Table is used by an alias"}],
+        "failed": [{"id": "in.c-main.items", "message": "Table is used by an alias"}],
     },
 }
 

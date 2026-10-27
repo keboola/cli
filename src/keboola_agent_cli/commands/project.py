@@ -569,7 +569,7 @@ def _format_refresh_result(console: Console, data: dict) -> None:
     # Failed projects
     failed = data.get("projects_failed", [])
     for p in failed:
-        console.print(format_item_error(f"project '{p['alias']}'", p["error"]), soft_wrap=True)
+        console.print(format_item_error(f"project '{p['alias']}'", p["message"]), soft_wrap=True)
 
     # Summary line
     summary_parts = []
@@ -773,7 +773,7 @@ def project_current(ctx: typer.Context) -> None:
     """Show the active project.
 
     Reports whether the value comes from the ``KBAGENT_PROJECT`` env var
-    (``env``) or the saved active project (``pin``). Prints nothing but a hint if
+    (``env``) or the saved active project (``active_project``). Prints nothing but a hint if
     neither is set. ``resolved_alias`` / ``resolved_source`` name the project
     a command without ``--project`` would use (``env``, ``active_project``,
     ``sole``, or ``none``).
