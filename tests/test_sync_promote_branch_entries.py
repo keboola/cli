@@ -3062,3 +3062,32 @@ def test_status_reads_a_promoted_entry_from_its_source_tree(tmp_path: Path) -> N
 
     status = w.svc.status(w.root)
     assert status["deleted"] == []
+
+
+# -- PR #929 review (Astra): a promote entry left in main/ is never a delete ---
+
+
+def test_promote_entry_left_in_main_is_never_deleted_by_a_dev_tree_push(
+    tmp_path: Path,
+) -> None:
+    a, b = VARIANTS["extractor"], VARIANTS["sql"]
+    w = World(tmp_path)
+    w.api.seed(a, name="Orders")
+    w.api.seed(b, name="Model")
+    w.init()
+    w.pull()
+    w.push(branch=DEV)  # 1. A and B promoted from main/
+    dev_a = _dev_id_of(w, a.component_id)
+
+    _set_ignored(w, [a.component_id])
+    w.pull(branch=DEV)  # 2. B materializes dev/; A's promote entry still points at main/
+    _set_ignored(w, [])
+
+    result = w.push(branch=DEV)  # 3. plain push from dev/
+    assert (a.component_id, dev_a) in w.api.remote[DEV]
+    assert all(d.get("config_id") != dev_a for d in result.get("skipped_deletions") or [])
+    assert {(o["config_id"], o["reason"]) for o in result.get("orphaned") or []} >= {
+        (dev_a, "promoted_from_other_tree")
+    }
+    w.push(branch=DEV, force=True)  # --force deletes nothing either
+    assert (a.component_id, dev_a) in w.api.remote[DEV]

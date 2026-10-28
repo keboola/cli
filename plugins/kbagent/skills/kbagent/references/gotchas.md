@@ -156,7 +156,10 @@ These lists keep `error`, because their entries are not failed items with an err
   again). `sync status` reads a promoted config from `main/` instead of calling it
   deleted. A row folder that names a row id the manifest lost is adopted by pull under
   its tracked config too; when it differs from the remote it is a conflict, never a new
-  row.
+  row. A promoted config whose record still points at `main/` after a `sync pull
+  --branch <dev>` left it out (its component was ignored then) is listed under
+  `orphaned` with reason `promoted_from_other_tree` by a push from `dev/`; even `--force`
+  never deletes it. Before, it read as deleted and `--force` deleted it on the branch.
 - **Deleting a promoted folder from `main/`** is a local delete for the dev branch:
   `sync push --branch <dev>` lists it under `skipped_deletions`, and
   `sync push --force --branch <dev>` deletes the dev config only. Production is untouched.

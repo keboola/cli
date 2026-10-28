@@ -59,6 +59,7 @@ ConfigReader = Callable[[Path], "dict[str, Any] | None"]
 REASON_OTHER_BRANCH = "tracked_on_other_branch"
 REASON_STALE_TREE = "stale_branch_tree"
 REASON_PROMOTED = "promoted_from_this_tree"
+REASON_PROMOTED_ELSEWHERE = "promoted_from_other_tree"
 
 # ``classify_untracked`` verdicts.
 VERDICT_CREATE = "create"
@@ -359,6 +360,17 @@ def scope_manifest(
         if promote.shadows(cfg, tree_path, source_branch_path):
             continue
 
+        # A promote entry whose files are in another tree (a pull of its branch
+        # left it out, e.g. while its component was ignored) is not this tree's:
+        # read here it has no file, and a deletion would delete the remote.
+        if (
+            tree_path == source_branch_path
+            and association is not None
+            and association.tree != source_branch_path
+        ):
+            orphaned.append(_promoted_elsewhere_record(cfg, association.tree, source_branch_path))
+            continue
+
         if tree_path == source_branch_path:
             in_tree.append(cfg)
             if same_branch(manifest, cfg.branch_id, target_branch_id) and cfg.metadata.get(
@@ -469,6 +481,26 @@ def _promoted_record(cfg: ManifestConfiguration, *, tree_path: str) -> dict[str,
             f"this directory was promoted to branch {cfg.branch_id} with 'sync push "
             f"--branch {cfg.branch_id}'; that branch's record is not part of this diff "
             f"-- nothing to do"
+        ),
+    }
+
+
+def _promoted_elsewhere_record(
+    cfg: ManifestConfiguration, files_tree: str, source_tree: str
+) -> dict[str, Any]:
+    """Report record for a promote entry whose files are in a tree other than the source."""
+    return {
+        "component_id": cfg.component_id,
+        "config_id": cfg.id,
+        "path": cfg.path,
+        "branch_id": cfg.branch_id,
+        "branch_path": files_tree,
+        "exists_on_target": True,
+        "reason": REASON_PROMOTED_ELSEWHERE,
+        "hint": (
+            f"promoted to branch {cfg.branch_id} from '{files_tree}/'; its files are not in "
+            f"'{source_tree}/', so this diff neither updates nor deletes it -- run 'kbagent "
+            f"sync pull --branch {cfg.branch_id}' to track it in '{source_tree}/'"
         ),
     }
 
