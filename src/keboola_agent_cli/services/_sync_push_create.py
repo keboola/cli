@@ -30,6 +30,7 @@ from ..sync.branch_scope import (
     PromotedFrom,
     branch_tree_path,
     find_branch_entry,
+    same_branch,
 )
 from ..sync.config_format import api_config_to_local
 from ..sync.diff_engine import config_hash
@@ -137,6 +138,69 @@ class CreateLedger:
     # created: the identity of a new config's rows until then (D7). Two new
     # directories of one component both have the empty id.
     created_by_path: dict[tuple[str, str], str] = field(default_factory=dict)
+    # ``(component_id, config dir path)`` -> the placeholder its file id is,
+    # for an untracked new config dir; decided once, before any create.
+    placeholders: dict[tuple[str, str], str] = field(default_factory=dict)
+    # ``(component_id, config dir path)`` -> the warning of a dir whose file id
+    # another new dir claims too: neither maps.
+    ambiguous: dict[tuple[str, str], dict[str, Any]] = field(default_factory=dict)
+
+    @classmethod
+    def plan(
+        cls,
+        service: SyncService,
+        manifest: Manifest,
+        config_changes: list[dict[str, Any]],
+        target: CreateTarget,
+    ) -> CreateLedger:
+        """The ledger of a push, with the placeholder of each untracked new config dir (Astra).
+
+        A file id is a placeholder only when no entry of the manifest owns it
+        -- as its current id or as the ``created_from_id`` of a config an
+        earlier push created from it -- so a copy still carrying a created
+        config's placeholder never steals it. Decided before any create, so
+        the push's own creates cannot change the answer. Two new dirs carrying
+        the same free id: neither maps, and both creates report it.
+        """
+        ledger = cls()
+        if target.branch_path != branch_tree_path(manifest, target.branch_id):
+            return ledger  # the promote path maps by source ids (D24)
+        owned = {(e.component_id, e.id) for e in manifest.configurations} | {
+            (e.component_id, str(e.metadata[CREATED_FROM_KEY]))
+            for e in manifest.configurations
+            if e.metadata.get(CREATED_FROM_KEY)
+        }
+        tracked = {
+            (e.component_id, e.path)
+            for e in manifest.configurations
+            if same_branch(manifest, e.branch_id, target.branch_id)
+        }
+        claims: dict[tuple[str, str], list[str]] = {}
+        for change in config_changes:
+            key = (change["component_id"], change.get("path", ""))
+            if change["change_type"] != "added" or key in tracked:
+                continue
+            data = service._read_config_file(target.project_root / target.branch_path / key[1])
+            file_id = str(((data or {}).get("_keboola") or {}).get("config_id") or "")
+            if file_id and (key[0], file_id) not in owned:
+                claims.setdefault((key[0], file_id), []).append(key[1])
+        for (component_id, file_id), paths in claims.items():
+            if len(paths) == 1:
+                ledger.placeholders[(component_id, paths[0])] = file_id
+                continue
+            for path in paths:
+                ledger.ambiguous[(component_id, path)] = {
+                    "code": "PLACEHOLDER_AMBIGUOUS",
+                    "component_id": component_id,
+                    "path": path,
+                    "placeholder": file_id,
+                    "message": (
+                        f"{len(paths)} new config folders carry the id {file_id!r} "
+                        f"({', '.join(sorted(paths))}); none of them is linked by it. "
+                        "Give each folder its own id, or set the links by hand."
+                    ),
+                }
+        return ledger
 
     def parent_id(self, component_id: str, parent_config_id: str) -> str:
         """The id a row change's parent has on the target after this push's creates."""
@@ -226,11 +290,13 @@ def record_created_config(
         # Also in the create's own checkpoint (D9): the placeholder it was
         # created from, and -- for a flow, orchestration or schedule -- that its
         # references are not rewritten yet; Phase D clears the flag.
-        placeholder = writeback.previous_id or _file_placeholder(
-            manifest, component_id, branch_id, outcome.pristine_data
+        placeholder = writeback.previous_id or ledger.placeholders.get(
+            (component_id, config_path_str), ""
         )
         if placeholder and placeholder != new_id:
             entry.metadata[CREATED_FROM_KEY] = placeholder
+        if (component_id, config_path_str) in ledger.ambiguous:
+            warnings.append(ledger.ambiguous[(component_id, config_path_str)])
         if component_id in RUN_TARGET_COMPONENTS or carries_transformation_link(
             component_id, outcome.configuration
         ):
@@ -377,20 +443,3 @@ def register_adopted_parent(
         status_code=0,
         error_code=ErrorCode.PARENT_CONFIG_NOT_TRACKED,
     )
-
-
-def _file_placeholder(
-    manifest: Manifest, component_id: str, branch_id: int | None, pristine: dict[str, Any]
-) -> str:
-    """The id an untracked new config's file carries, when it is a placeholder (Astra).
-
-    A file id no entry of the branch tracks (and the remote does not have,
-    or the config would have been adopted) names nothing but this new
-    config: a flow may select it, and its rows, by that id. A copied file
-    still carrying a TRACKED config's id (fork by copy, #482) is no
-    placeholder -- mapping it would redirect every link to the original.
-    """
-    file_id = str((pristine.get("_keboola") or {}).get("config_id") or "")
-    if not file_id or find_branch_entry(manifest, component_id, file_id, branch_id) is not None:
-        return ""
-    return file_id

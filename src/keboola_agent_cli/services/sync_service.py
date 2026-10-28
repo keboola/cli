@@ -1545,8 +1545,8 @@ class SyncService(BaseService):
             row_changes = [c for c in changes if bool(c.get("is_row"))]
 
             # The ids this push creates, for the rows and the link backfill.
-            ledger = CreateLedger()
             target = CreateTarget(project_root, branch_path, branch_id)
+            ledger = CreateLedger.plan(self, manifest, config_changes, target)
             # (ULID parent, row placeholder id) -> row ULID; ULID parent -> rows
             # created under it. Keyed per parent: two configs can use one row id.
             created_row_id_map: dict[tuple[str, str], str] = {}

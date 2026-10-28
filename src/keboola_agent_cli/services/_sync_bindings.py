@@ -23,7 +23,9 @@ from __future__ import annotations
 import copy
 import logging
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -39,10 +41,12 @@ from ._sync_link_pending import (
     LinkMaps,
     build_link_maps,
     link_pending_entries,
+    read_target,
     set_link_pending,
     validate_targets,
 )
 from ._sync_models import (
+    CREATED_FROM_KEY,
     FLOW_COMPONENT_ID,
     ORCHESTRATOR_COMPONENT_ID,
     SCHEDULER_COMPONENT_ID,
@@ -189,6 +193,9 @@ def _bind_variables(
             created_id_map=created_id_map,
             created_variables_ulids=created_variables_ulids,
             errors=result.errors,
+            may_fall_back=partial(
+                _names_nothing, client, result.targets, manifest, branch_id, vars_placeholder
+            ),
         )
         if parent_ulid is None:
             continue
@@ -238,11 +245,15 @@ def _resolve_variables_parent(
     created_id_map: dict[tuple[str, str], str],
     created_variables_ulids: list[str],
     errors: list[dict[str, str]],
+    may_fall_back: Callable[[], bool] | None = None,
 ) -> str | None:
     """Resolve a transformation's ``variables_id`` placeholder to a ULID.
 
     Returns the ULID, or ``None`` when there is nothing to backfill
     (already-bound path) or the link is ambiguous (an error is appended).
+    The single-created-config fallback applies only when *may_fall_back*
+    says the id names nothing: an id the target has, or a placeholder of a
+    config created by an earlier push, is never redirected (Astra).
     """
     parent_ulid = created_id_map.get((VARIABLES_COMPONENT_ID, vars_placeholder))
     if parent_ulid is not None:
@@ -251,6 +262,8 @@ def _resolve_variables_parent(
         # No variables config created this push: the link is either already
         # a ULID (UPDATE path) or points outside this push. Leave it.
         return None
+    if may_fall_back is not None and not may_fall_back():
+        return None  # an existing config or a mapped placeholder: never redirected
     if len(created_variables_ulids) == 1:
         parent_ulid = created_variables_ulids[0]
         logger.warning(
@@ -278,6 +291,30 @@ def _resolve_variables_parent(
         }
     )
     return None
+
+
+def _names_nothing(
+    client: Any,
+    targets: TargetCache,
+    manifest: Manifest,
+    branch_id: int | None,
+    variables_id: str,
+) -> bool:
+    """True when *variables_id* is neither a placeholder already mapped nor an existing config.
+
+    Only such a reference -- a typo, a placeholder no config carries -- may
+    be bound to the single variables config created this push. Existence
+    is read through the push's target cache; only a 404 proves the id names
+    nothing (a failed read proves nothing, so the link is left alone).
+    """
+    claimed = {
+        str(entry.metadata.get(CREATED_FROM_KEY) or "")
+        for entry in manifest.configurations
+        if entry.component_id == VARIABLES_COMPONENT_ID
+    }
+    if variables_id in claimed:
+        return False
+    return read_target(client, targets, VARIABLES_COMPONENT_ID, variables_id, branch_id).gone
 
 
 def _resolve_variables_row(

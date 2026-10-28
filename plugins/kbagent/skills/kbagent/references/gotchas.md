@@ -197,7 +197,12 @@ These lists keep `error`, because their entries are not failed items with an err
   in the same push that selects it by that id -- and its rows by the `row_id`s in its
   row files -- is linked to the new config and rows. Those row ids count only under the
   new config: a flow that selects the ORIGINAL config's row by a copied id keeps it. A
-  folder copied from a tracked config (its id is still tracked) is no placeholder.
+  folder copied from a tracked config (its id is still tracked) is no placeholder, nor is
+  one carrying the placeholder a config was already created from. Two new folders
+  carrying the same free id link neither (`PLACEHOLDER_AMBIGUOUS` warning). A
+  transformation's link to a variables config that exists on the target, or to a
+  placeholder already created, is never re-pointed to the one variables config the push
+  created; only an id that names nothing is.
 - **A transformation created in the same push as its variables values row or shared-code
   row** keeps `link_pending` the same way while that row is missing: the push that creates
   the row also sets `variables_values_id` / `shared_code_row_ids` and the `{{<row id>}}`

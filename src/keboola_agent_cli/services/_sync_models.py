@@ -127,6 +127,8 @@ class TargetRead:
     rows: set[str] | None
     error_code: ErrorCode | None = None
     message: str = ""
+    # The target answered 404: it is known NOT to exist (a failed read proves nothing).
+    gone: bool = False
 
 
 @dataclass

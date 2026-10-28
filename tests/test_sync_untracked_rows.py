@@ -1596,3 +1596,183 @@ def test_an_unreadable_variables_target_is_one_error_per_push(
     assert (error["change_type"], error["config_id"]) == ("link_target", world.target(VARS)["id"])
     for component_id, name in ((SQL, "SQL vars only"), (SQL, "SQL step"), (PY, "Py step")):
         assert _entry_metadata(world, component_id, name).get("link_pending") is True
+
+
+# ---------------------------------------------------------------------------
+# Astra on 2902addd: untracked placeholders
+# ---------------------------------------------------------------------------
+
+
+def _seed_variables(w: DiffWorld, config_id: str, row_names: list[str]) -> None:
+    w.api.types[VARS] = "other"
+    w.api.remote[PROD][(VARS, config_id)] = {
+        "id": config_id,
+        "name": f"Vars {config_id}",
+        "description": "",
+        "configuration": {"variables": [{"name": "x", "type": "string"}]},
+        "rows": [
+            {
+                "id": f"{config_id}-{i}" if i else "existing-prod-row",
+                "name": name,
+                "description": "",
+                "configuration": {"values": [{"name": "x", "value": str(i)}]},
+                "isDisabled": False,
+            }
+            for i, name in enumerate(row_names)
+        ],
+        "isDisabled": False,
+    }
+
+
+def _new_config_from(
+    w: DiffWorld, config_id: str, name: str, file_id: str, row_ids: list[str] | None = None
+) -> Path:
+    """A new untracked dir copied from a pulled config: its own name, file id and row ids."""
+    src = w.config_dir(config_id)
+    dst = src.parent / name.lower().replace(" ", "-")
+    shutil.copytree(src, dst)
+    data = read_yaml(dst / "_config.yml")
+    data["name"] = name
+    if file_id:
+        data["_keboola"]["config_id"] = file_id
+    else:
+        data["_keboola"].pop("config_id", None)
+    write_yaml(dst / "_config.yml", data)
+    for row_file, row_id in zip(
+        sorted(dst.glob("rows/*/_config.yml")), row_ids or [], strict=False
+    ):
+        row = read_yaml(row_file)
+        row["_keboola"]["row_id"] = row_id
+        write_yaml(row_file, row)
+    return dst
+
+
+def _new_transformation(w: DiffWorld, template_id: str, links: dict[str, str]) -> None:
+    tx = _new_config_from(w, template_id, "New step", "")
+    data = read_yaml(tx / "_config.yml")
+    data.setdefault("_configuration_extra", {}).update(links)
+    write_yaml(tx / "_config.yml", data)
+
+
+def _remote_named(w: DiffWorld, name: str) -> dict[str, Any]:
+    (config,) = [c for c in w.api.remote[PROD].values() if c["name"] == name]
+    return config
+
+
+def test_a_new_transformation_keeps_its_link_to_an_existing_variables_config(
+    tmp_path: Path,
+) -> None:
+    """Astra P1: existing-prod-vars/-row stay; an unrelated new-vars-ref is no fallback target."""
+    w = DiffWorld(tmp_path)
+    _seed_variables(w, "existing-prod-vars", ["Default"])
+    sql_id = w.api.seed(VARIANTS["sql"], name="Template")
+    w.init()
+    w.pull()
+    _new_config_from(w, "existing-prod-vars", "Unrelated vars", "new-vars-ref", ["new-row-ref"])
+    _new_transformation(
+        w,
+        sql_id,
+        {"variables_id": "existing-prod-vars", "variables_values_id": "existing-prod-row"},
+    )
+
+    w.push()
+
+    configuration = _remote_named(w, "New step")["configuration"]
+    assert configuration["variables_id"] == "existing-prod-vars"
+    assert configuration["variables_values_id"] == "existing-prod-row"
+
+
+def test_a_copy_never_takes_the_placeholder_of_a_created_config(tmp_path: Path) -> None:
+    """Astra P1: "ex-ref" was created as the original; a copy still carrying it is no placeholder."""
+    w = DiffWorld(tmp_path)
+    cid = w.api.seed(VARIANTS["extractor"])
+    w.api.types["keboola.flow"] = "other"
+    w.init()
+    w.pull()
+    original = _new_config_from(w, cid, "Original", "ex-ref")
+    held = tmp_path / "held-copy"
+    shutil.copytree(original, held)  # the copy, taken before the original is created
+    w.push()
+    shutil.copytree(held, original.parent / "copy")
+    data = read_yaml(original.parent / "copy" / "_config.yml")
+    data["name"] = "Copy"
+    write_yaml(original.parent / "copy" / "_config.yml", data)
+    version = read_yaml(w.config_dir(cid) / "_config.yml")["version"]
+    _write_flow(w, "Nightly", _job("keboola.ex-http", "ex-ref", []), version)
+
+    w.push()
+
+    (flow,) = [c for (comp, _), c in w.api.remote[PROD].items() if comp == "keboola.flow"]
+    assert (
+        flow["configuration"]["tasks"][0]["task"]["configId"] == _remote_named(w, "Original")["id"]
+    )
+
+
+def test_two_new_dirs_with_one_free_id_link_neither(tmp_path: Path) -> None:
+    """Astra P1: two new dirs claim "dup-ref" -- neither maps, and the push says so."""
+    w = DiffWorld(tmp_path)
+    cid = w.api.seed(VARIANTS["extractor"])
+    w.api.types["keboola.flow"] = "other"
+    w.init()
+    w.pull()
+    _new_config_from(w, cid, "First", "dup-ref")
+    _new_config_from(w, cid, "Second", "dup-ref")
+    version = read_yaml(w.config_dir(cid) / "_config.yml")["version"]
+    _write_flow(w, "Nightly", _job("keboola.ex-http", "dup-ref", []), version)
+
+    result = w.push()
+
+    (flow,) = [c for (comp, _), c in w.api.remote[PROD].items() if comp == "keboola.flow"]
+    assert flow["configuration"]["tasks"][0]["task"]["configId"] == "dup-ref"
+    ambiguous = [x for x in result.get("warnings", []) if x.get("code") == "PLACEHOLDER_AMBIGUOUS"]
+    assert len(ambiguous) == 2
+    for name in ("First", "Second"):
+        new_id = _remote_named(w, name)["id"]
+        (entry,) = [c for c in load_manifest(w.root).configurations if c.id == new_id]
+        assert "created_from_id" not in entry.metadata
+
+
+def test_a_new_transformation_selects_one_of_two_rows_of_a_new_variables_config(
+    tmp_path: Path,
+) -> None:
+    """Astra P1: new-vars-ref has row-one-ref and row-two-ref; the transformation picks row two."""
+    w = DiffWorld(tmp_path)
+    _seed_variables(w, "existing-prod-vars", ["Row one", "Row two"])
+    sql_id = w.api.seed(VARIANTS["sql"], name="Template")
+    w.init()
+    w.pull()
+    _new_config_from(
+        w, "existing-prod-vars", "New vars", "new-vars-ref", ["row-one-ref", "row-two-ref"]
+    )
+    _new_transformation(
+        w, sql_id, {"variables_id": "new-vars-ref", "variables_values_id": "row-two-ref"}
+    )
+
+    w.push()
+
+    new_vars = _remote_named(w, "New vars")
+    configuration = _remote_named(w, "New step")["configuration"]
+    assert configuration["variables_id"] == new_vars["id"]
+    assert configuration["variables_values_id"] == _by_name(new_vars, "Row two")
+    entry = next(
+        c
+        for c in load_manifest(w.root).configurations
+        if c.id == _remote_named(w, "New step")["id"]
+    )
+    assert "link_pending" not in entry.metadata
+
+
+def test_a_mapped_row_of_another_parent_does_not_resolve_a_link() -> None:
+    """Astra P2: A has only row-a, B's mapped row is row-b; A/row-b stays unresolved."""
+    from keboola_agent_cli.services._sync_link_pending import LinkMaps
+    from keboola_agent_cli.services._sync_link_recovery import resolve_links
+
+    maps = LinkMaps(
+        rows={("B", "src-b"): "row-b"},
+        target_rows={(VARS, "A"): {"row-a"}, (VARS, "B"): {"row-b"}},
+    )
+
+    links = resolve_links({"variables_id": "A", "variables_values_id": "row-b"}, maps)
+
+    assert links.pending
+    assert links.variables_values_id is None

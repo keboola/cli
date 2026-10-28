@@ -133,12 +133,22 @@ def _read_target(
     except KeboolaApiError as exc:
         gone = exc.status_code == 404
         code = ErrorCode.LINK_UNRESOLVED if gone else ErrorCode.API_ERROR
-        return TargetRead(None, code, f"{'is gone' if gone else 'cannot be read'}: {exc}")
+        return TargetRead(None, code, f"{'is gone' if gone else 'cannot be read'}: {exc}", gone)
     except Exception as exc:  # unreadable: no proof the target exists
         logger.warning("Could not read %s/%s to check its rows", component_id, config_id)
         return TargetRead(None, ErrorCode.API_ERROR, f"cannot be read: {exc}")
     rows = detail.get("rows") if isinstance(detail, dict) else None
     return TargetRead({str(r.get("id", "")) for r in rows or [] if isinstance(r, dict)})
+
+
+def read_target(
+    client: Any, cache: TargetCache, component_id: str, config_id: str, branch_id: int | None
+) -> TargetRead:
+    """One target config as this push sees it: read once, then from the push's cache."""
+    key = (component_id, config_id)
+    if key not in cache.reads:
+        cache.reads[key] = _read_target(client, component_id, config_id, branch_id)
+    return cache.reads[key]
 
 
 def validate_targets(
@@ -171,9 +181,7 @@ def validate_targets(
         if component_id is None:
             continue
         key = (component_id, parent)
-        if key not in cache.reads:  # each target is read once per push
-            cache.reads[key] = _read_target(client, component_id, parent, branch_id)
-        read = cache.reads[key]
+        read = read_target(client, cache, component_id, parent, branch_id)
         if read.rows is None:
             _forget_config(maps, component_id, parent)
             if key not in cache.reported:

@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..errors import ErrorCode, KeboolaApiError
-from ..sync.branch_scope import find_branch_entry
+from ..sync.branch_scope import find_branch_entry, same_branch
 from ..sync.config_format import api_config_to_local
 from ..sync.diff_engine import config_hash
 from ..sync.manifest import Manifest
@@ -51,6 +51,7 @@ from ._sync_link_pending import (
     validate_targets,
 )
 from ._sync_models import (
+    CREATED_FROM_KEY,
     RUN_TARGET_COMPONENTS,
     SHARED_CODE_COMPONENT_ID,
     VARIABLES_COMPONENT_ID,
@@ -108,6 +109,9 @@ def resolve_transformation_links(
     source_dir: Path | None,
 ) -> VariableBindingResult:
     """Phase C: the in-push link backfill, then the pending links of earlier pushes."""
+    created_row_id_map = scoped_row_map(
+        manifest, branch_id, created_row_id_map, created_rows_by_parent
+    )
     result = resolve_transformation_bindings(
         service,
         client,
@@ -172,6 +176,32 @@ def resolve_transformation_links(
     return result
 
 
+def scoped_row_map(
+    manifest: Manifest,
+    branch_id: int | None,
+    created_row_id_map: dict[tuple[str, str], str],
+    created_rows_by_parent: dict[str, list[str]],
+) -> dict[tuple[str, str], str]:
+    """This push's ``(parent, placeholder row id) -> row id`` map, complete (Astra).
+
+    A row created under a NEW untracked config has no diff-time identity, so
+    the push loop does not map it; its create recorded the row file's id as
+    ``created_from_id`` under that new parent. Those are added here, scoped
+    to the parent, so the first binding pass resolves a transformation that
+    selects one of several such rows.
+    """
+    full = dict(created_row_id_map)
+    fresh = {(parent, row) for parent, rows in created_rows_by_parent.items() for row in rows}
+    for entry in manifest.configurations:
+        if not same_branch(manifest, entry.branch_id, branch_id):
+            continue
+        for row in entry.rows:
+            source = str((row.metadata or {}).get(CREATED_FROM_KEY) or "")
+            if source and (entry.id, row.id) in fresh:
+                full.setdefault((entry.id, source), row.id)
+    return full
+
+
 def _read_remote(
     client: Any, created: CreatedConfig, branch_id: int | None, result: VariableBindingResult
 ) -> dict[str, Any] | None:
@@ -223,8 +253,8 @@ def _row_of(
     mapped = maps.rows.get((parent, raw))
     if mapped is not None:
         return mapped
-    if raw in maps.rows.values():
-        return None  # already the target row
+    if any(key[0] == parent and row == raw for key, row in maps.rows.items()):
+        return None  # already the target row created under THIS parent
     if known is not None:
         links.unresolved.append(
             f"Row {raw} of {component_id} config {parent} is not on the target."
