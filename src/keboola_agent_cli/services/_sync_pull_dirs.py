@@ -44,6 +44,7 @@ from ._sync_models import (
     PROMOTED_ROW_KEY,
     PROMOTED_SOURCE_KEY,
     REBIND_PENDING_KEY,
+    RETIRED_DELETION_KEY,
     RETIRED_ROWS_KEY,
 )
 from ._sync_stale import sweep_stale_rows
@@ -138,6 +139,21 @@ class PullEntries:
                     "pull_config_hash": str(row.metadata.get("pull_config_hash", "") or ""),
                     UNKNOWN_BASE_KEY: str(row.metadata.get(UNKNOWN_BASE_KEY) or ""),
                 }
+            # Its record of rows the remote deleted (D7) travels too: the next
+            # pull of its tree puts it back into the rebuilt entry, so a later
+            # promote push still sees those rows as deleted by the source.
+            deleted = entry.metadata.get(DELETED_ROWS_KEY)
+            for row_id, base in (deleted if isinstance(deleted, dict) else {}).items():
+                bucket.setdefault(
+                    f"{prefix}{row_id}",
+                    {
+                        "path": f"rows/.deleted-{row_id}",
+                        "pull_hash": "",
+                        "pull_config_hash": str(base or ""),
+                        UNKNOWN_BASE_KEY: "",
+                        RETIRED_DELETION_KEY: "true",
+                    },
+                )
         tracked = {f"{c.component_id}/{c.id}" for c in manifest.configurations}
         for branch in manifest.branches:
             kept = _prune_retired(records.get(branch.path, {}), tracked, project_root / branch.path)

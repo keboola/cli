@@ -43,6 +43,7 @@ from ..constants import CONFIG_FILENAME
 from ..sync.branch_scope import UNKNOWN_BASE_ADOPTED, UNKNOWN_BASE_KEY
 from ..sync.manifest import ManifestConfigRow, ManifestConfiguration
 from ._sync_companions import companion_baseline, config_locally_modified, current_companions
+from ._sync_models import RETIRED_DELETION_KEY
 from ._sync_workspace import SANDBOXES_COMPONENT_ID
 
 if TYPE_CHECKING:
@@ -526,6 +527,11 @@ def sweep_stale_rows(
     for key, tracked in existing_rows.items():
         row_id = key.removeprefix(row_key_prefix)
         if row_id == key or row_id in remote_row_ids:
+            continue
+        if tracked.get(RETIRED_DELETION_KEY):
+            # A deletion record a re-target retired (D7): back into the entry.
+            if deleted_rows is not None:
+                deleted_rows[row_id] = tracked["pull_config_hash"]
             continue
         row_dir = config_dir / tracked["path"]
         row_file = row_dir / CONFIG_FILENAME

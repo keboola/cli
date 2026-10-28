@@ -977,3 +977,30 @@ def test_a_baseline_free_row_deleted_on_the_remote_is_kept_and_never_recreated(
     assert ("remote_deleted", "1003") in _changes(sim)
     assert result["created"] == 0
     assert [r["name"] for r in sim.api.remote[PROD][HTTP_2]["rows"]] == ["Row tk9z"]
+
+
+def test_a_retarget_keeps_the_record_of_rows_production_deleted(tmp_path: Path) -> None:
+    """Devin (PR #933): `pull --branch DEV` dropped production's entry and with it
+    its ``deleted_rows`` record. A later production pull rebuilt the entry
+    without it, so the next promote push (`push --branch DEV` once dev/ is gone)
+    listed the row production deleted as remote-only, not as a deletion.
+
+    Sequence: production pull records the deletion -> pull --branch DEV ->
+    production pull -> (dev/ removed) -> push --branch DEV (promote)."""
+    sim = _world(tmp_path)
+    row_id = _drop_row(sim, PROD, HTTP_1, "Row tk2z")
+    _pull(sim)
+    assert row_id in _entry(sim, "1000").metadata[DELETED_ROWS_KEY]
+
+    _pull(sim, DEV)
+    _pull(sim)
+    assert row_id in (_entry(sim, "1000").metadata.get(DELETED_ROWS_KEY) or {})
+    shutil.rmtree(sim.root / "dev")  # no dev/ tree: the next push promotes main/
+
+    diff = _diff(sim, DEV)
+    result = _push(sim, DEV)
+
+    assert ("deleted", "1000") in _changes(sim, DEV)
+    assert all(r["row_id"] != row_id for r in diff["remote_only_rows"])
+    assert [d["config_id"] for d in result["skipped_deletions"]] == [row_id]
+    assert any(r["id"] == row_id for r in sim.api.remote[DEV][HTTP_1]["rows"])

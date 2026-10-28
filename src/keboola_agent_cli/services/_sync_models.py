@@ -90,6 +90,10 @@ DELETED_ROWS_KEY = "deleted_rows"
 # such a row by it (D6): a row the remote deleted meanwhile is removed (or
 # kept and reported when edited), never left behind for push to create again.
 RETIRED_ROWS_KEY = "retired_rows"
+# A ``retired_rows`` record that carries a ``deleted_rows`` entry (D7) of the
+# dropped config, not a row file: the next pull of the tree only puts it back
+# into the rebuilt entry's ``deleted_rows`` (never a detail, never a delete).
+RETIRED_DELETION_KEY = "deleted"
 # Config metadata of a transformation whose variables link the singleton
 # fallback bound to a new config while its values row could not be resolved
 # yet: ``{"<component>/<id it names>": "<config the fallback chose>"}``, so the

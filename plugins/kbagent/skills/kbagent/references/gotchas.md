@@ -257,8 +257,16 @@ These lists keep `error`, because their entries are not failed items with an err
   that carries a config id but has no manifest entry (adopted), a remote row no local row
   folder carries is listed here too -- before, it was a `conflict` (push never deleted it
   either way).
-- **`summary.unchanged` counts configs only**: it used to subtract row changes from the
-  config count and could go negative.
+- **`summary.unchanged` of `sync diff` changed meaning.** It is now the number of local
+  configs (tracked and adopted folders) with no config-level change -- a config whose only
+  changes are in its rows counts as unchanged, and a config delete or `deleted` conflict
+  is not a local config. Before, it was the local config count minus every `added`,
+  `modified`, `remote_modified` and `conflict` change (rows included) and each
+  `remote_deleted` config, so row changes
+  lowered it and it could go negative. Count row changes from `changes[]` (`is_row`).
+- **A retarget keeps production's deleted-row record.** After `sync pull --branch <dev>` and
+  a production pull, `deleted_rows` is back on the config entry, so a later promote push
+  still lists the rows production deleted as deletions.
 - **After `sync pull --branch <dev>`, a plain `sync pull` no longer leaves a deleted row
   behind.** The bookkeeping of `main/`'s rows is kept in the manifest's branch metadata
   (`retired_rows`), so a row production deleted meanwhile is removed (or kept and reported
