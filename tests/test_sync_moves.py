@@ -630,3 +630,28 @@ def test_human_output_names_the_move_and_the_ambiguous_one(orders: Tree) -> None
     text = console.export_text()
     assert f"MOVED {HTTP}/500: extractor/{HTTP}/orders -> {orders.rel(new)}" in text
     assert "AMBIGUOUS MOVE" in text and "orders-copy" in text
+
+
+def test_human_pull_output_of_moved_and_held_configs(orders: Tree) -> None:
+    from types import SimpleNamespace
+
+    from rich.console import Console
+
+    from keboola_agent_cli.commands.sync import _format_pull_result
+
+    new = orders.move(orders.dir_of("500"), "orders-moved")
+    shutil.copytree(new, new.parent / "orders-copy")
+    console = Console(record=True, width=300)
+    result = orders.pull(dry_run=True)
+    _format_pull_result(SimpleNamespace(console=console), result)
+    assert f"{HTTP}/orders" in console.export_text()
+
+
+def test_status_reports_a_move_not_a_delete_plus_add(orders: Tree) -> None:
+    before = orders.manifest_bytes()
+    new = orders.move(orders.dir_of("500"), "orders-moved")
+    status = orders.svc.status(orders.root)
+    assert status["deleted"] == [] and status["added"] == []
+    assert [m["moved_to"] for m in status["moves"]] == [orders.rel(new)]
+    assert status["unchanged"] == 1
+    assert orders.manifest_bytes() == before

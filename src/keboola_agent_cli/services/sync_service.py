@@ -126,7 +126,7 @@ from ._sync_diff_report import DiffExtras, DiffSides, diff_report
 from ._sync_link_pending import link_pending_entries, planned_row_refs
 from ._sync_link_recovery import resolve_transformation_links
 from ._sync_models import LocalConfigHashes
-from ._sync_moves import move_fields, persist_moves, relocate, settle_moves
+from ._sync_moves import move_fields, persist_moves, relocate, settle_moves, status_moves
 from ._sync_project_guard import adopt_existing_manifest, load_project_manifest
 from ._sync_promote_remap import (
     PromoteRemap,
@@ -977,6 +977,7 @@ class SyncService(BaseService):
             whose ``#``-secrets are still plaintext on the remote (issue #378).
         """
         manifest = load_manifest(project_root)
+        moves = status_moves(self, manifest, project_root)  # in memory only (#792 I)
 
         modified: list[dict[str, str]] = []
         deleted: list[dict[str, str]] = []
@@ -1035,6 +1036,7 @@ class SyncService(BaseService):
             "unchanged": unchanged,
             "total_tracked": len(manifest.configurations),
             "plaintext_secret_warnings": plaintext_secret_warnings,
+            "moves": moves,
         }
 
     # ------------------------------------------------------------------

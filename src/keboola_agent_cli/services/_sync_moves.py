@@ -54,6 +54,7 @@ from typing import TYPE_CHECKING, Any
 from ..constants import CONFIG_FILENAME
 from ..sync.branch_scope import config_key, entry_tree, find_branch_entry, promoted_from
 from ..sync.manifest import Manifest, ManifestConfiguration, load_manifest, save_manifest
+from ._sync_workspace import effective_ignored_components
 
 if TYPE_CHECKING:
     from .sync_service import SyncService
@@ -175,6 +176,7 @@ class MovePlan:
                 "action": "moved",
                 "component_id": m.component_id,
                 "config_id": m.config_id,
+                "config_name": Path(m.moved_to).name,
                 "path": m.moved_to,
                 "old_path": m.moved_from,
             }
@@ -185,6 +187,7 @@ class MovePlan:
                 "action": "skipped",
                 "component_id": item.component_id,
                 "config_id": item.config_id,
+                "config_name": Path(item.path).name,
                 "path": item.path,
                 "reason": "ambiguous move: " + item.message(),
             }
@@ -280,8 +283,27 @@ def settle_moves(
             )
         )
         if drop_held:
-            manifest.configurations = [c for c in manifest.configurations if c not in entries]
+            manifest.configurations = [
+                c for c in manifest.configurations if all(c is not e for e in entries)
+            ]
     return plan
+
+
+def status_moves(service: SyncService, manifest: Manifest, project_root: Path) -> list[dict]:
+    """``sync status``: relocate the moves of every tree in memory, return their records.
+
+    Status reads no remote, so it relocates every branch tree; an ambiguous
+    move stays as it is (its entry ``deleted``, its candidates ``added``).
+    """
+    ignored = effective_ignored_components(manifest)
+    trees = sorted({b.path for b in manifest.branches} or {"main"})
+    return [
+        move.to_dict()
+        for tree in trees
+        for move in settle_moves(
+            service, manifest, project_root, tree, ignored, drop_held=False
+        ).moves
+    ]
 
 
 def relocate(manifest: Manifest, diff_result: dict[str, Any]) -> int:
