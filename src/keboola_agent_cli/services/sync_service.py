@@ -43,6 +43,7 @@ from ..sync.branch_scope import (
     classify_untracked,
     entry_tree,
     find_untracked_configs,
+    is_production,
     same_branch,
     scope_manifest,
     stale_tree_record,
@@ -120,6 +121,8 @@ from ._sync_data_app import (
     resolve_pull_type,
     type_needs_rewrite,
 )
+from ._sync_deletes import DeleteInputs, DeleteTarget, source_deletions, track_source_deletions
+from ._sync_diff_report import DiffExtras, DiffSides, diff_report
 from ._sync_link_pending import link_pending_entries, planned_row_refs
 from ._sync_link_recovery import resolve_transformation_links
 from ._sync_models import LocalConfigHashes
@@ -626,10 +629,19 @@ class SyncService(BaseService):
                     "pull_config_hash": r.metadata.get("pull_config_hash", ""),
                     UNKNOWN_BASE_KEY: str(r.metadata.get(UNKNOWN_BASE_KEY) or ""),
                 }
+        # Rows of this tree an earlier re-targeting pull dropped (D6).
+        existing_rows.update(entries.retired_rows_for(existing_keys, components))
 
         # Entries the remote no longer lists (#792 A/C); their on-disk dirs are
         # reserved so a same-named new config cannot land in one.
-        stale = find_stale_entries(self, own_entries, components, branch_dir, ignored_components)
+        stale = find_stale_entries(
+            self,
+            own_entries,
+            components,
+            branch_dir,
+            ignored_components,
+            manifest.ignored_components,
+        )
         used_paths |= reserved_paths(stale, branch_dir)
 
         # Force-pull conflict guard (force-pull baseline corruption fix).
@@ -852,7 +864,6 @@ class SyncService(BaseService):
                 )
                 files_written += rows.files_written
                 rows_pulled += rows.rows_pulled
-                row_manifests = rows.rows
 
                 # Record in manifest: the old baseline verbatim for a skipped
                 # config, the fresh one otherwise (issue #792 B, #686, R4).
@@ -874,7 +885,7 @@ class SyncService(BaseService):
                     folder_name = existing_metadata.get(lookup_key, {}).get(FOLDER_METADATA_KEY)
                 if folder_name:
                     cfg_metadata[FOLDER_METADATA_KEY] = folder_name
-                carry_promote_metadata(old_entries.get(lookup_key), cfg_metadata, row_manifests)
+                carry_promote_metadata(old_entries.get(lookup_key), cfg_metadata, rows)
                 new_configurations.append(
                     ManifestConfiguration(
                         branchId=branch_id or 0,
@@ -882,7 +893,7 @@ class SyncService(BaseService):
                         id=config_id,
                         path=rel_path,
                         metadata=cfg_metadata,
-                        rows=row_manifests,
+                        rows=rows.rows,
                     )
                 )
 
@@ -915,6 +926,7 @@ class SyncService(BaseService):
             manifest.configurations = new_configurations + finalize_kept_entries(
                 entries.kept, new_configurations, branch_dir, ignored_components
             )
+            entries.retire(manifest, project_root, branch_dir_name, new_configurations)
             save_manifest(project_root, manifest)
 
         return {
@@ -1119,6 +1131,17 @@ class SyncService(BaseService):
         untracked_rows = UntrackedRows()
         for cfg in scope.in_tree:
             config_dir = project_root / source_branch_path / cfg.path
+            key = f"{cfg.component_id}/{cfg.id}"
+            # Baseline hash, leniently upgraded for entries written before the
+            # script-shape change (issue #686). Strict for versioned entries.
+            # Read before the file: a local delete is three-way too (D1).
+            stored_hashes[key] = stored_cfg_hash = effective_stored_hash(
+                cfg.metadata,
+                component_id=cfg.component_id,
+                config_id=cfg.id,
+                raw_remote=remote_raw.get(key),
+                remote_local=remote_configs.get(key),
+            )
             local_data = self._read_config_file(config_dir)
             if local_data is None:
                 continue
@@ -1127,22 +1150,11 @@ class SyncService(BaseService):
                 relabelled.append(problem)
             diff_warnings += companion_diagnostics(config_dir, cfg.component_id, cfg.path)
 
-            key = f"{cfg.component_id}/{cfg.id}"
-
             # Check if ANY file of this config changed since pull: _config.yml
             # and the companion set -- a new, deleted or edited companion (D2).
             is_unchanged = local_unchanged(self, config_dir, cfg.component_id, cfg.metadata)
             file_unchanged[key] = is_unchanged
 
-            # Baseline hash, leniently upgraded for entries written before the
-            # script-shape change (issue #686). Strict for versioned entries.
-            stored_cfg_hash = effective_stored_hash(
-                cfg.metadata,
-                component_id=cfg.component_id,
-                config_id=cfg.id,
-                raw_remote=remote_raw.get(key),
-                remote_local=remote_configs.get(key),
-            )
             # A companion pull kept although the remote cleared it: no
             # baseline says which side is right, so a difference is a conflict.
             if companion_conflict(config_dir, cfg.metadata):
@@ -1282,6 +1294,9 @@ class SyncService(BaseService):
         # (whose rows belong to that branch -- issue #649).
         for cfg in scope.in_tree:
             parent_dir = project_root / source_branch_path / cfg.path
+            if source_branch_path != branch_tree_path(manifest, branch_id):  # promote (D7)
+                deleted = source_deletions(manifest, cfg, branch_id)
+                track_source_deletions(deleted, cfg, remote_rows, tracked_row_keys, row_base_hashes)
             for row in cfg.rows:
                 row_key = f"{cfg.component_id}/{cfg.id}/rows/{row.id}"
                 tracked_row_keys.add(row_key)
@@ -1333,59 +1348,33 @@ class SyncService(BaseService):
                 if c.change_type == "remote_deleted"
             },
         )
-        for change in row_changeset:  # D22: an unknown-base row is never deleted by push
-            key = f"{change.component_id}/{change.parent_config_id}/rows/{change.config_id}"
-            if change.change_type == "deleted" and row_base_hashes.get(key) == UNKNOWN_BASE_HASH:
-                change.change_type = "conflict"
         changeset.extend(row_changeset + ambiguous_rows)
-
-        added = [c for c in changeset if c.change_type == "added"]
-        modified = [c for c in changeset if c.change_type == "modified"]
-        remote_modified = [c for c in changeset if c.change_type == "remote_modified"]
-        conflicts = [c for c in changeset if c.change_type == "conflict"]
-        deleted = [c for c in changeset if c.change_type == "deleted"]
-        remote_deleted = [c for c in changeset if c.change_type == "remote_deleted"]
-
-        # Detect remote-only configs (new on server, not yet pulled).
-        local_keys = {
-            f"{e['component_id']}/{e['config_id']}" for e in local_configs if e.get("config_id")
-        } | tracked_keys
-        remote_only: list[dict[str, str]] = []
-        for remote_key, remote_data in remote_configs.items():
-            if remote_key not in local_keys and remote_key not in never_fetched_keys:
-                parts = remote_key.split("/", 1)
-                remote_only.append(
-                    {
-                        "component_id": parts[0] if parts else "",
-                        "config_id": parts[1] if len(parts) > 1 else "",
-                        "config_name": remote_data.get("name", ""),
-                    }
-                )
-
-        return {
-            "changes": [c.to_dict() for c in changeset],
-            **({"companion_warnings": diff_warnings} if diff_warnings else {}),
-            "remote_only": remote_only,
-            "never_fetched": never_fetched,
-            "orphaned": orphaned,
-            "summary": {
-                "added": len(added),
-                "modified": len(modified),
-                "remote_modified": len(remote_modified),
-                "conflict": len(conflicts),
-                "deleted": len(deleted),
-                "remote_deleted": len(remote_deleted),
-                "unchanged": len(local_configs)
-                - len(added)
-                - len(modified)
-                - len(remote_modified)
-                - len(conflicts)
-                - sum(1 for c in remote_deleted if not c.is_row),
-                "remote_only": len(remote_only),
-                "never_fetched": len(never_fetched),
-                "orphaned": len(orphaned),
-            },
-        }
+        # Remote-only configs and rows, three-way local deletes, summary (D1-D5).
+        return diff_report(
+            changeset,
+            DiffSides(
+                local_configs=local_configs,
+                local_rows=local_rows,
+                remote_configs=remote_configs,
+                remote_rows=remote_rows,
+                tracked_keys=tracked_keys,
+                tracked_row_keys=tracked_row_keys,
+                never_fetched_keys=never_fetched_keys,
+            ),
+            DeleteInputs(
+                config_bases=base_hashes,
+                row_bases=row_base_hashes,
+                target_row_keys=scope.target_tracked_row_keys,
+                remote_rows=remote_rows,
+            ),
+            DeleteTarget(
+                branch_id=branch_id,
+                production=is_production(manifest, branch_id),
+                source_tree=source_branch_path,
+                target_tree=branch_tree_path(manifest, branch_id),
+            ),
+            DiffExtras(never_fetched, orphaned, diff_warnings),
+        )
 
     # ------------------------------------------------------------------
     # push

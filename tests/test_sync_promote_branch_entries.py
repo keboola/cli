@@ -2679,11 +2679,11 @@ def test_unignored_component_promotes_into_its_dev_config_not_a_duplicate(
     for ignored in ([v.component_id], []):
         _set_ignored(w, ignored)
         w.pull()
-    # Risk 78: the ignored pull removed main/'s directory (documented), and the
-    # first edit lived only there and on DEV. Re-pulled, main/ holds production
-    # again, so one edit recreates exactly what D holds: nothing to push.
-    assert "edit_marker" not in (_yaml(w.config_dir(cid)).get("parameters") or {})
-    semantic_edit(w.config_dir(cid) / CONFIG_FILE)
+    # Risk 78, under the #927 rule (sync group 3, D8): main/'s directory holds
+    # an edit production never got, so the ignored pull KEEPS it (before #927 it
+    # deleted it, and the edit survived only on DEV). Un-ignored, the pull keeps
+    # it as locally modified; main/ still equals what D holds: nothing to push.
+    assert (_yaml(w.config_dir(cid)).get("parameters") or {}).get("edit_marker") == 1
     assert w.push(branch=DEV)["status"] == "no_changes"
     semantic_edit(w.config_dir(cid) / CONFIG_FILE)
     w.push(branch=DEV)

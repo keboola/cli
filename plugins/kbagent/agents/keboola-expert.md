@@ -318,31 +318,32 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   pull` may not have fetched metadata. Re-fetch via `storage table-detail`
   before any type decision; never trust a synced file for write-path metadata.
 - **Drifted sync tree**: reconcile with `sync pull --theirs` (remote wins:
-  overwrites local edits, restores deleted files, resolves conflicts) -- NEVER
+  overwrites local edits, restores deleted files, resolves conflicts); NEVER
   hand-edit `.keboola/manifest.json`. Plain pull re-materializes deleted dirs;
-  `is_disabled: true` in `_config.yml` = config disabled (absent = enabled); a
-  `never_fetched` warning on diff/push = run `sync pull` first; a non-zero
-  `summary.orphaned` (0.89.0+, #649) = the manifest is targeted at another
-  branch's tree -- `sync pull` to re-target, never push; check each
-  `orphaned[].reason` first: `promoted_from_this_tree` (vNEXT) is a harmless
-  promote record, no pull needed. Since 0.96.1 (#792)
-  `sync push` deletes only with `--force` (else `skipped_deletions`), and a
-  `- REMOTE DELETED` diff line = deleted on the remote, push never re-creates
-  it: `sync pull`, or `config restore` to keep it. 0.99.0+: a `CONFLICT` on a
-  file with a config id and no manifest entry = no baseline: keep the edit
+  `is_disabled: true` = disabled (absent = enabled); `never_fetched` on
+  diff/push = `sync pull` first; non-zero `summary.orphaned` (0.89.0+, #649) =
+  manifest targets another branch's tree: `sync pull` to re-target, never
+  push -- but `orphaned[].reason` `promoted_from_this_tree` (vNEXT) is a
+  harmless promote record. 0.96.1+ (#792): push deletes only with `--force`
+  (else `skipped_deletions`); `- REMOTE DELETED` = deleted remotely, never
+  re-created: `sync pull`, or `config restore` to keep it. 0.99.0+: `CONFLICT`
+  on a file with a config id and no manifest entry = no baseline: keep the edit
   aside, `sync pull --theirs`, re-apply, push (sync-workflow.md). An
-  `ENCRYPTION_FAILED` push wrote nothing: fix the cause, push again. `sync
-  status` is local-only -- audit real drift with `sync diff`. A
-  `SYNC_LEGACY_BOUNDARY` push error = tree pulled by <= 0.90.1 (phantom
-  `REMOTE MODIFIED`, #686): `sync pull` first.
-- **`sync push --branch <dev>` from `main/`** (since vNEXT, #929): production
-  `sync diff` still shows the edit as local; a promoted config gets its own dev
-  entry; flow, schedule, variables and shared-code references are remapped to
-  the dev ids. gotchas.md.
+  `ENCRYPTION_FAILED` push wrote
+  nothing: fix, push again. `sync status` is local-only; audit with `sync
+  diff`. `SYNC_LEGACY_BOUNDARY` = tree pulled by <= 0.90.1 (#686): pull first.
+- **`sync push --branch <dev>` from `main/`** (vNEXT, #929): production `sync
+  diff` still shows the edit as local; a promoted config gets its own dev
+  entry; flow/schedule/variables/shared-code refs map to dev ids. gotchas.md.
+- **Sync rows/deletes/companions** (vNEXT, #931/#933): `push --force` never
+  deletes a remotely changed (or baseline-less) config/row -- read
+  `refused_deletions[]`; UI-added rows are in `remote_only_rows[]`; ignoring a
+  component keeps local work; `_description.md`/`pyproject.toml` are a tracked
+  set, a pyproject with no dependencies list never clears packages. gotchas.md.
 - **Ignored components** (0.91.0, #689): `keboola.sandboxes` +
-  `keboola.mcp-server-tool` (+ the manifest's `ignoredComponents`) never sync.
-  On <= 0.90.1 delete-dir-then-push still deletes such a config in production.
-  `"syncWorkspaces": true` (0.96.1+) syncs shared SQL workspaces: a `push
+  `keboola.mcp-server-tool` (+ manifest `ignoredComponents`) never sync; on
+  <= 0.90.1 delete-dir-then-push still deletes such a config in production.
+  `"syncWorkspaces": true` (0.96.1+) syncs shared SQL workspaces; a `push
   --force` delete also deletes their SQL editor sessions -- `--dry-run --force`
   first. gotchas.md.
 - **Native types**: `--column amount:NUMBER(18,2)` passes through; `BOOLEAN`
@@ -402,7 +403,7 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   Non-password apps (oidc, public) fail `VALIDATION_ERROR`. `create --wait` /
   `deploy --wait` deliver it the same way (`--copy` / `--reveal` need
   `--wait`). Never redeploy just to get the password. gotchas.md.
-- **Data-app type in `sync`** (0.94.0+): a `keboola.data-apps` runtime type (`python-js` / `streamlit`) lives only on the `/apps` record; pull records it as `_keboola.data_app_type`, push / clone send it. A type-less app (tree pulled before 0.94.0) is created as `python-js` with a `data_app_type_default` warning (0.96.1+): re-pull before cloning a Streamlit app, or set `_keboola.data_app_type: streamlit`.
+- **Data-app type in `sync`** (0.94.0+): a `keboola.data-apps` runtime type (`python-js` / `streamlit`) lives only on the `/apps` record; pull records it as `_keboola.data_app_type`, push/clone send it. A type-less app (pulled before 0.94.0) is created as `python-js` + `data_app_type_default` warning (0.96.1+): re-pull before cloning a Streamlit app, or set `_keboola.data_app_type: streamlit`.
 - **`ENCRYPTION_FAILED` on an Azure stack is a VERSION GATE, not a bad token**:
   <= 0.85.0 rejected the Azure `KBC::ProjectSecureKV::` cipher, so private-repo
   `create` and `secrets-set` could not work there at all. Upgrade to 0.86.0+; do

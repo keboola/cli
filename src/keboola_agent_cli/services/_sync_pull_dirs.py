@@ -17,6 +17,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import yaml
+
 from ..constants import CONFIG_FILENAME
 from ..sync.branch_scope import (
     UNKNOWN_BASE_ADOPTED,
@@ -36,11 +38,14 @@ from ._sync_models import (
     AMBIGUOUS_ROW_PLACEHOLDERS_KEY,
     AUTHORED_ROW_KEY,
     CREATED_FROM_KEY,
+    DELETED_ROWS_KEY,
     FALLBACK_LINKS_KEY,
     LINK_PENDING_KEY,
     PROMOTED_ROW_KEY,
     PROMOTED_SOURCE_KEY,
     REBIND_PENDING_KEY,
+    RETIRED_DELETION_KEY,
+    RETIRED_ROWS_KEY,
 )
 from ._sync_stale import sweep_stale_rows
 
@@ -67,6 +72,95 @@ class PullEntries:
 
     own: list[ManifestConfiguration]
     kept: list[ManifestConfiguration]
+    # Other branches' entries this pull drops (a re-target), and the rows of
+    # the pulled tree an earlier re-target dropped (D6, :func:`retired_rows`).
+    dropped: list[ManifestConfiguration] = field(default_factory=list)
+    retired: dict[str, dict[str, str]] = field(default_factory=dict)
+
+    def retired_rows_for(
+        self, own_keys: set[str], components: list[dict[str, Any]]
+    ) -> dict[str, dict[str, str]]:
+        """The pulled tree's retired rows the remote deleted, of configs with no entry here (D6).
+
+        Keyed like pull's ``existing_rows`` (``"{component}/{config}/{row}"``):
+        pull then judges such a row by its own last baseline in this tree --
+        an unedited row the remote deleted is removed, an edited one kept and
+        reported -- instead of leaving its file behind as a new row. Only rows
+        the fresh listing no longer has: a row still on the remote keeps the
+        rediscovery rule (D15, D22) -- its file is kept with an UNKNOWN base,
+        so any difference is a conflict, and two dirs carrying its id adopt
+        neither. The retired baseline is deletion provenance, never a way to
+        turn a rediscovered row into a proven, pushable one.
+        """
+        listed = {
+            f"{component.get('id', '')}/{cfg.get('id', '')}/{row.get('id', '')}"
+            for component in components
+            for cfg in component.get("configurations", [])
+            for row in cfg.get("rows", [])
+        }
+        return {
+            key: dict(value)
+            for key, value in self.retired.items()
+            if key.rsplit("/", 1)[0] not in own_keys and key not in listed
+        }
+
+    def retire(
+        self,
+        manifest: Manifest,
+        project_root: Path,
+        tree: str,
+        pulled: list[ManifestConfiguration],
+    ) -> None:
+        """Record the dropped entries' rows for their trees; consume the pulled tree's (D6).
+
+        The pulled tree keeps the records of configs this pull did not rebuild
+        (one skipped as locally modified, say); a rebuilt config's are now in
+        its entry. A dropped entry's rows replace the records of its config in
+        its own tree. Every tree's records are then pruned
+        (:func:`_prune_retired`), so they never grow without bound.
+        """
+        rebuilt = {f"{c.component_id}/{c.id}" for c in pulled}
+        records = {branch.path: retired_rows(manifest, branch.path) for branch in manifest.branches}
+        records[tree] = {
+            k: v for k, v in self.retired.items() if k.rsplit("/", 1)[0] not in rebuilt
+        }
+        for entry in self.dropped:
+            own_tree = branch_tree_path(manifest, entry.branch_id)
+            if own_tree == tree:
+                continue
+            bucket = records.setdefault(own_tree, {})
+            prefix = f"{entry.component_id}/{entry.id}/"
+            for key in [k for k in bucket if k.startswith(prefix)]:
+                del bucket[key]
+            for row in entry.rows:
+                bucket[f"{prefix}{row.id}"] = {
+                    "path": row.path,
+                    "pull_hash": str(row.metadata.get("pull_hash", "") or ""),
+                    "pull_config_hash": str(row.metadata.get("pull_config_hash", "") or ""),
+                    UNKNOWN_BASE_KEY: str(row.metadata.get(UNKNOWN_BASE_KEY) or ""),
+                }
+            # Its record of rows the remote deleted (D7) travels too: the next
+            # pull of its tree puts it back into the rebuilt entry, so a later
+            # promote push still sees those rows as deleted by the source.
+            deleted = entry.metadata.get(DELETED_ROWS_KEY)
+            for row_id, base in (deleted if isinstance(deleted, dict) else {}).items():
+                bucket.setdefault(
+                    f"{prefix}{row_id}",
+                    {
+                        "path": f"rows/.deleted-{row_id}",
+                        "pull_hash": "",
+                        "pull_config_hash": str(base or ""),
+                        UNKNOWN_BASE_KEY: "",
+                        RETIRED_DELETION_KEY: "true",
+                    },
+                )
+        tracked = {f"{c.component_id}/{c.id}" for c in manifest.configurations}
+        for branch in manifest.branches:
+            kept = _prune_retired(records.get(branch.path, {}), tracked, project_root / branch.path)
+            if kept:
+                branch.metadata[RETIRED_ROWS_KEY] = kept
+            else:
+                branch.metadata.pop(RETIRED_ROWS_KEY, None)
 
     def hold_ignored_promotes(self, ignored_components: frozenset[str]) -> None:
         """Move the pulled branch's promote entries of ignored components to *kept* (risk 79).
@@ -118,6 +212,7 @@ def partition_pull_entries(
     """
     own: list[ManifestConfiguration] = []
     kept: list[ManifestConfiguration] = []
+    dropped: list[ManifestConfiguration] = []
     for entry in manifest.configurations:
         if same_branch(manifest, entry.branch_id, branch_id):
             own.append(entry)
@@ -142,7 +237,72 @@ def partition_pull_entries(
             or not (project_root / own_tree / entry.path / CONFIG_FILENAME).exists()
         ):
             kept.append(entry)
-    return PullEntries(own=own, kept=kept)
+        elif own_tree is not None and own_tree != branch_dir_name:
+            dropped.append(entry)  # its rows are retired for its tree (D6)
+    return PullEntries(
+        own=own,
+        kept=kept,
+        dropped=dropped,
+        retired=retired_rows(manifest, branch_dir_name),
+    )
+
+
+def retired_rows(manifest: Manifest, tree: str) -> dict[str, dict[str, str]]:
+    """The rows of *tree* a re-targeting pull dropped, by ``"{component}/{config}/{row}"`` (D6).
+
+    ``sync pull --branch DEV`` re-targets the manifest and drops production's
+    entries; their files stay in ``main/``. The next production pull then
+    rediscovered each config by the id in its file -- but not its rows: a row
+    production deleted meanwhile was left on disk with no entry, and the next
+    push created it again (walk seed 210). The dropped rows' bookkeeping is
+    kept in that tree's branch metadata, so the next pull of the tree judges
+    every such row by its own last baseline there.
+    """
+    for branch in manifest.branches:
+        if branch.path == tree:
+            raw = branch.metadata.get(RETIRED_ROWS_KEY)
+            if isinstance(raw, dict):
+                return {str(k): dict(v) for k, v in raw.items() if isinstance(v, dict)}
+    return {}
+
+
+def _prune_retired(
+    records: dict[str, dict[str, str]], tracked: set[str], tree_dir: Path
+) -> dict[str, dict[str, str]]:
+    """*records* minus those nothing can need any more (bounded growth, D6).
+
+    A record goes only when BOTH hold: its config is in no manifest entry of
+    any tree (a pull that rebuilt it consumed it already; one whose remote
+    config is gone never rebuilds it), and no row dir under *tree_dir*
+    carries one of that config's retired row ids. While a carrier survives
+    on disk the record is what tells a later pull that its row was deleted
+    on the remote, so it is never pruned then.
+    """
+    if not records:
+        return {}
+    carried: set[tuple[str, str]] = set()
+    if tree_dir.is_dir():
+        for row_file in tree_dir.rglob(CONFIG_FILENAME):
+            if "rows" not in row_file.relative_to(tree_dir).parts[:-1]:
+                continue
+            try:
+                data = yaml.safe_load(row_file.read_text(encoding="utf-8"))
+            except (OSError, yaml.YAMLError):
+                continue
+            meta = data.get("_keboola") if isinstance(data, dict) else None
+            if isinstance(meta, dict) and meta.get("row_id"):
+                carried.add((str(meta.get("component_id") or ""), str(meta["row_id"])))
+    by_config: dict[str, list[str]] = {}
+    for key in records:
+        parent, _, row_id = key.rpartition("/")
+        by_config.setdefault(parent, []).append(row_id)
+    keep = {
+        parent
+        for parent, row_ids in by_config.items()
+        if parent in tracked
+        or any((parent.split("/", 1)[0], row_id) in carried for row_id in row_ids)
+    }
+    return {key: value for key, value in records.items() if key.rpartition("/")[0] in keep}
 
 
 def finalize_kept_entries(
@@ -275,7 +435,7 @@ def ambiguous_id_warnings(dirs: IdDirs, *, parent: str = "") -> list[dict[str, A
 def carry_promote_metadata(
     old: ManifestConfiguration | None,
     metadata: dict[str, Any],
-    rows: list[ManifestConfigRow],
+    pulled: RowPullResult,
 ) -> None:
     """Carry an entry's promote bookkeeping into the entry a pull rebuilt for it.
 
@@ -283,7 +443,19 @@ def carry_promote_metadata(
     rows' source ids survive a pull of the entry's branch, so a later push
     still finishes the rewrite. ``promoted_from`` itself is not carried: the
     pull has just written the entry's files into its own tree.
+
+    The record of rows the remote deleted (``deleted_rows``, D7) is merged:
+    the old record, plus the rows this pull removed, minus any id the remote
+    lists again (a rollback brought it back).
     """
+    rows = pulled.rows
+    recorded = old.metadata.get(DELETED_ROWS_KEY) if old is not None else None
+    deleted = dict(recorded) if isinstance(recorded, dict) else {}
+    deleted.update(pulled.deleted_rows)
+    for row in rows:
+        deleted.pop(row.id, None)
+    if deleted:
+        metadata[DELETED_ROWS_KEY] = deleted
     if old is None:
         return
     # Also the placeholder a config was created from and an unfinished link
@@ -318,6 +490,9 @@ class RowPullResult:
     rows: list[ManifestConfigRow]
     files_written: int = 0
     rows_pulled: int = 0
+    # Row id -> last ``pull_config_hash`` of each row removed because the
+    # remote deleted it (D7, ``deleted_rows`` in the config's metadata).
+    deleted_rows: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -391,6 +566,7 @@ def pull_config_rows(
         rel_path=ctx.rel_path,
         pull_details=pull_details,
         carried=carried,
+        deleted_rows=result.deleted_rows,
     )
     return result
 
@@ -493,7 +669,15 @@ def _pull_row(
         # existence guard keeps a new directory (first pull of a dev branch
         # that clones main -- same hash, no file yet) from being skipped.
         return _row_entry(row, row_rel_path, service._file_hash(row_file), row_api_cfg_hash)
-    # New or remote-changed row: write the file.
+    # New or remote-changed row: write the file, and say so (D5) -- a row
+    # added in the UI used to arrive without a word.
+    pull_details.append(
+        {
+            **detail,
+            "action": "updated" if existing or row_file.exists() else "new",
+            "row_id": str(row.get("id", "")),
+        }
+    )
     file_hash = ""
     if not ctx.dry_run:
         service._write_config_file(row_dir, row_local)

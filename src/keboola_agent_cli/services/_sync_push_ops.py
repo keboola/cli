@@ -41,6 +41,7 @@ from ._encryption import (
 from ._sync_baseline import apply_stamp, row_baseline
 from ._sync_companions import require_decided_packages
 from ._sync_data_app import create_synced_data_app
+from ._sync_deletes import fold_covered_rows
 from ._sync_models import AUTHORED_ROW_KEY, CREATED_FROM_KEY, PROMOTED_ROW_KEY, CreateOutcome
 from ._sync_workspace import SANDBOXES_COMPONENT_ID, warn_on_backend_size_change
 from ._sync_writeback import (
@@ -100,6 +101,19 @@ class PushPlan:
         if self.skipped:
             report["skipped"] = len(self.skipped)
             report["skipped_reason"] = SKIPPED_REASON
+        # Each local delete push refuses, with its own reason and next step (D4).
+        refused = [
+            {
+                key: change[key]
+                for key in ("component_id", "config_id", "parent_config_id", "is_row", "path")
+                if key in change
+            }
+            | {"message": (change.get("details") or [""])[0]}
+            for change in self.skipped
+            if change.get("refused_delete")
+        ]
+        if refused:
+            report["refused_deletions"] = refused
         if self.skipped_deletions:
             report["skipped_deletions"] = self.skipped_deletions
             report["skipped_deletions_reason"] = SKIPPED_DELETIONS_REASON
@@ -185,10 +199,12 @@ def plan_push(all_changes: list[dict[str, Any]], *, force: bool) -> PushPlan:
 
     Without *force* push deletes nothing on the remote, configs and rows
     alike, as the ``--force`` help says (issue #792 G). The held-back
-    deletions are listed in the result, also for ``--dry-run``.
+    deletions are listed in the result, also for ``--dry-run``. A config
+    delete stands for its rows, and one a row conflict blocks is held back
+    with it (:func:`fold_covered_rows`, D2/D3).
     """
     plan = PushPlan(changes=[], skipped=[], skipped_deletions=[])
-    for change in all_changes:
+    for change in fold_covered_rows(all_changes):
         if change["change_type"] not in PUSHABLE_CHANGE_TYPES:
             plan.skipped.append(change)
         elif change["change_type"] == "deleted" and not force:

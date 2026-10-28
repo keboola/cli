@@ -14,8 +14,9 @@ altogether, which hid two things from ``sync diff`` and ``sync push``:
   ``pull --branch`` that left the tree behind) is diffed against that config,
   but a row edited there was invisible. Its rows are now diffed by row id with
   an UNKNOWN base: a row that differs from the remote is a ``conflict`` (no
-  baseline says which side changed), never an update to send, and a remote row
-  with no file is a conflict too, never a delete.
+  baseline says which side changed), never an update to send. A remote row no
+  local dir carries is never a delete: it is listed in ``remote_only_rows[]``
+  (sync group 3, D5) -- it may as well have been added in the UI.
 """
 
 from __future__ import annotations
@@ -84,6 +85,7 @@ def collect_untracked_rows(
     (R5, #792 H). Only a row without an id is new there.
     """
     prefix = f"{component_id}/{config_id}/rows/"
+    carried: set[str] = set()
     for row_dir in _row_dirs(config_dir):
         data = service._read_config_file(row_dir)
         if not isinstance(data, dict):
@@ -104,6 +106,7 @@ def collect_untracked_rows(
             "source_row_id": "",
         }
         if config_id and file_row_id:
+            carried.add(file_row_id)
             entry["row_id"] = file_row_id
             entry.pop("parent_path")
             if f"{prefix}{file_row_id}" not in remote_rows:
@@ -111,10 +114,13 @@ def collect_untracked_rows(
         found.local_rows.append(entry)
     if not config_id:
         return
-    # Every remote row of an adopted config is compared with an unknown base:
-    # equal is unchanged, different -- or missing locally -- is a conflict.
+    # A remote row an adopted dir carries is compared with an unknown base:
+    # equal is unchanged, different is a conflict. A remote row NO local dir
+    # carries says nothing either way -- removed here, or added in the UI
+    # since -- so it is not tracked: diff reports it under
+    # ``remote_only_rows[]`` (D5), which push never creates or deletes.
     for key in remote_rows:
-        if key.startswith(prefix):
+        if key.startswith(prefix) and key.removeprefix(prefix) in carried:
             found.tracked_row_keys.add(key)
             found.base_hashes[key] = UNKNOWN_BASE_HASH
 

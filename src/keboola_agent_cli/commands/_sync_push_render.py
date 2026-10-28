@@ -34,6 +34,8 @@ def print_push_skips(formatter: Any, result: dict[str, Any]) -> None:
     skipped_reason = result.get("skipped_reason")
     if skipped_reason:
         formatter.err_console.print(f"  [yellow]{skipped_reason}[/yellow]")
+    for refused in result.get("refused_deletions", []):
+        formatter.err_console.print(f"  [red]![/red] {escape(str(refused.get('message', '')))}")
     deletions = result.get("skipped_deletions", [])
     if not deletions:
         return

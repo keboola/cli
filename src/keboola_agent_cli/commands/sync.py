@@ -26,6 +26,7 @@ from ._helpers import (
 )
 from ._project_ref import PROJECT_HELP
 from ._sync_clone_render import clone_summary, clone_total, print_clone_result
+from ._sync_diff_render import covered_suffix, has_remote_only, print_remote_only_rows
 from ._sync_push_render import (
     REMOTE_CHANGE_LABELS,
     dry_run_line,
@@ -330,7 +331,7 @@ def _format_diff_result(formatter: Any, result: dict) -> None:
     never_fetched = result.get("never_fetched", [])
     orphaned = result.get("orphaned", [])
 
-    if not changes and not remote_only:
+    if not changes and not has_remote_only(result):
         if never_fetched or orphaned:
             _format_never_fetched(formatter, never_fetched)
             _format_orphaned(formatter, orphaned)
@@ -361,6 +362,7 @@ def _format_diff_result(formatter: Any, result: dict) -> None:
             formatter.console.print(f"  ! CONFLICT {_change_label(change)}")
     if remote_only:
         formatter.console.print(f"  {len(remote_only)} new remote-only config(s)")
+    print_remote_only_rows(formatter, result)
     _format_never_fetched(formatter, never_fetched)
     _format_orphaned(formatter, orphaned)
 
@@ -466,7 +468,7 @@ def _diff_one_liner(result: dict) -> str:
     dlt = s.get("deleted", 0)
     rmod = s.get("remote_modified", 0) + s.get("remote_deleted", 0)
     conf = s.get("conflict", 0)
-    ro = s.get("remote_only", 0)
+    ro = s.get("remote_only", 0) + s.get("remote_only_rows", 0)
     if not any([mod, add, dlt, rmod, conf, ro]):
         return "[green]in sync[/green]"
     parts = []
@@ -904,7 +906,7 @@ def sync_diff(
         summary = result["summary"]
         remote_only = result.get("remote_only", [])
 
-        if not changes and not remote_only:
+        if not changes and not has_remote_only(result):
             if result.get("never_fetched") or result.get("orphaned"):
                 _format_never_fetched(formatter, result.get("never_fetched", []))
                 _format_orphaned(formatter, result.get("orphaned", []))
@@ -993,6 +995,7 @@ def sync_diff(
                 name = cfg.get("config_name", cfg.get("config_id", ""))
                 formatter.console.print(f"  [cyan]+ NEW {cfg['component_id']}/{name}[/cyan]")
 
+        print_remote_only_rows(formatter, result)
         _format_never_fetched(formatter, result.get("never_fetched", []))
         _format_orphaned(formatter, result.get("orphaned", []))
 
@@ -1150,7 +1153,9 @@ def _render_push_result(formatter: Any, result: dict[str, Any]) -> None:
         formatter.console.print("[yellow]Dry run -- no changes applied:[/yellow]")
         for change in result.get("changes", []):
             label = _change_label(change)
-            formatter.console.print(f"  {change['change_type'].upper()} {label}")
+            formatter.console.print(
+                f"  {change['change_type'].upper()} {label}{covered_suffix(change)}"
+            )
         print_dry_run_refusals(formatter, result)
         print_push_skips(formatter, result)
         _format_never_fetched(formatter, result.get("never_fetched", []))
@@ -1165,7 +1170,7 @@ def _render_push_result(formatter: Any, result: dict[str, Any]) -> None:
     for change in result.get("pushed_details", []):
         label = _change_label(change)
         action = change["change_type"].upper()
-        formatter.console.print(f"  {action} {label}")
+        formatter.console.print(f"  {action} {label}{covered_suffix(change)}")
     for err in errors:
         formatter.item_error(
             f"{err['change_type']} {err['component_id']}/{err['config_id']}", err["message"]
