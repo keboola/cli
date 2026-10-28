@@ -1039,12 +1039,15 @@ class Sim:
                 if isinstance(item, dict) and item.get("config_id"):
                     listed_ids.setdefault(str(item["config_id"]), set()).add(key)
         tree = self.tree(branch)
+        promoted: dict[str, str] = {}
         if not tree.is_dir():  # push --branch DEV promotes main/
             tree = self.tree(PROD)
+            promoted = self.promoted_ids(branch)
         remote = self.api.remote[branch]
         for d in config_dirs(tree):
             rel = d.relative_to(tree).as_posix()
             comp, cid = dir_identity(d)
+            cid = promoted.get(rel, cid)
             local = local_projection(d)
             if not cid:
                 if rel not in listed_paths:
@@ -1091,6 +1094,20 @@ class Sim:
                     "invisible_remote_config",
                     f"{comp}/{cid} exists only on branch {branch} but diff is silent",
                 )
+
+    def promoted_ids(self, branch: int) -> dict[str, str]:
+        """``path -> config id`` of the *branch* entries a promote push recorded.
+
+        A production config the promote created on the dev branch keeps the
+        production id in its main/ file (the production entry owns that file
+        too); the dev-branch entry at the same path is what names its dev id.
+        """
+        manifest = json.loads((self.root / ".keboola" / "manifest.json").read_text())
+        return {
+            c["path"]: str(c["id"])
+            for c in manifest.get("configurations", [])
+            if c.get("branchId") == branch
+        }
 
     def step(self, step: Step) -> None:
         name, a, b, c = step
@@ -1167,10 +1184,7 @@ MASKS = frozenset(
         "new-description-file",
         "new-config-rows",
         "remote-row-add-invisible",
-        "promote-then-pull",
-        "rename-across-trees",
         "untracked-row-overwrite",
-        "retarget-reuses-other-tree-baseline",
         # Not a bug by itself: after `pull --branch DEV` main/ is orphaned by
         # design (#649), so the masked user keeps working in dev/ with
         # --branch DEV. Unmasked, it surfaces the row variant of
@@ -1394,19 +1408,13 @@ def test_finding_remote_added_row_is_visible_in_diff(tmp_path: Path) -> None:
     assert any(cid == "1000" for _, cid in _changes(sim))
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "FINDING promote-then-pull (edit): `push --branch DEV` from main/ "
-        "re-stamps the shared manifest baseline with the DEV result "
-        "(stamp_updated_config). `sync diff` on production then calls the "
-        "local edit `remote_modified` (production never changed), and the "
-        "next plain `sync pull` silently replaces the edited transform.sql "
-        "with production's code. The edit survives only on DEV; the next "
-        "promote from the reverted main/ has nothing of it."
-    ),
-)
 def test_finding_promote_then_pull_keeps_local_edit(tmp_path: Path) -> None:
+    """Was FINDING promote-then-pull (edit): `push --branch DEV` from main/ re-stamps
+    the shared manifest baseline with the DEV result (stamp_updated_config). `sync diff`
+    on production then calls the local edit `remote_modified` (production never
+    changed), and the next plain `sync pull` silently replaces the edited transform.sql
+    with production's code. The edit survives only on DEV; the next promote from the
+    reverted main/ has nothing of it."""
     sim = _world(tmp_path)
     sql = _dir(sim, "transformation/keboola.snowflake-transformation/name-tk16z/transform.sql")
     sql.write_text(sql.read_text().replace("tk15z", "tk900z"), encoding="utf-8")
@@ -1417,17 +1425,11 @@ def test_finding_promote_then_pull_keeps_local_edit(tmp_path: Path) -> None:
     assert "tk900z" in sql.read_text()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "FINDING promote-then-pull (new config): a config authored in main/ "
-        "and promoted with `push --branch DEV` exists only on DEV. The next "
-        "plain `sync pull` (production) reports it 'removed' -- the label "
-        "for 'deleted on the remote' -- and deletes the authored directory "
-        "from main/ (stale-entry sweep, _sync_stale.py)."
-    ),
-)
 def test_finding_promoted_new_config_dir_survives_pull(tmp_path: Path) -> None:
+    """Was FINDING promote-then-pull (new config): a config authored in main/ and
+    promoted with `push --branch DEV` exists only on DEV. The next plain `sync pull`
+    (production) reports it 'removed' -- the label for 'deleted on the remote' -- and
+    deletes the authored directory from main/ (stale-entry sweep, _sync_stale.py)."""
     sim = _world(tmp_path)
     sim.local_new(0.6, 0.0, 0.0)  # a python-transformation-v2 copy
     (new_dir,) = (sim.root / "main/transformation/keboola.python-transformation-v2").glob("new-*")
@@ -1436,18 +1438,12 @@ def test_finding_promoted_new_config_dir_survives_pull(tmp_path: Path) -> None:
     assert new_dir.is_dir()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "FINDING rename-across-trees: one manifest entry (one path) serves "
-        "both branch trees. A config renamed on DEV gets a new path on `pull "
-        "--branch DEV`; the next plain `sync pull` writes production's copy "
-        "under that NEW path in main/ and leaves the old main/ directory, "
-        "which still carries the config id. diff calls it 'added' and a plain "
-        "`sync push` CREATES A DUPLICATE config in production."
-    ),
-)
 def test_finding_rename_on_dev_does_not_duplicate_prod_config(tmp_path: Path) -> None:
+    """Was FINDING rename-across-trees: one manifest entry (one path) serves both branch
+    trees. A config renamed on DEV gets a new path on `pull --branch DEV`; the next
+    plain `sync pull` writes production's copy under that NEW path in main/ and leaves
+    the old main/ directory, which still carries the config id. diff calls it 'added'
+    and a plain `sync push` CREATES A DUPLICATE config in production."""
     sim = _world(tmp_path)
     _pull(sim, DEV)
     sim.api.remote[DEV][PYT_1]["name"] = "Renamed on dev"
@@ -1481,18 +1477,12 @@ def test_finding_untracked_row_edit_survives_dev_pull(tmp_path: Path) -> None:
     assert "tk900z" in row.read_text()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "FINDING retarget-reuses-other-tree-baseline: `pull --branch DEV` "
-        "re-stamps the shared manifest entry (incl. pull_extra_hashes) from "
-        "dev/. A later plain `sync pull` judges main/ against dev/'s "
-        "baseline: a main/ config whose _description.md was removed (and "
-        "pushed) is reported 'skipped: locally modified' and diffs as a "
-        "conflict although main/ equals production."
-    ),
-)
 def test_finding_retarget_pull_has_no_false_conflict(tmp_path: Path) -> None:
+    """Was FINDING retarget-reuses-other-tree-baseline: `pull --branch DEV` re-stamps
+    the shared manifest entry (incl. pull_extra_hashes) from dev/. A later plain `sync
+    pull` judges main/ against dev/'s baseline: a main/ config whose _description.md was
+    removed (and pushed) is reported 'skipped: locally modified' and diffs as a conflict
+    although main/ equals production."""
     sim = _world(tmp_path)
     d = _dir(sim, "transformation/keboola.python-transformation-v2/name-tk21z")
     (d / "_description.md").unlink()

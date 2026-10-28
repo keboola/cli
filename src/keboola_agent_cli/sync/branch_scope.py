@@ -93,6 +93,37 @@ def branch_tree_path(manifest: Manifest, branch_id: int | None) -> str:
     return manifest.branches[0].path if manifest.branches else _DEFAULT_TREE_FALLBACK
 
 
+def same_branch(manifest: Manifest, a: int | None, b: int | None) -> bool:
+    """True iff branch ids *a* and *b* name the same branch (tree).
+
+    The one comparison every manifest write site uses to decide whether an
+    entry belongs to the branch it writes to: production is spelled ``None``,
+    ``0`` or the default branch's numeric id, and a raw ``==`` would call those
+    three different branches.
+    """
+    return branch_tree_path(manifest, a) == branch_tree_path(manifest, b)
+
+
+def find_branch_entry(
+    manifest: Manifest, component_id: str, config_id: str, branch_id: int | None
+) -> ManifestConfiguration | None:
+    """Return the entry of ``component_id/config_id`` on *branch_id*, if any.
+
+    A dev branch created from production holds its configs under the SAME ids,
+    so a lookup on ``(component_id, config_id)`` alone can return the entry of
+    another branch -- and a write to the dev branch then re-stamped the
+    production entry. Every write site looks its entry up through here.
+    """
+    for cfg in manifest.configurations:
+        if (
+            cfg.component_id == component_id
+            and cfg.id == config_id
+            and same_branch(manifest, cfg.branch_id, branch_id)
+        ):
+            return cfg
+    return None
+
+
 @dataclass(frozen=True)
 class Claim:
     """A manifest entry laying claim to a config id, and the tree it sits in."""
@@ -123,6 +154,17 @@ class TreeScope:
     orphaned: list[dict[str, Any]]
     claims: dict[str, list[Claim]]
     on_target: list[ManifestConfiguration]
+
+    @property
+    def in_tree_paths(self) -> set[str]:
+        """Source-tree directories an ``in_tree`` entry already accounts for.
+
+        On the promote path a target-branch entry's files live in the source
+        tree although its own tree is another one, so the untracked-file walk
+        (which maps every entry to its own tree) would see its directory a
+        second time.
+        """
+        return {cfg.path for cfg in self.in_tree}
 
     @property
     def tracked_keys(self) -> set[str]:
@@ -454,6 +496,7 @@ def find_untracked_rows(
     manifest: Manifest,
     read_config: ConfigReader,
     only_branch_path: str | None = None,
+    entries: list[ManifestConfiguration] | None = None,
 ) -> list[dict[str, Any]]:
     """Scan tracked config dirs for ``rows/*/_config.yml`` not in the manifest.
 
@@ -470,10 +513,19 @@ def find_untracked_rows(
     Each entry contains ``component_id``, ``parent_config_id``, ``row_name``
     (from the loaded YAML), ``path`` (relative to the parent config dir, e.g.
     ``rows/new-row``), and ``data`` (the loaded dict).
+
+    ``entries`` walks exactly these parents, all read from ``only_branch_path``:
+    ``diff`` passes its scoped ``in_tree`` entries, so on the promote path the
+    rows of a target-branch entry are looked up in the source tree where its
+    files are, and the rows of the production entry it shadows are not walked
+    a second time.
     """
     added: list[dict[str, Any]] = []
-    for cfg in manifest.configurations:
-        branch_path = branch_tree_path(manifest, cfg.branch_id)
+    for cfg in manifest.configurations if entries is None else entries:
+        if entries is not None and only_branch_path is not None:
+            branch_path = only_branch_path
+        else:
+            branch_path = branch_tree_path(manifest, cfg.branch_id)
         if only_branch_path is not None and branch_path != only_branch_path:
             continue
         parent_dir = project_root / branch_path / cfg.path

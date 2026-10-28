@@ -42,6 +42,7 @@ from ..sync.branch_scope import (
     classify_untracked,
     find_untracked_configs,
     find_untracked_rows,
+    same_branch,
     scope_manifest,
     stale_tree_record,
 )
@@ -113,9 +114,12 @@ from ._sync_push_ops import detect_name_drift, plan_push, push_create, push_row_
 from ._sync_stale import (
     apply_stale_sweep,
     find_stale_entries,
+    partition_pull_entries,
     remote_deleted_conflicts,
     reserved_paths,
+    row_dirs_by_id,
     sweep_stale_rows,
+    untracked_dirs_by_id,
 )
 from ._sync_storage import (
     fetch_jobs_per_config,
@@ -558,39 +562,42 @@ class SyncService(BaseService):
         used_paths: set[str] = set()  # detect naming collisions
         pull_details: list[dict[str, str]] = []  # per-config change info
 
-        # Build lookups for existing manifest state
-        existing_paths: dict[str, str] = {
-            f"{c.component_id}/{c.id}": c.path for c in manifest.configurations
-        }
+        # Build lookups for existing manifest state -- of the PULLED branch only.
+        # An entry belongs to exactly one branch, and a dev branch created from
+        # production holds the same config ids: reading another branch's entry
+        # here judged this tree by the other tree's baselines (a false "locally
+        # modified") and reused its path (a config renamed on the dev branch
+        # was written to a new main/ directory, the old one became an untracked
+        # copy and push created a duplicate). Other branches' entries are never
+        # looked up, never swept as stale and never delete a file; the promote
+        # entries among them (files in this tree, none in their own) are kept.
+        entries = partition_pull_entries(manifest, project_root, branch_dir_name)
+        own_entries = entries.own
+        untracked_dirs = untracked_dirs_by_id(self, project_root, manifest, branch_dir_name)
+        existing_paths: dict[str, str] = {f"{c.component_id}/{c.id}": c.path for c in own_entries}
         existing_keys: set[str] = set(existing_paths.keys())
         # Full metadata per entry -- the shape-migration checks need the
         # ``config_hash_version`` marker alongside the hashes (issue #686).
         existing_metadata: dict[str, dict[str, Any]] = {
-            f"{c.component_id}/{c.id}": c.metadata for c in manifest.configurations
+            f"{c.component_id}/{c.id}": c.metadata for c in own_entries
         }
         existing_config_hashes: dict[str, str] = {
-            f"{c.component_id}/{c.id}": c.metadata.get("pull_config_hash", "")
-            for c in manifest.configurations
+            f"{c.component_id}/{c.id}": c.metadata.get("pull_config_hash", "") for c in own_entries
         }
         # Build lookup for file hashes at pull time (to detect local edits)
         existing_file_hashes: dict[str, str] = {
-            f"{c.component_id}/{c.id}": c.metadata.get("pull_hash", "")
-            for c in manifest.configurations
+            f"{c.component_id}/{c.id}": c.metadata.get("pull_hash", "") for c in own_entries
         }
         # Companion-file hashes (transform.sql, _description.md, ...) recorded
         # at pull time; ``--theirs`` uses them to restore deleted code files.
         existing_extra_hashes: dict[str, dict[str, str]] = {
             f"{c.component_id}/{c.id}": c.metadata.get("pull_extra_hashes", {}) or {}
-            for c in manifest.configurations
-        }
-        # Track branch_id per config to detect branch switches
-        existing_branch_ids: dict[str, int] = {
-            f"{c.component_id}/{c.id}": c.branch_id for c in manifest.configurations
+            for c in own_entries
         }
         # Row-level state lookup, keyed by "{component_id}/{config_id}/{row_id}".
         # Values: dict with path, pull_hash, pull_config_hash (all optional).
         existing_rows: dict[str, dict[str, str]] = {}
-        for c in manifest.configurations:
+        for c in own_entries:
             for r in c.rows:
                 row_key = f"{c.component_id}/{c.id}/{r.id}"
                 existing_rows[row_key] = {
@@ -604,9 +611,7 @@ class SyncService(BaseService):
         ignored_components = sql_workspaces.effective_ignored_components(manifest)
         # Entries the remote no longer lists (#792 A/C); their on-disk dirs are
         # reserved so a same-named new config cannot land in one.
-        stale = find_stale_entries(
-            self, manifest.configurations, components, branch_dir, ignored_components
-        )
+        stale = find_stale_entries(self, own_entries, components, branch_dir, ignored_components)
         used_paths |= reserved_paths(stale, branch_dir)
 
         # Force-pull conflict guard (force-pull baseline corruption fix).
@@ -686,6 +691,10 @@ class SyncService(BaseService):
                                 rel_path,
                                 rename_target,
                             )
+                elif lookup_key in untracked_dirs:
+                    # The directory that already holds this config (its file
+                    # carries the id), not a new one named after the config.
+                    rel_path = untracked_dirs[lookup_key]
                 else:
                     # Generate new filesystem path with collision detection
                     rel_path = config_path(
@@ -784,9 +793,9 @@ class SyncService(BaseService):
                     )
                 else:
                     # Check if remote actually changed since last pull.
-                    # If pull_config_hash matches AND branch hasn't changed,
-                    # skip write (idempotent).  A branch switch means files
-                    # live in a different directory, so we must re-write.
+                    # If pull_config_hash matches, skip write (idempotent).
+                    # The lookups hold this branch's entries only, so a branch
+                    # switch makes every config new and re-writes it.
                     # The file-existence guard enforces the manifest<->disk
                     # invariant (issues #472/#466): a tracked config whose
                     # local file is missing (deleted dir, or a pre-0.72
@@ -794,13 +803,9 @@ class SyncService(BaseService):
                     # of being registered with an empty pull_hash -- which
                     # ``sync push --force`` would then plan as a remote DELETE.
                     old_cfg_hash = existing_config_hashes.get(lookup_key, "")
-                    branch_switched = existing_branch_ids.get(lookup_key, branch_id or 0) != (
-                        branch_id or 0
-                    )
                     config_file = config_dir / CONFIG_FILENAME
                     remote_unchanged = (
                         not is_new
-                        and not branch_switched
                         and old_cfg_hash
                         and old_cfg_hash == api_cfg_hash
                         and config_file.exists()
@@ -864,6 +869,7 @@ class SyncService(BaseService):
                 # per-row local modifications and push only changed rows.
                 row_manifests: list[ManifestConfigRow] = []
                 used_row_paths: set[str] = set()
+                adopted_rows = row_dirs_by_id(self, config_dir) if is_new else {}
                 for row in cfg.get("rows", []):
                     row_id = str(row.get("id", ""))
                     row_name = row.get("name", "untitled")
@@ -873,6 +879,8 @@ class SyncService(BaseService):
                     existing_row = existing_rows.get(row_lookup_key)
                     if existing_row:
                         row_rel_path = existing_row["path"]
+                    elif row_id in adopted_rows:
+                        row_rel_path = adopted_rows[row_id]
                     else:
                         row_rel_path = config_row_path(
                             manifest.naming.config_row,
@@ -1056,7 +1064,7 @@ class SyncService(BaseService):
 
         if not dry_run:
             # Update manifest with pulled configurations
-            manifest.configurations = new_configurations
+            manifest.configurations = new_configurations + entries.kept
             save_manifest(project_root, manifest)
 
         return {
@@ -1339,6 +1347,11 @@ class SyncService(BaseService):
             project_root, manifest, only_branch_path=source_branch_path
         ):
             component_id = added_cfg.get("component_id", "unknown")
+            # A promoted target-branch entry already diffs this directory (its
+            # files are in the source tree, not its own); a second, adopted
+            # reading of it doubled every change and called an edit a conflict.
+            if added_cfg["path"] in scope.in_tree_paths:
+                continue
             # An ignored component's leftover directory (its manifest entry is
             # gone, so the walk sees it as untracked) must not be planned as a
             # create -- push would re-add exactly what pull refuses to fetch.
@@ -1451,8 +1464,8 @@ class SyncService(BaseService):
         # Also add untracked local rows (new row dirs dropped under a tracked
         # config). They have no row_id yet so compute_row_changeset flags
         # them as "added" and push dispatches them via create_config_row.
-        for untracked in self._find_untracked_rows(
-            project_root, manifest, only_branch_path=source_branch_path
+        for untracked in find_untracked_rows(
+            project_root, manifest, self._read_config_file, source_branch_path, scope.in_tree
         ):
             # Same guard as the untracked configs above: the row walk keys off
             # ``manifest.configurations`` directly, so a still-tracked ignored
@@ -1671,6 +1684,9 @@ class SyncService(BaseService):
             # (component_id, placeholder_id) -> API-assigned ULID, captured
             # before the manifest writeback overwrites the placeholder in place.
             created_id_map: dict[tuple[str, str], str] = {}
+            # (component_id, source-branch id) -> id created on the target, for
+            # the row parents only (the link backfill must not rewrite them).
+            promoted_id_map: dict[tuple[str, str], str] = {}
             created_configs: list[CreatedConfig] = []
 
             # ---- Phase A: config creates / updates / deletes -------------
@@ -1714,6 +1730,11 @@ class SyncService(BaseService):
                             # transformation variable links can be remapped.
                             if writeback.previous_id:
                                 created_id_map[(component_id, writeback.previous_id)] = new_id
+                            elif config_id:
+                                # A tracked config created on a branch that
+                                # lacks it (promote path): its rows still name
+                                # the source branch's id.
+                                promoted_id_map[(component_id, config_id)] = new_id
                             created_configs.append(
                                 CreatedConfig(
                                     component_id=component_id,
@@ -1786,11 +1807,17 @@ class SyncService(BaseService):
                     elif change_type == "deleted":
                         # A workspace's SQL editor sessions go first (CLI-25).
                         sql_workspaces.delete_remote_config(client, change, branch_id)
-                        # Remove from manifest
+                        # Remove the target branch's entry only: another
+                        # branch's entry for the same id still describes a
+                        # config that exists there.
                         manifest.configurations = [
                             c
                             for c in manifest.configurations
-                            if not (c.component_id == component_id and c.id == config_id)
+                            if not (
+                                c.component_id == component_id
+                                and c.id == config_id
+                                and same_branch(manifest, c.branch_id, branch_id)
+                            )
                         ]
                         manifest_dirty = True
                         deleted += 1
@@ -1824,8 +1851,9 @@ class SyncService(BaseService):
                 # Phase A so the manifest lookup and create_config_row both hit
                 # the real config (KFR-05). UPDATE/DELETE parents already carry
                 # a ULID and pass through unchanged.
+                parent_key = (component_id, parent_config_id)
                 effective_parent_id = created_id_map.get(
-                    (component_id, parent_config_id), parent_config_id
+                    parent_key, promoted_id_map.get(parent_key, parent_config_id)
                 )
 
                 try:
@@ -2343,16 +2371,3 @@ class SyncService(BaseService):
         return find_untracked_configs(
             project_root, manifest, self._read_config_file, only_branch_path
         )
-
-    def _find_untracked_rows(
-        self,
-        project_root: Path,
-        manifest: Manifest,
-        only_branch_path: str | None = None,
-    ) -> list[dict[str, Any]]:
-        """Scan tracked config dirs for ``rows/*/_config.yml`` not in manifest.
-
-        Delegates to :func:`sync.branch_scope.find_untracked_rows`; see there
-        for the branch-scoping rules (issue #649).
-        """
-        return find_untracked_rows(project_root, manifest, self._read_config_file, only_branch_path)

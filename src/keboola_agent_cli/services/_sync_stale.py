@@ -31,7 +31,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..constants import CONFIG_FILENAME
-from ..sync.manifest import ManifestConfigRow, ManifestConfiguration
+from ..sync.branch_scope import branch_tree_path, find_untracked_configs
+from ..sync.manifest import Manifest, ManifestConfigRow, ManifestConfiguration
 from ._sync_baseline import extras_modified
 from ._sync_workspace import SANDBOXES_COMPONENT_ID
 
@@ -58,6 +59,83 @@ class StaleEntry:
     def keep_reason(self) -> str:
         """The ``skipped`` reason pull reports when it keeps this edited entry."""
         return REMOTE_DELETED_REASON if self.action == "removed" else WORKSPACE_SYNC_OFF_REASON
+
+
+@dataclass
+class PullEntries:
+    """``manifest.configurations`` split for a pull of one branch tree.
+
+    Attributes:
+        own: Entries of the pulled branch -- the only ones pull looks up,
+            refreshes, or sweeps as stale.
+        kept: Entries of another branch that pull carries over unchanged:
+            promote entries (``push --branch DEV`` with no ``dev/`` tree),
+            whose files live in the pulled tree and none in their own. They
+            map a directory to its config on the other branch; dropping them
+            made the next promote create that config on the branch again.
+    """
+
+    own: list[ManifestConfiguration]
+    kept: list[ManifestConfiguration]
+
+
+def partition_pull_entries(
+    manifest: Manifest, project_root: Path, branch_dir_name: str
+) -> PullEntries:
+    """Split the manifest into the pulled branch's entries and the ones to keep.
+
+    Another branch's entry that is neither is dropped, as before: its files
+    live in its own tree, which this pull re-targets away from (issue #649).
+    Pull never deletes a file because of another branch's entry.
+    """
+    own: list[ManifestConfiguration] = []
+    kept: list[ManifestConfiguration] = []
+    for entry in manifest.configurations:
+        tree = branch_tree_path(manifest, entry.branch_id)
+        if tree == branch_dir_name:
+            own.append(entry)
+        elif (project_root / branch_dir_name / entry.path / CONFIG_FILENAME).exists() and not (
+            project_root / tree / entry.path / CONFIG_FILENAME
+        ).exists():
+            kept.append(entry)
+    return PullEntries(own=own, kept=kept)
+
+
+def untracked_dirs_by_id(
+    service: SyncService, project_root: Path, manifest: Manifest, branch_dir_name: str
+) -> dict[str, str]:
+    """``"component/config_id" -> path`` of the untracked dirs in the pulled tree.
+
+    A config pull has no entry for -- the manifest was re-targeted to another
+    branch since this tree was pulled, or the entry was lost -- still has its
+    directory here, and the directory's ``_config.yml`` says which config it
+    is. Pull writes into that directory instead of a new one named after the
+    config: a name changed since (on either side) used to leave the old
+    directory behind as an untracked copy that push then created again. An
+    id carried by two directories (a copied dir) names neither.
+    """
+    seen: dict[str, list[str]] = {}
+    for found in find_untracked_configs(
+        project_root, manifest, service._read_config_file, only_branch_path=branch_dir_name
+    ):
+        if found["config_id"]:
+            key = f"{found['component_id']}/{found['config_id']}"
+            seen.setdefault(key, []).append(found["path"])
+    return {key: paths[0] for key, paths in seen.items() if len(paths) == 1}
+
+
+def row_dirs_by_id(service: SyncService, config_dir: Path) -> dict[str, str]:
+    """``row_id -> "rows/<dir>"`` read from the row files of an untracked config dir."""
+    found: dict[str, str] = {}
+    rows_dir = config_dir / "rows"
+    if not rows_dir.is_dir():
+        return found
+    for row_dir in sorted(rows_dir.iterdir()):
+        meta = (service._read_config_file(row_dir) or {}).get("_keboola") or {}
+        row_id = str(meta.get("row_id") or "")
+        if row_id:
+            found.setdefault(row_id, f"rows/{row_dir.name}")
+    return found
 
 
 def _entry_locally_modified(

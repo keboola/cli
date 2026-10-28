@@ -8,12 +8,14 @@ and propagate ``KBC.*`` metadata. Only :func:`writeback_after_push` needs the
 
 from __future__ import annotations
 
+import copy
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..constants import FOLDER_METADATA_KEY
 from ..errors import KeboolaApiError
+from ..sync.branch_scope import find_branch_entry, same_branch
 from ..sync.config_format import BASE_CONFIG_HASH_KEY
 from ..sync.manifest import ManifestConfigRow, ManifestConfiguration
 from ._encryption import apply_encrypted_to_local
@@ -87,9 +89,14 @@ def stamp_updated_config(
     beats confidently wrong, and a disk-derived value is what created the
     phantom drift in the first place.
 
-    An update that finds no manifest entry is an adopted-by-id config (issue
-    #497) -- an untracked local file whose ``_keboola.config_id`` resolved on
-    the branch. It is registered here so later diffs read a stable entry.
+    Only the entry of *branch_id* is ever changed. A dev branch created from
+    production holds the same config ids, so ``push --branch DEV`` from
+    ``main/`` updates a config the manifest tracks for PRODUCTION; that entry
+    is left alone (production still lacks the edit) and a dev-branch shadow is
+    recorded instead (:func:`promote_shadow`). An update that finds no
+    manifest entry at all is an adopted-by-id config (issue #497) -- an
+    untracked local file whose ``_keboola.config_id`` resolved on the branch.
+    It is registered here so later diffs read a stable entry.
     """
     stamp = config_baseline(
         client,
@@ -100,12 +107,19 @@ def stamp_updated_config(
     )
     if stamp.warning is not None:
         warnings.append(stamp.warning)
-    for cfg in manifest.configurations:
-        if cfg.component_id == component_id and cfg.id == config_id:
-            cfg.metadata["pull_hash"] = hashes.file_hash
-            cfg.metadata["pull_extra_hashes"] = hashes.extra_hashes
-            apply_stamp(cfg.metadata, stamp)
-            return
+    target = find_branch_entry(manifest, component_id, config_id, branch_id) or promote_shadow(
+        client,
+        manifest,
+        component_id=component_id,
+        config_id=config_id,
+        branch_id=branch_id,
+        response=response,
+    )
+    if target is not None:
+        target.metadata["pull_hash"] = hashes.file_hash
+        target.metadata["pull_extra_hashes"] = hashes.extra_hashes
+        apply_stamp(target.metadata, stamp)
+        return
     entry = writeback_create_config_in_manifest(
         manifest=manifest,
         component_id=component_id,
@@ -117,6 +131,83 @@ def stamp_updated_config(
         extra_hashes=hashes.extra_hashes,
     ).entry
     apply_stamp(entry.metadata, stamp)
+
+
+def promote_shadow(
+    client: Any,
+    manifest: Manifest,
+    *,
+    component_id: str,
+    config_id: str,
+    branch_id: int | None,
+    response: Any = None,
+) -> ManifestConfiguration | None:
+    """Record the *branch_id* entry for a config the manifest tracks on another branch.
+
+    The promote path (``push --branch DEV`` with no ``dev/`` tree) reads
+    ``main/``, whose entries belong to production. A dev branch created from
+    production holds the same config ids, so the first write to DEV for such a
+    directory needs an entry of its own: a *shadow* at the same path, so
+    ``scope_manifest`` diffs that directory against it from then on, and the
+    production entry keeps describing production.
+
+    The shadow starts as a copy of the production entry's baselines -- the dev
+    branch was a copy of production when it was created, and a baseline that
+    claimed more would hide a dev-side change made since. The caller then
+    re-stamps whatever it just wrote. Rows are copied too, with their
+    production baselines, but only rows that exist on the dev branch: a copied
+    row is "on the target", so the next diff updates it in place instead of
+    creating it again, while a row the dev branch lacks stays untracked and
+    is created like before. When the dev rows cannot be read every row is
+    copied, the safe side (a missing one then reads ``remote_deleted``,
+    which push never acts on, rather than ``added``, which duplicates).
+
+    Returns ``None`` when no other branch tracks the config.
+    """
+    source = next(
+        (
+            c
+            for c in manifest.configurations
+            if c.component_id == component_id and c.id == config_id
+        ),
+        None,
+    )
+    if source is None:
+        return None
+    on_branch = _branch_row_ids(client, component_id, config_id, branch_id, response)
+    shadow = ManifestConfiguration(
+        branchId=branch_id or 0,
+        componentId=component_id,
+        id=config_id,
+        path=source.path,
+        metadata=copy.deepcopy(source.metadata),
+        rows=[
+            copy.deepcopy(row) for row in source.rows if on_branch is None or row.id in on_branch
+        ],
+    )
+    manifest.configurations.append(shadow)
+    return shadow
+
+
+def _branch_row_ids(
+    client: Any, component_id: str, config_id: str, branch_id: int | None, response: Any
+) -> set[str] | None:
+    """Row ids of the config on *branch_id*, ``None`` when they cannot be read."""
+    payload = response if isinstance(response, dict) and "rows" in response else None
+    if payload is None:
+        try:
+            payload = client.get_config_detail(
+                component_id=component_id, config_id=config_id, branch_id=branch_id
+            )
+        except Exception:
+            logger.warning(
+                "Could not read the rows of %s/%s on branch %s", component_id, config_id, branch_id
+            )
+            return None
+    rows = payload.get("rows") if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        return None
+    return {str(row.get("id", "")) for row in rows if isinstance(row, dict)}
 
 
 def writeback_create_config_in_manifest(
@@ -140,7 +231,9 @@ def writeback_create_config_in_manifest(
     Matching includes ``branch_id`` because a single manifest can hold entries
     from multiple branches in git-branching mode; matching on
     ``(component_id, path)`` alone would risk updating the wrong branch's entry
-    when the same logical path exists under two branches.
+    when the same logical path exists under two branches. Production is
+    spelled ``None``, ``0`` or the default branch id, so the comparison goes
+    through :func:`same_branch`.
 
     Returns a :class:`WritebackResult` carrying the entry and its pre-overwrite
     ``previous_id`` so the create pass can remap any child row parents /
@@ -150,7 +243,7 @@ def writeback_create_config_in_manifest(
     target_branch = branch_id or 0
     for entry in manifest.configurations:
         if (
-            entry.branch_id == target_branch
+            same_branch(manifest, entry.branch_id, branch_id)
             and entry.component_id == component_id
             and entry.path == config_path_str
         ):
@@ -213,10 +306,9 @@ def manifest_folder(
     ``folder`` field. Matches the entry the way the create writeback does, on
     ``(branch_id, component_id, path)``. ``None`` when there is no folder.
     """
-    target_branch = branch_id or 0
     for entry in manifest.configurations:
         if (
-            entry.branch_id == target_branch
+            same_branch(manifest, entry.branch_id, branch_id)
             and entry.component_id == component_id
             and entry.path == config_path_str
         ):

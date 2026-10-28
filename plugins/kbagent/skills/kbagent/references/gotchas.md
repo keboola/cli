@@ -79,6 +79,43 @@ These lists keep `error`, because their entries are not failed items with an err
   own folder (not `main/`), so edit the files there. If you already edited code files after
   such a push, copy them aside first: a pull that takes a remote change overwrites them.
 
+## `sync push --branch <dev>` from `main/` no longer changes what production sees
+
+*(since vNEXT)*
+
+- **The promote push** (`sync push --branch <dev>` with no `<dev>/` folder, so kbagent
+  reads `main/`) now records what it wrote under the dev branch only. A dev branch made
+  from production holds the same config ids, and before, the push re-stamped the
+  production entry with the dev state: `sync diff` on production then called your
+  un-promoted edit a remote change, `sync push` refused it, and the `sync pull` it
+  recommended overwrote the edit in `main/`. Now production `sync diff` keeps showing the
+  edit as a local `modified` change until you push it to production, and `sync pull`
+  keeps it.
+- **A row added in `main/` and pushed to the dev branch** is recorded for the dev branch.
+  Before, production recorded it, and the next production `sync pull` deleted the new row
+  folder.
+- **A production config the dev branch lacks** is created there with its rows (before,
+  every row failed), and `main/_config.yml` keeps the PRODUCTION config id. Before, the
+  push wrote the dev id into that file and the next production `sync pull` renamed the
+  folder to `<name>-<id>`.
+- **A config created in `main/` and promoted** is no longer reported `removed` by the next
+  production `sync pull`, which used to delete its folder. Pull keeps the folder and keeps
+  the dev-branch record, so the next promote updates that dev config instead of creating
+  another one. Its new rows are pushed by the second promote push, like on production. An
+  edit to it after the promote is `modified`, not `modified` plus `conflict`.
+- **`sync pull` reads only the records of the branch it pulls.** After
+  `sync pull --branch <dev>`, a plain `sync pull` no longer judges `main/` by the dev
+  branch's baselines (a false "locally modified") and no longer reuses a folder name the
+  dev branch renamed (it left the old folder as a copy that `sync push` created again in
+  production). It writes each config into the `main/` folder whose `_config.yml` carries
+  that config id. A folder that differs from production then has no baseline: pull keeps
+  it (`skipped`) and `sync diff` calls it a `conflict`, as for any file with a config id
+  and no manifest entry.
+- **On an older version**, do not edit in `main/` and promote with `--branch` while you
+  also push the same configs to production. Run `sync pull --branch <dev>` once and work
+  in the `<dev>/` folder instead. If production `sync diff` shows `remote_modified` for a
+  config you only promoted, do not run `sync pull`: copy the folder aside first.
+
 ## Config folder is the configuration's `folder` field, not the `KBC.configuration.folderName` metadata key
 
 *(since vNEXT)* (DMD-2348)

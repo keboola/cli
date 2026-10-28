@@ -155,6 +155,13 @@ directory. Re-running the same push creates nothing; a later edit in `main/`
 updates the dev copy, never production. Older versions created another dev copy
 on every push (see gotchas.md).
 
+The dev branch's record of each promoted `main/` folder is its own (since vNEXT):
+the production record is never changed by a `--branch` push, so production
+`sync diff` keeps showing an edit you only promoted as a local `modified` change,
+and a production `sync pull` neither overwrites it nor deletes a promoted folder.
+A production config created on the dev branch keeps the production id in
+`main/_config.yml`; the dev-branch record maps the folder to the dev id.
+
 ## Switching back to production after a `--branch` pull (since v0.89.0)
 
 `sync pull --branch <dev>` does two things: it materializes the
@@ -189,7 +196,10 @@ kbagent sync diff --project prod                  # target: production
   `path`, `branch_id`, `branch_path`, `exists_on_target`, `reason`, `hint`) plus
   a `summary.orphaned` counter; human mode previews the first 10.
 - The fix: `kbagent sync pull --project prod` re-targets the manifest back to
-  production. Then diff/push behave normally and the warning disappears.
+  production. Then diff/push behave normally and the warning disappears. That pull
+  reads no dev-branch baselines (since vNEXT): it writes each config into the `main/`
+  folder whose `_config.yml` carries its id, and keeps (`skipped`) a folder that
+  differs from production, which then diffs as a `conflict`.
 
 Before this landed, that production diff classified the whole orphaned `main/`
 tree as `added` with an empty `config_id`, and `sync push` would have created a

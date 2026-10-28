@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..constants import CONFIG_FILENAME
 from ..errors import ErrorCode, KeboolaApiError
+from ..sync.branch_scope import branch_tree_path, find_branch_entry, same_branch
 from ..sync.code_extraction import merge_code_files, normalize_blocks_codes_script
 from ..sync.config_format import local_config_to_api, local_row_to_api
 from ..sync.manifest import Manifest, ManifestConfiguration
@@ -36,6 +37,7 @@ from ._sync_data_app import create_synced_data_app
 from ._sync_workspace import SANDBOXES_COMPONENT_ID, warn_on_backend_size_change
 from ._sync_writeback import (
     manifest_folder,
+    promote_shadow,
     writeback_after_push,
     writeback_create_row_in_manifest,
 )
@@ -365,13 +367,19 @@ def push_row_change(
     Returns the API-assigned row id on ``added`` (so the caller can map
     placeholder -> ULID for variable-link backfill), else ``None``.
     """
-    parent = next(
-        (
-            c
-            for c in manifest.configurations
-            if c.component_id == component_id and c.id == parent_config_id
-        ),
-        None,
+    # The parent entry of the TARGET branch: on the promote path the config is
+    # tracked for production, and a row written to the dev branch must never
+    # be recorded under the production entry (the next production pull then
+    # deleted the new row's directory). The first such write records the
+    # dev-branch shadow of that entry.
+    parent = find_branch_entry(
+        manifest, component_id, parent_config_id, branch_id
+    ) or promote_shadow(
+        client,
+        manifest,
+        component_id=component_id,
+        config_id=parent_config_id,
+        branch_id=branch_id,
     )
     if parent is None and change_type != "deleted":
         raise KeboolaApiError(
@@ -723,10 +731,36 @@ def push_create(
         )
 
     # Write back: update local file with config_id + encrypted secrets. Use
-    # pristine_data so blocks/code stay only in their code files.
-    writeback_after_push(service, pristine_data, config_dir, new_config_id, configuration)
+    # pristine_data so blocks/code stay only in their code files. A directory
+    # another branch's entry owns keeps that branch's id: on the promote path
+    # it is a production config created on the dev branch, and writing the
+    # dev id into main/ made the next production pull rename the directory.
+    # The dev-branch entry maps the directory to the new id instead.
+    file_config_id = (
+        ""
+        if _owned_by_other_branch(manifest, component_id, config_path_str, branch_id, branch_path)
+        else new_config_id
+    )
+    writeback_after_push(service, pristine_data, config_dir, file_config_id, configuration)
 
     return result
+
+
+def _owned_by_other_branch(
+    manifest: Manifest,
+    component_id: str,
+    config_path_str: str,
+    branch_id: int | None,
+    source_branch_path: str,
+) -> bool:
+    """True iff an entry of another branch tracks this source-tree directory."""
+    return any(
+        cfg.component_id == component_id
+        and cfg.path == config_path_str
+        and branch_tree_path(manifest, cfg.branch_id) == source_branch_path
+        and not same_branch(manifest, cfg.branch_id, branch_id)
+        for cfg in manifest.configurations
+    )
 
 
 def push_update(
