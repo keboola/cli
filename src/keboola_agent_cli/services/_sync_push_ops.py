@@ -807,6 +807,7 @@ def push_create(
         configuration=configuration,
         config_dir=config_dir,
         file_config_id="" if promote else str(new_config_id),
+        pending_refs=remap.pending_refs(component_id, original) if remap is not None else [],
     )
 
 
@@ -873,14 +874,7 @@ def push_update(
             configuration = copy.deepcopy(configuration)
             _keep_target_app_id(client, config_id, branch_id, configuration)
         # rebind_pending is on disk before the PUT that may need it.
-        remap.before_update(
-            component_id,
-            config_id,
-            configuration,
-            name=name,
-            description=description,
-            is_disabled=bool(local_data["is_disabled"]) if "is_disabled" in local_data else None,
-        )
+        remap.before_update(component_id, config_id, original)
 
     if component_id == SANDBOXES_COMPONENT_ID and warnings is not None:
         warn_on_backend_size_change(

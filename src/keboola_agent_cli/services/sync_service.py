@@ -1840,12 +1840,10 @@ class SyncService(BaseService):
                     remap,
                     manifest=manifest,
                     target=target,
-                    known_secrets=known_secrets,
                     warnings=warnings,
                     errors=errors,
                     diff_changes=diff_decisions(all_changes),
                     ignored_components=sql_workspaces.effective_ignored_components(manifest),
-                    allow_plaintext_fallback=allow_plaintext_fallback,
                 )
 
             # ---- Phase C: variable + shared-code links (KFR-03, CLI-24) --

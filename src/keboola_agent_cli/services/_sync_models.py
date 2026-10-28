@@ -39,13 +39,10 @@ SCHEDULER_COMPONENT_ID = "keboola.scheduler"
 # use each row as a ``{{<row id>}}`` placeholder.
 SHARED_CODE_COMPONENT_ID = "keboola.shared-code"
 
-# Manifest metadata of a promote create (``push --branch DEV`` reading main/)
-# whose references may still name source ids on the target; cleared once the
-# rebind PUT succeeded (D24).
+# Manifest metadata of a promote write (``push --branch DEV`` reading main/)
+# whose references may still name source ids on the target: the list of those
+# source references, cleared once every one maps to a target id (D24, D30).
 REBIND_PENDING_KEY = "rebind_pending"
-# Manifest metadata: hash of the payload a promote update was about to PUT when
-# it set ``rebind_pending`` -- the next push tells that PUT from a real change.
-REBIND_SENT_HASH_KEY = "rebind_sent_hash"
 # Row metadata: the source row a promote push created this row from (D24).
 PROMOTED_ROW_KEY = "promoted_from_id"
 
@@ -79,6 +76,8 @@ class CreateOutcome:
     configuration: dict[str, Any]
     config_dir: Path
     file_config_id: str
+    # Promote path: the source references this push still creates (D30).
+    pending_refs: list[list[str]] = field(default_factory=list)
 
 
 @dataclass

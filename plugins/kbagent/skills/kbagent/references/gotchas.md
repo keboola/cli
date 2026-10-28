@@ -112,15 +112,14 @@ These lists keep `error`, because their entries are not failed items with an err
   promote pushes created on the dev branch, on creates and on later updates alike, all
   in one payload. Before, they kept the production ids, which do not exist there, and a
   later edit sent the production ids again. Only the dev branch's copy changes; the
-  `main/` files keep the production ids. If a push dies before it finished rewriting
-  (also right after sending a config), or the final rewrite fails, the next promote push
-  finishes it, also with no local edit -- unless the config changed on the dev branch
-  since (its name, description, body, or the enabled state the push sent): then the
-  change is kept, the push reports a `promote_link_pending` warning (run
-  `sync pull --branch <dev>`). A config deleted there, or of a component you have since
-  added to `ignoredComponents`, is dropped from the rewrite and never sent. When the
-  create of a config it references fails, the reference stays pending (same warning)
-  and the push that creates that config finishes it.
+  `main/` files keep the production ids. A config sent while a config it references
+  was not created yet stays pending in the manifest (`rebind_pending` lists the missing
+  references) until every one exists on the dev branch -- also when the push dies, the
+  final rewrite fails, or a create fails. The next promote push then reads that config
+  from the dev branch, rewrites only those references and sends only its configuration,
+  so its name, description, enabled state and any other change made there are kept. A
+  config deleted there, or of a component you have since added to `ignoredComponents`,
+  is dropped from the rewrite.
 - **A config created in `main/` and promoted** is no longer reported `removed` by the next
   production `sync pull`, which used to delete its folder. Pull keeps the folder and keeps
   the dev-branch record, and moves the record with the folder when production renames

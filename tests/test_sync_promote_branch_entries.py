@@ -1466,10 +1466,11 @@ def test_pending_rebind_never_overwrites_a_remote_change_on_dev(
 ) -> None:
     w = _crash_before_rebind(tmp_path, monkeypatch)
     _dev_flow(w)["name"] = "Edited on dev"
-    result = w.push(branch=DEV)
+    w.push(branch=DEV)
 
+    # Recovery rewrites only the references, from the target's own config (D29).
     assert _dev_flow(w)["name"] == "Edited on dev"
-    assert any(x["change_type"] == "promote_link_pending" for x in result.get("warnings", []))
+    assert _dev_task_target(w) == _dev_id_of(w, VARIANTS["extractor"].component_id)
 
 
 def test_pending_rebind_of_a_config_deleted_on_dev_is_dropped(
@@ -1598,34 +1599,34 @@ def test_unknown_base_row_keeps_its_dir_when_the_parent_file_is_gone(tmp_path: P
 
 
 def _flow_running_two_extractors_crashes_after_put(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, explicit_enabled: bool = False
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, local_disabled: bool | None = None
 ) -> World:
     """The flow's promote update PUT lands, then the process dies.
 
-    Production E1 and flow F (-> E1) are pulled; the dev branch lacks E1, so a
+    Production flow F (-> E1) and E1 are pulled; the dev branch lacks E1, so a
     first promote creates it. Production then gains E2; F is edited in main/
-    to run both. The next promote creates E2 and updates F with both dev ids
-    -- and dies right after F's PUT, before any later bookkeeping.
+    to run both. The next promote updates F first -- E1 by its dev id, E2
+    still by its SOURCE id (not created yet) -- and dies right after F's PUT,
+    before E2's create. *local_disabled* writes an explicit ``is_disabled``.
     """
     v = VARIANTS["extractor"]
     comp = v.component_id
     w = World(tmp_path)
     w.api.types[comp] = v.component_type
     w.api.types["keboola.flow"] = "other"
-    for cid, name in (("cfg-e1", "Orders"),):
-        w.api.remote[PROD][(comp, cid)] = {
-            "id": cid,
-            "name": name,
-            "description": "",
-            "configuration": v.body(),
-            "rows": [],
-            "isDisabled": False,
-        }
-    w.api.remote[PROD][("keboola.flow", "cfg-flow")] = {
+    w.api.remote[PROD][("keboola.flow", "cfg-flow")] = {  # listed first: pushed first
         "id": "cfg-flow",
         "name": "Nightly",
         "description": "",
         "configuration": _flow_body(comp, "cfg-e1"),
+        "rows": [],
+        "isDisabled": False,
+    }
+    w.api.remote[PROD][(comp, "cfg-e1")] = {
+        "id": "cfg-e1",
+        "name": "Orders",
+        "description": "",
+        "configuration": v.body(),
         "rows": [],
         "isDisabled": False,
     }
@@ -1649,8 +1650,8 @@ def _flow_running_two_extractors_crashes_after_put(
     second["id"] = "t2"
     second["task"]["configId"] = "cfg-e2"
     data["_configuration_extra"]["tasks"].append(second)
-    if explicit_enabled:
-        data["is_disabled"] = False  # the update then sends the enabled state
+    if local_disabled is not None:
+        data["is_disabled"] = local_disabled  # the update then sends this state
     flow_file.write_text(dump_config_yaml(data), encoding="utf-8", newline="")
     original = w.api._update
 
@@ -1694,10 +1695,11 @@ def test_crash_after_an_update_put_keeps_a_real_remote_edit(
 ) -> None:
     w = _flow_running_two_extractors_crashes_after_put(tmp_path, monkeypatch)
     _dev_flow(w)["name"] = "Edited on dev"  # a real change after our PUT
-    result = w.push(branch=DEV)
+    w.push(branch=DEV)
 
     assert _dev_flow(w)["name"] == "Edited on dev"
-    assert any(x["change_type"] == "promote_link_pending" for x in result.get("warnings", []))
+    comp = VARIANTS["extractor"].component_id
+    assert sorted(_dev_task_targets(w)) == sorted(cid for c, cid in w.api.remote[DEV] if c == comp)
 
 
 # -- risk 52: every reference is mapped once, from its source id -----------
@@ -1787,12 +1789,13 @@ def test_manifest_save_never_touches_the_process_umask(
 def test_crash_after_an_update_put_keeps_a_remote_disable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    w = _flow_running_two_extractors_crashes_after_put(tmp_path, monkeypatch, explicit_enabled=True)
+    w = _flow_running_two_extractors_crashes_after_put(tmp_path, monkeypatch, local_disabled=False)
     _dev_flow(w)["isDisabled"] = True  # someone disabled it on the dev branch
-    result = w.push(branch=DEV)
+    w.push(branch=DEV)
 
     assert _dev_flow(w)["isDisabled"] is True
-    assert any(x["change_type"] == "promote_link_pending" for x in result.get("warnings", []))
+    comp = VARIANTS["extractor"].component_id
+    assert sorted(_dev_task_targets(w)) == sorted(cid for c, cid in w.api.remote[DEV] if c == comp)
 
 
 # -- risk 56: the final backfill keeps the target data-app id ---------------
@@ -1879,3 +1882,98 @@ def test_failed_dependency_create_keeps_the_rebind_pending_until_it_exists(
 
     assert _dev_task_target(w) == _dev_id_of(w, comp)
     assert not [c for c in load_manifest(w.root).configurations if c.metadata.get("rebind_pending")]
+
+
+# ===========================================================================
+# Round 7 (D29, D30; risks 58-60)
+# ===========================================================================
+
+
+def _dev_links_resolved(w: World) -> bool:
+    comp = VARIANTS["extractor"].component_id
+    return sorted(_dev_task_targets(w)) == sorted(cid for c, cid in w.api.remote[DEV] if c == comp)
+
+
+# -- risk 58: recovery PUTs only the configuration, never the enabled state --
+
+
+@pytest.mark.parametrize(
+    ("local_disabled", "remote_disabled"),
+    [(None, True), (True, False)],
+    ids=["remote-disable-survives", "remote-enable-survives"],
+)
+def test_recovery_never_changes_the_enabled_state_on_the_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    local_disabled: bool | None,
+    remote_disabled: bool,
+) -> None:
+    w = _flow_running_two_extractors_crashes_after_put(
+        tmp_path, monkeypatch, local_disabled=local_disabled
+    )
+    _dev_flow(w)["isDisabled"] = remote_disabled  # toggled on the dev branch since
+    if local_disabled is None:  # the local file now states the opposite explicitly
+        flow_file = w.config_dir("cfg-flow") / CONFIG_FILE
+        data = _yaml(flow_file.parent)
+        data["is_disabled"] = not remote_disabled
+        flow_file.write_text(dump_config_yaml(data), encoding="utf-8", newline="")
+    w.push(branch=DEV)
+
+    assert _dev_flow(w)["isDisabled"] is remote_disabled
+    assert _dev_links_resolved(w)
+
+
+# -- risk 59: a pending reference is cleared only when it resolves (D30) ----
+
+
+def test_ignoring_a_missing_dependency_keeps_the_rebind_pending(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    f = _seed_flow_world(tmp_path, flow_first=True)
+    w = f.world
+    comp = VARIANTS["extractor"].component_id
+    w.api.branch_from_prod()
+    del w.api.remote[DEV][(comp, f.extractor_id)]
+    semantic_edit(w.config_dir(f.flow_id) / CONFIG_FILE)
+    original = w.api._create
+
+    def extractor_create_fails(*args: Any, **kwargs: Any) -> dict:
+        if kwargs.get("component_id") == comp:
+            raise KeboolaApiError("create refused", 500, ErrorCode.API_ERROR)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(w.api, "_create", extractor_create_fails)
+    assert w.svc.push(alias="prod", project_root=w.root, branch_override=DEV)["errors"]
+    monkeypatch.undo()
+
+    def pending() -> list[str]:
+        return [
+            c.id for c in load_manifest(w.root).configurations if c.metadata.get("rebind_pending")
+        ]
+
+    manifest = load_manifest(w.root)
+    manifest.ignored_components = [comp]
+    save_manifest(w.root, manifest)
+    w.push(branch=DEV)  # the dependency is out of this push: it stays unresolved
+    assert pending() == [f.flow_id]
+
+    manifest = load_manifest(w.root)
+    manifest.ignored_components = []
+    save_manifest(w.root, manifest)
+    w.push(branch=DEV)  # creates the extractor, then rebinds the flow
+    assert _dev_task_target(w) == _dev_id_of(w, comp)
+    assert pending() == []
+
+
+# -- risk 60: recovery keeps every other change made on the target ----------
+
+
+def test_recovery_keeps_a_nested_version_changed_on_the_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    w = _flow_running_two_extractors_crashes_after_put(tmp_path, monkeypatch)
+    _dev_flow(w)["configuration"]["parameters"] = {"version": "v2"}  # changed after our PUT
+    w.push(branch=DEV)
+
+    assert _dev_flow(w)["configuration"]["parameters"] == {"version": "v2"}
+    assert _dev_links_resolved(w)

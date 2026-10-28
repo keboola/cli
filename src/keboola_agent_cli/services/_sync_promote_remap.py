@@ -1,4 +1,4 @@
-"""Config references on the promote path (D24).
+"""Config references on the promote path (D24, D29, D30).
 
 ``sync push --branch DEV`` with no ``dev/`` tree reads ``main/``, whose files
 name PRODUCTION ids -- a flow's task ``configId``, a transformation's
@@ -11,14 +11,17 @@ remapped in memory on EVERY promote push, create and update alike:
   ``promoted_from`` of every promote entry of the target branch, plus this
   push's creates) and for their rows (``promoted_from_id`` of each row a
   promote push created), and rewrites one payload for every reference kind
-  at once -- so no pass can undo another.
-- A config created before the configs it references (same push) is fixed by
-  :func:`finish_promote_rebind` after all creates, from the payload it was
-  sent with: ``main/`` is not read again.
-- A created config that references others is checkpointed with
-  ``rebind_pending``; a push that dies before the rebind finishes leaves the
-  flag, and the next promote push rebinds it without any local edit
-  (:func:`rebind_pending_entries`).
+  at once, each reference once from its source id.
+- A config sent before a config it references was created (same push) is
+  fixed by :func:`finish_promote_rebind` after all creates, from its original
+  payload: ``main/`` is not read again.
+- Such a config records ``rebind_pending``: the list of source references it
+  names that this push creates (D30), checkpointed before its PUT. The flag is
+  cleared only when every listed reference maps to a target id. A push that
+  dies, or whose dependency create fails, leaves it; a later promote push
+  reads the config FROM THE TARGET, rewrites only those references and PUTs
+  only ``configuration`` (D29) -- every other change made on the branch since
+  survives by construction.
 """
 
 from __future__ import annotations
@@ -29,28 +32,26 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from ..constants import CONFIG_FILENAME
 from ..errors import ErrorCode, KeboolaApiError
 from ..sync.branch_scope import find_branch_entry, promoted_from, same_branch, scope_manifest
+from ..sync.config_format import api_config_to_local
 from ..sync.diff_engine import config_hash
 from ..sync.manifest import Manifest
 from ._data_app_bodies import DATA_APP_COMPONENT_ID
+from ._sync_baseline import apply_stamp, config_baseline
 from ._sync_bindings import _rewrite_list_placeholders, task_config_ref
 from ._sync_models import (
     FLOW_COMPONENT_ID,
     ORCHESTRATOR_COMPONENT_ID,
     PROMOTED_ROW_KEY,
     REBIND_PENDING_KEY,
-    REBIND_SENT_HASH_KEY,
     SCHEDULER_COMPONENT_ID,
     SHARED_CODE_COMPONENT_ID,
     VARIABLES_COMPONENT_ID,
 )
-from ._sync_push_ops import push_update
 from ._sync_writeback import promote_shadow, stamp_updated_config
 
 if TYPE_CHECKING:
-    from ._encryption import SecretCache
     from ._sync_push_create import CreateTarget
     from .sync_service import SyncService
 
@@ -66,28 +67,6 @@ def has_references(component_id: str, configuration: dict[str, Any]) -> bool:
     if component_id in _RUN_TARGET_COMPONENTS:
         return True
     return any(configuration.get(key) for key in _LINK_KEYS)
-
-
-def payload_hash(
-    name: Any, description: Any, configuration: Any, is_disabled: bool | None = None
-) -> str:
-    """Hash of every field a promote update overwrites, as sent or as stored.
-
-    Name, description, body, and the enabled state when the update sends one
-    (``is_disabled`` None leaves the stored state alone, so it is not part of
-    the identity then). The state goes in under its own key: ``config_hash``
-    drops a falsy root ``is_disabled``, which would make "sent enabled" match
-    a config someone disabled since. Encrypted values are normalized away, so
-    the stored ciphertext of what we sent hashes like the payload itself.
-    """
-    fields: dict[str, Any] = {
-        "name": name or "",
-        "description": description or "",
-        "configuration": configuration,
-    }
-    if is_disabled is not None:
-        fields["enabled_state"] = "disabled" if is_disabled else "enabled"
-    return config_hash(fields)
 
 
 @dataclass
@@ -114,26 +93,23 @@ class PromoteRemap:
         rows: ``(target parent id, source row id)`` -> target row id.
         sent: ``(component_id, target id)`` -> the payload a config that
             references others was sent with this push.
-        expect_creates: The push still creates configs or rows, so a payload
-            sent now may name one of them by its source id (D24).
         expected: Source keys of the configs this push plans to create.
         expected_rows: Source ids of the rows this push plans to create.
-        hold: Called with ``(component_id, config_id, payload hash)`` before
-            such an update is PUT: it checkpoints ``rebind_pending`` first.
+        hold: Called with ``(component_id, config_id, pending references)``
+            before an update naming one of them is PUT: it checkpoints
+            ``rebind_pending`` first.
     """
 
     configs: dict[tuple[str, str], str] = field(default_factory=dict)
     rows: dict[tuple[str, str], str] = field(default_factory=dict)
     sent: dict[tuple[str, str], SentPayload] = field(default_factory=dict)
-    expect_creates: bool = False
     expected: set[tuple[str, str]] = field(default_factory=set)
     expected_rows: set[str] = field(default_factory=set)
-    hold: Callable[[str, str, str], None] | None = None
+    hold: Callable[[str, str, list[list[str]]], None] | None = None
 
     def plan(self, changes: list[dict[str, Any]]) -> None:
         """Note what this push creates: a reference to it resolves only after the create."""
         added = [c for c in changes if c["change_type"] == "added"]
-        self.expect_creates = bool(added)
         self.expected = {
             (c["component_id"], c["config_id"])
             for c in added
@@ -143,20 +119,46 @@ class PromoteRemap:
             str(c["config_id"]) for c in added if c.get("is_row") and c.get("config_id")
         }
 
-    def unresolved(self, component_id: str, original: dict[str, Any]) -> bool:
-        """True iff *original* names a config or row this push meant to create and did not.
+    def pending_refs(self, component_id: str, original: dict[str, Any]) -> list[list[str]]:
+        """The source references in *original* to configs or rows this push creates.
 
-        Such a reference still holds the source id on the target; the config
-        stays ``rebind_pending`` until a later push creates the dependency.
+        ``[component, config id]`` or ``[component, config id, row id]``. They
+        may still name the source on the target after the first PUT; the list
+        is what ``rebind_pending`` records (D30).
         """
-        for config_key, row_ids in _references(component_id, original):
-            if config_key in self.expected and config_key not in self.configs:
-                return True
-            parent = self.configs.get(config_key, config_key[1])
-            for row_id in row_ids:
-                if row_id in self.expected_rows and (parent, row_id) not in self.rows:
-                    return True
-        return False
+        refs: list[list[str]] = []
+        for (component, config_id), row_ids in _references(component_id, original):
+            if (component, config_id) in self.expected:
+                refs.append([component, config_id])
+            refs += [[component, config_id, r] for r in row_ids if r in self.expected_rows]
+        return refs
+
+    def resolved(self, refs: list[Any]) -> bool:
+        """True iff every listed source reference maps to a target id (D30)."""
+        for ref in refs:
+            if not isinstance(ref, list) or len(ref) < 2:
+                continue
+            key = (str(ref[0]), str(ref[1]))
+            if len(ref) == 2:
+                if key not in self.configs:
+                    return False
+            elif (self.configs.get(key, key[1]), str(ref[2])) not in self.rows:
+                return False
+        return True
+
+    def subset(self, refs: list[Any]) -> PromoteRemap:
+        """A remap that rewrites only the listed source references."""
+        sub = PromoteRemap()
+        for ref in refs:
+            if not isinstance(ref, list) or len(ref) < 2:
+                continue
+            key = (str(ref[0]), str(ref[1]))
+            parent = self.configs.get(key, key[1])
+            if len(ref) == 2 and key in self.configs:
+                sub.configs[key] = parent
+            elif len(ref) == 3 and (parent, str(ref[2])) in self.rows:
+                sub.rows[(parent, str(ref[2]))] = self.rows[(parent, str(ref[2]))]
+        return sub
 
     def refresh(
         self,
@@ -280,27 +282,16 @@ class PromoteRemap:
                 configuration=configuration,
             )
 
-    def before_update(
-        self,
-        component_id: str,
-        config_id: str,
-        payload: dict[str, Any],
-        *,
-        name: Any,
-        description: Any,
-        is_disabled: bool | None,
-    ) -> None:
-        """Checkpoint ``rebind_pending`` before an update that may need a later rebind (D24).
+    def before_update(self, component_id: str, config_id: str, original: dict[str, Any]) -> None:
+        """Checkpoint ``rebind_pending`` before an update naming a config this push creates.
 
         Before the PUT, not after it: a push that dies after the PUT would
-        otherwise leave a sent payload naming a source id and no record that
-        its links are unfinished. The payload hash lets the next push tell
-        this PUT from a real change on the target.
+        otherwise leave a target config naming a source id and no record that
+        its links are unfinished.
         """
-        if self.hold is not None and self.expect_creates and has_references(component_id, payload):
-            self.hold(
-                component_id, config_id, payload_hash(name, description, payload, is_disabled)
-            )
+        refs = self.pending_refs(component_id, original)
+        if self.hold is not None and refs:
+            self.hold(component_id, config_id, refs)
 
 
 def finish_promote_rebind(
@@ -310,36 +301,43 @@ def finish_promote_rebind(
     *,
     manifest: Manifest,
     target: CreateTarget,
-    known_secrets: SecretCache | None,
     warnings: list[dict[str, Any]],
     errors: list[dict[str, str]],
     diff_changes: dict[tuple[str, str], str],
     ignored_components: frozenset[str],
-    allow_plaintext_fallback: bool = False,
 ) -> bool:
     """Finish the references of a promote push; True when the manifest changed.
 
-    Runs after every create of the push, so a reference to a config created
-    later in the same push resolves too:
+    Runs after every create of the push:
 
-    1. A config still flagged ``rebind_pending`` from an earlier push that
-       died before its rebind is sent again (built from its files, remapped)
-       -- only when this push's diff allows it (*diff_changes*: config change
-       type by ``(component_id, config_id)``). A remote change or a conflict
-       keeps the flag and is reported, never overwritten -- unless the target
-       holds exactly the payload this push's own interrupted PUT sent
-       (``rebind_sent_hash``). A config deleted on the target drops the flag
-       (no PUT to a gone id, no endless 404s); so does an ignored component
-       (ignoring is the user's decision). Only configs the diff's scope
-       holds are eligible at all.
-    2. Each payload sent this push that the final id map still changes is PUT
-       again -- its original (source ids, secrets encrypted) remapped in
-       memory with the final map; ``main/`` is not read again, so nothing
-       undoes a remap, and no id is mapped twice.
+    1. Each payload sent this push that the final id map still changes is PUT
+       again -- its original (source ids, secrets encrypted) remapped with the
+       final map; ``main/`` is not read again, and no id is mapped twice.
+    2. A config still ``rebind_pending`` from an earlier push (D29) is read
+       from the target, only its listed references are rewritten, and only
+       ``configuration`` is PUT -- when anything changed. Its name,
+       description, enabled state and every other field changed on the
+       branch since survive. A config deleted on the target, or of an ignored
+       component, drops the flag; one out of the diff's scope keeps it.
 
-    A failed PUT keeps the flag, so the next promote push rebinds again.
+    A flag is cleared only when every listed reference maps to a target id
+    (D30); a failed PUT or a dependency not created yet keeps it.
     """
     branch_id = target.branch_id
+    for (component_id, config_id), sent in remap.sent.items():
+        payload = _with_target_identity(
+            component_id, remap.apply(component_id, sent.original), sent
+        )
+        if payload != sent.configuration:
+            try:
+                response = _put_configuration(client, component_id, config_id, payload, branch_id)
+            except KeboolaApiError as exc:
+                errors.append(_link_error(component_id, config_id, exc))
+                continue
+            _stamp(
+                service, client, manifest, target, component_id, config_id, sent, response, warnings
+            )
+        _settle(manifest, remap, component_id, config_id, branch_id, warnings)
     pending = pending_rebinds(manifest, branch_id)
     eligible = {
         (cfg.component_id, cfg.id)
@@ -352,78 +350,93 @@ def finish_promote_rebind(
             target_branch_id=branch_id,
         ).in_tree
     }
-    for component_id, config_id, path in pending:
+    for component_id, config_id, refs in pending:
         key = (component_id, config_id)
         if key in remap.sent:
             continue
-        decision = diff_changes.get(key)
-        if component_id in ignored_components or decision == "remote_deleted":
+        if component_id in ignored_components or diff_changes.get(key) == "remote_deleted":
             _clear_pending(manifest, component_id, config_id, branch_id)
             continue
         if key not in eligible:
             continue
-        if decision in ("conflict", "remote_modified") and not _target_holds_our_put(
-            client, manifest, component_id, config_id, branch_id
-        ):
-            warnings.append(_pending_warning(component_id, config_id, decision))
-            continue
-        if not (target.project_root / target.branch_path / path / CONFIG_FILENAME).exists():
-            continue
         try:
-            response = push_update(
-                service,
-                client,
-                component_id,
-                config_id,
-                path,
-                target.project_root,
-                manifest,
-                branch_id,
-                allow_plaintext_fallback=allow_plaintext_fallback,
-                warnings=warnings,
-                known_secrets=known_secrets,
-                remap=remap,
+            _rebind_on_target(
+                client, manifest, remap.subset(refs), component_id, config_id, branch_id
             )
         except KeboolaApiError as exc:
             errors.append(_link_error(component_id, config_id, exc))
             continue
-        _stamp(service, client, manifest, target, component_id, config_id, path, response, warnings)
-        _clear_pending(manifest, component_id, config_id, branch_id)
-    for (component_id, config_id), sent in remap.sent.items():
-        payload = _with_target_identity(
-            component_id, remap.apply(component_id, sent.original), sent
-        )
-        if payload != sent.configuration:
-            try:
-                response = client.update_config(
-                    component_id=component_id,
-                    config_id=config_id,
-                    configuration=payload,
-                    change_description="Remap promoted config IDs via kbagent sync push",
-                    branch_id=branch_id,
-                )
-            except KeboolaApiError as exc:
-                errors.append(_link_error(component_id, config_id, exc))
-                continue
-            _stamp(
-                service,
-                client,
-                manifest,
-                target,
-                component_id,
-                config_id,
-                sent.config_path,
-                response,
-                warnings,
-            )
-        if remap.unresolved(component_id, sent.original):
-            # A dependency's create failed: its source id is still in the
-            # payload. Keep the flag, so the push that creates it rebinds.
-            warnings.append(_dependency_warning(component_id, config_id))
-            _keep_pending(manifest, component_id, config_id, branch_id)
-            continue
-        _clear_pending(manifest, component_id, config_id, branch_id)
+        _settle(manifest, remap, component_id, config_id, branch_id, warnings)
     return bool(pending or remap.sent)
+
+
+def _put_configuration(
+    client: Any, component_id: str, config_id: str, configuration: dict[str, Any], branch_id: Any
+) -> Any:
+    """PUT only ``configuration``: name, description and enabled state stay as they are."""
+    return client.update_config(
+        component_id=component_id,
+        config_id=config_id,
+        configuration=configuration,
+        change_description="Remap promoted config IDs via kbagent sync push",
+        branch_id=branch_id,
+    )
+
+
+def _rebind_on_target(
+    client: Any,
+    manifest: Manifest,
+    listed: PromoteRemap,
+    component_id: str,
+    config_id: str,
+    branch_id: int | None,
+) -> None:
+    """Rewrite the listed references of the TARGET's config and PUT it if changed (D29).
+
+    The baseline moves to the response only when the target held exactly what
+    the baseline described before this PUT: then the PUT is the only change.
+    Otherwise it stays, so a change made on the branch keeps showing in diff.
+    """
+    remote = client.get_config_detail(
+        component_id=component_id, config_id=config_id, branch_id=branch_id
+    )
+    configuration = (remote or {}).get("configuration")
+    if not isinstance(configuration, dict):
+        return
+    rewritten = listed.apply(component_id, configuration)
+    if rewritten == configuration:
+        return
+    response = _put_configuration(client, component_id, config_id, rewritten, branch_id)
+    entry = find_branch_entry(manifest, component_id, config_id, branch_id)
+    before = config_hash(api_config_to_local(component_id, remote, config_id))
+    if entry is not None and entry.metadata.get("pull_config_hash") == before:
+        stamp = config_baseline(
+            client,
+            component_id=component_id,
+            config_id=config_id,
+            branch_id=branch_id,
+            response=response,
+        )
+        apply_stamp(entry.metadata, stamp)
+
+
+def _settle(
+    manifest: Manifest,
+    remap: PromoteRemap,
+    component_id: str,
+    config_id: str,
+    branch_id: int | None,
+    warnings: list[dict[str, Any]],
+) -> None:
+    """Clear ``rebind_pending`` when all its references resolved; else keep it and warn."""
+    entry = find_branch_entry(manifest, component_id, config_id, branch_id)
+    if entry is None or REBIND_PENDING_KEY not in entry.metadata:
+        return
+    refs = entry.metadata[REBIND_PENDING_KEY]
+    if remap.resolved(refs if isinstance(refs, list) else []):
+        entry.metadata.pop(REBIND_PENDING_KEY, None)
+        return
+    warnings.append(_dependency_warning(component_id, config_id))
 
 
 def _with_target_identity(
@@ -480,21 +493,8 @@ def _dependency_warning(component_id: str, config_id: str) -> dict[str, str]:
         "component_id": component_id,
         "config_id": config_id,
         "message": (
-            f"{component_id}/{config_id} still names a config or row whose create failed in "
-            f"this push; the next 'kbagent sync push --branch' that creates it sends the link."
-        ),
-    }
-
-
-def _pending_warning(component_id: str, config_id: str, decision: str) -> dict[str, str]:
-    return {
-        "change_type": "promote_link_pending",
-        "component_id": component_id,
-        "config_id": config_id,
-        "message": (
-            f"{component_id}/{config_id} still names source config ids on the branch, but "
-            f"it changed there since ({decision}); its links are not sent over that "
-            f"change. Run 'kbagent sync pull --branch <id>' to reconcile it."
+            f"{component_id}/{config_id} still names a config or row that does not exist on "
+            f"the branch yet; the 'kbagent sync push --branch' that creates it sends the link."
         ),
     }
 
@@ -506,9 +506,9 @@ def hold_before_put(
     checkpoint: Callable[[str], None],
     component_id: str,
     config_id: str,
-    sent_hash: str,
+    refs: list[list[str]],
 ) -> None:
-    """Record ``rebind_pending`` + the hash of the payload about to be PUT, and checkpoint.
+    """Record ``rebind_pending`` (the references still to resolve) and checkpoint (D30).
 
     The target entry may not exist yet (the first write of a branched config
     on the promote path); its shadow is recorded here, so the flag has a home.
@@ -525,35 +525,8 @@ def hold_before_put(
     )
     if entry is None:
         return
-    entry.metadata[REBIND_PENDING_KEY] = True
-    entry.metadata[REBIND_SENT_HASH_KEY] = sent_hash
+    entry.metadata[REBIND_PENDING_KEY] = refs
     checkpoint(f"{component_id}/{config_id}")
-
-
-def _target_holds_our_put(
-    client: Any, manifest: Manifest, component_id: str, config_id: str, branch_id: int | None
-) -> bool:
-    """True iff the target config is exactly what an interrupted push of ours PUT."""
-    entry = find_branch_entry(manifest, component_id, config_id, branch_id)
-    sent_hash = (entry.metadata.get(REBIND_SENT_HASH_KEY) if entry else "") or ""
-    if not sent_hash:
-        return False
-    try:
-        remote = client.get_config_detail(
-            component_id=component_id, config_id=config_id, branch_id=branch_id
-        )
-    except KeboolaApiError:
-        return False
-    if not isinstance(remote, dict):
-        return False
-    name, description = remote.get("name"), remote.get("description")
-    configuration = remote.get("configuration")
-    # The sent hash covers the enabled state only when the PUT sent one.
-    candidates = {
-        payload_hash(name, description, configuration),
-        payload_hash(name, description, configuration, bool(remote.get("isDisabled"))),
-    }
-    return sent_hash in candidates
 
 
 def _link_error(component_id: str, config_id: str, exc: KeboolaApiError) -> dict[str, str]:
@@ -573,7 +546,7 @@ def _stamp(
     target: CreateTarget,
     component_id: str,
     config_id: str,
-    path: str,
+    sent: SentPayload,
     response: Any,
     warnings: list[dict[str, Any]],
 ) -> None:
@@ -583,22 +556,12 @@ def _stamp(
         component_id=component_id,
         config_id=config_id,
         branch_id=target.branch_id,
-        config_path_str=path,
-        hashes=service._compute_config_hashes(
-            target.project_root / target.branch_path / path, component_id
-        ),
+        config_path_str=sent.config_path,
+        hashes=service._compute_config_hashes(sent.config_dir, component_id),
         response=response,
         warnings=warnings,
         source_tree=target.branch_path,
     )
-
-
-def _keep_pending(
-    manifest: Manifest, component_id: str, config_id: str, branch_id: int | None
-) -> None:
-    entry = find_branch_entry(manifest, component_id, config_id, branch_id)
-    if entry is not None:
-        entry.metadata[REBIND_PENDING_KEY] = True
 
 
 def _clear_pending(
@@ -607,17 +570,20 @@ def _clear_pending(
     entry = find_branch_entry(manifest, component_id, config_id, branch_id)
     if entry is not None:
         entry.metadata.pop(REBIND_PENDING_KEY, None)
-        entry.metadata.pop(REBIND_SENT_HASH_KEY, None)
 
 
-def pending_rebinds(manifest: Manifest, branch_id: int | None) -> list[tuple[str, str, str]]:
-    """``(component_id, config_id, path)`` of the target's entries still to rebind."""
+def pending_rebinds(manifest: Manifest, branch_id: int | None) -> list[tuple[str, str, list[Any]]]:
+    """``(component_id, config_id, references)`` of the target's entries still to rebind."""
     return [
-        (entry.component_id, entry.id, entry.path)
+        (entry.component_id, entry.id, _listed(entry.metadata[REBIND_PENDING_KEY]))
         for entry in manifest.configurations
-        if entry.metadata.get(REBIND_PENDING_KEY)
+        if REBIND_PENDING_KEY in entry.metadata
         and same_branch(manifest, entry.branch_id, branch_id)
     ]
+
+
+def _listed(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
 
 
 def diff_decisions(changes: list[dict[str, Any]]) -> dict[tuple[str, str], str]:

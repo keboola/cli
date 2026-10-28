@@ -28,7 +28,6 @@ from ..sync.branch_scope import PROMOTED_FROM_KEY, PromotedFrom, branch_tree_pat
 from ..sync.manifest import Manifest, save_manifest
 from ._sync_baseline import apply_stamp, config_baseline
 from ._sync_models import REBIND_PENDING_KEY, CreatedConfig, CreateOutcome
-from ._sync_promote_remap import has_references
 from ._sync_writeback import (
     link_promote_entries,
     propagate_kbc_metadata,
@@ -148,8 +147,8 @@ def record_created_config(
     if promote:
         association = PromotedFrom(target.branch_path, source_config_id)
         entry.metadata[PROMOTED_FROM_KEY] = association.as_metadata()
-        if has_references(component_id, outcome.configuration):
-            entry.metadata[REBIND_PENDING_KEY] = True
+        if outcome.pending_refs:
+            entry.metadata[REBIND_PENDING_KEY] = outcome.pending_refs
     try:
         checkpoint_manifest(target.project_root, manifest, f"{component_id}/{new_id}")
     except ManifestCheckpointError as fatal:
