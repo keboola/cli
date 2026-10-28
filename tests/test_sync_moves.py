@@ -18,7 +18,6 @@ import pytest
 import yaml
 
 from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
-from keboola_agent_cli.services._sync_moves import settle_moves
 from keboola_agent_cli.services.config_service import ConfigService
 from keboola_agent_cli.sync.manifest import load_manifest
 from test_sync_random_walk import DEV, HTTP, PROD, SQL, FakeApi, make_service
@@ -518,6 +517,8 @@ def test_m12_production_spelling_of_the_entry_does_not_matter(orders: Tree, spel
 
 
 def test_m12_unregistered_branch_entry_moves_in_the_default_tree(orders: Tree) -> None:
+    from keboola_agent_cli.services._sync_moves import settle_moves
+
     manifest = load_manifest(orders.root)
     manifest.configurations[0].branch_id = 777  # not in manifest.branches
     new = orders.move(orders.dir_of("500"), "orders-moved")
