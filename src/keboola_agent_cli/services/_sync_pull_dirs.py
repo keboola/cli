@@ -13,6 +13,7 @@ file keeps its local edits when pull has no baseline for it (D15).
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -48,6 +49,8 @@ from ._sync_models import (
     RETIRED_ROWS_KEY,
 )
 from ._sync_stale import sweep_stale_rows
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from .sync_service import SyncService
@@ -695,3 +698,24 @@ def _row_entry(
         path=row_rel_path,
         metadata={"pull_hash": file_hash, "pull_config_hash": cfg_hash},
     )
+
+
+def collect_config_folders(components: list[dict[str, Any]]) -> dict[str, str] | None:
+    """Map ``{component_id}/{config_id}`` to its UI folder name.
+
+    Read from the configuration's own ``folder`` field (null = no folder)
+    in the listing pull already fetched -- no extra request. Returns
+    ``None`` when a configuration lacks the field (a stack that predates
+    it): ``None`` means "unknown", NOT "no folders", so the caller keeps
+    each config's previously captured folder (CLI-9).
+    """
+    folders: dict[str, str] = {}
+    for component in components:
+        component_id = component.get("id", "")
+        for cfg in component.get("configurations", []) or []:
+            if "folder" not in cfg:
+                logger.warning("config listing carries no folder field; folders kept")
+                return None
+            if cfg["folder"]:
+                folders[f"{component_id}/{cfg.get('id', '')}"] = cfg["folder"]
+    return folders

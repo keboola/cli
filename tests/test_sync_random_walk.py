@@ -691,8 +691,6 @@ class Sim:
         self.note(f"  local delete {d.relative_to(self.root)}")
 
     def local_move(self, a: float, _b: float, c: float) -> None:
-        if "move-is-delete-create" in self.masks:
-            return
         d = _pick(config_dirs(self.local_tree(c)), a)
         if d is None:
             return
@@ -1239,8 +1237,7 @@ def shrink(steps: list[Step], kind: str, masks: frozenset[str] = frozenset()) ->
 # ===========================================================================
 
 # Known findings whose trigger the CI walk steers around. Each name has an
-# explicit ``xfail(strict=True)`` test below (or, for ``move-is-delete-create``,
-# in test_sync_formal_counterexamples.py). When a finding is fixed, its xfail
+# explicit ``xfail(strict=True)`` test below. When a finding is fixed, its xfail
 # test goes red: delete the marker AND the mask name here, so the walk starts
 # exercising that path again.
 MASKS = frozenset(
@@ -1250,7 +1247,6 @@ MASKS = frozenset(
         # --branch DEV.
         "pull-dev-orphans-main",
         "sparse-disabled-reenable",
-        "move-is-delete-create",  # #792 I
     }
 )
 
