@@ -145,22 +145,33 @@ class CreateLedger:
     # another new dir claims too: neither maps.
     ambiguous: dict[tuple[str, str], dict[str, Any]] = field(default_factory=dict)
 
+    # Placeholder-claim warnings of new rows (their creates have no hook).
+    row_warnings: list[dict[str, Any]] = field(default_factory=list)
+
+    def claimed_ids(self, component_id: str) -> set[str]:
+        """Every placeholder this push planned for a new *component_id* dir, mapped or not."""
+        mapped = {p for (comp, _), p in self.placeholders.items() if comp == component_id}
+        return mapped | {
+            str(w["placeholder"]) for (comp, _), w in self.ambiguous.items() if comp == component_id
+        }
+
     @classmethod
     def plan(
         cls,
         service: SyncService,
         manifest: Manifest,
-        config_changes: list[dict[str, Any]],
+        changes: list[dict[str, Any]],
         target: CreateTarget,
     ) -> CreateLedger:
-        """The ledger of a push, with the placeholder of each untracked new config dir (Astra).
+        """The ledger of a push, with the placeholder of each untracked new config and row (Astra).
 
         A file id is a placeholder only when no entry of the manifest owns it
         -- as its current id or as the ``created_from_id`` of a config an
         earlier push created from it -- so a copy still carrying a created
         config's placeholder never steals it. Decided before any create, so
         the push's own creates cannot change the answer. Two new dirs carrying
-        the same free id: neither maps, and both creates report it.
+        the same free id: neither maps, and both creates report it. Rows the
+        same way, scoped by their parent (:func:`_plan_rows`).
         """
         ledger = cls()
         if target.branch_path != branch_tree_path(manifest, target.branch_id):
@@ -176,9 +187,9 @@ class CreateLedger:
             if same_branch(manifest, e.branch_id, target.branch_id)
         }
         claims: dict[tuple[str, str], list[str]] = {}
-        for change in config_changes:
+        for change in changes:
             key = (change["component_id"], change.get("path", ""))
-            if change["change_type"] != "added" or key in tracked:
+            if change.get("is_row") or change["change_type"] != "added" or key in tracked:
                 continue
             data = service._read_config_file(target.project_root / target.branch_path / key[1])
             file_id = str(((data or {}).get("_keboola") or {}).get("config_id") or "")
@@ -189,17 +200,10 @@ class CreateLedger:
                 ledger.placeholders[(component_id, paths[0])] = file_id
                 continue
             for path in paths:
-                ledger.ambiguous[(component_id, path)] = {
-                    "code": "PLACEHOLDER_AMBIGUOUS",
-                    "component_id": component_id,
-                    "path": path,
-                    "placeholder": file_id,
-                    "message": (
-                        f"{len(paths)} new config folders carry the id {file_id!r} "
-                        f"({', '.join(sorted(paths))}); none of them is linked by it. "
-                        "Give each folder its own id, or set the links by hand."
-                    ),
-                }
+                ledger.ambiguous[(component_id, path)] = _ambiguity_warning(
+                    component_id, path, file_id, paths, "config folders"
+                )
+        ledger.row_warnings = _plan_rows(service, manifest, changes, target)
         return ledger
 
     def parent_id(self, component_id: str, parent_config_id: str) -> str:
@@ -443,3 +447,76 @@ def register_adopted_parent(
         status_code=0,
         error_code=ErrorCode.PARENT_CONFIG_NOT_TRACKED,
     )
+
+
+def _ambiguity_warning(
+    component_id: str, path: str, placeholder: str, paths: list[str], what: str
+) -> dict[str, Any]:
+    return {
+        "code": "PLACEHOLDER_AMBIGUOUS",
+        "component_id": component_id,
+        "path": path,
+        "placeholder": placeholder,
+        "message": (
+            f"{len(paths)} new {what} carry the id {placeholder!r} "
+            f"({', '.join(sorted(paths))}); none of them is linked by it. "
+            "Give each its own id, or set the links by hand."
+        ),
+    }
+
+
+def _plan_rows(
+    service: SyncService,
+    manifest: Manifest,
+    changes: list[dict[str, Any]],
+    target: CreateTarget,
+) -> list[dict[str, Any]]:
+    """Decide, once and before any create, which new row dirs a placeholder maps to (Astra).
+
+    A new row dir (no target identity yet) under a tracked config or a new
+    config dir may carry a row id in its file. It is that row's placeholder,
+    scoped to the parent, only when nothing under that parent owns it -- a
+    row's current id or the ``created_from_id`` an earlier push recorded --
+    and no other new dir under the parent carries it too. The decision is
+    written into the change's ``source_row_id``, the one identity both the
+    push's in-memory row map and the row's durable ``created_from_id`` read,
+    so the two can never disagree. Returns the ambiguity warnings.
+    """
+    groups: dict[tuple[str, str, str, str], list[dict[str, Any]]] = {}
+    owned: set[tuple[str, str, str]] = set()
+    for change in changes:
+        if not change.get("is_row") or change["change_type"] != "added" or change["config_id"]:
+            continue
+        component_id = change["component_id"]
+        parent_id = change.get("parent_config_id", "")
+        parent_path = change.get("parent_path", "")
+        if parent_path and not parent_id:
+            scope = f"path:{parent_path}"
+            row_file = target.project_root / target.branch_path / parent_path / change["path"]
+            data = service._read_config_file(row_file) or {}
+            placeholder = str((data.get("_keboola") or {}).get("row_id") or "")
+        else:
+            scope = f"id:{parent_id}"
+            placeholder = str(change.get("source_row_id") or "")
+            entry = find_branch_entry(manifest, component_id, parent_id, target.branch_id)
+            for row in entry.rows if entry is not None else []:
+                owned.add((component_id, scope, row.id))
+                source = (row.metadata or {}).get(CREATED_FROM_KEY)
+                if source:
+                    owned.add((component_id, scope, str(source)))
+        change["source_row_id"] = ""
+        if placeholder:
+            groups.setdefault((component_id, scope, placeholder, parent_path), []).append(change)
+    warnings: list[dict[str, Any]] = []
+    for (component_id, scope, placeholder, parent_path), group in groups.items():
+        if (component_id, scope, placeholder) in owned:
+            continue  # already owned under this parent: never claimed again
+        if len(group) == 1:
+            group[0]["source_row_id"] = placeholder
+            continue
+        paths = [f"{parent_path or scope}/{c['path']}" for c in group]
+        warnings.extend(
+            _ambiguity_warning(component_id, path, placeholder, paths, "row folders")
+            for path in paths
+        )
+    return warnings

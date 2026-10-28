@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..errors import ErrorCode, KeboolaApiError
-from ..sync.branch_scope import find_branch_entry, same_branch
+from ..sync.branch_scope import find_branch_entry
 from ..sync.config_format import api_config_to_local
 from ..sync.diff_engine import config_hash
 from ..sync.manifest import Manifest
@@ -51,7 +51,6 @@ from ._sync_link_pending import (
     validate_targets,
 )
 from ._sync_models import (
-    CREATED_FROM_KEY,
     RUN_TARGET_COMPONENTS,
     SHARED_CODE_COMPONENT_ID,
     VARIABLES_COMPONENT_ID,
@@ -60,6 +59,7 @@ from ._sync_models import (
 )
 
 if TYPE_CHECKING:
+    from ._sync_push_create import CreateLedger
     from .sync_service import SyncService
 
 _LINK_CHANGE_TYPES = frozenset({"variable_link", "shared_code_link"})
@@ -100,18 +100,21 @@ def resolve_transformation_links(
     service: SyncService,
     client: Any,
     *,
-    created_configs: list[CreatedConfig],
-    created_id_map: dict[tuple[str, str], str],
+    ledger: CreateLedger,
     created_row_id_map: dict[tuple[str, str], str],
     created_rows_by_parent: dict[str, list[str]],
     manifest: Manifest,
     branch_id: int | None,
     source_dir: Path | None,
 ) -> VariableBindingResult:
-    """Phase C: the in-push link backfill, then the pending links of earlier pushes."""
-    created_row_id_map = scoped_row_map(
-        manifest, branch_id, created_row_id_map, created_rows_by_parent
-    )
+    """Phase C: the in-push link backfill, then the pending links of earlier pushes.
+
+    *ledger* carries this push's creates and its planned placeholder claims
+    (:meth:`CreateLedger.plan`): a variables id any of them claims -- also one
+    whose create failed -- is never bound to another config by the fallback.
+    """
+    created_configs = ledger.created_configs
+    created_id_map = ledger.created_id_map
     result = resolve_transformation_bindings(
         service,
         client,
@@ -121,7 +124,9 @@ def resolve_transformation_links(
         created_rows_by_parent=created_rows_by_parent,
         manifest=manifest,
         branch_id=branch_id,
+        planned_claims=ledger.claimed_ids(VARIABLES_COMPONENT_ID),
     )
+    result.warnings.extend(ledger.row_warnings)
     if source_dir is None:  # promote path: its creates are remapped in memory (D24)
         return result
     failed = {
@@ -174,32 +179,6 @@ def resolve_transformation_links(
         entry = find_branch_entry(manifest, created.component_id, created.config_id, branch_id)
         result.pending_changed |= set_link_pending(entry, still)
     return result
-
-
-def scoped_row_map(
-    manifest: Manifest,
-    branch_id: int | None,
-    created_row_id_map: dict[tuple[str, str], str],
-    created_rows_by_parent: dict[str, list[str]],
-) -> dict[tuple[str, str], str]:
-    """This push's ``(parent, placeholder row id) -> row id`` map, complete (Astra).
-
-    A row created under a NEW untracked config has no diff-time identity, so
-    the push loop does not map it; its create recorded the row file's id as
-    ``created_from_id`` under that new parent. Those are added here, scoped
-    to the parent, so the first binding pass resolves a transformation that
-    selects one of several such rows.
-    """
-    full = dict(created_row_id_map)
-    fresh = {(parent, row) for parent, rows in created_rows_by_parent.items() for row in rows}
-    for entry in manifest.configurations:
-        if not same_branch(manifest, entry.branch_id, branch_id):
-            continue
-        for row in entry.rows:
-            source = str((row.metadata or {}).get(CREATED_FROM_KEY) or "")
-            if source and (entry.id, row.id) in fresh:
-                full.setdefault((entry.id, source), row.id)
-    return full
 
 
 def _read_remote(

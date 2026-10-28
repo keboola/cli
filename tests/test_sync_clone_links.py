@@ -313,6 +313,8 @@ class StorageFake:
         self.fail_row_names: set[str] = set()
         # Reads of these components' configs answer HTTP 503 (a target that cannot be read).
         self.unreadable_components: set[str] = set()
+        # Configs with these names fail to create.
+        self.fail_config_names: set[str] = set()
         # Row name -> a row someone adds in the UI right after that row is created.
         self.rows_added_with: dict[str, dict[str, Any]] = {}
         # Every update_config call: component id, config id, configuration sent.
@@ -363,7 +365,10 @@ class StorageFake:
     ) -> dict[str, Any]:
         if component_id in self.unreadable_components:
             raise KeboolaApiError("Service Unavailable", status_code=503)
-        return copy.deepcopy(self.find(component_id, config_id))
+        try:
+            return copy.deepcopy(self.find(component_id, config_id))
+        except KeyError:  # Storage answers 404 for a config it does not have
+            raise KeboolaApiError(f"Configuration {config_id} not found", status_code=404) from None
 
     def get_config_row(
         self, component_id: str, config_id: str, row_id: str, branch_id: int | None = None
@@ -383,6 +388,8 @@ class StorageFake:
         is_disabled: bool = False,
         folder: str | None = None,
     ) -> dict[str, Any]:
+        if name in self.fail_config_names:
+            raise KeboolaApiError("Storage refused the configuration", status_code=500)
         config = _config(f"new-{next(self._ids)}", name, copy.deepcopy(configuration))
         self.create_calls.append({"component_id": component_id, "id": config["id"]})
         self.append(component_id, config)

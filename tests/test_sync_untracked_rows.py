@@ -1776,3 +1776,102 @@ def test_a_mapped_row_of_another_parent_does_not_resolve_a_link() -> None:
 
     assert links.pending
     assert links.variables_values_id is None
+
+
+# ---------------------------------------------------------------------------
+# Astra on 36c758bd: claims decide, also for failed creates and rows
+# ---------------------------------------------------------------------------
+
+
+def _with_second_variables(components: list[dict[str, Any]]) -> None:
+    from test_sync_clone_links import _component_entry, _config, _row
+
+    _component_entry(components, VARS)["configurations"].append(
+        _config(
+            "vars-B-ref",
+            "Other variables",
+            {"variables": [{"name": "other", "type": "string"}]},
+            rows=[
+                _row("vrow-B-ref", "Other values", {"values": [{"name": "other", "value": "1"}]})
+            ],
+        )
+    )
+
+
+def test_a_failed_variables_create_never_redirects_its_transformation(
+    tmp_path: Path, tmp_config_dir: Path
+) -> None:
+    """Astra P1: A ("var-ref") fails, B is created -- T keeps naming A, the retry binds it."""
+    world = CloneWorld(tmp_path, tmp_config_dir, reference=_with_second_variables)
+    world.tgt_api.fail_config_names.add("Variables")
+
+    world.clone()
+
+    configuration = world.target(SQL, "SQL vars only")["configuration"]
+    assert configuration["variables_id"] == "var-ref"
+    assert _entry_metadata(world, SQL, "SQL vars only").get("link_pending") is True
+
+    world.tgt_api.fail_config_names.clear()
+    world.clone()
+
+    variables = world.target(VARS, "Variables")
+    configuration = world.target(SQL, "SQL vars only")["configuration"]
+    assert configuration["variables_id"] == variables["id"]
+    assert configuration["variables_values_id"] == variables["rows"][0]["id"]
+
+
+def test_a_restored_row_copy_never_takes_a_created_rows_placeholder(tmp_path: Path) -> None:
+    """Astra P1: R1 was created from "row-ref"; a copy still carrying it is no placeholder."""
+    w = DiffWorld(tmp_path)
+    _seed_variables(w, "existing-prod-vars", ["Default"])
+    sql_id = w.api.seed(VARIANTS["sql"], name="Template")
+    w.init()
+    w.pull()
+    rows = w.config_dir("existing-prod-vars") / "rows"
+    (template,) = sorted(rows.glob("*/_config.yml"))
+    row = read_yaml(template)
+    row["name"] = "First"
+    row["_keboola"]["row_id"] = "row-ref"
+    (rows / "first").mkdir()
+    write_yaml(rows / "first" / "_config.yml", row)
+    held = tmp_path / "held-row"
+    shutil.copytree(rows / "first", held)  # saved before the row is created
+    w.push()
+    (first,) = [
+        r for r in w.api.get(PROD, VARS, "existing-prod-vars")["rows"] if r["name"] == "First"
+    ]
+    shutil.copytree(held, rows / "restored")
+    copy_row = read_yaml(rows / "restored" / "_config.yml")
+    copy_row["name"] = "Restored"
+    copy_row["values"] = [{"name": "x", "value": "copy"}]
+    write_yaml(rows / "restored" / "_config.yml", copy_row)
+    _new_transformation(
+        w, sql_id, {"variables_id": "existing-prod-vars", "variables_values_id": "row-ref"}
+    )
+
+    w.push()
+
+    assert _remote_named(w, "New step")["configuration"]["variables_values_id"] == first["id"]
+
+
+def test_two_new_rows_with_one_placeholder_map_neither(tmp_path: Path) -> None:
+    """Astra P1: two rows of a new config carry "dup-row" -- neither maps, the push says so."""
+    w = DiffWorld(tmp_path)
+    _seed_variables(w, "existing-prod-vars", ["Row one", "Row two"])
+    sql_id = w.api.seed(VARIANTS["sql"], name="Template")
+    w.init()
+    w.pull()
+    _new_config_from(w, "existing-prod-vars", "New vars", "new-vars-ref", ["dup-row", "dup-row"])
+    _new_transformation(
+        w, sql_id, {"variables_id": "new-vars-ref", "variables_values_id": "dup-row"}
+    )
+
+    result = w.svc.push(alias="prod", project_root=w.root)
+
+    configuration = _remote_named(w, "New step")["configuration"]
+    assert configuration["variables_values_id"] == "dup-row"
+    ambiguous = [x for x in result.get("warnings", []) if x.get("code") == "PLACEHOLDER_AMBIGUOUS"]
+    assert len(ambiguous) == 2
+    new_vars = _remote_named(w, "New vars")
+    (entry,) = [c for c in load_manifest(w.root).configurations if c.id == new_vars["id"]]
+    assert all("created_from_id" not in (r.metadata or {}) for r in entry.rows)

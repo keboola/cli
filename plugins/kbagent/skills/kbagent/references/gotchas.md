@@ -202,7 +202,10 @@ These lists keep `error`, because their entries are not failed items with an err
   carrying the same free id link neither (`PLACEHOLDER_AMBIGUOUS` warning). A
   transformation's link to a variables config that exists on the target, or to a
   placeholder already created, is never re-pointed to the one variables config the push
-  created; only an id that names nothing is.
+  created; only an id nobody claims is -- a placeholder whose create failed keeps its
+  links, and the retry binds them. Row ids work the same way under their config: a row
+  folder carrying the id a row was already created from is a new row of its own, and two
+  new row folders carrying one id under one config link neither (`PLACEHOLDER_AMBIGUOUS`).
 - **A transformation created in the same push as its variables values row or shared-code
   row** keeps `link_pending` the same way while that row is missing: the push that creates
   the row also sets `variables_values_id` / `shared_code_row_ids` and the `{{<row id>}}`

@@ -105,6 +105,7 @@ def resolve_transformation_bindings(
     created_rows_by_parent: dict[str, list[str]],
     manifest: Manifest,
     branch_id: int | None,
+    planned_claims: set[str] | None = None,
 ) -> VariableBindingResult:
     """Rebind transformation links to the configs and rows created this push.
 
@@ -123,6 +124,7 @@ def resolve_transformation_bindings(
         created_rows_by_parent=created_rows_by_parent,
         manifest=manifest,
         branch_id=branch_id,
+        planned_claims=planned_claims or set(),
     )
     _bind_shared_code(
         service,
@@ -148,6 +150,7 @@ def _bind_variables(
     created_rows_by_parent: dict[str, list[str]],
     manifest: Manifest,
     branch_id: int | None,
+    planned_claims: set[str],
 ) -> None:
     """Rebind transformation -> variables links from placeholders to ULIDs.
 
@@ -194,7 +197,13 @@ def _bind_variables(
             created_variables_ulids=created_variables_ulids,
             errors=result.errors,
             may_fall_back=partial(
-                _names_nothing, client, result.targets, manifest, branch_id, vars_placeholder
+                _names_nothing,
+                client,
+                result.targets,
+                manifest,
+                branch_id,
+                planned_claims,
+                vars_placeholder,
             ),
         )
         if parent_ulid is None:
@@ -298,20 +307,24 @@ def _names_nothing(
     targets: TargetCache,
     manifest: Manifest,
     branch_id: int | None,
+    planned_claims: set[str],
     variables_id: str,
 ) -> bool:
-    """True when *variables_id* is neither a placeholder already mapped nor an existing config.
+    """True when NOBODY claims *variables_id* and the target does not have it.
 
     Only such a reference -- a typo, a placeholder no config carries -- may
-    be bound to the single variables config created this push. Existence
-    is read through the push's target cache; only a 404 proves the id names
-    nothing (a failed read proves nothing, so the link is left alone).
+    be bound to the single variables config created this push. Claimed is
+    an id that is a manifest entry's current id (a placeholder entry whose
+    create failed keeps it), a ``created_from_id``, or a placeholder this
+    push planned for an untracked dir (*planned_claims*, also when its
+    create failed): binding such a link elsewhere could never be repaired
+    by the retry of that create (Astra). Existence is read through the
+    push's target cache; only a 404 proves the id names nothing.
     """
-    claimed = {
-        str(entry.metadata.get(CREATED_FROM_KEY) or "")
-        for entry in manifest.configurations
-        if entry.component_id == VARIABLES_COMPONENT_ID
-    }
+    claimed = set(planned_claims)
+    for entry in manifest.configurations:
+        if entry.component_id == VARIABLES_COMPONENT_ID:
+            claimed |= {entry.id, str(entry.metadata.get(CREATED_FROM_KEY) or "")}
     if variables_id in claimed:
         return False
     return read_target(client, targets, VARIABLES_COMPONENT_ID, variables_id, branch_id).gone

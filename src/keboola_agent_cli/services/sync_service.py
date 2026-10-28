@@ -1546,7 +1546,7 @@ class SyncService(BaseService):
 
             # The ids this push creates, for the rows and the link backfill.
             target = CreateTarget(project_root, branch_path, branch_id)
-            ledger = CreateLedger.plan(self, manifest, config_changes, target)
+            ledger = CreateLedger.plan(self, manifest, changes, target)
             # (ULID parent, row placeholder id) -> row ULID; ULID parent -> rows
             # created under it. Keyed per parent: two configs can use one row id.
             created_row_id_map: dict[tuple[str, str], str] = {}
@@ -1773,8 +1773,7 @@ class SyncService(BaseService):
             binding = resolve_transformation_links(
                 self,
                 client,
-                created_configs=ledger.created_configs,
-                created_id_map=ledger.created_id_map,
+                ledger=ledger,
                 created_row_id_map=created_row_id_map,
                 created_rows_by_parent=created_rows_by_parent,
                 manifest=manifest,
