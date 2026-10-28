@@ -36,6 +36,7 @@ from ..sync.diff_engine import config_hash
 from ..sync.manifest import Manifest, save_manifest
 from ._sync_baseline import apply_stamp, config_baseline
 from ._sync_companions import merge_with_remote, record_companions
+from ._sync_link_pending import carries_transformation_link
 from ._sync_models import (
     CREATED_FROM_KEY,
     LINK_PENDING_KEY,
@@ -227,7 +228,9 @@ def record_created_config(
         # references are not rewritten yet; Phase D clears the flag.
         if writeback.previous_id and writeback.previous_id != new_id:
             entry.metadata[CREATED_FROM_KEY] = writeback.previous_id
-        if component_id in RUN_TARGET_COMPONENTS:
+        if component_id in RUN_TARGET_COMPONENTS or carries_transformation_link(
+            component_id, outcome.configuration
+        ):
             entry.metadata[LINK_PENDING_KEY] = True
         # In the create's own checkpoint: a crash right after it never leaves
         # a promote entry unlinked (risk 76).

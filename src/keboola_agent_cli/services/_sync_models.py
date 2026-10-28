@@ -132,6 +132,8 @@ class VariableBindingResult:
     ``warnings`` carries non-fatal baseline-stamping notices (issue #686).
     """
 
+    # The ``link_pending`` flag of a transformation changed (Devin 4400588270).
+    pending_changed: bool = False
     errors: list[dict[str, str]] = field(default_factory=list)
     warnings: list[dict[str, Any]] = field(default_factory=list)
     configs_rewritten: int = 0

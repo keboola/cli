@@ -404,13 +404,33 @@ def _follow_moved_rows(
     owned = {v["path"] for k, v in existing_rows.items() if k.startswith(prefix)}
     for key, tracked in existing_rows.items():
         row_id = key.removeprefix(prefix)
-        if row_id == key or (config_dir / tracked["path"] / CONFIG_FILENAME).exists():
+        if row_id == key:
             continue
-        if row_id in dirs.ambiguous:
+        path = current_row_path(config_dir, row_id, tracked["path"], dirs, owned)
+        if path is None:
             ambiguous.add(row_id)
-        elif row_id in dirs.by_id and dirs.by_id[row_id] not in owned:
-            tracked["path"] = dirs.by_id[row_id]
+        else:
+            tracked["path"] = path
     return ambiguous
+
+
+def current_row_path(
+    config_dir: Path, row_id: str, tracked_path: str, dirs: IdDirs, owned: set[str]
+) -> str | None:
+    """Where a tracked row's dir is now: its manifest path, or the one dir moved there.
+
+    The one rule pull and the ``pull --force`` preflight share (Devin
+    4400588073): a tracked row whose own dir is gone is at the one dir that
+    carries its id and no other tracked row owns. ``None`` when several dirs
+    carry the id (ambiguous); the manifest path when it exists or nothing
+    carries the id.
+    """
+    if (config_dir / tracked_path / CONFIG_FILENAME).exists():
+        return tracked_path
+    if row_id in dirs.ambiguous:
+        return None
+    moved = dirs.by_id.get(row_id)
+    return moved if moved is not None and moved not in owned else tracked_path
 
 
 def _pull_row(

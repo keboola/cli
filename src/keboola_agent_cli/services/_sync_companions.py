@@ -83,7 +83,7 @@ COMPANION_CONFLICT_KEY = "companion_conflict"
 # ``code`` of the companion entries in a command's ``warnings[]``.
 UNOWNED_COMPANION_CODE = "UNOWNED_COMPANION"
 COMPANION_KEPT_CODE = "COMPANION_KEPT"
-COMPANION_UNREADABLE_CODE = "COMPANION_UNREADABLE"
+COMPANION_UNREADABLE_CODE = ErrorCode.COMPANION_UNREADABLE.value
 
 
 @dataclass(frozen=True)

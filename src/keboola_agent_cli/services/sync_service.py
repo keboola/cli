@@ -81,7 +81,7 @@ from ._sync_baseline import (
     effective_stored_hash,
     raise_on_legacy_boundary,
 )
-from ._sync_bindings import resolve_run_target_bindings, resolve_transformation_bindings
+from ._sync_bindings import resolve_run_target_bindings
 from ._sync_branch import (
     branch_link as _branch_link,
 )
@@ -121,6 +121,7 @@ from ._sync_data_app import (
     type_needs_rewrite,
 )
 from ._sync_link_pending import link_pending_entries, planned_row_refs
+from ._sync_link_recovery import resolve_transformation_links
 from ._sync_models import LocalConfigHashes
 from ._sync_project_guard import adopt_existing_manifest, load_project_manifest
 from ._sync_promote_remap import (
@@ -1769,7 +1770,7 @@ class SyncService(BaseService):
             )
 
             # ---- Phase C: variable + shared-code links (KFR-03, CLI-24) --
-            binding = resolve_transformation_bindings(
+            binding = resolve_transformation_links(
                 self,
                 client,
                 created_configs=ledger.created_configs,
@@ -1778,11 +1779,11 @@ class SyncService(BaseService):
                 created_rows_by_parent=created_rows_by_parent,
                 manifest=manifest,
                 branch_id=branch_id,
+                source_dir=None if promoting else project_root / branch_path,
             )
             errors.extend(binding.errors)
             warnings.extend(binding.warnings)
-            if binding.configs_rewritten:
-                manifest_dirty = True
+            manifest_dirty |= bool(binding.configs_rewritten or binding.pending_changed)
 
             # ---- Phase D: flow/orchestrator task + schedule target backfill
             # After transformation links, remap the configIds that flows,

@@ -22,14 +22,14 @@ from typing import Any
 
 import pytest
 
-from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
+from keboola_agent_cli.errors import ErrorCode, KeboolaApiError, SyncConflictError
 from keboola_agent_cli.services import sync_service as sync_service_module
 from keboola_agent_cli.sync.config_format import api_config_to_local
 from keboola_agent_cli.sync.diff_engine import config_hash
 from keboola_agent_cli.sync.manifest import load_manifest, save_manifest
 from test_sync_bookkeeping_differential import VARIANTS
 from test_sync_bookkeeping_differential import World as DiffWorld
-from test_sync_clone_links import EXTRACTOR, FLOW, SQL
+from test_sync_clone_links import EXTRACTOR, FLOW, PY, SHARED, SQL, VARS
 from test_sync_clone_links import World as CloneWorld
 from test_sync_random_walk import (
     DEV,
@@ -1280,3 +1280,128 @@ def test_holds_treats_the_same_directory_as_held(tmp_path: Path) -> None:
     _symlink_or_skip(tmp_path / "b", a_dir)
     assert _sync_stale.holds(a_dir, tmp_path / "b")
     assert _sync_stale.holds(a_dir, a_dir)
+
+
+# ---------------------------------------------------------------------------
+# Devin round on PR #931
+# ---------------------------------------------------------------------------
+
+
+def _crash_once_before_phase_d(monkeypatch: pytest.MonkeyPatch) -> None:
+    original = sync_service_module.resolve_run_target_bindings
+    state = {"crashed": False}
+
+    def dies_once(*args: Any, **kwargs: Any) -> Any:
+        if not state["crashed"]:
+            state["crashed"] = True
+            raise Crash()
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(sync_service_module, "resolve_run_target_bindings", dies_once)
+
+
+def test_pending_flow_never_points_at_a_row_deleted_on_the_remote(
+    tmp_path: Path, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Devin 4400587856: a created row deleted remotely since is no resolved target."""
+    world = CloneWorld(tmp_path, tmp_config_dir)
+    _crash_once_before_phase_d(monkeypatch)
+    with pytest.raises(Crash):
+        world.clone()
+    dead_id = _orders_row_id(world)
+    rows = world.target(EXTRACTOR)["rows"]
+    rows[:] = [r for r in rows if r["id"] != dead_id]
+
+    second = world.clone()
+
+    assert dead_id not in _flow_task(world, 14).get("configRowIds", [])
+    assert _flow_task(world, 14)["configRowIds"] == ["exrow-1"]
+    assert any(e["error_code"] == ErrorCode.LINK_UNRESOLVED for e in second["errors"])
+    assert _flow_entry_metadata(world).get("link_pending") is True
+
+
+def test_force_pull_preflight_finds_a_moved_row_edited_on_both_sides(tmp_path: Path) -> None:
+    """Devin 4400588073: the preflight follows a moved row by id, like pull itself."""
+    sim = _world(tmp_path)
+    rows = _rows_of_1000(sim)
+    shutil.move(str(rows / "row-tk2z"), str(rows / "moved"))
+    _set_value(rows / "moved", "tk900z")
+    remote_row = next(r for r in sim.api.remote[PROD][HTTP_1]["rows"] if r["id"] == "1001")
+    remote_row["configuration"]["parameters"]["value"] = "tk901z"
+
+    with pytest.raises(SyncConflictError):
+        _pull(sim, force=True)
+
+    assert read_yaml(rows / "moved" / "_config.yml")["parameters"]["value"] == "tk900z"
+
+
+def _entry_metadata(world: CloneWorld, component_id: str, name: str) -> dict[str, Any]:
+    config_id = world.target(component_id, name)["id"]
+    (entry,) = [
+        c
+        for c in load_manifest(world.clone_dir).configurations
+        if c.component_id == component_id and c.id == config_id
+    ]
+    return entry.metadata
+
+
+def test_variables_link_after_a_failed_values_row_is_finished_by_the_next_push(
+    tmp_path: Path, tmp_config_dir: Path
+) -> None:
+    """Devin 4400588270: the transformation stays pending until the values row exists."""
+    world = CloneWorld(tmp_path, tmp_config_dir)
+    world.tgt_api.fail_row_names.add("Default values")
+
+    first = world.clone()
+    assert any(e["change_type"] == "variable_link" for e in first["errors"])
+    assert world.target(SQL, "SQL vars only")["configuration"]["variables_values_id"] == "vrow-ref"
+    assert _entry_metadata(world, SQL, "SQL vars only").get("link_pending") is True
+
+    world.tgt_api.fail_row_names.clear()
+    second = world.clone()
+
+    variables = world.target(VARS)
+    (values_row,) = variables["rows"]
+    for component_id, name in ((SQL, "SQL vars only"), (SQL, "SQL step"), (PY, "Py step")):
+        configuration = world.target(component_id, name)["configuration"]
+        assert configuration["variables_id"] == variables["id"]
+        assert configuration["variables_values_id"] == values_row["id"]
+        assert "link_pending" not in _entry_metadata(world, component_id, name)
+    assert second["errors"] == []
+    assert world.clone()["status"] == "no_changes"
+
+
+def test_shared_code_link_after_a_failed_row_is_finished_by_the_next_push(
+    tmp_path: Path, tmp_config_dir: Path
+) -> None:
+    """Devin 4400588270: shared-code rows are finished the same way."""
+    world = CloneWorld(tmp_path, tmp_config_dir)
+    world.tgt_api.fail_row_names.add("helpers")
+
+    first = world.clone()
+    assert any(e["change_type"] == "shared_code_link" for e in first["errors"])
+    assert _entry_metadata(world, PY, "Py step").get("link_pending") is True
+
+    world.tgt_api.fail_row_names.clear()
+    second = world.clone()
+
+    shared = world.target(SHARED, "Shared python")
+    (row,) = shared["rows"]
+    configuration = world.target(PY, "Py step")["configuration"]
+    assert configuration["shared_code_id"] == shared["id"]
+    assert configuration["shared_code_row_ids"] == [row["id"]]
+    assert f"{{{{{row['id']}}}}}" in str(configuration["parameters"])
+    assert "link_pending" not in _entry_metadata(world, PY, "Py step")
+    assert second["errors"] == []
+    assert world.clone()["status"] == "no_changes"
+
+
+def test_a_fully_bound_clone_leaves_no_transformation_pending(
+    tmp_path: Path, tmp_config_dir: Path
+) -> None:
+    """Devin 4400588270: a fully bound clone leaves no transformation pending."""
+    world = CloneWorld(tmp_path, tmp_config_dir)
+    assert world.clone()["errors"] == []
+    for component_id, name in ((SQL, "SQL vars only"), (SQL, "SQL step"), (PY, "Py step")):
+        assert "link_pending" not in _entry_metadata(world, component_id, name)
+    assert world.clone()["status"] == "no_changes"

@@ -46,6 +46,7 @@ from ..sync.config_format import BASE_CONFIG_HASH_KEY, api_config_to_local, api_
 from ..sync.diff_engine import config_hash
 from ..sync.manifest import Manifest
 from ._sync_companions import config_locally_modified, merge_with_remote
+from ._sync_pull_dirs import current_row_path, scan_row_dirs
 
 if TYPE_CHECKING:
     from .sync_service import SyncService
@@ -514,14 +515,20 @@ def detect_force_pull_conflicts(
                     }
                 )
 
-            # Row-level conflicts (same 3-way rule, per row).
+            # Row-level conflicts (same 3-way rule, per row), at the row's dir
+            # NOW -- a moved row is found by its id, as pull itself finds it.
             config_dir = branch_dir / rel_path
+            dirs = scan_row_dirs(service, config_dir)
+            prefix = f"{component_id}/{config_id}/"
+            owned = {v["path"] for k, v in existing_rows.items() if k.startswith(prefix)}
             for row in cfg.get("rows", []):
                 row_id = str(row.get("id", ""))
-                existing_row = existing_rows.get(f"{component_id}/{config_id}/{row_id}")
+                existing_row = existing_rows.get(f"{prefix}{row_id}")
                 if not existing_row:
                     continue
-                row_rel_path = existing_row.get("path", "")
+                row_rel_path = current_row_path(
+                    config_dir, row_id, existing_row.get("path", ""), dirs, owned
+                ) or existing_row.get("path", "")
                 if _is_conflict(
                     _row_locally_modified(
                         service,

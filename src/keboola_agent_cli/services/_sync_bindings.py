@@ -35,7 +35,13 @@ from ..sync.diff_engine import config_hash
 from ..sync.manifest import Manifest
 from ._sync_baseline import apply_stamp, config_baseline
 from ._sync_companions import record_companions
-from ._sync_link_pending import LinkMaps, build_link_maps, link_pending_entries, set_link_pending
+from ._sync_link_pending import (
+    LinkMaps,
+    build_link_maps,
+    drop_gone_targets,
+    link_pending_entries,
+    set_link_pending,
+)
 from ._sync_models import (
     FLOW_COMPONENT_ID,
     ORCHESTRATOR_COMPONENT_ID,
@@ -764,6 +770,15 @@ def resolve_run_target_bindings(
         for entry in link_pending_entries(manifest, branch_id)
         if source_dir is not None and (entry.component_id, entry.id) not in seen
     ]
+    # Mappings to targets deleted on the remote since are no resolved targets.
+    drop_gone_targets(
+        client,
+        manifest,
+        branch_id,
+        maps,
+        referenced=_referenced_targets(service, [*created_configs, *recovering], maps),
+        fresh_rows=set(created_row_id_map.values()),
+    )
     for created in [*created_configs, *recovering]:
         link_type = _RUN_TARGET_LINK_TYPES.get(created.component_id)
         if link_type is None:
@@ -773,6 +788,30 @@ def resolve_run_target_bindings(
         entry = find_branch_entry(manifest, created.component_id, created.config_id, branch_id)
         result.pending_changed |= set_link_pending(entry, pending)
     return result
+
+
+def _referenced_targets(
+    service: SyncService, configs: list[CreatedConfig], maps: LinkMaps
+) -> set[str]:
+    """Target ids of the configs the run-target configs in *configs* name (their tasks/target)."""
+    found: set[str] = set()
+    for created in configs:
+        if created.component_id not in _RUN_TARGET_LINK_TYPES:
+            continue
+        extra = (service._read_config_file(created.config_dir) or {}).get("_configuration_extra")
+        if not isinstance(extra, dict):
+            continue
+        refs: list[tuple[str, str]] = []
+        target = extra.get("target")
+        if isinstance(target, dict) and isinstance(target.get("componentId"), str):
+            refs.append((target["componentId"], str(target.get("configurationId", ""))))
+        tasks = extra.get("tasks")
+        for task_entry in tasks if isinstance(tasks, list) else []:
+            ref = task_config_ref(created.component_id, task_entry)
+            if ref is not None:
+                refs.append(ref)
+        found.update(maps.configs.get(ref, ref[1]) for ref in refs)
+    return found
 
 
 def put_configuration_only(

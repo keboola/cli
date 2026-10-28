@@ -183,6 +183,15 @@ These lists keep `error`, because their entries are not failed items with an err
   reads the config from the remote and rewrites only its references (a change made in the
   UI since survives); `sync diff` then shows the rewrite as a remote change unless the local
   file was in sync, in which case the file is updated too.
+  A row created by an earlier push and deleted on the remote since is not a resolved
+  target: the reference stays pending (`LINK_UNRESOLVED`) instead of naming the deleted id.
+- **A transformation created in the same push as its variables values row or shared-code
+  row** keeps `link_pending` the same way while that row is missing: the push that creates
+  the row also sets `variables_values_id` / `shared_code_row_ids` and the `{{<row id>}}`
+  placeholders -- before, the transformation kept the reference ids for good.
+- **`sync pull --force` finds a moved row by its id** before it checks for conflicts: a
+  row folder moved to another name and edited, whose remote row was edited too, is
+  `SYNC_CONFLICT` -- before, the check looked only at the old folder and missed it.
 
 ## `sync push --branch <dev>` from `main/` no longer changes what production sees
 
