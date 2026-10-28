@@ -209,6 +209,12 @@ These lists keep `error`, because their entries are not failed items with an err
   it is left as it is, pending, until that row exists. Row ids work the same way under their config: a row
   folder carrying the id a row was already created from is a new row of its own, and two
   new row folders carrying one id under one config link neither (`PLACEHOLDER_AMBIGUOUS`).
+  That decision is recorded on the config (`ambiguous_row_placeholders`): when one of
+  the rows fails to create, the retry does not make the other the row by default -- the
+  link stays pending and every push warns until no row file carries the id any more.
+  When the fallback chose the variables config but the values row failed to create, the
+  choice is recorded on the transformation (`fallback_links`) and the push that creates
+  the row finishes the link.
 - **A transformation created in the same push as its variables values row or shared-code
   row** keeps `link_pending` the same way while that row is missing: the push that creates
   the row also sets `variables_values_id` / `shared_code_row_ids` and the `{{<row id>}}`

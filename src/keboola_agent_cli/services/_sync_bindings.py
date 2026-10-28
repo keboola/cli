@@ -47,6 +47,7 @@ from ._sync_link_pending import (
 )
 from ._sync_models import (
     CREATED_FROM_KEY,
+    FALLBACK_LINKS_KEY,
     FLOW_COMPONENT_ID,
     ORCHESTRATOR_COMPONENT_ID,
     SCHEDULER_COMPONENT_ID,
@@ -220,6 +221,10 @@ def _bind_variables(
         )
         # A missing-but-required values row already recorded an error.
         if vals_placeholder and row_ulid is None:
+            if (VARIABLES_COMPONENT_ID, vars_placeholder) not in created_id_map:
+                # The fallback chose the parent: keep that choice for the push
+                # that creates the row -- the id T names maps to nothing else.
+                _remember_fallback(manifest, created, branch_id, vars_placeholder, parent_ulid)
             continue
 
         try:
@@ -301,6 +306,21 @@ def _resolve_variables_parent(
         }
     )
     return None
+
+
+def _remember_fallback(
+    manifest: Manifest,
+    created: CreatedConfig,
+    branch_id: int | None,
+    variables_id: str,
+    parent_ulid: str,
+) -> None:
+    """Record on the transformation's entry which config the fallback bound *variables_id* to."""
+    entry = find_branch_entry(manifest, created.component_id, created.config_id, branch_id)
+    if entry is not None:
+        links = dict(entry.metadata.get(FALLBACK_LINKS_KEY) or {})
+        links[f"{VARIABLES_COMPONENT_ID}/{variables_id}"] = parent_ulid
+        entry.metadata[FALLBACK_LINKS_KEY] = links
 
 
 def _names_nothing(

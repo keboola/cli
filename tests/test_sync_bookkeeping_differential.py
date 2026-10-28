@@ -40,6 +40,7 @@ import pytest
 import yaml
 
 from helpers import setup_single_project
+from keboola_agent_cli.errors import KeboolaApiError
 from keboola_agent_cli.models import TokenVerifyResponse
 from keboola_agent_cli.services.component_service import materialize_pushed_config
 from keboola_agent_cli.services.config_service import ConfigService
@@ -277,7 +278,10 @@ class Api:
     def _detail(
         self, component_id: str, config_id: str, branch_id: int | None = None, **_: Any
     ) -> dict:
-        return copy.deepcopy(self.remote[self._b(branch_id)][(component_id, config_id)])
+        config = self.remote[self._b(branch_id)].get((component_id, config_id))
+        if config is None:  # Storage answers 404 for a config it does not have
+            raise KeboolaApiError(f"Configuration {config_id} not found", status_code=404)
+        return copy.deepcopy(config)
 
     def _rows_of(self, component_id: str, config_id: str, branch_id: int | None) -> list[dict]:
         return self.remote[self._b(branch_id)][(component_id, config_id)]["rows"]

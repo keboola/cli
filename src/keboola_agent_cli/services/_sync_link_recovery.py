@@ -24,7 +24,7 @@ while one still names a config or row the target does not have.
 from __future__ import annotations
 
 import copy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -32,7 +32,7 @@ from ..errors import ErrorCode, KeboolaApiError
 from ..sync.branch_scope import find_branch_entry
 from ..sync.config_format import api_config_to_local
 from ..sync.diff_engine import config_hash
-from ..sync.manifest import Manifest
+from ..sync.manifest import Manifest, ManifestConfiguration
 from ._sync_bindings import (
     SharedCodeLink,
     _local_hash,
@@ -51,6 +51,7 @@ from ._sync_link_pending import (
     validate_targets,
 )
 from ._sync_models import (
+    FALLBACK_LINKS_KEY,
     RUN_TARGET_COMPONENTS,
     SHARED_CODE_COMPONENT_ID,
     VARIABLES_COMPONENT_ID,
@@ -159,9 +160,14 @@ def resolve_transformation_links(
     # rewritten, and every target they name is read first (shared cache).
     remotes = {c.config_id: _read_remote(client, c, branch_id, result) for c in configs}
     referenced: set[str] = set()
-    for remote in remotes.values():
+    entries = {
+        c.config_id: find_branch_entry(manifest, c.component_id, c.config_id, branch_id)
+        for c in configs
+    }
+    for config_id, remote in remotes.items():
         if remote is not None:
-            referenced |= resolve_links(remote["configuration"], maps).parents
+            own = _with_fallbacks(maps, entries[config_id])
+            referenced |= resolve_links(remote["configuration"], own).parents
     result.errors.extend(
         validate_targets(
             client,
@@ -175,12 +181,33 @@ def resolve_transformation_links(
     )
     for created in configs:
         remote = remotes[created.config_id]
+        entry = entries[created.config_id]
+        own = _with_fallbacks(maps, entry)
         still = remote is None or _recover(
-            service, client, created, remote, manifest, branch_id, maps, result
+            service, client, created, remote, manifest, branch_id, own, result
         )
-        entry = find_branch_entry(manifest, created.component_id, created.config_id, branch_id)
         result.pending_changed |= set_link_pending(entry, still)
+        if not still and entry is not None and entry.metadata.pop(FALLBACK_LINKS_KEY, None):
+            result.pending_changed = True
     return result
+
+
+def _with_fallbacks(maps: LinkMaps, entry: ManifestConfiguration | None) -> LinkMaps:
+    """*maps* plus the configs the singleton fallback chose for this transformation's links.
+
+    Recorded when the fallback bound a variables link whose values row could
+    not be resolved yet (Astra): without it the id the link names maps to
+    nothing, and recovery would settle a dead link.
+    """
+    links = (entry.metadata.get(FALLBACK_LINKS_KEY) if entry is not None else None) or {}
+    if not links:
+        return maps
+    chosen = {
+        (str(key).split("/", 1)[0], str(key).split("/", 1)[1]): str(target)
+        for key, target in links.items()
+        if "/" in str(key)
+    }
+    return replace(maps, configs={**maps.configs, **chosen})
 
 
 def _read_remote(

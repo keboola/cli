@@ -1959,3 +1959,57 @@ def test_an_ambiguous_values_row_is_never_redirected_when_one_create_fails(
 
     assert _remote_named(w, "New step")["configuration"]["variables_values_id"] == "dup-row"
     assert _entry_of(w, "New step").get("link_pending") is True
+
+
+# ---------------------------------------------------------------------------
+# Astra on ac852fa0: partial pushes keep what the plan decided
+# ---------------------------------------------------------------------------
+
+
+def test_an_ambiguous_row_placeholder_stays_ambiguous_after_a_partial_push(
+    tmp_path: Path,
+) -> None:
+    """Astra P1: Prod and Test carry "dup-row", Test fails -- the retry never binds T to Test."""
+    w = DiffWorld(tmp_path)
+    _seed_variables(w, "existing-prod-vars", ["Prod", "Test"])
+    sql_id = w.api.seed(VARIANTS["sql"], name="Template")
+    w.init()
+    w.pull()
+    _new_config_from(w, "existing-prod-vars", "New vars", "a-ref", ["dup-row", "dup-row"])
+    _new_transformation(w, sql_id, {"variables_id": "a-ref", "variables_values_id": "dup-row"})
+    _fail_once(w, "_create_row", "Test", KeboolaApiError("refused", 500, ErrorCode.API_ERROR))
+    w.svc.push(alias="prod", project_root=w.root)
+
+    second = w.svc.push(alias="prod", project_root=w.root)
+
+    new_vars = _remote_named(w, "New vars")
+    assert sorted(r["name"] for r in new_vars["rows"]) == ["Prod", "Test"]
+    assert _remote_named(w, "New step")["configuration"]["variables_values_id"] == "dup-row"
+    assert _entry_of(w, "New step").get("link_pending") is True
+    assert any(x.get("code") == "PLACEHOLDER_AMBIGUOUS" for x in second.get("warnings", []))
+
+
+def test_a_fallback_parent_is_finished_once_its_row_exists(tmp_path: Path) -> None:
+    """Astra P1: T names unclaimed-parent/row-ref; the fallback picks A, row-ref fails first."""
+    w = DiffWorld(tmp_path)
+    _seed_variables(w, "existing-prod-vars", ["Default"])
+    sql_id = w.api.seed(VARIANTS["sql"], name="Template")
+    w.init()
+    w.pull()
+    _new_config_from(w, "existing-prod-vars", "A vars", "a-ref", ["row-ref"])
+    _new_transformation(
+        w, sql_id, {"variables_id": "unclaimed-parent", "variables_values_id": "row-ref"}
+    )
+    _fail_once(w, "_create_row", "Default", KeboolaApiError("refused", 500, ErrorCode.API_ERROR))
+    w.svc.push(alias="prod", project_root=w.root)
+    assert _entry_of(w, "New step").get("link_pending") is True
+
+    w.push()
+
+    a_vars = _remote_named(w, "A vars")
+    configuration = _remote_named(w, "New step")["configuration"]
+    assert configuration["variables_id"] == a_vars["id"]
+    assert configuration["variables_values_id"] == a_vars["rows"][0]["id"]
+    metadata = _entry_of(w, "New step")
+    assert "link_pending" not in metadata
+    assert "fallback_links" not in metadata

@@ -33,8 +33,10 @@ from ..sync.manifest import Manifest, ManifestConfigRow, ManifestConfiguration
 from ..sync.naming import config_row_path
 from ._sync_models import (
     ADOPTED_ROW_IDS_KEY,
+    AMBIGUOUS_ROW_PLACEHOLDERS_KEY,
     AUTHORED_ROW_KEY,
     CREATED_FROM_KEY,
+    FALLBACK_LINKS_KEY,
     LINK_PENDING_KEY,
     PROMOTED_ROW_KEY,
     PROMOTED_SOURCE_KEY,
@@ -287,7 +289,14 @@ def carry_promote_metadata(
     # Also the placeholder a config was created from and an unfinished link
     # backfill (D9): a pull between the failed push and the next one must
     # not lose what the next one needs to finish the links.
-    for key in (REBIND_PENDING_KEY, CREATED_FROM_KEY, LINK_PENDING_KEY, ADOPTED_ROW_IDS_KEY):
+    for key in (
+        REBIND_PENDING_KEY,
+        CREATED_FROM_KEY,
+        LINK_PENDING_KEY,
+        ADOPTED_ROW_IDS_KEY,
+        AMBIGUOUS_ROW_PLACEHOLDERS_KEY,
+        FALLBACK_LINKS_KEY,
+    ):
         if old.metadata.get(key):
             metadata[key] = old.metadata[key]
     association = promoted_from(old)

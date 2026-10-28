@@ -71,6 +71,16 @@ LINK_PENDING_KEY = "link_pending"
 # local row dirs carried then, an ambiguous one included. A row dir that later
 # carries one of them alone is that row, never a new one (round 6).
 ADOPTED_ROW_IDS_KEY = "adopted_row_ids"
+# Config metadata: the row placeholders two or more of its new row dirs carried
+# in one push. Never mapped automatically again -- a partial push must not let
+# the dir that happened to fail become the row by default -- until no row file
+# of the config carries the id any more (Astra).
+AMBIGUOUS_ROW_PLACEHOLDERS_KEY = "ambiguous_row_placeholders"
+# Config metadata of a transformation whose variables link the singleton
+# fallback bound to a new config while its values row could not be resolved
+# yet: ``{"<component>/<id it names>": "<config the fallback chose>"}``, so the
+# push that creates the row finishes the link (Astra).
+FALLBACK_LINKS_KEY = "fallback_links"
 
 
 @dataclass

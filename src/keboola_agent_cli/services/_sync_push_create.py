@@ -39,6 +39,7 @@ from ._sync_baseline import apply_stamp, config_baseline
 from ._sync_companions import merge_with_remote, record_companions
 from ._sync_link_pending import carries_transformation_link
 from ._sync_models import (
+    AMBIGUOUS_ROW_PLACEHOLDERS_KEY,
     CREATED_FROM_KEY,
     LINK_PENDING_KEY,
     REBIND_PENDING_KEY,
@@ -147,6 +148,9 @@ class CreateLedger:
 
     # Placeholder-claim warnings of new rows (their creates have no hook).
     row_warnings: list[dict[str, Any]] = field(default_factory=list)
+    # ``(component_id, config dir path)`` of a NEW config -> the row
+    # placeholders its row dirs share: recorded on its entry when it is created.
+    ambiguous_rows: dict[tuple[str, str], set[str]] = field(default_factory=dict)
 
     def uncreated_claims(self) -> set[tuple[str, str]]:
         """``(component_id, placeholder)`` planned for a new dir this push did not create."""
@@ -211,7 +215,7 @@ class CreateLedger:
                 ledger.ambiguous[(component_id, path)] = _ambiguity_warning(
                     component_id, path, file_id, paths, "config folders"
                 )
-        ledger.row_warnings = _plan_rows(service, manifest, changes, target)
+        ledger.row_warnings = _plan_rows(service, manifest, changes, target, ledger.ambiguous_rows)
         return ledger
 
     def parent_id(self, component_id: str, parent_config_id: str) -> str:
@@ -309,6 +313,9 @@ def record_created_config(
             entry.metadata[CREATED_FROM_KEY] = placeholder
         if (component_id, config_path_str) in ledger.ambiguous:
             warnings.append(ledger.ambiguous[(component_id, config_path_str)])
+        shared = ledger.ambiguous_rows.get((component_id, config_path_str))
+        if shared:  # in the create's own checkpoint: a retry must not forget it
+            entry.metadata[AMBIGUOUS_ROW_PLACEHOLDERS_KEY] = sorted(shared)
         if component_id in RUN_TARGET_COMPONENTS or carries_transformation_link(
             component_id, outcome.configuration
         ):
@@ -478,6 +485,7 @@ def _plan_rows(
     manifest: Manifest,
     changes: list[dict[str, Any]],
     target: CreateTarget,
+    new_parent_ambiguity: dict[tuple[str, str], set[str]],
 ) -> list[dict[str, Any]]:
     """Decide, once and before any create, which new row dirs a placeholder maps to (Astra).
 
@@ -488,8 +496,22 @@ def _plan_rows(
     and no other new dir under the parent carries it too. The decision is
     written into the change's ``source_row_id``, the one identity both the
     push's in-memory row map and the row's durable ``created_from_id`` read,
-    so the two can never disagree. Returns the ambiguity warnings.
+    so the two can never disagree.
+
+    An ambiguous placeholder is recorded on the parent's entry
+    (``ambiguous_row_placeholders``; a new parent's in *new_parent_ambiguity*
+    until its create records it) and never mapped again while any row file
+    of the parent carries it -- a partial push leaves one carrier, which
+    must not become the row by default. Each push warns about it until the
+    user removes the id from every row file. Returns the warnings.
     """
+    warnings = _settle_recorded_ambiguity(service, manifest, target)
+    blocked = {
+        (e.component_id, f"id:{e.id}", str(p))
+        for e in manifest.configurations
+        if same_branch(manifest, e.branch_id, target.branch_id)
+        for p in e.metadata.get(AMBIGUOUS_ROW_PLACEHOLDERS_KEY) or []
+    }
     groups: dict[tuple[str, str, str, str], list[dict[str, Any]]] = {}
     owned: set[tuple[str, str, str]] = set()
     for change in changes:
@@ -515,10 +537,9 @@ def _plan_rows(
         change["source_row_id"] = ""
         if placeholder:
             groups.setdefault((component_id, scope, placeholder, parent_path), []).append(change)
-    warnings: list[dict[str, Any]] = []
     for (component_id, scope, placeholder, parent_path), group in groups.items():
-        if (component_id, scope, placeholder) in owned:
-            continue  # already owned under this parent: never claimed again
+        if (component_id, scope, placeholder) in owned | blocked:
+            continue  # owned, or once ambiguous, under this parent: never claimed
         if len(group) == 1:
             group[0]["source_row_id"] = placeholder
             continue
@@ -527,4 +548,41 @@ def _plan_rows(
             _ambiguity_warning(component_id, path, placeholder, paths, "row folders")
             for path in paths
         )
+        if parent_path:
+            new_parent_ambiguity.setdefault((component_id, parent_path), set()).add(placeholder)
+        else:
+            entry = find_branch_entry(manifest, component_id, scope[3:], target.branch_id)
+            if entry is not None:
+                recorded = set(entry.metadata.get(AMBIGUOUS_ROW_PLACEHOLDERS_KEY) or [])
+                entry.metadata[AMBIGUOUS_ROW_PLACEHOLDERS_KEY] = sorted(recorded | {placeholder})
+    return warnings
+
+
+def _settle_recorded_ambiguity(
+    service: SyncService, manifest: Manifest, target: CreateTarget
+) -> list[dict[str, Any]]:
+    """Drop a recorded ambiguous row placeholder no row file carries; warn about the rest."""
+    warnings: list[dict[str, Any]] = []
+    for entry in manifest.configurations:
+        recorded = entry.metadata.get(AMBIGUOUS_ROW_PLACEHOLDERS_KEY)
+        if not recorded or not same_branch(manifest, entry.branch_id, target.branch_id):
+            continue
+        rows_dir = target.project_root / target.branch_path / entry.path / "rows"
+        carried: dict[str, list[str]] = {}
+        for row_dir in sorted(rows_dir.iterdir()) if rows_dir.is_dir() else []:
+            data = service._read_config_file(row_dir) or {}
+            row_id = str((data.get("_keboola") or {}).get("row_id") or "")
+            carried.setdefault(row_id, []).append(f"{entry.path}/rows/{row_dir.name}")
+        kept = sorted(str(p) for p in recorded if str(p) in carried)
+        if kept:
+            entry.metadata[AMBIGUOUS_ROW_PLACEHOLDERS_KEY] = kept
+        else:
+            entry.metadata.pop(AMBIGUOUS_ROW_PLACEHOLDERS_KEY, None)
+        for placeholder in kept:
+            warnings.extend(
+                _ambiguity_warning(
+                    entry.component_id, path, placeholder, carried[placeholder], "row folders"
+                )
+                for path in carried[placeholder]
+            )
     return warnings
