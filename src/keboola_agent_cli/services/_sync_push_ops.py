@@ -40,7 +40,7 @@ from ._encryption import (
 )
 from ._sync_baseline import apply_stamp, row_baseline
 from ._sync_data_app import create_synced_data_app
-from ._sync_models import AUTHORED_ROW_KEY, PROMOTED_ROW_KEY, CreateOutcome
+from ._sync_models import AUTHORED_ROW_KEY, CREATED_FROM_KEY, PROMOTED_ROW_KEY, CreateOutcome
 from ._sync_workspace import SANDBOXES_COMPONENT_ID, warn_on_backend_size_change
 from ._sync_writeback import (
     link_promote_rows,
@@ -151,7 +151,10 @@ class PushPlan:
                 continue
             path = change.get("path", "")
             if change.get("is_row"):
-                parent_path = parent_paths.get((change["component_id"], change["parent_config_id"]))
+                # A row under an untracked parent dir names that dir (D7, D8).
+                parent_path = change.get("parent_path") or parent_paths.get(
+                    (change["component_id"], change["parent_config_id"])
+                )
                 if parent_path is None:
                     continue  # push reports PARENT_CONFIG_NOT_TRACKED for it
                 path = f"{parent_path}/{path}"
@@ -454,6 +457,7 @@ def push_row_change(
             warnings=warnings,
             known_secrets=known_secrets,
             source_row_id=(source_row_id or row_id) if remap is not None else "",
+            created_from=row_id if remap is None else "",
             checkpoint=checkpoint,
             remap=remap,
             # A create on the source tree's own branch: its promote entries'
@@ -498,6 +502,7 @@ def _push_create_row(
     warnings: list[dict[str, Any]] | None = None,
     known_secrets: SecretCache | None = None,
     source_row_id: str = "",
+    created_from: str = "",
     checkpoint: Callable[[str], None] | None = None,
     remap: PromoteRemap | None = None,
     link_rows_in: Manifest | None = None,
@@ -508,6 +513,9 @@ def _push_create_row(
     The row is recorded and *checkpoint* saves the manifest right after the
     API returned its id, before the local file is written back (D25).
     *source_row_id* (promote path) is recorded as the row it was created from.
+    *created_from* (any other push) is the placeholder row id the change
+    carried -- a ``sync clone`` reference row -- recorded for the link
+    backfill of a later push (D9).
     *link_rows_in* (the manifest, on any other push) links the promote
     entries of *source_tree* to the new row before the checkpoint (risk 74).
 
@@ -548,6 +556,8 @@ def _push_create_row(
         row_entry.metadata[PROMOTED_ROW_KEY] = source_row_id
     elif remap is not None:
         row_entry.metadata[AUTHORED_ROW_KEY] = True  # its source id is not known yet
+    if created_from and created_from != new_row_id:
+        row_entry.metadata[CREATED_FROM_KEY] = created_from
     if link_rows_in is not None:
         link_promote_rows(link_rows_in, tree=source_tree, source=parent)
     if checkpoint is not None:
@@ -556,7 +566,7 @@ def _push_create_row(
     # Write-back: encrypted secrets land in the local file so a subsequent diff
     # sees local == remote. ``config_id=""`` tells the shared helper to skip
     # writing a config_id into ``_keboola`` (rows use ``row_id``).
-    writeback_after_push(service, pristine_data, row_dir, "", configuration)
+    writeback_after_push(service, pristine_data, row_dir, "", configuration, is_row=True)
 
     row_file = row_dir / CONFIG_FILENAME
     stamp = row_baseline(
@@ -630,7 +640,7 @@ def push_update_row(
     )
     logger.info("Updated row %s/%s/%s", component_id, parent_config_id, row_id)
 
-    writeback_after_push(service, pristine_data, row_dir, "", configuration)
+    writeback_after_push(service, pristine_data, row_dir, "", configuration, is_row=True)
 
     row_file = row_dir / CONFIG_FILENAME
     new_file_hash = service._file_hash(row_file) if row_file.exists() else ""

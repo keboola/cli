@@ -79,6 +79,65 @@ These lists keep `error`, because their entries are not failed items with an err
   own folder (not `main/`), so edit the files there. If you already edited code files after
   such a push, copy them aside first: a pull that takes a remote change overwrites them.
 
+## Sync treats a config's companion files as one set; a new config's rows go up with it
+
+*(since vNEXT)*
+
+- **A companion file the remote no longer has is removed by `sync pull`.** When the
+  description or the package list is cleared remotely (in the UI), pull now deletes
+  `_description.md` / `pyproject.toml`. Before, it left the old file, `sync diff` said
+  "in sync", and the next `sync push` of any edit to that config sent the old value back.
+  A tree an older pull left in that state is repaired by the next `sync pull`, also when
+  the remote has not changed since. Pull deletes only a file it can prove unchanged since
+  the last sync: an edited file keeps the config `skipped` (its old baseline too, so
+  `sync diff` shows the conflict), and a file pull cannot judge (a config created by a push
+  that stopped half-way, an adopted directory) or one edited while pull runs is kept, with
+  a `companion_kept` entry in `warnings[]` and the config listed as `modified` by diff.
+  `sync pull --theirs` removes it.
+- **A new companion file is a local change.** Creating `_description.md` for a config
+  pulled with an empty description (or any companion file that was not there at pull
+  time) now shows as `modified` and `sync push` sends it. Deleting one shows as
+  `modified` too and clears the value. The manifest records the companion set as
+  `pull_extra_hashes` plus `pull_extra_hashes_version: 1`; older kbagent versions read
+  such a manifest without any phantom change.
+- **Only the files the component uses count**: `_description.md` for every config,
+  plus `transform.sql` (SQL transformations), `transform.py` + `pyproject.toml` (Python
+  transformations), `code.py` + `pyproject.toml` (custom Python apps). Any other of those
+  file names in a config folder (a `code.py` beside an extractor, `transform.py` renamed
+  to `code.py`) is never pushed, compared or deleted; `sync diff` lists it in `warnings[]`
+  (`unowned_companion`).
+- **Empty versus deleted:** an empty `_description.md` or `code.py` sends an empty value;
+  a deleted one sends the value inline in `_config.yml`, or none. A `pyproject.toml` with
+  no dependencies, or a deleted one, sends the inline `packages` (pull writes
+  `packages: []` there when the list is empty), or none. A companion file always wins over
+  the same value inline. After a push that cleared the description, `_config.yml` has the
+  `description: ''` line a fresh pull writes.
+- **`_config.yml` deleted while an edited `transform.sql` (or another companion) is kept**
+  is a local change: `sync pull` no longer re-creates the folder over it (reported
+  `skipped`). Delete the whole folder, or use `--theirs`, to take the remote.
+- **Changing `_keboola.component_id` in a tracked folder is refused** by `sync diff` and
+  `sync push` (`CONFIG_ERROR`, exit 5). Restore it, or move the files to a new folder
+  without `_keboola.config_id` to create a config of the other component.
+- **A new config authored with `rows/` is created with its rows in one `sync push`**
+  (production and `--branch`). Before, push created the config alone and reported success;
+  a second push created the rows. `sync diff` and `push --dry-run` list those rows as
+  `added` with `parent_path` (the folder) and an empty `parent_config_id`. When the config
+  create fails, its rows fail with `PARENT_CONFIG_NOT_TRACKED`; when a row create fails or
+  the push stops half-way, the next push creates only what is missing -- also when a row
+  file carries a row id copied from another config. A create whose response was lost (the
+  server created it, kbagent never saw the id) can still be created twice; check the
+  remote before re-running after a network failure.
+- **Rows under a folder adopted by its config id** (no manifest entry, the file carries an
+  existing config id) are compared by row id. A row that differs from the remote, or a
+  remote row with no file, is a `conflict` -- never an update or a delete, because nothing
+  records which side changed it. A new row (no row id) under such a config is created
+  when the config itself equals the remote; otherwise run `sync pull` first. Pushing the
+  adopted config registers its rows, so a later push never creates them a second time.
+- **A flow, orchestration or schedule created in the same push as a row it selects**
+  (typical for `sync clone`) keeps `link_pending` in the manifest while that row is
+  missing, and the push that creates the row also sets `configRowIds` -- no edit needed.
+  The same applies after a push that stopped before the links were set.
+
 ## `sync push --branch <dev>` from `main/` no longer changes what production sees
 
 *(since vNEXT)*

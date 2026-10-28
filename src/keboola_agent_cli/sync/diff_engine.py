@@ -54,6 +54,7 @@ class ConfigChange:
         is_row: bool = False,
         parent_config_id: str = "",
         source_row_id: str = "",
+        parent_path: str = "",
     ):
         self.change_type = change_type
         self.component_id = component_id
@@ -68,6 +69,10 @@ class ConfigChange:
         # A promote push's new row: its id in the source config, kept apart
         # from ``config_id`` (the target identity, empty until created).
         self.source_row_id = source_row_id
+        # A row under an untracked parent dir: the parent's path, its identity
+        # until push creates it (empty ``parent_config_id``) or registers the
+        # adopted config it names (``parent_config_id`` set).
+        self.parent_path = parent_path
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to dict for JSON output."""
@@ -84,6 +89,8 @@ class ConfigChange:
             data["parent_config_id"] = self.parent_config_id
             if self.source_row_id:
                 data["source_row_id"] = self.source_row_id
+            if self.parent_path:
+                data["parent_path"] = self.parent_path
         return data
 
 
@@ -546,6 +553,7 @@ def compute_row_changeset(
                     is_row=True,
                     parent_config_id=parent_config_id,
                     source_row_id=entry.get("source_row_id", ""),
+                    parent_path=entry.get("parent_path", ""),
                 )
             )
             if remote_key:

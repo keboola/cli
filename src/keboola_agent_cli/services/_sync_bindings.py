@@ -33,6 +33,8 @@ from ..sync.code_extraction import merge_code_files
 from ..sync.config_format import local_config_to_api
 from ..sync.manifest import Manifest
 from ._sync_baseline import apply_stamp, config_baseline
+from ._sync_companions import record_companions
+from ._sync_link_pending import LinkMaps, build_link_maps, link_pending_entries, set_link_pending
 from ._sync_models import (
     FLOW_COMPONENT_ID,
     ORCHESTRATOR_COMPONENT_ID,
@@ -426,7 +428,7 @@ def _refresh_binding_hashes(
     cfg = find_branch_entry(manifest, created.component_id, created.config_id, branch_id)
     if cfg is not None:
         cfg.metadata["pull_hash"] = hashes.file_hash
-        cfg.metadata["pull_extra_hashes"] = hashes.extra_hashes
+        record_companions(cfg.metadata, hashes.extra_hashes)
         apply_stamp(cfg.metadata, stamp)
 
 
@@ -695,11 +697,18 @@ class RunTargetRemap:
     ``references`` counts the task ``configId``s (or the schedule target)
     rewritten, ``config_row_ids`` the task ``configRowIds`` entries rewritten.
     ``unmapped_rows`` holds one message per task whose row ids have no new row.
+    ``unresolved`` counts references to a config push has not created yet.
     """
 
     references: int = 0
     config_row_ids: int = 0
     unmapped_rows: list[str] = field(default_factory=list)
+    unresolved: int = 0
+
+    @property
+    def pending(self) -> bool:
+        """True while a reference still names a config or row not created yet (D9)."""
+        return bool(self.unmapped_rows or self.unresolved)
 
 
 def resolve_run_target_bindings(
@@ -711,6 +720,7 @@ def resolve_run_target_bindings(
     created_row_id_map: dict[tuple[str, str], str],
     manifest: Manifest,
     branch_id: int | None,
+    source_dir: Path | None = None,
 ) -> FlowBindingResult:
     """Remap the configs that flows, orchestrations and schedules run (Phase D).
 
@@ -721,74 +731,115 @@ def resolve_run_target_bindings(
     ``_configuration_extra``. When such a config is created in the same push
     as the configs it runs -- e.g. a ``sync clone`` of a reference project --
     those ids still point at the source ids. This pass (mirroring the Phase-C
-    variable backfill) resolves each reference via ``created_id_map`` /
-    ``created_row_id_map`` to the ULID assigned this push, PUTs the corrected
-    config, rewrites the local ``_config.yml``, and refreshes the manifest
-    hashes so a re-push is clean. It never activates a schedule with the
-    Scheduler service.
+    variable backfill) resolves each reference to the ULID assigned to that
+    placeholder, PUTs the corrected config, rewrites the local
+    ``_config.yml``, and refreshes the manifest hashes so a re-push is clean.
+    It never activates a schedule with the Scheduler service.
 
-    A no-op when no such config was created this push, or when no task or
-    target references a config created this push (the id is left untouched --
-    it may legitimately point at a pre-existing config).
+    The maps come from this push's creates AND the manifest (D9): a config
+    still ``link_pending`` from an earlier push (its referenced row failed, or
+    the push died before this pass) is finished here too, from *source_dir*,
+    once what it names exists. ``link_pending`` is cleared when every
+    reference resolves and kept while one still names a config or row not
+    created yet.
+
+    A no-op when no such config was created this push or is pending, or when
+    no task or target references a config created from a placeholder (the id
+    is left untouched -- it may legitimately point at a pre-existing config).
     """
     result = FlowBindingResult()
-    for created in created_configs:
+    maps = build_link_maps(
+        manifest,
+        branch_id,
+        created_id_map=created_id_map,
+        created_row_id_map=created_row_id_map,
+        source_dir=source_dir,
+    )
+    todo = list(created_configs)
+    seen = {(c.component_id, c.config_id) for c in todo}
+    if source_dir is not None:
+        todo += [
+            CreatedConfig(entry.component_id, entry.id, source_dir / entry.path)
+            for entry in link_pending_entries(manifest, branch_id)
+            if (entry.component_id, entry.id) not in seen
+        ]
+    for created in todo:
         link_type = _RUN_TARGET_LINK_TYPES.get(created.component_id)
         if link_type is None:
             continue
-        local_data = service._read_config_file(created.config_dir)
-        if local_data is None:
-            continue
-        extra = local_data.get("_configuration_extra")
-        if not isinstance(extra, dict):
-            continue
-
-        remap = remap_run_targets_in_place(
-            created.component_id, extra, created_id_map, created_row_id_map
+        pending = _bind_run_target(
+            service, client, created, link_type, maps, manifest, branch_id, result
         )
-        for message in remap.unmapped_rows:
-            result.errors.append(
-                {
-                    "change_type": link_type,
-                    "error_code": ErrorCode.LINK_UNRESOLVED,
-                    "component_id": created.component_id,
-                    "config_id": created.config_id,
-                    "message": message,
-                }
-            )
-        if not remap.references:
-            continue
-
-        try:
-            _apply_run_target_binding(
-                service,
-                client,
-                created=created,
-                local_data=local_data,
-                manifest=manifest,
-                branch_id=branch_id,
-                warnings=result.warnings,
-            )
-        except KeboolaApiError as exc:
-            result.errors.append(
-                {
-                    "change_type": link_type,
-                    "error_code": ErrorCode.API_ERROR,
-                    "component_id": created.component_id,
-                    "config_id": created.config_id,
-                    "message": f"{exc} {_LINK_RETRY_HINT}",
-                }
-            )
-            continue
-        result.configs_rewritten += 1
-        if created.component_id == SCHEDULER_COMPONENT_ID:
-            result.schedule_targets += remap.references
-        elif created.component_id == ORCHESTRATOR_COMPONENT_ID:
-            result.orchestrator_tasks += remap.references
-        else:
-            result.flow_tasks += remap.references
-        result.config_row_ids += remap.config_row_ids
+        entry = find_branch_entry(manifest, created.component_id, created.config_id, branch_id)
+        result.pending_changed |= set_link_pending(entry, pending)
     return result
+
+
+def _bind_run_target(
+    service: SyncService,
+    client: Any,
+    created: CreatedConfig,
+    link_type: str,
+    maps: LinkMaps,
+    manifest: Manifest,
+    branch_id: int | None,
+    result: FlowBindingResult,
+) -> bool:
+    """Remap one run-target config and PUT it when changed; return whether it stays pending."""
+    local_data = service._read_config_file(created.config_dir)
+    extra = (local_data or {}).get("_configuration_extra")
+    if local_data is None or not isinstance(extra, dict):
+        return False
+    remap = remap_run_targets_in_place(
+        created.component_id,
+        extra,
+        maps.configs,
+        maps.rows,
+        target_rows=maps.target_rows,
+        uncreated=maps.uncreated,
+    )
+    for message in remap.unmapped_rows:
+        result.errors.append(
+            {
+                "change_type": link_type,
+                "error_code": ErrorCode.LINK_UNRESOLVED,
+                "component_id": created.component_id,
+                "config_id": created.config_id,
+                "message": message,
+            }
+        )
+    if not remap.references and not remap.config_row_ids:
+        return remap.pending
+    try:
+        _apply_run_target_binding(
+            service,
+            client,
+            created=created,
+            local_data=local_data,
+            manifest=manifest,
+            branch_id=branch_id,
+            warnings=result.warnings,
+        )
+    except KeboolaApiError as exc:
+        result.errors.append(
+            {
+                "change_type": link_type,
+                "error_code": ErrorCode.API_ERROR,
+                "component_id": created.component_id,
+                "config_id": created.config_id,
+                "message": f"{exc} {_LINK_RETRY_HINT}",
+            }
+        )
+        return True
+    result.configs_rewritten += 1
+    if created.component_id == SCHEDULER_COMPONENT_ID:
+        result.schedule_targets += remap.references
+    elif created.component_id == ORCHESTRATOR_COMPONENT_ID:
+        result.orchestrator_tasks += remap.references
+    else:
+        result.flow_tasks += remap.references
+    result.config_row_ids += remap.config_row_ids
+    return remap.pending
 
 
 def task_config_ref(component_id: str, task_entry: Any) -> tuple[str, str] | None:
@@ -819,30 +870,54 @@ def remap_run_targets_in_place(
     extra: dict[str, Any],
     created_id_map: dict[tuple[str, str], str],
     created_row_id_map: dict[tuple[str, str], str],
+    *,
+    target_rows: dict[tuple[str, str], set[str]] | None = None,
+    uncreated: set[tuple[str, str]] | None = None,
 ) -> RunTargetRemap:
     """Rewrite the task ``configId``s / ``configRowIds`` or the schedule target in place.
 
-    A reference is rewritten only when its ``(componentId, configId)`` matches
-    an entry created this push. A task's ``configRowIds`` are then looked up
-    under that new config only.
+    A reference is rewritten only when its ``(componentId, configId)`` names
+    a placeholder of a config created from it, this push or (D9) an earlier
+    one. A reference already naming such a created config is in target form;
+    its ``configRowIds`` are still resolved, under that config only: a row
+    the config has on the target stays, a placeholder row maps to the row
+    created from it. A reference to a config still to be created (*uncreated*)
+    is counted ``unresolved``.
     """
     remap = RunTargetRemap()
+    waiting = uncreated or set()
     if component_id == SCHEDULER_COMPONENT_ID:
-        remap.references = _remap_schedule_target(extra.get("target"), created_id_map)
+        target = extra.get("target")
+        if (
+            isinstance(target, dict)
+            and (
+                target.get("componentId"),
+                str(target.get("configurationId", "")),
+            )
+            in waiting
+        ):
+            remap.unresolved += 1
+        remap.references = _remap_schedule_target(target, created_id_map)
         return remap
     tasks = extra.get("tasks")
     if not isinstance(tasks, list):
         return remap
+    created_targets = {(comp, new_id) for (comp, _), new_id in created_id_map.items()}
     for task_entry in tasks:
         ref = task_config_ref(component_id, task_entry)
         if ref is None:
             continue
-        new_id = created_id_map.get(ref)
-        if not new_id or ref[1] == new_id:
+        if ref in waiting:
+            remap.unresolved += 1
             continue
-        task_entry["task"]["configId"] = new_id
-        remap.references += 1
-        _remap_task_rows(task_entry, ref[0], new_id, created_row_id_map, remap)
+        new_id = created_id_map.get(ref) or (ref[1] if ref in created_targets else "")
+        if not new_id:
+            continue
+        if ref[1] != new_id:
+            task_entry["task"]["configId"] = new_id
+            remap.references += 1
+        known = (target_rows or {}).get((ref[0], new_id), set())
+        _remap_task_rows(task_entry, ref[0], new_id, created_row_id_map, remap, known)
     return remap
 
 
@@ -852,11 +927,13 @@ def _remap_task_rows(
     new_config_id: str,
     created_row_id_map: dict[tuple[str, str], str],
     remap: RunTargetRemap,
+    known_rows: set[str],
 ) -> None:
-    """Rewrite a task's ``configRowIds`` to the rows created under its new config.
+    """Rewrite a task's ``configRowIds`` to the rows created under its config.
 
-    The task's config was created this push, so each of its rows is new too.
-    A row id without a new row is kept and reported in ``remap.unmapped_rows``.
+    A row id the config already has on the target (*known_rows*) is kept. A
+    row id without a row created from it is kept too, reported in
+    ``remap.unmapped_rows``, and leaves the config pending (D9).
     """
     task = task_entry["task"]
     old_row_ids = task.get("configRowIds")
@@ -867,7 +944,8 @@ def _remap_task_rows(
     for old_row_id in old_row_ids:
         new_row_id = created_row_id_map.get((new_config_id, str(old_row_id)))
         if new_row_id is None:
-            unmapped.append(str(old_row_id))
+            if str(old_row_id) not in known_rows:
+                unmapped.append(str(old_row_id))
             new_row_ids.append(old_row_id)
             continue
         new_row_ids.append(new_row_id)
@@ -879,7 +957,8 @@ def _remap_task_rows(
         remap.unmapped_rows.append(
             f"Task '{task_entry.get('name', '')}' (id {task_entry.get('id', '')}) lists "
             f"configRowIds {listed}, which have no row under {component_id}/{new_config_id} "
-            "created in this push, so they keep the old ids. Set the row ids by hand."
+            "yet, so they keep the old ids. The next 'kbagent sync push' that creates the "
+            "row sets them."
         )
 
 

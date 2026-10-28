@@ -33,6 +33,11 @@ ORCHESTRATOR_COMPONENT_ID = "keboola.orchestrator"
 # ``configuration.target.configurationId``.
 SCHEDULER_COMPONENT_ID = "keboola.scheduler"
 
+# The configs whose job is to run another config (Phase D).
+RUN_TARGET_COMPONENTS = frozenset(
+    {FLOW_COMPONENT_ID, ORCHESTRATOR_COMPONENT_ID, SCHEDULER_COMPONENT_ID}
+)
+
 # Sibling component that backs a transformation's shared-code links. A
 # transformation references it via ``configuration.shared_code_id`` (the
 # config) and ``configuration.shared_code_row_ids`` (row ids), and its scripts
@@ -53,6 +58,14 @@ PROMOTED_SOURCE_KEY = "promoted_source"
 # (authored in the source tree). Linked by path, once, when the source tree's
 # own branch creates that row (risk 83).
 AUTHORED_ROW_KEY = "promoted_authored"
+# Config and row metadata outside the promote path: the placeholder id (a
+# ``sync clone`` reference id, a scaffold's id) a push created this config or
+# row from. Lets a later push map a reference still naming that id (D9).
+CREATED_FROM_KEY = "created_from_id"
+# Config metadata of a flow, orchestration or schedule a push created outside
+# the promote path whose references may still name placeholder ids: set in its
+# create checkpoint, cleared once every reference resolves (D9).
+LINK_PENDING_KEY = "link_pending"
 
 
 @dataclass
@@ -142,6 +155,8 @@ class FlowBindingResult:
     orchestrator_tasks: int = 0
     schedule_targets: int = 0
     config_row_ids: int = 0
+    # ``link_pending`` was set or cleared on an entry (D9): the manifest changed.
+    pending_changed: bool = False
 
     def push_fields(self, shared_code_links: int) -> dict[str, Any]:
         """Return the push-result keys for the link remaps of Phase C and D.

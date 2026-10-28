@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING, Any
 from ..constants import CONFIG_FILENAME
 from ..sync.branch_scope import UNKNOWN_BASE_KEY
 from ..sync.manifest import ManifestConfigRow, ManifestConfiguration
-from ._sync_baseline import extras_modified
+from ._sync_companions import companions_modified
 from ._sync_workspace import SANDBOXES_COMPONENT_ID
 
 if TYPE_CHECKING:
@@ -84,7 +84,7 @@ def _entry_locally_modified(
         return False
     if service._file_hash(config_file) != pull_hash:
         return True
-    if extras_modified(service, config_dir, entry.metadata.get("pull_extra_hashes") or {}):
+    if companions_modified(service, config_dir, entry.component_id, entry.metadata):
         return True
     for row in entry.rows:
         row_hash = row.metadata.get("pull_hash", "")

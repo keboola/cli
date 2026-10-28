@@ -324,6 +324,18 @@ Depending on component type, additional files are extracted:
 | Custom Python app | `code.py` + `pyproject.toml` |
 | Flow/orchestrator | phases, tasks, schedules inline in `_config.yml` |
 
+*(since vNEXT)* These companion files are one set per config. Creating one (for example
+`_description.md` for a config without a description) or deleting one is a local change
+that `sync diff` lists and `sync push` sends. When the remote clears a value, `sync pull`
+removes its file -- unless you edited it, then the config is `skipped` and diff shows the
+conflict. Only the files of the config's component count; any other of these names in
+the folder is ignored and listed in diff `warnings[]`. An empty description is written
+inline as `description: ''`.
+
+A new config folder with a `rows/` subfolder is created with all its rows by one
+`sync push` (`--dry-run` lists the rows as `added`). If a create fails or the push stops
+half-way, run `sync push` again: it creates only what is still missing.
+
 Storage metadata is also pulled (read-only, not tracked in manifest):
 
 | Path | Purpose |

@@ -586,12 +586,6 @@ class Sim:
                 data["name"] = f"Name {new}"
             write_yaml(d / "_config.yml", data)
         elif slot == "desc":
-            if (
-                "new-description-file" in self.masks
-                and not (d / "_description.md").exists()
-                and not read_yaml(d / "_config.yml").get("description")
-            ):
-                return
             (d / "_description.md").write_text(f"Description {new}", encoding="utf-8")
         else:
             path = d / fname
@@ -641,8 +635,6 @@ class Sim:
             return
         dst = src.parent / f"new-{self.tok()}"
         shutil.copytree(src, dst)
-        if "new-config-rows" in self.masks:
-            shutil.rmtree(dst / "rows", ignore_errors=True)
         for yml in dst.rglob("_config.yml"):
             data = read_yaml(yml)
             meta = data.get("_keboola") or {}
@@ -771,8 +763,7 @@ class Sim:
         if slot == "value":
             params["value"] = new
         elif slot == "desc":
-            clear = c < 0.05 and "stale-companion-file" not in self.masks
-            cfg["description"] = "" if clear else f"Description {new}"
+            cfg["description"] = "" if c < 0.05 else f"Description {new}"
         elif slot == "sql":
             params["blocks"] = [
                 {"name": "B", "codes": [{"name": "C", "script": [f"SELECT '{new}';"]}]}
@@ -1228,15 +1219,11 @@ def shrink(steps: list[Step], kind: str, masks: frozenset[str] = frozenset()) ->
 # exercising that path again.
 MASKS = frozenset(
     {
-        "stale-companion-file",
-        "new-description-file",
-        "new-config-rows",
         "remote-row-add-invisible",
         "untracked-row-overwrite",
         # Not a bug by itself: after `pull --branch DEV` main/ is orphaned by
         # design (#649), so the masked user keeps working in dev/ with
-        # --branch DEV. Unmasked, it surfaces the row variant of
-        # new-config-rows (test_finding_row_edit_in_untracked_config_is_visible).
+        # --branch DEV.
         "pull-dev-orphans-main",
         "sparse-disabled-reenable",
         "force-delete-over-remote-edit",
@@ -1332,22 +1319,12 @@ def _proj(sim: Sim, branch: int, key: tuple[str, str]) -> dict[str, Any]:
     return remote_projection(key[0], sim.api.remote[branch][key])
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "FINDING stale-companion-file: when the remote CLEARS a field that "
-        "pull extracts into a companion file (description -> _description.md, "
-        "packages -> pyproject.toml), pull reports 'updated' but leaves the "
-        "old file on disk: extract_code_files only writes non-empty values "
-        "(code_extraction.py:314-319 _extract_description, and the "
-        "`if packages:` branches) and sync_service.py:835 never removes a "
-        "stale companion. diff then says clean, and the next push of ANY "
-        "edit to that config merges the stale file back and silently "
-        "restores the cleared value on the remote."
-    ),
-)
 @pytest.mark.parametrize("field", ["description", "packages"])
 def test_finding_cleared_remote_field_is_not_resurrected(tmp_path: Path, field: str) -> None:
+    """Was FINDING stale-companion-file: when the remote cleared a field that pull
+    extracts into a companion file (description -> _description.md, packages ->
+    pyproject.toml), pull left the old file on disk recorded as clean, and the next
+    push of ANY edit restored the cleared value on the remote"""
     sim = _world(tmp_path)
     if field == "description":
         key, rel, edit_slot = HTTP_1, "extractor/keboola.ex-http/name-tk6z", "value"
@@ -1363,18 +1340,9 @@ def test_finding_cleared_remote_field_is_not_resurrected(tmp_path: Path, field: 
     assert _proj(sim, PROD, key)[slot] == (), f"push restored the cleared {field}"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "FINDING new-description-file: a config pulled with an empty "
-        "description has no _description.md, so pull_extra_hashes has no "
-        "entry for it. Creating the file is invisible: diff only checks the "
-        "companions recorded at pull time (config_locally_modified / the "
-        "diff unchanged-shortcut around sync_service.py:1290), reports the "
-        "config unchanged, and push never sends the description."
-    ),
-)
 def test_finding_new_description_file_is_pushed(tmp_path: Path) -> None:
+    """Was FINDING new-description-file: a config pulled with an empty description has
+    no _description.md; creating one was invisible to diff and never pushed"""
     sim = _world(tmp_path)
     d = _dir(sim, "transformation/keboola.snowflake-transformation/name-tk16z")
     assert not (d / "_description.md").exists()
@@ -1384,36 +1352,19 @@ def test_finding_new_description_file_is_pushed(tmp_path: Path) -> None:
     assert _proj(sim, PROD, SQL_1)["desc"] == ("tk900z",)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "FINDING new-config-rows: rows are discovered only under configs the "
-        "manifest already tracks (branch_scope.py:475-478 "
-        "find_untracked_rows, called at sync_service.py:1454). A new config "
-        "authored with rows/ is created WITHOUT its rows; push reports "
-        "success. On production a second push creates them."
-    ),
-)
 def test_finding_new_config_is_created_with_its_rows(tmp_path: Path) -> None:
+    """Was FINDING new-config-rows: a new config authored with rows/ was created WITHOUT
+    its rows (rows were walked only under tracked configs)"""
     sim = _world(tmp_path)
     sim.local_new(0.0, 0.0, 0.0)  # copy of keboola.ex-http 1000 (2 rows)
-    assert _push(sim)["created"] == 1
+    assert _push(sim)["created"] == 3  # the config and its two rows, in one push
     (new_key,) = [k for k in sim.api.remote[PROD] if k[1] == "1010"]
     assert len(sim.api.remote[PROD][new_key]["rows"]) == 2
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "FINDING new-config-rows (dev-branch variant, worse): promoting a "
-        "new config with rows (`push --branch DEV`, no dev/ tree) creates "
-        "the config on DEV; its manifest entry then belongs to the dev tree "
-        "while the files live in main/, so find_untracked_rows "
-        "(branch_scope.py:477 only_branch_path filter) never sees the rows "
-        "again: diff --branch DEV is clean and the rows are never created."
-    ),
-)
 def test_finding_promoted_new_config_rows_reach_dev(tmp_path: Path) -> None:
+    """Was FINDING new-config-rows (dev-branch variant): promoting a new config with
+    rows never created them on DEV"""
     sim = _world(tmp_path)
     sim.local_new(0.0, 0.0, 0.0)
     _push(sim, DEV)
@@ -1422,17 +1373,9 @@ def test_finding_promoted_new_config_rows_reach_dev(tmp_path: Path) -> None:
     assert len(sim.api.remote[DEV][new_key]["rows"]) == 2
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "FINDING new-config-rows (adopted-config variant): after `pull "
-        "--branch DEV` drops a production config that is gone on DEV, its "
-        "main/ directory is untracked; a config-level edit there diffs as a "
-        "conflict (#792 E), but a ROW edit is invisible -- rows are walked "
-        "only under manifest-tracked configs (branch_scope.py:475)."
-    ),
-)
 def test_finding_row_edit_in_untracked_config_is_visible(tmp_path: Path) -> None:
+    """Was FINDING new-config-rows (adopted-config variant): a ROW edit under an
+    untracked config dir carrying an id was invisible to diff"""
     sim = _world(tmp_path)
     del sim.api.remote[DEV][HTTP_2]
     row = _dir(sim, "extractor/keboola.ex-http/name-tk13z/rows/row-tk11z/_config.yml")

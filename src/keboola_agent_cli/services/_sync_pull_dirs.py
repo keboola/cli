@@ -33,6 +33,8 @@ from ..sync.manifest import Manifest, ManifestConfigRow, ManifestConfiguration
 from ..sync.naming import config_row_path
 from ._sync_models import (
     AUTHORED_ROW_KEY,
+    CREATED_FROM_KEY,
+    LINK_PENDING_KEY,
     PROMOTED_ROW_KEY,
     PROMOTED_SOURCE_KEY,
     REBIND_PENDING_KEY,
@@ -281,8 +283,12 @@ def carry_promote_metadata(
     """
     if old is None:
         return
-    if old.metadata.get(REBIND_PENDING_KEY):
-        metadata[REBIND_PENDING_KEY] = old.metadata[REBIND_PENDING_KEY]
+    # Also the placeholder a config was created from and an unfinished link
+    # backfill (D9): a pull between the failed push and the next one must
+    # not lose what the next one needs to finish the links.
+    for key in (REBIND_PENDING_KEY, CREATED_FROM_KEY, LINK_PENDING_KEY):
+        if old.metadata.get(key):
+            metadata[key] = old.metadata[key]
     association = promoted_from(old)
     source = association.config_id if association is not None else ""
     source = source or str(old.metadata.get(PROMOTED_SOURCE_KEY) or "")
@@ -290,7 +296,7 @@ def carry_promote_metadata(
         metadata[PROMOTED_SOURCE_KEY] = source
     old_rows = {row.id: row.metadata for row in old.rows}
     for row in rows:
-        for key in (PROMOTED_ROW_KEY, AUTHORED_ROW_KEY):
+        for key in (PROMOTED_ROW_KEY, AUTHORED_ROW_KEY, CREATED_FROM_KEY):
             if key in old_rows.get(row.id, {}):
                 row.metadata[key] = old_rows[row.id][key]
 

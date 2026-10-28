@@ -23,11 +23,29 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from ..constants import CONFIG_HASH_VERSION, CONFIG_HASH_VERSION_KEY
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
-from ..sync.branch_scope import PROMOTED_FROM_KEY, PromotedFrom, branch_tree_path
+from ..sync.branch_scope import (
+    PROMOTED_FROM_KEY,
+    PromotedFrom,
+    branch_tree_path,
+    find_branch_entry,
+)
+from ..sync.code_extraction import merge_code_files
+from ..sync.config_format import api_config_to_local
+from ..sync.diff_engine import config_hash
 from ..sync.manifest import Manifest, save_manifest
 from ._sync_baseline import apply_stamp, config_baseline
-from ._sync_models import REBIND_PENDING_KEY, CreatedConfig, CreateOutcome
+from ._sync_companions import record_companions
+from ._sync_models import (
+    CREATED_FROM_KEY,
+    LINK_PENDING_KEY,
+    REBIND_PENDING_KEY,
+    RUN_TARGET_COMPONENTS,
+    CreatedConfig,
+    CreateOutcome,
+)
+from ._sync_untracked import adopted_row_entries
 from ._sync_writeback import (
     link_promote_entries,
     link_promote_rows,
@@ -115,11 +133,42 @@ class CreateLedger:
     created_id_map: dict[tuple[str, str], str] = field(default_factory=dict)
     promoted_id_map: dict[tuple[str, str], str] = field(default_factory=dict)
     created_configs: list[CreatedConfig] = field(default_factory=list)
+    # ``(component_id, config dir path)`` -> new id of every config this push
+    # created: the identity of a new config's rows until then (D7). Two new
+    # directories of one component both have the empty id.
+    created_by_path: dict[tuple[str, str], str] = field(default_factory=dict)
 
     def parent_id(self, component_id: str, parent_config_id: str) -> str:
         """The id a row change's parent has on the target after this push's creates."""
         key = (component_id, parent_config_id)
         return self.created_id_map.get(key, self.promoted_id_map.get(key, parent_config_id))
+
+    def row_parent(self, change: dict[str, Any]) -> str:
+        """The target id of a row change's parent; raises when its parent was not created.
+
+        A row under a new config directory names that directory
+        (``parent_path``, empty ``parent_config_id``): its parent is the config
+        this push created there. When that create failed, or never happened,
+        the row is skipped with a dependency error -- the next push creates
+        the parent and then the row.
+        """
+        component_id = change["component_id"]
+        parent_config_id = change.get("parent_config_id", "")
+        parent_path = change.get("parent_path", "")
+        if parent_path and not parent_config_id:
+            new_id = self.created_by_path.get((component_id, parent_path))
+            if not new_id:
+                raise KeboolaApiError(
+                    message=(
+                        f"Row {parent_path}/{change.get('path', '')} was not created: its "
+                        f"config {component_id} at {parent_path} was not created in this push "
+                        f"(see its error). The next 'kbagent sync push' creates both."
+                    ),
+                    status_code=0,
+                    error_code=ErrorCode.PARENT_CONFIG_NOT_TRACKED,
+                )
+            return new_id
+        return self.parent_id(component_id, parent_config_id)
 
 
 @dataclass(frozen=True)
@@ -174,6 +223,13 @@ def record_created_config(
         if outcome.pending_refs:
             entry.metadata[REBIND_PENDING_KEY] = outcome.pending_refs
     else:
+        # Also in the create's own checkpoint (D9): the placeholder it was
+        # created from, and -- for a flow, orchestration or schedule -- that its
+        # references are not rewritten yet; Phase D clears the flag.
+        if writeback.previous_id and writeback.previous_id != new_id:
+            entry.metadata[CREATED_FROM_KEY] = writeback.previous_id
+        if component_id in RUN_TARGET_COMPONENTS:
+            entry.metadata[LINK_PENDING_KEY] = True
         # In the create's own checkpoint: a crash right after it never leaves
         # a promote entry unlinked (risk 76).
         link_promote_entries(
@@ -211,6 +267,7 @@ def record_created_config(
             fatal.add_note(f"The local file could not be updated either: {secondary}")
         raise fatal from fatal.__cause__
 
+    ledger.created_by_path[(component_id, config_path_str)] = new_id
     writeback_after_push(
         service,
         outcome.pristine_data,
@@ -226,7 +283,7 @@ def record_created_config(
         warnings.append(stamp.warning)
     entry.metadata["pull_hash"] = hashes.file_hash
     entry.metadata["pull_config_hash"] = stamp.cfg_hash
-    entry.metadata["pull_extra_hashes"] = hashes.extra_hashes
+    record_companions(entry.metadata, hashes.extra_hashes)
     apply_stamp(entry.metadata, stamp)
 
     if writeback.previous_id:
@@ -253,3 +310,68 @@ def record_created_config(
             }
         )
     return new_id
+
+
+def register_adopted_parent(
+    service: SyncService,
+    client: Any,
+    *,
+    manifest: Manifest,
+    target: CreateTarget,
+    component_id: str,
+    config_id: str,
+    config_path: str,
+) -> None:
+    """Track an adopted config so a new row can be created under it (D8).
+
+    The directory carries the id of an existing remote config but has no
+    manifest entry. Its new row needs a tracked parent. The parent is
+    registered only when its files equal the remote config right now -- then
+    the remote IS the baseline, exactly what a pull would record -- with its
+    existing rows tracked under an unknown base. A parent that differs has no
+    baseline that says which side changed it (a conflict), so the row waits:
+    ``sync pull`` first.
+    """
+    if find_branch_entry(manifest, component_id, config_id, target.branch_id) is not None:
+        return
+    config_dir = target.project_root / target.branch_path / config_path
+    local = service._read_config_file(config_dir)
+    remote = None
+    if target.branch_path == branch_tree_path(manifest, target.branch_id) and local is not None:
+        remote = client.get_config_detail(
+            component_id=component_id, config_id=config_id, branch_id=target.branch_id
+        )
+    if local is not None and isinstance(remote, dict):
+        merge_code_files(component_id, local, config_dir)
+        remote_hash = config_hash(api_config_to_local(component_id, remote, config_id))
+        if config_hash(local) == remote_hash:
+            hashes = service._compute_config_hashes(config_dir, component_id)
+            entry = writeback_create_config_in_manifest(
+                manifest=manifest,
+                component_id=component_id,
+                branch_id=target.branch_id,
+                config_path_str=config_path,
+                new_id=config_id,
+                file_hash=hashes.file_hash,
+                cfg_hash=remote_hash,
+                extra_hashes=hashes.extra_hashes,
+            ).entry
+            entry.metadata[CONFIG_HASH_VERSION_KEY] = CONFIG_HASH_VERSION
+            record_companions(entry.metadata, hashes.extra_hashes)
+            rows = remote.get("rows")
+            remote_rows = (
+                {str(r.get("id", "")) for r in rows if isinstance(r, dict)}
+                if isinstance(rows, list)
+                else None
+            )
+            entry.rows = adopted_row_entries(config_dir, remote_rows)
+            return
+    raise KeboolaApiError(
+        message=(
+            f"Cannot create a row under {component_id}/{config_id} ({config_path}): the "
+            f"directory is not tracked in the manifest and differs from that config on the "
+            f"remote, so its baseline is unknown. Run 'kbagent sync pull' first."
+        ),
+        status_code=0,
+        error_code=ErrorCode.PARENT_CONFIG_NOT_TRACKED,
+    )

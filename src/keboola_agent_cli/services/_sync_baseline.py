@@ -45,6 +45,7 @@ from ..sync.code_extraction import (
 from ..sync.config_format import BASE_CONFIG_HASH_KEY, api_config_to_local, api_row_to_local
 from ..sync.diff_engine import config_hash
 from ..sync.manifest import Manifest
+from ._sync_companions import config_locally_modified
 
 if TYPE_CHECKING:
     from .sync_service import SyncService
@@ -263,48 +264,6 @@ def effective_stored_hash(
     return stored
 
 
-def extras_modified(service: SyncService, config_dir: Path, extra_hashes: dict[str, str]) -> bool:
-    """True iff any companion file recorded at pull time changed or vanished.
-
-    Companion files are the ``pull_extra_hashes`` entries (``transform.sql``,
-    ``code.py``, ``_description.md``, ...): the same set ``sync diff`` /
-    ``sync push`` merge back into the config, so they are part of the
-    config's local representation exactly like ``_config.yml``.
-    """
-    for fname, stored_hash in (extra_hashes or {}).items():
-        fpath = config_dir / fname
-        if not fpath.exists() or service._file_hash(fpath) != stored_hash:
-            return True
-    return False
-
-
-def config_locally_modified(
-    service: SyncService,
-    config_dir: Path,
-    pull_hash: str,
-    extra_hashes: dict[str, str],
-) -> bool:
-    """True iff the config's local representation differs from the pull state.
-
-    Covers ``_config.yml`` AND every companion file recorded at pull time
-    (issue #792 finding B): pull used to hash ``_config.yml`` only, so an
-    edited ``transform.sql`` beside an untouched ``_config.yml`` was silently
-    overwritten by a remote change -- plain pull and ``--force`` alike.
-
-    Without a recorded ``pull_hash`` nothing can be proven (False, as
-    before). A missing ``_config.yml`` means the config dir is gone, which
-    pull re-materializes (#472) -- not a local edit to protect.
-    """
-    if not pull_hash:
-        return False
-    config_file = config_dir / CONFIG_FILENAME
-    if not config_file.exists():
-        return False
-    if service._file_hash(config_file) != pull_hash:
-        return True
-    return extras_modified(service, config_dir, extra_hashes)
-
-
 # Pull ``details[].reason`` for a kept file that only carries the config id.
 ADOPTED_SKIP_REASON = "locally modified, not tracked in the manifest"
 
@@ -463,30 +422,24 @@ def raise_on_legacy_boundary(
 # ---------------------------------------------------------------------------
 
 
-def _is_conflict(
-    service: SyncService,
-    config_file: Path,
-    old_pull_hash: str,
-    old_cfg_hash: str,
-    api_cfg_hash: str,
-    extra_hashes: dict[str, str] | None = None,
-) -> bool:
+def _is_conflict(locally_modified: bool, old_cfg_hash: str, api_cfg_hash: str) -> bool:
     """True iff the local files are modified AND the remote also changed.
 
-    A 3-way conflict needs both a stored ``pull_hash`` (the synced file
-    state) and a stored ``pull_config_hash`` (the synced remote state);
-    without either we cannot prove a conflict, so return False -- be
+    A 3-way conflict needs a stored ``pull_config_hash`` (the synced remote
+    state); without it we cannot prove a conflict, so return False -- be
     conservative, ``--force`` must not abort on incomplete bookkeeping.
-    A missing local file is not a content conflict (nothing to lose).
-    ``extra_hashes`` (configs only; rows have no companion files) extends
-    the local check to the companion files (issue #792 finding B).
+    *locally_modified* is the caller's file-side check: the config's
+    ``_config.yml`` plus its companion set (issue #792 finding B, D2), or a
+    row's own file.
     """
     if not old_cfg_hash:
         return False
-    locally_modified = config_locally_modified(
-        service, config_file.parent, old_pull_hash, extra_hashes or {}
-    )
     return locally_modified and api_cfg_hash != old_cfg_hash
+
+
+def _row_locally_modified(service: SyncService, row_file: Path, pull_hash: str) -> bool:
+    """True iff a row file with a recorded ``pull_hash`` exists and differs from it."""
+    return bool(pull_hash) and row_file.exists() and service._file_hash(row_file) != pull_hash
 
 
 def detect_force_pull_conflicts(
@@ -497,7 +450,6 @@ def detect_force_pull_conflicts(
     ignored_components: frozenset[str],
     existing_keys: set[str],
     existing_paths: dict[str, str],
-    existing_file_hashes: dict[str, str],
     existing_metadata: dict[str, dict[str, Any]],
     existing_rows: dict[str, dict[str, str]],
 ) -> list[dict[str, str]]:
@@ -540,19 +492,17 @@ def detect_force_pull_conflicts(
 
             rel_path = existing_paths.get(lookup_key, "")
             remote_local = api_config_to_local(component_id, cfg, config_id)
+            metadata = existing_metadata.get(lookup_key, {})
             if _is_conflict(
-                service,
-                branch_dir / rel_path / CONFIG_FILENAME,
-                existing_file_hashes.get(lookup_key, ""),
+                config_locally_modified(service, branch_dir / rel_path, component_id, metadata),
                 effective_stored_hash(
-                    existing_metadata.get(lookup_key, {}),
+                    metadata,
                     component_id=component_id,
                     config_id=config_id,
                     raw_remote=cfg,
                     remote_local=remote_local,
                 ),
                 config_hash(remote_local),
-                existing_metadata.get(lookup_key, {}).get("pull_extra_hashes") or {},
             ):
                 conflicts.append(
                     {
@@ -573,9 +523,11 @@ def detect_force_pull_conflicts(
                     continue
                 row_rel_path = existing_row.get("path", "")
                 if _is_conflict(
-                    service,
-                    config_dir / row_rel_path / CONFIG_FILENAME,
-                    existing_row.get("pull_hash", ""),
+                    _row_locally_modified(
+                        service,
+                        config_dir / row_rel_path / CONFIG_FILENAME,
+                        existing_row.get("pull_hash", ""),
+                    ),
                     existing_row.get("pull_config_hash", ""),
                     config_hash(api_row_to_local(row, component_id)),
                 ):
