@@ -245,7 +245,10 @@ These lists keep `error`, because their entries are not failed items with an err
   a reference to such a production row maps to the dev row that already exists. An edit to
   it after the promote is `modified`, not `modified` plus `conflict`. Production
   `sync diff` lists the record under `orphaned` with reason `promoted_from_this_tree`
-  (nothing to do). A pull of any branch keeps the dev-branch record of a component you
+  (nothing to do). Human output folds these records into one "nothing to do" line,
+  but `--json` of diff and push keeps each one in `orphaned[]`, and `sync diff`
+  counts it in `summary.orphaned` (since vNEXT); its `reason` tells it apart from a config of
+  another branch's tree, which needs a `sync pull`. A pull of any branch keeps the dev-branch record of a component you
   add to `ignoredComponents` as it is (diff and push skip it while it is ignored), so
   after you remove the ignore and pull, the next promote updates that dev config again.
   Before, the pull dropped the record and the promote created a second config there.

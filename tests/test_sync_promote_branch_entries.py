@@ -27,6 +27,7 @@ from keboola_agent_cli.services._sync_bindings import _refresh_binding_hashes
 from keboola_agent_cli.services._sync_models import CreatedConfig
 from keboola_agent_cli.services._sync_promote_remap import (
     PromoteRemap,
+    PromoteUnit,
     SentPayload,
     finish_promote_rebind,
     recover_pending,
@@ -2235,9 +2236,9 @@ def test_a_rejected_update_never_drops_a_pending_reference(
 # ===========================================================================
 
 
-def _task_of(remote: dict) -> tuple[str, list[str]]:
+def _task_of(remote: dict) -> PromoteUnit:
     task = remote["configuration"]["tasks"][0]["task"]
-    return task["configId"], task["configRowIds"]
+    return PromoteUnit(task["configId"], task["configRowIds"])
 
 
 # -- risk 65: a config the branch holds under the production id resolves -----
@@ -2264,7 +2265,7 @@ def test_recovery_resolves_rows_under_a_config_the_branch_holds_under_its_own_id
     client = _in_memory_target(pending.remote, {(http, "P"): {"rows": [{"id": "2"}]}})
     recover_pending(client, pending.manifest, remap, "keboola.flow", "F", DEV, [])
 
-    assert _task_of(pending.remote) == ("P", ["2"])
+    assert _task_of(pending.remote) == PromoteUnit("P", ["2"])
     assert "rebind_pending" not in pending.flow.metadata
 
 
@@ -2283,10 +2284,10 @@ def test_recovery_follows_a_row_selection_edited_on_the_branch(all_rows_exist: b
     recover_pending(client, pending.manifest, remap, "keboola.flow", "F", DEV, [])
 
     if all_rows_exist:
-        assert _task_of(pending.remote) == ("D", ["11", "22"])
+        assert _task_of(pending.remote) == PromoteUnit("D", ["11", "22"])
         assert "rebind_pending" not in pending.flow.metadata
     else:
-        assert _task_of(pending.remote) == ("P", ["1", "2"])
+        assert _task_of(pending.remote) == PromoteUnit("P", ["1", "2"])
         assert pending.flow.metadata["rebind_pending"] == [
             [http, "P"],
             [http, "P", "1"],
@@ -2311,7 +2312,7 @@ def test_identity_parent_row_already_on_the_branch_is_never_remapped_again() -> 
     for _ in range(2):
         recover_pending(client, pending.manifest, remap, "keboola.flow", "F", DEV, [])
 
-    assert _task_of(pending.remote) == ("P", ["2"])
+    assert _task_of(pending.remote) == PromoteUnit("P", ["2"])
     assert pending.flow.metadata["rebind_pending"] == [[http, "E"]]
 
 
@@ -2324,7 +2325,7 @@ def test_identity_parent_unit_with_a_missing_row_is_left_whole() -> None:
     recover_pending(client, pending.manifest, remap, "keboola.flow", "F", DEV, [])
 
     client.update_config.assert_not_called()
-    assert _task_of(pending.remote) == ("P", ["1", "2"])
+    assert _task_of(pending.remote) == PromoteUnit("P", ["1", "2"])
     assert pending.flow.metadata["rebind_pending"] == [
         [http, "P"],
         [http, "P", "1"],
@@ -2342,7 +2343,7 @@ def test_identity_parent_with_unreadable_rows_is_left_untouched_and_pending() ->
     recover_pending(client, pending.manifest, remap, "keboola.flow", "F", DEV, [])
 
     client.update_config.assert_not_called()
-    assert _task_of(pending.remote) == ("P", ["1"])
+    assert _task_of(pending.remote) == PromoteUnit("P", ["1"])
     assert pending.flow.metadata["rebind_pending"] == [[http, "P"], [http, "P", "1"]]
 
 
@@ -2458,7 +2459,7 @@ def test_identity_unit_edited_to_an_unknown_row_keeps_the_config_pending(
     recover_pending(client, pending.manifest, remap, "keboola.flow", "F", DEV, [])
 
     client.update_config.assert_not_called()
-    assert _task_of(pending.remote) == ("P", ["99"])
+    assert _task_of(pending.remote) == PromoteUnit("P", ["99"])
     assert pending.flow.metadata["rebind_pending"] == [[http, "P"], [http, "P", "99"]]
 
 
@@ -2967,7 +2968,7 @@ def test_recovery_never_rewrites_to_a_row_missing_on_dev() -> None:
     recover_pending(client, pending.manifest, remap, "keboola.flow", "F", DEV, [])
 
     client.update_config.assert_not_called()
-    assert _task_of(pending.remote) == ("P", ["r1"])
+    assert _task_of(pending.remote) == PromoteUnit("P", ["r1"])
     assert pending.flow.metadata["rebind_pending"] == refs
 
 
