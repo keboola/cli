@@ -910,3 +910,38 @@ def test_all_projects_dry_run_lines_count_only_executable_creates(
     assert push_summary(result) == (
         "1 config(s) planned, 1 refused, 0 would be pushed: 0 created, 0 updated, 0 deleted."
     )
+
+
+def test_dry_run_refuses_the_rows_of_a_refused_new_config(tmp_path: Path) -> None:
+    """Round 8 P2: the planned rows of a refused create are refused too."""
+    from keboola_agent_cli.commands._sync_push_render import push_summary
+
+    sim = _world(tmp_path)
+    src = _dir(sim, APP_DIR)
+    dst = src.parent / "new-app"
+    shutil.copytree(src, dst)
+    data = read_yaml(dst / "_config.yml")
+    data["_keboola"].pop("config_id")
+    data["name"] = "Name tk901z"
+    write_yaml(dst / "_config.yml", data)
+    (dst / "pyproject.toml").write_text('[project]\nname = "app"\n', encoding="utf-8")
+    for name in ("one", "two"):
+        (dst / "rows" / name).mkdir(parents=True)
+        write_yaml(
+            dst / "rows" / name / "_config.yml",
+            {"version": 2, "name": f"Row {name}", "parameters": {"x": name}},
+        )
+
+    dry = sim.svc.push(alias="prod", project_root=sim.root, dry_run=True)
+    real = _push(sim)
+
+    assert sorted(e["error_code"] for e in dry["errors"]) == [
+        "COMPANION_UNREADABLE",
+        "PARENT_CONFIG_NOT_TRACKED",
+        "PARENT_CONFIG_NOT_TRACKED",
+    ]
+    assert push_summary(dry).startswith("3 config(s) planned, 3 refused, 0 would be pushed")
+    assert real["created"] == 0
+    assert sorted(e["error_code"] for e in real["errors"]) == sorted(
+        e["error_code"] for e in dry["errors"]
+    )

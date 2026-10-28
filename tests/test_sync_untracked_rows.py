@@ -873,3 +873,48 @@ def test_pull_keeps_ambiguous_carriers_of_a_remotely_deleted_row(tmp_path: Path)
     result = _push(sim, force=True)
     assert (result["created"], result["deleted"]) == (0, 0)
     assert [r["id"] for r in sim.api.remote[PROD][HTTP_1]["rows"]] == ["1002"]
+
+
+# ---------------------------------------------------------------------------
+# Round 8: a remote PARENT delete never erases row work
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("edited", [True, False], ids=["edited", "unedited"])
+def test_remote_config_delete_and_a_moved_row(tmp_path: Path, edited: bool) -> None:
+    """Round 8 P1 (Astra): rename rows/row-tk2z to rows/moved, edit it, delete 1000, pull."""
+    sim = _world(tmp_path)
+    rows = _rows_of_1000(sim)
+    shutil.move(str(rows / "row-tk2z"), str(rows / "moved"))
+    if edited:
+        _set_value(rows / "moved", "tk900z")
+    del sim.api.remote[PROD][HTTP_1]
+
+    result = _pull(sim)
+
+    config_dir = _dir(sim, HTTP_DIR)
+    assert config_dir.exists() is edited
+    if edited:
+        assert (rows / "moved" / "_config.yml").read_text().count("tk900z") == 1
+        assert any(
+            d.get("action") == "skipped" and d.get("path") == HTTP_DIR for d in result["details"]
+        )
+        assert _push(sim)["created"] == 0
+        assert HTTP_1 not in sim.api.remote[PROD]
+
+
+def test_remote_config_delete_keeps_a_new_row_dir(tmp_path: Path) -> None:
+    """Round 8 P1: a row dir no tracked row stands for is user content without a baseline."""
+    sim = _world(tmp_path)
+    rows = _rows_of_1000(sim)
+    shutil.copytree(rows / "row-tk4z", rows / "new-row")
+    data = read_yaml(rows / "new-row" / "_config.yml")
+    data["name"] = "Row tk905z"
+    data["_keboola"].pop("row_id")
+    write_yaml(rows / "new-row" / "_config.yml", data)
+    del sim.api.remote[PROD][HTTP_1]
+
+    _pull(sim)
+
+    assert (rows / "new-row" / "_config.yml").exists()
+    assert _push(sim)["created"] == 0

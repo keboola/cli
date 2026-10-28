@@ -83,12 +83,39 @@ def _entry_locally_modified(
     # sweep deleted it with the directory before.
     if config_locally_modified(service, config_dir, entry.component_id, entry.metadata):
         return True
-    if not entry.metadata.get("pull_hash"):
+    return _rows_locally_modified(service, config_dir, entry)
+
+
+def _rows_locally_modified(
+    service: SyncService, config_dir: Path, entry: ManifestConfiguration
+) -> bool:
+    """True iff any row dir under *config_dir* holds work a delete would lose (round 8).
+
+    Every row dir counts, not only the manifest's row paths: a tracked row
+    found by its id at another path (moved) is compared with that row's
+    baseline, and a row dir no tracked row stands for (a new row, a copy) is
+    user content without a baseline -- kept. A tracked row at its own path
+    is edited when its file differs from its ``pull_hash``.
+    """
+    rows_dir = config_dir / "rows"
+    if not rows_dir.is_dir():
         return False
-    for row in entry.rows:
+    by_path = {row.path: row for row in entry.rows}
+    by_id = {row.id: row for row in entry.rows}
+    for row_dir in sorted(rows_dir.iterdir()):
+        row_file = row_dir / CONFIG_FILENAME
+        if not row_file.is_file():
+            continue
+        row = by_path.get(f"rows/{row_dir.name}")
+        if row is None:
+            data = service._read_config_file(row_dir)
+            meta = data.get("_keboola") if isinstance(data, dict) else None
+            row_id = str(meta.get("row_id") or "") if isinstance(meta, dict) else ""
+            row = by_id.get(row_id)
+            if row is None or (config_dir / row.path / CONFIG_FILENAME).exists():
+                return True  # no tracked row it stands for: user content
         row_hash = row.metadata.get("pull_hash", "")
-        row_file = config_dir / row.path / CONFIG_FILENAME
-        if row_hash and row_file.exists() and service._file_hash(row_file) != row_hash:
+        if row_hash and service._file_hash(row_file) != row_hash:
             return True
     return False
 

@@ -118,8 +118,8 @@ These lists keep `error`, because their entries are not failed items with an err
   also a value an older kbagent wrote without escaping its quotes); a new config in that
   state is refused with `COMPANION_UNREADABLE` (`push --dry-run` and `clone --dry-run`
   print the same error with its remedy and count planned, refused and executable configs
-  separately, also per project with `--all-projects`), as is an update whose remote cannot
-  be read.
+  separately, also per project with `--all-projects`; the rows of a refused new config are
+  refused too, as the real push skips them), as is an update whose remote cannot be read.
   `sync diff` reports a file that is not valid TOML (`COMPANION_UNREADABLE` warning). A deleted companion sends the value inline in
   `_config.yml` (pull writes `description: ''` and `packages: []` there when they are
   empty), or none. After a push that cleared the
@@ -160,7 +160,10 @@ These lists keep `error`, because their entries are not failed items with an err
   a moved or renamed row folder included. At a new path it has no proven baseline, so a
   difference is a conflict until `sync pull`, which tracks the row at its new path (keeping
   a local edit, which then pushes normally); when the remote deleted that row, pull removes
-  the moved folder if it is unedited and keeps and reports it otherwise. A new row (no row id) under such a config is created
+  the moved folder if it is unedited and keeps and reports it otherwise. When the remote
+  deletes the whole CONFIG, pull keeps its folder (reported `skipped`) if any row folder in
+  it holds work: an edited row at any path, moved ones included, or a row folder no
+  tracked row stands for (a new row). A new row (no row id) under such a config is created
   when the config itself equals the remote; otherwise run `sync pull` first. Pushing the
   adopted config registers its rows, so a later push never creates them a second time.
 - **A flow, orchestration or schedule created in the same push as a row it selects**

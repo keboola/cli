@@ -245,7 +245,39 @@ def create_refusals(
                     "error_code": str(exc.error_code),
                 }
             )
+            refusals += _dependent_row_refusals(change, changes)
     return refusals
+
+
+def _dependent_row_refusals(
+    parent: dict[str, Any], changes: list[dict[str, Any]]
+) -> list[dict[str, str]]:
+    """The planned rows of a refused new config: the real push skips them too (round 8).
+
+    They name the refused config by its directory (``parent_path``) -- or, for
+    a placeholder config (a clone), by its placeholder id.
+    """
+    path, config_id = parent.get("path", ""), parent.get("config_id", "")
+    return [
+        {
+            "change_type": "added",
+            "component_id": row["component_id"],
+            "config_id": row.get("config_id", ""),
+            "message": (
+                f"Row {row.get('path', '')} would not be created: its config "
+                f"{parent['component_id']} at {path} is refused (see its error)."
+            ),
+            "error_code": str(ErrorCode.PARENT_CONFIG_NOT_TRACKED),
+        }
+        for row in changes
+        if row.get("is_row")
+        and row["change_type"] == "added"
+        and row["component_id"] == parent["component_id"]
+        and (
+            (row.get("parent_path") == path and not row.get("parent_config_id"))
+            or (config_id and row.get("parent_config_id") == config_id)
+        )
+    ]
 
 
 def detect_name_drift(
