@@ -479,6 +479,10 @@ class Sim:
         # remote intent: (branch, comp, cid, slot) -> value written remotely
         # and not yet pulled into that branch's tree
         self.remote_pending: dict[tuple[int, str, str, str], Any] = {}
+        # The value a pending slot had at the last sync, i.e. before its first
+        # unpulled remote change: a later change back to it leaves nothing
+        # unpulled (ABA), so a push applying a local change there is correct.
+        self.remote_base: dict[tuple[int, str, str, str], Any] = {}
         self.log: list[str] = []
         # The walk's own record of what a promote push created (D18): main/
         # keeps the source ids, so a dir's DEV id is known only from the push.
@@ -733,12 +737,22 @@ class Sim:
     def _remote_pick(self, branch: int, f: float) -> tuple[str, str] | None:
         return _pick(sorted(self.api.remote[branch]), f)
 
-    def _remote_set(self, branch: int, key: tuple[str, str], slot: str) -> None:
+    def _remote_set(
+        self, branch: int, key: tuple[str, str], slot: str, before: dict[str, Any]
+    ) -> None:
+        """Record a remote change of *slot*; *before* is the projection before it."""
         comp, cid = key
         cfg = self.api.remote[branch][key]
         if branch == DEV and not self.dev_synced:
             return
-        self.remote_pending[(branch, comp, cid, slot)] = remote_projection(comp, cfg).get(slot)
+        pkey = (branch, comp, cid, slot)
+        if pkey not in self.remote_pending:
+            self.remote_base[pkey] = before.get(slot)
+        now = remote_projection(comp, cfg).get(slot)
+        if now == self.remote_base[pkey]:
+            self.remote_pending.pop(pkey, None)  # back at the synced value
+        else:
+            self.remote_pending[pkey] = now
 
     def remote_edit(self, a: float, b: float, c: float) -> None:
         branch = self._remote_branch(c)
@@ -747,6 +761,7 @@ class Sim:
             return
         comp, _cid = key
         cfg = self.api.remote[branch][key]
+        before = remote_projection(comp, cfg)
         slots = [s for s in COMPONENT_SLOTS[comp] if s != "name"]
         if cfg["rows"]:
             slots.append("row")
@@ -774,7 +789,7 @@ class Sim:
             row = _pick(cfg["rows"], (b * 7) % 1)
             row["configuration"].setdefault("parameters", {})["value"] = new
             slot = f"row:{row['name']}"
-        self._remote_set(branch, key, slot)
+        self._remote_set(branch, key, slot, before)
         self.note(f"  remote edit {branch} {key} [{slot}] -> {new}")
 
     def remote_create(self, a: float, _b: float, c: float) -> None:
@@ -800,8 +815,9 @@ class Sim:
         if key is None:
             return
         cfg = self.api.remote[branch][key]
+        before = remote_projection(key[0], cfg)
         cfg["isDisabled"] = not cfg["isDisabled"]
-        self._remote_set(branch, key, "disabled")
+        self._remote_set(branch, key, "disabled", before)
         self.note(f"  remote toggle disabled {branch} {key} -> {cfg['isDisabled']}")
 
     def remote_rename(self, a: float, _b: float, c: float) -> None:
@@ -811,8 +827,9 @@ class Sim:
         key = self._remote_pick(branch, a)
         if key is None:
             return
+        before = remote_projection(key[0], self.api.remote[branch][key])
         self.api.remote[branch][key]["name"] = f"Name {self.tok()}"
-        self._remote_set(branch, key, "name")
+        self._remote_set(branch, key, "name", before)
         self.note(f"  remote rename {branch} {key} -> {self.api.remote[branch][key]['name']}")
 
     def remote_row_add(self, a: float, _b: float, c: float) -> None:
@@ -823,9 +840,10 @@ class Sim:
         key = _pick(keys, a)
         if key is None:
             return
+        before = remote_projection(key[0], self.api.remote[branch][key])
         row = self._remote_row(f"Row {self.tok()}")
         self.api.remote[branch][key]["rows"].append(row)
-        self._remote_set(branch, key, f"row:{row['name']}")
+        self._remote_set(branch, key, f"row:{row['name']}", before)
         self.note(f"  remote row add {branch} {key} {row['name']}")
 
     def remote_row_delete(self, a: float, b: float, c: float) -> None:
@@ -840,9 +858,10 @@ class Sim:
         key = _pick(keys, a)
         if key is None:
             return
+        before = remote_projection(key[0], self.api.remote[branch][key])
         rows = self.api.remote[branch][key]["rows"]
         row = rows.pop(min(int(b * len(rows)), len(rows) - 1))
-        self._remote_set(branch, key, f"row:{row['name']}")
+        self._remote_set(branch, key, f"row:{row['name']}", before)
         self.note(f"  remote row delete {branch} {key} {row['name']}")
 
     # -- commands -------------------------------------------------------------
@@ -1600,6 +1619,26 @@ def test_finding_force_push_does_not_delete_remotely_edited_row(tmp_path: Path) 
     assert any(r["id"] == row["id"] for r in sim.api.remote[PROD][HTTP_1]["rows"]), (
         "the unpulled remote row edit was deleted"
     )
+
+
+def test_remote_change_undone_before_a_push_is_no_unpulled_change(tmp_path: Path) -> None:
+    """Seed 2956 (ABA): remote toggle, local toggle, remote toggle back, push.
+
+    The remote's net state is the synced baseline again, so the 3-way push
+    applying the local change clobbers nothing.
+    """
+    sim = _world(tmp_path)
+    sim.remote_toggle(0.0, 0.0, 0.0)  # 1. production, the first config
+    key = min(sim.api.remote[PROD])
+    assert sim.api.remote[PROD][key]["isDisabled"] is True  # disabled -> True
+    (d,) = [d for d in config_dirs(sim.root / "main") if dir_identity(d) == key]
+    data = read_yaml(d / "_config.yml")
+    data["is_disabled"] = True  # 2. local toggle -> True
+    write_yaml(d / "_config.yml", data)
+    sim.remote_toggle(0.0, 0.0, 0.0)  # 3. -> False, the last-synced value
+    assert (PROD, *key, "disabled") not in sim.remote_pending
+    sim.push()  # 4. sets True; raises Violation on a clobber
+    assert sim.api.remote[PROD][key]["isDisabled"] is True
 
 
 # ===========================================================================
