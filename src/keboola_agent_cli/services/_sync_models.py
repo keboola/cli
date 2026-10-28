@@ -45,6 +45,10 @@ SHARED_CODE_COMPONENT_ID = "keboola.shared-code"
 REBIND_PENDING_KEY = "rebind_pending"
 # Row metadata: the source row a promote push created this row from (D24).
 PROMOTED_ROW_KEY = "promoted_from_id"
+# Row metadata: a row a promote push created from a row file with no source id
+# (authored in the source tree). Linked by path, once, when the source tree's
+# own branch creates that row (risk 83).
+AUTHORED_ROW_KEY = "promoted_authored"
 
 
 @dataclass

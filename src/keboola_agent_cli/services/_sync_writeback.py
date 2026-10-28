@@ -30,7 +30,7 @@ from ..sync.config_format import BASE_CONFIG_HASH_KEY
 from ..sync.manifest import ManifestConfigRow, ManifestConfiguration
 from ._encryption import apply_encrypted_to_local
 from ._sync_baseline import apply_stamp, config_baseline
-from ._sync_models import PROMOTED_ROW_KEY, LocalConfigHashes, WritebackResult
+from ._sync_models import AUTHORED_ROW_KEY, PROMOTED_ROW_KEY, LocalConfigHashes, WritebackResult
 
 if TYPE_CHECKING:
     from ..sync.manifest import Manifest
@@ -142,10 +142,11 @@ def link_promote_rows(manifest: Manifest, *, tree: str, source: ManifestConfigur
     gets its rows on the branch first; when the source tree's own branch later
     assigns their ids, a promote entry's row in the same row directory is
     recorded as created from that row -- also when the entry's own
-    association was already linked. A row that records its source is kept.
-    Only a config a promote created is linked: a shadow (held under the
-    source's own id) records its rows' sources when it is built, and a path
-    alone never proves a later row is the one it copied (risk 81).
+    association was already linked. Only a row the promote created from a
+    row file with no source id (marked authored, risk 83) is linked, once:
+    a row copied into a shadow or created from a known source row records
+    its source when it is made, and a path alone never proves a later row is
+    the one it copied (risk 81).
     """
     source_rows = {row.path: row.id for row in source.rows}
     for cfg in manifest.configurations:
@@ -156,12 +157,12 @@ def link_promote_rows(manifest: Manifest, *, tree: str, source: ManifestConfigur
             or association.tree != tree
             or association.config_id != source.id
             or cfg.component_id != source.component_id
-            or cfg.id == source.id  # a shadow
         ):
             continue
         for row in cfg.rows:
-            if not row.metadata.get(PROMOTED_ROW_KEY) and row.path in source_rows:
+            if row.metadata.get(AUTHORED_ROW_KEY) and row.path in source_rows:
                 row.metadata[PROMOTED_ROW_KEY] = source_rows[row.path]
+                row.metadata.pop(AUTHORED_ROW_KEY)
 
 
 def stamp_updated_config(

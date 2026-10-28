@@ -40,7 +40,7 @@ from ._encryption import (
 )
 from ._sync_baseline import apply_stamp, row_baseline
 from ._sync_data_app import create_synced_data_app
-from ._sync_models import PROMOTED_ROW_KEY, CreateOutcome
+from ._sync_models import AUTHORED_ROW_KEY, PROMOTED_ROW_KEY, CreateOutcome
 from ._sync_workspace import SANDBOXES_COMPONENT_ID, warn_on_backend_size_change
 from ._sync_writeback import (
     link_promote_rows,
@@ -546,6 +546,8 @@ def _push_create_row(
     )
     if source_row_id:
         row_entry.metadata[PROMOTED_ROW_KEY] = source_row_id
+    elif remap is not None:
+        row_entry.metadata[AUTHORED_ROW_KEY] = True  # its source id is not known yet
     if link_rows_in is not None:
         link_promote_rows(link_rows_in, tree=source_tree, source=parent)
     if checkpoint is not None:

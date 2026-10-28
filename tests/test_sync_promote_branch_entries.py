@@ -2792,11 +2792,21 @@ def test_ignored_dev_pull_keeps_the_promote_entry_and_never_duplicates(
     w.pull(branch=DEV)
     assert _entries(w, dev_id, DEV) == [before]  # carried untouched
     _set_ignored(w, [])
-    w.pull()
-    semantic_edit(w.config_dir(cid) / CONFIG_FILE)
+    result = w.pull()
+    # Risk 82: the DEV pull re-targeted the tree (#649) and dropped production's
+    # entry; main/ keeps P's directory, which carries P's id and the edit only
+    # DEV has. Without a baseline that is a local change the production pull
+    # keeps and skips (#792 E), so production has no entry until it is pushed
+    # or pulled with --theirs. D still owns the directory.
+    assert {"action": "skipped", "path": before.path}.items() <= next(
+        d for d in result["details"] if d.get("path") == before.path
+    ).items()
+    semantic_edit(w.root / "main" / before.path / CONFIG_FILE)
     w.push(branch=DEV)
 
     assert list(w.api.remote[DEV]) == [(v.component_id, dev_id)]  # no duplicate
+    dev_config = w.api.get(DEV, v.component_id, dev_id)["configuration"]
+    assert dev_config["parameters"]["edit_marker"] == 2  # D got the new edit
 
 
 # -- risk 80: a push with nothing to send still repairs an empty association --
@@ -2861,3 +2871,41 @@ def test_replacement_row_reusing_a_path_is_never_mapped_to_the_shadow_row(
     )  # never linked to r2
     task = _dev_flow(w)["configuration"]["tasks"][0]["task"]
     assert task["configRowIds"] != [r1]
+
+
+# ===========================================================================
+# Round 18 (risk 83): a row authored under a shadow is linked once production has it
+# ===========================================================================
+
+
+def test_row_authored_under_a_shadow_maps_to_its_dev_row_once_production_has_it(
+    tmp_path: Path,
+) -> None:
+    v = VARIANTS["rows"]
+    seeded = _seeded(tmp_path, v)
+    w, cid = seeded.world, seeded.config_id
+    w.api.types["keboola.flow"] = "other"
+    w.api.branch_from_prod()  # DEV holds P under the production id
+    author_row(w.config_dir(cid), v, {**_rows()[0], "name": "New"})  # rows/new
+    w.push(branch=DEV)  # r-dev, under the shadow of P
+    w.push()  # r-prod, at the same row path
+
+    (r_dev,) = [r["id"] for r in w.api.get(DEV, v.component_id, cid)["rows"] if r["name"] == "New"]
+    (r_prod,) = [
+        r["id"] for r in w.api.get(PROD, v.component_id, cid)["rows"] if r["name"] == "New"
+    ]
+    body = _flow_body(v.component_id, cid)
+    body["tasks"][0]["task"]["configRowIds"] = [r_prod]
+    w.api.remote[PROD][("keboola.flow", "cfg-flow")] = {
+        "id": "cfg-flow",
+        "name": "Nightly",
+        "description": "",
+        "configuration": body,
+        "rows": [],
+        "isDisabled": False,
+    }
+    w.pull()
+    w.push(branch=DEV)
+
+    task = _dev_flow(w)["configuration"]["tasks"][0]["task"]
+    assert (task["configId"], task["configRowIds"]) == (cid, [r_dev])
