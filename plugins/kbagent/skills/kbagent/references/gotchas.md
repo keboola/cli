@@ -122,7 +122,8 @@ These lists keep `error`, because their entries are not failed items with an err
   production id, kbagent reads which rows its dev copy holds only while it rewrites that
   dev copy; a row it selects that is neither there nor mapped, or rows it cannot read,
   keep the reference pending. A payload built from the `main/` files maps its rows
-  through the row map alone). The next promote push then reads that config
+  through the row map alone). A dev config or row deleted on the dev branch is never
+  used as a target: a reference to it stays pending in its production form. The next promote push then reads that config
   from the dev branch, rewrites only those references and sends only its configuration,
   so its name, description, enabled state and any other change made there are kept. A
   config deleted there, or of a component you have since added to `ignoredComponents`,

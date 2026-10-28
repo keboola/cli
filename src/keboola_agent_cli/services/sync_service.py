@@ -1679,6 +1679,7 @@ class SyncService(BaseService):
             remap = PromoteRemap() if promoting else None
             if remap is not None:
                 remap.plan(changes)
+                remap.note_gone(all_changes)
                 remap.use_target(client, branch_id)
                 remap.hold = partial(hold_pending, client, manifest, target, checkpoint)
 

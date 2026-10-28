@@ -2909,3 +2909,63 @@ def test_row_authored_under_a_shadow_maps_to_its_dev_row_once_production_has_it(
 
     task = _dev_flow(w)["configuration"]["tasks"][0]["task"]
     assert (task["configId"], task["configRowIds"]) == (cid, [r_dev])
+
+
+# ===========================================================================
+# Round 19 (risk 84): a target deleted on the branch never resolves a unit
+# ===========================================================================
+
+
+def test_flow_selecting_a_row_deleted_on_dev_stays_in_source_form_and_pending(
+    tmp_path: Path,
+) -> None:
+    v = VARIANTS["rows"]
+    w = World(tmp_path)
+    ext_id = w.api.seed(v)
+    (r1,) = [
+        r["id"] for r in w.api.get(PROD, v.component_id, ext_id)["rows"] if r["name"] == "Row 1"
+    ]
+    w.api.types["keboola.flow"] = "other"
+    w.init()
+    w.pull()
+    w.push(branch=DEV)  # P/r1 promoted as D/d1
+    dev_ext = _dev_id_of(w, v.component_id)
+    dev_rows = w.api.get(DEV, v.component_id, dev_ext)["rows"]
+    (d1,) = [r["id"] for r in dev_rows if r["name"] == "Row 1"]
+    dev_rows[:] = [r for r in dev_rows if r["id"] != d1]  # deleted on DEV, not pulled
+
+    body = _flow_body(v.component_id, ext_id)
+    body["tasks"][0]["task"]["configRowIds"] = [r1]
+    w.api.remote[PROD][("keboola.flow", "cfg-flow")] = {
+        "id": "cfg-flow",
+        "name": "Nightly",
+        "description": "",
+        "configuration": body,
+        "rows": [],
+        "isDisabled": False,
+    }
+    w.pull()
+    w.push(branch=DEV)
+
+    task = _dev_flow(w)["configuration"]["tasks"][0]["task"]
+    assert (task["configId"], task["configRowIds"]) == (ext_id, [r1])  # never D/[d1]
+    (flow_entry,) = [
+        c
+        for c in load_manifest(w.root).configurations
+        if c.component_id == "keboola.flow" and c.branch_id == DEV
+    ]
+    assert [v.component_id, ext_id, r1] in flow_entry.metadata["rebind_pending"]
+
+
+def test_recovery_never_rewrites_to_a_row_missing_on_dev() -> None:
+    http = "keboola.ex-http"
+    refs = [[http, "P"], [http, "P", "r1"]]
+    task = {"type": "job", "componentId": http, "configId": "P", "configRowIds": ["r1"]}
+    pending = _pending_flow_on_dev(refs, task)
+    remap = PromoteRemap(configs={(http, "P"): "D"}, rows={("D", "r1"): "d1"})
+    client = _in_memory_target(pending.remote, {(http, "D"): {"rows": []}})  # d1 gone
+    recover_pending(client, pending.manifest, remap, "keboola.flow", "F", DEV, [])
+
+    client.update_config.assert_not_called()
+    assert _task_of(pending.remote) == ("P", ["r1"])
+    assert pending.flow.metadata["rebind_pending"] == refs

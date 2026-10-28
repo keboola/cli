@@ -95,6 +95,9 @@ class PromoteRemap:
             references others was sent with this push.
         expected: Source keys of the configs this push plans to create.
         expected_rows: Source ids of the rows this push plans to create.
+        gone_configs: ``(component_id, target id)`` of configs the diff found
+            deleted on the target (``remote_deleted``) -- never a resolved target.
+        gone_rows: ``(target parent id, target row id)`` likewise (risk 84).
         hold: Called with ``(component_id, config_id, new pending references,
             all references of the payload)`` before an update is PUT: it
             checkpoints the merged ``rebind_pending`` first.
@@ -105,6 +108,8 @@ class PromoteRemap:
     sent: dict[tuple[str, str], SentPayload] = field(default_factory=dict)
     expected: set[tuple[str, str]] = field(default_factory=set)
     expected_rows: set[str] = field(default_factory=set)
+    gone_configs: set[tuple[str, str]] = field(default_factory=set)
+    gone_rows: set[tuple[str, str]] = field(default_factory=set)
     hold: Callable[[str, str, list[list[str]], set[tuple[str, ...]] | None], None] | None = None
     row_reader: Callable[[str, str], set[str] | None] | None = None
     _dev_rows: dict[tuple[str, str], set[str] | None] = field(default_factory=dict)
@@ -118,7 +123,10 @@ class PromoteRemap:
                 detail = client.get_config_detail(
                     component_id=component_id, config_id=config_id, branch_id=branch_id
                 )
-            except KeboolaApiError:
+            except KeboolaApiError as exc:
+                if exc.status_code == 404:  # absent on the target (risk 84)
+                    self.gone_configs.add((component_id, config_id))
+                    return set()
                 return None
             rows = detail.get("rows") if isinstance(detail, dict) else None
             if not isinstance(rows, list):
@@ -155,6 +163,39 @@ class PromoteRemap:
             for c in added
             if c.get("is_row") and (c.get("source_row_id") or c.get("config_id"))
         }
+
+    def note_gone(self, changes: list[dict[str, Any]]) -> None:
+        """Note the target configs and rows the diff found deleted there (risk 84).
+
+        A saved mapping to one of them is no resolved target: the unit stays
+        in source form and pending. Read from the diff the push already made.
+        """
+        for change in changes:
+            if change.get("change_type") != "remote_deleted":
+                continue
+            if change.get("is_row"):
+                self.gone_rows.add((str(change["parent_config_id"]), str(change["config_id"])))
+            else:
+                self.gone_configs.add((change["component_id"], str(change["config_id"])))
+
+    def _target_held(self, component: str, parent: str, row_ids: list[str], *, read: bool) -> bool:
+        """True unless a target this unit maps to is known deleted or absent (risk 84).
+
+        Both modes know the deletions the diff found. TARGET mode (recovery)
+        also reads the target's copy of a parent the unit maps to (*read*),
+        cached: a parent the target answers 404 for, or a copy lacking a
+        selected row, is not held. An unreadable copy proves no absence.
+        """
+        if (component, parent) in self.gone_configs or any(
+            (parent, r) in self.gone_rows for r in row_ids
+        ):
+            return False
+        if not (self._target_mode and read):
+            return True
+        existing = self._existing_rows(component, parent)
+        if (component, parent) in self.gone_configs:
+            return False
+        return existing is None or all(r in existing for r in row_ids)
 
     def pending_refs(self, component_id: str, original: dict[str, Any]) -> list[list[str]]:
         """The references of *original*'s units SOURCE mode cannot rewrite yet (D30, D31, D34)."""
@@ -241,6 +282,8 @@ class PromoteRemap:
                 return None
             else:
                 mapped.append(row_id)
+        if not self._target_held(component, parent, mapped, read=parent != config_id):
+            return None
         return parent, mapped
 
     def _identity_unit(
@@ -260,7 +303,7 @@ class PromoteRemap:
         for row_id in row_ids:
             if row_id in existing:
                 mapped.append(row_id)
-            elif (config_id, row_id) in self.rows:
+            elif self.rows.get((config_id, row_id)) in existing:  # a held target (risk 84)
                 mapped.append(self.rows[(config_id, row_id)])
             else:
                 return None
