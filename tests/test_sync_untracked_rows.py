@@ -1405,3 +1405,119 @@ def test_a_fully_bound_clone_leaves_no_transformation_pending(
     for component_id, name in ((SQL, "SQL vars only"), (SQL, "SQL step"), (PY, "Py step")):
         assert "link_pending" not in _entry_metadata(world, component_id, name)
     assert world.clone()["status"] == "no_changes"
+
+
+# ---------------------------------------------------------------------------
+# Astra on 5da2a090: recovery starts from the remote (#929 D32)
+# ---------------------------------------------------------------------------
+
+
+def _record_updates(world: CloneWorld, monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    """Every PUT the target receives: component, config id and the configuration sent."""
+    calls: list[dict[str, Any]] = []
+    original = world.tgt_api.update_config
+
+    def recording(component_id: str, config_id: str, **kwargs: Any) -> Any:
+        calls.append({"component_id": component_id, "config_id": config_id, **kwargs})
+        return original(component_id, config_id, **kwargs)
+
+    monkeypatch.setattr(world.tgt_api, "update_config", recording)
+    return calls
+
+
+def test_pending_transformation_keeps_a_link_edited_on_the_remote(
+    tmp_path: Path, tmp_config_dir: Path
+) -> None:
+    """Astra P1: a link changed in the UI before the retry is not a source id -- it survives."""
+    world = CloneWorld(tmp_path, tmp_config_dir)
+    world.tgt_api.fail_row_names.add("Default values")
+    world.clone()
+    remote = world.target(SQL, "SQL vars only")["configuration"]
+    remote["variables_id"] = "ui-vars"
+    remote["variables_values_id"] = "ui-row"
+    world.tgt_api.fail_row_names.clear()
+
+    world.clone()
+
+    configuration = world.target(SQL, "SQL vars only")["configuration"]
+    assert configuration["variables_id"] == "ui-vars"
+    assert configuration["variables_values_id"] == "ui-row"
+    assert "link_pending" not in _entry_metadata(world, SQL, "SQL vars only")
+    # The transformations nobody edited are still finished.
+    (values_row,) = world.target(VARS)["rows"]
+    assert world.target(PY, "Py step")["configuration"]["variables_values_id"] == values_row["id"]
+
+
+def test_pending_flow_never_writes_a_dead_row_only_its_remote_names(
+    tmp_path: Path, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Astra P1: local task names A, remote names B, B's mapped row is deleted -- never written."""
+    world = CloneWorld(tmp_path, tmp_config_dir)
+    _crash_once_before_phase_d(monkeypatch)
+    with pytest.raises(Crash):
+        world.clone()
+    variables = world.target(VARS)
+    (dead_row,) = variables["rows"]
+    variables["rows"] = []
+    remote_task = next(t for t in world.target(FLOW)["configuration"]["tasks"] if t["id"] == 14)
+    remote_task["task"].update(
+        {"componentId": VARS, "configId": "var-ref", "configRowIds": ["vrow-ref"]}
+    )
+
+    second = world.clone()
+
+    assert dead_row["id"] not in str(world.target(FLOW)["configuration"])
+    assert _flow_task(world, 14)["configRowIds"] == ["vrow-ref"]
+    assert any(e["error_code"] == ErrorCode.LINK_UNRESOLVED for e in second["errors"])
+    assert _flow_entry_metadata(world).get("link_pending") is True
+
+
+def test_unreadable_link_target_is_never_written(
+    tmp_path: Path, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Astra P1: a 503 on the target read is no proof it exists -- no rewrite, still pending."""
+    world = CloneWorld(tmp_path, tmp_config_dir)
+    _crash_once_before_phase_d(monkeypatch)
+    with pytest.raises(Crash):
+        world.clone()
+    original = world.tgt_api.get_config_detail
+
+    def unavailable(component_id: str, config_id: str, branch_id: int | None = None) -> Any:
+        if component_id == EXTRACTOR:
+            raise KeboolaApiError("Service Unavailable", status_code=503)
+        return original(component_id, config_id, branch_id)
+
+    monkeypatch.setattr(world.tgt_api, "get_config_detail", unavailable)
+
+    second = world.clone()
+
+    assert _flow_task(world, 14)["configId"] == "ex-ref"
+    assert _flow_task(world, 14)["configRowIds"] == ["exrow-1"]
+    assert any(
+        e["change_type"] == "link_target" and e["error_code"] == ErrorCode.API_ERROR
+        for e in second["errors"]
+    )
+    assert _flow_entry_metadata(world).get("link_pending") is True
+
+
+def test_link_repaired_in_the_ui_clears_pending_without_a_write(
+    tmp_path: Path, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Astra P2: the remote names a live row now -- pending clears, nothing is PUT."""
+    world = CloneWorld(tmp_path, tmp_config_dir)
+    world.tgt_api.fail_row_names.add("Default values")
+    world.clone()
+    variables = world.target(VARS)
+    variables["rows"].append(
+        {"id": "live-row", "name": "UI values", "description": "", "configuration": {"values": []}}
+    )
+    transformation = world.target(SQL, "SQL vars only")
+    transformation["configuration"]["variables_id"] = variables["id"]
+    transformation["configuration"]["variables_values_id"] = "live-row"
+    updates = _record_updates(world, monkeypatch)
+
+    world.clone()
+
+    assert [u for u in updates if u["config_id"] == transformation["id"]] == []
+    assert world.target(SQL, "SQL vars only")["configuration"]["variables_values_id"] == "live-row"
+    assert "link_pending" not in _entry_metadata(world, SQL, "SQL vars only")

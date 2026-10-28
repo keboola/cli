@@ -185,6 +185,11 @@ These lists keep `error`, because their entries are not failed items with an err
   file was in sync, in which case the file is updated too.
   A row created by an earlier push and deleted on the remote since is not a resolved
   target: the reference stays pending (`LINK_UNRESOLVED`) instead of naming the deleted id.
+  The finishing push works from the references the REMOTE config holds: a link changed in
+  the UI since is kept, one repaired in the UI clears `link_pending` without a write, and
+  every config it is about to name is read first -- one that is gone or cannot be read
+  (a 5xx) is never written; the link stays pending and the push reports it
+  (`change_type: link_target`). Each linked config is read once per push.
 - **A transformation created in the same push as its variables values row or shared-code
   row** keeps `link_pending` the same way while that row is missing: the push that creates
   the row also sets `variables_values_id` / `shared_code_row_ids` and the `{{<row id>}}`

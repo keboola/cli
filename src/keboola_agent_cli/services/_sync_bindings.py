@@ -38,9 +38,9 @@ from ._sync_companions import record_companions
 from ._sync_link_pending import (
     LinkMaps,
     build_link_maps,
-    drop_gone_targets,
     link_pending_entries,
     set_link_pending,
+    validate_targets,
 )
 from ._sync_models import (
     FLOW_COMPONENT_ID,
@@ -50,6 +50,7 @@ from ._sync_models import (
     VARIABLES_COMPONENT_ID,
     CreatedConfig,
     FlowBindingResult,
+    TargetCache,
     VariableBindingResult,
 )
 from ._sync_push_ops import guard_script_shape
@@ -729,6 +730,7 @@ def resolve_run_target_bindings(
     branch_id: int | None,
     source_dir: Path | None = None,
     planned_rows: set[tuple[str, str]] | None = None,
+    targets: TargetCache | None = None,
 ) -> FlowBindingResult:
     """Remap the configs that flows, orchestrations and schedules run (Phase D).
 
@@ -751,6 +753,14 @@ def resolve_run_target_bindings(
     reference resolves and kept while one still names a config or row not
     created yet.
 
+    A pending config is recovered from its REMOTE configuration (#929 D32):
+    only the references it holds there in source form are rewritten -- one a
+    user changed in the UI stays -- and every target the rewritten payload
+    names is read first (*targets*, the push's cache shared with Phase C). A
+    target that is gone or cannot be read is never written; whatever depends
+    on it stays pending and is reported. The flag is settled from the remote
+    content, so a link repaired in the UI clears it without a write.
+
     A no-op when no such config was created this push or is pending, or when
     no task or target references a config created from a placeholder (the id
     is left untouched -- it may legitimately point at a pre-existing config).
@@ -768,38 +778,71 @@ def resolve_run_target_bindings(
     recovering = [
         CreatedConfig(entry.component_id, entry.id, source_dir / entry.path)
         for entry in link_pending_entries(manifest, branch_id)
-        if source_dir is not None and (entry.component_id, entry.id) not in seen
+        if source_dir is not None
+        and (entry.component_id, entry.id) not in seen
+        and entry.component_id in _RUN_TARGET_LINK_TYPES
     ]
-    # Mappings to targets deleted on the remote since are no resolved targets.
-    drop_gone_targets(
-        client,
-        manifest,
-        branch_id,
+    # Recovery starts from the REMOTE (#929 D32): what a pending config holds
+    # there is what is rewritten, and every target it will name is validated.
+    remotes = {c.config_id: _read_pending(client, c, branch_id, result) for c in recovering}
+    referenced = _referenced_targets(
+        [(c, _local_extra(service, c)) for c in created_configs]
+        + [(c, (remotes[c.config_id] or {}).get("configuration")) for c in recovering],
         maps,
-        referenced=_referenced_targets(service, [*created_configs, *recovering], maps),
-        fresh_rows=set(created_row_id_map.values()),
+    )
+    result.errors.extend(
+        validate_targets(
+            client,
+            manifest,
+            branch_id,
+            maps,
+            targets or TargetCache(),
+            referenced=referenced,
+            fresh_rows=set(created_row_id_map.values()),
+        )
     )
     for created in [*created_configs, *recovering]:
         link_type = _RUN_TARGET_LINK_TYPES.get(created.component_id)
         if link_type is None:
             continue
-        bind = _bind_run_target if created in created_configs else _recover_run_target
-        pending = bind(service, client, created, link_type, maps, manifest, branch_id, result)
+        if created in created_configs:
+            pending = _bind_run_target(
+                service, client, created, link_type, maps, manifest, branch_id, result
+            )
+        else:
+            remote = remotes[created.config_id]
+            pending = remote is None or _recover_run_target(
+                service, client, created, remote, link_type, maps, manifest, branch_id, result
+            )
         entry = find_branch_entry(manifest, created.component_id, created.config_id, branch_id)
         result.pending_changed |= set_link_pending(entry, pending)
     return result
 
 
-def _referenced_targets(
-    service: SyncService, configs: list[CreatedConfig], maps: LinkMaps
-) -> set[str]:
-    """Target ids of the configs the run-target configs in *configs* name (their tasks/target)."""
+def _read_pending(
+    client: Any, created: CreatedConfig, branch_id: int | None, result: FlowBindingResult
+) -> dict[str, Any] | None:
+    """The remote of a pending config; ``None`` (an error, it stays pending) when unreadable."""
+    try:
+        remote = client.get_config_detail(
+            component_id=created.component_id, config_id=created.config_id, branch_id=branch_id
+        )
+    except KeboolaApiError as exc:
+        link_type = _RUN_TARGET_LINK_TYPES[created.component_id]
+        result.errors.append(_link_error(link_type, created, ErrorCode.API_ERROR, str(exc)))
+        return None
+    return remote if isinstance(remote, dict) else None
+
+
+def _local_extra(service: SyncService, created: CreatedConfig) -> Any:
+    return (service._read_config_file(created.config_dir) or {}).get("_configuration_extra")
+
+
+def _referenced_targets(configs: list[tuple[CreatedConfig, Any]], maps: LinkMaps) -> set[str]:
+    """Target ids the run-target payloads in *configs* name, or will name once rewritten."""
     found: set[str] = set()
-    for created in configs:
-        if created.component_id not in _RUN_TARGET_LINK_TYPES:
-            continue
-        extra = (service._read_config_file(created.config_dir) or {}).get("_configuration_extra")
-        if not isinstance(extra, dict):
+    for created, extra in configs:
+        if created.component_id not in _RUN_TARGET_LINK_TYPES or not isinstance(extra, dict):
             continue
         refs: list[tuple[str, str]] = []
         target = extra.get("target")
@@ -840,30 +883,24 @@ def _recover_run_target(
     service: SyncService,
     client: Any,
     created: CreatedConfig,
+    remote: dict[str, Any],
     link_type: str,
     maps: LinkMaps,
     manifest: Manifest,
     branch_id: int | None,
     result: FlowBindingResult,
 ) -> bool:
-    """Finish a ``link_pending`` config of an earlier push FROM THE REMOTE (D9, #929 D29).
+    """Finish a ``link_pending`` config of an earlier push FROM THE REMOTE (D9, #929 D29/D32).
 
     The remote config may have changed since that push (an edit in the UI) --
-    diff then withholds it -- so the local file is never sent. The remote
-    configuration is read, ONLY its references are rewritten, and only
+    diff then withholds it -- so the local file is never sent. *remote* is the
+    configuration read once for this pass; ONLY its references are rewritten, and only
     ``configuration`` is PUT. When the local file held exactly what the remote
     held, its references are rewritten the same way and both baselines move
     to the result; otherwise nothing local changes and diff shows the remote
     change for the next pull. Returns whether the config stays pending.
     """
-    try:
-        remote = client.get_config_detail(
-            component_id=created.component_id, config_id=created.config_id, branch_id=branch_id
-        )
-    except KeboolaApiError as exc:
-        result.errors.append(_link_error(link_type, created, ErrorCode.API_ERROR, str(exc)))
-        return True
-    configuration = remote.get("configuration") if isinstance(remote, dict) else None
+    configuration = remote.get("configuration")
     if not isinstance(configuration, dict):
         return True
     rewritten = copy.deepcopy(configuration)

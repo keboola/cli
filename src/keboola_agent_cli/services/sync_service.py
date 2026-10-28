@@ -1799,11 +1799,11 @@ class SyncService(BaseService):
                 branch_id=branch_id,
                 source_dir=None if promoting else project_root / branch_path,
                 planned_rows=planned_row_refs(row_changes),
+                targets=binding.targets,
             )
             errors.extend(flow_binding.errors)
             warnings.extend(flow_binding.warnings)
-            if flow_binding.configs_rewritten or flow_binding.pending_changed:
-                manifest_dirty = True
+            manifest_dirty |= bool(flow_binding.configs_rewritten or flow_binding.pending_changed)
 
         # Save manifest with updated hashes / new IDs / removed entries
         if manifest_dirty:

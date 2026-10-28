@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from ..constants import CONFIG_FILENAME
-from ..errors import KeboolaApiError
+from ..errors import ErrorCode, KeboolaApiError
 from ..sync.branch_scope import UNKNOWN_BASE_KEY, promoted_from, same_branch
 from ..sync.manifest import Manifest, ManifestConfigRow, ManifestConfiguration
 from ._sync_models import (
@@ -33,6 +33,8 @@ from ._sync_models import (
     RUN_TARGET_COMPONENTS,
     SHARED_CODE_COMPONENT_ID,
     VARIABLES_COMPONENT_ID,
+    TargetCache,
+    TargetRead,
 )
 
 logger = logging.getLogger(__name__)
@@ -117,55 +119,82 @@ def build_link_maps(
     return maps
 
 
-def drop_gone_targets(
+def _read_target(
+    client: Any, component_id: str, config_id: str, branch_id: int | None
+) -> TargetRead:
+    try:
+        detail = client.get_config_detail(
+            component_id=component_id, config_id=config_id, branch_id=branch_id
+        )
+    except KeboolaApiError as exc:
+        gone = exc.status_code == 404
+        code = ErrorCode.LINK_UNRESOLVED if gone else ErrorCode.API_ERROR
+        return TargetRead(None, code, f"{'is gone' if gone else 'cannot be read'}: {exc}")
+    except Exception as exc:  # unreadable: no proof the target exists
+        logger.warning("Could not read %s/%s to check its rows", component_id, config_id)
+        return TargetRead(None, ErrorCode.API_ERROR, f"cannot be read: {exc}")
+    rows = detail.get("rows") if isinstance(detail, dict) else None
+    return TargetRead({str(r.get("id", "")) for r in rows or [] if isinstance(r, dict)})
+
+
+def validate_targets(
     client: Any,
     manifest: Manifest,
     branch_id: int | None,
     maps: LinkMaps,
+    cache: TargetCache,
     *,
     referenced: set[str],
     fresh_rows: set[str],
-) -> None:
-    """Keep only mappings to targets that still exist on the target branch (Devin 4400587856).
+) -> list[dict[str, str]]:
+    """Read every target a recovery would write and keep only what exists (Devin 4400587856).
 
-    A row (or config) created by an earlier push may have been deleted on the
-    remote since; the manifest still names it until a pull reconciles it.
-    Every config a durable row mapping points into is read from the target
-    once: a row it no longer lists, or a config it answers 404 for, is no
-    resolved target -- references to it stay pending, never rewritten to a
-    dead id (#929's deleted-target rule). Only the configs the pass's
-    references name (*referenced*, target ids) are read, and not one created
-    this push; *fresh_rows* (created this push) are known to exist. A target
-    that cannot be read proves nothing and is kept.
+    *referenced* are the target ids the payloads -- the REMOTE configuration
+    of a pending config, the local one of a config created this push -- name
+    or will name once rewritten. A mapping is no proof its target exists: a
+    config the target answers 404 for, or that cannot be read at all (a 5xx
+    after the retries), is forgotten, so every reference to it stays pending
+    and nothing dependent on it is rewritten. Of a config that was read, its
+    LIVE rows are what the target has, and a row mapping to a row it no longer
+    lists is dropped (#929's deleted-target rule). Configs created this push
+    and rows created this push (*fresh_rows*) are known to exist. Returns one
+    error per failed target, once per push.
     """
+    errors: list[dict[str, str]] = []
     components = {entry.id: entry.component_id for entry in target_entries(manifest, branch_id)}
     for parent in sorted(referenced - maps.created_ids):
         component_id = components.get(parent)
         if component_id is None:
             continue
-        try:
-            detail = client.get_config_detail(
-                component_id=component_id, config_id=parent, branch_id=branch_id
-            )
-        except KeboolaApiError as exc:
-            if exc.status_code == 404:
-                _forget_config(maps, component_id, parent)
-            continue
-        except Exception:  # an unreadable target proves nothing: keep its mappings
-            logger.warning("Could not read %s/%s to check its rows", component_id, parent)
-            continue
-        rows = detail.get("rows") if isinstance(detail, dict) else None
-        if not isinstance(rows, list):
-            continue
-        present = {str(row.get("id", "")) for row in rows if isinstance(row, dict)}
-        maps.rows = {
-            key: row
-            for key, row in maps.rows.items()
-            if key[0] != parent or row in present or row in fresh_rows
-        }
         key = (component_id, parent)
-        if key in maps.target_rows:
-            maps.target_rows[key] = {r for r in maps.target_rows[key] if r in present}
+        if key not in cache.reads:  # each target is read once per push
+            cache.reads[key] = _read_target(client, component_id, parent, branch_id)
+        read = cache.reads[key]
+        if read.rows is None:
+            _forget_config(maps, component_id, parent)
+            if key not in cache.reported:
+                cache.reported.add(key)
+                errors.append(
+                    {
+                        "change_type": "link_target",
+                        "error_code": read.error_code or ErrorCode.API_ERROR,
+                        "component_id": component_id,
+                        "config_id": parent,
+                        "message": (
+                            f"Linked config {component_id}/{parent} {read.message} -- the links "
+                            "to it are not rewritten and stay pending for the next push."
+                        ),
+                    }
+                )
+            continue
+        live = read.rows  # read after every create of this push
+        maps.rows = {
+            k: row
+            for k, row in maps.rows.items()
+            if k[0] != parent or row in live or row in fresh_rows
+        }
+        maps.target_rows[key] = set(live)
+    return errors
 
 
 def _forget_config(maps: LinkMaps, component_id: str, config_id: str) -> None:

@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ..errors import ErrorCode
 from ..sync.manifest import ManifestConfiguration
 
 # Sibling component that backs a transformation's variable links. A
@@ -120,6 +121,23 @@ class CreatedConfig:
 
 
 @dataclass
+class TargetRead:
+    """One linked target config as a push read it: its live row ids, or why it could not be read."""
+
+    rows: set[str] | None
+    error_code: ErrorCode | None = None
+    message: str = ""
+
+
+@dataclass
+class TargetCache:
+    """The target reads of one push, shared by Phase C and Phase D (each target read once)."""
+
+    reads: dict[tuple[str, str], TargetRead] = field(default_factory=dict)
+    reported: set[tuple[str, str]] = field(default_factory=set)
+
+
+@dataclass
 class VariableBindingResult:
     """Outcome of the Phase-C transformation-link backfill (variables + shared code).
 
@@ -134,6 +152,8 @@ class VariableBindingResult:
 
     # The ``link_pending`` flag of a transformation changed (Devin 4400588270).
     pending_changed: bool = False
+    # The push's target reads, handed on to Phase D (#929 D32).
+    targets: TargetCache = field(default_factory=TargetCache)
     errors: list[dict[str, str]] = field(default_factory=list)
     warnings: list[dict[str, Any]] = field(default_factory=list)
     configs_rewritten: int = 0

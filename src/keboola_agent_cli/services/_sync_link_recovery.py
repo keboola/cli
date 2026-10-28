@@ -10,11 +10,15 @@ row, but Phase C only looked at the configs created in that push.
 Now a created config that carries such a link records ``link_pending`` in its
 create checkpoint (like a flow, D9). After the in-push passes, every pending
 transformation is finished from the durable maps of the manifest
-(:func:`build_link_maps`), the same way Phase D recovers a flow: the remote
-configuration is read, only its link keys are rewritten, and only
-``configuration`` is PUT. The local file is rewritten only when it held what
-the remote held. The flag is cleared once every link resolves and kept while
-one still names a config or row the target does not have.
+(:func:`build_link_maps`), the same way Phase D recovers a flow (#929 D32):
+the work is derived from the REMOTE configuration -- a link changed in the UI
+since is no source-form id and stays -- every target it will name is read
+first (:func:`validate_targets`, cached for the push), only its link keys are
+rewritten, and only ``configuration`` is PUT. A target that is gone or cannot
+be read is never written. The local file is rewritten only when it held what
+the remote held. The flag is settled from the remote content: cleared once no
+link is left in source form (also one repaired in the UI, with no write), kept
+while one still names a config or row the target does not have.
 """
 
 from __future__ import annotations
@@ -42,9 +46,9 @@ from ._sync_bindings import (
 from ._sync_link_pending import (
     LinkMaps,
     build_link_maps,
-    drop_gone_targets,
     link_pending_entries,
     set_link_pending,
+    validate_targets,
 )
 from ._sync_models import (
     RUN_TARGET_COMPONENTS,
@@ -134,27 +138,48 @@ def resolve_transformation_links(
         source_dir=source_dir,
     )
     configs = [CreatedConfig(e.component_id, e.id, source_dir / e.path) for e in pending]
-    links = {c.config_id: _links_of(service, c, maps) for c in configs}
-    drop_gone_targets(
-        client,
-        manifest,
-        branch_id,
-        maps,
-        referenced=set().union(*(link.parents for link in links.values())),
-        fresh_rows=set(created_row_id_map.values()),
+    # Recovery starts from the REMOTE (#929 D32): its links are what is
+    # rewritten, and every target they name is read first (shared cache).
+    remotes = {c.config_id: _read_remote(client, c, branch_id, result) for c in configs}
+    referenced: set[str] = set()
+    for remote in remotes.values():
+        if remote is not None:
+            referenced |= resolve_links(remote["configuration"], maps).parents
+    result.errors.extend(
+        validate_targets(
+            client,
+            manifest,
+            branch_id,
+            maps,
+            result.targets,
+            referenced=referenced,
+            fresh_rows=set(created_row_id_map.values()),
+        )
     )
     for created in configs:
-        still = _recover(
-            service, client, created, _links_of(service, created, maps), manifest, branch_id, result
+        remote = remotes[created.config_id]
+        still = remote is None or _recover(
+            service, client, created, remote, manifest, branch_id, maps, result
         )
         entry = find_branch_entry(manifest, created.component_id, created.config_id, branch_id)
         result.pending_changed |= set_link_pending(entry, still)
     return result
 
 
-def _links_of(service: SyncService, created: CreatedConfig, maps: LinkMaps) -> TransformationLinks:
-    extra = (service._read_config_file(created.config_dir) or {}).get("_configuration_extra")
-    return resolve_links(extra if isinstance(extra, dict) else {}, maps)
+def _read_remote(
+    client: Any, created: CreatedConfig, branch_id: int | None, result: VariableBindingResult
+) -> dict[str, Any] | None:
+    """The remote of a pending transformation; ``None`` (it stays pending) when unreadable."""
+    try:
+        remote = client.get_config_detail(
+            component_id=created.component_id, config_id=created.config_id, branch_id=branch_id
+        )
+    except KeboolaApiError as exc:
+        result.errors.append(_error(created, ErrorCode.API_ERROR, str(exc)))
+        return None
+    if not isinstance(remote, dict) or not isinstance(remote.get("configuration"), dict):
+        return None
+    return remote
 
 
 def _target_of(
@@ -166,7 +191,9 @@ def _target_of(
     key = (component_id, str(raw))
     target = maps.configs.get(key)
     if target is None and key in maps.uncreated:
-        links.unresolved.append(f"{component_id} config {raw} is not created yet.")
+        links.unresolved.append(
+            f"{component_id} config {raw} is not created yet or cannot be read."
+        )
         return None
     if target is None and key not in maps.target_rows:
         return None  # a config outside this tree: left as it is
@@ -255,26 +282,26 @@ def _recover(
     service: SyncService,
     client: Any,
     created: CreatedConfig,
-    links: TransformationLinks,
+    remote: dict[str, Any],
     manifest: Manifest,
     branch_id: int | None,
+    maps: LinkMaps,
     result: VariableBindingResult,
 ) -> bool:
-    """Finish one pending transformation FROM THE REMOTE; returns whether it stays pending."""
+    """Finish one pending transformation FROM ITS REMOTE CONFIGURATION; True while still pending.
+
+    The links are resolved from the remote configuration -- a link changed in the UI
+    since is not a source-form id and stays as it is -- against the
+    validated *maps*. Pending is settled from that remote content: nothing
+    left in source form (a link repaired in the UI included) clears it, with
+    no write when nothing needs rewriting.
+    """
+    configuration = remote["configuration"]
+    links = resolve_links(configuration, maps)
     for message in links.unresolved:
         result.errors.append(_error(created, ErrorCode.VARIABLE_LINK_UNRESOLVED, message))
     if not links.rewrites:
         return bool(links.unresolved)
-    try:
-        remote = client.get_config_detail(
-            component_id=created.component_id, config_id=created.config_id, branch_id=branch_id
-        )
-    except KeboolaApiError as exc:
-        result.errors.append(_error(created, ErrorCode.API_ERROR, str(exc)))
-        return True
-    configuration = remote.get("configuration") if isinstance(remote, dict) else None
-    if not isinstance(configuration, dict):
-        return True
     rewritten = copy.deepcopy(configuration)
     _apply_to_api(rewritten, links)
     local_data = service._read_config_file(created.config_dir)
