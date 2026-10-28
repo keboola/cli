@@ -46,6 +46,7 @@ from ._sync_link_pending import (
     validate_targets,
 )
 from ._sync_models import (
+    AMBIGUOUS_ROW_PLACEHOLDERS_KEY,
     CREATED_FROM_KEY,
     FALLBACK_LINKS_KEY,
     FLOW_COMPONENT_ID,
@@ -218,6 +219,7 @@ def _bind_variables(
             created_rows_by_parent=created_rows_by_parent,
             errors=result.errors,
             parent_by_fallback=(VARIABLES_COMPONENT_ID, vars_placeholder) not in created_id_map,
+            ambiguous_rows=_ambiguous_rows(manifest, parent_ulid, branch_id),
         )
         # A missing-but-required values row already recorded an error.
         if vals_placeholder and row_ulid is None:
@@ -308,6 +310,13 @@ def _resolve_variables_parent(
     return None
 
 
+def _ambiguous_rows(manifest: Manifest, parent_id: str, branch_id: int | None) -> set[str]:
+    """The row placeholders recorded as ambiguous under *parent_id* (``ambiguous_row_placeholders``)."""
+    entry = find_branch_entry(manifest, VARIABLES_COMPONENT_ID, parent_id, branch_id)
+    recorded = entry.metadata.get(AMBIGUOUS_ROW_PLACEHOLDERS_KEY) if entry is not None else None
+    return {str(p) for p in recorded or []}
+
+
 def _remember_fallback(
     manifest: Manifest,
     created: CreatedConfig,
@@ -360,6 +369,7 @@ def _resolve_variables_row(
     created_rows_by_parent: dict[str, list[str]],
     errors: list[dict[str, str]],
     parent_by_fallback: bool = True,
+    ambiguous_rows: set[str] | None = None,
 ) -> str | None:
     """Resolve a transformation's ``variables_values_id`` placeholder.
 
@@ -379,7 +389,9 @@ def _resolve_variables_row(
         mapped = created_row_id_map.get((parent_ulid, vals_placeholder))
         if mapped is not None:
             return mapped
-        if not parent_by_fallback:
+        # An ambiguous placeholder never resolves by itself -- also not under a
+        # parent the fallback chose, where one surviving sibling would win (Astra).
+        if not parent_by_fallback or vals_placeholder in (ambiguous_rows or set()):
             errors.append(
                 {
                     "change_type": "variable_link",

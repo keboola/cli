@@ -202,12 +202,25 @@ def _with_fallbacks(maps: LinkMaps, entry: ManifestConfiguration | None) -> Link
     links = (entry.metadata.get(FALLBACK_LINKS_KEY) if entry is not None else None) or {}
     if not links:
         return maps
-    chosen = {
-        (str(key).split("/", 1)[0], str(key).split("/", 1)[1]): str(target)
-        for key, target in links.items()
-        if "/" in str(key)
-    }
-    return replace(maps, configs={**maps.configs, **chosen})
+    chosen: dict[tuple[str, str], str] = {}
+    blocked: set[tuple[str, str]] = set()
+    for key, target in links.items():
+        if "/" not in str(key):
+            continue
+        component_id, named = str(key).split("/", 1)
+        # Validated like a durable mapping: a chosen config that is gone or
+        # cannot be read is never written -- the link stays pending and the
+        # record is kept for the push that can (Astra).
+        if (component_id, str(target)) in maps.failed:
+            blocked.add((component_id, named))
+        else:
+            chosen[(component_id, named)] = str(target)
+    return replace(
+        maps,
+        configs={**maps.configs, **chosen},
+        uncreated=maps.uncreated | blocked,
+        failed=maps.failed | blocked,
+    )
 
 
 def _read_remote(

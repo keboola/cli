@@ -2013,3 +2013,53 @@ def test_a_fallback_parent_is_finished_once_its_row_exists(tmp_path: Path) -> No
     metadata = _entry_of(w, "New step")
     assert "link_pending" not in metadata
     assert "fallback_links" not in metadata
+
+
+# ---------------------------------------------------------------------------
+# Astra on 413e9287: fallback choices are validated and never bypass ambiguity
+# ---------------------------------------------------------------------------
+
+
+def _fallback_over_ambiguous_rows(tmp_path: Path) -> DiffWorld:
+    """New A ("a-ref") with Prod and Test both carrying "dup-row"; T names unclaimed-parent/dup-row."""
+    w = DiffWorld(tmp_path)
+    _seed_variables(w, "existing-prod-vars", ["Prod", "Test"])
+    sql_id = w.api.seed(VARIANTS["sql"], name="Template")
+    w.init()
+    w.pull()
+    _new_config_from(w, "existing-prod-vars", "A vars", "a-ref", ["dup-row", "dup-row"])
+    _new_transformation(
+        w, sql_id, {"variables_id": "unclaimed-parent", "variables_values_id": "dup-row"}
+    )
+    return w
+
+
+def test_a_fallback_choice_deleted_on_the_remote_is_never_written(tmp_path: Path) -> None:
+    """Astra P1: the fallback chose A, A is deleted remotely -- no PUT names A, T stays pending."""
+    w = _fallback_over_ambiguous_rows(tmp_path)
+    w.svc.push(alias="prod", project_root=w.root)
+    assert _entry_of(w, "New step").get("fallback_links")
+    a_id = _remote_named(w, "A vars")["id"]
+    del w.api.remote[PROD][(VARS, a_id)]
+
+    w.svc.push(alias="prod", project_root=w.root)
+
+    configuration = _remote_named(w, "New step")["configuration"]
+    assert configuration["variables_id"] == "unclaimed-parent"
+    assert a_id not in str(configuration)
+    metadata = _entry_of(w, "New step")
+    assert metadata.get("link_pending") is True
+    assert metadata.get("fallback_links")
+
+
+def test_a_fallback_parent_never_resolves_an_ambiguous_row(tmp_path: Path) -> None:
+    """Astra P1: Prod fails, Test survives -- the ambiguous "dup-row" does not become Test."""
+    w = _fallback_over_ambiguous_rows(tmp_path)
+    _fail_once(w, "_create_row", "Prod", KeboolaApiError("refused", 500, ErrorCode.API_ERROR))
+
+    w.svc.push(alias="prod", project_root=w.root)
+
+    assert [r["name"] for r in _remote_named(w, "A vars")["rows"]] == ["Test"]
+    configuration = _remote_named(w, "New step")["configuration"]
+    assert configuration["variables_values_id"] == "dup-row"
+    assert _entry_of(w, "New step").get("link_pending") is True

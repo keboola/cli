@@ -214,7 +214,9 @@ These lists keep `error`, because their entries are not failed items with an err
   link stays pending and every push warns until no row file carries the id any more.
   When the fallback chose the variables config but the values row failed to create, the
   choice is recorded on the transformation (`fallback_links`) and the push that creates
-  the row finishes the link.
+  the row finishes the link -- unless the chosen config is gone or cannot be read by
+  then: nothing is written, the link stays pending and the record is kept. An ambiguous
+  row id is never resolved through that fallback either.
 - **A transformation created in the same push as its variables values row or shared-code
   row** keeps `link_pending` the same way while that row is missing: the push that creates
   the row also sets `variables_values_id` / `shared_code_row_ids` and the `{{<row id>}}`
