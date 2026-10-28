@@ -545,6 +545,9 @@ internal state:
   `sync pull` drops its manifest entries and removes their local directories.
   Those removals are reported with pull action `"ignored"` -- distinct from
   `"removed"`, which means the config was genuinely deleted on the remote.
+  *(since vNEXT)* A dev-branch record a promote push made (`sync push --branch
+  <dev>` from `main/`) is kept untouched instead, so un-ignoring the component
+  does not make the next promote create a duplicate dev config.
 - **Diff/push never see ignored configs**, on either side of the comparison:
   a stale local directory for an ignored component is filtered out too, so it
   can never be classified as `DELETED` and pushed as a remote deletion.

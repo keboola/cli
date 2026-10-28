@@ -704,22 +704,33 @@ def _source_row_ids(manifest: Manifest, cfg: ManifestConfiguration) -> dict[str,
     target entry but tracked, with its source id, under the source entry. The
     source id is kept apart from the target diff identity (risk 71): it is
     what the row map and ``promoted_from_id`` record once the row is created.
-    The source entry is the one on the branch registered for the source tree.
     """
     promoted = promoted_from(cfg)
     if promoted is None or not promoted.config_id:
         return {}
-    # The source branch by identity, never via branch_tree_path: that maps an
-    # unregistered id to the default tree (D28, risk 73).
+    source = promote_source(manifest, cfg, promoted)
+    return {row.path: row.id for row in source.rows} if source is not None else {}
+
+
+def promote_source(
+    manifest: Manifest, cfg: ManifestConfiguration, promoted: PromotedFrom
+) -> ManifestConfiguration | None:
+    """The source-tree entry a promote entry stands for, or ``None``.
+
+    Found on the branch registered for the source tree, by branch identity,
+    never via :func:`branch_tree_path` -- that maps an unregistered id to the
+    default tree (D28, risk 73). By the association's config id, or, while
+    that is still empty (an authored config), by the entry's path.
+    """
     trees = [b.id for b in manifest.branches if b.path == promoted.tree]
     if not trees:
-        return {}
+        return None
     for source in manifest.configurations:
         if (
             source is not cfg
             and source.component_id == cfg.component_id
-            and source.id == promoted.config_id
             and same_branch(manifest, source.branch_id, trees[0])
+            and (source.id == promoted.config_id if promoted.config_id else source.path == cfg.path)
         ):
-            return {row.path: row.id for row in source.rows}
-    return {}
+            return source
+    return None

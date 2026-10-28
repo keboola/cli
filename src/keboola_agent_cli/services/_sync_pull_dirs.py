@@ -128,15 +128,18 @@ def finalize_kept_entries(
 
     A promote entry follows its source config when this pull moved that
     config's directory (a rename, D13a), so the next promote still finds it
-    and does not create the config on the branch again. It is dropped -- its
-    files are never touched -- when its component is now ignored, or when its
-    source config is gone from the manifest and its directory is gone too
-    (D13c).
+    and does not create the config on the branch again. An entry of an ignored
+    component is carried untouched: the ignore filter keeps it out of diff and
+    push, and it is back in scope, still associated, once the component is
+    un-ignored -- dropping it made the next promote create a duplicate (risk
+    75). It is dropped -- its files are never touched -- only when its source
+    config is gone from the manifest and its directory is gone too (D13c).
     """
     paths = {(c.component_id, c.id): c.path for c in pulled}
     carried: list[ManifestConfiguration] = []
     for entry in kept:
         if entry.component_id in ignored_components:
+            carried.append(entry)  # untouched until the component is un-ignored
             continue
         association = promoted_from(entry)
         if association is not None and branch_dir.parent / association.tree != branch_dir:

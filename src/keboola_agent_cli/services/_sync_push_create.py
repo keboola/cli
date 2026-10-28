@@ -150,6 +150,17 @@ def record_created_config(
         entry.metadata[PROMOTED_FROM_KEY] = association.as_metadata()
         if outcome.pending_refs:
             entry.metadata[REBIND_PENDING_KEY] = outcome.pending_refs
+    else:
+        # In the create's own checkpoint: a crash right after it never leaves
+        # a promote entry unlinked (risk 76).
+        link_promote_entries(
+            manifest,
+            tree=target.branch_path,
+            component_id=component_id,
+            path=config_path_str,
+            config_id=new_id,
+        )
+        link_promote_rows(manifest, tree=target.branch_path, source=entry)
     try:
         checkpoint_manifest(target.project_root, manifest, f"{component_id}/{new_id}")
     except ManifestCheckpointError as fatal:
@@ -195,14 +206,6 @@ def record_created_config(
     elif source_config_id:
         ledger.promoted_id_map[(component_id, source_config_id)] = new_id
     if not promote:
-        link_promote_entries(
-            manifest,
-            tree=target.branch_path,
-            component_id=component_id,
-            path=config_path_str,
-            config_id=new_id,
-        )
-        link_promote_rows(manifest, tree=target.branch_path, source=entry)
         ledger.created_configs.append(
             CreatedConfig(
                 component_id=component_id, config_id=new_id, config_dir=outcome.config_dir

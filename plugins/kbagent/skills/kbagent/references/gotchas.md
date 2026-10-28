@@ -139,7 +139,12 @@ These lists keep `error`, because their entries are not failed items with an err
   a reference to such a production row maps to the dev row that already exists. An edit to
   it after the promote is `modified`, not `modified` plus `conflict`. Production
   `sync diff` lists the record under `orphaned` with reason `promoted_from_this_tree`
-  (nothing to do).
+  (nothing to do). A production pull keeps the dev-branch record of a component you
+  add to `ignoredComponents` as it is (diff and push skip it while it is ignored), so
+  after you remove the ignore and pull, the next promote updates that dev config again.
+  Before, the pull dropped the record and the promote created a second config there. A
+  record left without its production id by a push that died right after creating the
+  config is linked by the next push.
 - **Deleting a promoted folder from `main/`** is a local delete for the dev branch:
   `sync push --branch <dev>` lists it under `skipped_deletions`, and
   `sync push --force --branch <dev>` deletes the dev config only. Production is untouched.

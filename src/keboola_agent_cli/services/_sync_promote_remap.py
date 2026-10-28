@@ -286,7 +286,7 @@ class PromoteRemap:
                 configs[(entry.component_id, association.config_id)] = entry.id
             for row in entry.rows:
                 source = str((row.metadata or {}).get(PROMOTED_ROW_KEY) or "")
-                if source and source != row.id:
+                if source:  # a row mapped to its own id is resolved too (risk 77)
                     rows[(entry.id, source)] = row.id
         configs.update(created_configs)
         rows.update(created_rows)

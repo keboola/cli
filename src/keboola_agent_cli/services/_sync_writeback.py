@@ -22,6 +22,7 @@ from ..sync.branch_scope import (
     PromotedFrom,
     branch_tree_path,
     find_branch_entry,
+    promote_source,
     promoted_from,
     same_branch,
 )
@@ -104,6 +105,34 @@ def link_promote_entries(
             and cfg.path == path
         ):
             cfg.metadata[PROMOTED_FROM_KEY] = PromotedFrom(tree, config_id).as_metadata()
+
+
+def reconcile_promote_links(manifest: Manifest) -> bool:
+    """Link every promote entry to the source config and rows it stands for (risk 76).
+
+    Run on every push and idempotent: an entry whose association is still
+    empty while its source directory is now tracked with an id (a create
+    whose link a crash or an older version skipped) names that config, and
+    every entry's rows learn the source rows they came from. Returns whether
+    the manifest changed.
+    """
+    changed = False
+    for cfg in manifest.configurations:
+        association = promoted_from(cfg)
+        if association is None:
+            continue
+        source = promote_source(manifest, cfg, association)
+        if source is None:
+            continue
+        if not association.config_id:
+            cfg.metadata[PROMOTED_FROM_KEY] = PromotedFrom(
+                association.tree, source.id
+            ).as_metadata()
+            changed = True
+        before = [row.metadata.get(PROMOTED_ROW_KEY) for row in cfg.rows]
+        link_promote_rows(manifest, tree=association.tree, source=source)
+        changed = changed or before != [row.metadata.get(PROMOTED_ROW_KEY) for row in cfg.rows]
+    return changed
 
 
 def link_promote_rows(manifest: Manifest, *, tree: str, source: ManifestConfiguration) -> None:

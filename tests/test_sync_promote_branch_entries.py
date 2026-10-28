@@ -22,6 +22,7 @@ import pytest
 import yaml
 
 from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
+from keboola_agent_cli.services import _sync_push_create
 from keboola_agent_cli.services._sync_bindings import _refresh_binding_hashes
 from keboola_agent_cli.services._sync_models import CreatedConfig
 from keboola_agent_cli.services._sync_promote_remap import (
@@ -802,14 +803,18 @@ def test_prod_pull_drops_a_promote_entry_whose_dir_is_gone(tmp_path: Path) -> No
     assert _entries(w, dev_id, DEV) == []
 
 
-def test_prod_pull_drops_promote_entries_of_ignored_components(tmp_path: Path) -> None:
+def test_prod_pull_keeps_promote_entries_of_ignored_components_untouched(
+    tmp_path: Path,
+) -> None:
     p = _authored_and_promoted(tmp_path)
     w, config_dir, dev_id = p.world, p.config_dir, p.dev_id
+    (before,) = _entries(w, dev_id, DEV)
     manifest = load_manifest(w.root)
     manifest.ignored_components = [VARIANTS["extractor"].component_id]
     save_manifest(w.root, manifest)
     w.pull()
-    assert _entries(w, dev_id, DEV) == []
+    # Risk 75 revises D13c: kept as it was, back in scope once un-ignored.
+    assert _entries(w, dev_id, DEV) == [before]
     assert config_dir.is_dir()  # never deleted because of another branch's entry
 
 
@@ -2650,3 +2655,105 @@ def test_rows_promoted_before_production_created_them_map_to_the_dev_rows(
 def _prod_id_of(w: World, component_id: str) -> str:
     (prod_id,) = [cid for comp, cid in w.api.remote[PROD] if comp == component_id]
     return prod_id
+
+
+# ===========================================================================
+# Round 16 (risks 75-77)
+# ===========================================================================
+
+
+# -- risk 75: ignore, pull, un-ignore, pull: the promote still updates D -------
+
+
+def test_unignored_component_promotes_into_its_dev_config_not_a_duplicate(
+    tmp_path: Path,
+) -> None:
+    v = VARIANTS["extractor"]
+    seeded = _seeded(tmp_path, v)
+    w, cid = seeded.world, seeded.config_id
+    semantic_edit(w.config_dir(cid) / CONFIG_FILE)
+    w.push(branch=DEV)  # P promoted as D
+    dev_id = _dev_id_of(w, v.component_id)
+
+    for ignored in ([v.component_id], []):
+        manifest = load_manifest(w.root)
+        manifest.ignored_components = ignored
+        save_manifest(w.root, manifest)
+        w.pull()
+    semantic_edit(w.config_dir(cid) / CONFIG_FILE)
+    w.push(branch=DEV)
+
+    assert list(w.api.remote[DEV]) == [(v.component_id, dev_id)]  # no duplicate
+    dev_config = w.api.get(DEV, v.component_id, dev_id)["configuration"]
+    assert dev_config["parameters"]["edit_marker"] == 2  # D got the second edit
+
+
+# -- risk 76: a crash right after the production create's checkpoint ---------
+
+
+def test_crash_after_the_production_create_checkpoint_keeps_the_promote_link(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    v = VARIANTS["rows"]
+    w = World(tmp_path)
+    w.api.types[v.component_id] = v.component_type
+    w.api.types["keboola.flow"] = "other"
+    w.init()
+    w.pull()
+    author_config(w.root / "main", v)
+    for _ in range(2):
+        w.push(branch=DEV)  # D, d1
+    dev_ext = _dev_id_of(w, v.component_id)
+
+    def crash(*args: Any, **kwargs: Any) -> None:
+        raise KeboolaApiError("crashed after the checkpoint", 500, ErrorCode.API_ERROR)
+
+    monkeypatch.setattr(_sync_push_create, "writeback_after_push", crash)
+    w.svc.push(alias="prod", project_root=w.root)  # P created and checkpointed, then dies
+    monkeypatch.undo()
+    for _ in range(2):
+        w.push()  # the retry creates r1
+
+    prod_ext = _prod_id_of(w, v.component_id)
+    (r1,) = [
+        r["id"] for r in w.api.get(PROD, v.component_id, prod_ext)["rows"] if r["name"] == "Row 1"
+    ]
+    (d1,) = [
+        r["id"] for r in w.api.get(DEV, v.component_id, dev_ext)["rows"] if r["name"] == "Row 1"
+    ]
+    body = _flow_body(v.component_id, prod_ext)
+    body["tasks"][0]["task"]["configRowIds"] = [r1]
+    w.api.remote[PROD][("keboola.flow", "cfg-flow")] = {
+        "id": "cfg-flow",
+        "name": "Nightly",
+        "description": "",
+        "configuration": body,
+        "rows": [],
+        "isDisabled": False,
+    }
+    w.pull()
+    w.push(branch=DEV)
+
+    task = _dev_flow(w)["configuration"]["tasks"][0]["task"]
+    assert (task["configId"], task["configRowIds"]) == (dev_ext, [d1])
+
+
+# -- risk 77: a row mapped to its own id is resolved ---------------------------
+
+
+def test_a_row_mapped_to_its_own_id_resolves_the_unit() -> None:
+    http = "keboola.ex-http"
+    dev = ManifestConfiguration(
+        branchId=DEV,
+        componentId=http,
+        id="D",
+        path="extractor/keboola.ex-http/orders",
+        metadata={"promoted_from": {"tree": "main", "config_id": "P"}},
+        rows=[ManifestConfigRow(id="r1", path="rows/a", metadata={"promoted_from_id": "r1"})],
+    )
+    remap = PromoteRemap()
+    remap.refresh(_manifest((PROD, "main"), (DEV, "dev"), configurations=[dev]), DEV, {}, {})
+    body = _flow_body(http, "P")
+    body["tasks"][0]["task"]["configRowIds"] = ["r1"]
+    task = remap.apply("keboola.flow", body)["tasks"][0]["task"]
+    assert (task["configId"], task["configRowIds"]) == ("D", ["r1"])

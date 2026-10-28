@@ -148,7 +148,7 @@ from ._sync_storage import (
     write_per_config_jobs,
     write_storage_metadata,
 )
-from ._sync_writeback import stamp_updated_config
+from ._sync_writeback import reconcile_promote_links, stamp_updated_config
 from .base import BaseService, ClientFactory, find_default_branch_id
 from .data_app_service import (
     DataScienceClientFactory,
@@ -1610,7 +1610,8 @@ class SyncService(BaseService):
         # whose records carry non-string values such as ``after_length``).
         warnings: list[dict[str, Any]] = []
         pushed_details: list[dict[str, str]] = []
-        manifest_dirty = False
+        # A promote entry a crash left unlinked is linked now (risk 76).
+        manifest_dirty = reconcile_promote_links(manifest)
 
         # A data-app CREATE needs a Data Science client so its runtime type
         # travels into the target (CLI-8). Built only when the changeset
