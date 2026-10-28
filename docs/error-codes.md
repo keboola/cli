@@ -159,6 +159,7 @@ A command that fails with an error code exits with the code's `Exit` value below
 | `LINK_UNRESOLVED` | 1 | `api` | `sync push` could not re-point a shared-code row id or a task `configRowIds` entry to a row created in the same push; the id keeps its old value |
 | `SYNC_CONFLICT` | 1 | `conflict` | `sync pull --force` aborted: local and remote both changed since the last pull (`details.conflicts` lists them) |
 | `SYNC_LEGACY_BOUNDARY` | 1 | `conflict` | `sync push` refused one config: the working tree predates statement-boundary tracking, so pushing it would merge separate SQL statements into one. Run `sync pull` first |
+| `COMPANION_UNREADABLE` | 1 | `conflict` | `sync push` refused one config: its `pyproject.toml` states no usable `[project].dependencies` list (no key, not valid TOML), `_config.yml` has no inline `packages`, and the remote packages could not be read, so a push would drop them. Fix the file or add `packages` inline |
 
 ### Encryption
 

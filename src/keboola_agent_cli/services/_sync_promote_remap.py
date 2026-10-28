@@ -39,7 +39,7 @@ from ..sync.diff_engine import config_hash
 from ..sync.manifest import Manifest
 from ._data_app_bodies import DATA_APP_COMPONENT_ID
 from ._sync_baseline import apply_stamp, config_baseline
-from ._sync_bindings import _rewrite_list_placeholders, task_config_ref
+from ._sync_bindings import _rewrite_list_placeholders, put_configuration_only, task_config_ref
 from ._sync_models import (
     FLOW_COMPONENT_ID,
     ORCHESTRATOR_COMPONENT_ID,
@@ -61,6 +61,7 @@ _RUN_TARGET_COMPONENTS = frozenset(
     {FLOW_COMPONENT_ID, ORCHESTRATOR_COMPONENT_ID, SCHEDULER_COMPONENT_ID}
 )
 _LINK_KEYS = ("variables_id", "shared_code_id")
+PROMOTE_REMAP_DESCRIPTION = "Remap promoted config IDs via kbagent sync push"
 
 
 def has_references(component_id: str, configuration: dict[str, Any]) -> bool:
@@ -107,7 +108,8 @@ class PromoteRemap:
         sent: ``(component_id, target id)`` -> the payload a config that
             references others was sent with this push.
         expected: Source keys of the configs this push plans to create.
-        expected_rows: Source ids of the rows this push plans to create.
+        expected_rows: ``(component_id, parent id, source row id)`` of the rows
+            this push plans to create; the parent is the diff's parent id.
         gone_configs: ``(component_id, target id)`` of configs the diff found
             deleted on the target (``remote_deleted``) -- never a resolved target.
         gone_rows: ``(target parent id, target row id)`` likewise (risk 84).
@@ -120,7 +122,7 @@ class PromoteRemap:
     rows: dict[tuple[str, str], str] = field(default_factory=dict)
     sent: dict[tuple[str, str], SentPayload] = field(default_factory=dict)
     expected: set[tuple[str, str]] = field(default_factory=set)
-    expected_rows: set[str] = field(default_factory=set)
+    expected_rows: set[tuple[str, str, str]] = field(default_factory=set)
     gone_configs: set[tuple[str, str]] = field(default_factory=set)
     gone_rows: set[tuple[str, str]] = field(default_factory=set)
     hold: Callable[[str, str, list[list[str]], set[tuple[str, ...]] | None], None] | None = None
@@ -170,11 +172,12 @@ class PromoteRemap:
             if not c.get("is_row") and c.get("config_id")
         }
         # A row's source identity: its id in the source config (risk 72), which
-        # is all a new row under an already promoted config has.
+        # is all a new row under an already promoted config has -- scoped by
+        # its parent (S2): the same row id under another config is another row.
         self.expected_rows = {
-            str(c.get("source_row_id") or c["config_id"])
+            (c["component_id"], str(c.get("parent_config_id") or ""), str(source))
             for c in added
-            if c.get("is_row") and (c.get("source_row_id") or c.get("config_id"))
+            if c.get("is_row") and (source := c.get("source_row_id") or c.get("config_id"))
         }
 
     def note_gone(self, changes: list[dict[str, Any]]) -> None:
@@ -254,7 +257,9 @@ class PromoteRemap:
                 open_unit = existing is None or any(r not in existing for r in row_ids)
             else:
                 open_unit = open_unit or any(
-                    (parent, r) in self.rows or r in self.expected_rows or (*key, r) in marked
+                    (parent, r) in self.rows
+                    or self._row_expected(component, config_id, parent, r)
+                    or (*key, r) in marked
                     for r in row_ids
                 )
             if open_unit:
@@ -289,13 +294,19 @@ class PromoteRemap:
             target_row = self.rows.get((parent, row_id))
             if target_row is not None:
                 mapped.append(target_row)
-            elif row_id in self.expected_rows or parent != config_id:
+            elif self._row_expected(component, config_id, parent, row_id) or parent != config_id:
                 return None
             else:
                 mapped.append(row_id)
         if not self._target_held(component, parent, mapped, read=parent != config_id):
             return None
         return PromoteUnit(parent, mapped)
+
+    def _row_expected(self, component: str, config_id: str, parent: str, row_id: str) -> bool:
+        """True iff this push plans to create *row_id* under this unit's config (S2)."""
+        return any(
+            (component, owner, row_id) in self.expected_rows for owner in {config_id, parent}
+        )
 
     def _identity_unit(
         self, component: str, config_id: str, row_ids: list[str]
@@ -529,7 +540,9 @@ def finish_promote_rebind(
         )
         if payload != sent.configuration:
             try:
-                response = _put_configuration(client, component_id, config_id, payload, branch_id)
+                response = put_configuration_only(
+                    client, component_id, config_id, payload, branch_id, PROMOTE_REMAP_DESCRIPTION
+                )
             except KeboolaApiError as exc:
                 errors.append(_link_error(component_id, config_id, exc))
                 continue
@@ -601,19 +614,6 @@ def recover_pending(
         _settle(manifest, remap, component_id, config_id, branch_id, content, warnings)
 
 
-def _put_configuration(
-    client: Any, component_id: str, config_id: str, configuration: dict[str, Any], branch_id: Any
-) -> Any:
-    """PUT only ``configuration``: name, description and enabled state stay as they are."""
-    return client.update_config(
-        component_id=component_id,
-        config_id=config_id,
-        configuration=configuration,
-        change_description="Remap promoted config IDs via kbagent sync push",
-        branch_id=branch_id,
-    )
-
-
 def _rebind_on_target(
     client: Any,
     manifest: Manifest,
@@ -638,7 +638,9 @@ def _rebind_on_target(
     rewritten = remap.apply(component_id, configuration, target=True)
     if rewritten == configuration:
         return configuration
-    response = _put_configuration(client, component_id, config_id, rewritten, branch_id)
+    response = put_configuration_only(
+        client, component_id, config_id, rewritten, branch_id, PROMOTE_REMAP_DESCRIPTION
+    )
     entry = find_branch_entry(manifest, component_id, config_id, branch_id)
     before = config_hash(api_config_to_local(component_id, remote, config_id))
     if not keep_baseline and entry is not None and entry.metadata.get("pull_config_hash") == before:

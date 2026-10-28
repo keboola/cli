@@ -23,11 +23,31 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from ..constants import CONFIG_HASH_VERSION, CONFIG_HASH_VERSION_KEY
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
-from ..sync.branch_scope import PROMOTED_FROM_KEY, PromotedFrom, branch_tree_path
+from ..sync.branch_scope import (
+    PROMOTED_FROM_KEY,
+    PromotedFrom,
+    branch_tree_path,
+    find_branch_entry,
+    same_branch,
+)
+from ..sync.config_format import api_config_to_local
+from ..sync.diff_engine import config_hash
 from ..sync.manifest import Manifest, save_manifest
 from ._sync_baseline import apply_stamp, config_baseline
-from ._sync_models import REBIND_PENDING_KEY, CreatedConfig, CreateOutcome
+from ._sync_companions import merge_with_remote, record_companions
+from ._sync_link_pending import carries_transformation_link
+from ._sync_models import (
+    AMBIGUOUS_ROW_PLACEHOLDERS_KEY,
+    CREATED_FROM_KEY,
+    LINK_PENDING_KEY,
+    REBIND_PENDING_KEY,
+    RUN_TARGET_COMPONENTS,
+    CreatedConfig,
+    CreateOutcome,
+)
+from ._sync_untracked import register_adopted_rows
 from ._sync_writeback import (
     link_promote_entries,
     link_promote_rows,
@@ -115,11 +135,120 @@ class CreateLedger:
     created_id_map: dict[tuple[str, str], str] = field(default_factory=dict)
     promoted_id_map: dict[tuple[str, str], str] = field(default_factory=dict)
     created_configs: list[CreatedConfig] = field(default_factory=list)
+    # ``(component_id, config dir path)`` -> new id of every config this push
+    # created: the identity of a new config's rows until then (D7). Two new
+    # directories of one component both have the empty id.
+    created_by_path: dict[tuple[str, str], str] = field(default_factory=dict)
+    # ``(component_id, config dir path)`` -> the placeholder its file id is,
+    # for an untracked new config dir; decided once, before any create.
+    placeholders: dict[tuple[str, str], str] = field(default_factory=dict)
+    # ``(component_id, config dir path)`` -> the warning of a dir whose file id
+    # another new dir claims too: neither maps.
+    ambiguous: dict[tuple[str, str], dict[str, Any]] = field(default_factory=dict)
+
+    # Placeholder-claim warnings of new rows (their creates have no hook).
+    row_warnings: list[dict[str, Any]] = field(default_factory=list)
+    # ``(component_id, config dir path)`` of a NEW config -> the row
+    # placeholders its row dirs share: recorded on its entry when it is created.
+    ambiguous_rows: dict[tuple[str, str], set[str]] = field(default_factory=dict)
+
+    def uncreated_claims(self) -> set[tuple[str, str]]:
+        """``(component_id, placeholder)`` planned for a new dir this push did not create."""
+        return {
+            (component_id, placeholder)
+            for (component_id, path), placeholder in self.placeholders.items()
+            if (component_id, path) not in self.created_by_path
+        }
+
+    def claimed_ids(self, component_id: str) -> set[str]:
+        """Every placeholder this push planned for a new *component_id* dir, mapped or not."""
+        mapped = {p for (comp, _), p in self.placeholders.items() if comp == component_id}
+        return mapped | {
+            str(w["placeholder"]) for (comp, _), w in self.ambiguous.items() if comp == component_id
+        }
+
+    @classmethod
+    def plan(
+        cls,
+        service: SyncService,
+        manifest: Manifest,
+        changes: list[dict[str, Any]],
+        target: CreateTarget,
+    ) -> CreateLedger:
+        """The ledger of a push, with the placeholder of each untracked new config and row (Astra).
+
+        A file id is a placeholder only when no entry of the manifest owns it
+        -- as its current id or as the ``created_from_id`` of a config an
+        earlier push created from it -- so a copy still carrying a created
+        config's placeholder never steals it. Decided before any create, so
+        the push's own creates cannot change the answer. Two new dirs carrying
+        the same free id: neither maps, and both creates report it. Rows the
+        same way, scoped by their parent (:func:`_plan_rows`).
+        """
+        ledger = cls()
+        if target.branch_path != branch_tree_path(manifest, target.branch_id):
+            return ledger  # the promote path maps by source ids (D24)
+        owned = {(e.component_id, e.id) for e in manifest.configurations} | {
+            (e.component_id, str(e.metadata[CREATED_FROM_KEY]))
+            for e in manifest.configurations
+            if e.metadata.get(CREATED_FROM_KEY)
+        }
+        tracked = {
+            (e.component_id, e.path)
+            for e in manifest.configurations
+            if same_branch(manifest, e.branch_id, target.branch_id)
+        }
+        claims: dict[tuple[str, str], list[str]] = {}
+        for change in changes:
+            key = (change["component_id"], change.get("path", ""))
+            if change.get("is_row") or change["change_type"] != "added" or key in tracked:
+                continue
+            data = service._read_config_file(target.project_root / target.branch_path / key[1])
+            file_id = str(((data or {}).get("_keboola") or {}).get("config_id") or "")
+            if file_id and (key[0], file_id) not in owned:
+                claims.setdefault((key[0], file_id), []).append(key[1])
+        for (component_id, file_id), paths in claims.items():
+            if len(paths) == 1:
+                ledger.placeholders[(component_id, paths[0])] = file_id
+                continue
+            for path in paths:
+                ledger.ambiguous[(component_id, path)] = _ambiguity_warning(
+                    component_id, path, file_id, paths, "config folders"
+                )
+        ledger.row_warnings = _plan_rows(service, manifest, changes, target, ledger.ambiguous_rows)
+        return ledger
 
     def parent_id(self, component_id: str, parent_config_id: str) -> str:
         """The id a row change's parent has on the target after this push's creates."""
         key = (component_id, parent_config_id)
         return self.created_id_map.get(key, self.promoted_id_map.get(key, parent_config_id))
+
+    def row_parent(self, change: dict[str, Any]) -> str:
+        """The target id of a row change's parent; raises when its parent was not created.
+
+        A row under a new config directory names that directory
+        (``parent_path``, empty ``parent_config_id``): its parent is the config
+        this push created there. When that create failed, or never happened,
+        the row is skipped with a dependency error -- the next push creates
+        the parent and then the row.
+        """
+        component_id = change["component_id"]
+        parent_config_id = change.get("parent_config_id", "")
+        parent_path = change.get("parent_path", "")
+        if parent_path and not parent_config_id:
+            new_id = self.created_by_path.get((component_id, parent_path))
+            if not new_id:
+                raise KeboolaApiError(
+                    message=(
+                        f"Row {parent_path}/{change.get('path', '')} was not created: its "
+                        f"config {component_id} at {parent_path} was not created in this push "
+                        f"(see its error). The next 'kbagent sync push' creates both."
+                    ),
+                    status_code=0,
+                    error_code=ErrorCode.PARENT_CONFIG_NOT_TRACKED,
+                )
+            return new_id
+        return self.parent_id(component_id, parent_config_id)
 
 
 @dataclass(frozen=True)
@@ -174,6 +303,23 @@ def record_created_config(
         if outcome.pending_refs:
             entry.metadata[REBIND_PENDING_KEY] = outcome.pending_refs
     else:
+        # Also in the create's own checkpoint (D9): the placeholder it was
+        # created from, and -- for a flow, orchestration or schedule -- that its
+        # references are not rewritten yet; Phase D clears the flag.
+        placeholder = writeback.previous_id or ledger.placeholders.get(
+            (component_id, config_path_str), ""
+        )
+        if placeholder and placeholder != new_id:
+            entry.metadata[CREATED_FROM_KEY] = placeholder
+        if (component_id, config_path_str) in ledger.ambiguous:
+            warnings.append(ledger.ambiguous[(component_id, config_path_str)])
+        shared = ledger.ambiguous_rows.get((component_id, config_path_str))
+        if shared:  # in the create's own checkpoint: a retry must not forget it
+            entry.metadata[AMBIGUOUS_ROW_PLACEHOLDERS_KEY] = sorted(shared)
+        if component_id in RUN_TARGET_COMPONENTS or carries_transformation_link(
+            component_id, outcome.configuration
+        ):
+            entry.metadata[LINK_PENDING_KEY] = True
         # In the create's own checkpoint: a crash right after it never leaves
         # a promote entry unlinked (risk 76).
         link_promote_entries(
@@ -211,6 +357,7 @@ def record_created_config(
             fatal.add_note(f"The local file could not be updated either: {secondary}")
         raise fatal from fatal.__cause__
 
+    ledger.created_by_path[(component_id, config_path_str)] = new_id
     writeback_after_push(
         service,
         outcome.pristine_data,
@@ -226,10 +373,12 @@ def record_created_config(
         warnings.append(stamp.warning)
     entry.metadata["pull_hash"] = hashes.file_hash
     entry.metadata["pull_config_hash"] = stamp.cfg_hash
-    entry.metadata["pull_extra_hashes"] = hashes.extra_hashes
+    record_companions(entry.metadata, hashes.extra_hashes)
     apply_stamp(entry.metadata, stamp)
 
-    if writeback.previous_id:
+    if not promote and entry.metadata.get(CREATED_FROM_KEY):
+        ledger.created_id_map[(component_id, str(entry.metadata[CREATED_FROM_KEY]))] = new_id
+    elif writeback.previous_id:
         ledger.created_id_map[(component_id, writeback.previous_id)] = new_id
     elif source_config_id:
         ledger.promoted_id_map[(component_id, source_config_id)] = new_id
@@ -253,3 +402,187 @@ def record_created_config(
             }
         )
     return new_id
+
+
+def register_adopted_parent(
+    service: SyncService,
+    client: Any,
+    *,
+    manifest: Manifest,
+    target: CreateTarget,
+    component_id: str,
+    config_id: str,
+    config_path: str,
+) -> None:
+    """Track an adopted config so a new row can be created under it (D8).
+
+    The directory carries the id of an existing remote config but has no
+    manifest entry. Its new row needs a tracked parent. The parent is
+    registered only when its files equal the remote config right now -- then
+    the remote IS the baseline, exactly what a pull would record -- with its
+    existing rows tracked under an unknown base. A parent that differs has no
+    baseline that says which side changed it (a conflict), so the row waits:
+    ``sync pull`` first.
+    """
+    if find_branch_entry(manifest, component_id, config_id, target.branch_id) is not None:
+        return
+    config_dir = target.project_root / target.branch_path / config_path
+    local = service._read_config_file(config_dir)
+    remote = None
+    if target.branch_path == branch_tree_path(manifest, target.branch_id) and local is not None:
+        remote = client.get_config_detail(
+            component_id=component_id, config_id=config_id, branch_id=target.branch_id
+        )
+    if local is not None and isinstance(remote, dict):
+        remote_local = api_config_to_local(component_id, remote, config_id)
+        merge_with_remote(component_id, local, config_dir, remote_local)
+        remote_hash = config_hash(remote_local)
+        if config_hash(local) == remote_hash:
+            hashes = service._compute_config_hashes(config_dir, component_id)
+            entry = writeback_create_config_in_manifest(
+                manifest=manifest,
+                component_id=component_id,
+                branch_id=target.branch_id,
+                config_path_str=config_path,
+                new_id=config_id,
+                file_hash=hashes.file_hash,
+                cfg_hash=remote_hash,
+                extra_hashes=hashes.extra_hashes,
+            ).entry
+            entry.metadata[CONFIG_HASH_VERSION_KEY] = CONFIG_HASH_VERSION
+            record_companions(entry.metadata, hashes.extra_hashes)
+            register_adopted_rows(entry, config_dir)
+            return
+    raise KeboolaApiError(
+        message=(
+            f"Cannot create a row under {component_id}/{config_id} ({config_path}): the "
+            f"directory is not tracked in the manifest and differs from that config on the "
+            f"remote, so its baseline is unknown. Run 'kbagent sync pull' first."
+        ),
+        status_code=0,
+        error_code=ErrorCode.PARENT_CONFIG_NOT_TRACKED,
+    )
+
+
+def _ambiguity_warning(
+    component_id: str, path: str, placeholder: str, paths: list[str], what: str
+) -> dict[str, Any]:
+    return {
+        "code": "PLACEHOLDER_AMBIGUOUS",
+        "component_id": component_id,
+        "path": path,
+        "placeholder": placeholder,
+        "message": (
+            f"{len(paths)} new {what} carry the id {placeholder!r} "
+            f"({', '.join(sorted(paths))}); none of them is linked by it. "
+            "Give each its own id, or set the links by hand."
+        ),
+    }
+
+
+def _plan_rows(
+    service: SyncService,
+    manifest: Manifest,
+    changes: list[dict[str, Any]],
+    target: CreateTarget,
+    new_parent_ambiguity: dict[tuple[str, str], set[str]],
+) -> list[dict[str, Any]]:
+    """Decide, once and before any create, which new row dirs a placeholder maps to (Astra).
+
+    A new row dir (no target identity yet) under a tracked config or a new
+    config dir may carry a row id in its file. It is that row's placeholder,
+    scoped to the parent, only when nothing under that parent owns it -- a
+    row's current id or the ``created_from_id`` an earlier push recorded --
+    and no other new dir under the parent carries it too. The decision is
+    written into the change's ``source_row_id``, the one identity both the
+    push's in-memory row map and the row's durable ``created_from_id`` read,
+    so the two can never disagree.
+
+    An ambiguous placeholder is recorded on the parent's entry
+    (``ambiguous_row_placeholders``; a new parent's in *new_parent_ambiguity*
+    until its create records it) and never mapped again while any row file
+    of the parent carries it -- a partial push leaves one carrier, which
+    must not become the row by default. Each push warns about it until the
+    user removes the id from every row file. Returns the warnings.
+    """
+    warnings = _settle_recorded_ambiguity(service, manifest, target)
+    blocked = {
+        (e.component_id, f"id:{e.id}", str(p))
+        for e in manifest.configurations
+        if same_branch(manifest, e.branch_id, target.branch_id)
+        for p in e.metadata.get(AMBIGUOUS_ROW_PLACEHOLDERS_KEY) or []
+    }
+    groups: dict[tuple[str, str, str, str], list[dict[str, Any]]] = {}
+    owned: set[tuple[str, str, str]] = set()
+    for change in changes:
+        if not change.get("is_row") or change["change_type"] != "added" or change["config_id"]:
+            continue
+        component_id = change["component_id"]
+        parent_id = change.get("parent_config_id", "")
+        parent_path = change.get("parent_path", "")
+        if parent_path and not parent_id:
+            scope = f"path:{parent_path}"
+            row_file = target.project_root / target.branch_path / parent_path / change["path"]
+            data = service._read_config_file(row_file) or {}
+            placeholder = str((data.get("_keboola") or {}).get("row_id") or "")
+        else:
+            scope = f"id:{parent_id}"
+            placeholder = str(change.get("source_row_id") or "")
+            entry = find_branch_entry(manifest, component_id, parent_id, target.branch_id)
+            for row in entry.rows if entry is not None else []:
+                owned.add((component_id, scope, row.id))
+                source = (row.metadata or {}).get(CREATED_FROM_KEY)
+                if source:
+                    owned.add((component_id, scope, str(source)))
+        change["source_row_id"] = ""
+        if placeholder:
+            groups.setdefault((component_id, scope, placeholder, parent_path), []).append(change)
+    for (component_id, scope, placeholder, parent_path), group in groups.items():
+        if (component_id, scope, placeholder) in owned | blocked:
+            continue  # owned, or once ambiguous, under this parent: never claimed
+        if len(group) == 1:
+            group[0]["source_row_id"] = placeholder
+            continue
+        paths = [f"{parent_path or scope}/{c['path']}" for c in group]
+        warnings.extend(
+            _ambiguity_warning(component_id, path, placeholder, paths, "row folders")
+            for path in paths
+        )
+        if parent_path:
+            new_parent_ambiguity.setdefault((component_id, parent_path), set()).add(placeholder)
+        else:
+            entry = find_branch_entry(manifest, component_id, scope[3:], target.branch_id)
+            if entry is not None:
+                recorded = set(entry.metadata.get(AMBIGUOUS_ROW_PLACEHOLDERS_KEY) or [])
+                entry.metadata[AMBIGUOUS_ROW_PLACEHOLDERS_KEY] = sorted(recorded | {placeholder})
+    return warnings
+
+
+def _settle_recorded_ambiguity(
+    service: SyncService, manifest: Manifest, target: CreateTarget
+) -> list[dict[str, Any]]:
+    """Drop a recorded ambiguous row placeholder no row file carries; warn about the rest."""
+    warnings: list[dict[str, Any]] = []
+    for entry in manifest.configurations:
+        recorded = entry.metadata.get(AMBIGUOUS_ROW_PLACEHOLDERS_KEY)
+        if not recorded or not same_branch(manifest, entry.branch_id, target.branch_id):
+            continue
+        rows_dir = target.project_root / target.branch_path / entry.path / "rows"
+        carried: dict[str, list[str]] = {}
+        for row_dir in sorted(rows_dir.iterdir()) if rows_dir.is_dir() else []:
+            data = service._read_config_file(row_dir) or {}
+            row_id = str((data.get("_keboola") or {}).get("row_id") or "")
+            carried.setdefault(row_id, []).append(f"{entry.path}/rows/{row_dir.name}")
+        kept = sorted(str(p) for p in recorded if str(p) in carried)
+        if kept:
+            entry.metadata[AMBIGUOUS_ROW_PLACEHOLDERS_KEY] = kept
+        else:
+            entry.metadata.pop(AMBIGUOUS_ROW_PLACEHOLDERS_KEY, None)
+        for placeholder in kept:
+            warnings.extend(
+                _ambiguity_warning(
+                    entry.component_id, path, placeholder, carried[placeholder], "row folders"
+                )
+                for path in carried[placeholder]
+            )
+    return warnings

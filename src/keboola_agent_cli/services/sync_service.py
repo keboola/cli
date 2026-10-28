@@ -20,8 +20,6 @@ from ..config_store import ConfigStore
 from ..constants import (
     BRANCH_MAPPING_FILENAME,
     CONFIG_FILENAME,
-    CONFIG_HASH_VERSION,
-    CONFIG_HASH_VERSION_KEY,
     DEFAULT_JOBS_PER_CONFIG,
     DEFAULT_MAX_SAMPLES,
     DEFAULT_SAMPLE_LIMIT,
@@ -45,12 +43,11 @@ from ..sync.branch_scope import (
     classify_untracked,
     entry_tree,
     find_untracked_configs,
-    find_untracked_rows,
     same_branch,
     scope_manifest,
     stale_tree_record,
 )
-from ..sync.code_extraction import extract_code_files, merge_code_files
+from ..sync.code_extraction import merge_code_files
 from ..sync.config_format import (
     api_config_to_local,
     api_row_to_local,
@@ -72,6 +69,7 @@ from ..sync.manifest import (
     save_manifest,
 )
 from ..sync.naming import config_path
+from . import _sync_push_ops as push_ops
 from . import _sync_workspace as sql_workspaces
 from ._encryption import (
     encrypt_secrets_in_config,
@@ -79,12 +77,11 @@ from ._encryption import (
 )
 from ._sync_baseline import (
     adopted_skip_detail,
-    config_locally_modified,
     detect_force_pull_conflicts,
     effective_stored_hash,
     raise_on_legacy_boundary,
 )
-from ._sync_bindings import resolve_run_target_bindings, resolve_transformation_bindings
+from ._sync_bindings import resolve_run_target_bindings
 from ._sync_branch import (
     branch_link as _branch_link,
 )
@@ -104,6 +101,18 @@ from ._sync_bulk import (
     push_all as _bulk_push_all,
 )
 from ._sync_clone import clone_project as _clone_project_impl
+from ._sync_companions import (
+    companion_conflict,
+    companion_diagnostics,
+    config_locally_modified,
+    current_companions,
+    kept_companion_warning,
+    local_unchanged,
+    merge_with_remote,
+    preserved_baseline,
+    pulled_baseline,
+    write_pulled_config,
+)
 from ._sync_data_app import (
     load_data_app_types,
     push_ds_client,
@@ -111,6 +120,8 @@ from ._sync_data_app import (
     resolve_pull_type,
     type_needs_rewrite,
 )
+from ._sync_link_pending import link_pending_entries, planned_row_refs
+from ._sync_link_recovery import resolve_transformation_links
 from ._sync_models import LocalConfigHashes
 from ._sync_project_guard import adopt_existing_manifest, load_project_manifest
 from ._sync_promote_remap import (
@@ -136,6 +147,7 @@ from ._sync_push_create import (
     checkpoint_manifest,
     is_fatal_push_error,
     record_created_config,
+    register_adopted_parent,
 )
 from ._sync_push_ops import detect_name_drift, plan_push, push_create, push_row_change, push_update
 from ._sync_stale import (
@@ -149,6 +161,13 @@ from ._sync_storage import (
     fetch_samples,
     write_per_config_jobs,
     write_storage_metadata,
+)
+from ._sync_untracked import (
+    UntrackedRows,
+    collect_tracked_parent_rows,
+    collect_untracked_rows,
+    component_change_problem,
+    raise_on_component_change,
 )
 from ._sync_writeback import reconcile_promote_links, stamp_updated_config
 from .base import BaseService, ClientFactory, find_default_branch_id
@@ -171,17 +190,6 @@ def _reconcile_saved_promote_links(project_root: Path) -> None:
         return
     if reconcile_promote_links(manifest):
         save_manifest(project_root, manifest)
-
-
-# Companion files extracted alongside a config's ``_config.yml`` whose hashes
-# are tracked so ``sync diff`` notices edits to code/description files.
-_EXTRA_HASH_FILENAMES: tuple[str, ...] = (
-    "_description.md",
-    "transform.sql",
-    "transform.py",
-    "code.py",
-    "pyproject.toml",
-)
 
 
 def _ensure_within_branch(
@@ -454,31 +462,6 @@ class SyncService(BaseService):
     # pull
     # ------------------------------------------------------------------
 
-    def _local_files_match_pull_state(
-        self,
-        config_dir: Path,
-        pull_hash: str,
-        extra_hashes: dict[str, str],
-    ) -> bool:
-        """True iff every file recorded at pull time is present and unmodified.
-
-        Used by ``pull --theirs`` to decide whether an idempotent skip is
-        safe: the main ``_config.yml`` must byte-match ``pull_hash`` and every
-        companion code file in ``pull_extra_hashes`` must exist with its
-        recorded hash.  Any missing or edited file means the config must be
-        re-materialized from remote.
-        """
-        config_file = config_dir / CONFIG_FILENAME
-        if not pull_hash or not config_file.exists():
-            return False
-        if self._file_hash(config_file) != pull_hash:
-            return False
-        for fname, stored_hash in extra_hashes.items():
-            fpath = config_dir / fname
-            if not fpath.exists() or self._file_hash(fpath) != stored_hash:
-                return False
-        return True
-
     def pull(
         self,
         alias: str,
@@ -613,6 +596,7 @@ class SyncService(BaseService):
         old_entries = {f"{c.component_id}/{c.id}": c for c in own_entries}
         untracked_dirs = scan_config_dirs(self, project_root, manifest, branch_dir_name)
         pull_warnings: list[dict[str, Any]] = ambiguous_id_warnings(untracked_dirs)
+        companion_warnings: list[dict[str, str]] = []
         # Paths owned on disk before this pull allocates any (D14): a new or
         # renamed config never lands in one, whatever order the remote lists.
         reserved = (
@@ -629,16 +613,6 @@ class SyncService(BaseService):
         }
         existing_config_hashes: dict[str, str] = {
             f"{c.component_id}/{c.id}": c.metadata.get("pull_config_hash", "") for c in own_entries
-        }
-        # Build lookup for file hashes at pull time (to detect local edits)
-        existing_file_hashes: dict[str, str] = {
-            f"{c.component_id}/{c.id}": c.metadata.get("pull_hash", "") for c in own_entries
-        }
-        # Companion-file hashes (transform.sql, _description.md, ...) recorded
-        # at pull time; ``--theirs`` uses them to restore deleted code files.
-        existing_extra_hashes: dict[str, dict[str, str]] = {
-            f"{c.component_id}/{c.id}": c.metadata.get("pull_extra_hashes", {}) or {}
-            for c in own_entries
         }
         # Row-level state lookup, keyed by "{component_id}/{config_id}/{row_id}".
         # Values: dict with path, pull_hash, pull_config_hash (all optional).
@@ -678,7 +652,6 @@ class SyncService(BaseService):
                 ignored_components=ignored_components,
                 existing_keys=existing_keys,
                 existing_paths=existing_paths,
-                existing_file_hashes=existing_file_hashes,
                 existing_metadata=existing_metadata,
                 existing_rows=existing_rows,
             ) + remote_deleted_conflicts(stale)
@@ -789,46 +762,24 @@ class SyncService(BaseService):
                         pull_details.append(skipped)
                         continue
 
-                # Detect local modifications: if the file hash differs from the
-                # pull_hash stored in manifest, the user edited the file -- so
-                # preserve it instead of overwriting.  This now runs even under
-                # ``--force``: a force-pull that reaches here for a modified file
-                # has already passed the conflict guard above (so the remote is
-                # unchanged), and re-stamping the baseline from the edited file
-                # would silently strand the un-pushed edits.  Preserving keeps
-                # the pending delta visible to ``sync push``.
-                # ``--theirs`` disables the preserve entirely: remote wins.
-                # The check covers every file the config's local
-                # representation consists of -- ``_config.yml`` plus the
-                # companion files recorded in ``pull_extra_hashes`` (the set
-                # diff/push merge back) -- so an edited ``transform.sql`` is
-                # protected like an edited ``_config.yml`` (issue #792 B).
-                locally_modified = False
-                if not is_new and not theirs:
-                    locally_modified = config_locally_modified(
-                        self,
-                        config_dir,
-                        existing_file_hashes.get(lookup_key, ""),
-                        existing_extra_hashes.get(lookup_key, {}),
-                    )
+                # Detect local modifications: the config's whole local
+                # representation -- ``_config.yml`` plus its companion SET
+                # (a new, deleted or edited companion file, issue #792 B, D2)
+                # -- differs from the pull state, so preserve it instead of
+                # overwriting. This runs even under ``--force``: a force-pull
+                # reaching here has passed the conflict guard (remote
+                # unchanged), and re-stamping the baseline from the edited
+                # files would strand the un-pushed edits. ``--theirs``
+                # disables the preserve entirely: remote wins.
+                old_metadata = existing_metadata.get(lookup_key, {})
+                locally_modified = (
+                    not is_new
+                    and not theirs
+                    and config_locally_modified(self, config_dir, component_id, old_metadata)
+                )
 
-                remote_unchanged = False  # set in else branch; default for locally_modified path
-                if locally_modified and not dry_run:
-                    # Preserve the existing local file -- don't overwrite.
-                    # Still update manifest entry (remote hash changes, but
-                    # local file stays as-is).
-                    file_hash = self._file_hash(config_dir / CONFIG_FILENAME)
-                    pull_details.append(
-                        {
-                            "action": "skipped",
-                            "component_id": component_id,
-                            "config_name": config_name,
-                            "path": rel_path,
-                            "reason": "locally modified",
-                        }
-                    )
-                elif locally_modified and dry_run:
-                    file_hash = ""
+                file_hash = ""
+                if locally_modified:
                     pull_details.append(
                         {
                             "action": "skipped",
@@ -839,77 +790,47 @@ class SyncService(BaseService):
                         }
                     )
                 else:
-                    # Check if remote actually changed since last pull.
-                    # If pull_config_hash matches, skip write (idempotent).
-                    # The lookups hold this branch's entries only, so a branch
-                    # switch makes every config new and re-writes it.
+                    # Remote unchanged since the last pull -> the write may be
+                    # skipped (idempotent). The lookups hold this branch's
+                    # entries only, so a branch switch makes every config new.
                     # The file-existence guard enforces the manifest<->disk
-                    # invariant (issues #472/#466): a tracked config whose
-                    # local file is missing (deleted dir, or a pre-0.72
-                    # name-collision phantom entry) is re-materialized instead
-                    # of being registered with an empty pull_hash -- which
-                    # ``sync push --force`` would then plan as a remote DELETE.
+                    # invariant (#472/#466): a tracked config whose file is
+                    # missing is re-materialized. A data app's type lives in
+                    # _keboola, invisible to config_hash, so a changed type
+                    # forces the write too.
                     old_cfg_hash = existing_config_hashes.get(lookup_key, "")
-                    config_file = config_dir / CONFIG_FILENAME
-                    remote_unchanged = (
+                    remote_unchanged = bool(
                         not is_new
                         and old_cfg_hash
                         and old_cfg_hash == api_cfg_hash
-                        and config_file.exists()
+                        and (config_dir / CONFIG_FILENAME).exists()
+                        and not type_needs_rewrite(component_id, da_type, on_disk_da_type)
                     )
-                    if remote_unchanged and theirs:
-                        # ``--theirs``: an idempotent skip is only allowed when
-                        # the local files still byte-match the pull state --
-                        # otherwise the edited/partial files must be overwritten
-                        # with the remote version.
-                        remote_unchanged = self._local_files_match_pull_state(
-                            config_dir,
-                            existing_file_hashes.get(lookup_key, ""),
-                            existing_extra_hashes.get(lookup_key, {}),
-                        )
-
-                    # A data app's type lives in _keboola, invisible to
-                    # config_hash, so a body-unchanged config would otherwise
-                    # skip the write and discard a fetched (or changed) type.
-                    if remote_unchanged and type_needs_rewrite(
-                        component_id, da_type, on_disk_da_type
-                    ):
-                        remote_unchanged = False
-
-                    if remote_unchanged:
-                        # Nothing changed -- reuse existing file hash
-                        file_hash = self._file_hash(config_file)
-                    else:
-                        # Extract code files (SQL, Python) if applicable.
-                        # This modifies local_data in place (removes
-                        # blocks/code) and writes separate code files.
-                        if not dry_run:
-                            extract_code_files(component_id, local_data, config_dir)
-                            file_hash = self._write_config_file(config_dir, local_data)
-                        else:
-                            file_hash = ""
-
+                    pulled = write_pulled_config(
+                        self,
+                        config_dir,
+                        component_id,
+                        local_data,
+                        old_metadata,
+                        remote_unchanged=remote_unchanged,
+                        theirs=theirs,
+                        dry_run=dry_run,
+                    )
+                    file_hash = pulled.file_hash
+                    companion_warnings.extend(
+                        kept_companion_warning(component_id, rel_path, name) for name in pulled.kept
+                    )
+                    if pulled.written:
                         configs_pulled += 1
                         files_written += 1
-
-                        if is_new:
-                            pull_details.append(
-                                {
-                                    "action": "new",
-                                    "component_id": component_id,
-                                    "config_name": config_name,
-                                    "path": rel_path,
-                                }
-                            )
-                        else:
-                            pull_details.append(
-                                {
-                                    "action": "updated",
-                                    "component_id": component_id,
-                                    "config_name": config_name,
-                                    "path": rel_path,
-                                }
-                            )
+                        pull_details.append(
+                            {
+                                "action": "new" if is_new else "updated",
+                                "component_id": component_id,
+                                "config_name": config_name,
+                                "path": rel_path,
+                            }
+                        )
 
                 rows = pull_config_rows(
                     self,
@@ -933,49 +854,13 @@ class SyncService(BaseService):
                 rows_pulled += rows.rows_pulled
                 row_manifests = rows.rows
 
-                # Record in manifest (store file hash for change detection).
-                # For skipped configs: keep existing pull_hash (file untouched)
-                # but do NOT update pull_config_hash -- keep the old base so
-                # 3-way diff still correctly detects the local modification.
-                if locally_modified:
-                    old_pull_hash = existing_file_hashes.get(lookup_key, file_hash)
-                    old_cfg_hash = existing_config_hashes.get(lookup_key, pull_cfg_hash)
-                    cfg_metadata = {
-                        "pull_hash": old_pull_hash,
-                        "pull_config_hash": old_cfg_hash,
-                        # Carry the companion baseline over too: dropping it
-                        # would make diff/push read an edited transform.sql
-                        # as unchanged (issue #792 B).
-                        "pull_extra_hashes": existing_extra_hashes.get(lookup_key, {}),
-                    }
-                    # The preserved hash was NOT produced by the current
-                    # producer, so its version marker is carried over verbatim
-                    # (absent stays absent) -- never stamped onto a legacy hash.
-                    old_version = existing_metadata.get(lookup_key, {}).get(CONFIG_HASH_VERSION_KEY)
-                    if old_version:
-                        cfg_metadata[CONFIG_HASH_VERSION_KEY] = old_version
-                else:
-                    # Compute hashes for all extracted files
-                    extra_hashes: dict[str, str] = {}
-                    if not dry_run:
-                        for fname in [
-                            "_description.md",
-                            "transform.sql",
-                            "transform.py",
-                            "code.py",
-                            "pyproject.toml",
-                        ]:
-                            fpath = config_dir / fname
-                            if fpath.exists():
-                                extra_hashes[fname] = self._file_hash(fpath)
-                    cfg_metadata = {
-                        "pull_hash": file_hash,
-                        "pull_config_hash": pull_cfg_hash,
-                        "pull_extra_hashes": extra_hashes,
-                        # Freshly computed with the current producer, so the
-                        # shape version is stamped alongside it (issue #686).
-                        CONFIG_HASH_VERSION_KEY: CONFIG_HASH_VERSION,
-                    }
+                # Record in manifest: the old baseline verbatim for a skipped
+                # config, the fresh one otherwise (issue #792 B, #686, R4).
+                cfg_metadata = (
+                    preserved_baseline(old_metadata)
+                    if locally_modified
+                    else pulled_baseline(file_hash, pull_cfg_hash, pulled)
+                )
                 # Keep the UI folder with the config. Pull dropped it before,
                 # so every pulled or cloned config landed in the root (CLI-9).
                 # The manifest stores it under the legacy metadata key name
@@ -1048,6 +933,7 @@ class SyncService(BaseService):
             # refreshed. Lets a caller tell "no folders" from "unknown" (CLI-9).
             "folder_lookup_failed": folder_map is None,
             **({"warnings": pull_warnings} if pull_warnings else {}),
+            **({"companion_warnings": companion_warnings} if companion_warnings else {}),
         }
 
     # ------------------------------------------------------------------
@@ -1095,26 +981,8 @@ class SyncService(BaseService):
                     never_fetched.append(entry)
                 continue
 
-            # Compare file hash against the hash stored at pull time.
-            # Check both _config.yml AND extracted code files (transform.sql etc.)
-            # to match the same logic used by diff().
-            current_hash = self._file_hash(config_file)
-            pull_hash = cfg.metadata.get("pull_hash", "")
-            config_unchanged = bool(pull_hash and current_hash == pull_hash)
-
-            extras_unchanged = True
-            stored_extra = cfg.metadata.get("pull_extra_hashes", {})
-            for fname, stored_h in stored_extra.items():
-                fpath = config_dir / fname
-                if fpath.exists():
-                    if self._file_hash(fpath) != stored_h:
-                        extras_unchanged = False
-                        break
-                else:
-                    extras_unchanged = False
-                    break
-
-            if config_unchanged and extras_unchanged:
+            # _config.yml AND the companion set, the same check diff() makes.
+            if local_unchanged(self, config_dir, cfg.component_id, cfg.metadata):
                 unchanged += 1
             else:
                 modified.append(
@@ -1246,34 +1114,24 @@ class SyncService(BaseService):
         file_unchanged: dict[str, bool] = {}
         local_override_hashes: dict[str, str] = {}
         stored_hashes: dict[str, str] = {}
+        diff_warnings: list[dict[str, str]] = []
+        relabelled: list[str] = []
+        untracked_rows = UntrackedRows()
         for cfg in scope.in_tree:
             config_dir = project_root / source_branch_path / cfg.path
             local_data = self._read_config_file(config_dir)
             if local_data is None:
                 continue
+            problem = component_change_problem(cfg.component_id, local_data, cfg.path)
+            if problem:
+                relabelled.append(problem)
+            diff_warnings += companion_diagnostics(config_dir, cfg.component_id, cfg.path)
 
             key = f"{cfg.component_id}/{cfg.id}"
 
-            # Check if ANY file in this config dir changed since pull.
-            # Manifest stores pull_extra_hashes for extracted files.
-            pull_hash = cfg.metadata.get("pull_hash", "")
-            config_file = config_dir / CONFIG_FILENAME
-            current_file_hash = self._file_hash(config_file) if config_file.exists() else ""
-            config_unchanged = bool(pull_hash and current_file_hash == pull_hash)
-
-            extras_unchanged = True
-            stored_extra = cfg.metadata.get("pull_extra_hashes", {})
-            for fname, stored_h in stored_extra.items():
-                fpath = config_dir / fname
-                if fpath.exists():
-                    if self._file_hash(fpath) != stored_h:
-                        extras_unchanged = False
-                        break
-                else:
-                    extras_unchanged = False
-                    break
-
-            is_unchanged = config_unchanged and extras_unchanged
+            # Check if ANY file of this config changed since pull: _config.yml
+            # and the companion set -- a new, deleted or edited companion (D2).
+            is_unchanged = local_unchanged(self, config_dir, cfg.component_id, cfg.metadata)
             file_unchanged[key] = is_unchanged
 
             # Baseline hash, leniently upgraded for entries written before the
@@ -1285,13 +1143,17 @@ class SyncService(BaseService):
                 raw_remote=remote_raw.get(key),
                 remote_local=remote_configs.get(key),
             )
+            # A companion pull kept although the remote cleared it: no
+            # baseline says which side is right, so a difference is a conflict.
+            if companion_conflict(config_dir, cfg.metadata):
+                stored_cfg_hash = UNKNOWN_BASE_HASH
             stored_hashes[key] = stored_cfg_hash
 
             if is_unchanged and stored_cfg_hash:
                 # All files match pull state -- use stored API hash
                 local_override_hashes[key] = stored_cfg_hash
             # Always merge for local_data (needed for deep_diff details)
-            merge_code_files(cfg.component_id, local_data, config_dir)
+            merge_with_remote(cfg.component_id, local_data, config_dir, remote_configs.get(key))
 
             local_configs.append(
                 {
@@ -1326,7 +1188,6 @@ class SyncService(BaseService):
             local_data = self._read_config_file(config_dir)
             if local_data is None:
                 continue
-            merge_code_files(component_id, local_data, config_dir)
             # Adopt-by-id guard (issues #482 / #649): an untracked file whose
             # ``_keboola.config_id`` resolves on the target branch and is not
             # claimed by a manifest entry IN THIS TREE refers to an EXISTING
@@ -1353,6 +1214,21 @@ class SyncService(BaseService):
                 continue
             if verdict == VERDICT_CREATE:
                 untracked_id = ""  # new config, push creates it
+            # Merged once the identity is known: packages a pyproject.toml left
+            # undecided are the adopted remote config's (T1).
+            remote_local = remote_configs.get(f"{component_id}/{untracked_id}")
+            merge_with_remote(component_id, local_data, config_dir, remote_local)
+            # Its rows join the plan: created with it, or diffed by id (D7, D8).
+            collect_untracked_rows(
+                self,
+                untracked_rows,
+                config_dir,
+                component_id=component_id,
+                config_id=untracked_id,
+                config_path=added_cfg["path"],
+                remote_rows=remote_rows,
+            )
+            diff_warnings += companion_diagnostics(config_dir, component_id, added_cfg["path"])
             # An adopted file has no manifest baseline: compute_changeset reads
             # the one a `config new --push` scaffold records (issue #792 E).
             local_configs.append(
@@ -1365,6 +1241,8 @@ class SyncService(BaseService):
                     "adopted": bool(untracked_id),
                 }
             )
+
+        raise_on_component_change(relabelled)
 
         # Build base hashes for 3-way diff.
         # Preferred: pull_config_hash (normalized hash stored at pull time).
@@ -1395,9 +1273,9 @@ class SyncService(BaseService):
 
         # Row-level diff: walk manifest rows, load local YAML, feed into
         # compute_row_changeset alongside remote_rows built above.
-        local_rows: list[dict[str, Any]] = []
-        tracked_row_keys: set[str] = set()
-        row_base_hashes: dict[str, str] = {}
+        local_rows: list[dict[str, Any]] = untracked_rows.local_rows
+        tracked_row_keys: set[str] = untracked_rows.tracked_row_keys
+        row_base_hashes: dict[str, str] = untracked_rows.base_hashes
         # ``scope.in_tree`` already drops never-fetched parents (whose rows were
         # never materialized either, so tracking them would plan remote row
         # deletes -- issue #472) and parents tracked on another branch's tree
@@ -1430,35 +1308,25 @@ class SyncService(BaseService):
                     }
                 )
 
-        # Also add untracked local rows (new row dirs dropped under a tracked
-        # config). They have no row_id yet so compute_row_changeset flags
-        # them as "added" and push dispatches them via create_config_row.
-        for untracked in find_untracked_rows(
-            project_root, manifest, self._read_config_file, source_branch_path, scope.in_tree
-        ):
-            # Same guard as the untracked configs above: the row walk keys off
-            # ``manifest.configurations`` directly, so a still-tracked ignored
-            # parent would otherwise contribute row creates.
-            if untracked["component_id"] in ignored_components:
-                continue
-            local_rows.append(
-                {
-                    "component_id": untracked["component_id"],
-                    "parent_config_id": untracked["parent_config_id"],
-                    "row_id": "",  # target diff identity: not on the target yet
-                    "source_row_id": untracked["source_row_id"],  # risk 71
-                    "row_name": untracked["row_name"],
-                    "path": untracked["path"],
-                    "data": untracked["data"],
-                }
-            )
+        # Also add untracked local rows (new row dirs under a tracked config).
+        ambiguous_rows = collect_tracked_parent_rows(
+            self,
+            untracked_rows,
+            project_root,
+            manifest,
+            source_branch_path,
+            scope.in_tree,
+            branch_id=branch_id,
+            remote_rows=remote_rows,
+            ignored_components=ignored_components,
+        )
 
         row_changeset = compute_row_changeset(
             local_rows,
             remote_rows,
             tracked_row_keys,
             row_base_hashes or None,
-            scope.target_tracked_row_keys,
+            scope.target_tracked_row_keys | untracked_rows.gone_row_keys,
             {
                 f"{c.component_id}/{c.config_id}"
                 for c in changeset
@@ -1469,7 +1337,7 @@ class SyncService(BaseService):
             key = f"{change.component_id}/{change.parent_config_id}/rows/{change.config_id}"
             if change.change_type == "deleted" and row_base_hashes.get(key) == UNKNOWN_BASE_HASH:
                 change.change_type = "conflict"
-        changeset.extend(row_changeset)
+        changeset.extend(row_changeset + ambiguous_rows)
 
         added = [c for c in changeset if c.change_type == "added"]
         modified = [c for c in changeset if c.change_type == "modified"]
@@ -1496,6 +1364,7 @@ class SyncService(BaseService):
 
         return {
             "changes": [c.to_dict() for c in changeset],
+            **({"companion_warnings": diff_warnings} if diff_warnings else {}),
             "remote_only": remote_only,
             "never_fetched": never_fetched,
             "orphaned": orphaned,
@@ -1567,6 +1436,8 @@ class SyncService(BaseService):
             _reconcile_saved_promote_links(project_root)
         diff_result = self.diff(alias, project_root, branch_override=branch_override)
         all_changes = diff_result["changes"]
+        companion_warnings = diff_result.get("companion_warnings") or []
+        shown = {"companion_warnings": companion_warnings} if companion_warnings else {}
         never_fetched = diff_result.get("never_fetched", [])
         # Configs excluded from the changeset because they belong to another
         # branch's tree (issue #649) -- reported, never pushed.
@@ -1581,7 +1452,8 @@ class SyncService(BaseService):
         # again although nothing changed locally.
         stored = load_manifest(project_root)
         target_id = self._resolve_branch_id(alias, stored, project_root, branch_override)
-        if not changes and not pending_rebinds(stored, target_id):
+        pending = pending_rebinds(stored, target_id) or link_pending_entries(stored, target_id)
+        if not changes and not pending:
             result: dict[str, Any] = {
                 "status": "no_changes",
                 "created": 0,
@@ -1589,6 +1461,7 @@ class SyncService(BaseService):
                 "deleted": 0,
                 "errors": [],
                 **plan.report(),
+                **shown,
             }
             if never_fetched:
                 result["never_fetched"] = never_fetched
@@ -1602,6 +1475,9 @@ class SyncService(BaseService):
                 "changes": changes,
                 "summary": {**diff_result["summary"], "deleted": plan.deletions},
                 **plan.report(),
+                **shown,
+                # The creates a real push refuses (T1, round 5).
+                "errors": push_ops.create_refusals(self, changes, stored, project_root, target_id),
             }
             if never_fetched:
                 dry_result["never_fetched"] = never_fetched
@@ -1669,8 +1545,8 @@ class SyncService(BaseService):
             row_changes = [c for c in changes if bool(c.get("is_row"))]
 
             # The ids this push creates, for the rows and the link backfill.
-            ledger = CreateLedger()
             target = CreateTarget(project_root, branch_path, branch_id)
+            ledger = CreateLedger.plan(self, manifest, changes, target)
             # (ULID parent, row placeholder id) -> row ULID; ULID parent -> rows
             # created under it. Keyed per parent: two configs can use one row id.
             created_row_id_map: dict[tuple[str, str], str] = {}
@@ -1773,6 +1649,7 @@ class SyncService(BaseService):
                                 response=response,
                                 warnings=warnings,
                                 source_tree=branch_path,
+                                config_dir=config_dir,
                             )
                             manifest_dirty = True
                         updated += 1
@@ -1816,16 +1693,27 @@ class SyncService(BaseService):
                 source_row_id = change.get("source_row_id") or config_id  # risk 71
                 config_path_str = change.get("path", "")
                 parent_config_id = change.get("parent_config_id", "")
-                # Remap the diff-time parent placeholder to the ULID assigned in
-                # Phase A so the manifest lookup and create_config_row both hit
-                # the real config (KFR-05). UPDATE/DELETE parents already carry
-                # a ULID and pass through unchanged.
-                effective_parent_id = ledger.parent_id(component_id, parent_config_id)
-                if remap is not None:
-                    remap.refresh(manifest, branch_id, ledger.created_id_map, created_row_id_map)
-
                 manifest_dirty = True  # before a create's checkpoint (D25)
                 try:
+                    # The parent's id on the target after Phase A: a placeholder
+                    # maps to its ULID (KFR-05), a new config dir to the config
+                    # created there (D7) -- a parent that was not created skips
+                    # the row with an error. An adopted dir is registered (D8).
+                    effective_parent_id = ledger.row_parent(change)
+                    if change.get("parent_path") and parent_config_id:
+                        register_adopted_parent(
+                            self,
+                            client,
+                            manifest=manifest,
+                            target=target,
+                            component_id=component_id,
+                            config_id=parent_config_id,
+                            config_path=change["parent_path"],
+                        )
+                    if remap is not None:
+                        remap.refresh(
+                            manifest, branch_id, ledger.created_id_map, created_row_id_map
+                        )
                     new_row_id = push_row_change(
                         self,
                         client,
@@ -1882,20 +1770,19 @@ class SyncService(BaseService):
             )
 
             # ---- Phase C: variable + shared-code links (KFR-03, CLI-24) --
-            binding = resolve_transformation_bindings(
+            binding = resolve_transformation_links(
                 self,
                 client,
-                created_configs=ledger.created_configs,
-                created_id_map=ledger.created_id_map,
+                ledger=ledger,
                 created_row_id_map=created_row_id_map,
                 created_rows_by_parent=created_rows_by_parent,
                 manifest=manifest,
                 branch_id=branch_id,
+                source_dir=None if promoting else project_root / branch_path,
             )
             errors.extend(binding.errors)
             warnings.extend(binding.warnings)
-            if binding.configs_rewritten:
-                manifest_dirty = True
+            manifest_dirty |= bool(binding.configs_rewritten or binding.pending_changed)
 
             # ---- Phase D: flow/orchestrator task + schedule target backfill
             # After transformation links, remap the configIds that flows,
@@ -1909,11 +1796,13 @@ class SyncService(BaseService):
                 created_row_id_map=created_row_id_map,
                 manifest=manifest,
                 branch_id=branch_id,
+                source_dir=None if promoting else project_root / branch_path,
+                planned_rows=planned_row_refs(row_changes),
+                targets=binding.targets,
             )
             errors.extend(flow_binding.errors)
             warnings.extend(flow_binding.warnings)
-            if flow_binding.configs_rewritten:
-                manifest_dirty = True
+            manifest_dirty |= bool(flow_binding.configs_rewritten or flow_binding.pending_changed)
 
         # Save manifest with updated hashes / new IDs / removed entries
         if manifest_dirty:
@@ -1927,6 +1816,7 @@ class SyncService(BaseService):
             "errors": errors,
             "pushed_details": pushed_details,
             **plan.report(),
+            **shown,
         }
         if warnings:
             result_data["warnings"] = warnings
@@ -1982,17 +1872,13 @@ class SyncService(BaseService):
         config_file = config_dir / CONFIG_FILENAME
         file_hash = self._file_hash(config_file) if config_file.exists() else ""
         local_data = self._read_config_file(config_dir)
-        if local_data is not None:
-            merge_code_files(component_id, local_data, config_dir)
-            cfg_hash = config_hash(local_data)
-        else:
-            cfg_hash = ""
-        extra_hashes: dict[str, str] = {}
-        for fname in _EXTRA_HASH_FILENAMES:
-            fpath = config_dir / fname
-            if fpath.exists():
-                extra_hashes[fname] = self._file_hash(fpath)
-        return LocalConfigHashes(file_hash=file_hash, cfg_hash=cfg_hash, extra_hashes=extra_hashes)
+        merged = merge_code_files(component_id, local_data, config_dir) if local_data else None
+        cfg_hash = config_hash(merged) if merged is not None else ""
+        return LocalConfigHashes(
+            file_hash=file_hash,
+            cfg_hash=cfg_hash,
+            extra_hashes=current_companions(self, config_dir, component_id),
+        )
 
     def _record_push_error(
         self,

@@ -30,7 +30,9 @@ from ..sync.config_format import BASE_CONFIG_HASH_KEY
 from ..sync.manifest import ManifestConfigRow, ManifestConfiguration
 from ._encryption import apply_encrypted_to_local
 from ._sync_baseline import apply_stamp, config_baseline
+from ._sync_companions import canonical_description, record_companions
 from ._sync_models import AUTHORED_ROW_KEY, PROMOTED_ROW_KEY, LocalConfigHashes, WritebackResult
+from ._sync_untracked import register_adopted_rows
 
 if TYPE_CHECKING:
     from ..sync.manifest import Manifest
@@ -80,6 +82,7 @@ def stamp_created_config(
         extra_hashes=hashes.extra_hashes,
     )
     apply_stamp(writeback.entry.metadata, stamp)
+    record_companions(writeback.entry.metadata, hashes.extra_hashes)
     if promoted is not None:
         writeback.entry.metadata[PROMOTED_FROM_KEY] = promoted.as_metadata()
     return writeback
@@ -177,6 +180,7 @@ def stamp_updated_config(
     response: Any,
     warnings: list[dict[str, str]],
     source_tree: str,
+    config_dir: Path | None = None,
 ) -> None:
     """Refresh a pushed config's manifest bookkeeping from the API state (#686).
 
@@ -194,7 +198,10 @@ def stamp_updated_config(
     config (issue #497) -- an untracked local file whose
     ``_keboola.config_id`` resolved on the branch. It is registered at
     *config_path_str*, the directory just pushed, never at another branch's
-    path or with another branch's rows.
+    path or with another branch's rows. Its own row dirs (in *config_dir*)
+    that carry a row id are registered too, with an unknown base (D8, T3):
+    left out, the next diff read them as new rows and the next push created
+    every one of them a second time -- also a row deleted on the remote.
     """
     stamp = config_baseline(
         client,
@@ -217,7 +224,7 @@ def stamp_updated_config(
     )
     if target is not None:
         target.metadata["pull_hash"] = hashes.file_hash
-        target.metadata["pull_extra_hashes"] = hashes.extra_hashes
+        record_companions(target.metadata, hashes.extra_hashes)
         apply_stamp(target.metadata, stamp)
         return
     entry = writeback_create_config_in_manifest(
@@ -231,6 +238,9 @@ def stamp_updated_config(
         extra_hashes=hashes.extra_hashes,
     ).entry
     apply_stamp(entry.metadata, stamp)
+    record_companions(entry.metadata, hashes.extra_hashes)
+    if config_dir is not None:
+        register_adopted_rows(entry, config_dir)
 
 
 def promote_shadow(
@@ -515,14 +525,29 @@ def writeback_after_push(
     config_dir: Path,
     config_id: str,
     pushed_configuration: dict[str, Any],
+    *,
+    is_row: bool = False,
+    row_id: str = "",
 ) -> None:
     """Update local ``_config.yml`` after a successful push.
 
     Writes back the API-assigned ``_keboola.config_id`` (on first create) and
     the encrypted secret values (so local matches remote state). A scaffold's
     ``_keboola.base_config_hash`` is dropped: after the push the manifest
-    holds the baseline (issue #792 E).
+    holds the baseline (issue #792 E). A config whose description is empty
+    gets the ``description: ''`` line a fresh pull writes (L2), so its
+    ``pull_hash`` is the one a pull would record. A row gets *row_id* in its
+    ``_keboola`` footer, as a pull writes it: without it the next pull of a
+    tree that lost the row's manifest entry (a ``pull --branch`` and back)
+    could not find the row's directory by its id, wrote the row into a second
+    directory, and the first one diffed as a new row -- a duplicate on the
+    next push (R2). The promote path passes no *row_id*: ``main/`` keeps its
+    own ids (D19).
     """
+    if not is_row:
+        local_data = canonical_description(local_data, config_dir)
+    elif row_id:
+        local_data.setdefault("_keboola", {})["row_id"] = row_id
     keboola_meta = local_data.setdefault("_keboola", {})
     keboola_meta.pop(BASE_CONFIG_HASH_KEY, None)
     if config_id:

@@ -25,8 +25,18 @@ from ._helpers import (
     resolve_project_alias,
 )
 from ._project_ref import PROJECT_HELP
-from ._sync_clone_render import clone_summary, print_clone_result
-from ._sync_push_render import REMOTE_CHANGE_LABELS, print_push_skips, push_skips_one_liner
+from ._sync_clone_render import clone_summary, clone_total, print_clone_result
+from ._sync_push_render import (
+    REMOTE_CHANGE_LABELS,
+    dry_run_line,
+    dry_run_one_liner,
+    emit_companion_warnings,
+    print_dry_run_refusals,
+    print_push_skips,
+    push_skips_one_liner,
+    push_summary,
+    push_total,
+)
 
 sync_app = typer.Typer(help="Sync project configurations with local filesystem")
 
@@ -382,12 +392,8 @@ def _format_push_result(formatter: Any, result: dict) -> None:
         _format_orphaned(formatter, result.get("orphaned", []))
         return
     if status == "dry_run":
-        summary = result.get("summary", {})
-        formatter.console.print(
-            f"  Would create {summary.get('added', 0)}, "
-            f"update {summary.get('modified', 0)}, "
-            f"delete {summary.get('deleted', 0)}"
-        )
+        formatter.console.print(f"  {dry_run_line(result)}")
+        print_dry_run_refusals(formatter, result)
         print_push_skips(formatter, result)
         _format_never_fetched(formatter, result.get("never_fetched", []))
         _format_orphaned(formatter, result.get("orphaned", []))
@@ -486,8 +492,7 @@ def _push_one_liner(result: dict) -> str:
     if status == "no_changes":
         return f"[green]nothing to push[/green]{held}"
     if status == "dry_run":
-        s = result.get("summary", {})
-        return f"would: +{s.get('added', 0)} ~{s.get('modified', 0)} -{s.get('deleted', 0)}{held}"
+        return f"{dry_run_one_liner(result)}{held}"
     c = result.get("created", 0)
     u = result.get("updated", 0)
     d = result.get("deleted", 0)
@@ -536,6 +541,7 @@ def _finish_all_projects(
     formatter: Any, data: dict, per_project_formatter: Any, one_liner: Any, done_as: str
 ) -> None:
     """End an ``--all-projects`` run: per-project lines, then one headline (HO2)."""
+    emit_companion_warnings(formatter, data)
     summary = data["summary"]
     finish_items(
         formatter,
@@ -726,6 +732,7 @@ def sync_pull(
         emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
+    emit_companion_warnings(formatter, result)
     if formatter.json_mode:
         formatter.output(result)
     else:
@@ -889,6 +896,7 @@ def sync_diff(
         emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
+    emit_companion_warnings(formatter, result)
     if formatter.json_mode:
         formatter.output(result)
     else:
@@ -1114,46 +1122,17 @@ def sync_push(
         emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
+    emit_companion_warnings(formatter, result)
     # A per-config failure is collected, not raised -- without this the command
     # reported a green "Pushed" and exit 0 even when every config failed (#745).
     finish_items(
         formatter,
         result,
         failed=len(result.get("errors", [])),
-        total=_push_total(result),
+        total=push_total(result),
         noun="configs",
-        summary=_push_summary(result),
+        summary=push_summary(result),
         render=lambda: _render_push_result(formatter, result),
-    )
-
-
-def _push_total(result: dict[str, Any]) -> int:
-    """Every config change that a single-project ``sync push`` tried or would try."""
-    if result.get("status") == "dry_run":
-        summary = result.get("summary", {})
-        return sum(summary.get(key, 0) for key in ("added", "modified", "deleted"))
-    created = result.get("created", 0) + result.get("updated", 0) + result.get("deleted", 0)
-    return created + len(result.get("errors", []))
-
-
-def _push_summary(result: dict[str, Any]) -> str:
-    """The headline text of a single-project ``sync push``."""
-    status = result.get("status", "")
-    if status == "no_changes":
-        return "0 config(s) pushed, no changes."
-    if status == "dry_run":
-        summary = result.get("summary", {})
-        added, modified = summary.get("added", 0), summary.get("modified", 0)
-        deleted = summary.get("deleted", 0)
-        return (
-            f"{added + modified + deleted} config(s) would be pushed: {added} created, "
-            f"{modified} updated, {deleted} deleted."
-        )
-    created, updated = result.get("created", 0), result.get("updated", 0)
-    deleted = result.get("deleted", 0)
-    return (
-        f"{created + updated + deleted} config(s) pushed: {created} created, "
-        f"{updated} updated, {deleted} deleted."
     )
 
 
@@ -1172,6 +1151,7 @@ def _render_push_result(formatter: Any, result: dict[str, Any]) -> None:
         for change in result.get("changes", []):
             label = _change_label(change)
             formatter.console.print(f"  {change['change_type'].upper()} {label}")
+        print_dry_run_refusals(formatter, result)
         print_push_skips(formatter, result)
         _format_never_fetched(formatter, result.get("never_fetched", []))
         _format_orphaned(formatter, result.get("orphaned", []))
@@ -1296,7 +1276,7 @@ def sync_clone(
         formatter,
         result,
         failed=failed,
-        total=result.get("created", 0) + failed,
+        total=clone_total(result, failed),
         noun="items",
         summary=clone_summary(result),
         render=lambda: print_clone_result(formatter, result),

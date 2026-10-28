@@ -39,8 +39,9 @@ from ._encryption import (
     is_already_encrypted,
 )
 from ._sync_baseline import apply_stamp, row_baseline
+from ._sync_companions import require_decided_packages
 from ._sync_data_app import create_synced_data_app
-from ._sync_models import AUTHORED_ROW_KEY, PROMOTED_ROW_KEY, CreateOutcome
+from ._sync_models import AUTHORED_ROW_KEY, CREATED_FROM_KEY, PROMOTED_ROW_KEY, CreateOutcome
 from ._sync_workspace import SANDBOXES_COMPONENT_ID, warn_on_backend_size_change
 from ._sync_writeback import (
     link_promote_rows,
@@ -151,7 +152,10 @@ class PushPlan:
                 continue
             path = change.get("path", "")
             if change.get("is_row"):
-                parent_path = parent_paths.get((change["component_id"], change["parent_config_id"]))
+                # A row under an untracked parent dir names that dir (D7, D8).
+                parent_path = change.get("parent_path") or parent_paths.get(
+                    (change["component_id"], change["parent_config_id"])
+                )
                 if parent_path is None:
                     continue  # push reports PARENT_CONFIG_NOT_TRACKED for it
                 path = f"{parent_path}/{path}"
@@ -192,6 +196,88 @@ def plan_push(all_changes: list[dict[str, Any]], *, force: bool) -> PushPlan:
         else:
             plan.changes.append(change)
     return plan
+
+
+def create_refusals(
+    service: SyncService,
+    changes: list[dict[str, Any]],
+    manifest: Manifest,
+    project_root: Path,
+    branch_id: int | None,
+) -> list[dict[str, str]]:
+    """The config creates a real push would refuse, as push ``errors`` records (dry run).
+
+    The same check :func:`push_create` makes before its POST: a new config
+    whose ``pyproject.toml`` states no package list and whose ``_config.yml``
+    has none inline has no remote to take them from (``COMPANION_UNREADABLE``,
+    T1). ``push --dry-run`` and ``clone --dry-run`` report it instead of
+    showing a create the real run refuses.
+    """
+    refusals: list[dict[str, str]] = []
+    creates = [c for c in changes if c["change_type"] == "added" and not c.get("is_row")]
+    if not creates:
+        return refusals
+    source_dir = project_root / service._resolve_source_branch_path(
+        manifest, project_root, branch_id
+    )
+    for change in creates:
+        config_dir = source_dir / change.get("path", "")
+        local_data = service._read_config_file(config_dir)
+        if not isinstance(local_data, dict):
+            continue
+        merge_code_files(change["component_id"], local_data, config_dir)
+        try:
+            require_decided_packages(
+                None,
+                component_id=change["component_id"],
+                config_id="",
+                branch_id=None,
+                local_data=local_data,
+                config_path=change.get("path", ""),
+            )
+        except KeboolaApiError as exc:
+            refusals.append(
+                {
+                    "change_type": "added",
+                    "component_id": change["component_id"],
+                    "config_id": change.get("config_id", ""),
+                    "message": exc.message,
+                    "error_code": str(exc.error_code),
+                }
+            )
+            refusals += _dependent_row_refusals(change, changes)
+    return refusals
+
+
+def _dependent_row_refusals(
+    parent: dict[str, Any], changes: list[dict[str, Any]]
+) -> list[dict[str, str]]:
+    """The planned rows of a refused new config: the real push skips them too (round 8).
+
+    They name the refused config by its directory (``parent_path``) -- or, for
+    a placeholder config (a clone), by its placeholder id.
+    """
+    path, config_id = parent.get("path", ""), parent.get("config_id", "")
+    return [
+        {
+            "change_type": "added",
+            "component_id": row["component_id"],
+            "config_id": row.get("config_id", ""),
+            "message": (
+                f"Row {row.get('path', '')} would not be created: its config "
+                f"{parent['component_id']} at {path} is refused (see its error)."
+            ),
+            "error_code": str(ErrorCode.PARENT_CONFIG_NOT_TRACKED),
+        }
+        for row in changes
+        if row.get("is_row")
+        and row["change_type"] == "added"
+        and row["component_id"] == parent["component_id"]
+        and (
+            (row.get("parent_path") == path and not row.get("parent_config_id"))
+            or (config_id and row.get("parent_config_id") == config_id)
+        )
+    ]
 
 
 def detect_name_drift(
@@ -454,6 +540,8 @@ def push_row_change(
             warnings=warnings,
             known_secrets=known_secrets,
             source_row_id=(source_row_id or row_id) if remap is not None else "",
+            # The identity the push's in-memory row map uses (R6).
+            created_from=(source_row_id or row_id) if remap is None else "",
             checkpoint=checkpoint,
             remap=remap,
             # A create on the source tree's own branch: its promote entries'
@@ -498,6 +586,7 @@ def _push_create_row(
     warnings: list[dict[str, Any]] | None = None,
     known_secrets: SecretCache | None = None,
     source_row_id: str = "",
+    created_from: str = "",
     checkpoint: Callable[[str], None] | None = None,
     remap: PromoteRemap | None = None,
     link_rows_in: Manifest | None = None,
@@ -508,6 +597,9 @@ def _push_create_row(
     The row is recorded and *checkpoint* saves the manifest right after the
     API returned its id, before the local file is written back (D25).
     *source_row_id* (promote path) is recorded as the row it was created from.
+    *created_from* (any other push) is the placeholder row id the change
+    carried -- a ``sync clone`` reference row -- recorded for the link
+    backfill of a later push (D9).
     *link_rows_in* (the manifest, on any other push) links the promote
     entries of *source_tree* to the new row before the checkpoint (risk 74).
 
@@ -548,6 +640,8 @@ def _push_create_row(
         row_entry.metadata[PROMOTED_ROW_KEY] = source_row_id
     elif remap is not None:
         row_entry.metadata[AUTHORED_ROW_KEY] = True  # its source id is not known yet
+    if created_from and created_from != new_row_id:
+        row_entry.metadata[CREATED_FROM_KEY] = created_from
     if link_rows_in is not None:
         link_promote_rows(link_rows_in, tree=source_tree, source=parent)
     if checkpoint is not None:
@@ -556,7 +650,15 @@ def _push_create_row(
     # Write-back: encrypted secrets land in the local file so a subsequent diff
     # sees local == remote. ``config_id=""`` tells the shared helper to skip
     # writing a config_id into ``_keboola`` (rows use ``row_id``).
-    writeback_after_push(service, pristine_data, row_dir, "", configuration)
+    writeback_after_push(
+        service,
+        pristine_data,
+        row_dir,
+        "",
+        configuration,
+        is_row=True,
+        row_id=new_row_id if remap is None else "",
+    )
 
     row_file = row_dir / CONFIG_FILENAME
     stamp = row_baseline(
@@ -630,7 +732,15 @@ def push_update_row(
     )
     logger.info("Updated row %s/%s/%s", component_id, parent_config_id, row_id)
 
-    writeback_after_push(service, pristine_data, row_dir, "", configuration)
+    writeback_after_push(
+        service,
+        pristine_data,
+        row_dir,
+        "",
+        configuration,
+        is_row=True,
+        row_id=row_id if remap is None else "",
+    )
 
     row_file = row_dir / CONFIG_FILENAME
     new_file_hash = service._file_hash(row_file) if row_file.exists() else ""
@@ -719,6 +829,15 @@ def push_create(
 
     # Merge code files (transform.sql, transform.py, code.py) back into config
     merge_code_files(component_id, local_data, config_dir)
+    # A new config has no remote packages to keep (T1).
+    require_decided_packages(
+        client,
+        component_id=component_id,
+        config_id="",
+        branch_id=branch_id,
+        local_data=local_data,
+        config_path=config_path_str,
+    )
 
     name, description, configuration = local_config_to_api(local_data)
     folder = manifest_folder(manifest, component_id, branch_id, config_path_str)
@@ -863,6 +982,15 @@ def push_update(
 
     # Merge code files (transform.sql, transform.py, code.py) back into config
     merge_code_files(component_id, local_data, config_dir)
+    # Packages a silent pyproject.toml left undecided: the target's own (T1).
+    require_decided_packages(
+        client,
+        component_id=component_id,
+        config_id=config_id,
+        branch_id=branch_id,
+        local_data=local_data,
+        config_path=config_path_str,
+    )
 
     name, description, configuration = local_config_to_api(local_data)
 

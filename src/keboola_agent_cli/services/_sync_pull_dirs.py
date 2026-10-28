@@ -32,7 +32,12 @@ from ..sync.diff_engine import config_hash
 from ..sync.manifest import Manifest, ManifestConfigRow, ManifestConfiguration
 from ..sync.naming import config_row_path
 from ._sync_models import (
+    ADOPTED_ROW_IDS_KEY,
+    AMBIGUOUS_ROW_PLACEHOLDERS_KEY,
     AUTHORED_ROW_KEY,
+    CREATED_FROM_KEY,
+    FALLBACK_LINKS_KEY,
+    LINK_PENDING_KEY,
     PROMOTED_ROW_KEY,
     PROMOTED_SOURCE_KEY,
     REBIND_PENDING_KEY,
@@ -281,8 +286,19 @@ def carry_promote_metadata(
     """
     if old is None:
         return
-    if old.metadata.get(REBIND_PENDING_KEY):
-        metadata[REBIND_PENDING_KEY] = old.metadata[REBIND_PENDING_KEY]
+    # Also the placeholder a config was created from and an unfinished link
+    # backfill (D9): a pull between the failed push and the next one must
+    # not lose what the next one needs to finish the links.
+    for key in (
+        REBIND_PENDING_KEY,
+        CREATED_FROM_KEY,
+        LINK_PENDING_KEY,
+        ADOPTED_ROW_IDS_KEY,
+        AMBIGUOUS_ROW_PLACEHOLDERS_KEY,
+        FALLBACK_LINKS_KEY,
+    ):
+        if old.metadata.get(key):
+            metadata[key] = old.metadata[key]
     association = promoted_from(old)
     source = association.config_id if association is not None else ""
     source = source or str(old.metadata.get(PROMOTED_SOURCE_KEY) or "")
@@ -290,7 +306,7 @@ def carry_promote_metadata(
         metadata[PROMOTED_SOURCE_KEY] = source
     old_rows = {row.id: row.metadata for row in old.rows}
     for row in rows:
-        for key in (PROMOTED_ROW_KEY, AUTHORED_ROW_KEY):
+        for key in (PROMOTED_ROW_KEY, AUTHORED_ROW_KEY, CREATED_FROM_KEY):
             if key in old_rows.get(row.id, {}):
                 row.metadata[key] = old_rows[row.id][key]
 
@@ -342,6 +358,7 @@ def pull_config_rows(
     # A row dir carrying an id is adopted by that id under a tracked parent
     # too, unless a manifest row owns its path (D22 guards a differing file).
     prefix = f"{ctx.component_id}/{ctx.config_id}/"
+    carried = _follow_moved_rows(ctx.config_dir, existing_rows, prefix, dirs)
     owned = {v["path"] for k, v in existing_rows.items() if k.startswith(prefix)}
     adopted = {rid: path for rid, path in dirs.by_id.items() if path not in owned}
     used: set[str] = set()
@@ -373,8 +390,56 @@ def pull_config_rows(
         dry_run=ctx.dry_run,
         rel_path=ctx.rel_path,
         pull_details=pull_details,
+        carried=carried,
     )
     return result
+
+
+def _follow_moved_rows(
+    config_dir: Path, existing_rows: dict[str, dict[str, str]], prefix: str, dirs: IdDirs
+) -> set[str]:
+    """Point each tracked row whose dir is gone at the one dir that now carries its id (round 7).
+
+    A row dir moved (renamed) by the user is that row at its new path: pull
+    then writes into it, and the stale sweep judges it there -- unedited and
+    gone on the remote, it is removed; edited, it is kept and reported.
+    Before, the sweep looked at the old path only, dropped the entry and left
+    the moved dir, which the next push created as a new row. Returns the ids
+    of tracked rows whose dir is gone while two or more dirs carry the id:
+    those entries are never swept (the id is never forgotten while a dir
+    carries it).
+    """
+    ambiguous: set[str] = set()
+    owned = {v["path"] for k, v in existing_rows.items() if k.startswith(prefix)}
+    for key, tracked in existing_rows.items():
+        row_id = key.removeprefix(prefix)
+        if row_id == key:
+            continue
+        path = current_row_path(config_dir, row_id, tracked["path"], dirs, owned)
+        if path is None:
+            ambiguous.add(row_id)
+        else:
+            tracked["path"] = path
+    return ambiguous
+
+
+def current_row_path(
+    config_dir: Path, row_id: str, tracked_path: str, dirs: IdDirs, owned: set[str]
+) -> str | None:
+    """Where a tracked row's dir is now: its manifest path, or the one dir moved there.
+
+    The one rule pull and the ``pull --force`` preflight share (Devin
+    4400588073): a tracked row whose own dir is gone is at the one dir that
+    carries its id and no other tracked row owns. ``None`` when several dirs
+    carry the id (ambiguous); the manifest path when it exists or nothing
+    carries the id.
+    """
+    if (config_dir / tracked_path / CONFIG_FILENAME).exists():
+        return tracked_path
+    if row_id in dirs.ambiguous:
+        return None
+    moved = dirs.by_id.get(row_id)
+    return moved if moved is not None and moved not in owned else tracked_path
 
 
 def _pull_row(

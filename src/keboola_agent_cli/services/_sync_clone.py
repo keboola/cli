@@ -28,6 +28,7 @@ from ..sync.clone import (
 from ..sync.manifest import load_manifest, save_manifest
 from ._sync_clone_warnings import collect_clone_warnings, read_encrypted_values
 from ._sync_project_guard import verified_project_id
+from ._sync_push_ops import create_refusals
 from ._sync_storage import create_buckets_from_export
 from .base import find_default_branch_id
 
@@ -224,6 +225,8 @@ def clone_project(
             "warnings": collect_clone_warnings(
                 service, changes=changes, encrypted=encrypted, dry_run=True, **tree_args
             ),
+            # The creates the real clone's push refuses (T1, round 5).
+            "errors": _dry_run_refusals(service, changes, tree_args),
             **override_counts,
         }
 
@@ -276,3 +279,17 @@ def clone_project(
         "warnings": [*push_result.get("warnings", []), *clone_warnings],
         **override_counts,
     }
+
+
+def _dry_run_refusals(
+    service: SyncService, changes: list[dict[str, Any]], tree_args: dict[str, Any]
+) -> list[dict[str, str]]:
+    """The creates the clone's push would refuse, read from the tree it pushes."""
+    if not any(c.get("change_type") == "added" and not c.get("is_row") for c in changes):
+        return []
+    root = tree_args["target_path"]
+    manifest = load_manifest(root)
+    branch_id = service._resolve_branch_id(
+        tree_args["target_alias"], manifest, root, branch_override=tree_args["branch_override"]
+    )
+    return create_refusals(service, changes, manifest, root, branch_id)

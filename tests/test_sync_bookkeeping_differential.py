@@ -40,6 +40,7 @@ import pytest
 import yaml
 
 from helpers import setup_single_project
+from keboola_agent_cli.errors import KeboolaApiError
 from keboola_agent_cli.models import TokenVerifyResponse
 from keboola_agent_cli.services.component_service import materialize_pushed_config
 from keboola_agent_cli.services.config_service import ConfigService
@@ -277,7 +278,10 @@ class Api:
     def _detail(
         self, component_id: str, config_id: str, branch_id: int | None = None, **_: Any
     ) -> dict:
-        return copy.deepcopy(self.remote[self._b(branch_id)][(component_id, config_id)])
+        config = self.remote[self._b(branch_id)].get((component_id, config_id))
+        if config is None:  # Storage answers 404 for a config it does not have
+            raise KeboolaApiError(f"Configuration {config_id} not found", status_code=404)
+        return copy.deepcopy(config)
 
     def _rows_of(self, component_id: str, config_id: str, branch_id: int | None) -> list[dict]:
         return self.remote[self._b(branch_id)][(component_id, config_id)]["rows"]
@@ -1052,17 +1056,9 @@ SCENARIOS: dict[str, tuple[Callable[[Path, Variant], int | None], tuple[str, ...
 }
 
 # Finding texts (severity first). Full stories: the explicit tests at the end.
-F5 = (
-    "F5 (HIGH): a new config authored with rows is created without its rows -- "
-    "diff lists no rows under an untracked parent; a second push creates them"
-)
 L1 = (
     "L1 (LOW): pyproject.toml carries config-derived fields (name, "
     "[tool.keboola] config_id) that push/clone never refresh; pull writes them"
-)
-L2 = (
-    "L2 (LOW, layout only): after clearing a description by deleting "
-    "_description.md, _config.yml lacks the `description: ''` a fresh pull writes"
 )
 L3 = (
     "L3 (LOW): push stamps config_hash_version on ROW entries, pull never does "
@@ -1077,18 +1073,18 @@ L4 = (
 
 # (scenario, variant) -> FINDING reason, from the actual run.
 FINDINGS: dict[tuple[str, str], str] = {
-    # The new config's rows go up on the second push, like on production (F5).
-    ("push_create_promote_dev", "rows"): F5,
+    # F5 is fixed: the rows go up in the same push. What is left is the row
+    # bookkeeping of every row push creates (L3, L4).
+    ("push_create_promote_dev", "rows"): f"{L3}; {L4}",
     ("push_create_promote_dev", "app"): L1,
     ("promote_row_create_to_branched_dev", "rows"): f"{L3}; {L4}",
-    ("push_create", "rows"): F5,
+    ("push_create", "rows"): f"{L3}; {L4}",
     ("promote_pulled_to_dev", "rows"): f"{L3}; {L4}",
     ("push_create", "app"): L1,
     ("promote_pulled_to_dev", "app"): L1,
     ("push_rename_in_yaml", "python"): L1,
     ("push_rename_in_yaml", "app"): L1,
     ("clone", "app"): L1,
-    **{("push_remove_description", v): L2 for v in CONFIG_VARIANTS},
     ("row_create", "rows"): f"{L3}; {L4}",
     ("row_update", "rows"): L3,
     ("row_disable", "rows"): L3,
@@ -1268,15 +1264,10 @@ def test_new_config_with_rows_promoted_to_dev_gets_its_rows(tmp_path: Path) -> N
     assert len(cfg["rows"]) == 2
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "FINDING F5 (MED): a new config authored with rows is created WITHOUT its "
-        "rows on the first push (status pushed, no error); rows only go up on a "
-        "second push"
-    ),
-)
 def test_new_config_with_rows_is_complete_after_one_push(tmp_path: Path) -> None:
+    """Was FINDING F5 (MED): a new config authored with rows was created WITHOUT its
+    rows on the first push (status pushed, no error); rows only went up on a second
+    push -- rows were walked only under configs the manifest already tracked"""
     v = _rows_variant()
     w = World(tmp_path)
     w.api.types[v.component_id] = v.component_type

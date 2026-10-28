@@ -673,6 +673,8 @@ def find_untracked_rows(
     read_config: ConfigReader,
     only_branch_path: str | None = None,
     entries: list[ManifestConfiguration] | None = None,
+    *,
+    file_ids_as_source: bool = False,
 ) -> list[dict[str, Any]]:
     """Scan tracked config dirs for ``rows/*/_config.yml`` not in the manifest.
 
@@ -696,6 +698,12 @@ def find_untracked_rows(
     rows of a target-branch entry are looked up in the source tree where its
     files are, and the rows of the production entry it shadows are not walked
     a second time.
+
+    *file_ids_as_source* (any push but the promote path): a row file that
+    carries a row id, under a config that is not a promote entry, keeps that
+    id as its ``source_row_id`` -- the id a flow created in the same push
+    selects it by, recorded as ``created_from_id`` when the row is created
+    (D9, R6). On the promote path only a source entry's own rows count (risk 81).
     """
     added: list[dict[str, Any]] = []
     for cfg in manifest.configurations if entries is None else entries:
@@ -729,7 +737,12 @@ def find_untracked_rows(
                     "row_name": local_data.get("name", ""),
                     "path": row_rel_path,
                     "data": local_data,
-                    "source_row_id": source_rows.get(row_rel_path, ""),
+                    "source_row_id": source_rows.get(row_rel_path, "")
+                    or (
+                        str((local_data.get("_keboola") or {}).get("row_id") or "")
+                        if file_ids_as_source and promoted_from(cfg) is None
+                        else ""
+                    ),
                 }
             )
     return added

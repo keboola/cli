@@ -79,6 +79,153 @@ These lists keep `error`, because their entries are not failed items with an err
   own folder (not `main/`), so edit the files there. If you already edited code files after
   such a push, copy them aside first: a pull that takes a remote change overwrites them.
 
+## Sync treats a config's companion files as one set; a new config's rows go up with it
+
+*(since vNEXT)*
+
+- **A companion file the remote no longer has is removed by `sync pull`.** When the
+  description or the package list is cleared remotely (in the UI), pull now deletes
+  `_description.md` / `pyproject.toml`. Before, it left the old file, `sync diff` said
+  "in sync", and the next `sync push` of any edit to that config sent the old value back.
+  A tree an older pull left in that state is repaired by the next `sync pull`, also when
+  the remote has not changed since. Pull deletes only a file it can prove unchanged since
+  the last sync: an edited file keeps the config `skipped` (its old baseline too, so
+  `sync diff` shows the conflict), and a file pull cannot judge (a config created by a push
+  that stopped half-way, an adopted directory) or one edited while pull runs is kept, with
+  a `COMPANION_KEPT` entry in `warnings[]`. While that file exists, `sync diff` lists the
+  config as a `conflict` and `sync push` never sends it: delete the file to accept the
+  remote's cleared value, or run `sync pull --theirs`.
+- **A new companion file is a local change.** Creating `_description.md` for a config
+  pulled with an empty description (or any companion file that was not there at pull
+  time) now shows as `modified` and `sync push` sends it. Deleting one shows as
+  `modified` too and clears the value. The manifest records the companion set as
+  `pull_extra_hashes` plus `pull_extra_hashes_version: 1`; older kbagent versions read
+  such a manifest without any phantom change.
+- **Only the files the component uses count**: `_description.md` for every config,
+  plus `transform.sql` (SQL transformations), `transform.py` + `pyproject.toml` (Python
+  transformations), `code.py` + `pyproject.toml` (custom Python apps). Any other of those
+  file names in a config folder (a `code.py` beside an extractor, `transform.py` renamed
+  to `code.py`) is never pushed, compared or deleted; `sync diff` and `sync push` (also
+  with nothing to push, and `--dry-run`) report it as an `UNOWNED_COMPANION` entry in the
+  top-level `warnings[]` (`--json`) or a warning line on stderr; with `--all-projects`
+  each entry names its `project`.
+- **Empty versus deleted:** a companion file always wins over the same value inline, so an
+  empty `_description.md`, `code.py`, `transform.sql` or `transform.py` sends an empty
+  value. `pyproject.toml` is read as TOML: its `[project].dependencies` list is the package
+  list (`dependencies = []` is an empty one, a one-line list works). A file that states no
+  such list -- no key, a Poetry-only file, not valid TOML -- never decides the packages:
+  the inline `packages` apply, else push keeps the packages the remote config has (exactly,
+  also a value an older kbagent wrote without escaping its quotes); a new config in that
+  state is refused with `COMPANION_UNREADABLE` (`push --dry-run` and `clone --dry-run`
+  print the same error with its remedy and count planned, refused and executable configs
+  separately, also per project with `--all-projects`; the rows of a refused new config are
+  refused too, as the real push skips them), as is an update whose remote cannot be read.
+  `sync diff` reports a file that is not valid TOML (`COMPANION_UNREADABLE` warning). A deleted companion sends the value inline in
+  `_config.yml` (pull writes `description: ''` and `packages: []` there when they are
+  empty), or none. After a push that cleared the
+  description, `_config.yml` has the `description: ''` line a fresh pull writes.
+- **`_config.yml` deleted while an edited `transform.sql` (or another companion) is kept**
+  is a local change: `sync pull` no longer re-creates the folder over it (reported
+  `skipped`). Delete the whole folder, or use `--theirs`, to take the remote.
+- **Changing `_keboola.component_id` in a tracked folder is refused** by `sync diff` and
+  `sync push` (`CONFIG_ERROR`, exit 5). Restore it, or move the files to a new folder
+  without `_keboola.config_id` to create a config of the other component.
+- **A new config authored with `rows/` is created with its rows in one `sync push`**
+  (production and `--branch`). Before, push created the config alone and reported success;
+  a second push created the rows. `sync diff` and `push --dry-run` list those rows as
+  `added` with `parent_path` (the folder) and an empty `parent_config_id`. When the config
+  create fails, its rows fail with `PARENT_CONFIG_NOT_TRACKED`; when a row create fails or
+  the push stops half-way, the next push creates only what is missing -- also when a row
+  file carries a row id copied from another config (a copied id is never taken as the
+  row's identity: on `--branch` the row is linked to its production row by its folder once
+  production creates it). A row push creates now carries its
+  `_keboola.row_id` in its file, as a pull writes it (not on `--branch` from `main/`), so a
+  later `sync pull` finds it by id instead of writing a second copy. A create whose response was lost (the
+  server created it, kbagent never saw the id) can still be created twice; check the
+  remote before re-running after a network failure.
+- **Rows under a folder adopted by its config id** (no manifest entry, the file carries an
+  existing config id) are compared by row id. A row that differs from the remote, or a
+  remote row with no file, is a `conflict` -- never an update or a delete, because nothing
+  records which side changed it. A row file carrying an id the remote no longer has is
+  `remote_deleted`: push never creates it again, also after the adopted config was
+  registered (its rows are registered with it, that one included). Two row folders of one
+  config carrying the same row id (a copied row folder) are both a `conflict` naming both
+  folders, and push creates neither. Delete every folder that is not that row: the one left
+  with the row id IS the row (compared by id, `remote_deleted` when the remote lost it) and
+  is never created again. To keep a copy as a NEW row, remove the `row_id` line from its
+  `_config.yml` instead. This holds for a tracked row folder too: while two folders stand
+  for one row id, both are a conflict, push updates and deletes neither, and the row is
+  never inferred deleted. Any row folder that alone carries the id of a row the config has
+  (on the remote, in the manifest, or recorded when the config was adopted) is that row --
+  a moved or renamed row folder included. At a new path it has no proven baseline, so a
+  difference is a conflict until `sync pull`, which tracks the row at its new path (keeping
+  a local edit, which then pushes normally); when the remote deleted that row, pull removes
+  the moved folder if it is unedited and keeps and reports it otherwise. When the remote
+  deletes the whole CONFIG, pull keeps its folder (reported `skipped`) if any row folder in
+  it holds work: an edited row at any path, moved ones included, a row folder no tracked
+  row stands for (a new row), or several folders carrying one row's id. Another config's
+  folder nested inside it is that config's, not this one's work: it is judged (and kept or
+  removed) on its own. An outer config holding a nested one that stays is kept whole and
+  reported `skipped`; a later pull removes it once the nested config is gone -- also when
+  the nested config is reached through a link (`alias -> parent/child`). A config folder
+  that is a symbolic link, or that contains one anywhere, is never traversed or deleted
+  -- it is reported `skipped` instead, also under `--theirs`: kbagent does not decide what
+  a folder owns through links. Containment is judged by the filesystem, so it holds on
+  case-insensitive ones. What is kept is decided for every config before anything is
+  deleted, so the manifest order never changes the outcome. A new row (no row id) under such a config is created
+  when the config itself equals the remote; otherwise run `sync pull` first. Pushing the
+  adopted config registers its rows, so a later push never creates them a second time.
+- **A flow, orchestration or schedule created in the same push as a row it selects**
+  (typical for `sync clone`) keeps `link_pending` in the manifest while that row is
+  missing (also a new row under an existing config whose create failed), and the push that
+  creates the row also sets `configRowIds` -- no edit needed.
+  The same applies after a push that stopped before the links were set. That later push
+  reads the config from the remote and rewrites only its references (a change made in the
+  UI since survives); `sync diff` then shows the rewrite as a remote change unless the local
+  file was in sync, in which case the file is updated too.
+  A row created by an earlier push and deleted on the remote since is not a resolved
+  target: the reference stays pending (`LINK_UNRESOLVED`) instead of naming the deleted id.
+  The finishing push works from the references the REMOTE config holds: a link changed in
+  the UI since is kept, one repaired in the UI clears `link_pending` without a write, and
+  every config it is about to name is read first -- one that is gone or cannot be read
+  (a 5xx) is never written; the link stays pending and the push reports it
+  (`change_type: link_target`) -- once per push, not again for each link that names it.
+  A row the selected config has on the target is never remapped, also not when an
+  earlier create recorded that id as a placeholder.
+- **A new config folder whose `_config.yml` carries an id nothing tracks** (a
+  placeholder, e.g. `config_id: ex-ref`) is created as before, and now a flow created
+  in the same push that selects it by that id -- and its rows by the `row_id`s in its
+  row files -- is linked to the new config and rows. Those row ids count only under the
+  new config: a flow that selects the ORIGINAL config's row by a copied id keeps it. A
+  folder copied from a tracked config (its id is still tracked) is no placeholder, nor is
+  one carrying the placeholder a config was already created from. Two new folders
+  carrying the same free id link neither (`PLACEHOLDER_AMBIGUOUS` warning). A
+  transformation's link to a variables config that exists on the target, or to a
+  placeholder already created, is never re-pointed to the one variables config the push
+  created; only an id nobody claims is -- a placeholder whose create failed keeps its
+  links and stays `link_pending` (also when its folder is untracked), and the retry binds
+  them. An explicit `variables_values_id` is never re-pointed to another row of the new
+  variables config either: when its own row failed to create (or several rows carry it),
+  it is left as it is, pending, until that row exists. Row ids work the same way under their config: a row
+  folder carrying the id a row was already created from is a new row of its own, and two
+  new row folders carrying one id under one config link neither (`PLACEHOLDER_AMBIGUOUS`).
+  That decision is recorded on the config (`ambiguous_row_placeholders`): when one of
+  the rows fails to create, the retry does not make the other the row by default -- the
+  link stays pending and every push warns until no row file carries the id any more.
+  When the fallback chose the variables config but the values row failed to create, the
+  choice is recorded on the transformation (`fallback_links`) and the push that creates
+  the row finishes the link -- unless the chosen config is gone or cannot be read by
+  then (also after a `sync pull` dropped that config's entry): nothing is written, the
+  link stays pending and the record is kept. An ambiguous
+  row id is never resolved through that fallback either.
+- **A transformation created in the same push as its variables values row or shared-code
+  row** keeps `link_pending` the same way while that row is missing: the push that creates
+  the row also sets `variables_values_id` / `shared_code_row_ids` and the `{{<row id>}}`
+  placeholders -- before, the transformation kept the reference ids for good.
+- **`sync pull --force` finds a moved row by its id** before it checks for conflicts: a
+  row folder moved to another name and edited, whose remote row was edited too, is
+  `SYNC_CONFLICT` -- before, the check looked only at the old folder and missed it.
+
 ## `sync push --branch <dev>` from `main/` no longer changes what production sees
 
 *(since vNEXT)*

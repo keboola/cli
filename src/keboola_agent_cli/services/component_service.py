@@ -425,7 +425,7 @@ def materialize_pushed_config(
     # The slugified directory can pre-exist (same-name re-run, stray files):
     # report only what THIS call wrote, and clear a stale _description.md a
     # previous occupant left behind when the pushed description is empty --
-    # _extract_description only ever writes, so the stale file would
+    # extract_code_files only ever writes, so the stale file would
     # misattribute to the new config_id (PR #653 review sweep).
     if not description:
         stale_description = config_dir / DESCRIPTION_FILENAME

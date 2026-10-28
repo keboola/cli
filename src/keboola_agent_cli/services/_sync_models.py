@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ..errors import ErrorCode
 from ..sync.manifest import ManifestConfiguration
 
 # Sibling component that backs a transformation's variable links. A
@@ -32,6 +33,11 @@ ORCHESTRATOR_COMPONENT_ID = "keboola.orchestrator"
 # A schedule runs ``configuration.target.componentId`` /
 # ``configuration.target.configurationId``.
 SCHEDULER_COMPONENT_ID = "keboola.scheduler"
+
+# The configs whose job is to run another config (Phase D).
+RUN_TARGET_COMPONENTS = frozenset(
+    {FLOW_COMPONENT_ID, ORCHESTRATOR_COMPONENT_ID, SCHEDULER_COMPONENT_ID}
+)
 
 # Sibling component that backs a transformation's shared-code links. A
 # transformation references it via ``configuration.shared_code_id`` (the
@@ -53,6 +59,28 @@ PROMOTED_SOURCE_KEY = "promoted_source"
 # (authored in the source tree). Linked by path, once, when the source tree's
 # own branch creates that row (risk 83).
 AUTHORED_ROW_KEY = "promoted_authored"
+# Config and row metadata outside the promote path: the placeholder id (a
+# ``sync clone`` reference id, a scaffold's id) a push created this config or
+# row from. Lets a later push map a reference still naming that id (D9).
+CREATED_FROM_KEY = "created_from_id"
+# Config metadata of a flow, orchestration or schedule a push created outside
+# the promote path whose references may still name placeholder ids: set in its
+# create checkpoint, cleared once every reference resolves (D9).
+LINK_PENDING_KEY = "link_pending"
+# Config metadata of a config registered by its id (adopted): every row id its
+# local row dirs carried then, an ambiguous one included. A row dir that later
+# carries one of them alone is that row, never a new one (round 6).
+ADOPTED_ROW_IDS_KEY = "adopted_row_ids"
+# Config metadata: the row placeholders two or more of its new row dirs carried
+# in one push. Never mapped automatically again -- a partial push must not let
+# the dir that happened to fail become the row by default -- until no row file
+# of the config carries the id any more (Astra).
+AMBIGUOUS_ROW_PLACEHOLDERS_KEY = "ambiguous_row_placeholders"
+# Config metadata of a transformation whose variables link the singleton
+# fallback bound to a new config while its values row could not be resolved
+# yet: ``{"<component>/<id it names>": "<config the fallback chose>"}``, so the
+# push that creates the row finishes the link (Astra).
+FALLBACK_LINKS_KEY = "fallback_links"
 
 
 @dataclass
@@ -103,6 +131,29 @@ class CreatedConfig:
 
 
 @dataclass
+class TargetRead:
+    """One linked target config as a push read it: its live row ids, or why it could not be read."""
+
+    rows: set[str] | None
+    error_code: ErrorCode | None = None
+    message: str = ""
+    # The target answered 404: it is known NOT to exist (a failed read proves nothing).
+    gone: bool = False
+
+
+@dataclass
+class TargetCache:
+    """The target reads of one push, shared by Phase C and Phase D (each target read once)."""
+
+    reads: dict[tuple[str, str], TargetRead] = field(default_factory=dict)
+    reported: set[tuple[str, str]] = field(default_factory=set)
+    # ``(component_id, placeholder)`` this push planned for a new dir and did
+    # not create (its create failed): known not to exist YET, so a link to it
+    # stays pending until a later push creates it.
+    uncreated_claims: set[tuple[str, str]] = field(default_factory=set)
+
+
+@dataclass
 class VariableBindingResult:
     """Outcome of the Phase-C transformation-link backfill (variables + shared code).
 
@@ -115,6 +166,10 @@ class VariableBindingResult:
     ``warnings`` carries non-fatal baseline-stamping notices (issue #686).
     """
 
+    # The ``link_pending`` flag of a transformation changed (Devin 4400588270).
+    pending_changed: bool = False
+    # The push's target reads, handed on to Phase D (#929 D32).
+    targets: TargetCache = field(default_factory=TargetCache)
     errors: list[dict[str, str]] = field(default_factory=list)
     warnings: list[dict[str, Any]] = field(default_factory=list)
     configs_rewritten: int = 0
@@ -142,6 +197,8 @@ class FlowBindingResult:
     orchestrator_tasks: int = 0
     schedule_targets: int = 0
     config_row_ids: int = 0
+    # ``link_pending`` was set or cleared on an entry (D9): the manifest changed.
+    pending_changed: bool = False
 
     def push_fields(self, shared_code_links: int) -> dict[str, Any]:
         """Return the push-result keys for the link remaps of Phase C and D.
