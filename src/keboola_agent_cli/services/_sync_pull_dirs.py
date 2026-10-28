@@ -57,6 +57,22 @@ class PullEntries:
     own: list[ManifestConfiguration]
     kept: list[ManifestConfiguration]
 
+    def hold_ignored_promotes(self, ignored_components: frozenset[str]) -> None:
+        """Move the pulled branch's promote entries of ignored components to *kept* (risk 79).
+
+        Pull never drops a promote entry because its component is ignored,
+        whichever branch it is on: the stale sweep would, and once un-ignored
+        the next promote created the config on its branch again. Kept, it is
+        carried through untouched (:func:`finalize_kept_entries`).
+        """
+        held = [
+            e
+            for e in self.own
+            if e.component_id in ignored_components and promoted_from(e) is not None
+        ]
+        self.own = [e for e in self.own if e not in held]
+        self.kept.extend(held)
+
     def kept_paths_in(self, tree: str) -> set[str]:
         """Paths of the kept entries whose files live in *tree* (reserved by a pull of it)."""
         paths = set()

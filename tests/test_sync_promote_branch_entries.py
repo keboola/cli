@@ -2676,16 +2676,26 @@ def test_unignored_component_promotes_into_its_dev_config_not_a_duplicate(
     dev_id = _dev_id_of(w, v.component_id)
 
     for ignored in ([v.component_id], []):
-        manifest = load_manifest(w.root)
-        manifest.ignored_components = ignored
-        save_manifest(w.root, manifest)
+        _set_ignored(w, ignored)
         w.pull()
+    # Risk 78: the ignored pull removed main/'s directory (documented), and the
+    # first edit lived only there and on DEV. Re-pulled, main/ holds production
+    # again, so one edit recreates exactly what D holds: nothing to push.
+    assert "edit_marker" not in (_yaml(w.config_dir(cid)).get("parameters") or {})
+    semantic_edit(w.config_dir(cid) / CONFIG_FILE)
+    assert w.push(branch=DEV)["status"] == "no_changes"
     semantic_edit(w.config_dir(cid) / CONFIG_FILE)
     w.push(branch=DEV)
 
     assert list(w.api.remote[DEV]) == [(v.component_id, dev_id)]  # no duplicate
     dev_config = w.api.get(DEV, v.component_id, dev_id)["configuration"]
-    assert dev_config["parameters"]["edit_marker"] == 2  # D got the second edit
+    assert dev_config["parameters"]["edit_marker"] == 2  # D got the new edit
+
+
+def _set_ignored(w: World, ignored: list[str]) -> None:
+    manifest = load_manifest(w.root)
+    manifest.ignored_components = ignored
+    save_manifest(w.root, manifest)
 
 
 # -- risk 76: a crash right after the production create's checkpoint ---------
@@ -2757,3 +2767,97 @@ def test_a_row_mapped_to_its_own_id_resolves_the_unit() -> None:
     body["tasks"][0]["task"]["configRowIds"] = ["r1"]
     task = remap.apply("keboola.flow", body)["tasks"][0]["task"]
     assert (task["configId"], task["configRowIds"]) == ("D", ["r1"])
+
+
+# ===========================================================================
+# Round 17 (risks 79-81)
+# ===========================================================================
+
+
+# -- risk 79: an ignored DEV pull keeps the promote entry it owns -------------
+
+
+def test_ignored_dev_pull_keeps_the_promote_entry_and_never_duplicates(
+    tmp_path: Path,
+) -> None:
+    v = VARIANTS["extractor"]
+    seeded = _seeded(tmp_path, v)
+    w, cid = seeded.world, seeded.config_id
+    semantic_edit(w.config_dir(cid) / CONFIG_FILE)
+    w.push(branch=DEV)  # P promoted as D, the only component
+    dev_id = _dev_id_of(w, v.component_id)
+    (before,) = _entries(w, dev_id, DEV)
+
+    _set_ignored(w, [v.component_id])
+    w.pull(branch=DEV)
+    assert _entries(w, dev_id, DEV) == [before]  # carried untouched
+    _set_ignored(w, [])
+    w.pull()
+    semantic_edit(w.config_dir(cid) / CONFIG_FILE)
+    w.push(branch=DEV)
+
+    assert list(w.api.remote[DEV]) == [(v.component_id, dev_id)]  # no duplicate
+
+
+# -- risk 80: a push with nothing to send still repairs an empty association --
+
+
+def test_push_with_no_changes_links_a_promote_entry_left_without_its_source(
+    tmp_path: Path,
+) -> None:
+    p = _authored_and_promoted(tmp_path)
+    w, dev_id = p.world, p.dev_id
+    w.push()  # production creates P
+    prod_id = _prod_id_of(w, VARIANTS["extractor"].component_id)
+    manifest = load_manifest(w.root)
+    (dev,) = [c for c in manifest.configurations if c.id == dev_id]
+    dev.metadata["promoted_from"] = {"tree": "main", "config_id": ""}  # as a crash left it
+    save_manifest(w.root, manifest)
+
+    assert w.push()["status"] == "no_changes"
+    (dev,) = _entries(w, dev_id, DEV)
+    assert dev.metadata["promoted_from"] == {"tree": "main", "config_id": prod_id}
+
+
+# -- risk 81: a row reusing a path is never linked to a surviving shadow row ---
+
+
+def test_replacement_row_reusing_a_path_is_never_mapped_to_the_shadow_row(
+    tmp_path: Path,
+) -> None:
+    v = VARIANTS["rows"]
+    seeded = _seeded(tmp_path, v)
+    w, cid = seeded.world, seeded.config_id
+    w.api.types["keboola.flow"] = "other"
+    w.api.branch_from_prod()  # DEV inherits P/r1
+    semantic_edit(w.config_dir(cid) / CONFIG_FILE)
+    w.push(branch=DEV)  # the shadow of P tracks r1
+    prod_rows = w.api.get(PROD, v.component_id, cid)["rows"]
+    (r1,) = [r["id"] for r in prod_rows if r["name"] == "Row 1"]
+
+    # Production deletes r1, then creates r2 under the same name: same row dir.
+    prod_rows[:] = [r for r in prod_rows if r["id"] != r1]
+    w.pull()
+    r2 = w.api._create_row(
+        v.component_id, cid, name="Row 1", configuration={"parameters": {"table": "t9"}}
+    )["id"]
+    w.pull()
+    body = _flow_body(v.component_id, cid)
+    body["tasks"][0]["task"]["configRowIds"] = [r2]
+    w.api.remote[PROD][("keboola.flow", "cfg-flow")] = {
+        "id": "cfg-flow",
+        "name": "Nightly",
+        "description": "",
+        "configuration": body,
+        "rows": [],
+        "isDisabled": False,
+    }
+    w.pull()
+    w.push(branch=DEV)
+
+    (shadow,) = _entries(w, cid, DEV)
+    assert all(
+        r.metadata.get("promoted_from_id") in (None, r.id) for r in shadow.rows
+    )  # never linked to r2
+    task = _dev_flow(w)["configuration"]["tasks"][0]["task"]
+    assert task["configRowIds"] != [r1]

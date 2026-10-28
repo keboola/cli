@@ -143,6 +143,9 @@ def link_promote_rows(manifest: Manifest, *, tree: str, source: ManifestConfigur
     assigns their ids, a promote entry's row in the same row directory is
     recorded as created from that row -- also when the entry's own
     association was already linked. A row that records its source is kept.
+    Only a config a promote created is linked: a shadow (held under the
+    source's own id) records its rows' sources when it is built, and a path
+    alone never proves a later row is the one it copied (risk 81).
     """
     source_rows = {row.path: row.id for row in source.rows}
     for cfg in manifest.configurations:
@@ -153,6 +156,7 @@ def link_promote_rows(manifest: Manifest, *, tree: str, source: ManifestConfigur
             or association.tree != tree
             or association.config_id != source.id
             or cfg.component_id != source.component_id
+            or cfg.id == source.id  # a shadow
         ):
             continue
         for row in cfg.rows:
@@ -308,19 +312,25 @@ def _shadow_rows(
     branch has but that differs as a conflict -- never as an edit to send.
     """
     if on_branch is not None:
-        return [copy.deepcopy(row) for row in rows if row.id in on_branch]
-    return [
-        ManifestConfigRow(
-            id=row.id,
-            path=row.path,
-            metadata={
-                "pull_hash": "",
-                "pull_config_hash": "",
-                UNKNOWN_BASE_KEY: UNKNOWN_BASE_UNREAD,
-            },
-        )
-        for row in rows
-    ]
+        copied = [copy.deepcopy(row) for row in rows if row.id in on_branch]
+    else:
+        copied = [
+            ManifestConfigRow(
+                id=row.id,
+                path=row.path,
+                metadata={
+                    "pull_hash": "",
+                    "pull_config_hash": "",
+                    UNKNOWN_BASE_KEY: UNKNOWN_BASE_UNREAD,
+                },
+            )
+            for row in rows
+        ]
+    for row in copied:
+        # The source row each copy stands for, recorded now: a later path
+        # match cannot tell it from a new row reusing the path (risk 81).
+        row.metadata[PROMOTED_ROW_KEY] = row.id
+    return copied
 
 
 def _branch_row_ids(

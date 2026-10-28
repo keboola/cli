@@ -157,6 +157,20 @@ from .data_app_service import (
 
 logger = logging.getLogger(__name__)
 
+
+def _reconcile_saved_promote_links(project_root: Path) -> None:
+    """Link the saved manifest's promote entries (risk 76) and save it when that changed.
+
+    A tree without a readable manifest is left to the diff, which reports it.
+    """
+    try:
+        manifest = load_manifest(project_root)
+    except (FileNotFoundError, ValueError):
+        return
+    if reconcile_promote_links(manifest):
+        save_manifest(project_root, manifest)
+
+
 # Companion files extracted alongside a config's ``_config.yml`` whose hashes
 # are tracked so ``sync diff`` notices edits to code/description files.
 _EXTRA_HASH_FILENAMES: tuple[str, ...] = (
@@ -589,6 +603,10 @@ class SyncService(BaseService):
         # looked up, never swept as stale and never delete a file; the promote
         # entries among them (files in this tree, none in their own) are kept.
         entries = partition_pull_entries(manifest, project_root, branch_id, branch_dir_name)
+        # Resolved once and shared by the conflict guard, the fetch loop and
+        # the stale-entry sweep below -- see ``effective_ignored_components``.
+        ignored_components = sql_workspaces.effective_ignored_components(manifest)
+        entries.hold_ignored_promotes(ignored_components)
         own_entries = entries.own
         untracked_dirs = scan_config_dirs(self, project_root, manifest, branch_dir_name)
         pull_warnings: list[dict[str, Any]] = ambiguous_id_warnings(untracked_dirs)
@@ -632,9 +650,6 @@ class SyncService(BaseService):
                     UNKNOWN_BASE_KEY: str(r.metadata.get(UNKNOWN_BASE_KEY) or ""),
                 }
 
-        # Resolved once and shared by the conflict guard, the fetch loop and
-        # the stale-entry sweep below -- see ``effective_ignored_components``.
-        ignored_components = sql_workspaces.effective_ignored_components(manifest)
         # Entries the remote no longer lists (#792 A/C); their on-disk dirs are
         # reserved so a same-named new config cannot land in one.
         stale = find_stale_entries(self, own_entries, components, branch_dir, ignored_components)
@@ -1543,6 +1558,10 @@ class SyncService(BaseService):
         Returns:
             Dict with push results (created, updated, deleted, errors).
         """
+        if not dry_run:
+            # Before the diff and any early return, so the plan sees the links
+            # a crash or an older version left out (risk 80).
+            _reconcile_saved_promote_links(project_root)
         diff_result = self.diff(alias, project_root, branch_override=branch_override)
         all_changes = diff_result["changes"]
         never_fetched = diff_result.get("never_fetched", [])
@@ -1610,8 +1629,7 @@ class SyncService(BaseService):
         # whose records carry non-string values such as ``after_length``).
         warnings: list[dict[str, Any]] = []
         pushed_details: list[dict[str, str]] = []
-        # A promote entry a crash left unlinked is linked now (risk 76).
-        manifest_dirty = reconcile_promote_links(manifest)
+        manifest_dirty = False
 
         # A data-app CREATE needs a Data Science client so its runtime type
         # travels into the target (CLI-8). Built only when the changeset
