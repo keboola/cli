@@ -326,15 +326,22 @@ def test_description_payload(
 @pytest.mark.parametrize(
     ("inline", "files", "expected"),
     [
-        # The companion wins: a pyproject.toml with no dependencies is an
-        # empty package list, whatever is inline (R10).
-        ({}, {"pyproject.toml": "[project]\nname = 'x'\n"}, []),
-        ({"packages": ["inline"]}, {"pyproject.toml": "[project]\nname = 'x'\n"}, []),
+        # S1: only a dependency list the file states replaces the packages.
+        # No [project].dependencies key: the file says nothing -- the inline
+        # list applies (Astra's input), never an empty list.
+        ({}, {"pyproject.toml": "[project]\nname = 'x'\n"}, None),
+        ({"packages": ["pandas"]}, {"pyproject.toml": '[project]\nname = "app"\n'}, ["pandas"]),
+        # A one-line list is TOML too (Astra's second input).
+        ({}, {"pyproject.toml": '[project]\ndependencies = ["pandas"]\n'}, ["pandas"]),
+        # An explicit empty list IS an empty package list.
+        ({"packages": ["inline"]}, {"pyproject.toml": "[project]\ndependencies = []\n"}, []),
+        # Not valid TOML: the inline value stays.
+        ({"packages": ["pandas"]}, {"pyproject.toml": "[project\ndependencies = [\n"}, ["pandas"]),
         ({}, {}, None),  # deleted: no packages sent
         ({"packages": []}, {}, []),  # explicit empty inline list (what pull writes)
         (
             {"packages": ["inline"]},
-            {"pyproject.toml": 'dependencies = [\n    "file",\n]\n'},
+            {"pyproject.toml": '[project]\ndependencies = [\n    "file",\n]\n'},
             ["file"],
         ),
     ],
@@ -571,3 +578,75 @@ def test_json_diff_carries_the_warning_in_the_envelope(tmp_path: Path) -> None:
     [warning] = [w for w in envelope["warnings"] if w["code"] == "UNOWNED_COMPANION"]
     assert warning["path"] == f"{HTTP_DIR}/code.py"
     assert "companion_warnings" not in envelope["data"]
+
+
+# ---------------------------------------------------------------------------
+# S1: a pyproject.toml that states no dependencies never clears the packages
+# ---------------------------------------------------------------------------
+
+
+def test_pyproject_without_dependencies_never_clears_the_remote_packages(tmp_path: Path) -> None:
+    """S1 (Astra's P1): inline ``packages`` + a pyproject.toml with no dependencies key."""
+    sim = _world(tmp_path)
+    sim.api.remote[PROD][APP_1]["configuration"]["parameters"]["packages"] = ["pandas"]
+    _pull(sim)
+    config_dir = _dir(sim, APP_DIR)
+    (config_dir / "pyproject.toml").write_text('[project]\nname = "app"\n', encoding="utf-8")
+    data = read_yaml(config_dir / "_config.yml")
+    data["parameters"]["packages"] = ["pandas"]
+    data["name"] = "Name tk900z"  # the unrelated edit that makes the config pushable
+    write_yaml(config_dir / "_config.yml", data)
+
+    _push(sim)
+
+    remote = sim.api.remote[PROD][APP_1]
+    assert remote["name"] == "Name tk900z"
+    assert remote["configuration"]["parameters"]["packages"] == ["pandas"]
+
+
+def test_unreadable_pyproject_is_reported_and_keeps_the_inline_packages(tmp_path: Path) -> None:
+    sim = _world(tmp_path)
+    config_dir = _dir(sim, APP_DIR)
+    (config_dir / "pyproject.toml").write_text("[project\n", encoding="utf-8")
+    data = read_yaml(config_dir / "_config.yml")
+    data["parameters"]["packages"] = ["pkgtk24z"]
+    write_yaml(config_dir / "_config.yml", data)
+
+    result = sim.svc.diff(alias="prod", project_root=sim.root)
+
+    assert [w["code"] for w in result["companion_warnings"]] == ["COMPANION_UNREADABLE"]
+    _push(sim)
+    assert sim.api.remote[PROD][APP_1]["configuration"]["parameters"]["packages"] == ["pkgtk24z"]
+
+
+def test_pyproject_render_is_valid_toml_for_a_quoted_marker(tmp_path: Path) -> None:
+    """S1: a package spec with quotes made the written file invalid TOML."""
+    spec = 'pandas; python_version < "3.12"'
+    data = {"name": "App", "parameters": {"packages": [spec]}, "_keboola": {}}
+    files = render_code_files(APP, data)
+    (tmp_path / "pyproject.toml").write_text(files["pyproject.toml"], encoding="utf-8")
+    assert merge_code_files(APP, {"parameters": {}}, tmp_path)["parameters"]["packages"] == [spec]
+
+
+def test_all_projects_results_emit_each_projects_companion_warnings(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """S4: ``--all-projects`` diff/push/pull results name the project of each entry."""
+    from keboola_agent_cli.commands._sync_push_render import emit_companion_warnings
+    from keboola_agent_cli.output import OutputFormatter
+
+    def bulk() -> dict[str, Any]:
+        return {
+            "projects": {"prod": copy.deepcopy(_IN_SYNC_WITH_A_WARNING), "dev": {"error": "x"}},
+            "summary": {"total": 2},
+        }
+
+    formatter = OutputFormatter(json_mode=True, no_color=True)
+    data = bulk()
+    emit_companion_warnings(formatter, data)
+    [warning] = formatter.warnings
+    assert (warning["code"], warning["project"]) == ("UNOWNED_COMPANION", "prod")
+    assert "companion_warnings" not in data["projects"]["prod"]
+
+    emit_companion_warnings(OutputFormatter(json_mode=False, no_color=True), bulk())
+    assert f"prod: {HTTP_DIR}/code.py is not part of" in capsys.readouterr().err

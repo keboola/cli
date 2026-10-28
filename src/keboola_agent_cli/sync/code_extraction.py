@@ -6,7 +6,9 @@ On push: reads code files back into config parameters.
 
 from __future__ import annotations
 
+import json
 import logging
+import tomllib
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -731,9 +733,59 @@ def _render_app_packages(config_data: dict[str, Any]) -> str | None:
 
 
 def _merge_packages(config_data: dict[str, Any], path: Path) -> None:
-    """pyproject.toml's dependencies ARE the package list: none listed is ``[]``."""
-    packages = _parse_pyproject_packages(path.read_text(encoding="utf-8"))
-    config_data.setdefault("parameters", {})["packages"] = packages
+    """pyproject.toml's ``[project].dependencies``, when it states them, ARE the packages.
+
+    Parsed as TOML (a one-line ``dependencies = [...]`` included). Only a
+    dependency list the file actually states replaces the package list --
+    an explicit ``dependencies = []`` is an empty one. A file without the key,
+    or one that is not valid TOML, says nothing: the inline value (or none)
+    applies, so such a file can never clear the remote's packages. For a
+    file not valid TOML that an older kbagent wrote (a package spec with a
+    quote broke its output), the old line reader's non-empty answer is
+    used, as that version did; ``sync diff`` reports such a file
+    (``COMPANION_UNREADABLE``).
+    """
+    text = path.read_text(encoding="utf-8")
+    declared = declared_dependencies(text)
+    if isinstance(declared, list):
+        config_data.setdefault("parameters", {})["packages"] = declared
+        return
+    if declared is _UNREADABLE and not _has_inline_packages(config_data):
+        legacy = _parse_pyproject_packages(text)
+        if legacy:
+            config_data.setdefault("parameters", {})["packages"] = legacy
+
+
+_UNREADABLE = object()
+
+
+def declared_dependencies(text: str) -> list[str] | object | None:
+    """``[project].dependencies`` of a pyproject.toml text.
+
+    A list of strings when the file states one; ``None`` when it states none
+    (no ``[project]`` or no ``dependencies``); :data:`_UNREADABLE` when the
+    text is not valid TOML or the value is not a list of strings.
+    """
+    try:
+        project = tomllib.loads(text).get("project")
+    except tomllib.TOMLDecodeError:
+        return _UNREADABLE
+    if not isinstance(project, dict) or "dependencies" not in project:
+        return None
+    dependencies = project["dependencies"]
+    if not isinstance(dependencies, list) or not all(isinstance(d, str) for d in dependencies):
+        return _UNREADABLE
+    return list(dependencies)
+
+
+def pyproject_unreadable(text: str) -> bool:
+    """True iff a pyproject.toml text cannot say which packages it lists."""
+    return declared_dependencies(text) is _UNREADABLE
+
+
+def _has_inline_packages(config_data: dict[str, Any]) -> bool:
+    parameters = config_data.get("parameters")
+    return isinstance(parameters, dict) and "packages" in parameters
 
 
 # ---- pyproject.toml helpers ----
@@ -749,30 +801,37 @@ def _render_pyproject_toml(
     # Sanitize name for pyproject
     safe_name = name.lower().replace(" ", "-").replace("_", "-")
 
+    # Every value as a TOML basic string (JSON escaping is valid there): a
+    # package spec with a quote, e.g. a marker ``python_version < "3.12"``,
+    # used to make the file invalid TOML. Plain values render as before.
     lines = [
         "[project]",
-        f'name = "{safe_name}"',
+        f"name = {_toml_string(safe_name)}",
         'requires-python = ">=3.11"',
         "dependencies = [",
     ]
     for pkg in packages:
-        lines.append(f'    "{pkg}",')
+        lines.append(f"    {_toml_string(str(pkg))},")
     lines.append("]")
 
     if component_id or config_id:
         lines.append("")
         lines.append("[tool.keboola]")
         if component_id:
-            lines.append(f'component_id = "{component_id}"')
+            lines.append(f"component_id = {_toml_string(str(component_id))}")
         if config_id:
-            lines.append(f'config_id = "{config_id}"')
+            lines.append(f"config_id = {_toml_string(str(config_id))}")
 
     lines.append("")  # trailing newline
     return "\n".join(lines)
 
 
+def _toml_string(value: str) -> str:
+    return json.dumps(value, ensure_ascii=False)
+
+
 def _parse_pyproject_packages(content: str) -> list[str]:
-    """Read packages from a pyproject.toml's dependencies."""
+    """The pre-TOML line reader of a pyproject.toml's dependencies (fallback only)."""
     packages: list[str] = []
     in_deps = False
 

@@ -330,8 +330,9 @@ that `sync diff` lists and `sync push` sends. When the remote clears a value, `s
 removes its file -- unless you edited it, then the config is `skipped` and diff shows the
 conflict. Only the files of the config's component count; any other of these names in
 the folder is ignored and reported as an `UNOWNED_COMPANION` warning. A companion file
-always wins over the same value inline (an empty `pyproject.toml` is an empty package
-list). An empty description is written inline as `description: ''`.
+always wins over the same value inline; `pyproject.toml` counts only when it states
+`[project].dependencies` (`dependencies = []` is an empty list, a file without the key
+never clears the packages). An empty description is written inline as `description: ''`.
 
 A new config folder with a `rows/` subfolder is created with all its rows by one
 `sync push` (`--dry-run` lists the rows as `added`). If a create fails or the push stops

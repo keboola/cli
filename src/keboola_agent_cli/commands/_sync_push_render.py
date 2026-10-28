@@ -68,7 +68,21 @@ def emit_companion_warnings(formatter: Any, result: dict[str, Any]) -> None:
     line on stderr in human mode -- also when diff finds nothing to change
     or push has nothing to push, which is exactly when a file sync ignores
     or kept would otherwise go unnoticed.
+
+    An ``--all-projects`` result (``projects``: alias -> result) emits every
+    project's entries, each naming its project -- a ``project`` field, and the
+    alias in front of the human message (S4).
     """
+    _emit(formatter, result, "")
+    for alias, project_result in (result.get("projects") or {}).items():
+        if isinstance(project_result, dict):
+            _emit(formatter, project_result, str(alias))
+
+
+def _emit(formatter: Any, result: dict[str, Any], project: str) -> None:
     for entry in result.pop("companion_warnings", None) or []:
         extra = {k: v for k, v in entry.items() if k not in ("code", "message")}
-        formatter.warning(escape(entry["message"]), code=entry["code"], **extra)
+        if project:
+            extra["project"] = project
+        message = f"{project}: {entry['message']}" if project else entry["message"]
+        formatter.warning(escape(message), code=entry["code"], **extra)

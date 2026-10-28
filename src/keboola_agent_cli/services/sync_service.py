@@ -103,13 +103,13 @@ from ._sync_bulk import (
 from ._sync_clone import clone_project as _clone_project_impl
 from ._sync_companions import (
     companion_conflict,
+    companion_diagnostics,
     config_locally_modified,
     current_companions,
     kept_companion_warning,
     local_unchanged,
     preserved_baseline,
     pulled_baseline,
-    unowned_companion_warnings,
     write_pulled_config,
 )
 from ._sync_data_app import (
@@ -119,7 +119,7 @@ from ._sync_data_app import (
     resolve_pull_type,
     type_needs_rewrite,
 )
-from ._sync_link_pending import link_pending_entries
+from ._sync_link_pending import link_pending_entries, planned_row_refs
 from ._sync_models import LocalConfigHashes
 from ._sync_project_guard import adopt_existing_manifest, load_project_manifest
 from ._sync_promote_remap import (
@@ -1122,7 +1122,7 @@ class SyncService(BaseService):
             problem = component_change_problem(cfg.component_id, local_data, cfg.path)
             if problem:
                 relabelled.append(problem)
-            diff_warnings += unowned_companion_warnings(config_dir, cfg.component_id, cfg.path)
+            diff_warnings += companion_diagnostics(config_dir, cfg.component_id, cfg.path)
 
             key = f"{cfg.component_id}/{cfg.id}"
 
@@ -1222,7 +1222,7 @@ class SyncService(BaseService):
                 config_path=added_cfg["path"],
                 remote_rows=remote_rows,
             )
-            diff_warnings += unowned_companion_warnings(config_dir, component_id, added_cfg["path"])
+            diff_warnings += companion_diagnostics(config_dir, component_id, added_cfg["path"])
             # An adopted file has no manifest baseline: compute_changeset reads
             # the one a `config new --push` scaffold records (issue #792 E).
             local_configs.append(
@@ -1461,11 +1461,8 @@ class SyncService(BaseService):
         # again although nothing changed locally.
         stored = load_manifest(project_root)
         target_id = self._resolve_branch_id(alias, stored, project_root, branch_override)
-        if (
-            not changes
-            and not pending_rebinds(stored, target_id)
-            and not link_pending_entries(stored, target_id)
-        ):
+        pending = pending_rebinds(stored, target_id) or link_pending_entries(stored, target_id)
+        if not changes and not pending:
             result: dict[str, Any] = {
                 "status": "no_changes",
                 "created": 0,
@@ -1808,6 +1805,7 @@ class SyncService(BaseService):
                 manifest=manifest,
                 branch_id=branch_id,
                 source_dir=None if promoting else project_root / branch_path,
+                planned_rows=planned_row_refs(row_changes),
             )
             errors.extend(flow_binding.errors)
             warnings.extend(flow_binding.warnings)

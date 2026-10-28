@@ -5,6 +5,6 @@
     "commands/storage.py": 1887,
     "services/data_app_service.py": 1600,
     "services/storage_service.py": 1664,
-    "services/sync_service.py": 1564
+    "services/sync_service.py": 1562
   }
 }

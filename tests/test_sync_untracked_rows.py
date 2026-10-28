@@ -16,6 +16,7 @@ The walk world (``test_sync_random_walk``): ex-http 1000 "Name tk6z" with rows
 from __future__ import annotations
 
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -81,7 +82,7 @@ def _row_values(cfg: dict[str, Any]) -> list[str]:
     return [r["configuration"]["parameters"]["value"] for r in cfg["rows"]]
 
 
-def _fail_once(sim: Sim, attribute: str, name: str, error: BaseException) -> None:
+def _fail_once(sim: Any, attribute: str, name: str, error: BaseException) -> None:
     """Make the fake API's create of the config/row called *name* raise *error* once."""
     original = getattr(sim.api, attribute)
     state = {"failed": False}
@@ -110,14 +111,14 @@ def test_dry_run_lists_the_rows_of_a_new_config(tmp_path: Path) -> None:
     assert {c["parent_config_id"] for c in rows} == {""}
 
 
-def test_rows_of_a_new_config_keep_their_copied_ids_as_source(tmp_path: Path) -> None:
-    """R9: the copied row id is the row's source identity for reference planning."""
+def test_copied_row_ids_of_a_new_config_are_no_source_identity(tmp_path: Path) -> None:
+    """S2 (replaces R9): a copied row id under a new config is a placeholder."""
     sim = _world(tmp_path)
     _author(sim, "Name tk901z", "tk911z", keep_row_ids=True)
     result = sim.svc.push(alias="prod", project_root=sim.root, dry_run=True)
     rows = [c for c in result["changes"] if c.get("is_row")]
-    assert sorted(c["source_row_id"] for c in rows) == ["1001", "1002"]
-    assert {c["config_id"] for c in rows} == {""}
+    assert len(rows) == 2
+    assert all(not c.get("source_row_id") and not c["config_id"] for c in rows)
 
 
 def test_two_new_configs_get_their_own_rows(tmp_path: Path) -> None:
@@ -431,10 +432,41 @@ def test_pending_link_recovery_keeps_a_remote_edit_of_the_flow(
     )
 
 
-def test_untracked_row_selected_by_a_new_flow_survives_a_crash(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """R6: the row's checkpoint records the id the flow selects it by."""
+@dataclass(frozen=True)
+class FlowOverRow:
+    """A pulled ex-http config with an untracked row selected by a new flow."""
+
+    world: DiffWorld
+    config_id: str
+    component_id: str
+
+
+def _write_flow(w: DiffWorld, name: str, task: dict[str, Any], version: Any) -> None:
+    flow_dir = w.root / "main" / "other" / "keboola.flow" / name.lower()
+    flow_dir.mkdir(parents=True)
+    write_yaml(
+        flow_dir / "_config.yml",
+        {
+            "version": version,
+            "name": name,
+            "description": "",
+            "_configuration_extra": {"tasks": [{"id": 1, "name": "t", "task": task}]},
+            "_keboola": {"component_id": "keboola.flow"},
+        },
+    )
+
+
+def _job(component_id: str, config_id: str, rows: list[str]) -> dict[str, Any]:
+    return {
+        "type": "job",
+        "componentId": component_id,
+        "configId": config_id,
+        "configRowIds": rows,
+        "mode": "run",
+    }
+
+
+def _flow_over_new_row(tmp_path: Path) -> FlowOverRow:
     variant = VARIANTS["rows"]
     w = DiffWorld(tmp_path)
     cid = w.api.seed(variant)
@@ -448,25 +480,27 @@ def test_untracked_row_selected_by_a_new_flow_survives_a_crash(
     row["_keboola"]["row_id"] = "row-R"  # a copied id the flow below selects
     (parent / "rows" / "row-new").mkdir()
     write_yaml(parent / "rows" / "row-new" / "_config.yml", row)
-    flow_dir = w.root / "main" / "other" / "keboola.flow" / "nightly"
-    flow_dir.mkdir(parents=True)
-    task = {
-        "type": "job",
-        "componentId": variant.component_id,
-        "configId": cid,
-        "configRowIds": ["row-R"],
-        "mode": "run",
-    }
-    write_yaml(
-        flow_dir / "_config.yml",
-        {
-            "version": row["version"],
-            "name": "Nightly",
-            "description": "",
-            "_configuration_extra": {"tasks": [{"id": 1, "name": "t", "task": task}]},
-            "_keboola": {"component_id": "keboola.flow"},
-        },
+    _write_flow(w, "Nightly", _job(variant.component_id, cid, ["row-R"]), row["version"])
+    return FlowOverRow(world=w, config_id=cid, component_id=variant.component_id)
+
+
+def _assert_flow_selects_the_new_row(case: FlowOverRow) -> None:
+    w = case.world
+    new_row = next(
+        r
+        for r in w.api.get(PROD, case.component_id, case.config_id)["rows"]
+        if r["name"] == "Row New"
     )
+    (flow,) = [c for (comp, _), c in w.api.remote[PROD].items() if comp == "keboola.flow"]
+    assert flow["configuration"]["tasks"][0]["task"]["configRowIds"] == [new_row["id"]]
+
+
+def test_untracked_row_selected_by_a_new_flow_survives_a_crash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R6: the row's checkpoint records the id the flow selects it by."""
+    case = _flow_over_new_row(tmp_path)
+    w = case.world
     original = sync_service_module.resolve_run_target_bindings
     state = {"crashed": False}
 
@@ -482,8 +516,99 @@ def test_untracked_row_selected_by_a_new_flow_survives_a_crash(
 
     w.push()
 
-    new_row = next(
-        r for r in w.api.get(PROD, variant.component_id, cid)["rows"] if r["name"] == "Row New"
+    _assert_flow_selects_the_new_row(case)
+
+
+def test_failed_row_create_under_an_existing_config_keeps_the_flow_pending(
+    tmp_path: Path,
+) -> None:
+    """S3: the planned row is a dependency; the push that creates it sets the link."""
+    case = _flow_over_new_row(tmp_path)
+    w = case.world
+    _fail_once(w, "_create_row", "Row New", KeboolaApiError("refused", 500, ErrorCode.API_ERROR))
+
+    first = w.svc.push(alias="prod", project_root=w.root)
+    assert any(e.get("error_code") == ErrorCode.LINK_UNRESOLVED for e in first["errors"])
+    (flow_entry,) = [
+        c for c in load_manifest(w.root).configurations if c.component_id == "keboola.flow"
+    ]
+    assert flow_entry.metadata.get("link_pending") is True
+
+    w.push()
+
+    _assert_flow_selects_the_new_row(case)
+
+
+def _copy_config(w: DiffWorld, config_id: str, name: str) -> Path:
+    """Copy a config dir to a new one: config id removed, row ids KEPT (copied)."""
+    src = w.config_dir(config_id)
+    dst = src.parent / name.lower()
+    shutil.copytree(src, dst)
+    data = read_yaml(dst / "_config.yml")
+    data["_keboola"].pop("config_id")
+    data["name"] = name
+    write_yaml(dst / "_config.yml", data)
+    return dst
+
+
+def _by_name(cfg: dict[str, Any], name: str) -> str:
+    return next(r["id"] for r in cfg["rows"] if r["name"] == name)
+
+
+def test_copied_row_ids_under_a_new_config_are_linked_by_path(tmp_path: Path) -> None:
+    """S2 (Astra's sequence): copy, promote, push to production, promote a flow over P/RP."""
+    variant = VARIANTS["rows"]
+    w = DiffWorld(tmp_path)
+    cid = w.api.seed(variant)
+    w.api.types["keboola.flow"] = "other"
+    w.api.branch_from_prod()
+    w.init()
+    w.pull()
+    _copy_config(w, cid, "Copied")
+    w.push(branch=DEV)  # the copy on DEV: ND with rows RD
+    w.push()  # the copy on production: P with rows RP
+    (prod_copy,) = [c for c in w.api.remote[PROD].values() if c["name"] == "Copied"]
+    (dev_copy,) = [c for c in w.api.remote[DEV].values() if c["name"] == "Copied"]
+    version = read_yaml(w.config_dir(cid) / "_config.yml")["version"]
+    _write_flow(
+        w,
+        "Nightly",
+        _job(variant.component_id, prod_copy["id"], [_by_name(prod_copy, "Row 1")]),
+        version,
     )
-    (flow,) = [c for (comp, _), c in w.api.remote[PROD].items() if comp == "keboola.flow"]
-    assert flow["configuration"]["tasks"][0]["task"]["configRowIds"] == [new_row["id"]]
+
+    w.push(branch=DEV)
+
+    (flow,) = [c for (comp, _), c in w.api.remote[DEV].items() if comp == "keboola.flow"]
+    task = flow["configuration"]["tasks"][0]["task"]
+    assert (task["configId"], task["configRowIds"]) == (
+        dev_copy["id"],
+        [_by_name(dev_copy, "Row 1")],
+    )
+
+
+def test_copied_row_id_does_not_make_the_original_row_pending(tmp_path: Path) -> None:
+    """S2: a reference to the ORIGINAL config's row R is not a planned create."""
+    variant = VARIANTS["rows"]
+    w = DiffWorld(tmp_path)
+    cid = w.api.seed(variant)
+    w.api.types["keboola.flow"] = "other"
+    w.api.branch_from_prod()
+    w.init()
+    w.pull()
+    _copy_config(w, cid, "Copied")
+    original_row = _by_name(w.api.get(PROD, variant.component_id, cid), "Row 1")
+    version = read_yaml(w.config_dir(cid) / "_config.yml")["version"]
+    _write_flow(w, "Nightly", _job(variant.component_id, cid, [original_row]), version)
+
+    w.push(branch=DEV)
+
+    (flow,) = [c for (comp, _), c in w.api.remote[DEV].items() if comp == "keboola.flow"]
+    task = flow["configuration"]["tasks"][0]["task"]
+    assert (task["configId"], task["configRowIds"]) == (cid, [original_row])
+    (entry,) = [
+        c
+        for c in load_manifest(w.root).configurations
+        if c.component_id == "keboola.flow" and c.branch_id == DEV
+    ]
+    assert "rebind_pending" not in entry.metadata

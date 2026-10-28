@@ -722,6 +722,7 @@ def resolve_run_target_bindings(
     manifest: Manifest,
     branch_id: int | None,
     source_dir: Path | None = None,
+    planned_rows: set[tuple[str, str]] | None = None,
 ) -> FlowBindingResult:
     """Remap the configs that flows, orchestrations and schedules run (Phase D).
 
@@ -755,6 +756,7 @@ def resolve_run_target_bindings(
         created_id_map=created_id_map,
         created_row_id_map=created_row_id_map,
         source_dir=source_dir,
+        planned_rows=planned_rows,
     )
     seen = {(c.component_id, c.config_id) for c in created_configs}
     recovering = [
@@ -850,6 +852,7 @@ def _recover_run_target(
             maps.rows,
             target_rows=maps.target_rows,
             uncreated=maps.uncreated,
+            planned_rows=maps.planned_rows,
         )
         service._write_config_file(created.config_dir, local_data)
         _refresh_binding_hashes(
@@ -885,6 +888,7 @@ def _remap_into(
         maps.rows,
         target_rows=maps.target_rows,
         uncreated=maps.uncreated,
+        planned_rows=maps.planned_rows,
     )
     for message in remap.unmapped_rows:
         result.errors.append(_link_error(link_type, created, ErrorCode.LINK_UNRESOLVED, message))
@@ -986,6 +990,7 @@ def remap_run_targets_in_place(
     *,
     target_rows: dict[tuple[str, str], set[str]] | None = None,
     uncreated: set[tuple[str, str]] | None = None,
+    planned_rows: set[tuple[str, str]] | None = None,
 ) -> RunTargetRemap:
     """Rewrite the task ``configId``s / ``configRowIds`` or the schedule target in place.
 
@@ -1040,6 +1045,7 @@ def remap_run_targets_in_place(
             remap,
             known,
             track_unmapped=bool(created),
+            planned=planned_rows or set(),
         )
     return remap
 
@@ -1053,6 +1059,7 @@ def _remap_task_rows(
     known_rows: set[str],
     *,
     track_unmapped: bool = True,
+    planned: set[tuple[str, str]] | None = None,
 ) -> None:
     """Rewrite a task's ``configRowIds`` to the rows created under its config.
 
@@ -1075,7 +1082,8 @@ def _remap_task_rows(
             else created_row_id_map.get((new_config_id, str(old_row_id)))
         )
         if new_row_id is None:
-            if str(old_row_id) not in known_rows and track_unmapped:
+            missing = str(old_row_id) not in known_rows
+            if missing and (track_unmapped or (new_config_id, str(old_row_id)) in (planned or ())):
                 unmapped.append(str(old_row_id))
             new_row_ids.append(old_row_id)
             continue

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from ..constants import CONFIG_FILENAME
 from ..sync.branch_scope import UNKNOWN_BASE_KEY, promoted_from, same_branch
@@ -39,12 +40,17 @@ class LinkMaps:
             not one of them).
         uncreated: ``(component_id, placeholder id)`` of configs push still
             has to create: a reference to one stays pending.
+        planned_rows: Rows planned under existing configs (see the field).
     """
 
     configs: dict[tuple[str, str], str] = field(default_factory=dict)
     rows: dict[tuple[str, str], str] = field(default_factory=dict)
     target_rows: dict[tuple[str, str], set[str]] = field(default_factory=dict)
     uncreated: set[tuple[str, str]] = field(default_factory=set)
+    # ``(parent id, source row id)`` of the rows this push planned to create
+    # under an EXISTING config (S3): a reference to one that is still missing
+    # (its create failed) keeps the referencing config pending.
+    planned_rows: set[tuple[str, str]] = field(default_factory=set)
 
 
 def target_entries(manifest: Manifest, branch_id: int | None) -> list[ManifestConfiguration]:
@@ -69,9 +75,10 @@ def build_link_maps(
     created_id_map: dict[tuple[str, str], str],
     created_row_id_map: dict[tuple[str, str], str],
     source_dir: Path | None,
+    planned_rows: set[tuple[str, str]] | None = None,
 ) -> LinkMaps:
     """The maps one Phase-D pass resolves references with."""
-    maps = LinkMaps()
+    maps = LinkMaps(planned_rows=set(planned_rows or ()))
     for entry in target_entries(manifest, branch_id):
         source = str(entry.metadata.get(CREATED_FROM_KEY) or "")
         if source:
@@ -109,3 +116,15 @@ def set_link_pending(entry: ManifestConfiguration | None, pending: bool) -> bool
     else:
         entry.metadata.pop(LINK_PENDING_KEY, None)
     return True
+
+
+def planned_row_refs(row_changes: list[dict[str, Any]]) -> set[tuple[str, str]]:
+    """``(parent id, source row id)`` of each row create a push plans under an existing config."""
+    return {
+        (str(c["parent_config_id"]), str(source))
+        for c in row_changes
+        if c["change_type"] == "added"
+        and c.get("parent_config_id")
+        and not c.get("parent_path")
+        and (source := c.get("source_row_id") or c.get("config_id"))
+    }

@@ -541,6 +541,7 @@ def _finish_all_projects(
     formatter: Any, data: dict, per_project_formatter: Any, one_liner: Any, done_as: str
 ) -> None:
     """End an ``--all-projects`` run: per-project lines, then one headline (HO2)."""
+    emit_companion_warnings(formatter, data)
     summary = data["summary"]
     finish_items(
         formatter,

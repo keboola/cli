@@ -67,9 +67,9 @@ def collect_untracked_rows(
     """Add the rows of one untracked config dir to *found*.
 
     *config_id* is ``""`` for a config push creates: every row is new, also
-    one whose file carries an id copied from another config -- that id is
-    kept as its ``source_row_id``, the identity reference planning and the
-    link backfill know it by (R9). For an adopted config (*config_id* set) a
+    one whose file carries an id copied from another config -- that id is a
+    placeholder, not the row's source identity (S2): the row is created as
+    authored and linked by its path. For an adopted config (*config_id* set) a
     row carrying an id is that row: diffed against the remote one, or
     ``remote_deleted`` when the remote no longer has it -- never POSTed again
     (R5, #792 H). Only a row without an id is new there.
@@ -88,7 +88,10 @@ def collect_untracked_rows(
             "path": f"rows/{row_dir.name}",
             "data": data,
             "parent_path": config_path,
-            "source_row_id": "" if config_id else file_row_id,
+            # A row id in a NEW config's row file was copied from another
+            # config: a placeholder, never a source identity (S2). The row is
+            # created as authored and linked by its path later (risk 83).
+            "source_row_id": "",
         }
         if config_id and file_row_id:
             entry["row_id"] = file_row_id

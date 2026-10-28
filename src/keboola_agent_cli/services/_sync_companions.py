@@ -39,7 +39,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..constants import CONFIG_FILENAME, CONFIG_HASH_VERSION, CONFIG_HASH_VERSION_KEY
-from ..sync.code_extraction import DESCRIPTION_FILENAME, owned_companions, render_code_files
+from ..sync.code_extraction import (
+    DESCRIPTION_FILENAME,
+    PYPROJECT_FILENAME,
+    owned_companions,
+    pyproject_unreadable,
+    render_code_files,
+)
 
 if TYPE_CHECKING:
     from .sync_service import SyncService
@@ -73,6 +79,7 @@ COMPANION_CONFLICT_KEY = "companion_conflict"
 # ``code`` of the companion entries in a command's ``warnings[]``.
 UNOWNED_COMPANION_CODE = "UNOWNED_COMPANION"
 COMPANION_KEPT_CODE = "COMPANION_KEPT"
+COMPANION_UNREADABLE_CODE = "COMPANION_UNREADABLE"
 
 
 @dataclass(frozen=True)
@@ -380,17 +387,21 @@ def kept_companion_warning(component_id: str, rel_path: str, name: str) -> dict[
 # ---------------------------------------------------------------------------
 
 
-def unowned_companion_warnings(
+def companion_diagnostics(
     config_dir: Path, component_id: str, rel_path: str
 ) -> list[dict[str, str]]:
-    """Diff ``companion_warnings`` for a companion filename this component does not use.
+    """Diff ``companion_warnings`` for one config dir (D11, S1).
 
+    ``UNOWNED_COMPANION``: a companion filename this component does not use.
     A ``code.py`` beside an extractor, or a ``transform.py`` renamed to
     ``code.py``, is ignored by push: merge dispatches by component, so the
-    file is never sent. Said out loud instead of silently.
+    file is never sent. ``COMPANION_UNREADABLE``: a ``pyproject.toml`` that
+    is not valid TOML (or whose dependencies are not a list of strings) says
+    nothing about the packages, so push keeps the inline value instead.
+    Both said out loud instead of silently.
     """
     owned = set(owned_companions(component_id))
-    return [
+    found = [
         {
             "code": UNOWNED_COMPANION_CODE,
             "component_id": component_id,
@@ -403,6 +414,25 @@ def unowned_companion_warnings(
         for name in sorted(LEGACY_COMPANIONS - owned)
         if (config_dir / name).is_file()
     ]
+    pyproject = config_dir / PYPROJECT_FILENAME
+    if (
+        PYPROJECT_FILENAME in owned
+        and pyproject.is_file()
+        and pyproject_unreadable(pyproject.read_text(encoding="utf-8"))
+    ):
+        found.append(
+            {
+                "code": COMPANION_UNREADABLE_CODE,
+                "component_id": component_id,
+                "path": f"{rel_path}/{PYPROJECT_FILENAME}",
+                "message": (
+                    f"{rel_path}/{PYPROJECT_FILENAME} is not valid TOML, or its "
+                    f"[project].dependencies is not a list of strings, so push does not take "
+                    f"the packages from it (the inline packages, if any, are sent). Fix the file."
+                ),
+            }
+        )
+    return found
 
 
 def canonical_description(local_data: dict[str, Any], config_dir: Path) -> dict[str, Any]:

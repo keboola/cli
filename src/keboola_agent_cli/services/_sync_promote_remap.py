@@ -96,7 +96,8 @@ class PromoteRemap:
         sent: ``(component_id, target id)`` -> the payload a config that
             references others was sent with this push.
         expected: Source keys of the configs this push plans to create.
-        expected_rows: Source ids of the rows this push plans to create.
+        expected_rows: ``(component_id, parent id, source row id)`` of the rows
+            this push plans to create; the parent is the diff's parent id.
         gone_configs: ``(component_id, target id)`` of configs the diff found
             deleted on the target (``remote_deleted``) -- never a resolved target.
         gone_rows: ``(target parent id, target row id)`` likewise (risk 84).
@@ -109,7 +110,7 @@ class PromoteRemap:
     rows: dict[tuple[str, str], str] = field(default_factory=dict)
     sent: dict[tuple[str, str], SentPayload] = field(default_factory=dict)
     expected: set[tuple[str, str]] = field(default_factory=set)
-    expected_rows: set[str] = field(default_factory=set)
+    expected_rows: set[tuple[str, str, str]] = field(default_factory=set)
     gone_configs: set[tuple[str, str]] = field(default_factory=set)
     gone_rows: set[tuple[str, str]] = field(default_factory=set)
     hold: Callable[[str, str, list[list[str]], set[tuple[str, ...]] | None], None] | None = None
@@ -159,11 +160,12 @@ class PromoteRemap:
             if not c.get("is_row") and c.get("config_id")
         }
         # A row's source identity: its id in the source config (risk 72), which
-        # is all a new row under an already promoted config has.
+        # is all a new row under an already promoted config has -- scoped by
+        # its parent (S2): the same row id under another config is another row.
         self.expected_rows = {
-            str(c.get("source_row_id") or c["config_id"])
+            (c["component_id"], str(c.get("parent_config_id") or ""), str(source))
             for c in added
-            if c.get("is_row") and (c.get("source_row_id") or c.get("config_id"))
+            if c.get("is_row") and (source := c.get("source_row_id") or c.get("config_id"))
         }
 
     def note_gone(self, changes: list[dict[str, Any]]) -> None:
@@ -243,7 +245,9 @@ class PromoteRemap:
                 open_unit = existing is None or any(r not in existing for r in row_ids)
             else:
                 open_unit = open_unit or any(
-                    (parent, r) in self.rows or r in self.expected_rows or (*key, r) in marked
+                    (parent, r) in self.rows
+                    or self._row_expected(component, config_id, parent, r)
+                    or (*key, r) in marked
                     for r in row_ids
                 )
             if open_unit:
@@ -280,13 +284,19 @@ class PromoteRemap:
             target_row = self.rows.get((parent, row_id))
             if target_row is not None:
                 mapped.append(target_row)
-            elif row_id in self.expected_rows or parent != config_id:
+            elif self._row_expected(component, config_id, parent, row_id) or parent != config_id:
                 return None
             else:
                 mapped.append(row_id)
         if not self._target_held(component, parent, mapped, read=parent != config_id):
             return None
         return parent, mapped
+
+    def _row_expected(self, component: str, config_id: str, parent: str, row_id: str) -> bool:
+        """True iff this push plans to create *row_id* under this unit's config (S2)."""
+        return any(
+            (component, owner, row_id) in self.expected_rows for owner in {config_id, parent}
+        )
 
     def _identity_unit(
         self, component: str, config_id: str, row_ids: list[str]
