@@ -383,8 +383,17 @@ class World:
         return self.root / self.svc._resolve_source_branch_path(manifest, self.root, branch)
 
     def config_dir(self, config_id: str, branch: int | None = None) -> Path:
+        """The dir of *config_id*'s entry on *branch* (production by default).
+
+        A dev branch made from production holds the same ids, so a promote
+        push can record a second entry with this id for the dev branch.
+        """
         manifest = load_manifest(self.root)
-        (entry,) = [c for c in manifest.configurations if c.id == config_id]
+        (entry,) = [
+            c
+            for c in manifest.configurations
+            if c.id == config_id and (c.branch_id or PROD) == (branch or PROD)
+        ]
         return self.source_tree(branch) / entry.path
 
 

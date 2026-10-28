@@ -24,7 +24,7 @@ import yaml
 from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 from keboola_agent_cli.services._sync_bindings import _refresh_binding_hashes
 from keboola_agent_cli.services._sync_models import CreatedConfig
-from keboola_agent_cli.services._sync_promote_remap import PromoteRemap
+from keboola_agent_cli.services._sync_promote_remap import PromoteRemap, recover_pending
 from keboola_agent_cli.services._sync_push_create import ManifestCheckpointError
 from keboola_agent_cli.services._sync_writeback import writeback_create_config_in_manifest
 from keboola_agent_cli.services.component_service import materialize_pushed_config
@@ -1977,3 +1977,119 @@ def test_recovery_keeps_a_nested_version_changed_on_the_target(
 
     assert _dev_flow(w)["configuration"]["parameters"] == {"version": "v2"}
     assert _dev_links_resolved(w)
+
+
+# ===========================================================================
+# Round 8 (risks 61-62)
+# ===========================================================================
+
+
+# -- risk 61: a resolved reference leaves the pending list, never applied again
+
+
+def test_repeated_recovery_never_remaps_a_resolved_row_again() -> None:
+    http = "keboola.ex-http"
+    manifest = _manifest((PROD, "main"), (DEV, "dev"))
+    flow = ManifestConfiguration(
+        branchId=DEV,
+        componentId="keboola.flow",
+        id="F",
+        path="other/keboola.flow/f",
+        metadata={"rebind_pending": [[http, "P"], [http, "P", "1"], [http, "P", "2"], [http, "E"]]},
+    )
+    manifest.configurations.append(flow)
+    # P -> D with overlapping row ids, and E still missing on the branch.
+    remap = PromoteRemap(configs={(http, "P"): "D"}, rows={("D", "1"): "2", ("D", "2"): "3"})
+    remote = {
+        "configuration": {
+            "tasks": [
+                {
+                    "id": "t",
+                    "task": {
+                        "type": "job",
+                        "componentId": http,
+                        "configId": "D",
+                        "configRowIds": ["1", "2"],
+                    },
+                }
+            ]
+        }
+    }
+    client = MagicMock()
+    client.get_config_detail.side_effect = lambda **_: copy.deepcopy(remote)
+
+    def put(**kwargs: Any) -> dict:
+        remote["configuration"] = copy.deepcopy(kwargs["configuration"])
+        return copy.deepcopy(remote)
+
+    client.update_config.side_effect = put
+    for _ in range(2):  # E stays unresolved, so the flow stays pending
+        recover_pending(client, manifest, remap, "keboola.flow", "F", DEV, [])
+
+    assert remote["configuration"]["tasks"][0]["task"]["configRowIds"] == ["2", "3"]
+    assert flow.metadata["rebind_pending"] == [[http, "E"]]
+
+
+# -- risk 62: an update merges the pending list, never replaces it ---------
+
+
+def test_editing_a_pending_flow_never_forgets_an_ignored_dependency(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    f = _seed_flow_world(tmp_path, flow_first=True)
+    w = f.world
+    http, mysql = VARIANTS["extractor"].component_id, "keboola.ex-db-mysql"
+    w.api.branch_from_prod()
+    del w.api.remote[DEV][(http, f.extractor_id)]
+    flow_file = w.config_dir(f.flow_id) / CONFIG_FILE
+    semantic_edit(flow_file)
+    original = w.api._create
+
+    def http_create_fails(*args: Any, **kwargs: Any) -> dict:
+        if kwargs.get("component_id") == http:
+            raise KeboolaApiError("create refused", 500, ErrorCode.API_ERROR)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(w.api, "_create", http_create_fails)
+    assert w.svc.push(alias="prod", project_root=w.root, branch_override=DEV)["errors"]
+    monkeypatch.undo()
+
+    def set_ignored(components: list[str]) -> None:
+        manifest = load_manifest(w.root)
+        manifest.ignored_components = components
+        save_manifest(w.root, manifest)
+
+    def dev_pending() -> Any:
+        manifest = load_manifest(w.root)
+        (entry,) = [
+            c
+            for c in manifest.configurations
+            if c.id == f.flow_id and same_branch(manifest, c.branch_id, DEV)
+        ]
+        return entry.metadata.get("rebind_pending")
+
+    # Production gains X; E's component is ignored; F now also runs X.
+    w.api.types[mysql] = "extractor"
+    w.api.remote[PROD][(mysql, "cfg-x")] = {
+        "id": "cfg-x",
+        "name": "Customers",
+        "description": "",
+        "configuration": VARIANTS["extractor"].body(),
+        "rows": [],
+        "isDisabled": False,
+    }
+    w.pull()
+    set_ignored([http])
+    data = _yaml(flow_file.parent)
+    second = copy.deepcopy(data["_configuration_extra"]["tasks"][0])
+    second["id"] = "t2"
+    second["task"].update({"componentId": mysql, "configId": "cfg-x"})
+    data["_configuration_extra"]["tasks"].append(second)
+    flow_file.write_text(dump_config_yaml(data), encoding="utf-8", newline="")
+    w.push(branch=DEV)  # creates X and rebinds it; E is still missing
+    assert dev_pending() == [[http, f.extractor_id]]
+
+    set_ignored([])
+    w.push(branch=DEV)  # creates E, then rebinds the flow
+    assert _dev_task_targets(w) == [_dev_id_of(w, http), _dev_id_of(w, mysql)]
+    assert dev_pending() is None

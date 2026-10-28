@@ -95,9 +95,9 @@ class PromoteRemap:
             references others was sent with this push.
         expected: Source keys of the configs this push plans to create.
         expected_rows: Source ids of the rows this push plans to create.
-        hold: Called with ``(component_id, config_id, pending references)``
-            before an update naming one of them is PUT: it checkpoints
-            ``rebind_pending`` first.
+        hold: Called with ``(component_id, config_id, new pending references,
+            all references of the payload)`` before an update is PUT: it
+            checkpoints the merged ``rebind_pending`` first.
     """
 
     configs: dict[tuple[str, str], str] = field(default_factory=dict)
@@ -105,7 +105,7 @@ class PromoteRemap:
     sent: dict[tuple[str, str], SentPayload] = field(default_factory=dict)
     expected: set[tuple[str, str]] = field(default_factory=set)
     expected_rows: set[str] = field(default_factory=set)
-    hold: Callable[[str, str, list[list[str]]], None] | None = None
+    hold: Callable[[str, str, list[list[str]], set[tuple[str, ...]]], None] | None = None
 
     def plan(self, changes: list[dict[str, Any]]) -> None:
         """Note what this push creates: a reference to it resolves only after the create."""
@@ -120,31 +120,33 @@ class PromoteRemap:
         }
 
     def pending_refs(self, component_id: str, original: dict[str, Any]) -> list[list[str]]:
-        """The source references in *original* to configs or rows this push creates.
+        """The source references in *original* this push creates and the map lacks yet.
 
-        ``[component, config id]`` or ``[component, config id, row id]``. They
-        may still name the source on the target after the first PUT; the list
-        is what ``rebind_pending`` records (D30).
+        ``[component, config id]`` or ``[component, config id, row id]``: the
+        references a payload sent NOW carries as source ids. They are what
+        ``rebind_pending`` records (D30); a reference the map already resolves
+        is sent as its target id and is never listed, so nothing maps it again.
         """
         refs: list[list[str]] = []
         for (component, config_id), row_ids in _references(component_id, original):
             if (component, config_id) in self.expected:
                 refs.append([component, config_id])
             refs += [[component, config_id, r] for r in row_ids if r in self.expected_rows]
-        return refs
+        return self.unresolved_of(refs)
 
-    def resolved(self, refs: list[Any]) -> bool:
-        """True iff every listed source reference maps to a target id (D30)."""
+    def unresolved_of(self, refs: list[Any]) -> list[list[str]]:
+        """The listed source references that do not map to a target id yet (D30)."""
+        remaining: list[list[str]] = []
         for ref in refs:
             if not isinstance(ref, list) or len(ref) < 2:
                 continue
             key = (str(ref[0]), str(ref[1]))
             if len(ref) == 2:
                 if key not in self.configs:
-                    return False
+                    remaining.append([key[0], key[1]])
             elif (self.configs.get(key, key[1]), str(ref[2])) not in self.rows:
-                return False
-        return True
+                remaining.append([key[0], key[1], str(ref[2])])
+        return remaining
 
     def subset(self, refs: list[Any]) -> PromoteRemap:
         """A remap that rewrites only the listed source references."""
@@ -289,9 +291,13 @@ class PromoteRemap:
         otherwise leave a target config naming a source id and no record that
         its links are unfinished.
         """
-        refs = self.pending_refs(component_id, original)
-        if self.hold is not None and refs:
-            self.hold(component_id, config_id, refs)
+        if self.hold is not None:
+            self.hold(
+                component_id,
+                config_id,
+                self.pending_refs(component_id, original),
+                _reference_keys(component_id, original),
+            )
 
 
 def finish_promote_rebind(
@@ -350,7 +356,7 @@ def finish_promote_rebind(
             target_branch_id=branch_id,
         ).in_tree
     }
-    for component_id, config_id, refs in pending:
+    for component_id, config_id, _refs in pending:
         key = (component_id, config_id)
         if key in remap.sent:
             continue
@@ -360,14 +366,31 @@ def finish_promote_rebind(
         if key not in eligible:
             continue
         try:
-            _rebind_on_target(
-                client, manifest, remap.subset(refs), component_id, config_id, branch_id
-            )
+            recover_pending(client, manifest, remap, component_id, config_id, branch_id, warnings)
         except KeboolaApiError as exc:
             errors.append(_link_error(component_id, config_id, exc))
-            continue
-        _settle(manifest, remap, component_id, config_id, branch_id, warnings)
     return bool(pending or remap.sent)
+
+
+def recover_pending(
+    client: Any,
+    manifest: Manifest,
+    remap: PromoteRemap,
+    component_id: str,
+    config_id: str,
+    branch_id: int | None,
+    warnings: list[dict[str, Any]],
+) -> None:
+    """Rewrite a pending config's listed references on the target, then prune the list.
+
+    Only the references still listed are applied -- each one once: after the
+    PUT, the resolved ones leave the list (per-reference completion), so a
+    later recovery never maps an id that already names the target.
+    """
+    entry = find_branch_entry(manifest, component_id, config_id, branch_id)
+    refs = _listed(entry.metadata.get(REBIND_PENDING_KEY)) if entry is not None else []
+    _rebind_on_target(client, manifest, remap.subset(refs), component_id, config_id, branch_id)
+    _settle(manifest, remap, component_id, config_id, branch_id, warnings)
 
 
 def _put_configuration(
@@ -428,14 +451,20 @@ def _settle(
     branch_id: int | None,
     warnings: list[dict[str, Any]],
 ) -> None:
-    """Clear ``rebind_pending`` when all its references resolved; else keep it and warn."""
+    """Prune ``rebind_pending`` to the references still unresolved; clear it when none is.
+
+    Called after a successful PUT (or when nothing needed one): every listed
+    reference the map resolves is now a target id on the target, so it leaves
+    the list and is never applied again.
+    """
     entry = find_branch_entry(manifest, component_id, config_id, branch_id)
     if entry is None or REBIND_PENDING_KEY not in entry.metadata:
         return
-    refs = entry.metadata[REBIND_PENDING_KEY]
-    if remap.resolved(refs if isinstance(refs, list) else []):
+    remaining = remap.unresolved_of(_listed(entry.metadata[REBIND_PENDING_KEY]))
+    if not remaining:
         entry.metadata.pop(REBIND_PENDING_KEY, None)
         return
+    entry.metadata[REBIND_PENDING_KEY] = remaining
     warnings.append(_dependency_warning(component_id, config_id))
 
 
@@ -487,6 +516,15 @@ def _references(
     return refs
 
 
+def _reference_keys(component_id: str, original: dict[str, Any]) -> set[tuple[str, ...]]:
+    """Every reference a source payload names, as pending-list keys."""
+    keys: set[tuple[str, ...]] = set()
+    for (component, config_id), row_ids in _references(component_id, original):
+        keys.add((component, config_id))
+        keys.update((component, config_id, row_id) for row_id in row_ids)
+    return keys
+
+
 def _dependency_warning(component_id: str, config_id: str) -> dict[str, str]:
     return {
         "change_type": "promote_link_pending",
@@ -507,25 +545,39 @@ def hold_before_put(
     component_id: str,
     config_id: str,
     refs: list[list[str]],
+    referenced: set[tuple[str, ...]],
 ) -> None:
-    """Record ``rebind_pending`` (the references still to resolve) and checkpoint (D30).
+    """Record ``rebind_pending`` before an update's PUT, and checkpoint (D30).
 
+    The new list MERGES: the references already pending that the payload
+    still names (a dependency missing since an earlier push -- ignored, say --
+    is never forgotten by a later edit), plus this push's unresolved creates.
     The target entry may not exist yet (the first write of a branched config
     on the promote path); its shadow is recorded here, so the flag has a home.
     """
-    entry = find_branch_entry(
-        manifest, component_id, config_id, target.branch_id
-    ) or promote_shadow(
-        client,
-        manifest,
-        component_id=component_id,
-        config_id=config_id,
-        branch_id=target.branch_id,
-        source_tree=target.branch_path,
-    )
+    entry = find_branch_entry(manifest, component_id, config_id, target.branch_id)
     if entry is None:
+        if not refs:
+            return
+        entry = promote_shadow(
+            client,
+            manifest,
+            component_id=component_id,
+            config_id=config_id,
+            branch_id=target.branch_id,
+            source_tree=target.branch_path,
+        )
+        if entry is None:
+            return
+    existing = _listed(entry.metadata.get(REBIND_PENDING_KEY))
+    merged = [ref for ref in existing if tuple(str(part) for part in ref) in referenced]
+    merged += [ref for ref in refs if ref not in merged]
+    if merged == existing:
         return
-    entry.metadata[REBIND_PENDING_KEY] = refs
+    if merged:
+        entry.metadata[REBIND_PENDING_KEY] = merged
+    else:
+        entry.metadata.pop(REBIND_PENDING_KEY, None)
     checkpoint(f"{component_id}/{config_id}")
 
 
