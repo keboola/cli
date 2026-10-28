@@ -26,6 +26,7 @@ from ..sync.branch_scope import (
     promoted_from,
     same_branch,
 )
+from ..sync.code_extraction import PYPROJECT_FILENAME
 from ..sync.config_format import BASE_CONFIG_HASH_KEY
 from ..sync.manifest import ManifestConfigRow, ManifestConfiguration
 from ..sync.pyproject_identity import refresh_pyproject_identity
@@ -534,6 +535,7 @@ def writeback_after_push(
     is_row: bool = False,
     row_id: str = "",
     component_id: str = "",
+    warnings: list[dict[str, Any]] | None = None,
 ) -> None:
     """Update local ``_config.yml`` after a successful push.
 
@@ -551,6 +553,8 @@ def writeback_after_push(
     own ids (D19). A config's ``pyproject.toml`` gets the name and id a pull
     would write (only those fields; *component_id* says whether it owns one),
     before the caller hashes the companions -- also no id on the promote path.
+    A ``pyproject.toml`` that cannot be refreshed safely is left as it is and
+    reported in *warnings*: the remote write already happened.
     """
     if not is_row:
         local_data = canonical_description(local_data, config_dir)
@@ -568,7 +572,26 @@ def writeback_after_push(
 
     service._write_config_file(config_dir, local_data)
     if not is_row and component_id:
-        refresh_pyproject_identity(
+        refreshed = refresh_pyproject_identity(
             component_id, config_dir, name=str(local_data.get("name") or ""), config_id=config_id
         )
+        if not refreshed and warnings is not None:
+            warnings.append(_pyproject_warning(component_id, config_dir))
     logger.debug("Updated local config at %s after push", config_dir)
+
+
+def _pyproject_warning(component_id: str, config_dir: Path) -> dict[str, str]:
+    """The push warning for a ``pyproject.toml`` whose owned fields were not refreshed."""
+    path = config_dir / PYPROJECT_FILENAME
+    message = (
+        f"{path} was left unchanged: its name / config_id could not be updated "
+        f"without changing other content (or it is not valid TOML). Set them by hand, "
+        f"or delete the file and run 'kbagent sync pull' to get the pulled form."
+    )
+    logger.warning("%s", message)
+    return {
+        "change_type": "pyproject_not_refreshed",
+        "component_id": component_id,
+        "path": str(path),
+        "message": message,
+    }

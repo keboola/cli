@@ -90,9 +90,13 @@ These lists keep `error`, because their entries are not failed items with an err
   `sync diff` then said "in sync" while the config stayed disabled. `is_disabled: false`
   still works on every version.
 - **How push knows.** The manifest records which pulled or pushed file had the line. A
-  missing key re-enables only when that file had it. A tree pulled before this version has
-  no record: there a missing key still leaves the remote alone until the next `sync pull`
-  that writes the file. A config disabled in the UI is never enabled by an unrelated push.
+  missing key re-enables only when that file had it. A config disabled in the UI is never
+  enabled by an unrelated push.
+- **After upgrading, run `sync pull` once before you re-enable by deleting the line.** A
+  tree pulled with an older version has no record. Delete the line and push before any
+  pull, and push leaves the remote alone: the config stays disabled and `sync diff` then
+  says "in sync". A plain pull of the unedited file records it; or write
+  `is_disabled: false` instead of deleting the line, which works on every version.
 - **A plain `sync pull` keeps the deleted line deleted** (the config is locally modified),
   and the next push still re-enables. If the config was re-enabled in the UI meanwhile,
   diff shows nothing to push; if it was also changed there in another way, diff shows a

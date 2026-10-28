@@ -9,13 +9,17 @@ values and its recorded hash described a file a fresh pull would not write.
 Only those owned fields change. Everything else is the user's -- other
 tables, comments, a custom ``requires-python``, the line endings -- and stays
 byte for byte, which is why this edits lines instead of re-rendering the file.
-No file is created: pull writes none for a config without packages.
+No file is created: pull writes none for a config without packages. A file the
+line edit cannot change safely is left alone (the push then warns).
 """
 
 from __future__ import annotations
 
+import copy
 import re
+import tomllib
 from pathlib import Path
+from typing import Any
 
 from .code_extraction import (
     PYPROJECT_FILENAME,
@@ -35,24 +39,39 @@ _VALUE = r"^(\s*{key}\s*=\s*)(\"(?:[^\"\\]|\\.)*\"|'[^']*')(.*)$"
 
 def refresh_pyproject_identity(
     component_id: str, config_dir: Path, *, name: str, config_id: str
-) -> None:
+) -> bool:
     """Point the owned fields of *config_dir*'s ``pyproject.toml`` at the config.
 
     *name* is the config's name; *config_id* its id, or ``""`` when the file
     must not get one (the promote path keeps the source tree's own ids, and a
     config not created yet has none). ``[tool.keboola]`` is an app's only.
+
+    The line edit covers the layout pull writes. Any other valid TOML spelling
+    (a multi-line string, a quoted key, an inline ``keboola = {...}`` table, a
+    number) could turn into invalid TOML or a second definition, so the result
+    is parsed and must equal the file's own content with only the owned values
+    changed. When it does not -- or the file is no valid TOML to begin with --
+    the file is left byte for byte as it was and False is returned: the remote
+    write already happened, so the caller warns instead of failing.
     """
     path = config_dir / PYPROJECT_FILENAME
     if PYPROJECT_FILENAME not in owned_companions(component_id) or not path.is_file():
-        return
+        return True
     original = path.read_bytes()
     try:
         text = original.decode("utf-8")
-    except UnicodeDecodeError:
-        return
+        before = tomllib.loads(text)
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return False
+    expected = _expected(before, component_id, name=name, config_id=config_id)
+    if expected is None:
+        return False
+    if expected == before:
+        return True
     lines = text.splitlines(keepends=True)
-    if name:
-        _set_value(lines, "project", "name", pyproject_name(name), add=False)
+    project = before.get("project")
+    if isinstance(project, dict) and expected["project"].get("name") != project.get("name"):
+        _set_value(lines, "project", "name", expected["project"]["name"], add=False)
     if config_id and component_id in PYTHON_APP_COMPONENTS:
         newline = "\r\n" if "\r\n" in text else "\n"
         if not _set_value(lines, "tool.keboola", "config_id", config_id, add=True):
@@ -64,9 +83,36 @@ def refresh_pyproject_identity(
                 f"component_id = {toml_string(component_id)}{newline}",
                 f"config_id = {toml_string(config_id)}{newline}",
             ]
-    updated = "".join(lines).encode("utf-8")
-    if updated != original:
-        path.write_bytes(updated)
+    updated = "".join(lines)
+    try:
+        if tomllib.loads(updated) != expected:
+            return False
+    except tomllib.TOMLDecodeError:
+        return False
+    path.write_bytes(updated.encode("utf-8"))
+    return True
+
+
+def _expected(
+    before: dict[str, Any], component_id: str, *, name: str, config_id: str
+) -> dict[str, Any] | None:
+    """*before* with the owned values set, or ``None`` when its shape has no place for them."""
+    expected = copy.deepcopy(before)
+    project = expected.get("project")
+    if name and isinstance(project, dict) and "name" in project:
+        project["name"] = pyproject_name(name)
+    if config_id and component_id in PYTHON_APP_COMPONENTS:
+        tool = expected.setdefault("tool", {})
+        if not isinstance(tool, dict):
+            return None
+        table = tool.get("keboola")
+        if table is None:
+            tool["keboola"] = {"component_id": component_id, "config_id": config_id}
+        elif isinstance(table, dict):
+            table["config_id"] = config_id
+        else:
+            return None
+    return expected
 
 
 def _set_value(lines: list[str], table: str, key: str, value: str, *, add: bool) -> bool:

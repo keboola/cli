@@ -16,6 +16,7 @@ Three findings of the bookkeeping differential and the random walk:
 
 from __future__ import annotations
 
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,7 @@ from keboola_agent_cli.errors import KeboolaApiError
 from keboola_agent_cli.services._sync_disabled import DISABLED_BASELINE_KEY, baseline_disabled
 from keboola_agent_cli.sync.config_format import dump_config_yaml
 from keboola_agent_cli.sync.manifest import ManifestConfiguration, load_manifest, save_manifest
+from keboola_agent_cli.sync.pyproject_identity import refresh_pyproject_identity
 from test_sync_bookkeeping_differential import (
     CONFIG_FILE,
     DEV,
@@ -295,6 +297,53 @@ def test_r6_ui_reenabled_meanwhile_is_no_change_and_a_rename_is_a_conflict(
     assert (remote["name"], remote["isDisabled"]) == ("Renamed In UI", False)
 
 
+def test_r5_row_promote_takes_the_record_of_the_source_row(tmp_path: Path) -> None:
+    """R5, row provenance: a pulled disabled row, line deleted in main/, ``push
+    --branch DEV`` to a branch made from production re-enables it there only."""
+    v = VARIANTS["rows"]
+    w, cid = _pulled(tmp_path, v, row_disabled=True)
+    w.api.branch_from_prod()
+    row_file = _disabled_row_file(w, cid)
+    row_id = str(_read(row_file)["_keboola"]["row_id"])
+    _drop_flag(row_file)
+
+    w.push(branch=DEV)
+    assert _row_on(w, DEV, v, cid, row_id)["isDisabled"] is False
+    assert _row_on(w, PROD, v, cid, row_id)["isDisabled"] is True
+    assert dirty(w.diff(branch=DEV)["summary"]) == {}
+    (prod_row,) = [r for r in _entry(w, v.component_id, cid).rows if r.id == row_id]
+    assert baseline_disabled(prod_row.metadata), "production never got the push"
+    w.push()
+    assert _row_on(w, PROD, v, cid, row_id)["isDisabled"] is False
+
+
+def test_f2_row_kept_after_remote_delete_keeps_its_record(tmp_path: Path) -> None:
+    """F2: a row whose line was deleted and that production then deleted is kept by
+    pull (edited, D7) with its old baseline -- and its record. ``push --branch DEV``
+    (DEV made from production before the delete) then re-enables it on DEV."""
+    v = VARIANTS["rows"]
+    w, cid = _pulled(tmp_path, v, row_disabled=True)
+    w.api.branch_from_prod()
+    row_file = _disabled_row_file(w, cid)
+    row_id = str(_read(row_file)["_keboola"]["row_id"])
+    _drop_flag(row_file)
+    prod_rows = w.api.get(PROD, v.component_id, cid)["rows"]
+    prod_rows[:] = [r for r in prod_rows if r["id"] != row_id]
+
+    w.pull()
+    assert row_file.exists()
+    (kept,) = [r for r in _entry(w, v.component_id, cid).rows if r.id == row_id]
+    assert baseline_disabled(kept.metadata), "pull dropped the record of the kept row"
+
+    w.push(branch=DEV)
+    assert _row_on(w, DEV, v, cid, row_id)["isDisabled"] is False
+
+
+def _row_on(w: World, branch: int, v: Variant, config_id: str, row_id: str) -> dict[str, Any]:
+    (row,) = [r for r in w.api.get(branch, v.component_id, config_id)["rows"] if r["id"] == row_id]
+    return row
+
+
 # ===========================================================================
 # C. pyproject.toml identity fields
 # ===========================================================================
@@ -435,6 +484,64 @@ def test_r12_failed_create_leaves_files_and_bookkeeping(
     result = w.svc.push(alias="prod", project_root=w.root)
     assert result["errors"]
     assert _snapshot(w, config_dir) == before
+
+
+PYTHON = "keboola.python-transformation-v2"
+APP_ID = "kds-team.app-custom-python"
+PYPROJECT_HEAD = '[project]\nname = "orders"\ndependencies = ["x"]\n'
+UNEDITABLE = {
+    # The line edit replaced only the opening "" of a multi-line string.
+    "multiline-basic": (
+        PYTHON,
+        PYPROJECT_HEAD.replace('"orders"', '"""orders"""'),
+    ),
+    "multiline-literal": (PYTHON, PYPROJECT_HEAD.replace('"orders"', "'''orders'''")),
+    # A quoted key is the same key: a second config_id line duplicated it.
+    "quoted-key": (
+        APP_ID,
+        PYPROJECT_HEAD + '\n[tool.keboola]\n"config_id" = "123"\n',
+    ),
+    # An inline table is [tool.keboola] too: appending one defined it twice.
+    "inline-table": (
+        APP_ID,
+        PYPROJECT_HEAD + '\n[tool]\nkeboola = { component_id = "c", config_id = "123" }\n',
+    ),
+    # A bare number is not a string the edit matches: it added a second line.
+    "bare-number": (APP_ID, PYPROJECT_HEAD + "\n[tool.keboola]\nconfig_id = 123\n"),
+}
+
+
+@pytest.mark.parametrize("case", sorted(UNEDITABLE))
+def test_f1_valid_toml_the_edit_cannot_handle_is_left_unchanged(tmp_path: Path, case: str) -> None:
+    """F1: a valid pyproject.toml the line edit would corrupt stays byte for byte."""
+    component_id, text = UNEDITABLE[case]
+    pyproject = tmp_path / PYPROJECT
+    pyproject.write_bytes(text.encode("utf-8"))
+    assert (
+        refresh_pyproject_identity(component_id, tmp_path, name="Renamed", config_id="456") is False
+    )
+    assert pyproject.read_bytes() == text.encode("utf-8")
+    tomllib.loads(pyproject.read_text(encoding="utf-8"))
+
+
+def test_f1_push_warns_and_keeps_an_uneditable_pyproject(tmp_path: Path) -> None:
+    """F1 end to end: the rename is pushed, the file stays valid and unchanged, and
+    the push names it in warnings[] (it never fails: the remote write happened)."""
+    v = VARIANTS["python"]
+    w, cid = _pulled(tmp_path, v)
+    config_dir = w.config_dir(cid)
+    pyproject = config_dir / PYPROJECT
+    custom = pyproject.read_bytes().replace(b'name = "orders"', b'name = """orders"""')
+    pyproject.write_bytes(custom)
+    _rename(config_dir / CONFIG_FILE, "Renamed")
+
+    result = w.push()
+    assert w.api.get(PROD, v.component_id, cid)["name"] == "Renamed"
+    assert pyproject.read_bytes() == custom
+    (warning,) = [
+        x for x in result.get("warnings", []) if x["change_type"] == "pyproject_not_refreshed"
+    ]
+    assert str(pyproject) in warning["message"]
 
 
 # ===========================================================================

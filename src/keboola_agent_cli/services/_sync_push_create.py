@@ -367,6 +367,7 @@ def record_created_config(
         outcome.file_config_id,
         outcome.configuration,
         component_id=component_id,
+        warnings=warnings,
     )
     hashes = service._compute_config_hashes(outcome.config_dir, component_id)
     stamp = config_baseline(

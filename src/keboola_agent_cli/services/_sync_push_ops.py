@@ -1101,6 +1101,7 @@ def push_update(
         "" if promote else config_id,
         configuration,
         component_id=component_id,
+        warnings=warnings,
     )
 
     return result if isinstance(result, dict) else {}
