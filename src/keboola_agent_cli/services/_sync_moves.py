@@ -290,6 +290,14 @@ def _carried(service: SyncService, config_dir: Path) -> tuple[str, str] | None:
     return str(meta.get("component_id") or ""), str(meta["config_id"])
 
 
+def _same_dir(a: Path, b: Path) -> bool:
+    """True when *a* and *b* are one directory (a symlinked alias included)."""
+    try:
+        return a.exists() and b.exists() and a.samefile(b)
+    except OSError:
+        return False
+
+
 def _sources(
     service: SyncService, in_tree: list[ManifestConfiguration], tree_dir: Path, ignored: frozenset
 ) -> tuple[dict[tuple[str, str, str], list[ManifestConfiguration]], dict[str, str]]:
@@ -303,7 +311,9 @@ def _sources(
     displaced paths (path -> the config id its file carries now).
     """
     eligible = [e for e in in_tree if e.component_id not in ignored and e.metadata.get("pull_hash")]
-    known = {(e.component_id, _identity(e)) for e in eligible}
+    known: dict[tuple[str, str], list[Path]] = defaultdict(list)
+    for e in eligible:
+        known[(e.component_id, _identity(e))].append(tree_dir / e.path)
     groups: dict[tuple[str, str, str], list[ManifestConfiguration]] = defaultdict(list)
     displaced: dict[str, str] = {}
     for entry in eligible:
@@ -315,8 +325,11 @@ def _sources(
                 continue
             if carried[0] not in ("", entry.component_id):
                 continue  # a relabelled component: diff refuses it
-            if (entry.component_id, carried[1]) not in known:
+            owners = known.get((entry.component_id, carried[1]))
+            if not owners:
                 continue  # an id no tracked config has: the old behavior
+            if any(_same_dir(entry_dir, owner) for owner in owners):
+                continue  # an alias (a symlink) of the other config's directory
             displaced[entry.path] = carried[1]
         groups[(entry.path, entry.component_id, identity)].append(entry)
     return groups, displaced
