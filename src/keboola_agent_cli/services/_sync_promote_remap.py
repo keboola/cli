@@ -31,24 +31,22 @@ from typing import TYPE_CHECKING, Any
 
 from ..constants import CONFIG_FILENAME
 from ..errors import ErrorCode, KeboolaApiError
-from ..sync.branch_scope import find_branch_entry, promoted_from, same_branch
+from ..sync.branch_scope import find_branch_entry, promoted_from, same_branch, scope_manifest
+from ..sync.diff_engine import config_hash
 from ..sync.manifest import Manifest
-from ._sync_bindings import (
-    _rewrite_list_placeholders,
-    remap_run_targets_in_place,
-    task_config_ref,
-)
+from ._sync_bindings import _rewrite_list_placeholders, task_config_ref
 from ._sync_models import (
     FLOW_COMPONENT_ID,
     ORCHESTRATOR_COMPONENT_ID,
     PROMOTED_ROW_KEY,
     REBIND_PENDING_KEY,
+    REBIND_SENT_HASH_KEY,
     SCHEDULER_COMPONENT_ID,
     SHARED_CODE_COMPONENT_ID,
     VARIABLES_COMPONENT_ID,
 )
 from ._sync_push_ops import push_update
-from ._sync_writeback import stamp_updated_config
+from ._sync_writeback import promote_shadow, stamp_updated_config
 
 if TYPE_CHECKING:
     from ._encryption import SecretCache
@@ -69,12 +67,29 @@ def has_references(component_id: str, configuration: dict[str, Any]) -> bool:
     return any(configuration.get(key) for key in _LINK_KEYS)
 
 
+def payload_hash(name: Any, description: Any, configuration: Any) -> str:
+    """Hash of a config as sent or as stored: name, description and body.
+
+    Encrypted values are normalized away (``config_hash``), so the stored
+    ciphertext of what we sent hashes like the payload itself.
+    """
+    return config_hash(
+        {"name": name or "", "description": description or "", "configuration": configuration}
+    )
+
+
 @dataclass
 class SentPayload:
-    """What one config was sent to the target with, and where its files are."""
+    """What one config was sent to the target with, and where its files are.
+
+    ``original`` is the payload before any remap (source ids, secrets
+    encrypted); every remap starts from it, so a reference is mapped exactly
+    once from its source identity, never again from an id already mapped.
+    """
 
     config_dir: Path
     config_path: str
+    original: dict[str, Any]
     configuration: dict[str, Any]
 
 
@@ -87,11 +102,17 @@ class PromoteRemap:
         rows: ``(target parent id, source row id)`` -> target row id.
         sent: ``(component_id, target id)`` -> the payload a config that
             references others was sent with this push.
+        expect_creates: The push still creates configs or rows, so a payload
+            sent now may name one of them by its source id (D24).
+        hold: Called with ``(component_id, config_id, payload hash)`` before
+            such an update is PUT: it checkpoints ``rebind_pending`` first.
     """
 
     configs: dict[tuple[str, str], str] = field(default_factory=dict)
     rows: dict[tuple[str, str], str] = field(default_factory=dict)
     sent: dict[tuple[str, str], SentPayload] = field(default_factory=dict)
+    expect_creates: bool = False
+    hold: Callable[[str, str, str], None] | None = None
 
     def refresh(
         self,
@@ -118,33 +139,49 @@ class PromoteRemap:
         self.configs, self.rows = configs, rows
 
     def apply(self, component_id: str, configuration: dict[str, Any]) -> dict[str, Any]:
-        """A copy of *configuration* with every known source id replaced."""
+        """A copy of *configuration* with every known source id replaced.
+
+        *configuration* must hold SOURCE ids (an original payload): every
+        reference is looked up once, by its source identity. Applying it to an
+        already remapped payload could map a target id again when source and
+        target ids overlap.
+        """
         out = copy.deepcopy(configuration)
         if component_id in _RUN_TARGET_COMPONENTS:
-            remap_run_targets_in_place(component_id, out, self.configs, self.rows)
-            self._remap_task_rows(component_id, out)
+            self._remap_run_targets(component_id, out)
         self._remap_variables(out)
         self._remap_shared_code(out)
         if out == configuration:
             return configuration
         return out
 
-    def _remap_task_rows(self, component_id: str, out: dict[str, Any]) -> None:
-        """Map each task's ``configRowIds`` under the config the task NOW runs.
+    def _remap_run_targets(self, component_id: str, out: dict[str, Any]) -> None:
+        """Map a schedule's target, or each task's ``configId`` and ``configRowIds``.
 
-        Separate from the ``configId`` remap: a payload sent before its rows
-        existed already names the target config, and its source row ids still
-        need mapping on the final pass.
+        A task's rows are mapped under the config it runs on the target, each
+        from its source row id, once.
         """
+        if component_id == SCHEDULER_COMPONENT_ID:
+            target = out.get("target")
+            if isinstance(target, dict) and isinstance(target.get("componentId"), str):
+                key = (target["componentId"], str(target.get("configurationId", "")))
+                if key in self.configs:
+                    target["configurationId"] = self.configs[key]
+            return
         tasks = out.get("tasks")
         for task_entry in tasks if isinstance(tasks, list) else []:
             ref = task_config_ref(component_id, task_entry)
-            row_ids = task_entry["task"].get("configRowIds") if ref else None
-            if ref is None or not isinstance(row_ids, list):
+            if ref is None:
                 continue
-            task_entry["task"]["configRowIds"] = [
-                self.rows.get((ref[1], str(row_id)), row_id) for row_id in row_ids
-            ]
+            task = task_entry["task"]
+            parent = self.configs.get(ref, ref[1])
+            if parent != ref[1]:
+                task["configId"] = parent
+            row_ids = task.get("configRowIds")
+            if isinstance(row_ids, list):
+                task["configRowIds"] = [
+                    self.rows.get((parent, str(row_id)), row_id) for row_id in row_ids
+                ]
 
     def _remap_variables(self, out: dict[str, Any]) -> None:
         variables_id = out.get("variables_id")
@@ -187,13 +224,36 @@ class PromoteRemap:
         *,
         config_dir: Path,
         config_path: str,
+        original: dict[str, Any],
         configuration: dict[str, Any],
     ) -> None:
         """Keep the payload a referencing config was sent with, for the final rebind."""
-        if has_references(component_id, configuration):
+        if has_references(component_id, original):
             self.sent[(component_id, config_id)] = SentPayload(
-                config_dir=config_dir, config_path=config_path, configuration=configuration
+                config_dir=config_dir,
+                config_path=config_path,
+                original=original,
+                configuration=configuration,
             )
+
+    def before_update(
+        self,
+        component_id: str,
+        config_id: str,
+        payload: dict[str, Any],
+        *,
+        name: Any,
+        description: Any,
+    ) -> None:
+        """Checkpoint ``rebind_pending`` before an update that may need a later rebind (D24).
+
+        Before the PUT, not after it: a push that dies after the PUT would
+        otherwise leave a sent payload naming a source id and no record that
+        its links are unfinished. The payload hash lets the next push tell
+        this PUT from a real change on the target.
+        """
+        if self.hold is not None and self.expect_creates and has_references(component_id, payload):
+            self.hold(component_id, config_id, payload_hash(name, description, payload))
 
 
 def finish_promote_rebind(
@@ -207,6 +267,7 @@ def finish_promote_rebind(
     warnings: list[dict[str, Any]],
     errors: list[dict[str, str]],
     diff_changes: dict[tuple[str, str], str],
+    ignored_components: frozenset[str],
     allow_plaintext_fallback: bool = False,
 ) -> bool:
     """Finish the references of a promote push; True when the manifest changed.
@@ -218,24 +279,45 @@ def finish_promote_rebind(
        died before its rebind is sent again (built from its files, remapped)
        -- only when this push's diff allows it (*diff_changes*: config change
        type by ``(component_id, config_id)``). A remote change or a conflict
-       keeps the flag and is reported, never overwritten; a config deleted on
-       the target drops the flag (no PUT to a gone id, no endless 404s).
+       keeps the flag and is reported, never overwritten -- unless the target
+       holds exactly the payload this push's own interrupted PUT sent
+       (``rebind_sent_hash``). A config deleted on the target drops the flag
+       (no PUT to a gone id, no endless 404s); so does an ignored component
+       (ignoring is the user's decision). Only configs the diff's scope
+       holds are eligible at all.
     2. Each payload sent this push that the final id map still changes is PUT
-       again -- the payload already sent (secrets encrypted), remapped in
-       memory; ``main/`` is not read again, so nothing undoes a remap.
+       again -- its original (source ids, secrets encrypted) remapped in
+       memory with the final map; ``main/`` is not read again, so nothing
+       undoes a remap, and no id is mapped twice.
 
     A failed PUT keeps the flag, so the next promote push rebinds again.
     """
     branch_id = target.branch_id
     pending = pending_rebinds(manifest, branch_id)
+    eligible = {
+        (cfg.component_id, cfg.id)
+        for cfg in scope_manifest(
+            manifest,
+            target.project_root,
+            target.branch_path,
+            set(),
+            ignored_components=ignored_components,
+            target_branch_id=branch_id,
+        ).in_tree
+    }
     for component_id, config_id, path in pending:
-        if (component_id, config_id) in remap.sent:
+        key = (component_id, config_id)
+        if key in remap.sent:
             continue
-        decision = diff_changes.get((component_id, config_id))
-        if decision == "remote_deleted":
+        decision = diff_changes.get(key)
+        if component_id in ignored_components or decision == "remote_deleted":
             _clear_pending(manifest, component_id, config_id, branch_id)
             continue
-        if decision in ("conflict", "remote_modified"):
+        if key not in eligible:
+            continue
+        if decision in ("conflict", "remote_modified") and not _target_holds_our_put(
+            client, manifest, component_id, config_id, branch_id
+        ):
             warnings.append(_pending_warning(component_id, config_id, decision))
             continue
         if not (target.project_root / target.branch_path / path / CONFIG_FILENAME).exists():
@@ -261,7 +343,7 @@ def finish_promote_rebind(
         _stamp(service, client, manifest, target, component_id, config_id, path, response, warnings)
         _clear_pending(manifest, component_id, config_id, branch_id)
     for (component_id, config_id), sent in remap.sent.items():
-        payload = remap.apply(component_id, sent.configuration)
+        payload = remap.apply(component_id, sent.original)
         if payload != sent.configuration:
             try:
                 response = client.update_config(
@@ -302,27 +384,57 @@ def _pending_warning(component_id: str, config_id: str, decision: str) -> dict[s
     }
 
 
-def hold_for_rebind(
-    remap: PromoteRemap,
+def hold_before_put(
+    client: Any,
     manifest: Manifest,
+    target: CreateTarget,
+    checkpoint: Callable[[str], None],
     component_id: str,
     config_id: str,
-    branch_id: int | None,
-    checkpoint: Callable[[str], None],
+    sent_hash: str,
 ) -> None:
-    """Keep ``rebind_pending`` on a promote update until the final pass confirms it.
+    """Record ``rebind_pending`` + the hash of the payload about to be PUT, and checkpoint.
 
-    The update's baseline is stamped from a payload that may still name a
-    config created later in this push; a failed final PUT (or a crash) must
-    leave the flag on disk so the next promote push finishes the links.
+    The target entry may not exist yet (the first write of a branched config
+    on the promote path); its shadow is recorded here, so the flag has a home.
     """
-    if (component_id, config_id) not in remap.sent:
-        return
-    entry = find_branch_entry(manifest, component_id, config_id, branch_id)
+    entry = find_branch_entry(
+        manifest, component_id, config_id, target.branch_id
+    ) or promote_shadow(
+        client,
+        manifest,
+        component_id=component_id,
+        config_id=config_id,
+        branch_id=target.branch_id,
+        source_tree=target.branch_path,
+    )
     if entry is None:
         return
     entry.metadata[REBIND_PENDING_KEY] = True
+    entry.metadata[REBIND_SENT_HASH_KEY] = sent_hash
     checkpoint(f"{component_id}/{config_id}")
+
+
+def _target_holds_our_put(
+    client: Any, manifest: Manifest, component_id: str, config_id: str, branch_id: int | None
+) -> bool:
+    """True iff the target config is exactly what an interrupted push of ours PUT."""
+    entry = find_branch_entry(manifest, component_id, config_id, branch_id)
+    sent_hash = (entry.metadata.get(REBIND_SENT_HASH_KEY) if entry else "") or ""
+    if not sent_hash:
+        return False
+    try:
+        remote = client.get_config_detail(
+            component_id=component_id, config_id=config_id, branch_id=branch_id
+        )
+    except KeboolaApiError:
+        return False
+    if not isinstance(remote, dict):
+        return False
+    stored = payload_hash(
+        remote.get("name"), remote.get("description"), remote.get("configuration")
+    )
+    return stored == sent_hash
 
 
 def _link_error(component_id: str, config_id: str, exc: KeboolaApiError) -> dict[str, str]:
@@ -368,6 +480,7 @@ def _clear_pending(
     entry = find_branch_entry(manifest, component_id, config_id, branch_id)
     if entry is not None:
         entry.metadata.pop(REBIND_PENDING_KEY, None)
+        entry.metadata.pop(REBIND_SENT_HASH_KEY, None)
 
 
 def pending_rebinds(manifest: Manifest, branch_id: int | None) -> list[tuple[str, str, str]]:

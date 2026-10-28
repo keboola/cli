@@ -43,6 +43,9 @@ SHARED_CODE_COMPONENT_ID = "keboola.shared-code"
 # whose references may still name source ids on the target; cleared once the
 # rebind PUT succeeded (D24).
 REBIND_PENDING_KEY = "rebind_pending"
+# Manifest metadata: hash of the payload a promote update was about to PUT when
+# it set ``rebind_pending`` -- the next push tells that PUT from a real change.
+REBIND_SENT_HASH_KEY = "rebind_sent_hash"
 # Row metadata: the source row a promote push created this row from (D24).
 PROMOTED_ROW_KEY = "promoted_from_id"
 

@@ -714,12 +714,10 @@ def push_create(
         component_id, configuration, warnings, config_path=config_path_str
     )
     promote = branch_path != branch_tree_path(manifest, branch_id)
-    if remap is not None:
-        configuration = remap.apply(component_id, configuration)
 
     # Encrypt #-prefixed secrets before sending to API
     project_id = manifest.project.id if manifest.project else None
-    configuration = encrypt_secrets_in_config(
+    original = encrypt_secrets_in_config(
         client,
         project_id,
         component_id,
@@ -727,6 +725,8 @@ def push_create(
         allow_plaintext_fallback=allow_plaintext_fallback,
         known=known_secrets,
     )
+    # The remap starts from the source-id payload, once (D24).
+    configuration = remap.apply(component_id, original) if remap is not None else original
 
     if component_id == DATA_APP_COMPONENT_ID and ds_client is not None:
         # Carry the DS runtime type into the target (CLI-8): create the DS
@@ -792,6 +792,7 @@ def push_create(
             str(new_config_id),
             config_dir=config_dir,
             config_path=config_path_str,
+            original=original,
             configuration=configuration,
         )
     # The local file gets config_id + encrypted secrets only after the caller
@@ -854,14 +855,9 @@ def push_update(
     configuration = guard_script_shape(
         component_id, configuration, warnings, config_id=config_id, config_path=config_path_str
     )
-    if remap is not None:
-        configuration = remap.apply(component_id, configuration)
-        if component_id == DATA_APP_COMPONENT_ID:
-            _keep_target_app_id(client, config_id, branch_id, configuration)
-
     # Encrypt #-prefixed secrets before sending to API
     project_id = manifest.project.id if manifest.project else None
-    configuration = encrypt_secrets_in_config(
+    original = encrypt_secrets_in_config(
         client,
         project_id,
         component_id,
@@ -869,6 +865,17 @@ def push_update(
         allow_plaintext_fallback=allow_plaintext_fallback,
         known=known_secrets,
     )
+    configuration = original
+    if remap is not None:
+        # The remap starts from the source-id payload, once (D24).
+        configuration = remap.apply(component_id, original)
+        if component_id == DATA_APP_COMPONENT_ID:
+            configuration = copy.deepcopy(configuration)
+            _keep_target_app_id(client, config_id, branch_id, configuration)
+        # rebind_pending is on disk before the PUT that may need it.
+        remap.before_update(
+            component_id, config_id, configuration, name=name, description=description
+        )
 
     if component_id == SANDBOXES_COMPONENT_ID and warnings is not None:
         warn_on_backend_size_change(
@@ -898,6 +905,7 @@ def push_update(
             config_id,
             config_dir=config_dir,
             config_path=config_path_str,
+            original=original,
             configuration=configuration,
         )
 

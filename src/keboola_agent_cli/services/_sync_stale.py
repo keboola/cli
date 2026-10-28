@@ -70,6 +70,14 @@ def _entry_locally_modified(
     the entry is not treated as modified (same conservatism as the force-pull
     conflict guard).
     """
+    # A row kept with an unknown base (D22) counts as edited -- its file may
+    # hold edits pull could not tell from a stale copy -- also when the parent
+    # file or the parent's baseline is gone, so this check comes first.
+    if any(
+        row.metadata.get(UNKNOWN_BASE_KEY) and (config_dir / row.path / CONFIG_FILENAME).exists()
+        for row in entry.rows
+    ):
+        return True
     pull_hash = entry.metadata.get("pull_hash", "")
     config_file = config_dir / CONFIG_FILENAME
     if not pull_hash or not config_file.exists():
@@ -81,13 +89,7 @@ def _entry_locally_modified(
     for row in entry.rows:
         row_hash = row.metadata.get("pull_hash", "")
         row_file = config_dir / row.path / CONFIG_FILENAME
-        if not row_file.exists():
-            continue
-        # A row kept with an unknown base (D22) counts as edited: its file may
-        # hold edits pull could not tell from a stale copy.
-        if row.metadata.get(UNKNOWN_BASE_KEY):
-            return True
-        if row_hash and service._file_hash(row_file) != row_hash:
+        if row_hash and row_file.exists() and service._file_hash(row_file) != row_hash:
             return True
     return False
 

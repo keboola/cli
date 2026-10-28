@@ -9,7 +9,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
-import tempfile
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -205,34 +205,24 @@ def save_manifest(project_root: Path, manifest: Manifest) -> None:
     # Atomic: a temp file in the same directory, flushed to disk, then renamed
     # over the manifest. ``sync push`` saves after every create (a crash must
     # not lose the record of a created config), so an interrupted save must
-    # leave the previous manifest whole, never a truncated one.
-    fd, tmp_name = tempfile.mkstemp(prefix=f".{MANIFEST_FILENAME}.", dir=keboola_dir)
-    tmp_path = Path(tmp_name)
+    # leave the previous manifest whole, never a truncated one. The temp file
+    # is created with 0666 so the OS applies the umask, exactly as a plain
+    # write of a new file would; an existing manifest's mode is copied over.
+    tmp_path = keboola_dir / f".{MANIFEST_FILENAME}.{os.getpid()}.{uuid.uuid4().hex}"
+    fd = os.open(tmp_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0), 0o666)
     try:
         with os.fdopen(fd, "wb") as handle:
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
-        # mkstemp creates 0600: keep an existing manifest's mode, and give a
-        # new one the mode a plain open() would (0666 minus the umask).
         if manifest_path.exists():
-            mode = manifest_path.stat().st_mode & 0o777
-        else:
-            mode = 0o666 & ~_current_umask()
-        os.chmod(tmp_path, mode)
+            os.chmod(tmp_path, manifest_path.stat().st_mode & 0o777)
         os.replace(tmp_path, manifest_path)
         _fsync_dir(keboola_dir)
     except BaseException:
         with contextlib.suppress(OSError):
             tmp_path.unlink()
         raise
-
-
-def _current_umask() -> int:
-    """The process umask (``os.umask`` can only be read by setting it)."""
-    mask = os.umask(0o022)
-    os.umask(mask)
-    return mask
 
 
 def _fsync_dir(directory: Path) -> None:

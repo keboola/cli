@@ -116,7 +116,7 @@ from ._sync_promote_remap import (
     PromoteRemap,
     diff_decisions,
     finish_promote_rebind,
-    hold_for_rebind,
+    hold_before_put,
     pending_rebinds,
 )
 from ._sync_pull_dirs import (
@@ -1657,6 +1657,9 @@ class SyncService(BaseService):
             # remapped source id -> target id in memory (D24).
             promoting = branch_path != self._find_branch_path(manifest, branch_id)
             remap = PromoteRemap() if promoting else None
+            if remap is not None:
+                remap.expect_creates = any(c["change_type"] == "added" for c in changes)
+                remap.hold = partial(hold_before_put, client, manifest, target, checkpoint)
 
             # ---- Phase A: config creates / updates / deletes -------------
             for change in config_changes:
@@ -1742,10 +1745,6 @@ class SyncService(BaseService):
                                 source_tree=branch_path,
                             )
                             manifest_dirty = True
-                            if remap is not None:  # durable until the final rebind (D24)
-                                hold_for_rebind(
-                                    remap, manifest, component_id, config_id, branch_id, checkpoint
-                                )
                         updated += 1
                         pushed_details.append(change)
 
@@ -1845,6 +1844,7 @@ class SyncService(BaseService):
                     warnings=warnings,
                     errors=errors,
                     diff_changes=diff_decisions(all_changes),
+                    ignored_components=sql_workspaces.effective_ignored_components(manifest),
                     allow_plaintext_fallback=allow_plaintext_fallback,
                 )
 

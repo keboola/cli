@@ -24,12 +24,13 @@ import yaml
 from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 from keboola_agent_cli.services._sync_bindings import _refresh_binding_hashes
 from keboola_agent_cli.services._sync_models import CreatedConfig
+from keboola_agent_cli.services._sync_promote_remap import PromoteRemap
 from keboola_agent_cli.services._sync_push_create import ManifestCheckpointError
 from keboola_agent_cli.services._sync_writeback import writeback_create_config_in_manifest
 from keboola_agent_cli.services.component_service import materialize_pushed_config
 from keboola_agent_cli.sync.branch_scope import same_branch
 from keboola_agent_cli.sync.code_extraction import merge_code_files
-from keboola_agent_cli.sync.config_format import api_config_to_local
+from keboola_agent_cli.sync.config_format import api_config_to_local, dump_config_yaml
 from keboola_agent_cli.sync.diff_engine import config_hash
 from keboola_agent_cli.sync.manifest import (
     Manifest,
@@ -1572,3 +1573,202 @@ def test_pending_rebind_on_dev_leaves_a_production_push_with_no_changes(tmp_path
             entry.metadata["rebind_pending"] = True
     save_manifest(w.root, manifest)
     assert w.push()["status"] == "no_changes"
+
+
+# ===========================================================================
+# Round 5 (risks 50-54)
+# ===========================================================================
+
+
+# -- risk 50: unknown-base rows protect the dir even without the parent file --
+
+
+def test_unknown_base_row_keeps_its_dir_when_the_parent_file_is_gone(tmp_path: Path) -> None:
+    r = _adopted_edited_row(tmp_path)
+    w, cid = r.world, r.config_id
+    (r.config_dir / CONFIG_FILE).unlink()
+    del w.api.remote[PROD][(VARIANTS["rows"].component_id, cid)]
+    w.pull()
+
+    row_file = r.config_dir / "rows" / "row-1" / CONFIG_FILE
+    assert "edit_marker" in row_file.read_text(encoding="utf-8")
+
+
+# -- risk 51: rebind_pending is on disk before the PUT ---------------------
+
+
+def _flow_running_two_extractors_crashes_after_put(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> World:
+    """The flow's promote update PUT lands, then the process dies.
+
+    Production E1 and flow F (-> E1) are pulled; the dev branch lacks E1, so a
+    first promote creates it. Production then gains E2; F is edited in main/
+    to run both. The next promote creates E2 and updates F with both dev ids
+    -- and dies right after F's PUT, before any later bookkeeping.
+    """
+    v = VARIANTS["extractor"]
+    comp = v.component_id
+    w = World(tmp_path)
+    w.api.types[comp] = v.component_type
+    w.api.types["keboola.flow"] = "other"
+    for cid, name in (("cfg-e1", "Orders"),):
+        w.api.remote[PROD][(comp, cid)] = {
+            "id": cid,
+            "name": name,
+            "description": "",
+            "configuration": v.body(),
+            "rows": [],
+            "isDisabled": False,
+        }
+    w.api.remote[PROD][("keboola.flow", "cfg-flow")] = {
+        "id": "cfg-flow",
+        "name": "Nightly",
+        "description": "",
+        "configuration": _flow_body(comp, "cfg-e1"),
+        "rows": [],
+        "isDisabled": False,
+    }
+    w.init()
+    w.pull()
+    w.api.branch_from_prod()
+    del w.api.remote[DEV][(comp, "cfg-e1")]
+    w.push(branch=DEV)  # E1 created on the dev branch
+    w.api.remote[PROD][(comp, "cfg-e2")] = {
+        "id": "cfg-e2",
+        "name": "Customers",
+        "description": "",
+        "configuration": v.body(),
+        "rows": [],
+        "isDisabled": False,
+    }
+    w.pull()
+    flow_file = w.config_dir("cfg-flow") / CONFIG_FILE
+    data = _yaml(flow_file.parent)
+    second = copy.deepcopy(data["_configuration_extra"]["tasks"][0])
+    second["id"] = "t2"
+    second["task"]["configId"] = "cfg-e2"
+    data["_configuration_extra"]["tasks"].append(second)
+    flow_file.write_text(dump_config_yaml(data), encoding="utf-8", newline="")
+    original = w.api._update
+
+    def put_then_crash(*args: Any, **kwargs: Any) -> dict:
+        response = original(*args, **kwargs)
+        if kwargs.get("component_id") == "keboola.flow" and str(
+            kwargs.get("change_description", "")
+        ).startswith("Updated"):
+            raise _Crash
+        return response
+
+    monkeypatch.setattr(w.api, "_update", put_then_crash)
+    with pytest.raises(_Crash):
+        w.svc.push(alias="prod", project_root=w.root, branch_override=DEV)
+    monkeypatch.undo()
+    return w
+
+
+def _dev_task_targets(w: World) -> list[str]:
+    return [t["task"]["configId"] for t in _dev_flow(w)["configuration"]["tasks"]]
+
+
+def test_crash_after_an_update_put_is_finished_by_the_next_push(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    w = _flow_running_two_extractors_crashes_after_put(tmp_path, monkeypatch)
+    pending = [c for c in load_manifest(w.root).configurations if c.metadata.get("rebind_pending")]
+    assert [c.component_id for c in pending] == ["keboola.flow"]  # saved BEFORE the PUT
+    result = w.push(branch=DEV)
+
+    comp = VARIANTS["extractor"].component_id
+    dev_extractors = sorted(cid for c, cid in w.api.remote[DEV] if c == comp)
+    assert len(dev_extractors) == 2  # nothing created twice
+    assert sorted(_dev_task_targets(w)) == dev_extractors
+    assert not any(x["change_type"] == "promote_link_pending" for x in result.get("warnings", []))
+    assert not [c for c in load_manifest(w.root).configurations if c.metadata.get("rebind_pending")]
+
+
+def test_crash_after_an_update_put_keeps_a_real_remote_edit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    w = _flow_running_two_extractors_crashes_after_put(tmp_path, monkeypatch)
+    _dev_flow(w)["name"] = "Edited on dev"  # a real change after our PUT
+    result = w.push(branch=DEV)
+
+    assert _dev_flow(w)["name"] == "Edited on dev"
+    assert any(x["change_type"] == "promote_link_pending" for x in result.get("warnings", []))
+
+
+# -- risk 52: every reference is mapped once, from its source id -----------
+
+
+def test_overlapping_row_ids_are_mapped_once_from_the_source_id() -> None:
+    remap = PromoteRemap(
+        configs={("keboola.ex-http", "P"): "D", ("keboola.shared-code", "S"): "S2"},
+        rows={("D", "1"): "2", ("D", "2"): "3", ("S2", "a"): "b", ("S2", "b"): "c"},
+    )
+    flow = {
+        "tasks": [
+            {
+                "id": "t",
+                "task": {
+                    "type": "job",
+                    "componentId": "keboola.ex-http",
+                    "configId": "P",
+                    "configRowIds": ["1"],
+                },
+            }
+        ]
+    }
+    sent = remap.apply("keboola.flow", flow)
+    task = sent["tasks"][0]["task"]
+    assert (task["configId"], task["configRowIds"]) == ("D", ["2"])
+    assert flow["tasks"][0]["task"]["configRowIds"] == ["1"]  # the original is untouched
+    assert remap.apply("keboola.flow", flow) == sent  # the final pass starts from it too
+
+    transformation = {
+        "shared_code_id": "S",
+        "shared_code_row_ids": ["a"],
+        "parameters": {"blocks": [{"codes": [{"script": ["{{a}}"]}]}]},
+    }
+    out = remap.apply("keboola.snowflake-transformation", transformation)
+    assert out["shared_code_row_ids"] == ["b"]
+    assert out["parameters"]["blocks"][0]["codes"][0]["script"] == ["{{b}}"]
+
+
+# -- risk 53: pending recovery never PUTs an ignored component -------------
+
+
+def test_pending_rebind_of_an_ignored_component_is_dropped_without_a_put(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    w = _crash_before_rebind(tmp_path, monkeypatch)
+    manifest = load_manifest(w.root)
+    manifest.ignored_components = ["keboola.flow"]
+    save_manifest(w.root, manifest)
+    _dev_flow(w)["name"] = "Edited on dev"
+    w.push(branch=DEV)
+
+    assert _dev_flow(w)["name"] == "Edited on dev"
+    assert not [c for c in load_manifest(w.root).configurations if c.metadata.get("rebind_pending")]
+
+
+# -- risk 54: no process-wide umask change ----------------------------------
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX file modes")
+def test_manifest_save_never_touches_the_process_umask(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    old = os.umask(0o077)
+    try:
+
+        def umask_forbidden(*_: Any) -> int:
+            raise AssertionError("save_manifest changed the process umask")
+
+        monkeypatch.setattr(os, "umask", umask_forbidden)
+        save_manifest(tmp_path, _manifest((PROD, "main")))
+        monkeypatch.undo()
+    finally:
+        os.umask(old)
+    mode = (tmp_path / ".keboola" / "manifest.json").stat().st_mode & 0o777
+    assert mode == 0o600  # the OS applied the umask to the new file
