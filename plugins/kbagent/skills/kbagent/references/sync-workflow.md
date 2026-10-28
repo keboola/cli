@@ -510,6 +510,22 @@ and the Storage API has no conditional delete, so a UI edit made between
   (`skipped_deletions` without `--force`; three-way with it). A dev row that
   `main/` never had is in `remote_only_rows[]`, never a deletion.
 
+### A directory moved by hand keeps its config id
+
+*(since vNEXT)*
+
+A hand move (`mv`, `git mv`) of a tracked config directory is a move, not a
+delete plus a create: when the old directory is gone and exactly one untracked
+directory of the same branch tree carries the config's `_keboola.config_id`
+and `_keboola.component_id`, diff lists it under `moves[]` (`moved_from`,
+`moved_to`) and classifies the content as usual. Push creates and deletes
+nothing for the move (also with `--force`) and saves the new path in the
+manifest. The next pull renames the directory to the config name; to keep a
+new name, rename the config with `kbagent config rename --directory DIR`.
+When two or more directories carry the id of a missing directory, the move is
+ambiguous: a `CONFLICT` with `ambiguous_move` and `candidates`, nothing pushed
+or deleted, nothing pulled into them -- keep one and remove the others.
+
 ## Key behaviors
 
 - **One project per directory** *(since 0.100.0, CLI-31)*: pull, diff and push

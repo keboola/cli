@@ -205,10 +205,12 @@ def test_m1_unchanged_move_with_rows_is_path_bookkeeping_only(orders: Tree) -> N
 
     after = orders.diff()
     assert after["changes"] == [] and "moves" not in after
-    orders.pull()
+    pulled = orders.pull()
     assert orders.api.log == []
     assert len(orders.entries("500")) == 1
-    orders.dir_of("500")  # exactly one directory carries the config
+    # Pull names the directory after the config again, as for any dir name.
+    assert orders.rel(orders.dir_of("500")) == old_rel
+    assert [d["action"] for d in pulled["details"]] == ["renamed"]
     assert orders.diff()["changes"] == []
     assert remote_ids(orders.api) == ["500"]
 
@@ -216,7 +218,7 @@ def test_m1_unchanged_move_with_rows_is_path_bookkeeping_only(orders: Tree) -> N
 def test_m1_pull_right_after_a_move_keeps_one_directory(orders: Tree) -> None:
     orders.move(orders.dir_of("500"), "orders-moved")
     result = orders.pull()
-    assert any(d["action"] == "moved" for d in result["details"])
+    assert [d["action"] for d in result["details"]][:2] == ["moved", "renamed"]
     orders.dir_of("500")
     assert len(orders.entries("500")) == 1
     assert orders.diff()["changes"] == []
