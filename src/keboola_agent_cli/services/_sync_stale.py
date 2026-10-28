@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..constants import CONFIG_FILENAME
-from ..sync.branch_scope import UNKNOWN_BASE_KEY
+from ..sync.branch_scope import UNKNOWN_BASE_ADOPTED, UNKNOWN_BASE_KEY
 from ..sync.manifest import ManifestConfigRow, ManifestConfiguration
 from ._sync_companions import companion_baseline, config_locally_modified, current_companions
 from ._sync_workspace import SANDBOXES_COMPONENT_ID
@@ -255,13 +255,21 @@ def holds(outer: Path, inner: Path) -> bool:
 def _row_edited(
     service: SyncService, row_file: Path, metadata: dict[str, Any], *, unknown_counts: bool = False
 ) -> bool:
-    """True iff *row_file* exists and differs from its baseline (or, *unknown_counts*, has none provable)."""
+    """True iff *row_file* exists and nothing proves it unchanged since the last pull.
+
+    A file with no recorded ``pull_hash`` is never proven unchanged -- with or
+    without an ``unknown_base`` marker, at its manifest path or at a moved
+    carrier (a row-create writeback interrupted before its baseline was saved
+    leaves such a row): a sweep that deleted it deleted local work. With
+    *unknown_counts*, an ``unknown_base`` marker counts as edited even when a
+    hash is recorded.
+    """
     if not row_file.is_file():
         return False
-    if unknown_counts and metadata.get(UNKNOWN_BASE_KEY):
-        return True
     pull_hash = metadata.get("pull_hash", "")
-    return bool(pull_hash) and service._file_hash(row_file) != pull_hash
+    if not pull_hash or (unknown_counts and metadata.get(UNKNOWN_BASE_KEY)):
+        return True
+    return service._file_hash(row_file) != pull_hash
 
 
 def find_stale_entries(
@@ -524,9 +532,14 @@ def sweep_stale_rows(
         pull_hash = tracked["pull_hash"]
         # A row kept with an unknown base (D22) counts as edited: pull cannot
         # tell its file from the remote's last state, so it never deletes it.
-        unknown_base = tracked.get(UNKNOWN_BASE_KEY, "")
+        # So does a row with no recorded hash (group 3 round 3): nothing
+        # proves its file unchanged. Kept, it is marked unknown-base, so diff
+        # reports it ``remote_deleted`` and push never creates it again.
+        unknown_base = tracked.get(UNKNOWN_BASE_KEY, "") or (
+            "" if pull_hash else UNKNOWN_BASE_ADOPTED
+        )
         edited = row_file.exists() and (
-            bool(unknown_base) or (bool(pull_hash) and service._file_hash(row_file) != pull_hash)
+            bool(unknown_base) or service._file_hash(row_file) != pull_hash
         )
         # Its dir is gone but copies carry its id (*carried*): which one is
         # the row is unknown, so the entry is kept -- and every copy -- until

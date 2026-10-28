@@ -276,13 +276,20 @@ These lists keep `error`, because their entries are not failed items with an err
 - **Ignoring a component keeps local work** (#927). `sync pull` after a component is added to
   `ignoredComponents` deletes only folders it can prove unchanged. An edited folder, or one
   with a file that has no baseline (an adopted config, a row without a hash -- also when
-  the config's own `_config.yml` is gone), is kept with its manifest entry and reported
+  the config's own `_config.yml` is gone or the row folder was moved), is kept with its
+  manifest entry and reported
   `skipped` (reason names the component), also with `--force` and `--theirs`. Before, the
   folders were deleted with the unpushed edits. After un-ignoring, the kept folder diffs
   against its old baseline (`modified`, or `conflict` when the remote changed meanwhile).
   `keboola.sandboxes` in `ignoredComponents` follows this rule too; only a shared SQL
   workspace dropped because `syncWorkspaces` is off keeps the CLI-25 rule (`--theirs`
   deletes it).
+- **A row file without a recorded hash is never deleted by a pull** (a push stopped between
+  creating a row and saving its baseline leaves one): not when its config is deleted on the
+  remote or its component ignored (also after the row folder was moved), and not when the
+  remote deleted the row itself -- then it is kept, reported `skipped`, and `sync diff`
+  lists it `remote_deleted`, so push never creates it again. Delete the folder yourself (or
+  run `sync pull --theirs`, except under an ignored component) to drop it.
 - **Limits, not fixed:** an edit that changes ONLY an encrypted value (`KBC::...`) is
   invisible to the comparison, so such a config is still `deleted`; and the Storage API has
   no conditional delete, so a UI edit made between `sync diff` and the DELETE is not

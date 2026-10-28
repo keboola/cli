@@ -924,3 +924,56 @@ def test_remote_row_added_under_an_adopted_config_is_remote_only(tmp_path: Path)
     assert not [c for c in diff["changes"] if c["config_id"] == row["id"]]
     _push(sim, force=True)
     assert any(r["id"] == row["id"] for r in sim.api.remote[PROD][HTTP_2]["rows"])
+
+
+@pytest.mark.parametrize("why", ["ignored", "deleted-on-remote"])
+def test_a_moved_baseline_free_row_keeps_its_config_dir(tmp_path: Path, why: str) -> None:
+    """Round 3 P1 (Astra's input): a tracked row with empty baseline hashes and no
+    ``unknown_base`` marker (a row-create writeback interrupted before its
+    baseline was saved) is moved to ``rows/moved`` and edited. Its config is then
+    swept -- its component ignored, or the config deleted on the remote -- and a
+    plain pull deleted the whole dir with the edit: the moved carrier's missing
+    hash read as "unchanged". An absent baseline is unproven everywhere."""
+    sim = _world(tmp_path)
+    manifest = load_manifest(sim.root)
+    (entry,) = [c for c in manifest.configurations if c.id == "1003"]
+    (row,) = [r for r in entry.rows if r.id == "1005"]
+    row.metadata = {"pull_hash": "", "pull_config_hash": ""}
+    save_manifest(sim.root, manifest)
+    rows = _dir(sim, f"{HTTP_2_DIR}/rows")
+    (rows / "row-tk11z").rename(rows / "moved")
+    moved = rows / "moved" / "_config.yml"
+    moved.write_text(moved.read_text().replace("tk12z", "tk900z"), encoding="utf-8")
+    if why == "ignored":
+        _set_ignored(sim, HTTP)
+    else:
+        del sim.api.remote[PROD][HTTP_2]
+
+    result = _pull(sim)
+
+    assert "tk900z" in moved.read_text()
+    assert any(d["path"] == HTTP_2_DIR and d["action"] == "skipped" for d in result["details"])
+    assert any(c.id == "1003" for c in load_manifest(sim.root).configurations)
+
+
+def test_a_baseline_free_row_deleted_on_the_remote_is_kept_and_never_recreated(
+    tmp_path: Path,
+) -> None:
+    """Round 3: the row sweep (a row the remote deleted) applies the same rule --
+    a row file with no recorded hash is kept, reported, and diffs as
+    ``remote_deleted``, so push never creates it again."""
+    sim = _world(tmp_path)
+    manifest = load_manifest(sim.root)
+    (entry,) = [c for c in manifest.configurations if c.id == "1003"]
+    (row,) = [r for r in entry.rows if r.id == "1005"]
+    row.metadata = {"pull_hash": "", "pull_config_hash": ""}
+    save_manifest(sim.root, manifest)
+    _drop_row(sim, PROD, HTTP_2, "Row tk11z")
+
+    _pull(sim)
+    result = _push(sim, force=True)
+
+    assert (_dir(sim, f"{HTTP_2_DIR}/rows/row-tk11z") / "_config.yml").exists()
+    assert ("remote_deleted", "1003") in _changes(sim)
+    assert result["created"] == 0
+    assert [r["name"] for r in sim.api.remote[PROD][HTTP_2]["rows"]] == ["Row tk9z"]
