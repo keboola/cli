@@ -89,35 +89,48 @@ def _entry_locally_modified(
 def _rows_locally_modified(
     service: SyncService, config_dir: Path, entry: ManifestConfiguration
 ) -> bool:
-    """True iff any row dir under *config_dir* holds work a delete would lose (round 8).
+    """True iff any row dir under *config_dir* holds work a delete would lose (rounds 8, 9).
 
-    Every row dir counts, not only the manifest's row paths: a tracked row
-    found by its id at another path (moved) is compared with that row's
-    baseline, and a row dir no tracked row stands for (a new row, a copy) is
-    user content without a baseline -- kept. A tracked row at its own path
-    is edited when its file differs from its ``pull_hash``.
+    Every tracked row is checked at its actual manifest path, whatever the
+    row naming (``naming.configRow`` may be ``records/{config_row_name}`` or
+    nested). Every other ``_config.yml`` below the config dir is found by a
+    recursive walk: one whose file carries a tracked row's id while that row's
+    own dir is gone is that row, moved, and is judged by that row's baseline
+    -- an unknown base counts as edited; any other is user content without a
+    baseline (a new row, a copy) and is kept.
     """
-    rows_dir = config_dir / "rows"
-    if not rows_dir.is_dir():
-        return False
     by_path = {row.path: row for row in entry.rows}
     by_id = {row.id: row for row in entry.rows}
-    for row_dir in sorted(rows_dir.iterdir()):
-        row_file = row_dir / CONFIG_FILENAME
-        if not row_file.is_file():
+    for row in entry.rows:
+        if _row_edited(service, config_dir / row.path / CONFIG_FILENAME, row.metadata):
+            return True
+    own = config_dir / CONFIG_FILENAME
+    for row_file in sorted(config_dir.rglob(CONFIG_FILENAME)):
+        if row_file == own:
             continue
-        row = by_path.get(f"rows/{row_dir.name}")
-        if row is None:
-            data = service._read_config_file(row_dir)
-            meta = data.get("_keboola") if isinstance(data, dict) else None
-            row_id = str(meta.get("row_id") or "") if isinstance(meta, dict) else ""
-            row = by_id.get(row_id)
-            if row is None or (config_dir / row.path / CONFIG_FILENAME).exists():
-                return True  # no tracked row it stands for: user content
-        row_hash = row.metadata.get("pull_hash", "")
-        if row_hash and service._file_hash(row_file) != row_hash:
+        if row_file.parent.relative_to(config_dir).as_posix() in by_path:
+            continue  # a tracked row at its own path: checked above
+        data = service._read_config_file(row_file.parent)
+        meta = data.get("_keboola") if isinstance(data, dict) else None
+        row_id = str(meta.get("row_id") or "") if isinstance(meta, dict) else ""
+        moved = by_id.get(row_id)
+        if moved is None or (config_dir / moved.path / CONFIG_FILENAME).exists():
+            return True  # no tracked row it stands for: user content
+        if _row_edited(service, row_file, moved.metadata, unknown_counts=True):
             return True
     return False
+
+
+def _row_edited(
+    service: SyncService, row_file: Path, metadata: dict[str, Any], *, unknown_counts: bool = False
+) -> bool:
+    """True iff *row_file* exists and differs from its baseline (or, *unknown_counts*, has none provable)."""
+    if not row_file.is_file():
+        return False
+    if unknown_counts and metadata.get(UNKNOWN_BASE_KEY):
+        return True
+    pull_hash = metadata.get("pull_hash", "")
+    return bool(pull_hash) and service._file_hash(row_file) != pull_hash
 
 
 def find_stale_entries(

@@ -918,3 +918,71 @@ def test_remote_config_delete_keeps_a_new_row_dir(tmp_path: Path) -> None:
 
     assert (rows / "new-row" / "_config.yml").exists()
     assert _push(sim)["created"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Round 9: the parent-delete guard sees every row layout and unknown bases
+# ---------------------------------------------------------------------------
+
+
+def _world_with_row_naming(tmp_path: Path, template: str) -> Sim:
+    sim = Sim(tmp_path)
+    sim.seed_remote()
+    sim.svc.init_sync(alias="prod", project_root=sim.root)
+    manifest = load_manifest(sim.root)
+    manifest.naming.config_row = template
+    save_manifest(sim.root, manifest)
+    _pull(sim)
+    return sim
+
+
+@pytest.mark.parametrize(
+    ("template", "row_dir"),
+    [
+        ("records/{config_row_name}", "records/row-tk2z"),  # Astra's input
+        ("rows/group/{config_row_name}", "rows/group/row-tk2z"),  # nested
+    ],
+    ids=["records", "nested"],
+)
+def test_remote_config_delete_keeps_an_edited_row_in_a_custom_layout(
+    tmp_path: Path, template: str, row_dir: str
+) -> None:
+    """Round 9 P1: the edited row is checked at its manifest path, whatever the naming."""
+    sim = _world_with_row_naming(tmp_path, template)
+    row = _dir(sim, f"{HTTP_DIR}/{row_dir}")
+    assert (row / "_config.yml").exists()
+    _set_value(row, "tk900z")
+    del sim.api.remote[PROD][HTTP_1]
+
+    _pull(sim)
+
+    assert "tk900z" in (row / "_config.yml").read_text()
+
+
+@pytest.mark.parametrize(
+    ("template", "row_dir", "new_dir"),
+    [
+        ("rows/{config_row_name}", "rows/row-tk2z", "rows/moved"),  # Astra's input
+        ("rows/group/{config_row_name}", "rows/group/row-tk2z", "rows/group/moved"),
+    ],
+    ids=["rows", "nested"],
+)
+def test_remote_config_delete_keeps_a_moved_unknown_base_row(
+    tmp_path: Path, template: str, row_dir: str, new_dir: str
+) -> None:
+    """Round 9 P1: an adopted row (unknown base, empty pull_hash), moved, parent deleted."""
+    sim = _world_with_row_naming(tmp_path, template)
+    _set_value(_dir(sim, f"{HTTP_DIR}/{row_dir}"), "tk900z")
+    manifest = load_manifest(sim.root)
+    for entry in manifest.configurations:
+        for row in entry.rows if entry.id == "1000" else []:
+            if row.id == "1001":
+                row.metadata = {"pull_hash": "", "pull_config_hash": "", "unknown_base": "adopted"}
+    save_manifest(sim.root, manifest)
+    moved = _dir(sim, f"{HTTP_DIR}/{new_dir}")
+    shutil.move(str(_dir(sim, f"{HTTP_DIR}/{row_dir}")), str(moved))
+    del sim.api.remote[PROD][HTTP_1]
+
+    _pull(sim)
+
+    assert "tk900z" in (moved / "_config.yml").read_text()
