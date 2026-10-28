@@ -11,10 +11,12 @@ the bookkeeping differential test.
 from __future__ import annotations
 
 import copy
+import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 import yaml
@@ -368,7 +370,8 @@ def test_pull_keeps_an_edited_row_of_a_rediscovered_config(tmp_path: Path) -> No
     assert any(
         d["action"] == "skipped" and d["path"].endswith("rows/row-1") for d in result["details"]
     )
-    assert w.diff()["summary"]["modified"] == 1  # pending, not hidden
+    # Listed, never hidden: with no baseline the row is a conflict (D22).
+    assert w.diff()["summary"]["conflict"] == 1
 
 
 def test_pull_keeps_an_edited_row_in_a_noncanonical_folder(tmp_path: Path) -> None:
@@ -1299,3 +1302,273 @@ def test_binding_refresh_with_branch_none_finds_an_entry_under_the_default_id(
         warnings=[],
     )
     assert entry.metadata["pull_config_hash"] != "stale"
+
+
+# ===========================================================================
+# Round 4 (risks 38-49)
+# ===========================================================================
+
+
+def _adopted_edited_row(tmp_path: Path) -> Retargeted:
+    """A rediscovered config whose edited ``rows/row-1`` pull kept with an unknown base."""
+    r = _retargeted(tmp_path, "rows")
+    semantic_edit(r.config_dir / "rows" / "row-1" / CONFIG_FILE)
+    r.world.pull()
+    return r
+
+
+def _crash_before_rebind(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> World:
+    """Flow + extractor promoted (flow first); the push dies before the final rebind."""
+    w = _seed_flow_world(tmp_path, flow_first=True).world
+
+    def crash(*_: Any, **__: Any) -> bool:
+        raise _Crash
+
+    monkeypatch.setattr("keboola_agent_cli.services.sync_service.finish_promote_rebind", crash)
+    with pytest.raises(_Crash):
+        w.svc.push(alias="prod", project_root=w.root, branch_override=DEV)
+    monkeypatch.undo()
+    return w
+
+
+def _dev_flow(w: World) -> dict:
+    (flow,) = [cfg for (comp, _), cfg in w.api.remote[DEV].items() if comp == "keboola.flow"]
+    return flow
+
+
+# -- risk 39: a secondary failure never masks the fatal checkpoint error ------
+
+
+def test_secondary_writeback_failure_never_masks_the_checkpoint_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    v = VARIANTS["extractor"]
+    w = World(tmp_path)
+    w.api.types[v.component_id] = v.component_type
+    w.init()
+    w.pull()
+    author_config(w.root / "main", v, "First")
+    author_config(w.root / "main", v, "Second")
+
+    def disk_full(*_: Any, **__: Any) -> None:
+        raise PermissionError("no space left on device")
+
+    monkeypatch.setattr("keboola_agent_cli.services._sync_push_create.save_manifest", disk_full)
+    monkeypatch.setattr(
+        "keboola_agent_cli.services._sync_push_create.writeback_after_push", disk_full
+    )
+    with pytest.raises(ManifestCheckpointError):
+        w.svc.push(alias="prod", project_root=w.root)
+    assert len(w.api.remote[PROD]) == 1  # the push stopped after the first create
+
+
+# -- risk 40: a local delete of an unknown-base row is a conflict, never a DELETE
+
+
+def test_local_delete_of_an_unknown_base_row_is_a_conflict_not_a_delete(tmp_path: Path) -> None:
+    r = _adopted_edited_row(tmp_path)
+    w, cid = r.world, r.config_id
+    shutil.rmtree(r.config_dir / "rows" / "row-1")
+    rows = w.api.get(PROD, VARIANTS["rows"].component_id, cid)["rows"]
+    (row_id,) = [row["id"] for row in rows if row["name"] == "Row 1"]
+
+    assert [c["change_type"] for c in w.diff()["changes"] if c["config_id"] == row_id] == [
+        "conflict"
+    ]
+    w.push(force=True)
+    assert any(row["id"] == row_id for row in rows)
+
+
+# -- risk 41: a remote parent delete keeps a dir holding an unknown-base row --
+
+
+def test_remote_config_delete_keeps_a_dir_with_an_unknown_base_row(tmp_path: Path) -> None:
+    r = _adopted_edited_row(tmp_path)
+    w, cid = r.world, r.config_id
+    del w.api.remote[PROD][(VARIANTS["rows"].component_id, cid)]
+    result = w.pull()
+
+    assert "edit_marker" in (r.config_dir / "rows" / "row-1" / CONFIG_FILE).read_text(
+        encoding="utf-8"
+    )
+    assert [
+        d["action"]
+        for d in result["details"]
+        if d["path"].startswith(r.config_dir.relative_to(w.root / "main").as_posix())
+    ] == ["skipped"]
+
+
+# -- risk 42: a flow's row selection maps to the dev rows -------------------
+
+
+def test_flow_row_selection_maps_to_the_rows_created_on_dev(tmp_path: Path) -> None:
+    v = VARIANTS["rows"]
+    w = World(tmp_path)
+    ext_id = w.api.seed(v)  # listed before the flow: created first on DEV
+    row_id = w.api.get(PROD, v.component_id, ext_id)["rows"][0]["id"]
+    w.api.types["keboola.flow"] = "other"
+    body = _flow_body(v.component_id, ext_id)
+    body["tasks"][0]["task"]["configRowIds"] = [row_id]
+    w.api.remote[PROD][("keboola.flow", "cfg-flow")] = {
+        "id": "cfg-flow",
+        "name": "Nightly",
+        "description": "",
+        "configuration": body,
+        "rows": [],
+        "isDisabled": False,
+    }
+    w.init()
+    w.pull()
+    w.push(branch=DEV)
+
+    dev_ext = _dev_id_of(w, v.component_id)
+    (dev_row,) = [
+        row["id"]
+        for row in w.api.get(DEV, v.component_id, dev_ext)["rows"]
+        if row["name"] == "Row 1"
+    ]
+    task = _dev_flow(w)["configuration"]["tasks"][0]["task"]
+    assert (task["configId"], task["configRowIds"]) == (dev_ext, [dev_row])
+
+
+# -- risk 43: a failed final rebind of an UPDATE is retried ------------------
+
+
+def test_failed_final_rebind_of_an_updated_flow_is_retried(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    f = _seed_flow_world(tmp_path, flow_first=True)
+    w = f.world
+    w.api.branch_from_prod()
+    del w.api.remote[DEV][(VARIANTS["extractor"].component_id, f.extractor_id)]
+    semantic_edit(w.config_dir(f.flow_id) / CONFIG_FILE)
+    original = w.api._update
+
+    def remap_put_fails(*args: Any, **kwargs: Any) -> dict:
+        if str(kwargs.get("change_description", "")).startswith("Remap"):
+            raise KeboolaApiError("refused", 500, ErrorCode.API_ERROR)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(w.api, "_update", remap_put_fails)
+    assert w.svc.push(alias="prod", project_root=w.root, branch_override=DEV)["errors"]
+    monkeypatch.undo()
+    w.push(branch=DEV)  # no local edit since
+
+    assert _dev_task_target(w) == _dev_id_of(w, VARIANTS["extractor"].component_id)
+
+
+# -- risk 44: a pending rebind goes through the plan ------------------------
+
+
+def test_pending_rebind_never_overwrites_a_remote_change_on_dev(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    w = _crash_before_rebind(tmp_path, monkeypatch)
+    _dev_flow(w)["name"] = "Edited on dev"
+    result = w.push(branch=DEV)
+
+    assert _dev_flow(w)["name"] == "Edited on dev"
+    assert any(x["change_type"] == "promote_link_pending" for x in result.get("warnings", []))
+
+
+def test_pending_rebind_of_a_config_deleted_on_dev_is_dropped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    w = _crash_before_rebind(tmp_path, monkeypatch)
+    (flow_key,) = [key for key in w.api.remote[DEV] if key[0] == "keboola.flow"]
+    del w.api.remote[DEV][flow_key]
+    w.push(branch=DEV)  # no error: no PUT to the gone id
+    w.push(branch=DEV)
+    assert not [c for c in load_manifest(w.root).configurations if c.metadata.get("rebind_pending")]
+
+
+# -- risk 45: a second data-app promote keeps the dev app id ---------------
+
+
+def test_second_data_app_promote_keeps_the_dev_app_id(tmp_path: Path) -> None:
+    app = "keboola.data-apps"
+    w = World(tmp_path)
+    w.api.types[app] = "other"
+    w.api.remote[PROD][(app, "cfg-app")] = {
+        "id": "cfg-app",
+        "name": "Dash",
+        "description": "",
+        "configuration": {"parameters": {"id": "prod-app", "dataApp": {"slug": "dash"}}},
+        "rows": [],
+        "isDisabled": False,
+    }
+    ds = MagicMock()
+    ds.list_apps.return_value = []
+
+    def create_app(
+        *, type_: str, name: str, description: str, config: dict, branch_id: Any
+    ) -> dict:
+        created = w.api._create(app, name, config, branch_id=DEV)
+        return {"id": "dev-app", "configId": created["id"]}
+
+    ds.create_app.side_effect = create_app
+    w.svc._ds_client_factory = lambda url, token: ds
+    w.init()
+    w.pull()
+    config_file = w.config_dir("cfg-app") / CONFIG_FILE
+    w.push(branch=DEV)
+    semantic_edit(config_file)
+    w.push(branch=DEV)
+
+    ((_, dev_cfg),) = w.api.remote[DEV].items()
+    assert dev_cfg["configuration"]["parameters"]["id"] == "dev-app"
+    assert "prod-app" in config_file.read_text(encoding="utf-8")
+
+
+# -- risks 46 / 49: manifest mode and directory sync ------------------------
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX file modes")
+def test_new_manifest_respects_the_umask_and_an_existing_mode_is_kept(tmp_path: Path) -> None:
+    manifest_path = tmp_path / ".keboola" / "manifest.json"
+    old = os.umask(0o077)
+    try:
+        save_manifest(tmp_path, _manifest((PROD, "main")))
+    finally:
+        os.umask(old)
+    assert manifest_path.stat().st_mode & 0o777 == 0o600
+    manifest_path.chmod(0o640)
+    save_manifest(tmp_path, _manifest((PROD, "main")))
+    assert manifest_path.stat().st_mode & 0o777 == 0o640
+
+
+@pytest.mark.skipif(os.name != "posix", reason="directory fsync is POSIX-only")
+def test_manifest_save_syncs_its_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    synced: list[int] = []
+    opened: dict[int, str] = {}
+    real_open, real_fsync = os.open, os.fsync
+
+    def recording_open(path: Any, flags: int, *args: Any, **kwargs: Any) -> int:
+        fd = real_open(path, flags, *args, **kwargs)
+        opened[fd] = str(path)
+        return fd
+
+    def recording_fsync(fd: int) -> None:
+        synced.append(fd)
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "open", recording_open)
+    monkeypatch.setattr(os, "fsync", recording_fsync)
+    save_manifest(tmp_path, _manifest((PROD, "main")))
+    monkeypatch.undo()
+    assert str(tmp_path / ".keboola") in [opened.get(fd) for fd in synced]
+
+
+# -- risk 47: a pending rebind on DEV does not make a production push a write --
+
+
+def test_pending_rebind_on_dev_leaves_a_production_push_with_no_changes(tmp_path: Path) -> None:
+    v = VARIANTS["extractor"]
+    w = _seeded(tmp_path, v).world
+    w.push(branch=DEV)
+    manifest = load_manifest(w.root)
+    for entry in manifest.configurations:
+        if same_branch(manifest, entry.branch_id, DEV):
+            entry.metadata["rebind_pending"] = True
+    save_manifest(w.root, manifest)
+    assert w.push()["status"] == "no_changes"

@@ -81,7 +81,13 @@ def _entry_locally_modified(
     for row in entry.rows:
         row_hash = row.metadata.get("pull_hash", "")
         row_file = config_dir / row.path / CONFIG_FILENAME
-        if row_hash and row_file.exists() and service._file_hash(row_file) != row_hash:
+        if not row_file.exists():
+            continue
+        # A row kept with an unknown base (D22) counts as edited: its file may
+        # hold edits pull could not tell from a stale copy.
+        if row.metadata.get(UNKNOWN_BASE_KEY):
+            return True
+        if row_hash and service._file_hash(row_file) != row_hash:
             return True
     return False
 

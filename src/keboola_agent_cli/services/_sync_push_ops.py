@@ -856,6 +856,8 @@ def push_update(
     )
     if remap is not None:
         configuration = remap.apply(component_id, configuration)
+        if component_id == DATA_APP_COMPONENT_ID:
+            _keep_target_app_id(client, config_id, branch_id, configuration)
 
     # Encrypt #-prefixed secrets before sending to API
     project_id = manifest.project.id if manifest.project else None
@@ -908,3 +910,23 @@ def push_update(
     )
 
     return result if isinstance(result, dict) else {}
+
+
+def _keep_target_app_id(
+    client: Any, config_id: str, branch_id: int | None, configuration: dict[str, Any]
+) -> None:
+    """Send the target branch's data-app id, never the one main/ names.
+
+    A data app's ``parameters.id`` points at its Data Science app. On the
+    promote path main/ keeps the production app id (D23), so an update read
+    from main/ would re-point the dev branch's config at the production app.
+    The id is read from the config on the target branch itself; a failed read
+    fails this update rather than send the wrong id.
+    """
+    remote = client.get_config_detail(
+        component_id=DATA_APP_COMPONENT_ID, config_id=config_id, branch_id=branch_id
+    )
+    target_params = ((remote or {}).get("configuration") or {}).get("parameters") or {}
+    params = configuration.get("parameters")
+    if target_params.get("id") and isinstance(params, dict):
+        params["id"] = target_params["id"]

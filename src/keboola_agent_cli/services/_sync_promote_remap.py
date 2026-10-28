@@ -24,6 +24,7 @@ remapped in memory on EVERY promote push, create and update alike:
 from __future__ import annotations
 
 import copy
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -32,7 +33,11 @@ from ..constants import CONFIG_FILENAME
 from ..errors import ErrorCode, KeboolaApiError
 from ..sync.branch_scope import find_branch_entry, promoted_from, same_branch
 from ..sync.manifest import Manifest
-from ._sync_bindings import _rewrite_list_placeholders, remap_run_targets_in_place
+from ._sync_bindings import (
+    _rewrite_list_placeholders,
+    remap_run_targets_in_place,
+    task_config_ref,
+)
 from ._sync_models import (
     FLOW_COMPONENT_ID,
     ORCHESTRATOR_COMPONENT_ID,
@@ -117,11 +122,29 @@ class PromoteRemap:
         out = copy.deepcopy(configuration)
         if component_id in _RUN_TARGET_COMPONENTS:
             remap_run_targets_in_place(component_id, out, self.configs, self.rows)
+            self._remap_task_rows(component_id, out)
         self._remap_variables(out)
         self._remap_shared_code(out)
         if out == configuration:
             return configuration
         return out
+
+    def _remap_task_rows(self, component_id: str, out: dict[str, Any]) -> None:
+        """Map each task's ``configRowIds`` under the config the task NOW runs.
+
+        Separate from the ``configId`` remap: a payload sent before its rows
+        existed already names the target config, and its source row ids still
+        need mapping on the final pass.
+        """
+        tasks = out.get("tasks")
+        for task_entry in tasks if isinstance(tasks, list) else []:
+            ref = task_config_ref(component_id, task_entry)
+            row_ids = task_entry["task"].get("configRowIds") if ref else None
+            if ref is None or not isinstance(row_ids, list):
+                continue
+            task_entry["task"]["configRowIds"] = [
+                self.rows.get((ref[1], str(row_id)), row_id) for row_id in row_ids
+            ]
 
     def _remap_variables(self, out: dict[str, Any]) -> None:
         variables_id = out.get("variables_id")
@@ -183,6 +206,7 @@ def finish_promote_rebind(
     known_secrets: SecretCache | None,
     warnings: list[dict[str, Any]],
     errors: list[dict[str, str]],
+    diff_changes: dict[tuple[str, str], str],
     allow_plaintext_fallback: bool = False,
 ) -> bool:
     """Finish the references of a promote push; True when the manifest changed.
@@ -191,7 +215,11 @@ def finish_promote_rebind(
     later in the same push resolves too:
 
     1. A config still flagged ``rebind_pending`` from an earlier push that
-       died before its rebind is sent again (built from its files, remapped).
+       died before its rebind is sent again (built from its files, remapped)
+       -- only when this push's diff allows it (*diff_changes*: config change
+       type by ``(component_id, config_id)``). A remote change or a conflict
+       keeps the flag and is reported, never overwritten; a config deleted on
+       the target drops the flag (no PUT to a gone id, no endless 404s).
     2. Each payload sent this push that the final id map still changes is PUT
        again -- the payload already sent (secrets encrypted), remapped in
        memory; ``main/`` is not read again, so nothing undoes a remap.
@@ -202,6 +230,13 @@ def finish_promote_rebind(
     pending = pending_rebinds(manifest, branch_id)
     for component_id, config_id, path in pending:
         if (component_id, config_id) in remap.sent:
+            continue
+        decision = diff_changes.get((component_id, config_id))
+        if decision == "remote_deleted":
+            _clear_pending(manifest, component_id, config_id, branch_id)
+            continue
+        if decision in ("conflict", "remote_modified"):
+            warnings.append(_pending_warning(component_id, config_id, decision))
             continue
         if not (target.project_root / target.branch_path / path / CONFIG_FILENAME).exists():
             continue
@@ -252,6 +287,42 @@ def finish_promote_rebind(
             )
         _clear_pending(manifest, component_id, config_id, branch_id)
     return bool(pending or remap.sent)
+
+
+def _pending_warning(component_id: str, config_id: str, decision: str) -> dict[str, str]:
+    return {
+        "change_type": "promote_link_pending",
+        "component_id": component_id,
+        "config_id": config_id,
+        "message": (
+            f"{component_id}/{config_id} still names source config ids on the branch, but "
+            f"it changed there since ({decision}); its links are not sent over that "
+            f"change. Run 'kbagent sync pull --branch <id>' to reconcile it."
+        ),
+    }
+
+
+def hold_for_rebind(
+    remap: PromoteRemap,
+    manifest: Manifest,
+    component_id: str,
+    config_id: str,
+    branch_id: int | None,
+    checkpoint: Callable[[str], None],
+) -> None:
+    """Keep ``rebind_pending`` on a promote update until the final pass confirms it.
+
+    The update's baseline is stamped from a payload that may still name a
+    config created later in this push; a failed final PUT (or a crash) must
+    leave the flag on disk so the next promote push finishes the links.
+    """
+    if (component_id, config_id) not in remap.sent:
+        return
+    entry = find_branch_entry(manifest, component_id, config_id, branch_id)
+    if entry is None:
+        return
+    entry.metadata[REBIND_PENDING_KEY] = True
+    checkpoint(f"{component_id}/{config_id}")
 
 
 def _link_error(component_id: str, config_id: str, exc: KeboolaApiError) -> dict[str, str]:
@@ -309,6 +380,10 @@ def pending_rebinds(manifest: Manifest, branch_id: int | None) -> list[tuple[str
     ]
 
 
-def has_pending_rebind(manifest: Manifest) -> bool:
-    """True iff any entry still waits for a promote rebind."""
-    return any(entry.metadata.get(REBIND_PENDING_KEY) for entry in manifest.configurations)
+def diff_decisions(changes: list[dict[str, Any]]) -> dict[tuple[str, str], str]:
+    """Config change type by ``(component_id, config_id)`` from a diff's changes."""
+    return {
+        (c["component_id"], c["config_id"]): c["change_type"]
+        for c in changes
+        if not c.get("is_row") and c.get("config_id")
+    }

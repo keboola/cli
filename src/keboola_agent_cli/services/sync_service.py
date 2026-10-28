@@ -112,7 +112,13 @@ from ._sync_data_app import (
 )
 from ._sync_models import LocalConfigHashes
 from ._sync_project_guard import adopt_existing_manifest, load_project_manifest
-from ._sync_promote_remap import PromoteRemap, finish_promote_rebind, has_pending_rebind
+from ._sync_promote_remap import (
+    PromoteRemap,
+    diff_decisions,
+    finish_promote_rebind,
+    hold_for_rebind,
+    pending_rebinds,
+)
 from ._sync_pull_dirs import (
     RowPullContext,
     ambiguous_id_warnings,
@@ -1383,6 +1389,13 @@ class SyncService(BaseService):
             for row in cfg.rows:
                 row_key = f"{cfg.component_id}/{cfg.id}/rows/{row.id}"
                 tracked_row_keys.add(row_key)
+                # The base first: a local delete of an unknown-base row must be
+                # a conflict too, never a DELETE (D22).
+                pch = row.metadata.get("pull_config_hash") if row.metadata else ""
+                if pch:
+                    row_base_hashes[row_key] = pch
+                elif row.metadata.get(UNKNOWN_BASE_KEY):
+                    row_base_hashes[row_key] = UNKNOWN_BASE_HASH  # D22: a difference conflicts
                 row_dir = parent_dir / row.path
                 row_local = self._read_config_file(row_dir)
                 if row_local is None:
@@ -1398,11 +1411,6 @@ class SyncService(BaseService):
                         "data": row_local,
                     }
                 )
-                pch = row.metadata.get("pull_config_hash") if row.metadata else ""
-                if pch:
-                    row_base_hashes[row_key] = pch
-                elif row.metadata.get(UNKNOWN_BASE_KEY):
-                    row_base_hashes[row_key] = UNKNOWN_BASE_HASH  # D22: a difference conflicts
 
         # Also add untracked local rows (new row dirs dropped under a tracked
         # config). They have no row_id yet so compute_row_changeset flags
@@ -1548,7 +1556,9 @@ class SyncService(BaseService):
 
         # A promote create whose references still need a rebind (D24) is pushed
         # again although nothing changed locally.
-        if not changes and not has_pending_rebind(load_manifest(project_root)):
+        stored = load_manifest(project_root)
+        target_id = self._resolve_branch_id(alias, stored, project_root, branch_override)
+        if not changes and not pending_rebinds(stored, target_id):
             result: dict[str, Any] = {
                 "status": "no_changes",
                 "created": 0,
@@ -1638,6 +1648,7 @@ class SyncService(BaseService):
             # The ids this push creates, for the rows and the link backfill.
             ledger = CreateLedger()
             target = CreateTarget(project_root, branch_path, branch_id)
+            checkpoint = partial(checkpoint_manifest, project_root, manifest)
             # (ULID parent, row placeholder id) -> row ULID; ULID parent -> rows
             # created under it. Keyed per parent: two configs can use one row id.
             created_row_id_map: dict[tuple[str, str], str] = {}
@@ -1731,6 +1742,10 @@ class SyncService(BaseService):
                                 source_tree=branch_path,
                             )
                             manifest_dirty = True
+                            if remap is not None:  # durable until the final rebind (D24)
+                                hold_for_rebind(
+                                    remap, manifest, component_id, config_id, branch_id, checkpoint
+                                )
                         updated += 1
                         pushed_details.append(change)
 
@@ -1779,6 +1794,7 @@ class SyncService(BaseService):
                 if remap is not None:
                     remap.refresh(manifest, branch_id, ledger.created_id_map, created_row_id_map)
 
+                manifest_dirty = True  # before a create's checkpoint (D25)
                 try:
                     new_row_id = push_row_change(
                         self,
@@ -1794,10 +1810,9 @@ class SyncService(BaseService):
                         allow_plaintext_fallback=allow_plaintext_fallback,
                         warnings=warnings,
                         known_secrets=known_secrets,
-                        checkpoint=partial(checkpoint_manifest, project_root, manifest),
+                        checkpoint=checkpoint,
                         remap=remap,
                     )
-                    manifest_dirty = True
                     if change_type == "added":
                         created += 1
                         if new_row_id:
@@ -1829,6 +1844,7 @@ class SyncService(BaseService):
                     known_secrets=known_secrets,
                     warnings=warnings,
                     errors=errors,
+                    diff_changes=diff_decisions(all_changes),
                     allow_plaintext_fallback=allow_plaintext_fallback,
                 )
 

@@ -213,11 +213,39 @@ def save_manifest(project_root: Path, manifest: Manifest) -> None:
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
-        # mkstemp creates 0600; keep the mode a plain write gave the manifest.
-        mode = manifest_path.stat().st_mode & 0o777 if manifest_path.exists() else 0o644
+        # mkstemp creates 0600: keep an existing manifest's mode, and give a
+        # new one the mode a plain open() would (0666 minus the umask).
+        if manifest_path.exists():
+            mode = manifest_path.stat().st_mode & 0o777
+        else:
+            mode = 0o666 & ~_current_umask()
         os.chmod(tmp_path, mode)
         os.replace(tmp_path, manifest_path)
+        _fsync_dir(keboola_dir)
     except BaseException:
         with contextlib.suppress(OSError):
             tmp_path.unlink()
         raise
+
+
+def _current_umask() -> int:
+    """The process umask (``os.umask`` can only be read by setting it)."""
+    mask = os.umask(0o022)
+    os.umask(mask)
+    return mask
+
+
+def _fsync_dir(directory: Path) -> None:
+    """Flush the rename to disk (POSIX; best effort, a no-op on Windows).
+
+    ``os.replace`` is atomic, but only a sync of the directory makes the new
+    name survive a power loss.
+    """
+    if os.name != "posix":
+        return
+    with contextlib.suppress(OSError):
+        fd = os.open(directory, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)

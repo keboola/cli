@@ -18,6 +18,7 @@ is used.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -37,6 +38,8 @@ from ._sync_writeback import (
 
 if TYPE_CHECKING:
     from .sync_service import SyncService
+
+logger = logging.getLogger(__name__)
 
 
 class ManifestCheckpointError(ConfigError):
@@ -149,17 +152,25 @@ def record_created_config(
             entry.metadata[REBIND_PENDING_KEY] = True
     try:
         checkpoint_manifest(target.project_root, manifest, f"{component_id}/{new_id}")
-    except ManifestCheckpointError:
+    except ManifestCheckpointError as fatal:
         # Best effort: outside the promote path the file then carries the id,
-        # and the next push adopts it instead of creating it again.
-        writeback_after_push(
-            service,
-            outcome.pristine_data,
-            outcome.config_dir,
-            outcome.file_config_id,
-            outcome.configuration,
-        )
-        raise
+        # and the next push adopts it instead of creating it again. A failure
+        # here (the same full disk) must never replace the fatal error: the
+        # push still stops, the secondary failure is only noted on it.
+        try:
+            writeback_after_push(
+                service,
+                outcome.pristine_data,
+                outcome.config_dir,
+                outcome.file_config_id,
+                outcome.configuration,
+            )
+        except Exception as secondary:
+            logger.warning(
+                "Writing the created id into %s failed: %s", outcome.config_dir, secondary
+            )
+            fatal.add_note(f"The local file could not be updated either: {secondary}")
+        raise fatal from fatal.__cause__
 
     writeback_after_push(
         service,
