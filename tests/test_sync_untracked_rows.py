@@ -1229,3 +1229,54 @@ def test_any_symlink_inside_a_clean_stale_config_keeps_it(tmp_path: Path) -> Non
     assert (outside / "keep.txt").read_text() == "mine"
     [kept] = [d for d in result["details"] if d.get("path") == HTTP_DIR]
     assert kept["action"] == "skipped"
+
+
+# ---------------------------------------------------------------------------
+# Round 13: a staying config that IS the stale dir (an alias) protects it
+# ---------------------------------------------------------------------------
+
+
+def _b_is_an_alias_of_a(sim: Sim) -> Path:
+    """Astra's input: A at ``a`` (deleted remotely); B at ``b -> a``; ``a/`` holds B's files."""
+    a_dir = _dir(sim, HTTP_DIR)
+    shutil.rmtree(a_dir)
+    shutil.move(str(_dir(sim, HTTP_2_DIR)), str(a_dir))
+    _symlink_or_skip(_dir(sim, HTTP_2_DIR), a_dir)
+    del sim.api.remote[PROD][HTTP_1]
+    return a_dir
+
+
+def test_a_live_alias_of_the_stale_dir_keeps_it(tmp_path: Path) -> None:
+    """Round 13 P1: B is still on the remote, ``pull --theirs``."""
+    sim = _world(tmp_path)
+    a_dir = _b_is_an_alias_of_a(sim)
+    before = (a_dir / "_config.yml").read_text()
+
+    _pull(sim, theirs=True)
+
+    assert (a_dir / "_config.yml").read_text() == before  # B's files survive
+
+
+def test_a_kept_alias_of_the_stale_dir_keeps_it(tmp_path: Path) -> None:
+    """Round 13 P1: B is deleted remotely too, but kept (edited, a link) -- ``--theirs``
+    keeps nothing for being edited, so only the alias rule protects ``a``."""
+    sim = _world(tmp_path)
+    a_dir = _b_is_an_alias_of_a(sim)
+    _edit_b(a_dir)
+    del sim.api.remote[PROD][HTTP_2]
+
+    result = _pull(sim, theirs=True)
+
+    assert "tk900z" in (a_dir / "_config.yml").read_text()
+    skipped = {d["path"] for d in result["details"] if d.get("action") == "skipped"}
+    assert {HTTP_DIR, HTTP_2_DIR} <= skipped
+
+
+def test_holds_treats_the_same_directory_as_held(tmp_path: Path) -> None:
+    from keboola_agent_cli.services import _sync_stale
+
+    a_dir = tmp_path / "a"
+    a_dir.mkdir()
+    _symlink_or_skip(tmp_path / "b", a_dir)
+    assert _sync_stale.holds(a_dir, tmp_path / "b")
+    assert _sync_stale.holds(a_dir, a_dir)

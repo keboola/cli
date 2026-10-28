@@ -203,18 +203,20 @@ def contains(outer: Path, inner: Path) -> bool:
 
 
 def holds(outer: Path, inner: Path) -> bool:
-    """True iff the dir *inner* is inside *outer* by its path OR by its real location (round 12).
+    """True iff the dir *inner* is *outer* or inside it, by path OR by real location (rounds 12, 13).
 
     By path: an ancestor of *inner* is *outer* (:func:`contains`). By real
     location: *inner* resolved through every link lies inside *outer*
     resolved -- a config reached as ``alias -> parent/child`` is inside
     ``parent``.
     """
-    if contains(outer, inner):
+    # The same directory under another spelling or through a link (``b -> a``)
+    # is held too: deleting it would delete the staying config's files (round 13).
+    if same_dir(outer, inner) or contains(outer, inner):
         return True
     real_inner = Path(os.path.realpath(inner))
     real_outer = Path(os.path.realpath(outer))
-    return real_inner != real_outer and any(
+    return real_inner == real_outer or any(
         same_dir(parent, real_outer) for parent in real_inner.parents
     )
 
