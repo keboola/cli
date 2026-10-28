@@ -166,6 +166,7 @@ def validate_targets(
     *,
     referenced: set[str],
     fresh_rows: set[str],
+    pinned: set[tuple[str, str]] | None = None,
 ) -> list[dict[str, str]]:
     """Read every target a recovery would write and keep only what exists (Devin 4400587856).
 
@@ -179,13 +180,17 @@ def validate_targets(
     lists is dropped (#929's deleted-target rule). Configs created this push
     and rows created this push (*fresh_rows*) are known to exist. Returns one
     error per failed target, once per push.
+
+    *pinned* are ``(component_id, config id)`` pairs a record names on its
+    own -- a transformation's ``fallback_links`` (Astra): read whether or not
+    a manifest entry still tracks the config (a pull drops the entry of a
+    config deleted on the remote), so a gone one lands in ``maps.failed``.
     """
     errors: list[dict[str, str]] = []
     components = {entry.id: entry.component_id for entry in target_entries(manifest, branch_id)}
-    for parent in sorted(referenced - maps.created_ids):
-        component_id = components.get(parent)
-        if component_id is None:
-            continue
+    targets = {(components[p], p) for p in referenced - maps.created_ids if p in components}
+    targets |= {pair for pair in pinned or set() if pair[1] not in maps.created_ids}
+    for component_id, parent in sorted(targets):
         key = (component_id, parent)
         read = read_target(client, cache, component_id, parent, branch_id)
         if read.rows is None:

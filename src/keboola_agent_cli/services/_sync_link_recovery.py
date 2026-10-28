@@ -177,6 +177,7 @@ def resolve_transformation_links(
             result.targets,
             referenced=referenced,
             fresh_rows=set(created_row_id_map.values()),
+            pinned=set().union(*(_fallback_targets(e) for e in entries.values())),
         )
     )
     for created in configs:
@@ -190,6 +191,12 @@ def resolve_transformation_links(
         if not still and entry is not None and entry.metadata.pop(FALLBACK_LINKS_KEY, None):
             result.pending_changed = True
     return result
+
+
+def _fallback_targets(entry: ManifestConfiguration | None) -> set[tuple[str, str]]:
+    """``(component_id, config id)`` of every config a transformation's ``fallback_links`` chose."""
+    links = (entry.metadata.get(FALLBACK_LINKS_KEY) if entry is not None else None) or {}
+    return {(str(k).split("/", 1)[0], str(t)) for k, t in links.items() if "/" in str(k)}
 
 
 def _with_fallbacks(maps: LinkMaps, entry: ManifestConfiguration | None) -> LinkMaps:

@@ -2034,13 +2034,23 @@ def _fallback_over_ambiguous_rows(tmp_path: Path) -> DiffWorld:
     return w
 
 
-def test_a_fallback_choice_deleted_on_the_remote_is_never_written(tmp_path: Path) -> None:
-    """Astra P1: the fallback chose A, A is deleted remotely -- no PUT names A, T stays pending."""
+@pytest.mark.parametrize("pull_between", [False, True], ids=["push", "pull-then-push"])
+def test_a_fallback_choice_deleted_on_the_remote_is_never_written(
+    tmp_path: Path, pull_between: bool
+) -> None:
+    """Astra P1: the fallback chose A, A is deleted remotely -- no PUT names A, T stays pending.
+
+    With a plain pull in between (Astra's sequence), A has no manifest entry
+    any more; the recorded choice is read all the same.
+    """
     w = _fallback_over_ambiguous_rows(tmp_path)
     w.svc.push(alias="prod", project_root=w.root)
     assert _entry_of(w, "New step").get("fallback_links")
     a_id = _remote_named(w, "A vars")["id"]
     del w.api.remote[PROD][(VARS, a_id)]
+    if pull_between:
+        w.pull()
+        assert not [c for c in load_manifest(w.root).configurations if c.id == a_id]
 
     w.svc.push(alias="prod", project_root=w.root)
 
