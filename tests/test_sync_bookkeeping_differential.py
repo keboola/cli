@@ -433,8 +433,10 @@ def semantic_edit(path: Path) -> None:
         return
     text = path.read_text(encoding="utf-8")
     assert TOKEN in text, f"no {TOKEN!r} token to edit in {path}"
-    # The token stays a prefix, so the file can be edited again later.
-    path.write_text(text.replace(TOKEN, f"{TOKEN}e", 1), encoding="utf-8", newline="")
+    # The token stays a prefix, so the file can be edited again later. Written
+    # in text mode like pull writes companion files (CRLF on Windows), so the
+    # edited file has the line endings a fresh pull would produce.
+    path.write_text(text.replace(TOKEN, f"{TOKEN}e", 1), encoding="utf-8")
 
 
 # ===========================================================================
