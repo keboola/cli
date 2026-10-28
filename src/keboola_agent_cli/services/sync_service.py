@@ -1658,7 +1658,7 @@ class SyncService(BaseService):
             promoting = branch_path != self._find_branch_path(manifest, branch_id)
             remap = PromoteRemap() if promoting else None
             if remap is not None:
-                remap.expect_creates = any(c["change_type"] == "added" for c in changes)
+                remap.plan(changes)
                 remap.hold = partial(hold_before_put, client, manifest, target, checkpoint)
 
             # ---- Phase A: config creates / updates / deletes -------------

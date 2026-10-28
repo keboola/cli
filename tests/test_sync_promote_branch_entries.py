@@ -1598,7 +1598,7 @@ def test_unknown_base_row_keeps_its_dir_when_the_parent_file_is_gone(tmp_path: P
 
 
 def _flow_running_two_extractors_crashes_after_put(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, explicit_enabled: bool = False
 ) -> World:
     """The flow's promote update PUT lands, then the process dies.
 
@@ -1649,6 +1649,8 @@ def _flow_running_two_extractors_crashes_after_put(
     second["id"] = "t2"
     second["task"]["configId"] = "cfg-e2"
     data["_configuration_extra"]["tasks"].append(second)
+    if explicit_enabled:
+        data["is_disabled"] = False  # the update then sends the enabled state
     flow_file.write_text(dump_config_yaml(data), encoding="utf-8", newline="")
     original = w.api._update
 
@@ -1772,3 +1774,108 @@ def test_manifest_save_never_touches_the_process_umask(
         os.umask(old)
     mode = (tmp_path / ".keboola" / "manifest.json").stat().st_mode & 0o777
     assert mode == 0o600  # the OS applied the umask to the new file
+
+
+# ===========================================================================
+# Round 6 (risks 55-57)
+# ===========================================================================
+
+
+# -- risk 55: recovery never re-enables a config disabled on the target ------
+
+
+def test_crash_after_an_update_put_keeps_a_remote_disable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    w = _flow_running_two_extractors_crashes_after_put(tmp_path, monkeypatch, explicit_enabled=True)
+    _dev_flow(w)["isDisabled"] = True  # someone disabled it on the dev branch
+    result = w.push(branch=DEV)
+
+    assert _dev_flow(w)["isDisabled"] is True
+    assert any(x["change_type"] == "promote_link_pending" for x in result.get("warnings", []))
+
+
+# -- risk 56: the final backfill keeps the target data-app id ---------------
+
+
+def test_data_app_with_a_variables_link_keeps_its_dev_app_id_on_every_promote(
+    tmp_path: Path,
+) -> None:
+    app, variables = "keboola.data-apps", "keboola.variables"
+    w = World(tmp_path)
+    w.api.types.update({app: "other", variables: "other"})
+    w.api.remote[PROD][(variables, "cfg-vars")] = {
+        "id": "cfg-vars",
+        "name": "Vars",
+        "description": "",
+        "configuration": {"variables": [{"name": "x", "type": "string"}]},
+        "rows": [],
+        "isDisabled": False,
+    }
+    w.api.remote[PROD][(app, "cfg-app")] = {
+        "id": "cfg-app",
+        "name": "Dash",
+        "description": "",
+        "configuration": {
+            "parameters": {"id": "prod-app", "dataApp": {"slug": "dash"}},
+            "variables_id": "cfg-vars",
+        },
+        "rows": [],
+        "isDisabled": False,
+    }
+    ds = MagicMock()
+    ds.list_apps.return_value = []
+
+    def create_app(
+        *, type_: str, name: str, description: str, config: dict, branch_id: Any
+    ) -> dict:
+        created = w.api._create(app, name, config, branch_id=DEV)
+        return {"id": "dev-app", "configId": created["id"]}
+
+    ds.create_app.side_effect = create_app
+    w.svc._ds_client_factory = lambda url, token: ds
+    w.init()
+    w.pull()
+
+    def dev_app() -> dict:
+        (cfg,) = [c for (comp, _), c in w.api.remote[DEV].items() if comp == app]
+        return cfg["configuration"]
+
+    w.push(branch=DEV)
+    dev_vars = _dev_id_of(w, variables)
+    assert (dev_app()["parameters"]["id"], dev_app()["variables_id"]) == ("dev-app", dev_vars)
+    semantic_edit(w.config_dir("cfg-app") / CONFIG_FILE)
+    w.push(branch=DEV)
+    assert (dev_app()["parameters"]["id"], dev_app()["variables_id"]) == ("dev-app", dev_vars)
+
+
+# -- risk 57: a failed dependency create keeps the rebind pending ------------
+
+
+def test_failed_dependency_create_keeps_the_rebind_pending_until_it_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    f = _seed_flow_world(tmp_path, flow_first=True)
+    w = f.world
+    comp = VARIANTS["extractor"].component_id
+    w.api.branch_from_prod()
+    del w.api.remote[DEV][(comp, f.extractor_id)]
+    semantic_edit(w.config_dir(f.flow_id) / CONFIG_FILE)
+    original = w.api._create
+
+    def extractor_create_fails(*args: Any, **kwargs: Any) -> dict:
+        if kwargs.get("component_id") == comp:
+            raise KeboolaApiError("create refused", 500, ErrorCode.API_ERROR)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(w.api, "_create", extractor_create_fails)
+    result = w.svc.push(alias="prod", project_root=w.root, branch_override=DEV)
+    assert result["errors"]
+    assert [
+        c.id for c in load_manifest(w.root).configurations if c.metadata.get("rebind_pending")
+    ] == [f.flow_id]
+    monkeypatch.undo()
+    w.push(branch=DEV)  # creates the extractor, then rebinds the flow
+
+    assert _dev_task_target(w) == _dev_id_of(w, comp)
+    assert not [c for c in load_manifest(w.root).configurations if c.metadata.get("rebind_pending")]

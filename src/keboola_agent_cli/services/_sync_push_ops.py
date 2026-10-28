@@ -874,7 +874,12 @@ def push_update(
             _keep_target_app_id(client, config_id, branch_id, configuration)
         # rebind_pending is on disk before the PUT that may need it.
         remap.before_update(
-            component_id, config_id, configuration, name=name, description=description
+            component_id,
+            config_id,
+            configuration,
+            name=name,
+            description=description,
+            is_disabled=bool(local_data["is_disabled"]) if "is_disabled" in local_data else None,
         )
 
     if component_id == SANDBOXES_COMPONENT_ID and warnings is not None:
