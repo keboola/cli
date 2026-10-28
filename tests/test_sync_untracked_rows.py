@@ -1053,16 +1053,115 @@ def test_a_genuine_untracked_row_next_to_a_nested_config_keeps_the_outer(tmp_pat
     assert not child.exists()  # B, clean, swept
 
 
-def test_an_edited_nested_config_survives_its_outer_configs_removal(tmp_path: Path) -> None:
-    """Round 10: A (clean) is removed around B (edited, kept) -- never with it."""
-    sim = _world(tmp_path)
-    child = _nest_config_b_in_a(sim)
+def _edit_b(child: Path) -> None:
     data = read_yaml(child / "_config.yml")
     data["parameters"]["value"] = "tk900z"
     write_yaml(child / "_config.yml", data)
 
+
+def test_an_outer_config_holding_a_kept_nested_one_is_kept_whole(tmp_path: Path) -> None:
+    """Round 11: A (clean, deleted) holds B (edited, kept): A is kept and reported."""
+    sim = _world(tmp_path)
+    child = _nest_config_b_in_a(sim)
+    _edit_b(child)
+
+    result = _pull(sim)
+
+    assert "tk900z" in (child / "_config.yml").read_text()
+    assert (_dir(sim, HTTP_DIR) / "_config.yml").exists()
+    [kept] = [d for d in result["details"] if d.get("path") == HTTP_DIR]
+    assert kept["action"] == "skipped"
+    assert f"{HTTP_DIR}/child" in kept["reason"]
+    assert "1000" in {c.id for c in load_manifest(sim.root).configurations}
+
+    shutil.rmtree(child)  # the user drops B; the next pull removes both
+    _pull(sim)
+    assert not _dir(sim, HTTP_DIR).exists()
+
+
+def test_containment_is_judged_by_the_filesystem_not_the_spelling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Round 11: on a case-insensitive filesystem ``Extractor/a`` IS ``extractor/a``."""
+    from keboola_agent_cli.services import _sync_stale
+
+    def case_insensitive(a: Any, b: Any) -> bool:
+        return str(a).casefold() == str(b).casefold()
+
+    monkeypatch.setattr(_sync_stale.os.path, "samefile", case_insensitive)
+    outer = Path("/tree/main/extractor/keboola.ex-http/a")
+    assert _sync_stale.contains(outer, Path("/tree/main/Extractor/keboola.ex-http/a/child"))
+    assert not _sync_stale.contains(outer, Path("/tree/main/extractor/keboola.ex-http/ab"))
+    reason = _sync_stale._kept_whole_reason(
+        outer,
+        {"Extractor/keboola.ex-http/a/child": Path("/tree/main/Extractor/keboola.ex-http/a/child")},
+    )
+    assert reason is not None and "Extractor/keboola.ex-http/a/child" in reason
+
+
+def _case_insensitive(path: Path) -> bool:
+    probe = path / "CaseProbe"
+    probe.mkdir()
+    try:
+        return (path / "caseprobe").exists()
+    finally:
+        probe.rmdir()
+
+
+def test_a_nested_config_spelled_in_another_case_keeps_its_outer(tmp_path: Path) -> None:
+    """Round 11: the real filesystem variant -- only where it is case-insensitive."""
+    if not _case_insensitive(tmp_path):
+        pytest.skip("case-sensitive filesystem")
+    sim = _world(tmp_path)
+    child = _nest_config_b_in_a(sim)
+    _edit_b(child)
+    manifest = load_manifest(sim.root)
+    for entry in manifest.configurations:
+        if entry.id == "1003":
+            entry.path = f"{HTTP_DIR}/CHILD"
+    save_manifest(sim.root, manifest)
+
     _pull(sim)
 
     assert "tk900z" in (child / "_config.yml").read_text()
-    assert not (_dir(sim, HTTP_DIR) / "_config.yml").exists()
-    assert not _rows_of_1000(sim).exists()
+
+
+def _symlink_or_skip(link: Path, target: Path) -> None:
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except OSError:
+        pytest.skip("cannot create symbolic links here")
+
+
+def test_a_symlinked_outer_config_dir_deletes_nothing_in_its_target(tmp_path: Path) -> None:
+    """Round 11 P1 (Astra): the config dir is a symlink; the remote deletes the config."""
+    sim = _world(tmp_path)
+    config_dir = _dir(sim, HTTP_DIR)
+    target = tmp_path / "elsewhere"
+    shutil.move(str(config_dir), str(target))
+    _symlink_or_skip(config_dir, target)
+    before = sorted(p.relative_to(target) for p in target.rglob("*"))
+    del sim.api.remote[PROD][HTTP_1]
+
+    result = _pull(sim)
+
+    assert config_dir.is_symlink()
+    assert sorted(p.relative_to(target) for p in target.rglob("*")) == before
+    [kept] = [d for d in result["details"] if d.get("path") == HTTP_DIR]
+    assert kept["action"] == "skipped"
+
+
+def test_a_kept_nested_config_that_is_a_symlink_is_never_unlinked(tmp_path: Path) -> None:
+    """Round 11: B is a symlink inside A; B is kept (edited), so A is kept whole."""
+    sim = _world(tmp_path)
+    child = _nest_config_b_in_a(sim)
+    target = tmp_path / "b-elsewhere"
+    shutil.move(str(child), str(target))
+    _symlink_or_skip(child, target)
+    _edit_b(target)
+
+    _pull(sim)
+
+    assert child.is_symlink()
+    assert "tk900z" in (target / "_config.yml").read_text()
+    assert (_dir(sim, HTTP_DIR) / "_config.yml").exists()

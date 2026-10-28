@@ -25,6 +25,7 @@ an entry and report it as ``skipped``; only ``--theirs`` deletes it.
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -112,6 +113,8 @@ def _rows_locally_modified(
     - the one dir carrying it is that row, moved, judged by its baseline (an
       unknown base counts as edited).
     """
+    if config_dir.is_symlink():
+        return True  # never traversed, never deleted through (round 11)
     by_path = {row.path: row for row in entry.rows}
     by_id = {row.id: row for row in entry.rows}
     for row in entry.rows:
@@ -137,13 +140,38 @@ def _rows_locally_modified(
 
 
 def _row_files(config_dir: Path, other_configs: frozenset[Path]) -> list[Path]:
-    """Every ``_config.yml`` below *config_dir* but its own, not entering another config's dir."""
+    """Every ``_config.yml`` below *config_dir* but its own, not entering another config's dir.
+
+    ``Path.walk`` does not follow symbolic links: a symlinked dir is never
+    entered (round 11). Another config's dir is recognised by the filesystem
+    (:func:`same_dir`), never by spelling: on a case-insensitive filesystem
+    ``Extractor/x`` IS ``extractor/x``.
+    """
     found: list[Path] = []
     for root, dirs, files in config_dir.walk():
-        dirs[:] = sorted(d for d in dirs if root / d not in other_configs)
+        dirs[:] = sorted(d for d in dirs if not any(same_dir(root / d, o) for o in other_configs))
         if root != config_dir and CONFIG_FILENAME in files:
             found.append(root / CONFIG_FILENAME)
     return found
+
+
+def same_dir(a: Path, b: Path) -> bool:
+    """True iff *a* and *b* are the same existing directory entry (``os.path.samefile``)."""
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return False
+
+
+def contains(outer: Path, inner: Path) -> bool:
+    """True iff *inner* lies inside *outer*, judged by the filesystem (round 11).
+
+    Walks up *inner*'s own path and compares each ancestor with *outer* by
+    :func:`same_dir` -- case-insensitive filesystems included, and without
+    resolving *inner* through a symlink (a symlinked dir inside *outer* is
+    inside it).
+    """
+    return any(same_dir(parent, outer) for parent in inner.parents)
 
 
 def _row_edited(
@@ -225,18 +253,21 @@ def _remove_dir(orphan_dir: Path, branch_dir: Path) -> None:
         parent = parent.parent
 
 
-def _remove_around(orphan_dir: Path, keep: set[Path]) -> None:
-    """Remove *orphan_dir*'s own files and dirs, leaving the config dirs in *keep* below it."""
-    for root, dirs, files in orphan_dir.walk(top_down=False):
-        if any(root == k or root.is_relative_to(k) for k in keep):
-            continue
-        for name in files:
-            (root / name).unlink()
-        for name in dirs:
-            child = root / name
-            if child.is_dir() and not any(child.iterdir()):
-                child.rmdir()
-    logger.info("Removed orphaned config files around nested configs: %s", orphan_dir)
+def _kept_whole_reason(config_dir: Path, staying: dict[str, Path]) -> str | None:
+    """Why a stale config dir is kept as it is (round 11), or ``None`` when it may go.
+
+    A symlinked config dir is never deleted through. A dir holding a config
+    that stays is never deleted with it.
+    """
+    if config_dir.is_symlink():
+        return "the config directory is a symbolic link; kbagent does not delete through it"
+    for path, nested in sorted(staying.items()):
+        if contains(config_dir, nested):
+            return (
+                f"it contains the config directory {path}, which stays; a later pull removes "
+                f"it once that config is gone"
+            )
+    return None
 
 
 def apply_stale_sweep(
@@ -257,10 +288,29 @@ def apply_stale_sweep(
     pull owns (written or kept by the fetch loop) is never deleted.
     """
     live_paths = {c.path for c in new_configurations}
-    # Config dirs that stay (written by this pull, or a kept edited entry): a
-    # stale config whose dir holds one is removed around it, never with it.
-    staying = live_paths | {s.entry.path for s in stale if s.locally_modified and not theirs}
+    # Config dirs that stay (written by this pull, or kept as edited). A stale
+    # config whose dir holds one is kept whole and reported: nothing in doubt
+    # is ever deleted, and a later pull removes it once the nested one is gone.
+    staying = {
+        path: branch_dir / path
+        for path in live_paths | {s.entry.path for s in stale if s.locally_modified and not theirs}
+        if path
+    }
     for s in stale:
+        config_dir = branch_dir / s.entry.path
+        reason = _kept_whole_reason(config_dir, staying) if s.entry.path else None
+        if reason is not None:
+            new_configurations.append(s.entry)
+            pull_details.append(
+                {
+                    "action": "skipped",
+                    "component_id": s.entry.component_id,
+                    "config_name": s.entry.path,
+                    "path": s.entry.path,
+                    "reason": reason,
+                }
+            )
+            continue
         if s.locally_modified and not theirs:
             new_configurations.append(s.entry)
             pull_details.append(
@@ -282,11 +332,7 @@ def apply_stale_sweep(
             }
         )
         if not dry_run and s.entry.path and s.entry.path not in live_paths:
-            nested = {branch_dir / p for p in staying if p.startswith(f"{s.entry.path}/")}
-            if nested:
-                _remove_around(branch_dir / s.entry.path, nested)
-            else:
-                _remove_dir(branch_dir / s.entry.path, branch_dir)
+            _remove_dir(branch_dir / s.entry.path, branch_dir)
 
 
 def sweep_stale_rows(
