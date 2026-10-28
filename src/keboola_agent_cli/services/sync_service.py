@@ -20,8 +20,6 @@ from ..config_store import ConfigStore
 from ..constants import (
     BRANCH_MAPPING_FILENAME,
     CONFIG_FILENAME,
-    CONFIG_HASH_VERSION,
-    CONFIG_HASH_VERSION_KEY,
     DEFAULT_JOBS_PER_CONFIG,
     DEFAULT_MAX_SAMPLES,
     DEFAULT_SAMPLE_LIMIT,
@@ -104,12 +102,13 @@ from ._sync_bulk import (
 )
 from ._sync_clone import clone_project as _clone_project_impl
 from ._sync_companions import (
-    COMPANION_VERSION_KEY,
+    companion_conflict,
     config_locally_modified,
     current_companions,
     kept_companion_warning,
     local_unchanged,
-    record_companions,
+    preserved_baseline,
+    pulled_baseline,
     unowned_companion_warnings,
     write_pulled_config,
 )
@@ -594,6 +593,7 @@ class SyncService(BaseService):
         old_entries = {f"{c.component_id}/{c.id}": c for c in own_entries}
         untracked_dirs = scan_config_dirs(self, project_root, manifest, branch_dir_name)
         pull_warnings: list[dict[str, Any]] = ambiguous_id_warnings(untracked_dirs)
+        companion_warnings: list[dict[str, str]] = []
         # Paths owned on disk before this pull allocates any (D14): a new or
         # renamed config never lands in one, whatever order the remote lists.
         reserved = (
@@ -814,7 +814,7 @@ class SyncService(BaseService):
                         dry_run=dry_run,
                     )
                     file_hash = pulled.file_hash
-                    pull_warnings.extend(
+                    companion_warnings.extend(
                         kept_companion_warning(component_id, rel_path, name) for name in pulled.kept
                     )
                     if pulled.written:
@@ -851,32 +851,13 @@ class SyncService(BaseService):
                 rows_pulled += rows.rows_pulled
                 row_manifests = rows.rows
 
-                # Record in manifest (store file hash for change detection).
-                # A skipped config keeps its whole old baseline -- pull_hash,
-                # pull_config_hash, the companion snapshot and the version
-                # markers, verbatim: advancing any of them would turn a real
-                # conflict into an ordinary-looking local edit (issue #792 B).
-                if locally_modified:
-                    cfg_metadata = {
-                        key: old_metadata[key]
-                        for key in (
-                            "pull_hash",
-                            "pull_config_hash",
-                            "pull_extra_hashes",
-                            COMPANION_VERSION_KEY,
-                            CONFIG_HASH_VERSION_KEY,
-                        )
-                        if key in old_metadata
-                    }
-                else:
-                    cfg_metadata = {
-                        "pull_hash": file_hash,
-                        "pull_config_hash": pull_cfg_hash,
-                        # Freshly computed with the current producer, so the
-                        # shape version is stamped alongside it (issue #686).
-                        CONFIG_HASH_VERSION_KEY: CONFIG_HASH_VERSION,
-                    }
-                    record_companions(cfg_metadata, pulled.extra_hashes)
+                # Record in manifest: the old baseline verbatim for a skipped
+                # config, the fresh one otherwise (issue #792 B, #686, R4).
+                cfg_metadata = (
+                    preserved_baseline(old_metadata)
+                    if locally_modified
+                    else pulled_baseline(file_hash, pull_cfg_hash, pulled)
+                )
                 # Keep the UI folder with the config. Pull dropped it before,
                 # so every pulled or cloned config landed in the root (CLI-9).
                 # The manifest stores it under the legacy metadata key name
@@ -949,6 +930,7 @@ class SyncService(BaseService):
             # refreshed. Lets a caller tell "no folders" from "unknown" (CLI-9).
             "folder_lookup_failed": folder_map is None,
             **({"warnings": pull_warnings} if pull_warnings else {}),
+            **({"companion_warnings": companion_warnings} if companion_warnings else {}),
         }
 
     # ------------------------------------------------------------------
@@ -1158,6 +1140,10 @@ class SyncService(BaseService):
                 raw_remote=remote_raw.get(key),
                 remote_local=remote_configs.get(key),
             )
+            # A companion pull kept although the remote cleared it: no
+            # baseline says which side is right, so a difference is a conflict.
+            if companion_conflict(config_dir, cfg.metadata):
+                stored_cfg_hash = UNKNOWN_BASE_HASH
             stored_hashes[key] = stored_cfg_hash
 
             if is_unchanged and stored_cfg_hash:
@@ -1320,7 +1306,12 @@ class SyncService(BaseService):
         # config). They have no row_id yet so compute_row_changeset flags
         # them as "added" and push dispatches them via create_config_row.
         for untracked in find_untracked_rows(
-            project_root, manifest, self._read_config_file, source_branch_path, scope.in_tree
+            project_root,
+            manifest,
+            self._read_config_file,
+            source_branch_path,
+            scope.in_tree,
+            file_ids_as_source=source_branch_path == branch_tree_path(manifest, branch_id),
         ):
             # Same guard as the untracked configs above: the row walk keys off
             # ``manifest.configurations`` directly, so a still-tracked ignored
@@ -1344,7 +1335,7 @@ class SyncService(BaseService):
             remote_rows,
             tracked_row_keys,
             row_base_hashes or None,
-            scope.target_tracked_row_keys,
+            scope.target_tracked_row_keys | untracked_rows.gone_row_keys,
             {
                 f"{c.component_id}/{c.config_id}"
                 for c in changeset
@@ -1382,7 +1373,7 @@ class SyncService(BaseService):
 
         return {
             "changes": [c.to_dict() for c in changeset],
-            **({"warnings": diff_warnings} if diff_warnings else {}),
+            **({"companion_warnings": diff_warnings} if diff_warnings else {}),
             "remote_only": remote_only,
             "never_fetched": never_fetched,
             "orphaned": orphaned,
@@ -1454,6 +1445,8 @@ class SyncService(BaseService):
             _reconcile_saved_promote_links(project_root)
         diff_result = self.diff(alias, project_root, branch_override=branch_override)
         all_changes = diff_result["changes"]
+        companion_warnings = diff_result.get("companion_warnings") or []
+        shown = {"companion_warnings": companion_warnings} if companion_warnings else {}
         never_fetched = diff_result.get("never_fetched", [])
         # Configs excluded from the changeset because they belong to another
         # branch's tree (issue #649) -- reported, never pushed.
@@ -1480,6 +1473,7 @@ class SyncService(BaseService):
                 "deleted": 0,
                 "errors": [],
                 **plan.report(),
+                **shown,
             }
             if never_fetched:
                 result["never_fetched"] = never_fetched
@@ -1493,6 +1487,7 @@ class SyncService(BaseService):
                 "changes": changes,
                 "summary": {**diff_result["summary"], "deleted": plan.deletions},
                 **plan.report(),
+                **shown,
             }
             if never_fetched:
                 dry_result["never_fetched"] = never_fetched
@@ -1831,6 +1826,7 @@ class SyncService(BaseService):
             "errors": errors,
             "pushed_details": pushed_details,
             **plan.report(),
+            **shown,
         }
         if warnings:
             result_data["warnings"] = warnings

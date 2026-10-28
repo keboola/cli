@@ -30,7 +30,8 @@ from typing import TYPE_CHECKING, Any
 from ..errors import ErrorCode, KeboolaApiError
 from ..sync.branch_scope import find_branch_entry
 from ..sync.code_extraction import merge_code_files
-from ..sync.config_format import local_config_to_api
+from ..sync.config_format import api_config_to_local, local_config_to_api
+from ..sync.diff_engine import config_hash
 from ..sync.manifest import Manifest
 from ._sync_baseline import apply_stamp, config_baseline
 from ._sync_companions import record_companions
@@ -755,24 +756,162 @@ def resolve_run_target_bindings(
         created_row_id_map=created_row_id_map,
         source_dir=source_dir,
     )
-    todo = list(created_configs)
-    seen = {(c.component_id, c.config_id) for c in todo}
-    if source_dir is not None:
-        todo += [
-            CreatedConfig(entry.component_id, entry.id, source_dir / entry.path)
-            for entry in link_pending_entries(manifest, branch_id)
-            if (entry.component_id, entry.id) not in seen
-        ]
-    for created in todo:
+    seen = {(c.component_id, c.config_id) for c in created_configs}
+    recovering = [
+        CreatedConfig(entry.component_id, entry.id, source_dir / entry.path)
+        for entry in link_pending_entries(manifest, branch_id)
+        if source_dir is not None and (entry.component_id, entry.id) not in seen
+    ]
+    for created in [*created_configs, *recovering]:
         link_type = _RUN_TARGET_LINK_TYPES.get(created.component_id)
         if link_type is None:
             continue
-        pending = _bind_run_target(
-            service, client, created, link_type, maps, manifest, branch_id, result
-        )
+        bind = _bind_run_target if created in created_configs else _recover_run_target
+        pending = bind(service, client, created, link_type, maps, manifest, branch_id, result)
         entry = find_branch_entry(manifest, created.component_id, created.config_id, branch_id)
         result.pending_changed |= set_link_pending(entry, pending)
     return result
+
+
+def put_configuration_only(
+    client: Any,
+    component_id: str,
+    config_id: str,
+    configuration: dict[str, Any],
+    branch_id: Any,
+    change_description: str = "Remap linked config IDs via kbagent sync push",
+) -> Any:
+    """PUT only ``configuration``: name, description and enabled state stay as they are.
+
+    The write of every reference recovery (#929 D29, D9): a change made on the
+    remote since -- in the UI, say -- survives by construction.
+    """
+    return client.update_config(
+        component_id=component_id,
+        config_id=config_id,
+        configuration=configuration,
+        change_description=change_description,
+        branch_id=branch_id,
+    )
+
+
+def _recover_run_target(
+    service: SyncService,
+    client: Any,
+    created: CreatedConfig,
+    link_type: str,
+    maps: LinkMaps,
+    manifest: Manifest,
+    branch_id: int | None,
+    result: FlowBindingResult,
+) -> bool:
+    """Finish a ``link_pending`` config of an earlier push FROM THE REMOTE (D9, #929 D29).
+
+    The remote config may have changed since that push (an edit in the UI) --
+    diff then withholds it -- so the local file is never sent. The remote
+    configuration is read, ONLY its references are rewritten, and only
+    ``configuration`` is PUT. When the local file held exactly what the remote
+    held, its references are rewritten the same way and both baselines move
+    to the result; otherwise nothing local changes and diff shows the remote
+    change for the next pull. Returns whether the config stays pending.
+    """
+    try:
+        remote = client.get_config_detail(
+            component_id=created.component_id, config_id=created.config_id, branch_id=branch_id
+        )
+    except KeboolaApiError as exc:
+        result.errors.append(_link_error(link_type, created, ErrorCode.API_ERROR, str(exc)))
+        return True
+    configuration = remote.get("configuration") if isinstance(remote, dict) else None
+    if not isinstance(configuration, dict):
+        return True
+    rewritten = copy.deepcopy(configuration)
+    remap = _remap_into(created, rewritten, maps, link_type, result)
+    if not remap.references and not remap.config_row_ids:
+        return remap.pending
+    local_data = service._read_config_file(created.config_dir)
+    in_step = local_data is not None and _local_hash(created, local_data) == config_hash(
+        api_config_to_local(created.component_id, remote, created.config_id)
+    )
+    try:
+        response = put_configuration_only(
+            client, created.component_id, created.config_id, rewritten, branch_id
+        )
+    except KeboolaApiError as exc:
+        result.errors.append(_link_error(link_type, created, ErrorCode.API_ERROR, str(exc)))
+        return True
+    _count(created.component_id, remap, result)
+    extra = (local_data or {}).get("_configuration_extra")
+    if in_step and local_data is not None and isinstance(extra, dict):
+        remap_run_targets_in_place(
+            created.component_id,
+            extra,
+            maps.configs,
+            maps.rows,
+            target_rows=maps.target_rows,
+            uncreated=maps.uncreated,
+        )
+        service._write_config_file(created.config_dir, local_data)
+        _refresh_binding_hashes(
+            service,
+            client,
+            created=created,
+            manifest=manifest,
+            branch_id=branch_id,
+            response=response,
+            warnings=result.warnings,
+        )
+    return remap.pending
+
+
+def _local_hash(created: CreatedConfig, local_data: dict[str, Any]) -> str:
+    merged = copy.deepcopy(local_data)
+    merge_code_files(created.component_id, merged, created.config_dir)
+    return config_hash(merged)
+
+
+def _remap_into(
+    created: CreatedConfig,
+    extra: dict[str, Any],
+    maps: LinkMaps,
+    link_type: str,
+    result: FlowBindingResult,
+) -> RunTargetRemap:
+    """Remap *extra* in place and report every task row id that stays unmapped."""
+    remap = remap_run_targets_in_place(
+        created.component_id,
+        extra,
+        maps.configs,
+        maps.rows,
+        target_rows=maps.target_rows,
+        uncreated=maps.uncreated,
+    )
+    for message in remap.unmapped_rows:
+        result.errors.append(_link_error(link_type, created, ErrorCode.LINK_UNRESOLVED, message))
+    return remap
+
+
+def _link_error(
+    link_type: str, created: CreatedConfig, error_code: ErrorCode, message: str
+) -> dict[str, str]:
+    return {
+        "change_type": link_type,
+        "error_code": error_code,
+        "component_id": created.component_id,
+        "config_id": created.config_id,
+        "message": message,
+    }
+
+
+def _count(component_id: str, remap: RunTargetRemap, result: FlowBindingResult) -> None:
+    result.configs_rewritten += 1
+    if component_id == SCHEDULER_COMPONENT_ID:
+        result.schedule_targets += remap.references
+    elif component_id == ORCHESTRATOR_COMPONENT_ID:
+        result.orchestrator_tasks += remap.references
+    else:
+        result.flow_tasks += remap.references
+    result.config_row_ids += remap.config_row_ids
 
 
 def _bind_run_target(
@@ -785,29 +924,16 @@ def _bind_run_target(
     branch_id: int | None,
     result: FlowBindingResult,
 ) -> bool:
-    """Remap one run-target config and PUT it when changed; return whether it stays pending."""
+    """Remap a config created this push and PUT it when changed; return whether it stays pending.
+
+    Created this push, so its remote copy is the local file: the file is
+    remapped, PUT and stamped.
+    """
     local_data = service._read_config_file(created.config_dir)
     extra = (local_data or {}).get("_configuration_extra")
     if local_data is None or not isinstance(extra, dict):
         return False
-    remap = remap_run_targets_in_place(
-        created.component_id,
-        extra,
-        maps.configs,
-        maps.rows,
-        target_rows=maps.target_rows,
-        uncreated=maps.uncreated,
-    )
-    for message in remap.unmapped_rows:
-        result.errors.append(
-            {
-                "change_type": link_type,
-                "error_code": ErrorCode.LINK_UNRESOLVED,
-                "component_id": created.component_id,
-                "config_id": created.config_id,
-                "message": message,
-            }
-        )
+    remap = _remap_into(created, extra, maps, link_type, result)
     if not remap.references and not remap.config_row_ids:
         return remap.pending
     try:
@@ -822,23 +948,10 @@ def _bind_run_target(
         )
     except KeboolaApiError as exc:
         result.errors.append(
-            {
-                "change_type": link_type,
-                "error_code": ErrorCode.API_ERROR,
-                "component_id": created.component_id,
-                "config_id": created.config_id,
-                "message": f"{exc} {_LINK_RETRY_HINT}",
-            }
+            _link_error(link_type, created, ErrorCode.API_ERROR, f"{exc} {_LINK_RETRY_HINT}")
         )
         return True
-    result.configs_rewritten += 1
-    if created.component_id == SCHEDULER_COMPONENT_ID:
-        result.schedule_targets += remap.references
-    elif created.component_id == ORCHESTRATOR_COMPONENT_ID:
-        result.orchestrator_tasks += remap.references
-    else:
-        result.flow_tasks += remap.references
-    result.config_row_ids += remap.config_row_ids
+    _count(created.component_id, remap, result)
     return remap.pending
 
 
@@ -910,14 +1023,24 @@ def remap_run_targets_in_place(
         if ref in waiting:
             remap.unresolved += 1
             continue
-        new_id = created_id_map.get(ref) or (ref[1] if ref in created_targets else "")
-        if not new_id:
-            continue
+        created = created_id_map.get(ref) or (ref[1] if ref in created_targets else "")
+        # An existing config's rows are remapped too, when one it selects was
+        # created this push from a file carrying that id (R6); unknown ids of
+        # an existing config are left alone -- they may be rows of its own.
+        new_id = created or ref[1]
         if ref[1] != new_id:
             task_entry["task"]["configId"] = new_id
             remap.references += 1
         known = (target_rows or {}).get((ref[0], new_id), set())
-        _remap_task_rows(task_entry, ref[0], new_id, created_row_id_map, remap, known)
+        _remap_task_rows(
+            task_entry,
+            ref[0],
+            new_id,
+            created_row_id_map,
+            remap,
+            known,
+            track_unmapped=bool(created),
+        )
     return remap
 
 
@@ -928,6 +1051,8 @@ def _remap_task_rows(
     created_row_id_map: dict[tuple[str, str], str],
     remap: RunTargetRemap,
     known_rows: set[str],
+    *,
+    track_unmapped: bool = True,
 ) -> None:
     """Rewrite a task's ``configRowIds`` to the rows created under its config.
 
@@ -942,9 +1067,15 @@ def _remap_task_rows(
     new_row_ids: list[Any] = []
     unmapped: list[str] = []
     for old_row_id in old_row_ids:
-        new_row_id = created_row_id_map.get((new_config_id, str(old_row_id)))
+        # A row the config has on the target is never remapped -- also not
+        # when a new row was created from a file carrying that same id.
+        new_row_id = (
+            None
+            if str(old_row_id) in known_rows
+            else created_row_id_map.get((new_config_id, str(old_row_id)))
+        )
         if new_row_id is None:
-            if str(old_row_id) not in known_rows:
+            if str(old_row_id) not in known_rows and track_unmapped:
                 unmapped.append(str(old_row_id))
             new_row_ids.append(old_row_id)
             continue

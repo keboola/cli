@@ -26,6 +26,8 @@ from keboola_agent_cli.services import sync_service as sync_service_module
 from keboola_agent_cli.sync.config_format import api_config_to_local
 from keboola_agent_cli.sync.diff_engine import config_hash
 from keboola_agent_cli.sync.manifest import load_manifest, save_manifest
+from test_sync_bookkeeping_differential import VARIANTS
+from test_sync_bookkeeping_differential import World as DiffWorld
 from test_sync_clone_links import EXTRACTOR, FLOW, SQL
 from test_sync_clone_links import World as CloneWorld
 from test_sync_random_walk import (
@@ -36,6 +38,7 @@ from test_sync_random_walk import (
     Sim,
     _changes,
     _dir,
+    _pull,
     _push,
     _world,
     read_yaml,
@@ -105,6 +108,16 @@ def test_dry_run_lists_the_rows_of_a_new_config(tmp_path: Path) -> None:
     assert [c["change_type"] for c in rows] == ["added", "added"]
     assert {c["parent_path"] for c in rows} == {"extractor/keboola.ex-http/name-tk901z"}
     assert {c["parent_config_id"] for c in rows} == {""}
+
+
+def test_rows_of_a_new_config_keep_their_copied_ids_as_source(tmp_path: Path) -> None:
+    """R9: the copied row id is the row's source identity for reference planning."""
+    sim = _world(tmp_path)
+    _author(sim, "Name tk901z", "tk911z", keep_row_ids=True)
+    result = sim.svc.push(alias="prod", project_root=sim.root, dry_run=True)
+    rows = [c for c in result["changes"] if c.get("is_row")]
+    assert sorted(c["source_row_id"] for c in rows) == ["1001", "1002"]
+    assert {c["config_id"] for c in rows} == {""}
 
 
 def test_two_new_configs_get_their_own_rows(tmp_path: Path) -> None:
@@ -351,3 +364,126 @@ def test_flow_links_survive_a_push_that_dies_before_the_backfill(
     assert _flow_task(world, 10)["configId"] == world.target(SQL, "SQL step")["id"]
     assert _flow_task(world, 14)["configRowIds"] == [_orders_row_id(world)]
     assert world.clone()["status"] == "no_changes"
+
+
+# ---------------------------------------------------------------------------
+# Round 2: R2, R3, R5, R6
+# ---------------------------------------------------------------------------
+
+
+def test_new_config_rows_survive_a_dev_pull_and_a_theirs_pull(tmp_path: Path) -> None:
+    """R2 (walk seed 668): a row push created carries its id, so a later pull finds it.
+
+    Without ``_keboola.row_id`` in the row file, ``pull --theirs`` after a
+    ``pull --branch DEV`` wrote the rows into second directories and diff
+    listed the first ones as new rows -- duplicates on the next push.
+    """
+    sim = _world(tmp_path)
+    _author(sim, "Name tk901z", "tk911z")
+    assert _push(sim)["created"] == 3
+    _pull(sim, DEV)
+    _pull(sim, theirs=True)
+
+    assert _changes(sim) == []
+    assert _push(sim)["status"] == "no_changes"
+    (cfg,) = _created(sim, PROD, "Name tk901z")
+    assert len(cfg["rows"]) == 2
+    rows_dir = _dir(sim, "extractor/keboola.ex-http/name-tk901z/rows")
+    assert len(list(rows_dir.iterdir())) == 2
+
+
+def test_remotely_deleted_row_of_an_adopted_config_is_not_recreated(tmp_path: Path) -> None:
+    """R5: a row file carrying an id the remote no longer has is ``remote_deleted``."""
+    sim = _world(tmp_path)
+    _forget(sim, HTTP_2)
+    rows = sim.api.remote[PROD][HTTP_2]["rows"]
+    rows[:] = [r for r in rows if r["id"] != "1005"]
+
+    assert ("remote_deleted", "1003") in _changes(sim)
+    result = _push(sim)
+
+    assert result["created"] == 0
+    assert [r["id"] for r in sim.api.remote[PROD][HTTP_2]["rows"]] == ["1004"]
+
+
+def test_pending_link_recovery_keeps_a_remote_edit_of_the_flow(
+    tmp_path: Path, tmp_config_dir: Path
+) -> None:
+    """R3: only the references of the remote config are rewritten, never the local file sent."""
+    world = CloneWorld(tmp_path, tmp_config_dir)
+    world.tgt_api.fail_row_names.add("orders")
+    world.clone()
+    flow = world.target(FLOW)
+    flow["configuration"]["phases"][0]["name"] = "Edited in the UI"
+    world.tgt_api.fail_row_names.clear()
+
+    second = world.clone()
+
+    assert second["errors"] == []
+    flow = world.target(FLOW)
+    assert flow["configuration"]["phases"][0]["name"] == "Edited in the UI"
+    assert _flow_task(world, 14)["configRowIds"] == [_orders_row_id(world)]
+    assert "link_pending" not in _flow_entry_metadata(world)
+    # The local file is untouched: diff shows the remote change for a pull.
+    diff = world.service.diff(alias="target", project_root=world.clone_dir)
+    assert any(
+        c["change_type"] == "remote_modified" and c["component_id"] == FLOW for c in diff["changes"]
+    )
+
+
+def test_untracked_row_selected_by_a_new_flow_survives_a_crash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R6: the row's checkpoint records the id the flow selects it by."""
+    variant = VARIANTS["rows"]
+    w = DiffWorld(tmp_path)
+    cid = w.api.seed(variant)
+    w.api.types["keboola.flow"] = "other"
+    w.init()
+    w.pull()
+    parent = w.config_dir(cid)
+    (template,) = sorted(parent.glob("rows/*/_config.yml"))[:1]
+    row = read_yaml(template)
+    row["name"] = "Row New"
+    row["_keboola"]["row_id"] = "row-R"  # a copied id the flow below selects
+    (parent / "rows" / "row-new").mkdir()
+    write_yaml(parent / "rows" / "row-new" / "_config.yml", row)
+    flow_dir = w.root / "main" / "other" / "keboola.flow" / "nightly"
+    flow_dir.mkdir(parents=True)
+    task = {
+        "type": "job",
+        "componentId": variant.component_id,
+        "configId": cid,
+        "configRowIds": ["row-R"],
+        "mode": "run",
+    }
+    write_yaml(
+        flow_dir / "_config.yml",
+        {
+            "version": row["version"],
+            "name": "Nightly",
+            "description": "",
+            "_configuration_extra": {"tasks": [{"id": 1, "name": "t", "task": task}]},
+            "_keboola": {"component_id": "keboola.flow"},
+        },
+    )
+    original = sync_service_module.resolve_run_target_bindings
+    state = {"crashed": False}
+
+    def dies_once(*args: Any, **kwargs: Any) -> Any:
+        if not state["crashed"]:
+            state["crashed"] = True
+            raise Crash()
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(sync_service_module, "resolve_run_target_bindings", dies_once)
+    with pytest.raises(Crash):
+        w.svc.push(alias="prod", project_root=w.root)
+
+    w.push()
+
+    new_row = next(
+        r for r in w.api.get(PROD, variant.component_id, cid)["rows"] if r["name"] == "Row New"
+    )
+    (flow,) = [c for (comp, _), c in w.api.remote[PROD].items() if comp == "keboola.flow"]
+    assert flow["configuration"]["tasks"][0]["task"]["configRowIds"] == [new_row["id"]]

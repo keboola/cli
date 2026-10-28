@@ -1315,6 +1315,12 @@ def _changes(sim: Sim, branch: int | None = None) -> list[tuple[str, str]]:
     ]
 
 
+def _local_new_of(sim: Sim, rel: str) -> None:
+    """``Sim.local_new`` of the config dir *rel* in main/ (its picks go by sort order)."""
+    dirs = config_dirs(sim.tree(PROD))
+    sim.local_new((dirs.index(_dir(sim, rel)) + 0.5) / len(dirs), 0.0, 0.0)
+
+
 def _proj(sim: Sim, branch: int, key: tuple[str, str]) -> dict[str, Any]:
     return remote_projection(key[0], sim.api.remote[branch][key])
 
@@ -1356,7 +1362,7 @@ def test_finding_new_config_is_created_with_its_rows(tmp_path: Path) -> None:
     """Was FINDING new-config-rows: a new config authored with rows/ was created WITHOUT
     its rows (rows were walked only under tracked configs)"""
     sim = _world(tmp_path)
-    sim.local_new(0.0, 0.0, 0.0)  # copy of keboola.ex-http 1000 (2 rows)
+    _local_new_of(sim, "extractor/keboola.ex-http/name-tk6z")  # ex-http 1000, 2 rows
     assert _push(sim)["created"] == 3  # the config and its two rows, in one push
     (new_key,) = [k for k in sim.api.remote[PROD] if k[1] == "1010"]
     assert len(sim.api.remote[PROD][new_key]["rows"]) == 2
@@ -1366,7 +1372,7 @@ def test_finding_promoted_new_config_rows_reach_dev(tmp_path: Path) -> None:
     """Was FINDING new-config-rows (dev-branch variant): promoting a new config with
     rows never created them on DEV"""
     sim = _world(tmp_path)
-    sim.local_new(0.0, 0.0, 0.0)
+    _local_new_of(sim, "extractor/keboola.ex-http/name-tk6z")
     _push(sim, DEV)
     _push(sim, DEV)  # even a second push
     (new_key,) = [k for k in sim.api.remote[DEV] if k[1] == "1010"]

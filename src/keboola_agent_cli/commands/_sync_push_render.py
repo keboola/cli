@@ -58,3 +58,17 @@ def push_skips_one_liner(result: dict[str, Any]) -> str:
             f"[yellow]{len(result['skipped_deletions'])} deletion(s) need --force[/yellow]"
         )
     return "".join(f", {part}" for part in parts)
+
+
+def emit_companion_warnings(formatter: Any, result: dict[str, Any]) -> None:
+    """Move a sync result's ``companion_warnings`` to the command's warnings.
+
+    Each becomes a ``warnings[]`` entry of the envelope with its ``code``
+    (``UNOWNED_COMPANION``, ``COMPANION_KEPT``) in ``--json``, and a warning
+    line on stderr in human mode -- also when diff finds nothing to change
+    or push has nothing to push, which is exactly when a file sync ignores
+    or kept would otherwise go unnoticed.
+    """
+    for entry in result.pop("companion_warnings", None) or []:
+        extra = {k: v for k, v in entry.items() if k not in ("code", "message")}
+        formatter.warning(escape(entry["message"]), code=entry["code"], **extra)

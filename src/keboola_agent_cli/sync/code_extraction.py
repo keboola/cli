@@ -7,6 +7,8 @@ On push: reads code files back into config parameters.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
@@ -312,6 +314,26 @@ def normalize_blocks_codes_script(
     return config, normalizations
 
 
+@dataclass(frozen=True)
+class Companion:
+    """One companion file of a component's configs and the payload field it carries.
+
+    Attributes:
+        filename: The file next to ``_config.yml``.
+        payload_field: The dotted config field the file holds (for readers).
+        render: Pull side: pops the value from the local config dict and
+            returns the file content, or ``None`` when pull writes no file.
+        merge: Push side: puts the file's content back into the local config
+            dict. Called only when the file exists, and the file always wins
+            over the same value inline -- an empty file is an empty value.
+    """
+
+    filename: str
+    payload_field: str
+    render: Callable[[dict[str, Any]], str | None]
+    merge: Callable[[dict[str, Any], Path], None]
+
+
 def owned_companions(component_id: str) -> tuple[str, ...]:
     """The companion files *component_id*'s configs own (the D1 registry).
 
@@ -320,45 +342,43 @@ def owned_companions(component_id: str) -> tuple[str, ...]:
     its component extracts it. Any other file in the directory -- a
     ``pyproject.toml`` a user keeps beside an extractor, a ``code.py`` next to
     a SQL transformation -- is never hashed, compared or deleted by sync.
-    Dispatch is by exact component id, like :func:`extract_code_files`.
+    Dispatch is by exact component id.
     """
+    return tuple(companion.filename for companion in companions_of(component_id))
+
+
+def companions_of(component_id: str) -> tuple[Companion, ...]:
+    """The registry entries of *component_id*, in extraction order."""
     if component_id in SQL_TRANSFORMATION_COMPONENTS:
-        return (DESCRIPTION_FILENAME, "transform.sql")
+        return (_DESCRIPTION, _SQL_CODE)
     if component_id in PYTHON_TRANSFORMATION_COMPONENTS:
-        return (DESCRIPTION_FILENAME, "transform.py", PYPROJECT_FILENAME)
+        return (_DESCRIPTION, _PYTHON_CODE, _PYTHON_PACKAGES)
     if component_id in PYTHON_APP_COMPONENTS:
-        return (DESCRIPTION_FILENAME, "code.py", PYPROJECT_FILENAME)
-    return (DESCRIPTION_FILENAME,)
+        return (_DESCRIPTION, _APP_CODE, _APP_PACKAGES)
+    return (_DESCRIPTION,)
 
 
-def _render_description(config_data: dict[str, Any], files: dict[str, str]) -> None:
-    """Move a non-empty description into ``_description.md``.
+def _parameters(config_data: dict[str, Any]) -> dict[str, Any] | None:
+    """The ``parameters`` dict a render reads, or ``None`` when there is none."""
+    parameters = config_data.get("parameters")
+    return parameters if isinstance(parameters, dict) else None
+
+
+def _render_description(config_data: dict[str, Any]) -> str | None:
+    """A non-empty description goes to ``_description.md``.
 
     An empty description stays inline as ``description: ''`` -- the layout a
     fresh pull writes and push writeback restores (L2).
     """
     description = config_data.get("description", "")
     if not description:
-        return
-    files[DESCRIPTION_FILENAME] = description
+        return None
     del config_data["description"]
+    return description
 
 
-def _merge_description(config_data: dict[str, Any], config_dir: Path) -> None:
-    """Read _description.md back into config_data.
-
-    With neither the file nor a ``description`` key the description is empty,
-    which is what push sends (``local_config_to_api`` defaults it to ``""``)
-    and what pull writes. Spelling it out keeps an untracked file whose
-    ``_description.md`` was deleted equal to its remote: without it the
-    adopt guard (#792 E) read the missing key as a local change and kept
-    the file out of the manifest.
-    """
-    desc_file = config_dir / DESCRIPTION_FILENAME
-    if desc_file.exists():
-        config_data["description"] = desc_file.read_text(encoding="utf-8")
-    else:
-        config_data.setdefault("description", "")
+def _merge_description(config_data: dict[str, Any], path: Path) -> None:
+    config_data["description"] = path.read_text(encoding="utf-8")
 
 
 def extract_code_files(
@@ -388,13 +408,10 @@ def render_code_files(component_id: str, config_data: dict[str, Any]) -> dict[st
     list) instead of leaving it to be pushed back.
     """
     files: dict[str, str] = {}
-    _render_description(config_data, files)
-    if component_id in SQL_TRANSFORMATION_COMPONENTS:
-        _render_sql_transformation(config_data, files)
-    elif component_id in PYTHON_TRANSFORMATION_COMPONENTS:
-        _render_python_transformation(config_data, files)
-    elif component_id in PYTHON_APP_COMPONENTS:
-        _render_python_app(config_data, files)
+    for companion in companions_of(component_id):
+        content = companion.render(config_data)
+        if content is not None:
+            files[companion.filename] = content
     return files
 
 
@@ -405,16 +422,19 @@ def merge_code_files(
 ) -> dict[str, Any]:
     """Read code files and merge them back into config_data.
 
-    Reverse of extract_code_files. Called before push.
+    Reverse of extract_code_files. Called before push. A present companion
+    always wins over the same value inline; a missing one leaves the inline
+    value (or none). With neither the file nor a ``description`` key the
+    description is empty, which is what push sends and what pull writes --
+    spelling it out keeps an untracked file whose ``_description.md`` was
+    deleted equal to its remote (#792 E adopt guard).
     Returns the modified config_data.
     """
-    _merge_description(config_data, config_dir)
-    if component_id in SQL_TRANSFORMATION_COMPONENTS:
-        return _merge_sql_transformation(config_data, config_dir)
-    if component_id in PYTHON_TRANSFORMATION_COMPONENTS:
-        return _merge_python_transformation(config_data, config_dir)
-    if component_id in PYTHON_APP_COMPONENTS:
-        return _merge_python_app(config_data, config_dir)
+    for companion in companions_of(component_id):
+        path = config_dir / companion.filename
+        if path.exists():
+            companion.merge(config_data, path)
+    config_data.setdefault("description", "")
     return config_data
 
 
@@ -480,15 +500,12 @@ def _render_sql_code(scripts: list[Any], code_name: str) -> list[str]:
     return _render_sql_script_lines(scripts, with_markers=True)
 
 
-def _render_sql_transformation(config_data: dict[str, Any], files: dict[str, str]) -> None:
+def _render_sql_transformation(config_data: dict[str, Any]) -> str | None:
     """Move SQL blocks from parameters.blocks into transform.sql."""
-    parameters = config_data.get("parameters") or {}
-    if not isinstance(parameters, dict):
-        return
-    blocks = parameters.get("blocks", [])
-
-    if not blocks:
-        return
+    parameters = _parameters(config_data)
+    blocks = parameters.get("blocks", []) if parameters is not None else []
+    if parameters is None or not blocks:
+        return None
 
     lines: list[str] = []
     for block in blocks:
@@ -502,25 +519,15 @@ def _render_sql_transformation(config_data: dict[str, Any], files: dict[str, str
             lines.extend(_render_sql_code(code.get("script") or [], code_name))
             lines.append("")
 
-    files["transform.sql"] = "\n".join(lines).rstrip() + "\n"
-
     # Remove blocks from parameters (they're now in the SQL file)
     parameters.pop("blocks", None)
+    return "\n".join(lines).rstrip() + "\n"
 
 
-def _merge_sql_transformation(config_data: dict[str, Any], config_dir: Path) -> dict[str, Any]:
-    """Read transform.sql and parse block markers back into parameters.blocks."""
-    sql_file = config_dir / "transform.sql"
-    if not sql_file.exists():
-        return config_data
-
-    content = sql_file.read_text(encoding="utf-8")
-    blocks = _parse_sql_blocks(content)
-
-    parameters = config_data.setdefault("parameters", {})
-    parameters["blocks"] = blocks
-
-    return config_data
+def _merge_sql_transformation(config_data: dict[str, Any], path: Path) -> None:
+    """Parse transform.sql's block markers back into parameters.blocks."""
+    blocks = _parse_sql_blocks(path.read_text(encoding="utf-8"))
+    config_data.setdefault("parameters", {})["blocks"] = blocks
 
 
 def _parse_sql_blocks(content: str) -> list[dict[str, Any]]:
@@ -595,63 +602,49 @@ def _parse_sql_blocks(content: str) -> list[dict[str, Any]]:
 # ---- Python Transformations ----
 
 
-def _render_python_transformation(config_data: dict[str, Any], files: dict[str, str]) -> None:
-    """Move Python blocks into transform.py, packages into pyproject.toml."""
-    parameters = config_data.get("parameters") or {}
-    if not isinstance(parameters, dict):
-        return
-    blocks = parameters.get("blocks", [])
+def _render_python_blocks(config_data: dict[str, Any]) -> str | None:
+    """Move Python blocks into transform.py."""
+    parameters = _parameters(config_data)
+    blocks = parameters.get("blocks", []) if parameters is not None else []
+    if parameters is None or not blocks:
+        return None
+    lines: list[str] = []
+    for block in blocks:
+        block_name = block.get("name", "unnamed")
+        lines.append(PYTHON_BLOCK_MARKER.format(name=block_name))
+        lines.append("")
 
-    if blocks:
-        lines: list[str] = []
-        for block in blocks:
-            block_name = block.get("name", "unnamed")
-            lines.append(PYTHON_BLOCK_MARKER.format(name=block_name))
+        for code in block.get("codes", []):
+            code_name = code.get("name", "unnamed")
+            lines.append(PYTHON_CODE_MARKER.format(name=code_name))
+
+            scripts = code.get("script") or []
+            for si, script in enumerate(scripts):
+                if si > 0:
+                    lines.append("")  # blank line between script elements
+                if isinstance(script, str) and "\n" in script:
+                    lines.extend(script.split("\n"))
+                else:
+                    lines.append(script)
             lines.append("")
 
-            for code in block.get("codes", []):
-                code_name = code.get("name", "unnamed")
-                lines.append(PYTHON_CODE_MARKER.format(name=code_name))
-
-                scripts = code.get("script") or []
-                for si, script in enumerate(scripts):
-                    if si > 0:
-                        lines.append("")  # blank line between script elements
-                    if isinstance(script, str) and "\n" in script:
-                        lines.extend(script.split("\n"))
-                    else:
-                        lines.append(script)
-                lines.append("")
-
-        files["transform.py"] = "\n".join(lines).rstrip() + "\n"
-
-        # Remove blocks from parameters
-        parameters.pop("blocks", None)
-
-    # Extract packages to pyproject.toml
-    packages = parameters.get("packages", [])
-    if packages:
-        config_name = config_data.get("name", "transformation")
-        files[PYPROJECT_FILENAME] = _render_pyproject_toml(config_name, packages)
-        parameters.pop("packages", None)
+    parameters.pop("blocks", None)
+    return "\n".join(lines).rstrip() + "\n"
 
 
-def _merge_python_transformation(config_data: dict[str, Any], config_dir: Path) -> dict[str, Any]:
-    """Read transform.py and pyproject.toml back into config_data."""
-    py_file = config_dir / "transform.py"
-    if py_file.exists():
-        content = py_file.read_text(encoding="utf-8")
-        blocks = _parse_python_blocks(content)
-        parameters = config_data.setdefault("parameters", {})
-        parameters["blocks"] = blocks
+def _merge_python_blocks(config_data: dict[str, Any], path: Path) -> None:
+    blocks = _parse_python_blocks(path.read_text(encoding="utf-8"))
+    config_data.setdefault("parameters", {})["blocks"] = blocks
 
-    # Read packages from pyproject.toml
-    packages = _read_pyproject_packages(config_dir)
-    if packages:
-        parameters = config_data.setdefault("parameters", {})
-        parameters["packages"] = packages
 
-    return config_data
+def _render_python_packages(config_data: dict[str, Any]) -> str | None:
+    """Move a transformation's packages into pyproject.toml."""
+    parameters = _parameters(config_data)
+    packages = parameters.get("packages", []) if parameters is not None else []
+    if parameters is None or not packages:
+        return None
+    parameters.pop("packages", None)
+    return _render_pyproject_toml(config_data.get("name", "transformation"), packages)
 
 
 def _parse_python_blocks(content: str) -> list[dict[str, Any]]:
@@ -707,42 +700,40 @@ def _parse_python_blocks(content: str) -> list[dict[str, Any]]:
 # ---- Python Apps ----
 
 
-def _render_python_app(config_data: dict[str, Any], files: dict[str, str]) -> None:
-    """Move parameters.code into code.py and packages into pyproject.toml."""
-    parameters = config_data.get("parameters") or {}
-    if not isinstance(parameters, dict):
-        return
-
-    code = parameters.get("code")
-    if code and isinstance(code, str):
-        files["code.py"] = code
-        parameters.pop("code", None)
-
-    packages = parameters.get("packages", [])
-    if packages:
-        keboola_meta = config_data.get("_keboola", {})
-        files[PYPROJECT_FILENAME] = _render_pyproject_toml(
-            config_data.get("name", "app"),
-            packages,
-            component_id=keboola_meta.get("component_id"),
-            config_id=keboola_meta.get("config_id"),
-        )
-        parameters.pop("packages", None)
+def _render_app_code(config_data: dict[str, Any]) -> str | None:
+    """Move parameters.code into code.py."""
+    parameters = _parameters(config_data)
+    code = parameters.get("code") if parameters is not None else None
+    if parameters is None or not code or not isinstance(code, str):
+        return None
+    parameters.pop("code", None)
+    return code
 
 
-def _merge_python_app(config_data: dict[str, Any], config_dir: Path) -> dict[str, Any]:
-    """Read code.py and pyproject.toml back into config_data."""
-    code_file = config_dir / "code.py"
-    if code_file.exists():
-        parameters = config_data.setdefault("parameters", {})
-        parameters["code"] = code_file.read_text(encoding="utf-8")
+def _merge_app_code(config_data: dict[str, Any], path: Path) -> None:
+    config_data.setdefault("parameters", {})["code"] = path.read_text(encoding="utf-8")
 
-    packages = _read_pyproject_packages(config_dir)
-    if packages:
-        parameters = config_data.setdefault("parameters", {})
-        parameters["packages"] = packages
 
-    return config_data
+def _render_app_packages(config_data: dict[str, Any]) -> str | None:
+    """Move an app's packages into pyproject.toml, with its ``[tool.keboola]`` ids."""
+    parameters = _parameters(config_data)
+    packages = parameters.get("packages", []) if parameters is not None else []
+    if parameters is None or not packages:
+        return None
+    keboola_meta = config_data.get("_keboola", {})
+    parameters.pop("packages", None)
+    return _render_pyproject_toml(
+        config_data.get("name", "app"),
+        packages,
+        component_id=keboola_meta.get("component_id"),
+        config_id=keboola_meta.get("config_id"),
+    )
+
+
+def _merge_packages(config_data: dict[str, Any], path: Path) -> None:
+    """pyproject.toml's dependencies ARE the package list: none listed is ``[]``."""
+    packages = _parse_pyproject_packages(path.read_text(encoding="utf-8"))
+    config_data.setdefault("parameters", {})["packages"] = packages
 
 
 # ---- pyproject.toml helpers ----
@@ -780,13 +771,8 @@ def _render_pyproject_toml(
     return "\n".join(lines)
 
 
-def _read_pyproject_packages(config_dir: Path) -> list[str]:
-    """Read packages from pyproject.toml dependencies."""
-    toml_file = config_dir / PYPROJECT_FILENAME
-    if not toml_file.exists():
-        return []
-
-    content = toml_file.read_text(encoding="utf-8")
+def _parse_pyproject_packages(content: str) -> list[str]:
+    """Read packages from a pyproject.toml's dependencies."""
     packages: list[str] = []
     in_deps = False
 
@@ -804,3 +790,25 @@ def _read_pyproject_packages(config_dir: Path) -> list[str]:
                 packages.append(pkg)
 
     return packages
+
+
+# The registry (D1): every companion file and the payload field it carries.
+# Extraction (``render_code_files``), merge (``merge_code_files``), the
+# manifest baseline and the pull cleanup all read it through
+# :func:`companions_of`; adding a companion here is the whole change.
+_DESCRIPTION = Companion(
+    DESCRIPTION_FILENAME, "description", _render_description, _merge_description
+)
+_SQL_CODE = Companion(
+    "transform.sql", "parameters.blocks", _render_sql_transformation, _merge_sql_transformation
+)
+_PYTHON_CODE = Companion(
+    "transform.py", "parameters.blocks", _render_python_blocks, _merge_python_blocks
+)
+_PYTHON_PACKAGES = Companion(
+    PYPROJECT_FILENAME, "parameters.packages", _render_python_packages, _merge_packages
+)
+_APP_CODE = Companion("code.py", "parameters.code", _render_app_code, _merge_app_code)
+_APP_PACKAGES = Companion(
+    PYPROJECT_FILENAME, "parameters.packages", _render_app_packages, _merge_packages
+)

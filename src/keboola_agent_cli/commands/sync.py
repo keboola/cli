@@ -26,7 +26,12 @@ from ._helpers import (
 )
 from ._project_ref import PROJECT_HELP
 from ._sync_clone_render import clone_summary, print_clone_result
-from ._sync_push_render import REMOTE_CHANGE_LABELS, print_push_skips, push_skips_one_liner
+from ._sync_push_render import (
+    REMOTE_CHANGE_LABELS,
+    emit_companion_warnings,
+    print_push_skips,
+    push_skips_one_liner,
+)
 
 sync_app = typer.Typer(help="Sync project configurations with local filesystem")
 
@@ -726,6 +731,7 @@ def sync_pull(
         emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
+    emit_companion_warnings(formatter, result)
     if formatter.json_mode:
         formatter.output(result)
     else:
@@ -889,6 +895,7 @@ def sync_diff(
         emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
+    emit_companion_warnings(formatter, result)
     if formatter.json_mode:
         formatter.output(result)
     else:
@@ -1114,6 +1121,7 @@ def sync_push(
         emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
+    emit_companion_warnings(formatter, result)
     # A per-config failure is collected, not raised -- without this the command
     # reported a green "Pushed" and exit 0 even when every config failed (#745).
     finish_items(

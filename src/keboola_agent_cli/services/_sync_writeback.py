@@ -529,6 +529,7 @@ def writeback_after_push(
     pushed_configuration: dict[str, Any],
     *,
     is_row: bool = False,
+    row_id: str = "",
 ) -> None:
     """Update local ``_config.yml`` after a successful push.
 
@@ -537,10 +538,18 @@ def writeback_after_push(
     ``_keboola.base_config_hash`` is dropped: after the push the manifest
     holds the baseline (issue #792 E). A config whose description is empty
     gets the ``description: ''`` line a fresh pull writes (L2), so its
-    ``pull_hash`` is the one a pull would record; rows are left as they are.
+    ``pull_hash`` is the one a pull would record. A row gets *row_id* in its
+    ``_keboola`` footer, as a pull writes it: without it the next pull of a
+    tree that lost the row's manifest entry (a ``pull --branch`` and back)
+    could not find the row's directory by its id, wrote the row into a second
+    directory, and the first one diffed as a new row -- a duplicate on the
+    next push (R2). The promote path passes no *row_id*: ``main/`` keeps its
+    own ids (D19).
     """
     if not is_row:
         local_data = canonical_description(local_data, config_dir)
+    elif row_id:
+        local_data.setdefault("_keboola", {})["row_id"] = row_id
     keboola_meta = local_data.setdefault("_keboola", {})
     keboola_meta.pop(BASE_CONFIG_HASH_KEY, None)
     if config_id:

@@ -457,7 +457,8 @@ def push_row_change(
             warnings=warnings,
             known_secrets=known_secrets,
             source_row_id=(source_row_id or row_id) if remap is not None else "",
-            created_from=row_id if remap is None else "",
+            # The identity the push's in-memory row map uses (R6).
+            created_from=(source_row_id or row_id) if remap is None else "",
             checkpoint=checkpoint,
             remap=remap,
             # A create on the source tree's own branch: its promote entries'
@@ -566,7 +567,15 @@ def _push_create_row(
     # Write-back: encrypted secrets land in the local file so a subsequent diff
     # sees local == remote. ``config_id=""`` tells the shared helper to skip
     # writing a config_id into ``_keboola`` (rows use ``row_id``).
-    writeback_after_push(service, pristine_data, row_dir, "", configuration, is_row=True)
+    writeback_after_push(
+        service,
+        pristine_data,
+        row_dir,
+        "",
+        configuration,
+        is_row=True,
+        row_id=new_row_id if remap is None else "",
+    )
 
     row_file = row_dir / CONFIG_FILENAME
     stamp = row_baseline(
@@ -640,7 +649,15 @@ def push_update_row(
     )
     logger.info("Updated row %s/%s/%s", component_id, parent_config_id, row_id)
 
-    writeback_after_push(service, pristine_data, row_dir, "", configuration, is_row=True)
+    writeback_after_push(
+        service,
+        pristine_data,
+        row_dir,
+        "",
+        configuration,
+        is_row=True,
+        row_id=row_id if remap is None else "",
+    )
 
     row_file = row_dir / CONFIG_FILENAME
     new_file_hash = service._file_hash(row_file) if row_file.exists() else ""

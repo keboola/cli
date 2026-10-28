@@ -42,6 +42,9 @@ class UntrackedRows:
     local_rows: list[dict[str, Any]] = field(default_factory=list)
     tracked_row_keys: set[str] = field(default_factory=set)
     base_hashes: dict[str, str] = field(default_factory=dict)
+    # Row keys of an adopted config whose local file carries a row id the
+    # remote config no longer has: ``remote_deleted``, never re-created (R5).
+    gone_row_keys: set[str] = field(default_factory=set)
 
 
 def _row_dirs(config_dir: Path) -> list[Path]:
@@ -63,16 +66,20 @@ def collect_untracked_rows(
 ) -> None:
     """Add the rows of one untracked config dir to *found*.
 
-    *config_id* is ``""`` for a config push creates (every row is new, also
-    one whose file carries an id copied from another config) and the remote
-    id for an adopted one.
+    *config_id* is ``""`` for a config push creates: every row is new, also
+    one whose file carries an id copied from another config -- that id is
+    kept as its ``source_row_id``, the identity reference planning and the
+    link backfill know it by (R9). For an adopted config (*config_id* set) a
+    row carrying an id is that row: diffed against the remote one, or
+    ``remote_deleted`` when the remote no longer has it -- never POSTed again
+    (R5, #792 H). Only a row without an id is new there.
     """
     prefix = f"{component_id}/{config_id}/rows/"
     for row_dir in _row_dirs(config_dir):
         data = service._read_config_file(row_dir)
         if not isinstance(data, dict):
             continue
-        row_id = str((data.get("_keboola") or {}).get("row_id") or "") if config_id else ""
+        file_row_id = str((data.get("_keboola") or {}).get("row_id") or "")
         entry: dict[str, Any] = {
             "component_id": component_id,
             "parent_config_id": config_id,
@@ -81,10 +88,13 @@ def collect_untracked_rows(
             "path": f"rows/{row_dir.name}",
             "data": data,
             "parent_path": config_path,
+            "source_row_id": "" if config_id else file_row_id,
         }
-        if row_id and f"{prefix}{row_id}" in remote_rows:
-            entry["row_id"] = row_id
+        if config_id and file_row_id:
+            entry["row_id"] = file_row_id
             entry.pop("parent_path")
+            if f"{prefix}{file_row_id}" not in remote_rows:
+                found.gone_row_keys.add(f"{prefix}{file_row_id}")
         found.local_rows.append(entry)
     if not config_id:
         return

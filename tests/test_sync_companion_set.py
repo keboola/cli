@@ -18,16 +18,24 @@ What is pinned here, per the group-2 design (D1-D6, D10, D11):
 
 from __future__ import annotations
 
+import copy
 import hashlib
+import json
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 import yaml
 
 from keboola_agent_cli.errors import ConfigError
 from keboola_agent_cli.services import _sync_companions
-from keboola_agent_cli.sync.code_extraction import merge_code_files
+from keboola_agent_cli.sync.code_extraction import (
+    companions_of,
+    merge_code_files,
+    owned_companions,
+    render_code_files,
+)
 from keboola_agent_cli.sync.config_format import api_config_to_local
 from keboola_agent_cli.sync.diff_engine import config_hash
 from keboola_agent_cli.sync.manifest import load_manifest, save_manifest
@@ -214,11 +222,27 @@ def test_unknown_companion_baseline_never_authorizes_a_delete(
 
     result = _pull(sim)
 
-    assert (_dir(sim, HTTP_DIR) / "_description.md").exists()
-    [warning] = [w for w in result.get("warnings", []) if w["change_type"] == "companion_kept"]
-    assert warning["path"] == f"{HTTP_DIR}/_description.md"
-    # Kept, it is a visible local change -- never a silently clean file.
+    kept = _dir(sim, HTTP_DIR) / "_description.md"
+    assert kept.exists()
+    [warning] = result["companion_warnings"]
+    assert (warning["code"], warning["path"]) == ("COMPANION_KEPT", f"{HTTP_DIR}/_description.md")
+    _kept_file_is_a_conflict_until_it_is_gone(sim, kept)
+
+
+def _kept_file_is_a_conflict_until_it_is_gone(sim: Any, kept: Path) -> None:
+    """R4: a kept obsolete companion never reaches the remote; deleting it resolves it."""
+    assert ("conflict", "1000") in _changes(sim)
+    sim._local_edit_slot(_dir(sim, HTTP_DIR), "value")  # a later, unrelated edit
+    pushed = _push(sim)
+    assert pushed.get("skipped")
+    assert _proj(sim, PROD, HTTP_1)["desc"] == ()
+    kept.unlink()  # accept the remote's empty description
     assert ("modified", "1000") in _changes(sim)
+    _push(sim)
+    value = read_yaml(_dir(sim, HTTP_DIR) / "_config.yml")["parameters"]["value"]
+    assert _proj(sim, PROD, HTTP_1)["desc"] == ()
+    assert _proj(sim, PROD, HTTP_1)["value"] == (value,)
+    assert _changes(sim) == []
 
 
 def test_obsolete_companion_edited_during_pull_is_kept(
@@ -240,7 +264,9 @@ def test_obsolete_companion_edited_during_pull_is_kept(
     result = _pull(sim)
 
     assert stale.read_text(encoding="utf-8") == "Saved meanwhile tk900z"
-    assert any(w["change_type"] == "companion_kept" for w in result.get("warnings", []))
+    assert [w["code"] for w in result["companion_warnings"]] == ["COMPANION_KEPT"]
+    monkeypatch.undo()
+    _kept_file_is_a_conflict_until_it_is_gone(sim, stale)
 
 
 def test_unowned_file_is_never_hashed_compared_or_deleted(tmp_path: Path) -> None:
@@ -300,10 +326,10 @@ def test_description_payload(
 @pytest.mark.parametrize(
     ("inline", "files", "expected"),
     [
-        # A pyproject.toml with no dependencies names no packages: the
-        # inline list (if any) applies, else the key is absent.
-        ({}, {"pyproject.toml": "[project]\nname = 'x'\n"}, None),
-        ({"packages": []}, {"pyproject.toml": "[project]\nname = 'x'\n"}, []),
+        # The companion wins: a pyproject.toml with no dependencies is an
+        # empty package list, whatever is inline (R10).
+        ({}, {"pyproject.toml": "[project]\nname = 'x'\n"}, []),
+        ({"packages": ["inline"]}, {"pyproject.toml": "[project]\nname = 'x'\n"}, []),
         ({}, {}, None),  # deleted: no packages sent
         ({"packages": []}, {}, []),  # explicit empty inline list (what pull writes)
         (
@@ -336,6 +362,52 @@ def test_code_payload(
     assert merged["parameters"].get("code") == expected
 
 
+@pytest.mark.parametrize(
+    ("component_id", "filename"),
+    [(SQL, "transform.sql"), ("keboola.python-transformation-v2", "transform.py")],
+)
+@pytest.mark.parametrize(
+    ("inline", "file", "expected"),
+    [
+        ({}, "", []),  # empty file: no blocks
+        ({}, None, None),  # deleted, no inline: no blocks sent
+        ({"blocks": []}, None, []),  # explicit empty inline field
+        ({"blocks": [{"name": "inline", "codes": []}]}, "", []),  # file wins, also empty
+    ],
+)
+def test_transformation_code_payload(
+    tmp_path: Path,
+    component_id: str,
+    filename: str,
+    inline: dict[str, Any],
+    file: str | None,
+    expected: Any,
+) -> None:
+    """R10: the same matrix for the SQL and Python transformation code files."""
+    files = {} if file is None else {filename: file}
+    merged = _merged(tmp_path, component_id, {"parameters": dict(inline)}, files)
+    assert merged["parameters"].get("blocks") == expected
+
+
+def test_registry_drives_extraction_and_merge(tmp_path: Path) -> None:
+    """R8 (D1): every registry entry renders its file and merges it back into its field."""
+    data = {
+        "description": "d",
+        "parameters": {"code": "print(1)\n", "packages": ["a"]},
+        "_keboola": {"component_id": APP, "config_id": "1"},
+    }
+    files = render_code_files(APP, data)
+    assert set(files) == set(owned_companions(APP))
+    assert [c.filename for c in companions_of(APP)] == list(owned_companions(APP))
+    for name, content in files.items():
+        (tmp_path / name).write_text(content, encoding="utf-8")
+    merged = merge_code_files(APP, data, tmp_path)
+    assert (merged["description"], merged["parameters"]) == (
+        "d",
+        {"code": "print(1)\n", "packages": ["a"]},
+    )
+
+
 def test_deleting_a_pulled_description_does_not_resurrect_anything(tmp_path: Path) -> None:
     """Risk 13: pull never writes a value both inline and in the file."""
     sim = _world(tmp_path)
@@ -366,8 +438,8 @@ def test_companion_of_another_component_is_reported(tmp_path: Path) -> None:
     sim = _world(tmp_path)
     (_dir(sim, HTTP_DIR) / "code.py").write_text("print('tk900z')\n", encoding="utf-8")
     result = sim.svc.diff(alias="prod", project_root=sim.root)
-    [warning] = result["warnings"]
-    assert (warning["change_type"], warning["path"]) == ("unowned_companion", f"{HTTP_DIR}/code.py")
+    [warning] = result["companion_warnings"]
+    assert (warning["code"], warning["path"]) == ("UNOWNED_COMPANION", f"{HTTP_DIR}/code.py")
     assert result["changes"] == []
 
 
@@ -382,3 +454,120 @@ def test_component_id_change_is_refused(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match="cannot change its component"):
         _push(sim)
     assert _proj(sim, PROD, HTTP_1)["name"] == "Name tk6z"
+
+
+# ---------------------------------------------------------------------------
+# R12 / R13 / R7
+# ---------------------------------------------------------------------------
+
+
+def test_remote_delete_keeps_an_edited_companion_whose_config_yml_is_gone(tmp_path: Path) -> None:
+    """R12: the stale sweep applies the D6 rule before deleting the directory."""
+    sim = _world(tmp_path)
+    config_dir = _dir(sim, SQL_DIR)
+    sql = config_dir / "transform.sql"
+    sql.write_text(sql.read_text(encoding="utf-8") + "SELECT 'tk900z';\n", encoding="utf-8")
+    (config_dir / "_config.yml").unlink()
+    del sim.api.remote[PROD][SQL_1]
+
+    _pull(sim)
+
+    assert "tk900z" in sql.read_text(encoding="utf-8")
+
+
+def test_old_writer_over_a_version_1_entry_reads_clean_and_sees_a_new_file(
+    tmp_path: Path,
+) -> None:
+    """R13: an older kbagent's push keeps the marker and rewrites the map its way."""
+    sim = _world(tmp_path)
+    config_dir = _dir(sim, SQL_DIR)
+    (config_dir / "code.py").write_text("print('mine')\n", encoding="utf-8")  # not owned
+    manifest = load_manifest(sim.root)
+    for entry in manifest.configurations:
+        if (entry.component_id, entry.id) == SQL_1:
+            # origin/main's stamp_updated_config: pull_hash and the map from the
+            # five names found on disk, every other key -- the marker -- kept.
+            entry.metadata["pull_hash"] = sim.svc._file_hash(config_dir / "_config.yml")
+            entry.metadata["pull_extra_hashes"] = {
+                name: sim.svc._file_hash(config_dir / name)
+                for name in sorted(_sync_companions.LEGACY_COMPANIONS)
+                if (config_dir / name).exists()
+            }
+            assert entry.metadata["pull_extra_hashes_version"] == 1
+    save_manifest(sim.root, manifest)
+
+    assert _changes(sim) == []
+    (config_dir / "_description.md").write_text("Description tk900z", encoding="utf-8")
+    assert ("modified", "1006") in _changes(sim)
+
+
+def test_companion_warnings_reach_push_results(tmp_path: Path) -> None:
+    """R7: also when push has nothing to push, and on a dry run."""
+    sim = _world(tmp_path)
+    (_dir(sim, HTTP_DIR) / "code.py").write_text("print('tk900z')\n", encoding="utf-8")
+    for result in (
+        _push(sim),
+        sim.svc.push(alias="prod", project_root=sim.root, dry_run=True),
+    ):
+        assert result["status"] == "no_changes"
+        [warning] = result["companion_warnings"]
+        assert warning["code"] == "UNOWNED_COMPANION"
+    sim._local_edit_slot(_dir(sim, HTTP_DIR), "value")
+    for result in (sim.svc.push(alias="prod", project_root=sim.root, dry_run=True), _push(sim)):
+        assert [w["code"] for w in result["companion_warnings"]] == ["UNOWNED_COMPANION"]
+
+
+def _cli_diff(tmp_path: Path, diff_result: dict[str, Any], *flags: str) -> Any:
+    from typer.testing import CliRunner
+
+    from keboola_agent_cli.cli import app
+    from keboola_agent_cli.services.project_service import ProjectService
+    from test_sync_cli import TEST_TOKEN, _make_sync_service_mock, _setup_config
+
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+    mock_sync = _make_sync_service_mock()
+    mock_sync.diff.return_value = diff_result
+    with (
+        patch("keboola_agent_cli.cli.ConfigStore") as store_cls,
+        patch("keboola_agent_cli.cli.ProjectService") as project_cls,
+        patch("keboola_agent_cli.cli.SyncService") as sync_cls,
+    ):
+        store_cls.return_value = store
+        project_cls.return_value = ProjectService(config_store=store)
+        sync_cls.return_value = mock_sync
+        return CliRunner().invoke(
+            app,
+            [*flags, "sync", "diff", "--project", "prod", "--directory", str(tmp_path)],
+        )
+
+
+_IN_SYNC_WITH_A_WARNING: dict[str, Any] = {
+    "changes": [],
+    "summary": {"added": 0, "modified": 0, "deleted": 0, "unchanged": 1},
+    "companion_warnings": [
+        {
+            "code": "UNOWNED_COMPANION",
+            "component_id": HTTP,
+            "path": f"{HTTP_DIR}/code.py",
+            "message": f"{HTTP_DIR}/code.py is not part of a {HTTP} configuration",
+        }
+    ],
+}
+
+
+def test_human_diff_prints_the_warning_also_when_in_sync(tmp_path: Path) -> None:
+    result = _cli_diff(tmp_path, copy.deepcopy(_IN_SYNC_WITH_A_WARNING))
+    assert result.exit_code == 0, result.output
+    assert "No differences found" in result.stdout
+    assert f"{HTTP_DIR}/code.py is not part of" in result.stderr
+
+
+def test_json_diff_carries_the_warning_in_the_envelope(tmp_path: Path) -> None:
+    result = _cli_diff(tmp_path, copy.deepcopy(_IN_SYNC_WITH_A_WARNING), "--json")
+    assert result.exit_code == 0, result.output
+    envelope = json.loads(result.stdout)
+    [warning] = [w for w in envelope["warnings"] if w["code"] == "UNOWNED_COMPANION"]
+    assert warning["path"] == f"{HTTP_DIR}/code.py"
+    assert "companion_warnings" not in envelope["data"]

@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING, Any
 from ..constants import CONFIG_FILENAME
 from ..sync.branch_scope import UNKNOWN_BASE_KEY
 from ..sync.manifest import ManifestConfigRow, ManifestConfiguration
-from ._sync_companions import companions_modified
+from ._sync_companions import config_locally_modified
 from ._sync_workspace import SANDBOXES_COMPONENT_ID
 
 if TYPE_CHECKING:
@@ -78,14 +78,13 @@ def _entry_locally_modified(
         for row in entry.rows
     ):
         return True
-    pull_hash = entry.metadata.get("pull_hash", "")
-    config_file = config_dir / CONFIG_FILENAME
-    if not pull_hash or not config_file.exists():
+    # _config.yml and the companion set, by the pull rule: an edited companion
+    # that survives a deleted _config.yml is local work too (D6, R12) -- the
+    # sweep deleted it with the directory before.
+    if config_locally_modified(service, config_dir, entry.component_id, entry.metadata):
+        return True
+    if not entry.metadata.get("pull_hash"):
         return False
-    if service._file_hash(config_file) != pull_hash:
-        return True
-    if companions_modified(service, config_dir, entry.component_id, entry.metadata):
-        return True
     for row in entry.rows:
         row_hash = row.metadata.get("pull_hash", "")
         row_file = config_dir / row.path / CONFIG_FILENAME

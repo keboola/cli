@@ -39,7 +39,7 @@ from ..sync.diff_engine import config_hash
 from ..sync.manifest import Manifest
 from ._data_app_bodies import DATA_APP_COMPONENT_ID
 from ._sync_baseline import apply_stamp, config_baseline
-from ._sync_bindings import _rewrite_list_placeholders, task_config_ref
+from ._sync_bindings import _rewrite_list_placeholders, put_configuration_only, task_config_ref
 from ._sync_models import (
     FLOW_COMPONENT_ID,
     ORCHESTRATOR_COMPONENT_ID,
@@ -61,6 +61,7 @@ _RUN_TARGET_COMPONENTS = frozenset(
     {FLOW_COMPONENT_ID, ORCHESTRATOR_COMPONENT_ID, SCHEDULER_COMPONENT_ID}
 )
 _LINK_KEYS = ("variables_id", "shared_code_id")
+PROMOTE_REMAP_DESCRIPTION = "Remap promoted config IDs via kbagent sync push"
 
 
 def has_references(component_id: str, configuration: dict[str, Any]) -> bool:
@@ -519,7 +520,9 @@ def finish_promote_rebind(
         )
         if payload != sent.configuration:
             try:
-                response = _put_configuration(client, component_id, config_id, payload, branch_id)
+                response = put_configuration_only(
+                    client, component_id, config_id, payload, branch_id, PROMOTE_REMAP_DESCRIPTION
+                )
             except KeboolaApiError as exc:
                 errors.append(_link_error(component_id, config_id, exc))
                 continue
@@ -591,19 +594,6 @@ def recover_pending(
         _settle(manifest, remap, component_id, config_id, branch_id, content, warnings)
 
 
-def _put_configuration(
-    client: Any, component_id: str, config_id: str, configuration: dict[str, Any], branch_id: Any
-) -> Any:
-    """PUT only ``configuration``: name, description and enabled state stay as they are."""
-    return client.update_config(
-        component_id=component_id,
-        config_id=config_id,
-        configuration=configuration,
-        change_description="Remap promoted config IDs via kbagent sync push",
-        branch_id=branch_id,
-    )
-
-
 def _rebind_on_target(
     client: Any,
     manifest: Manifest,
@@ -628,7 +618,9 @@ def _rebind_on_target(
     rewritten = remap.apply(component_id, configuration, target=True)
     if rewritten == configuration:
         return configuration
-    response = _put_configuration(client, component_id, config_id, rewritten, branch_id)
+    response = put_configuration_only(
+        client, component_id, config_id, rewritten, branch_id, PROMOTE_REMAP_DESCRIPTION
+    )
     entry = find_branch_entry(manifest, component_id, config_id, branch_id)
     before = config_hash(api_config_to_local(component_id, remote, config_id))
     if not keep_baseline and entry is not None and entry.metadata.get("pull_config_hash") == before:

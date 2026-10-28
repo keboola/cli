@@ -38,7 +38,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from ..constants import CONFIG_FILENAME
+from ..constants import CONFIG_FILENAME, CONFIG_HASH_VERSION, CONFIG_HASH_VERSION_KEY
 from ..sync.code_extraction import DESCRIPTION_FILENAME, owned_companions, render_code_files
 
 if TYPE_CHECKING:
@@ -47,13 +47,32 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 COMPANION_VERSION_KEY = "pull_extra_hashes_version"
-COMPANION_VERSION = 1
 
 # The filenames every kbagent before the companion registry hashed when found
 # on disk: a legacy map is a complete snapshot of these, and of nothing else.
 LEGACY_COMPANIONS: frozenset[str] = frozenset(
     {DESCRIPTION_FILENAME, "transform.sql", "transform.py", "code.py", "pyproject.toml"}
 )
+
+# What each version of the marker certifies, FROZEN: version 1 covers exactly
+# the five legacy names. An older kbagent that rewrites the map keeps the
+# marker it found, and it scanned those five names only -- so a companion
+# filename the registry gains later must come with a NEW version (and its own
+# frozen set here). Otherwise a retained ``1`` would certify absence of a
+# file the old writer never looked for.
+COMPANION_VERSION = 1
+COMPANION_COVERAGE: dict[int, frozenset[str]] = {1: LEGACY_COMPANIONS}
+
+# Config metadata: obsolete companions a pull kept because it could not prove
+# them unchanged (unknown baseline, or edited while pull ran). While such a
+# file exists the config diffs as a conflict, never as an edit to push: the
+# remote cleared that value (R4). Cleared once the file is gone or a pull
+# reconciles it (``--theirs``).
+COMPANION_CONFLICT_KEY = "companion_conflict"
+
+# ``code`` of the companion entries in a command's ``warnings[]``.
+UNOWNED_COMPANION_CODE = "UNOWNED_COMPANION"
+COMPANION_KEPT_CODE = "COMPANION_KEPT"
 
 
 @dataclass(frozen=True)
@@ -77,11 +96,11 @@ def companion_baseline(component_id: str, metadata: dict[str, Any]) -> Companion
     """Read the companion baseline of one manifest entry (versioned or legacy)."""
     owned = frozenset(owned_companions(component_id))
     recorded = metadata.get("pull_extra_hashes")
-    if metadata.get(COMPANION_VERSION_KEY) == COMPANION_VERSION:
-        coverage = owned
-    else:
-        # A legacy snapshot never speaks for a companion type it did not scan.
-        coverage = owned & LEGACY_COMPANIONS
+    # A snapshot never speaks for a companion type its writer did not scan:
+    # a legacy map for the five legacy names, a versioned one for its frozen set.
+    coverage = owned & COMPANION_COVERAGE.get(
+        metadata.get(COMPANION_VERSION_KEY) or 0, LEGACY_COMPANIONS
+    )
     known = bool(metadata.get("pull_hash")) and isinstance(recorded, dict)
     hashes = {
         str(name): str(value)
@@ -101,9 +120,19 @@ def current_companions(service: SyncService, config_dir: Path, component_id: str
 
 
 def record_companions(metadata: dict[str, Any], hashes: dict[str, str]) -> None:
-    """Stamp a complete companion snapshot (present files; the rest known absent)."""
+    """Stamp a complete companion snapshot (present files; the rest known absent).
+
+    Also ends a kept-companion conflict: the snapshot is now what is on disk.
+    """
     metadata["pull_extra_hashes"] = dict(hashes)
     metadata[COMPANION_VERSION_KEY] = COMPANION_VERSION
+    metadata.pop(COMPANION_CONFLICT_KEY, None)
+
+
+def companion_conflict(config_dir: Path, metadata: dict[str, Any]) -> bool:
+    """True while a companion a pull kept as obsolete is still on disk (R4)."""
+    kept = metadata.get(COMPANION_CONFLICT_KEY)
+    return isinstance(kept, list) and any((config_dir / str(name)).is_file() for name in kept)
 
 
 def _changed_companions(
@@ -291,16 +320,55 @@ def write_pulled_config(
     )
 
 
+def preserved_baseline(old_metadata: dict[str, Any]) -> dict[str, Any]:
+    """The baseline a pull records for a config it skipped as locally modified.
+
+    The old one, verbatim -- ``pull_hash``, ``pull_config_hash``, the companion
+    snapshot, the version markers and a kept-companion conflict: advancing any
+    of them would turn a real conflict into an ordinary-looking local edit
+    (issue #792 B). The preserved hash was not produced by the current
+    producer, so its version marker is carried, never stamped (issue #686).
+    """
+    keys = (
+        "pull_hash",
+        "pull_config_hash",
+        "pull_extra_hashes",
+        COMPANION_VERSION_KEY,
+        COMPANION_CONFLICT_KEY,
+        CONFIG_HASH_VERSION_KEY,
+    )
+    return {key: old_metadata[key] for key in keys if key in old_metadata}
+
+
+def pulled_baseline(file_hash: str, cfg_hash: str, pulled: PulledConfig) -> dict[str, Any]:
+    """The baseline a pull records for a config it wrote (or found in sync).
+
+    Freshly computed with the current producer, so the shape version is
+    stamped (issue #686). A companion pull had to keep makes it a conflict
+    until the file is gone (R4).
+    """
+    metadata: dict[str, Any] = {
+        "pull_hash": file_hash,
+        "pull_config_hash": cfg_hash,
+        CONFIG_HASH_VERSION_KEY: CONFIG_HASH_VERSION,
+    }
+    record_companions(metadata, pulled.extra_hashes)
+    if pulled.kept:
+        metadata[COMPANION_CONFLICT_KEY] = list(pulled.kept)
+    return metadata
+
+
 def kept_companion_warning(component_id: str, rel_path: str, name: str) -> dict[str, str]:
-    """Pull ``warnings[]`` entry for an obsolete companion pull did not delete."""
+    """``companion_warnings`` entry for an obsolete companion pull did not delete."""
     message = (
         f"{rel_path}/{name}: the remote no longer has this value, but pull could not prove "
-        f"the file unchanged since the last sync, so it kept it. `kbagent sync diff` lists the "
-        f"config as modified; delete the file to accept the remote, or push to send it back."
+        f"the file unchanged since the last sync, so it kept it. Until the file is gone, "
+        f"`kbagent sync diff` lists the config as a conflict and push leaves it alone: delete "
+        f"the file to accept the remote, or run `kbagent sync pull --theirs`."
     )
     logger.warning("%s", message)
     return {
-        "change_type": "companion_kept",
+        "code": COMPANION_KEPT_CODE,
         "component_id": component_id,
         "path": f"{rel_path}/{name}",
         "message": message,
@@ -315,7 +383,7 @@ def kept_companion_warning(component_id: str, rel_path: str, name: str) -> dict[
 def unowned_companion_warnings(
     config_dir: Path, component_id: str, rel_path: str
 ) -> list[dict[str, str]]:
-    """Diff ``warnings[]`` for a companion filename this component does not use.
+    """Diff ``companion_warnings`` for a companion filename this component does not use.
 
     A ``code.py`` beside an extractor, or a ``transform.py`` renamed to
     ``code.py``, is ignored by push: merge dispatches by component, so the
@@ -324,7 +392,7 @@ def unowned_companion_warnings(
     owned = set(owned_companions(component_id))
     return [
         {
-            "change_type": "unowned_companion",
+            "code": UNOWNED_COMPANION_CODE,
             "component_id": component_id,
             "path": f"{rel_path}/{name}",
             "message": (

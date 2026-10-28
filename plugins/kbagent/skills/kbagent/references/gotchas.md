@@ -92,8 +92,9 @@ These lists keep `error`, because their entries are not failed items with an err
   the last sync: an edited file keeps the config `skipped` (its old baseline too, so
   `sync diff` shows the conflict), and a file pull cannot judge (a config created by a push
   that stopped half-way, an adopted directory) or one edited while pull runs is kept, with
-  a `companion_kept` entry in `warnings[]` and the config listed as `modified` by diff.
-  `sync pull --theirs` removes it.
+  a `COMPANION_KEPT` entry in `warnings[]`. While that file exists, `sync diff` lists the
+  config as a `conflict` and `sync push` never sends it: delete the file to accept the
+  remote's cleared value, or run `sync pull --theirs`.
 - **A new companion file is a local change.** Creating `_description.md` for a config
   pulled with an empty description (or any companion file that was not there at pull
   time) now shows as `modified` and `sync push` sends it. Deleting one shows as
@@ -104,14 +105,15 @@ These lists keep `error`, because their entries are not failed items with an err
   plus `transform.sql` (SQL transformations), `transform.py` + `pyproject.toml` (Python
   transformations), `code.py` + `pyproject.toml` (custom Python apps). Any other of those
   file names in a config folder (a `code.py` beside an extractor, `transform.py` renamed
-  to `code.py`) is never pushed, compared or deleted; `sync diff` lists it in `warnings[]`
-  (`unowned_companion`).
-- **Empty versus deleted:** an empty `_description.md` or `code.py` sends an empty value;
-  a deleted one sends the value inline in `_config.yml`, or none. A `pyproject.toml` with
-  no dependencies, or a deleted one, sends the inline `packages` (pull writes
-  `packages: []` there when the list is empty), or none. A companion file always wins over
-  the same value inline. After a push that cleared the description, `_config.yml` has the
-  `description: ''` line a fresh pull writes.
+  to `code.py`) is never pushed, compared or deleted; `sync diff` and `sync push` (also
+  with nothing to push, and `--dry-run`) report it as an `UNOWNED_COMPANION` entry in the
+  top-level `warnings[]` (`--json`) or a warning line on stderr.
+- **Empty versus deleted:** a companion file always wins over the same value inline, so an
+  empty `_description.md`, `code.py`, `transform.sql` or `transform.py` sends an empty
+  value, and a `pyproject.toml` with no dependencies sends an empty package list. A deleted
+  one sends the value inline in `_config.yml` (pull writes `description: ''` and
+  `packages: []` there when they are empty), or none. After a push that cleared the
+  description, `_config.yml` has the `description: ''` line a fresh pull writes.
 - **`_config.yml` deleted while an edited `transform.sql` (or another companion) is kept**
   is a local change: `sync pull` no longer re-creates the folder over it (reported
   `skipped`). Delete the whole folder, or use `--theirs`, to take the remote.
@@ -124,19 +126,25 @@ These lists keep `error`, because their entries are not failed items with an err
   `added` with `parent_path` (the folder) and an empty `parent_config_id`. When the config
   create fails, its rows fail with `PARENT_CONFIG_NOT_TRACKED`; when a row create fails or
   the push stops half-way, the next push creates only what is missing -- also when a row
-  file carries a row id copied from another config. A create whose response was lost (the
+  file carries a row id copied from another config. A row push creates now carries its
+  `_keboola.row_id` in its file, as a pull writes it (not on `--branch` from `main/`), so a
+  later `sync pull` finds it by id instead of writing a second copy. A create whose response was lost (the
   server created it, kbagent never saw the id) can still be created twice; check the
   remote before re-running after a network failure.
 - **Rows under a folder adopted by its config id** (no manifest entry, the file carries an
   existing config id) are compared by row id. A row that differs from the remote, or a
   remote row with no file, is a `conflict` -- never an update or a delete, because nothing
-  records which side changed it. A new row (no row id) under such a config is created
+  records which side changed it. A row file carrying an id the remote no longer has is
+  `remote_deleted`: push never creates it again. A new row (no row id) under such a config is created
   when the config itself equals the remote; otherwise run `sync pull` first. Pushing the
   adopted config registers its rows, so a later push never creates them a second time.
 - **A flow, orchestration or schedule created in the same push as a row it selects**
   (typical for `sync clone`) keeps `link_pending` in the manifest while that row is
   missing, and the push that creates the row also sets `configRowIds` -- no edit needed.
-  The same applies after a push that stopped before the links were set.
+  The same applies after a push that stopped before the links were set. That later push
+  reads the config from the remote and rewrites only its references (a change made in the
+  UI since survives); `sync diff` then shows the rewrite as a remote change unless the local
+  file was in sync, in which case the file is updated too.
 
 ## `sync push --branch <dev>` from `main/` no longer changes what production sees
 
