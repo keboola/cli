@@ -423,7 +423,7 @@ def test_m9_move_into_another_component_directory_is_a_move(orders: Tree) -> Non
 
 def test_m10_promoted_config_and_its_source_keep_their_ids(orders: Tree) -> None:
     first = orders.push(branch=DEV)
-    assert first["created"] == 1
+    assert first["created"] == 3  # the config and its two rows
     (dev_id,) = remote_ids(orders.api, DEV)
     orders.api.log.clear()
     old = orders.dir_of("500")
