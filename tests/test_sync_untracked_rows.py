@@ -1092,11 +1092,8 @@ def test_containment_is_judged_by_the_filesystem_not_the_spelling(
     outer = Path("/tree/main/extractor/keboola.ex-http/a")
     assert _sync_stale.contains(outer, Path("/tree/main/Extractor/keboola.ex-http/a/child"))
     assert not _sync_stale.contains(outer, Path("/tree/main/extractor/keboola.ex-http/ab"))
-    reason = _sync_stale._kept_whole_reason(
-        outer,
-        {"Extractor/keboola.ex-http/a/child": Path("/tree/main/Extractor/keboola.ex-http/a/child")},
-    )
-    assert reason is not None and "Extractor/keboola.ex-http/a/child" in reason
+    assert _sync_stale.holds(outer, Path("/tree/main/Extractor/keboola.ex-http/a/child"))
+    assert not _sync_stale.holds(outer, Path("/tree/main/extractor/keboola.ex-http/ab"))
 
 
 def _case_insensitive(path: Path) -> bool:
@@ -1165,3 +1162,70 @@ def test_a_kept_nested_config_that_is_a_symlink_is_never_unlinked(tmp_path: Path
     assert child.is_symlink()
     assert "tk900z" in (target / "_config.yml").read_text()
     assert (_dir(sim, HTTP_DIR) / "_config.yml").exists()
+
+
+# ---------------------------------------------------------------------------
+# Round 12: two-pass sweep; no ownership decided through links
+# ---------------------------------------------------------------------------
+
+
+def test_a_config_reached_through_an_alias_link_keeps_its_real_parent(tmp_path: Path) -> None:
+    """Round 12 P1 (Astra): B's manifest path is ``alias -> <A>/child``, B edited."""
+    sim = _world(tmp_path)
+    child = _dir(sim, f"{HTTP_DIR}/child")
+    shutil.move(str(_dir(sim, HTTP_2_DIR)), str(child))
+    alias = _dir(sim, "extractor/keboola.ex-http/alias")
+    _symlink_or_skip(alias, child)
+    manifest = load_manifest(sim.root)
+    for entry in manifest.configurations:
+        if entry.id == "1003":
+            entry.path = "extractor/keboola.ex-http/alias"
+    save_manifest(sim.root, manifest)
+    _edit_b(child)
+    del sim.api.remote[PROD][HTTP_1]
+    del sim.api.remote[PROD][HTTP_2]
+
+    result = _pull(sim)
+
+    assert "tk900z" in (child / "_config.yml").read_text()
+    assert (_dir(sim, HTTP_DIR) / "_config.yml").exists()
+    kept = {d["path"] for d in result["details"] if d.get("action") == "skipped"}
+    assert HTTP_DIR in kept
+
+
+def test_a_symlinked_nested_config_first_in_the_manifest_survives_theirs(tmp_path: Path) -> None:
+    """Round 12 P2 (Astra): B (a link under A) listed before A, ``pull --theirs``."""
+    sim = _world(tmp_path)
+    child = _nest_config_b_in_a(sim)
+    target = tmp_path / "b-elsewhere"
+    shutil.move(str(child), str(target))
+    _symlink_or_skip(child, target)
+    manifest = load_manifest(sim.root)
+    manifest.configurations.sort(key=lambda c: c.id != "1003")  # B before A
+    save_manifest(sim.root, manifest)
+
+    result = _pull(sim, theirs=True)
+
+    assert child.is_symlink() and (target / "_config.yml").exists()
+    assert (_dir(sim, HTTP_DIR) / "_config.yml").exists()
+    skipped = {d["path"] for d in result["details"] if d.get("action") == "skipped"}
+    assert {HTTP_DIR, f"{HTTP_DIR}/child"} <= skipped
+    ids = {c.id for c in load_manifest(sim.root).configurations}
+    assert {"1000", "1003"} <= ids  # the manifest matches what stays on disk
+
+
+def test_any_symlink_inside_a_clean_stale_config_keeps_it(tmp_path: Path) -> None:
+    """Round 12: kbagent does not decide ownership through links."""
+    sim = _world(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "keep.txt").write_text("mine", encoding="utf-8")
+    _symlink_or_skip(_rows_of_1000(sim) / "link", outside)
+    del sim.api.remote[PROD][HTTP_1]
+
+    result = _pull(sim)
+
+    assert (_dir(sim, HTTP_DIR) / "_config.yml").exists()
+    assert (outside / "keep.txt").read_text() == "mine"
+    [kept] = [d for d in result["details"] if d.get("path") == HTTP_DIR]
+    assert kept["action"] == "skipped"

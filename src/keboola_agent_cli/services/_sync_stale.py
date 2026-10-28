@@ -27,7 +27,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -113,15 +113,16 @@ def _rows_locally_modified(
     - the one dir carrying it is that row, moved, judged by its baseline (an
       unknown base counts as edited).
     """
-    if config_dir.is_symlink():
-        return True  # never traversed, never deleted through (round 11)
+    tree = scan_owned_tree(config_dir, other_configs)
+    if tree.is_link or tree.symlinks:
+        return True  # never traversed or decided through a link (rounds 11, 12)
     by_path = {row.path: row for row in entry.rows}
     by_id = {row.id: row for row in entry.rows}
     for row in entry.rows:
         if _row_edited(service, config_dir / row.path / CONFIG_FILENAME, row.metadata):
             return True
     carriers: dict[str, list[Path]] = {}
-    for row_file in _row_files(config_dir, other_configs):
+    for row_file in tree.row_files:
         if row_file.parent.relative_to(config_dir).as_posix() in by_path:
             continue  # a tracked row at its own path: checked above
         data = service._read_config_file(row_file.parent)
@@ -139,20 +140,47 @@ def _rows_locally_modified(
     return False
 
 
-def _row_files(config_dir: Path, other_configs: frozenset[Path]) -> list[Path]:
-    """Every ``_config.yml`` below *config_dir* but its own, not entering another config's dir.
+@dataclass(frozen=True)
+class OwnedTree:
+    """What one config dir holds of its own (round 12) -- the one helper both the
+    "locally modified" classification and the sweep's delete decision read.
 
-    ``Path.walk`` does not follow symbolic links: a symlinked dir is never
-    entered (round 11). Another config's dir is recognised by the filesystem
-    (:func:`same_dir`), never by spelling: on a case-insensitive filesystem
-    ``Extractor/x`` IS ``extractor/x``.
+    Attributes:
+        is_link: The config dir itself is a symbolic link.
+        row_files: Every ``_config.yml`` below it but its own.
+        symlinks: Every symbolic link below it (files and dirs alike).
     """
-    found: list[Path] = []
+
+    is_link: bool
+    row_files: list[Path] = field(default_factory=list)
+    symlinks: list[Path] = field(default_factory=list)
+
+
+def scan_owned_tree(config_dir: Path, other_configs: frozenset[Path]) -> OwnedTree:
+    """Walk *config_dir* without entering another config's dir or following any link.
+
+    ``Path.walk`` does not follow symbolic links (a symlinked dir is listed,
+    never entered); every link found is recorded -- kbagent does not decide
+    ownership through links. Another config's dir is recognised by the
+    filesystem (:func:`same_dir`), never by spelling: on a case-insensitive
+    filesystem ``Extractor/x`` IS ``extractor/x``. A symlinked config dir is
+    not walked at all.
+    """
+    if config_dir.is_symlink():
+        return OwnedTree(is_link=True)
+    tree = OwnedTree(is_link=False)
+    if not config_dir.is_dir():
+        return tree
     for root, dirs, files in config_dir.walk():
-        dirs[:] = sorted(d for d in dirs if not any(same_dir(root / d, o) for o in other_configs))
+        tree.symlinks.extend(root / name for name in [*dirs, *files] if (root / name).is_symlink())
+        dirs[:] = sorted(
+            d
+            for d in dirs
+            if not (root / d).is_symlink() and not any(same_dir(root / d, o) for o in other_configs)
+        )
         if root != config_dir and CONFIG_FILENAME in files:
-            found.append(root / CONFIG_FILENAME)
-    return found
+            tree.row_files.append(root / CONFIG_FILENAME)
+    return tree
 
 
 def same_dir(a: Path, b: Path) -> bool:
@@ -172,6 +200,23 @@ def contains(outer: Path, inner: Path) -> bool:
     inside it).
     """
     return any(same_dir(parent, outer) for parent in inner.parents)
+
+
+def holds(outer: Path, inner: Path) -> bool:
+    """True iff the dir *inner* is inside *outer* by its path OR by its real location (round 12).
+
+    By path: an ancestor of *inner* is *outer* (:func:`contains`). By real
+    location: *inner* resolved through every link lies inside *outer*
+    resolved -- a config reached as ``alias -> parent/child`` is inside
+    ``parent``.
+    """
+    if contains(outer, inner):
+        return True
+    real_inner = Path(os.path.realpath(inner))
+    real_outer = Path(os.path.realpath(outer))
+    return real_inner != real_outer and any(
+        same_dir(parent, real_outer) for parent in real_inner.parents
+    )
 
 
 def _row_edited(
@@ -253,21 +298,59 @@ def _remove_dir(orphan_dir: Path, branch_dir: Path) -> None:
         parent = parent.parent
 
 
-def _kept_whole_reason(config_dir: Path, staying: dict[str, Path]) -> str | None:
-    """Why a stale config dir is kept as it is (round 11), or ``None`` when it may go.
+SYMLINK_ROOT_REASON = "the config directory is a symbolic link; kbagent does not delete through it"
+SYMLINK_INSIDE_REASON = (
+    "it contains a symbolic link; kbagent does not decide ownership through links"
+)
 
-    A symlinked config dir is never deleted through. A dir holding a config
-    that stays is never deleted with it.
+
+def _keep_reasons(
+    stale: list[StaleEntry], branch_dir: Path, live_paths: set[str], *, theirs: bool
+) -> dict[int, str]:
+    """Pass 1 of the sweep: why each stale entry is kept, by index (round 12).
+
+    Decided for ALL entries before anything is deleted, so the outcome never
+    depends on manifest order. Kept: a symlinked config dir, one with a link
+    anywhere inside it, and an edited one (unless ``--theirs``) -- then, to a
+    fixed point, every config dir that holds a config that stays (written by
+    this pull or kept here), by path or by real location (:func:`holds`).
     """
-    if config_dir.is_symlink():
-        return "the config directory is a symbolic link; kbagent does not delete through it"
-    for path, nested in sorted(staying.items()):
-        if contains(config_dir, nested):
-            return (
-                f"it contains the config directory {path}, which stays; a later pull removes "
-                f"it once that config is gone"
+    others = frozenset(branch_dir / p for p in live_paths | {x.entry.path for x in stale} if p)
+    reasons: dict[int, str] = {}
+    for index, item in enumerate(stale):
+        if not item.entry.path:
+            continue
+        config_dir = branch_dir / item.entry.path
+        tree = scan_owned_tree(config_dir, others - {config_dir})
+        if tree.is_link:
+            reasons[index] = SYMLINK_ROOT_REASON
+        elif tree.symlinks:
+            reasons[index] = SYMLINK_INSIDE_REASON
+        elif item.locally_modified and not theirs:
+            reasons[index] = item.keep_reason
+    changed = True
+    while changed:
+        changed = False
+        staying = {p for p in live_paths if p} | {stale[i].entry.path for i in reasons}
+        for index, item in enumerate(stale):
+            if index in reasons or not item.entry.path:
+                continue
+            config_dir = branch_dir / item.entry.path
+            holder = next(
+                (
+                    p
+                    for p in sorted(staying)
+                    if p != item.entry.path and holds(config_dir, branch_dir / p)
+                ),
+                None,
             )
-    return None
+            if holder is not None:
+                reasons[index] = (
+                    f"it contains the config directory {holder}, which stays; a later pull "
+                    f"removes it once that config is gone"
+                )
+                changed = True
+    return reasons
 
 
 def apply_stale_sweep(
@@ -279,60 +362,41 @@ def apply_stale_sweep(
     new_configurations: list[ManifestConfiguration],
     pull_details: list[dict[str, str]],
 ) -> None:
-    """Report stale entries and delete their directories, safely.
+    """Report stale entries and delete their directories, safely, in two passes (round 12).
 
-    A locally edited ``removed`` entry is preserved unless ``--theirs``: its
-    manifest entry is carried over unchanged (so the manifest still matches
-    disk) and it is reported as ``skipped``. ``--force`` never reaches that
-    branch -- the conflict guard has already aborted. A path an entry of this
-    pull owns (written or kept by the fetch loop) is never deleted.
+    Pass 1 (:func:`_keep_reasons`) decides every keep: an edited entry
+    (unless ``--theirs``), a symlinked config dir or one with a link inside,
+    and a dir that holds a config that stays. A kept entry's manifest entry is
+    carried over unchanged (the manifest still matches disk) and it is
+    reported ``skipped`` with its reason. Pass 2 deletes the rest.
+    ``--force`` never reaches an edited entry -- the conflict guard has
+    already aborted. A path an entry of this pull owns is never deleted.
     """
     live_paths = {c.path for c in new_configurations}
-    # Config dirs that stay (written by this pull, or kept as edited). A stale
-    # config whose dir holds one is kept whole and reported: nothing in doubt
-    # is ever deleted, and a later pull removes it once the nested one is gone.
-    staying = {
-        path: branch_dir / path
-        for path in live_paths | {s.entry.path for s in stale if s.locally_modified and not theirs}
-        if path
-    }
-    for s in stale:
-        config_dir = branch_dir / s.entry.path
-        reason = _kept_whole_reason(config_dir, staying) if s.entry.path else None
-        if reason is not None:
-            new_configurations.append(s.entry)
+    reasons = _keep_reasons(stale, branch_dir, live_paths, theirs=theirs)
+    for index, item in enumerate(stale):
+        if index in reasons:
+            new_configurations.append(item.entry)
             pull_details.append(
                 {
                     "action": "skipped",
-                    "component_id": s.entry.component_id,
-                    "config_name": s.entry.path,
-                    "path": s.entry.path,
-                    "reason": reason,
-                }
-            )
-            continue
-        if s.locally_modified and not theirs:
-            new_configurations.append(s.entry)
-            pull_details.append(
-                {
-                    "action": "skipped",
-                    "component_id": s.entry.component_id,
-                    "config_name": s.entry.path,
-                    "path": s.entry.path,
-                    "reason": s.keep_reason,
+                    "component_id": item.entry.component_id,
+                    "config_name": item.entry.path,
+                    "path": item.entry.path,
+                    "reason": reasons[index],
                 }
             )
             continue
         pull_details.append(
             {
-                "action": s.action,
-                "component_id": s.entry.component_id,
+                "action": item.action,
+                "component_id": item.entry.component_id,
                 "config_name": "",
-                "path": s.entry.path,
+                "path": item.entry.path,
             }
         )
-        if not dry_run and s.entry.path and s.entry.path not in live_paths:
-            _remove_dir(branch_dir / s.entry.path, branch_dir)
+        if not dry_run and item.entry.path and item.entry.path not in live_paths:
+            _remove_dir(branch_dir / item.entry.path, branch_dir)
 
 
 def sweep_stale_rows(

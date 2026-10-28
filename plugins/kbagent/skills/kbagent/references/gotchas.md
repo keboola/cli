@@ -166,9 +166,13 @@ These lists keep `error`, because their entries are not failed items with an err
   row stands for (a new row), or several folders carrying one row's id. Another config's
   folder nested inside it is that config's, not this one's work: it is judged (and kept or
   removed) on its own. An outer config holding a nested one that stays is kept whole and
-  reported `skipped`; a later pull removes it once the nested config is gone. A config
-  folder that is a symbolic link is never traversed or deleted through -- it is reported
-  instead. Containment is judged by the filesystem, so it holds on case-insensitive ones. A new row (no row id) under such a config is created
+  reported `skipped`; a later pull removes it once the nested config is gone -- also when
+  the nested config is reached through a link (`alias -> parent/child`). A config folder
+  that is a symbolic link, or that contains one anywhere, is never traversed or deleted
+  -- it is reported `skipped` instead, also under `--theirs`: kbagent does not decide what
+  a folder owns through links. Containment is judged by the filesystem, so it holds on
+  case-insensitive ones. What is kept is decided for every config before anything is
+  deleted, so the manifest order never changes the outcome. A new row (no row id) under such a config is created
   when the config itself equals the remote; otherwise run `sync pull` first. Pushing the
   adopted config registers its rows, so a later push never creates them a second time.
 - **A flow, orchestration or schedule created in the same push as a row it selects**
