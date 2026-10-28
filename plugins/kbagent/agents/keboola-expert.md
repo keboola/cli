@@ -323,7 +323,9 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   `is_disabled: true` in `_config.yml` = config disabled (absent = enabled); a
   `never_fetched` warning on diff/push = run `sync pull` first; a non-zero
   `summary.orphaned` (0.89.0+, #649) = the manifest is targeted at another
-  branch's tree -- `sync pull` to re-target, never push. Since 0.96.1 (#792)
+  branch's tree -- `sync pull` to re-target, never push; check each
+  `orphaned[].reason` first: `promoted_from_this_tree` (vNEXT) is a harmless
+  promote record, no pull needed. Since 0.96.1 (#792)
   `sync push` deletes only with `--force` (else `skipped_deletions`), and a
   `- REMOTE DELETED` diff line = deleted on the remote, push never re-creates
   it: `sync pull`, or `config restore` to keep it. 0.99.0+: a `CONFLICT` on a
@@ -393,8 +395,8 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   shows `Git: {}`): 0.99.0+ `deploy` backfills `parameters.dataApp.git`; pass
   `--git-branch` with the branch the code is on (an app with runs refuses
   without it). Older: merge the block by hand, redeploy. data-app-workflow.md.
-- **`data-app password` keeps the password out of the chat (0.96.1+)**: no
-  output without `--reveal`; the user presses `c` in their own terminal, or you
+- **`data-app password` keeps the password out of the chat (0.96.1+)**: status
+  and app links print, the password only with `--reveal`; the user presses `c` in their own terminal, or you
   run `--copy`. Project token only. Below 0.96.1 it PRINTS the password and
   needs a Manage token: do not run it there; send the user to the Keboola UI.
   Non-password apps (oidc, public) fail `VALIDATION_ERROR`. `create --wait` /
