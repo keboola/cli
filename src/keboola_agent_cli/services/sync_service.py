@@ -1427,7 +1427,8 @@ class SyncService(BaseService):
                 {
                     "component_id": untracked["component_id"],
                     "parent_config_id": untracked["parent_config_id"],
-                    "row_id": "",
+                    "row_id": "",  # target diff identity: not on the target yet
+                    "source_row_id": untracked["source_row_id"],  # risk 71
                     "row_name": untracked["row_name"],
                     "path": untracked["path"],
                     "data": untracked["data"],
@@ -1784,6 +1785,7 @@ class SyncService(BaseService):
                 change_type = change["change_type"]
                 component_id = change["component_id"]
                 config_id = change["config_id"]
+                source_row_id = change.get("source_row_id") or config_id  # risk 71
                 config_path_str = change.get("path", "")
                 parent_config_id = change.get("parent_config_id", "")
                 # Remap the diff-time parent placeholder to the ULID assigned in
@@ -1803,6 +1805,7 @@ class SyncService(BaseService):
                         component_id=component_id,
                         parent_config_id=effective_parent_id,
                         row_id=config_id,
+                        source_row_id=source_row_id,
                         row_path_str=config_path_str,
                         project_root=project_root,
                         manifest=manifest,
@@ -1816,8 +1819,10 @@ class SyncService(BaseService):
                     if change_type == "added":
                         created += 1
                         if new_row_id:
-                            if config_id:
-                                created_row_id_map[(effective_parent_id, config_id)] = new_row_id
+                            if source_row_id:
+                                created_row_id_map[(effective_parent_id, source_row_id)] = (
+                                    new_row_id
+                                )
                             created_rows_by_parent.setdefault(effective_parent_id, []).append(
                                 new_row_id
                             )

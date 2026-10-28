@@ -368,6 +368,7 @@ def push_row_change(
     known_secrets: SecretCache | None = None,
     checkpoint: Callable[[str], None] | None = None,
     remap: PromoteRemap | None = None,
+    source_row_id: str = "",
 ) -> str | None:
     """Dispatch a single row-level change (added/modified/deleted) to the API.
 
@@ -451,7 +452,7 @@ def push_row_change(
             allow_plaintext_fallback=allow_plaintext_fallback,
             warnings=warnings,
             known_secrets=known_secrets,
-            source_row_id=row_id if remap is not None else "",
+            source_row_id=(source_row_id or row_id) if remap is not None else "",
             checkpoint=checkpoint,
             remap=remap,
         )

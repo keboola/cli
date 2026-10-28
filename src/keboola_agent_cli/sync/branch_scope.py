@@ -650,7 +650,8 @@ def find_untracked_rows(
 
     Each entry contains ``component_id``, ``parent_config_id``, ``row_name``
     (from the loaded YAML), ``path`` (relative to the parent config dir, e.g.
-    ``rows/new-row``), and ``data`` (the loaded dict).
+    ``rows/new-row``), ``data`` (the loaded dict) and ``source_row_id`` (the
+    row's id in the source config a promote entry shadows, else ``""``).
 
     ``entries`` walks exactly these parents, all read from ``only_branch_path``:
     ``diff`` passes its scoped ``in_tree`` entries, so on the promote path the
@@ -671,6 +672,7 @@ def find_untracked_rows(
         if not rows_dir.is_dir():
             continue
         tracked_row_paths = {row.path for row in cfg.rows}
+        source_rows = _source_row_ids(manifest, cfg)
         for row_subdir in rows_dir.iterdir():
             if not row_subdir.is_dir():
                 continue
@@ -689,6 +691,29 @@ def find_untracked_rows(
                     "row_name": local_data.get("name", ""),
                     "path": row_rel_path,
                     "data": local_data,
+                    "source_row_id": source_rows.get(row_rel_path, ""),
                 }
             )
     return added
+
+
+def _source_row_ids(manifest: Manifest, cfg: ManifestConfiguration) -> dict[str, str]:
+    """Row path -> row id in the source-tree config a promote entry shadows.
+
+    A row added to that source config after the promote is untracked under the
+    target entry but tracked, with its source id, under the source entry. The
+    source id is kept apart from the target diff identity (risk 71): it is
+    what the row map and ``promoted_from_id`` record once the row is created.
+    """
+    promoted = promoted_from(cfg)
+    if promoted is None or not promoted.config_id:
+        return {}
+    for source in manifest.configurations:
+        if (
+            source is not cfg
+            and source.component_id == cfg.component_id
+            and source.id == promoted.config_id
+            and branch_tree_path(manifest, source.branch_id) == promoted.tree
+        ):
+            return {row.path: row.id for row in source.rows}
+    return {}

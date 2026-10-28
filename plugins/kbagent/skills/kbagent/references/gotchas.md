@@ -131,7 +131,10 @@ These lists keep `error`, because their entries are not failed items with an err
   production `sync pull`, which used to delete its folder. Pull keeps the folder and keeps
   the dev-branch record, and moves the record with the folder when production renames
   the config, so the next promote updates that dev config instead of creating another
-  one. Its new rows are pushed by the second promote push, like on production. An edit to
+  one. Its new rows are pushed by the second promote push, like on production. A row
+  added on production to a config already promoted (and pulled into `main/`) is created
+  under the dev copy with its production row id recorded, so a flow or other reference
+  that selects it switches to the new dev row in the same push. An edit to
   it after the promote is `modified`, not `modified` plus `conflict`. Production
   `sync diff` lists the record under `orphaned` with reason `promoted_from_this_tree`
   (nothing to do).

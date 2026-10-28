@@ -2455,3 +2455,56 @@ def test_identity_unit_edited_to_an_unknown_row_keeps_the_config_pending(
     client.update_config.assert_not_called()
     assert _task_of(pending.remote) == ("P", ["99"])
     assert pending.flow.metadata["rebind_pending"] == [[http, "P"], [http, "P", "99"]]
+
+
+# ===========================================================================
+# Round 13 (risk 71): a row added after the promote keeps its source identity
+# ===========================================================================
+
+
+def test_row_added_to_a_promoted_config_is_mapped_when_a_flow_selects_it(
+    tmp_path: Path,
+) -> None:
+    v = VARIANTS["rows"]
+    w = World(tmp_path)
+    ext_id = w.api.seed(v)  # P, listed before the flow
+    w.api.types["keboola.flow"] = "other"
+    w.api.remote[PROD][("keboola.flow", "cfg-flow")] = {
+        "id": "cfg-flow",
+        "name": "Nightly",
+        "description": "",
+        "configuration": _flow_body(v.component_id, ext_id),
+        "rows": [],
+        "isDisabled": False,
+    }
+    w.init()
+    w.pull()
+    w.push(branch=DEV)  # 1. promote P -> D
+    dev_ext = _dev_id_of(w, v.component_id)
+
+    # 2. production gains row r2; pull production (main/ tracks it, the DEV entry does not)
+    r2 = w.api._create_row(
+        v.component_id, ext_id, name="Row 3", configuration={"parameters": {"table": "t3"}}
+    )["id"]
+    w.pull()
+
+    # 3. the source flow now selects P / [r2]
+    flow_file = w.config_dir("cfg-flow") / CONFIG_FILE
+    data = _yaml(flow_file.parent)
+    data["_configuration_extra"]["tasks"][0]["task"]["configRowIds"] = [r2]
+    flow_file.write_text(dump_config_yaml(data), encoding="utf-8", newline="")
+
+    # 4. push to DEV: r2 is created under D as d2, and the task follows it
+    w.push(branch=DEV)
+    (d2,) = [
+        row["id"]
+        for row in w.api.get(DEV, v.component_id, dev_ext)["rows"]
+        if row["name"] == "Row 3"
+    ]
+    task = _dev_flow(w)["configuration"]["tasks"][0]["task"]
+    assert (task["configId"], task["configRowIds"]) == (dev_ext, [d2])
+    manifest = load_manifest(w.root)
+    (dev_entry,) = [c for c in manifest.configurations if c.id == dev_ext and c.branch_id == DEV]
+    (row_entry,) = [r for r in dev_entry.rows if r.id == d2]
+    assert row_entry.metadata["promoted_from_id"] == r2  # recorded on create
+    assert not any(c.metadata.get("rebind_pending") for c in manifest.configurations)
