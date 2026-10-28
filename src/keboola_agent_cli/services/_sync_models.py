@@ -137,6 +137,10 @@ class TargetCache:
 
     reads: dict[tuple[str, str], TargetRead] = field(default_factory=dict)
     reported: set[tuple[str, str]] = field(default_factory=set)
+    # ``(component_id, placeholder)`` this push planned for a new dir and did
+    # not create (its create failed): known not to exist YET, so a link to it
+    # stays pending until a later push creates it.
+    uncreated_claims: set[tuple[str, str]] = field(default_factory=set)
 
 
 @dataclass

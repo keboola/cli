@@ -127,6 +127,7 @@ def resolve_transformation_links(
         planned_claims=ledger.claimed_ids(VARIABLES_COMPONENT_ID),
     )
     result.warnings.extend(ledger.row_warnings)
+    result.targets.uncreated_claims = ledger.uncreated_claims()
     if source_dir is None:  # promote path: its creates are remapped in memory (D24)
         return result
     failed = {
@@ -151,6 +152,7 @@ def resolve_transformation_links(
         created_id_map=created_id_map,
         created_row_id_map=created_row_id_map,
         source_dir=source_dir,
+        uncreated_claims=result.targets.uncreated_claims,
     )
     configs = [CreatedConfig(e.component_id, e.id, source_dir / e.path) for e in pending]
     # Recovery starts from the REMOTE (#929 D32): its links are what is

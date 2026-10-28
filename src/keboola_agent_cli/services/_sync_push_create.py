@@ -148,6 +148,14 @@ class CreateLedger:
     # Placeholder-claim warnings of new rows (their creates have no hook).
     row_warnings: list[dict[str, Any]] = field(default_factory=list)
 
+    def uncreated_claims(self) -> set[tuple[str, str]]:
+        """``(component_id, placeholder)`` planned for a new dir this push did not create."""
+        return {
+            (component_id, placeholder)
+            for (component_id, path), placeholder in self.placeholders.items()
+            if (component_id, path) not in self.created_by_path
+        }
+
     def claimed_ids(self, component_id: str) -> set[str]:
         """Every placeholder this push planned for a new *component_id* dir, mapped or not."""
         mapped = {p for (comp, _), p in self.placeholders.items() if comp == component_id}

@@ -1875,3 +1875,87 @@ def test_two_new_rows_with_one_placeholder_map_neither(tmp_path: Path) -> None:
     new_vars = _remote_named(w, "New vars")
     (entry,) = [c for c in load_manifest(w.root).configurations if c.id == new_vars["id"]]
     assert all("created_from_id" not in (r.metadata or {}) for r in entry.rows)
+
+
+# ---------------------------------------------------------------------------
+# Astra on fb5fea19: failed creates keep their claims
+# ---------------------------------------------------------------------------
+
+
+def _entry_of(w: DiffWorld, name: str) -> dict[str, Any]:
+    config_id = _remote_named(w, name)["id"]
+    (entry,) = [c for c in load_manifest(w.root).configurations if c.id == config_id]
+    return entry.metadata
+
+
+def test_a_link_to_a_failed_untracked_create_is_finished_by_the_next_push(tmp_path: Path) -> None:
+    """Astra P1: A ("a-ref") fails, B and T are created -- T stays pending, then links to A."""
+    w = DiffWorld(tmp_path)
+    _seed_variables(w, "existing-prod-vars", ["Default"])
+    sql_id = w.api.seed(VARIANTS["sql"], name="Template")
+    w.init()
+    w.pull()
+    _new_config_from(w, "existing-prod-vars", "A vars", "a-ref", ["a-row"])
+    _new_config_from(w, "existing-prod-vars", "B vars", "b-ref", ["b-row"])
+    _new_transformation(w, sql_id, {"variables_id": "a-ref", "variables_values_id": "a-row"})
+    _fail_once(w, "_create", "A vars", KeboolaApiError("refused", 500, ErrorCode.API_ERROR))
+
+    w.svc.push(alias="prod", project_root=w.root)
+
+    assert _remote_named(w, "New step")["configuration"]["variables_id"] == "a-ref"
+    assert _entry_of(w, "New step").get("link_pending") is True
+
+    w.push()
+
+    a_vars = _remote_named(w, "A vars")
+    configuration = _remote_named(w, "New step")["configuration"]
+    assert configuration["variables_id"] == a_vars["id"]
+    assert configuration["variables_values_id"] == a_vars["rows"][0]["id"]
+    assert "link_pending" not in _entry_of(w, "New step")
+
+
+def test_an_explicit_values_row_whose_create_failed_is_never_redirected(tmp_path: Path) -> None:
+    """Astra P1: T selects "prod-ref"; that row fails, "test-ref" is created -- no redirect."""
+    w = DiffWorld(tmp_path)
+    _seed_variables(w, "existing-prod-vars", ["Prod", "Test"])
+    sql_id = w.api.seed(VARIANTS["sql"], name="Template")
+    w.init()
+    w.pull()
+    _new_config_from(w, "existing-prod-vars", "New vars", "new-vars-ref", ["prod-ref", "test-ref"])
+    _new_transformation(
+        w, sql_id, {"variables_id": "new-vars-ref", "variables_values_id": "prod-ref"}
+    )
+    _fail_once(w, "_create_row", "Prod", KeboolaApiError("refused", 500, ErrorCode.API_ERROR))
+
+    w.svc.push(alias="prod", project_root=w.root)
+
+    assert _remote_named(w, "New step")["configuration"]["variables_values_id"] == "prod-ref"
+    assert _entry_of(w, "New step").get("link_pending") is True
+
+    w.push()
+
+    new_vars = _remote_named(w, "New vars")
+    configuration = _remote_named(w, "New step")["configuration"]
+    assert configuration["variables_id"] == new_vars["id"]
+    assert configuration["variables_values_id"] == _by_name(new_vars, "Prod")
+
+
+def test_an_ambiguous_values_row_is_never_redirected_when_one_create_fails(
+    tmp_path: Path,
+) -> None:
+    """Astra P1: two rows carry "dup-row", one fails -- the other is no fallback target."""
+    w = DiffWorld(tmp_path)
+    _seed_variables(w, "existing-prod-vars", ["Row one", "Row two"])
+    sql_id = w.api.seed(VARIANTS["sql"], name="Template")
+    w.init()
+    w.pull()
+    _new_config_from(w, "existing-prod-vars", "New vars", "new-vars-ref", ["dup-row", "dup-row"])
+    _new_transformation(
+        w, sql_id, {"variables_id": "new-vars-ref", "variables_values_id": "dup-row"}
+    )
+    _fail_once(w, "_create_row", "Row one", KeboolaApiError("refused", 500, ErrorCode.API_ERROR))
+
+    w.svc.push(alias="prod", project_root=w.root)
+
+    assert _remote_named(w, "New step")["configuration"]["variables_values_id"] == "dup-row"
+    assert _entry_of(w, "New step").get("link_pending") is True

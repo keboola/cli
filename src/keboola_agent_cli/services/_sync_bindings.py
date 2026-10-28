@@ -216,6 +216,7 @@ def _bind_variables(
             created_row_id_map=created_row_id_map,
             created_rows_by_parent=created_rows_by_parent,
             errors=result.errors,
+            parent_by_fallback=(VARIABLES_COMPONENT_ID, vars_placeholder) not in created_id_map,
         )
         # A missing-but-required values row already recorded an error.
         if vals_placeholder and row_ulid is None:
@@ -338,17 +339,42 @@ def _resolve_variables_row(
     created_row_id_map: dict[tuple[str, str], str],
     created_rows_by_parent: dict[str, list[str]],
     errors: list[dict[str, str]],
+    parent_by_fallback: bool = True,
 ) -> str | None:
     """Resolve a transformation's ``variables_values_id`` placeholder.
 
     Returns the row ULID, or ``None`` when no values row was created (the link
     is then left unset) or the choice is ambiguous (an error is appended only
     when ``vals_placeholder`` was actually requested).
+
+    The single-sibling fallback serves a link that names no row (empty
+    ``variables_values_id``), or one under a parent that was itself the
+    fallback (its row id names a config nobody claims, so no row either).
+    An explicit row id under a parent matched exactly -- ``prod-ref`` whose
+    create failed, or one two new rows carry -- is never re-pointed to a
+    sibling (Astra): it stays, with an error, and the transformation stays
+    pending until that row's own placeholder resolves.
     """
     if vals_placeholder:
         mapped = created_row_id_map.get((parent_ulid, vals_placeholder))
         if mapped is not None:
             return mapped
+        if not parent_by_fallback:
+            errors.append(
+                {
+                    "change_type": "variable_link",
+                    "error_code": ErrorCode.VARIABLE_LINK_UNRESOLVED,
+                    "component_id": created.component_id,
+                    "config_id": created.config_id,
+                    "message": (
+                        f"variables_values_id {vals_placeholder!r} names no row created "
+                        f"under variables config {parent_ulid} (its create failed, or "
+                        "several rows carry it). The link is left as it is; the push "
+                        "that creates that row sets it."
+                    ),
+                }
+            )
+            return None
     siblings = created_rows_by_parent.get(parent_ulid, [])
     if len(siblings) == 1:
         row_ulid = siblings[0]
@@ -823,6 +849,7 @@ def resolve_run_target_bindings(
         created_row_id_map=created_row_id_map,
         source_dir=source_dir,
         planned_rows=planned_rows,
+        uncreated_claims=targets.uncreated_claims if targets is not None else None,
     )
     seen = {(c.component_id, c.config_id) for c in created_configs}
     recovering = [

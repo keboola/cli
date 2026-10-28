@@ -96,9 +96,15 @@ def build_link_maps(
     created_row_id_map: dict[tuple[str, str], str],
     source_dir: Path | None,
     planned_rows: set[tuple[str, str]] | None = None,
+    uncreated_claims: set[tuple[str, str]] | None = None,
 ) -> LinkMaps:
-    """The maps one Phase-D pass resolves references with."""
-    maps = LinkMaps(planned_rows=set(planned_rows or ()))
+    """The maps one Phase-C/D pass resolves references with.
+
+    *uncreated_claims* are the placeholders this push planned for new
+    untracked dirs whose create failed: no manifest entry names them, so
+    without them a link to one looked external and was settled (Astra).
+    """
+    maps = LinkMaps(planned_rows=set(planned_rows or ()), uncreated=set(uncreated_claims or ()))
     for entry in target_entries(manifest, branch_id):
         source = str(entry.metadata.get(CREATED_FROM_KEY) or "")
         if source:
