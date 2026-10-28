@@ -159,8 +159,13 @@ The dev branch's record of each promoted `main/` folder is its own (since vNEXT)
 the production record is never changed by a `--branch` push, so production
 `sync diff` keeps showing an edit you only promoted as a local `modified` change,
 and a production `sync pull` neither overwrites it nor deletes a promoted folder.
-A production config created on the dev branch keeps the production id in
-`main/_config.yml`; the dev-branch record maps the folder to the dev id.
+A promote push never writes a dev id into `main/`: a production config keeps its
+production id, a config authored there keeps none (a plain `sync push` later
+creates it in production), and the dev-branch record (`promoted_from` in the
+manifest) maps the folder to the dev id. A production rename moves that record
+with the folder; deleting the folder is a local delete for the dev branch
+(`--force` deletes the dev config). Flows and transformations promoted together
+with the configs they run point at the dev ids on the dev branch.
 
 ## Switching back to production after a `--branch` pull (since v0.89.0)
 

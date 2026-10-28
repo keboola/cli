@@ -58,6 +58,7 @@ ConfigReader = Callable[[Path], "dict[str, Any] | None"]
 # ``orphaned[].reason`` values (stable, part of the --json contract).
 REASON_OTHER_BRANCH = "tracked_on_other_branch"
 REASON_STALE_TREE = "stale_branch_tree"
+REASON_PROMOTED = "promoted_from_this_tree"
 
 # ``classify_untracked`` verdicts.
 VERDICT_CREATE = "create"
@@ -93,15 +94,65 @@ def branch_tree_path(manifest: Manifest, branch_id: int | None) -> str:
     return manifest.branches[0].path if manifest.branches else _DEFAULT_TREE_FALLBACK
 
 
-def same_branch(manifest: Manifest, a: int | None, b: int | None) -> bool:
-    """True iff branch ids *a* and *b* name the same branch (tree).
+def is_production(manifest: Manifest, branch_id: int | None) -> bool:
+    """True iff *branch_id* spells production: ``None``, ``0`` or the default branch id.
 
-    The one comparison every manifest write site uses to decide whether an
-    entry belongs to the branch it writes to: production is spelled ``None``,
-    ``0`` or the default branch's numeric id, and a raw ``==`` would call those
-    three different branches.
+    The default branch is ``manifest.branches[0]`` (``sync init`` registers it
+    first). Any other id is a dev branch, registered or not.
     """
-    return branch_tree_path(manifest, a) == branch_tree_path(manifest, b)
+    if not branch_id:
+        return True
+    return bool(manifest.branches) and branch_id == manifest.branches[0].id
+
+
+def same_branch(manifest: Manifest, a: int | None, b: int | None) -> bool:
+    """True iff branch ids *a* and *b* name the same branch.
+
+    The one comparison every manifest site uses to decide whether an entry
+    belongs to the branch it reads or writes: production is spelled ``None``,
+    ``0`` or the default branch's numeric id, and a raw ``==`` would call those
+    three different branches. Two dev-branch ids are the same branch only when
+    they are equal. It deliberately does not compare tree paths:
+    :func:`branch_tree_path` maps an id that is not registered in the manifest
+    to the default tree, and two different unregistered ids (or one and
+    production) would then compare equal -- a dev write matched the production
+    entry.
+    """
+    a_prod, b_prod = is_production(manifest, a), is_production(manifest, b)
+    if a_prod or b_prod:
+        return a_prod and b_prod
+    return a == b
+
+
+# Metadata key of a target-branch entry recorded by a promote push
+# (``sync push --branch <dev>`` reading ``main/``): which tree the files live in
+# and which source-tree config the entry stands for (issue #792 D).
+PROMOTED_FROM_KEY = "promoted_from"
+
+
+@dataclass(frozen=True)
+class PromotedFrom:
+    """Where a promote entry's files live: a source tree and a config there.
+
+    ``config_id`` is the source-tree config the entry shadows, or ``""`` for a
+    config authored in the source tree and never created on its branch (then
+    the entry's ``path`` alone names the directory).
+    """
+
+    tree: str
+    config_id: str
+
+    def as_metadata(self) -> dict[str, str]:
+        """The manifest metadata value recording this association."""
+        return {"tree": self.tree, "config_id": self.config_id}
+
+
+def promoted_from(cfg: ManifestConfiguration) -> PromotedFrom | None:
+    """The promote association an entry records, or ``None``."""
+    raw = cfg.metadata.get(PROMOTED_FROM_KEY)
+    if not isinstance(raw, dict) or not raw.get("tree"):
+        return None
+    return PromotedFrom(tree=str(raw["tree"]), config_id=str(raw.get("config_id") or ""))
 
 
 def find_branch_entry(
@@ -220,7 +271,7 @@ def scope_manifest(
             from EVERY partition -- see below.
         target_branch_id: Branch the API writes go to. Selects
             ``on_target``, and on the promote path (the target's own tree is
-            not *source_branch_path*) :func:`_promoted_paths`.
+            not *source_branch_path*) :func:`_promote_scope`.
 
     Returns:
         A :class:`TreeScope`.
@@ -230,8 +281,7 @@ def scope_manifest(
     orphaned: list[dict[str, Any]] = []
     claims: dict[str, list[Claim]] = {}
     on_target: list[ManifestConfiguration] = []
-    target_tree = branch_tree_path(manifest, target_branch_id)
-    promoted = _promoted_paths(manifest, project_root, source_branch_path, target_branch_id)
+    promote = _promote_scope(manifest, project_root, source_branch_path, target_branch_id)
 
     for cfg in manifest.configurations:
         # Ignored-component guard (issue #689). The remote side of the diff
@@ -273,21 +323,28 @@ def scope_manifest(
         # the target, and it shadows the source tree's own (production) entry
         # for the same dir. Without this the production entry kept diffing as
         # ``added`` against the target and every promote push created another
-        # copy of the same config.
-        promote_key = (cfg.component_id, cfg.path)
-        if promote_key in promoted:
-            if cfg.branch_id == target_branch_id:
-                in_tree.append(cfg)
-                if cfg.metadata.get("pull_hash"):
-                    on_target.append(cfg)
+        # copy of the same config. A promote entry whose directory is gone
+        # stays in the tree: its config is a local delete (D13b).
+        if promote.owns(manifest, cfg, target_branch_id):
+            in_tree.append(cfg)
+            if cfg.metadata.get("pull_hash"):
+                on_target.append(cfg)
+            continue
+        if promote.shadows(cfg, tree_path, source_branch_path):
             continue
 
         if tree_path == source_branch_path:
             in_tree.append(cfg)
-            if tree_path == target_tree and cfg.metadata.get("pull_hash"):
+            if same_branch(manifest, cfg.branch_id, target_branch_id) and cfg.metadata.get(
+                "pull_hash"
+            ):
                 on_target.append(cfg)
             continue
 
+        association = promoted_from(cfg)
+        if association is not None and association.tree == source_branch_path:
+            orphaned.append(_promoted_record(cfg, tree_path=tree_path))
+            continue
         orphaned.append(
             _other_branch_record(cfg, tree_path=tree_path, exists_on_target=key in remote_keys)
         )
@@ -301,31 +358,93 @@ def scope_manifest(
     )
 
 
-def _promoted_paths(
+@dataclass(frozen=True)
+class _PromoteScope:
+    """The promote entries of one diff and the source entries they shadow.
+
+    Empty unless the target branch has no tree of its own, so the source tree
+    (``main/``) is promoted to it (KFR-07). A promote entry maps one source dir
+    to one config on the target (one local dir -> at most one remote config per
+    branch), so the next diff/push compares that dir against it rather than
+    against the production entry.
+    """
+
+    entry_keys: frozenset[tuple[str, str]]
+    source_ids: frozenset[tuple[str, str]]
+    source_paths: frozenset[tuple[str, str]]
+
+    def owns(
+        self, manifest: Manifest, cfg: ManifestConfiguration, target_branch_id: int | None
+    ) -> bool:
+        """True iff *cfg* is a promote entry of the target branch."""
+        return (cfg.component_id, cfg.id) in self.entry_keys and same_branch(
+            manifest, cfg.branch_id, target_branch_id
+        )
+
+    def shadows(self, cfg: ManifestConfiguration, tree_path: str, source_tree: str) -> bool:
+        """True iff *cfg* is a source-tree entry a promote entry stands in for."""
+        return tree_path == source_tree and (
+            (cfg.component_id, cfg.id) in self.source_ids
+            or (cfg.component_id, cfg.path) in self.source_paths
+        )
+
+
+def _promote_scope(
     manifest: Manifest,
     project_root: Path,
     source_branch_path: str,
     target_branch_id: int | None,
-) -> set[tuple[str, str]]:
-    """Return ``(component_id, path)`` of source-tree dirs already promoted.
+) -> _PromoteScope:
+    """Collect the promote entries of the target branch (issue #792 D, D13).
 
-    Only non-empty on the KFR-07 promote path: the push target branch has no
-    materialized tree of its own, so ``main/`` is the source. A promote push
-    CREATEs each config the target lacks and records the new id under the
-    target branch with the SAME relative path -- files stay in ``main/``. Such
-    an entry maps one source dir to one config on the target, so the next
-    diff/push must compare that dir against it rather than against the
-    production entry (one local dir -> at most one remote config per branch).
+    An entry is a promote entry when it records a :class:`PromotedFrom` naming
+    the source tree: the association is explicit, so it survives a rename of
+    the source dir (pull moves the entry with it) and the deletion of the
+    source dir (the entry then diffs as a local delete). An entry written
+    before the association was recorded counts when its path exists in the
+    source tree, as before.
     """
-    if target_branch_id is None:
-        return set()
+    empty = _PromoteScope(frozenset(), frozenset(), frozenset())
+    if is_production(manifest, target_branch_id):
+        return empty
     if branch_tree_path(manifest, target_branch_id) == source_branch_path:
-        return set()
+        return empty
+    entry_keys: set[tuple[str, str]] = set()
+    source_ids: set[tuple[str, str]] = set()
+    source_paths: set[tuple[str, str]] = set()
+    for cfg in manifest.configurations:
+        if not same_branch(manifest, cfg.branch_id, target_branch_id):
+            continue
+        association = promoted_from(cfg)
+        if association is None:
+            if not (project_root / source_branch_path / cfg.path / CONFIG_FILENAME).exists():
+                continue
+            source_paths.add((cfg.component_id, cfg.path))
+        elif association.tree != source_branch_path:
+            continue
+        elif association.config_id:
+            source_ids.add((cfg.component_id, association.config_id))
+        else:
+            source_paths.add((cfg.component_id, cfg.path))
+        entry_keys.add((cfg.component_id, cfg.id))
+    return _PromoteScope(frozenset(entry_keys), frozenset(source_ids), frozenset(source_paths))
+
+
+def _promoted_record(cfg: ManifestConfiguration, *, tree_path: str) -> dict[str, Any]:
+    """Report record for a promote entry of another branch, seen from its source tree."""
     return {
-        (cfg.component_id, cfg.path)
-        for cfg in manifest.configurations
-        if cfg.branch_id == target_branch_id
-        and (project_root / source_branch_path / cfg.path / CONFIG_FILENAME).exists()
+        "component_id": cfg.component_id,
+        "config_id": cfg.id,
+        "path": cfg.path,
+        "branch_id": cfg.branch_id,
+        "branch_path": tree_path,
+        "exists_on_target": False,
+        "reason": REASON_PROMOTED,
+        "hint": (
+            f"this directory was promoted to branch {cfg.branch_id} with 'sync push "
+            f"--branch {cfg.branch_id}'; that branch's record is not part of this diff "
+            f"-- nothing to do"
+        ),
     }
 
 

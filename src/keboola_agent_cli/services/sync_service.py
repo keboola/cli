@@ -60,7 +60,6 @@ from ..sync.git_utils import get_default_branch, is_git_repo
 from ..sync.manifest import (
     Manifest,
     ManifestBranch,
-    ManifestConfigRow,
     ManifestConfiguration,
     ManifestGitBranching,
     ManifestNaming,
@@ -68,7 +67,7 @@ from ..sync.manifest import (
     load_manifest,
     save_manifest,
 )
-from ..sync.naming import config_path, config_row_path
+from ..sync.naming import config_path
 from . import _sync_workspace as sql_workspaces
 from ._encryption import (
     encrypt_secrets_in_config,
@@ -108,18 +107,23 @@ from ._sync_data_app import (
     resolve_pull_type,
     type_needs_rewrite,
 )
-from ._sync_models import CreatedConfig, LocalConfigHashes
+from ._sync_models import LocalConfigHashes
 from ._sync_project_guard import adopt_existing_manifest, load_project_manifest
+from ._sync_pull_dirs import (
+    RowPullContext,
+    ambiguous_id_warnings,
+    finalize_kept_entries,
+    partition_pull_entries,
+    pull_config_rows,
+    scan_config_dirs,
+)
+from ._sync_push_create import CreateLedger, record_created_config
 from ._sync_push_ops import detect_name_drift, plan_push, push_create, push_row_change, push_update
 from ._sync_stale import (
     apply_stale_sweep,
     find_stale_entries,
-    partition_pull_entries,
     remote_deleted_conflicts,
     reserved_paths,
-    row_dirs_by_id,
-    sweep_stale_rows,
-    untracked_dirs_by_id,
 )
 from ._sync_storage import (
     fetch_jobs_per_config,
@@ -127,11 +131,7 @@ from ._sync_storage import (
     write_per_config_jobs,
     write_storage_metadata,
 )
-from ._sync_writeback import (
-    propagate_kbc_metadata,
-    stamp_created_config,
-    stamp_updated_config,
-)
+from ._sync_writeback import stamp_updated_config
 from .base import BaseService, ClientFactory, find_default_branch_id
 from .data_app_service import (
     DataScienceClientFactory,
@@ -571,9 +571,13 @@ class SyncService(BaseService):
         # copy and push created a duplicate). Other branches' entries are never
         # looked up, never swept as stale and never delete a file; the promote
         # entries among them (files in this tree, none in their own) are kept.
-        entries = partition_pull_entries(manifest, project_root, branch_dir_name)
+        entries = partition_pull_entries(manifest, project_root, branch_id, branch_dir_name)
         own_entries = entries.own
-        untracked_dirs = untracked_dirs_by_id(self, project_root, manifest, branch_dir_name)
+        untracked_dirs = scan_config_dirs(self, project_root, manifest, branch_dir_name)
+        pull_warnings: list[dict[str, Any]] = ambiguous_id_warnings(untracked_dirs)
+        # Paths owned on disk before this pull allocates any (D14): a new or
+        # renamed config never lands in one, whatever order the remote lists.
+        reserved = untracked_dirs.paths | {c.path for c in own_entries + entries.kept}
         existing_paths: dict[str, str] = {f"{c.component_id}/{c.id}": c.path for c in own_entries}
         existing_keys: set[str] = set(existing_paths.keys())
         # Full metadata per entry -- the shape-migration checks need the
@@ -655,6 +659,7 @@ class SyncService(BaseService):
                 # Reuse existing path if config is already tracked (stable paths)
                 lookup_key = f"{component_id}/{config_id}"
                 is_new = lookup_key not in existing_keys
+                generated = False
                 if lookup_key in existing_paths:
                     rel_path = existing_paths[lookup_key]
 
@@ -668,7 +673,7 @@ class SyncService(BaseService):
                     if rel_path != expected_path and not dry_run:
                         rename_target = expected_path
                         # Collision: if target already used, add suffix
-                        if rename_target in used_paths:
+                        if rename_target in used_paths or rename_target in reserved:
                             suffix = config_id[:8] if len(config_id) > 8 else config_id
                             rename_target = f"{rename_target}-{suffix}"
 
@@ -691,10 +696,10 @@ class SyncService(BaseService):
                                 rel_path,
                                 rename_target,
                             )
-                elif lookup_key in untracked_dirs:
+                elif lookup_key in untracked_dirs.by_id:
                     # The directory that already holds this config (its file
                     # carries the id), not a new one named after the config.
-                    rel_path = untracked_dirs[lookup_key]
+                    rel_path = untracked_dirs.by_id[lookup_key]
                 else:
                     # Generate new filesystem path with collision detection
                     rel_path = config_path(
@@ -703,7 +708,8 @@ class SyncService(BaseService):
                         component_id,
                         config_name,
                     )
-                if rel_path in used_paths:
+                    generated = True
+                if rel_path in used_paths or (generated and rel_path in reserved):
                     # Append short config ID suffix to resolve collision
                     suffix = config_id[:8] if len(config_id) > 8 else config_id
                     rel_path = f"{rel_path}-{suffix}"
@@ -864,112 +870,27 @@ class SyncService(BaseService):
                                 }
                             )
 
-                # Row-level pull: each row gets its own 3-way diff state
-                # (pull_hash, pull_config_hash) so ``sync push`` can detect
-                # per-row local modifications and push only changed rows.
-                row_manifests: list[ManifestConfigRow] = []
-                used_row_paths: set[str] = set()
-                adopted_rows = row_dirs_by_id(self, config_dir) if is_new else {}
-                for row in cfg.get("rows", []):
-                    row_id = str(row.get("id", ""))
-                    row_name = row.get("name", "untitled")
-
-                    # Reuse existing row path (stable) if already tracked.
-                    row_lookup_key = f"{component_id}/{config_id}/{row_id}"
-                    existing_row = existing_rows.get(row_lookup_key)
-                    if existing_row:
-                        row_rel_path = existing_row["path"]
-                    elif row_id in adopted_rows:
-                        row_rel_path = adopted_rows[row_id]
-                    else:
-                        row_rel_path = config_row_path(
-                            manifest.naming.config_row,
-                            row_name,
-                        )
-                        if row_rel_path in used_row_paths:
-                            suffix = row_id[:8] if len(row_id) > 8 else row_id
-                            row_rel_path = f"{row_rel_path}-{suffix}"
-                    used_row_paths.add(row_rel_path)
-                    row_dir = config_dir / row_rel_path
-
-                    row_local = api_row_to_local(row, component_id)
-                    row_api_cfg_hash = config_hash(row_local)
-
-                    row_file = row_dir / CONFIG_FILENAME
-                    old_row_file_hash = existing_row["pull_hash"] if existing_row else ""
-                    old_row_cfg_hash = existing_row["pull_config_hash"] if existing_row else ""
-                    # Runs even under ``--force``: a force-pull reaching a
-                    # modified row has passed the conflict guard (remote
-                    # unchanged), so preserve the row rather than re-stamp its
-                    # baseline from the edited file and strand the edits.
-                    # ``--theirs`` disables the preserve: remote wins.
-                    row_locally_modified = False
-                    if not theirs and existing_row and old_row_file_hash and row_file.exists():
-                        row_locally_modified = self._file_hash(row_file) != old_row_file_hash
-
-                    if row_locally_modified:
-                        # Preserve local edits; keep old hashes as the 3-way base.
-                        row_file_hash = old_row_file_hash
-                        row_pull_cfg_hash = old_row_cfg_hash
-                        pull_details.append(
-                            {
-                                "action": "skipped",
-                                "component_id": component_id,
-                                "config_name": f"{config_name}/{row_name}",
-                                "path": f"{rel_path}/{row_rel_path}",
-                                "reason": "row locally modified",
-                            }
-                        )
-                    elif (
-                        existing_row
-                        and old_row_cfg_hash
-                        and old_row_cfg_hash == row_api_cfg_hash
-                        and row_file.exists()
-                        and (not theirs or self._file_hash(row_file) == old_row_file_hash)
-                    ):
-                        # Idempotent: remote unchanged since last pull, file untouched.
-                        # Guard: row_file.exists() ensures we don't skip writing when
-                        # the directory is new (e.g. first pull of a dev branch that
-                        # clones main -- same hash but no file on disk yet).
-                        # Under ``--theirs`` an edited row file additionally falls
-                        # through to the write branch so remote wins.
-                        row_file_hash = (
-                            self._file_hash(row_file) if row_file.exists() else old_row_file_hash
-                        )
-                        row_pull_cfg_hash = row_api_cfg_hash
-                    else:
-                        # New or remote-changed row: write the file.
-                        if not dry_run:
-                            self._write_config_file(row_dir, row_local)
-                            row_file_hash = self._file_hash(row_file) if row_file.exists() else ""
-                        else:
-                            row_file_hash = ""
-                        row_pull_cfg_hash = row_api_cfg_hash
-                        files_written += 1
-                        rows_pulled += 1
-
-                    row_manifests.append(
-                        ManifestConfigRow(
-                            id=row_id,
-                            path=row_rel_path,
-                            metadata={
-                                "pull_hash": row_file_hash,
-                                "pull_config_hash": row_pull_cfg_hash,
-                            },
-                        )
-                    )
-                # A tracked row that is gone from the remote (issue #792 H).
-                row_manifests += sweep_stale_rows(
+                rows = pull_config_rows(
                     self,
-                    config_dir,
+                    RowPullContext(
+                        component_id=component_id,
+                        config_id=config_id,
+                        config_name=config_name,
+                        rel_path=rel_path,
+                        config_dir=config_dir,
+                        row_naming=manifest.naming.config_row,
+                        adopt=is_new,
+                        theirs=theirs,
+                        dry_run=dry_run,
+                    ),
+                    cfg.get("rows", []),
                     existing_rows,
-                    f"{component_id}/{config_id}/",
-                    {str(row.get("id", "")) for row in cfg.get("rows", [])},
-                    theirs=theirs,
-                    dry_run=dry_run,
-                    rel_path=rel_path,
-                    pull_details=pull_details,
+                    pull_details,
+                    pull_warnings,
                 )
+                files_written += rows.files_written
+                rows_pulled += rows.rows_pulled
+                row_manifests = rows.rows
 
                 # Record in manifest (store file hash for change detection).
                 # For skipped configs: keep existing pull_hash (file untouched)
@@ -1064,7 +985,9 @@ class SyncService(BaseService):
 
         if not dry_run:
             # Update manifest with pulled configurations
-            manifest.configurations = new_configurations + entries.kept
+            manifest.configurations = new_configurations + finalize_kept_entries(
+                entries.kept, new_configurations, branch_dir, ignored_components
+            )
             save_manifest(project_root, manifest)
 
         return {
@@ -1082,6 +1005,7 @@ class SyncService(BaseService):
             # predates it): folders were kept from the previous pull, not
             # refreshed. Lets a caller tell "no folders" from "unknown" (CLI-9).
             "folder_lookup_failed": folder_map is None,
+            **({"warnings": pull_warnings} if pull_warnings else {}),
         }
 
     # ------------------------------------------------------------------
@@ -1669,7 +1593,12 @@ class SyncService(BaseService):
             branch_path = self._resolve_source_branch_path(manifest, project_root, branch_id)
             # An encryption failure stops push before its first write (#792 F).
             known_secrets = plan.encrypt_secrets(
-                self, client, project_root / branch_path, manifest, allow_plaintext_fallback
+                self,
+                client,
+                project_root / branch_path,
+                manifest,
+                allow_plaintext_fallback,
+                branch_id=branch_id,
             )
 
             # Process configs before rows, and rebind variable links last.
@@ -1681,13 +1610,8 @@ class SyncService(BaseService):
             config_changes = [c for c in changes if not bool(c.get("is_row"))]
             row_changes = [c for c in changes if bool(c.get("is_row"))]
 
-            # (component_id, placeholder_id) -> API-assigned ULID, captured
-            # before the manifest writeback overwrites the placeholder in place.
-            created_id_map: dict[tuple[str, str], str] = {}
-            # (component_id, source-branch id) -> id created on the target, for
-            # the row parents only (the link backfill must not rewrite them).
-            promoted_id_map: dict[tuple[str, str], str] = {}
-            created_configs: list[CreatedConfig] = []
+            # The ids this push creates, for the rows and the link backfill.
+            ledger = CreateLedger()
 
             # ---- Phase A: config creates / updates / deletes -------------
             for change in config_changes:
@@ -1713,52 +1637,21 @@ class SyncService(BaseService):
                             known_secrets=known_secrets,
                         )
                         if result:
-                            new_id = str(result.get("id", ""))
-                            config_dir = project_root / branch_path / config_path_str
-                            writeback = stamp_created_config(
+                            record_created_config(
+                                self,
                                 client,
+                                ledger,
                                 manifest=manifest,
-                                component_id=component_id,
+                                project_root=project_root,
+                                branch_path=branch_path,
                                 branch_id=branch_id,
+                                component_id=component_id,
+                                source_config_id=config_id,
                                 config_path_str=config_path_str,
-                                new_id=new_id,
-                                hashes=self._compute_config_hashes(config_dir, component_id),
-                                response=result,
+                                result=result,
                                 warnings=warnings,
+                                errors=errors,
                             )
-                            # Record placeholder -> ULID so child rows and
-                            # transformation variable links can be remapped.
-                            if writeback.previous_id:
-                                created_id_map[(component_id, writeback.previous_id)] = new_id
-                            elif config_id:
-                                # A tracked config created on a branch that
-                                # lacks it (promote path): its rows still name
-                                # the source branch's id.
-                                promoted_id_map[(component_id, config_id)] = new_id
-                            created_configs.append(
-                                CreatedConfig(
-                                    component_id=component_id,
-                                    config_id=new_id,
-                                    config_dir=config_dir,
-                                )
-                            )
-                            metadata_error = propagate_kbc_metadata(
-                                client, writeback.entry, branch_id
-                            )
-                            if metadata_error is not None:
-                                # The config IS on the remote; only the
-                                # follow-up metadata POST failed. Accumulate
-                                # like any other per-change error so the rest
-                                # of the push continues, and surface the
-                                # original cause in the envelope.
-                                errors.append(
-                                    {
-                                        "change_type": "metadata_propagation",
-                                        "component_id": component_id,
-                                        "config_id": new_id,
-                                        "message": metadata_error,
-                                    }
-                                )
                             manifest_dirty = True
                             created += 1
                             pushed_details.append(change)
@@ -1799,6 +1692,7 @@ class SyncService(BaseService):
                                 hashes=self._compute_config_hashes(config_dir, component_id),
                                 response=response,
                                 warnings=warnings,
+                                source_tree=branch_path,
                             )
                             manifest_dirty = True
                         updated += 1
@@ -1851,10 +1745,7 @@ class SyncService(BaseService):
                 # Phase A so the manifest lookup and create_config_row both hit
                 # the real config (KFR-05). UPDATE/DELETE parents already carry
                 # a ULID and pass through unchanged.
-                parent_key = (component_id, parent_config_id)
-                effective_parent_id = created_id_map.get(
-                    parent_key, promoted_id_map.get(parent_key, parent_config_id)
-                )
+                effective_parent_id = ledger.parent_id(component_id, parent_config_id)
 
                 try:
                     new_row_id = push_row_change(
@@ -1874,6 +1765,7 @@ class SyncService(BaseService):
                     )
                     manifest_dirty = True
                     if change_type == "added":
+                        save_manifest(project_root, manifest)  # checkpoint (D17)
                         created += 1
                         if new_row_id:
                             if config_id:
@@ -1899,12 +1791,13 @@ class SyncService(BaseService):
             binding = resolve_transformation_bindings(
                 self,
                 client,
-                created_configs=created_configs,
-                created_id_map=created_id_map,
+                created_configs=ledger.created_configs,
+                created_id_map=ledger.created_id_map,
                 created_row_id_map=created_row_id_map,
                 created_rows_by_parent=created_rows_by_parent,
                 manifest=manifest,
                 branch_id=branch_id,
+                promoted_id_map=ledger.promoted_id_map,
             )
             errors.extend(binding.errors)
             warnings.extend(binding.warnings)
@@ -1918,11 +1811,12 @@ class SyncService(BaseService):
             flow_binding = resolve_run_target_bindings(
                 self,
                 client,
-                created_configs=created_configs,
-                created_id_map=created_id_map,
+                created_configs=ledger.created_configs,
+                created_id_map=ledger.created_id_map,
                 created_row_id_map=created_row_id_map,
                 manifest=manifest,
                 branch_id=branch_id,
+                promoted_id_map=ledger.promoted_id_map,
             )
             errors.extend(flow_binding.errors)
             warnings.extend(flow_binding.warnings)

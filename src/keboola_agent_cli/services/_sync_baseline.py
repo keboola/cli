@@ -36,6 +36,7 @@ from ..constants import (
     CONFIG_HASH_VERSION_KEY,
 )
 from ..errors import ErrorCode, KeboolaApiError
+from ..sync.branch_scope import find_branch_entry
 from ..sync.code_extraction import (
     is_sql_transformation_component,
     marker_less_roundtrip,
@@ -420,7 +421,9 @@ def raise_on_legacy_boundary(
     """
     if not is_sql_transformation_component(component_id):
         return
-    entry = next(
+    # The baseline being pushed over: the target branch's entry, else (promote
+    # path, first write) the source entry it is diffed against.
+    entry = find_branch_entry(manifest, component_id, config_id, branch_id) or next(
         (
             c
             for c in manifest.configurations

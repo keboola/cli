@@ -66,6 +66,10 @@ class CreatedConfig:
     component_id: str
     config_id: str
     config_dir: Path
+    # False on the promote path (``push --branch DEV`` reading ``main/``): the
+    # link backfill then rewrites only the remote DEV payload. The source
+    # files keep the source branch's ids (D16, D19).
+    write_local: bool = True
 
 
 @dataclass

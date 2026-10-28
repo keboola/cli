@@ -107,6 +107,7 @@ class PushPlan:
         source_dir: Path,
         manifest: Manifest,
         allow_plaintext_fallback: bool,
+        branch_id: int | None = None,
     ) -> SecretCache:
         """Encrypt every ``#`` secret push sends, before the first write.
 
@@ -123,7 +124,16 @@ class PushPlan:
         project_id = manifest.project.id if manifest.project else None
         if not project_id or allow_plaintext_fallback:
             return {}
+        # A row's parent dir: the push target's own entry wins over another
+        # branch's entry of the same id (a dev branch shares production ids).
         parent_paths = {(c.component_id, c.id): c.path for c in manifest.configurations}
+        parent_paths.update(
+            {
+                (c.component_id, c.id): c.path
+                for c in manifest.configurations
+                if same_branch(manifest, c.branch_id, branch_id)
+            }
+        )
         plaintexts: dict[str, set[str]] = {}
         for change in self.changes:
             if change["change_type"] not in ("added", "modified"):
@@ -371,7 +381,8 @@ def push_row_change(
     # tracked for production, and a row written to the dev branch must never
     # be recorded under the production entry (the next production pull then
     # deleted the new row's directory). The first such write records the
-    # dev-branch shadow of that entry.
+    # dev-branch shadow of that entry (promote path only, D20).
+    source_branch_path = service._resolve_source_branch_path(manifest, project_root, branch_id)
     parent = find_branch_entry(
         manifest, component_id, parent_config_id, branch_id
     ) or promote_shadow(
@@ -380,6 +391,7 @@ def push_row_change(
         component_id=component_id,
         config_id=parent_config_id,
         branch_id=branch_id,
+        source_tree=source_branch_path,
     )
     if parent is None and change_type != "deleted":
         raise KeboolaApiError(
@@ -406,7 +418,6 @@ def push_row_change(
 
     # added / modified both read a local row file and encrypt-then-push.
     assert parent is not None  # guarded above for non-deleted change_types
-    source_branch_path = service._resolve_source_branch_path(manifest, project_root, branch_id)
     row_dir = project_root / source_branch_path / parent.path / row_path_str
 
     if change_type == "added":
@@ -731,36 +742,17 @@ def push_create(
         )
 
     # Write back: update local file with config_id + encrypted secrets. Use
-    # pristine_data so blocks/code stay only in their code files. A directory
-    # another branch's entry owns keeps that branch's id: on the promote path
-    # it is a production config created on the dev branch, and writing the
-    # dev id into main/ made the next production pull rename the directory.
-    # The dev-branch entry maps the directory to the new id instead.
-    file_config_id = (
-        ""
-        if _owned_by_other_branch(manifest, component_id, config_path_str, branch_id, branch_path)
-        else new_config_id
-    )
+    # pristine_data so blocks/code stay only in their code files. On the
+    # promote path (no tree of the target's own) the source tree keeps its
+    # own ids (D19): writing the dev id into main/ made the next production
+    # pull rename a pulled config's directory, and an authored one could no
+    # longer be pushed to production. The dev-branch entry's
+    # ``promoted_from`` maps the directory to the new id instead.
+    promote = branch_path != branch_tree_path(manifest, branch_id)
+    file_config_id = "" if promote else new_config_id
     writeback_after_push(service, pristine_data, config_dir, file_config_id, configuration)
 
     return result
-
-
-def _owned_by_other_branch(
-    manifest: Manifest,
-    component_id: str,
-    config_path_str: str,
-    branch_id: int | None,
-    source_branch_path: str,
-) -> bool:
-    """True iff an entry of another branch tracks this source-tree directory."""
-    return any(
-        cfg.component_id == component_id
-        and cfg.path == config_path_str
-        and branch_tree_path(manifest, cfg.branch_id) == source_branch_path
-        and not same_branch(manifest, cfg.branch_id, branch_id)
-        for cfg in manifest.configurations
-    )
 
 
 def push_update(

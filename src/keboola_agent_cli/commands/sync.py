@@ -11,6 +11,7 @@ import typer
 
 from ..constants import SYNC_ORPHAN_PREVIEW_LIMIT
 from ..errors import ConfigError, ErrorCode, KeboolaApiError, SyncConflictError
+from ..sync.branch_scope import REASON_PROMOTED
 from ._all_projects import FANOUT_ONE_PROJECT_HELP
 from ._helpers import (
     BRANCH_ONE_PROJECT_MESSAGE,
@@ -286,6 +287,13 @@ def _format_orphaned(formatter: Any, orphaned: list[dict]) -> None:
     project-sized in the case that matters (issue #649) -- print a preview and
     collapse the tail into a count.
     """
+    promoted = [item for item in orphaned if item.get("reason") == REASON_PROMOTED]
+    if promoted:
+        formatter.console.print(
+            f"\n  [dim]{len(promoted)} config dir(s) of this tree are also tracked on the "
+            f"branch they were promoted to with 'sync push --branch'; nothing to do.[/dim]"
+        )
+    orphaned = [item for item in orphaned if item.get("reason") != REASON_PROMOTED]
     if not orphaned:
         return
     formatter.console.print(

@@ -480,6 +480,10 @@ class Sim:
         # and not yet pulled into that branch's tree
         self.remote_pending: dict[tuple[int, str, str, str], Any] = {}
         self.log: list[str] = []
+        # The walk's own record of what a promote push created (D18): main/
+        # keeps the source ids, so a dir's DEV id is known only from the push.
+        # (component, "id:<source id>" | "path:<dir>") -> DEV config id.
+        self.promoted: dict[tuple[str, str], str] = {}
 
     # -- helpers ---------------------------------------------------------
     def tok(self) -> str:
@@ -937,6 +941,8 @@ class Sim:
         )
         if result is None:
             return
+        if target == DEV and not self.tree(DEV).is_dir():
+            self.record_promoted(before)
         self.note(
             f"  {label} -> created={result.get('created')} updated={result.get('updated')} "
             f"deleted={result.get('deleted')} errors={len(result.get('errors') or [])} "
@@ -1039,15 +1045,15 @@ class Sim:
                 if isinstance(item, dict) and item.get("config_id"):
                     listed_ids.setdefault(str(item["config_id"]), set()).add(key)
         tree = self.tree(branch)
-        promoted: dict[str, str] = {}
-        if not tree.is_dir():  # push --branch DEV promotes main/
+        promote = branch == DEV and not tree.is_dir()
+        if promote:  # push --branch DEV promotes main/
             tree = self.tree(PROD)
-            promoted = self.promoted_ids(branch)
         remote = self.api.remote[branch]
+        local_ids: set[str] = set()
         for d in config_dirs(tree):
             rel = d.relative_to(tree).as_posix()
-            comp, cid = dir_identity(d)
-            cid = promoted.get(rel, cid)
+            comp, cid = self.dev_identity(d) if promote else dir_identity(d)
+            local_ids.add(cid)
             local = local_projection(d)
             if not cid:
                 if rel not in listed_paths:
@@ -1087,7 +1093,6 @@ class Sim:
                 )
         # A config that exists only on the remote (created in the UI, not
         # pulled yet) must show up in diff too, not only local directories.
-        local_ids = {dir_identity(d)[1] for d in config_dirs(tree)}
         for comp, cid in remote:
             if cid not in local_ids and cid not in listed_ids:
                 raise Violation(
@@ -1095,19 +1100,42 @@ class Sim:
                     f"{comp}/{cid} exists only on branch {branch} but diff is silent",
                 )
 
-    def promoted_ids(self, branch: int) -> dict[str, str]:
-        """``path -> config id`` of the *branch* entries a promote push recorded.
+    @staticmethod
+    def _source_key(d: Path, tree: Path) -> tuple[str, str]:
+        comp, cid = dir_identity(d)
+        return comp, f"id:{cid}" if cid else f"path:{d.relative_to(tree).as_posix()}"
 
-        A production config the promote created on the dev branch keeps the
-        production id in its main/ file (the production entry owns that file
-        too); the dev-branch entry at the same path is what names its dev id.
+    def record_promoted(self, before: dict[tuple[str, str], Any]) -> None:
+        """Map each config a promote push created on DEV to its main/ dir.
+
+        The dir is the one whose name the new config carries (every name in
+        the walk is unique). Independent of the manifest, so a wrong mapping
+        written there is caught by the consistency check.
         """
-        manifest = json.loads((self.root / ".keboola" / "manifest.json").read_text())
-        return {
-            c["path"]: str(c["id"])
-            for c in manifest.get("configurations", [])
-            if c.get("branchId") == branch
-        }
+        main = self.tree(PROD)
+        for comp, cid in set(self.api.remote[DEV]) - set(before):
+            name = self.api.remote[DEV][(comp, cid)].get("name")
+            dirs = [
+                d
+                for d in config_dirs(main)
+                if dir_identity(d)[0] == comp and read_yaml(d / "_config.yml").get("name") == name
+            ]
+            if len(dirs) == 1:
+                self.promoted[self._source_key(dirs[0], main)] = cid
+
+    def rekey_promoted(self) -> None:
+        """A promoted authored dir that got a production id is now known by it."""
+        main = self.tree(PROD)
+        for d in config_dirs(main):
+            comp, cid = dir_identity(d)
+            path_key = (comp, f"path:{d.relative_to(main).as_posix()}")
+            if cid and path_key in self.promoted:
+                self.promoted.setdefault((comp, f"id:{cid}"), self.promoted.pop(path_key))
+
+    def dev_identity(self, d: Path) -> tuple[str, str]:
+        """The DEV config a main/ dir stands for on the promote path."""
+        comp, cid = dir_identity(d)
+        return comp, self.promoted.get(self._source_key(d, self.tree(PROD)), cid)
 
     def step(self, step: Step) -> None:
         name, a, b, c = step
@@ -1116,6 +1144,7 @@ class Sim:
         getattr(self, name)(a, b, c)
         if self.skipped_step:
             return
+        self.rekey_promoted()
         self.deliver()
         self.check_no_lost_edit(name)
         if name in ("pull", "pull_force", "pull_theirs", "push", "push_force"):
@@ -1454,17 +1483,14 @@ def test_finding_rename_on_dev_does_not_duplicate_prod_config(tmp_path: Path) ->
     assert set(sim.api.remote[PROD]) == before, "push created a duplicate config"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "FINDING untracked-row-overwrite: rows have no #792 E adopt guard. "
-        "A row deleted on production is dropped from the SHARED manifest by "
-        "a plain `sync pull`; the dev/ copy of that row file, edited locally, "
-        "is now untracked and the next `pull --branch DEV` overwrites it "
-        "without a conflict or skip (sync_service.py:931 write branch)."
-    ),
-)
 def test_finding_untracked_row_edit_survives_dev_pull(tmp_path: Path) -> None:
+    """Was FINDING untracked-row-overwrite: rows have no #792 E adopt guard. A row
+    deleted on production is dropped from the SHARED manifest by a plain `sync pull`;
+    the dev/ copy of that row file, edited locally, is now untracked and the next `pull
+    --branch DEV` overwrites it without a conflict or skip (sync_service.py:931 write
+    branch). Fixed by D15: a row pull rediscovers by its row id and has no baseline for
+    keeps a local file that differs from the remote (skipped); only --theirs overwrites
+    it. The walk keeps its mask until a seed sweep without it is green."""
     sim = _world(tmp_path)
     rows = sim.api.remote[PROD][HTTP_2]["rows"]
     sim.api.remote[PROD][HTTP_2]["rows"] = [r for r in rows if r["name"] != "Row tk11z"]

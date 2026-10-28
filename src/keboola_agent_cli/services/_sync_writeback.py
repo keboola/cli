@@ -15,7 +15,14 @@ from typing import TYPE_CHECKING, Any
 
 from ..constants import FOLDER_METADATA_KEY
 from ..errors import KeboolaApiError
-from ..sync.branch_scope import find_branch_entry, same_branch
+from ..sync.branch_scope import (
+    PROMOTED_FROM_KEY,
+    PromotedFrom,
+    branch_tree_path,
+    find_branch_entry,
+    promoted_from,
+    same_branch,
+)
 from ..sync.config_format import BASE_CONFIG_HASH_KEY
 from ..sync.manifest import ManifestConfigRow, ManifestConfiguration
 from ._encryption import apply_encrypted_to_local
@@ -40,12 +47,15 @@ def stamp_created_config(
     hashes: LocalConfigHashes,
     response: Any,
     warnings: list[dict[str, str]],
+    promoted: PromotedFrom | None = None,
 ) -> WritebackResult:
     """Record a created config with an API-derived ``pull_config_hash`` (#686).
 
     ``pull_hash`` describes the local file and stays disk-derived; the config
     hash is the API's own view of what was just written, so the next
-    ``sync diff`` compares like with like.
+    ``sync diff`` compares like with like. *promoted* is set on the promote
+    path (D13): the new entry then records which source-tree directory and
+    config it stands for, since its files are not in its own tree.
     """
     stamp = config_baseline(
         client,
@@ -67,7 +77,31 @@ def stamp_created_config(
         extra_hashes=hashes.extra_hashes,
     )
     apply_stamp(writeback.entry.metadata, stamp)
+    if promoted is not None:
+        writeback.entry.metadata[PROMOTED_FROM_KEY] = promoted.as_metadata()
     return writeback
+
+
+def link_promote_entries(
+    manifest: Manifest, *, tree: str, component_id: str, path: str, config_id: str
+) -> None:
+    """Point promote entries of an authored *path* at the config just created for it.
+
+    A config authored in the source tree and promoted before it existed there
+    records ``config_id=""`` (D19). Once a push creates it on the source
+    tree's own branch, its association names that config, so a later rename
+    of the directory by a pull moves the promote entry with it (D13a).
+    """
+    for cfg in manifest.configurations:
+        association = promoted_from(cfg)
+        if (
+            association is not None
+            and association.tree == tree
+            and not association.config_id
+            and cfg.component_id == component_id
+            and cfg.path == path
+        ):
+            cfg.metadata[PROMOTED_FROM_KEY] = PromotedFrom(tree, config_id).as_metadata()
 
 
 def stamp_updated_config(
@@ -81,6 +115,7 @@ def stamp_updated_config(
     hashes: LocalConfigHashes,
     response: Any,
     warnings: list[dict[str, str]],
+    source_tree: str,
 ) -> None:
     """Refresh a pushed config's manifest bookkeeping from the API state (#686).
 
@@ -93,10 +128,12 @@ def stamp_updated_config(
     production holds the same config ids, so ``push --branch DEV`` from
     ``main/`` updates a config the manifest tracks for PRODUCTION; that entry
     is left alone (production still lacks the edit) and a dev-branch shadow is
-    recorded instead (:func:`promote_shadow`). An update that finds no
-    manifest entry at all is an adopted-by-id config (issue #497) -- an
-    untracked local file whose ``_keboola.config_id`` resolved on the branch.
-    It is registered here so later diffs read a stable entry.
+    recorded instead (:func:`promote_shadow`; only on the promote path, D20).
+    Any other update that finds no entry of *branch_id* is an adopted-by-id
+    config (issue #497) -- an untracked local file whose
+    ``_keboola.config_id`` resolved on the branch. It is registered at
+    *config_path_str*, the directory just pushed, never at another branch's
+    path or with another branch's rows.
     """
     stamp = config_baseline(
         client,
@@ -113,6 +150,8 @@ def stamp_updated_config(
         component_id=component_id,
         config_id=config_id,
         branch_id=branch_id,
+        source_tree=source_tree,
+        path=config_path_str,
         response=response,
     )
     if target is not None:
@@ -140,16 +179,22 @@ def promote_shadow(
     component_id: str,
     config_id: str,
     branch_id: int | None,
+    source_tree: str,
+    path: str | None = None,
     response: Any = None,
 ) -> ManifestConfiguration | None:
-    """Record the *branch_id* entry for a config the manifest tracks on another branch.
+    """Record the *branch_id* entry for a source-tree config written to it.
 
-    The promote path (``push --branch DEV`` with no ``dev/`` tree) reads
-    ``main/``, whose entries belong to production. A dev branch created from
-    production holds the same config ids, so the first write to DEV for such a
-    directory needs an entry of its own: a *shadow* at the same path, so
-    ``scope_manifest`` diffs that directory against it from then on, and the
-    production entry keeps describing production.
+    Only on the promote path (D20): *branch_id* has no tree of its own, so
+    ``push --branch DEV`` reads *source_tree* (``main/``), whose entries belong
+    to production. A dev branch created from production holds the same config
+    ids, so the first write to DEV for such a directory needs an entry of its
+    own: a *shadow* at the same path, recording which source config it stands
+    for (``promoted_from``, D13), so ``scope_manifest`` diffs that directory
+    against it from then on and the production entry keeps describing
+    production. The source is the entry of that id in *source_tree* -- never
+    "the first entry with that id on any branch" -- and, when *path* is given,
+    it must be the directory just pushed.
 
     The shadow starts as a copy of the production entry's baselines -- the dev
     branch was a copy of production when it was created, and a baseline that
@@ -162,25 +207,33 @@ def promote_shadow(
     copied, the safe side (a missing one then reads ``remote_deleted``,
     which push never acts on, rather than ``added``, which duplicates).
 
-    Returns ``None`` when no other branch tracks the config.
+    Returns ``None`` off the promote path or when *source_tree* does not
+    track the config.
     """
+    if branch_tree_path(manifest, branch_id) == source_tree:
+        return None
     source = next(
         (
             c
             for c in manifest.configurations
-            if c.component_id == component_id and c.id == config_id
+            if c.component_id == component_id
+            and c.id == config_id
+            and branch_tree_path(manifest, c.branch_id) == source_tree
+            and not same_branch(manifest, c.branch_id, branch_id)
         ),
         None,
     )
-    if source is None:
+    if source is None or (path is not None and source.path != path):
         return None
     on_branch = _branch_row_ids(client, component_id, config_id, branch_id, response)
+    metadata = copy.deepcopy(source.metadata)
+    metadata[PROMOTED_FROM_KEY] = PromotedFrom(source_tree, config_id).as_metadata()
     shadow = ManifestConfiguration(
         branchId=branch_id or 0,
         componentId=component_id,
         id=config_id,
         path=source.path,
-        metadata=copy.deepcopy(source.metadata),
+        metadata=metadata,
         rows=[
             copy.deepcopy(row) for row in source.rows if on_branch is None or row.id in on_branch
         ],

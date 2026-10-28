@@ -469,6 +469,7 @@ def bookkeeping(world: World, branch: int | None) -> dict[tuple[str, str], dict[
             "rows": rows,
             "_path": c.path,
             "_row_paths": {r.id: r.path for r in c.rows},
+            "_promoted_from": c.metadata.get("promoted_from"),
         }
     return out
 
@@ -513,19 +514,35 @@ def self_consistency(world: World, branch: int | None) -> list[str]:
     return problems
 
 
-def _names_other_config(world: World, branch: int | None, config_id: str, path: str) -> bool:
-    """True iff the config dir's ``_config.yml`` names a config id other than *config_id*.
+def _promoted_identity_only(
+    world: World, fresh: World, branch: int | None, config_id: str, mine: dict, theirs: dict
+) -> bool:
+    """True iff the config's file differs from the fresh pull's ONLY by the promoted id.
 
-    A promote push (``push --branch DEV``, no ``dev/`` tree) that creates a
-    production config on a dev branch lacking it leaves ``main/``'s file
-    naming the PRODUCTION id: the production entry owns that file too, and
-    writing the dev id into it broke the next production pull (F7). Its
-    ``pull_hash`` then describes that file, which a fresh pull of the dev
-    branch (dev id in the file) can never reproduce byte for byte;
-    ``self_consistency`` still checks it against the file on disk.
+    A promote push (``push --branch DEV``, no ``dev/`` tree) never writes the
+    dev id into ``main/`` (D19): the file keeps the source config's id (or
+    none, for a config authored there), which the entry records in
+    ``promoted_from``. Its ``pull_hash`` then describes that file, which a
+    fresh pull of the dev branch (dev id in the file) cannot reproduce byte
+    for byte. The exception holds only for an entry carrying ``promoted_from``
+    whose file names exactly that source id, and only when the two files are
+    otherwise equal; ``self_consistency`` still checks the hash against the
+    file on disk.
     """
-    data = yaml.safe_load((world.source_tree(branch) / path / CONFIG_FILE).read_text())
-    return str(((data or {}).get("_keboola") or {}).get("config_id", "")) != config_id
+    association = mine.get("_promoted_from")
+    if not isinstance(association, dict):
+        return False
+    local = yaml.safe_load(
+        (world.source_tree(branch) / mine["_path"] / CONFIG_FILE).read_text(encoding="utf-8")
+    )
+    meta = local.setdefault("_keboola", {})
+    if str(meta.get("config_id", "") or "") != str(association.get("config_id") or ""):
+        return False
+    meta["config_id"] = config_id
+    pulled = yaml.safe_load(
+        (fresh.source_tree(branch) / theirs["_path"] / CONFIG_FILE).read_text(encoding="utf-8")
+    )
+    return local == pulled
 
 
 def compare_to_fresh(world: World, fresh: World, branch: int | None) -> list[str]:
@@ -541,9 +558,11 @@ def compare_to_fresh(world: World, fresh: World, branch: int | None) -> list[str
             problems.append(f"{key}: tracked, but a fresh pull does not track it")
             continue
         a, b = mine[key], theirs[key]
-        other_id = _names_other_config(world, branch, key[1], a["_path"])
+        promoted_id = a["pull_hash"] != b["pull_hash"] and _promoted_identity_only(
+            world, fresh, branch, key[1], a, b
+        )
         for field in ("branch_id", *BOOKKEEPING_KEYS):
-            if field == "pull_hash" and other_id:
+            if field == "pull_hash" and promoted_id:
                 continue
             if field == "pull_extra_hashes":
                 if a[field] != b[field]:

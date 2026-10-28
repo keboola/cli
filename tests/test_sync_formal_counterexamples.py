@@ -835,23 +835,11 @@ def test_i_moving_config_dir_is_not_delete_plus_create(tmp_path: Path) -> None:
 
 
 # ===========================================================================
-# J -- `sync pull --branch dev` reports untouched production configs as
-#      "removed" because the stale-entry sweep is unscoped by branch tree.
+# J -- `sync pull --branch dev` must not report untouched production configs
+#      as "removed" (the stale-entry sweep is scoped to the pulled branch).
 # ===========================================================================
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "#792 J: pull()'s stale-entry sweep (sync_service.py ~1063) compares "
-        "the freshly-fetched keys against the FULL old manifest."
-        "configurations, not scoped to the branch just pulled. A `sync pull "
-        "--branch dev` after a production pull reports every untouched "
-        "production entry as 'removed' -- the exact label sync-workflow.md "
-        "documents as meaning 'the config was genuinely deleted on the "
-        "remote', which it was not. Confirmed via spec S4."
-    ),
-)
 def test_j_branch_scoped_pull_does_not_report_other_branch_configs_removed(
     tmp_config_dir: Path, tmp_path: Path
 ) -> None:
@@ -860,7 +848,8 @@ def test_j_branch_scoped_pull_does_not_report_other_branch_configs_removed(
     the ORIGINAL branch as `"removed"` -- that label is documented to mean
     the remote genuinely deleted it.
 
-    Issue #792 finding J.
+    Issue #792 finding J. Fixed by the branch-scoped pull (pull reads, and
+    sweeps as stale, only the entries of the branch it pulls).
     """
     project_root = tmp_path / "project"
     project_root.mkdir()
