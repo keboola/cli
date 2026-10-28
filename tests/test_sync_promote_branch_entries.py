@@ -2005,10 +2005,10 @@ def test_repeated_recovery_never_remaps_a_resolved_row_again() -> None:
             "tasks": [
                 {
                     "id": "t",
-                    "task": {
+                    "task": {  # still in source form after an interrupted promote
                         "type": "job",
                         "componentId": http,
-                        "configId": "D",
+                        "configId": "P",
                         "configRowIds": ["1", "2"],
                     },
                 }
@@ -2026,7 +2026,8 @@ def test_repeated_recovery_never_remaps_a_resolved_row_again() -> None:
     for _ in range(2):  # E stays unresolved, so the flow stays pending
         recover_pending(client, manifest, remap, "keboola.flow", "F", DEV, [])
 
-    assert remote["configuration"]["tasks"][0]["task"]["configRowIds"] == ["2", "3"]
+    task = remote["configuration"]["tasks"][0]["task"]
+    assert (task["configId"], task["configRowIds"]) == ("D", ["2", "3"])
     assert flow.metadata["rebind_pending"] == [[http, "E"]]
 
 
@@ -2093,3 +2094,105 @@ def test_editing_a_pending_flow_never_forgets_an_ignored_dependency(
     w.push(branch=DEV)  # creates E, then rebinds the flow
     assert _dev_task_targets(w) == [_dev_id_of(w, http), _dev_id_of(w, mysql)]
     assert dev_pending() is None
+
+
+# ===========================================================================
+# Round 9 (D31; risks 63-64)
+# ===========================================================================
+
+
+def _pending_flow_on_dev(
+    refs: list[list[str]], task: dict
+) -> tuple[Manifest, ManifestConfiguration, dict]:
+    manifest = _manifest((PROD, "main"), (DEV, "dev"))
+    flow = ManifestConfiguration(
+        branchId=DEV,
+        componentId="keboola.flow",
+        id="F",
+        path="other/keboola.flow/f",
+        metadata={"rebind_pending": refs},
+    )
+    manifest.configurations.append(flow)
+    remote = {"configuration": {"tasks": [{"id": "t", "task": task}]}}
+    return manifest, flow, remote
+
+
+def _in_memory_target(remote: dict) -> MagicMock:
+    client = MagicMock()
+    client.get_config_detail.side_effect = lambda **_: copy.deepcopy(remote)
+
+    def put(**kwargs: Any) -> dict:
+        remote["configuration"] = copy.deepcopy(kwargs["configuration"])
+        return copy.deepcopy(remote)
+
+    client.update_config.side_effect = put
+    return client
+
+
+# -- risk 63: a task's config and rows are rewritten as ONE unit (D31) -------
+
+
+def test_staggered_row_resolution_rewrites_the_task_only_when_complete() -> None:
+    http = "keboola.ex-http"
+    refs = [[http, "P"], [http, "P", "1"], [http, "P", "2"]]
+    task = {"type": "job", "componentId": http, "configId": "P", "configRowIds": ["1", "2"]}
+    manifest, flow, remote = _pending_flow_on_dev(refs, task)
+    client = _in_memory_target(remote)
+
+    # Only row 1 exists on the branch yet: the task stays wholly in source form.
+    first = PromoteRemap(configs={(http, "P"): "D"}, rows={("D", "1"): "2"})
+    recover_pending(client, manifest, first, "keboola.flow", "F", DEV, [])
+    sent = remote["configuration"]["tasks"][0]["task"]
+    assert (sent["configId"], sent["configRowIds"]) == ("P", ["1", "2"])
+    assert flow.metadata["rebind_pending"] == refs
+
+    # Row 2 now exists: the whole unit is rewritten at once, the list cleared.
+    second = PromoteRemap(configs={(http, "P"): "D"}, rows={("D", "1"): "2", ("D", "2"): "3"})
+    recover_pending(client, manifest, second, "keboola.flow", "F", DEV, [])
+    sent = remote["configuration"]["tasks"][0]["task"]
+    assert (sent["configId"], sent["configRowIds"]) == ("D", ["2", "3"])
+    assert "rebind_pending" not in flow.metadata
+
+
+# -- risk 64: references leave the pending list only after a successful PUT --
+
+
+def test_a_rejected_update_never_drops_a_pending_reference(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    f = _seed_flow_world(tmp_path, flow_first=True)
+    w = f.world
+    http = VARIANTS["extractor"].component_id
+    w.api.branch_from_prod()
+    del w.api.remote[DEV][(http, f.extractor_id)]
+    flow_file = w.config_dir(f.flow_id) / CONFIG_FILE
+    semantic_edit(flow_file)
+    original_create, original_update = w.api._create, w.api._update
+
+    def http_create_fails(*args: Any, **kwargs: Any) -> dict:
+        if kwargs.get("component_id") == http:
+            raise KeboolaApiError("create refused", 500, ErrorCode.API_ERROR)
+        return original_create(*args, **kwargs)
+
+    monkeypatch.setattr(w.api, "_create", http_create_fails)
+    assert w.svc.push(alias="prod", project_root=w.root, branch_override=DEV)["errors"]
+    pending_file = flow_file.read_bytes()
+
+    # Edit F so it no longer runs E; the dev branch rejects the update (400).
+    data = _yaml(flow_file.parent)
+    data["_configuration_extra"]["tasks"] = []
+    flow_file.write_text(dump_config_yaml(data), encoding="utf-8", newline="")
+
+    def flow_update_rejected(*args: Any, **kwargs: Any) -> dict:
+        if kwargs.get("component_id") == "keboola.flow":
+            raise KeboolaApiError("invalid configuration", 400, ErrorCode.API_ERROR)
+        return original_update(*args, **kwargs)
+
+    monkeypatch.setattr(w.api, "_update", flow_update_rejected)
+    assert w.svc.push(alias="prod", project_root=w.root, branch_override=DEV)["errors"]
+    monkeypatch.undo()
+
+    flow_file.write_bytes(pending_file)  # back to what the dev branch holds
+    w.push(branch=DEV)  # creates E, then rebinds the flow
+    assert _dev_task_target(w) == _dev_id_of(w, http)
+    assert not [c for c in load_manifest(w.root).configurations if c.metadata.get("rebind_pending")]

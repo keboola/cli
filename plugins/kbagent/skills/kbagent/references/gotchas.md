@@ -116,7 +116,9 @@ These lists keep `error`, because their entries are not failed items with an err
   was not created yet stays pending in the manifest (`rebind_pending` lists the missing
   references) until every one exists on the dev branch -- also when the push dies, the
   final rewrite fails, a create fails, or the config is edited again meanwhile; a
-  reference leaves the list once it is rewritten. The next promote push then reads that config
+  reference leaves the list once it is rewritten. A task's config and the rows it selects
+  (likewise a shared-code or variables link and its rows) switch to the dev ids together,
+  only once all of them exist there. The next promote push then reads that config
   from the dev branch, rewrites only those references and sends only its configuration,
   so its name, description, enabled state and any other change made there are kept. A
   config deleted there, or of a component you have since added to `ignoredComponents`,

@@ -105,7 +105,7 @@ class PromoteRemap:
     sent: dict[tuple[str, str], SentPayload] = field(default_factory=dict)
     expected: set[tuple[str, str]] = field(default_factory=set)
     expected_rows: set[str] = field(default_factory=set)
-    hold: Callable[[str, str, list[list[str]], set[tuple[str, ...]]], None] | None = None
+    hold: Callable[[str, str, list[list[str]], set[tuple[str, ...]] | None], None] | None = None
 
     def plan(self, changes: list[dict[str, Any]]) -> None:
         """Note what this push creates: a reference to it resolves only after the create."""
@@ -120,47 +120,85 @@ class PromoteRemap:
         }
 
     def pending_refs(self, component_id: str, original: dict[str, Any]) -> list[list[str]]:
-        """The source references in *original* this push creates and the map lacks yet.
+        """The references of *original* whose unit does not resolve yet (D30, D31).
 
-        ``[component, config id]`` or ``[component, config id, row id]``: the
-        references a payload sent NOW carries as source ids. They are what
-        ``rebind_pending`` records (D30); a reference the map already resolves
-        is sent as its target id and is never listed, so nothing maps it again.
+        ``[component, config id]`` plus ``[component, config id, row id]`` for
+        each row the unit selects. A unit (a config and the rows it selects)
+        is sent either wholly in target ids or wholly in source ids; only the
+        latter are listed, so nothing is ever mapped twice.
         """
         refs: list[list[str]] = []
         for (component, config_id), row_ids in _references(component_id, original):
-            if (component, config_id) in self.expected:
-                refs.append([component, config_id])
-            refs += [[component, config_id, r] for r in row_ids if r in self.expected_rows]
-        return self.unresolved_of(refs)
+            if self._unit(component, config_id, row_ids) is not None:
+                continue
+            for ref in [[component, config_id]] + [[component, config_id, r] for r in row_ids]:
+                if ref not in refs:
+                    refs.append(ref)
+        return refs
 
     def unresolved_of(self, refs: list[Any]) -> list[list[str]]:
-        """The listed source references that do not map to a target id yet (D30)."""
-        remaining: list[list[str]] = []
-        for ref in refs:
-            if not isinstance(ref, list) or len(ref) < 2:
-                continue
-            key = (str(ref[0]), str(ref[1]))
-            if len(ref) == 2:
-                if key not in self.configs:
-                    remaining.append([key[0], key[1]])
-            elif (self.configs.get(key, key[1]), str(ref[2])) not in self.rows:
-                remaining.append([key[0], key[1], str(ref[2])])
-        return remaining
+        """The listed references whose unit does not fully map to target ids yet (D30, D31).
+
+        Per unit, never per value: while one part of a unit is missing, every
+        listed reference of that unit stays.
+        """
+        listed = [
+            [str(part) for part in ref] for ref in refs if isinstance(ref, list) and len(ref) >= 2
+        ]
+        open_units = set()
+        for ref in listed:
+            key = (ref[0], ref[1])
+            parent = self.configs.get(key, key[1])
+            if (len(ref) == 2 and key not in self.configs) or (
+                len(ref) == 3 and (parent, ref[2]) not in self.rows
+            ):
+                open_units.add(key)
+        return [ref for ref in listed if (ref[0], ref[1]) in open_units]
 
     def subset(self, refs: list[Any]) -> PromoteRemap:
-        """A remap that rewrites only the listed source references."""
+        """A remap holding only the listed units that resolve completely."""
+        open_units = {(ref[0], ref[1]) for ref in self.unresolved_of(refs)}
         sub = PromoteRemap()
         for ref in refs:
             if not isinstance(ref, list) or len(ref) < 2:
                 continue
             key = (str(ref[0]), str(ref[1]))
+            if key in open_units:
+                continue
             parent = self.configs.get(key, key[1])
             if len(ref) == 2 and key in self.configs:
                 sub.configs[key] = parent
-            elif len(ref) == 3 and (parent, str(ref[2])) in self.rows:
+            elif len(ref) == 3:
                 sub.rows[(parent, str(ref[2]))] = self.rows[(parent, str(ref[2]))]
         return sub
+
+    def _unit(
+        self, component: str, config_id: str, row_ids: list[str]
+    ) -> tuple[str, list[str]] | None:
+        """The target ids of one unit -- a config and the rows it selects -- or ``None`` (D31).
+
+        ``None`` leaves the unit as it is: a part of it is still to be
+        created, or it already names the target (target form). A config the
+        map does not know keeps its id; its rows map where the map knows them.
+        A promote-created config maps only with ALL its rows mapped.
+        """
+        key = (component, config_id)
+        if key in self.configs:
+            parent = self.configs[key]
+        elif key in self.expected or config_id in self.configs.values():
+            return None
+        else:
+            parent = config_id
+        mapped: list[str] = []
+        for row_id in row_ids:
+            target_row = self.rows.get((parent, row_id))
+            if target_row is not None:
+                mapped.append(target_row)
+            elif row_id in self.expected_rows or parent != config_id:
+                return None
+            else:
+                mapped.append(row_id)
+        return parent, mapped
 
     def refresh(
         self,
@@ -204,17 +242,13 @@ class PromoteRemap:
         return out
 
     def _remap_run_targets(self, component_id: str, out: dict[str, Any]) -> None:
-        """Map a schedule's target, or each task's ``configId`` and ``configRowIds``.
-
-        A task's rows are mapped under the config it runs on the target, each
-        from its source row id, once.
-        """
+        """Map a schedule's target, or each task's ``configId`` with its ``configRowIds``."""
         if component_id == SCHEDULER_COMPONENT_ID:
             target = out.get("target")
             if isinstance(target, dict) and isinstance(target.get("componentId"), str):
-                key = (target["componentId"], str(target.get("configurationId", "")))
-                if key in self.configs:
-                    target["configurationId"] = self.configs[key]
+                unit = self._unit(target["componentId"], str(target.get("configurationId", "")), [])
+                if unit is not None and unit[0] != str(target.get("configurationId", "")):
+                    target["configurationId"] = unit[0]
             return
         tasks = out.get("tasks")
         for task_entry in tasks if isinstance(tasks, list) else []:
@@ -222,46 +256,50 @@ class PromoteRemap:
             if ref is None:
                 continue
             task = task_entry["task"]
-            parent = self.configs.get(ref, ref[1])
-            if parent != ref[1]:
-                task["configId"] = parent
             row_ids = task.get("configRowIds")
-            if isinstance(row_ids, list):
+            rows = [str(r) for r in row_ids] if isinstance(row_ids, list) else []
+            unit = self._unit(ref[0], ref[1], rows)
+            if unit is None:
+                continue
+            if unit[0] != ref[1]:
+                task["configId"] = unit[0]
+            if isinstance(row_ids, list) and unit[1] != rows:
                 task["configRowIds"] = [
-                    self.rows.get((parent, str(row_id)), row_id) for row_id in row_ids
+                    new if new != str(old) else old
+                    for old, new in zip(row_ids, unit[1], strict=True)
                 ]
 
     def _remap_variables(self, out: dict[str, Any]) -> None:
         variables_id = out.get("variables_id")
         if not isinstance(variables_id, (str, int)) or variables_id == "":
             return
-        parent = self.configs.get((VARIABLES_COMPONENT_ID, str(variables_id)))
-        if parent is not None:
-            out["variables_id"] = parent
         values_id = out.get("variables_values_id")
-        if isinstance(values_id, (str, int)) and values_id != "":
-            new_values = self.rows.get((parent or str(variables_id), str(values_id)))
-            if new_values is not None:
-                out["variables_values_id"] = new_values
+        has_values = isinstance(values_id, (str, int)) and values_id != ""
+        unit = self._unit(
+            VARIABLES_COMPONENT_ID, str(variables_id), [str(values_id)] if has_values else []
+        )
+        if unit is None:
+            return
+        if unit[0] != str(variables_id):
+            out["variables_id"] = unit[0]
+        if has_values and unit[1][0] != str(values_id):
+            out["variables_values_id"] = unit[1][0]
 
     def _remap_shared_code(self, out: dict[str, Any]) -> None:
         shared_code_id = out.get("shared_code_id")
         if not isinstance(shared_code_id, (str, int)) or shared_code_id == "":
             return
-        parent = self.configs.get((SHARED_CODE_COMPONENT_ID, str(shared_code_id)))
-        if parent is not None:
-            out["shared_code_id"] = parent
-        target = parent or str(shared_code_id)
         row_ids = out.get("shared_code_row_ids")
-        listed = row_ids if isinstance(row_ids, list) else []
-        row_map = {
-            str(old): self.rows[(target, str(old))]
-            for old in listed
-            if (target, str(old)) in self.rows
-        }
+        listed = [str(r) for r in row_ids] if isinstance(row_ids, list) else []
+        unit = self._unit(SHARED_CODE_COMPONENT_ID, str(shared_code_id), listed)
+        if unit is None:
+            return
+        if unit[0] != str(shared_code_id):
+            out["shared_code_id"] = unit[0]
+        row_map = {old: new for old, new in zip(listed, unit[1], strict=True) if old != new}
         if not row_map:
             return
-        out["shared_code_row_ids"] = [row_map.get(str(r), r) for r in listed]
+        out["shared_code_row_ids"] = [row_map.get(str(r), r) for r in row_ids or []]
         if "parameters" in out:
             out["parameters"] = _rewrite_list_placeholders(out["parameters"], row_map)
 
@@ -290,6 +328,15 @@ class PromoteRemap:
         Before the PUT, not after it: a push that dies after the PUT would
         otherwise leave a target config naming a source id and no record that
         its links are unfinished.
+        """
+        if self.hold is not None:
+            self.hold(component_id, config_id, self.pending_refs(component_id, original), None)
+
+    def after_update(self, component_id: str, config_id: str, original: dict[str, Any]) -> None:
+        """After a successful PUT: drop pending references the payload no longer names.
+
+        Only now (D30, risk 64): a PUT that fails leaves the target with the
+        old references, so they must stay pending until one succeeds.
         """
         if self.hold is not None:
             self.hold(
@@ -537,7 +584,7 @@ def _dependency_warning(component_id: str, config_id: str) -> dict[str, str]:
     }
 
 
-def hold_before_put(
+def hold_pending(
     client: Any,
     manifest: Manifest,
     target: CreateTarget,
@@ -545,19 +592,22 @@ def hold_before_put(
     component_id: str,
     config_id: str,
     refs: list[list[str]],
-    referenced: set[tuple[str, ...]],
+    referenced: set[tuple[str, ...]] | None,
 ) -> None:
-    """Record ``rebind_pending`` before an update's PUT, and checkpoint (D30).
+    """Update ``rebind_pending`` around an update's PUT (D30, risk 64).
 
-    The new list MERGES: the references already pending that the payload
-    still names (a dependency missing since an earlier push -- ignored, say --
-    is never forgotten by a later edit), plus this push's unresolved creates.
-    The target entry may not exist yet (the first write of a branched config
-    on the promote path); its shadow is recorded here, so the flag has a home.
+    Before the PUT (*referenced* ``None``) references are only ADDED, then
+    checkpointed: the target may end up holding them. After a successful PUT
+    the list keeps the references already pending that the payload still
+    names (a dependency missing since an earlier push -- ignored, say -- is
+    never forgotten by a later edit) plus this push's unresolved ones; the
+    rest are dropped, saved with the end of the push. The target entry may
+    not exist yet (the first write of a branched config on the promote
+    path); its shadow is recorded here, so the flag has a home.
     """
     entry = find_branch_entry(manifest, component_id, config_id, target.branch_id)
     if entry is None:
-        if not refs:
+        if not refs or referenced is not None:
             return
         entry = promote_shadow(
             client,
@@ -570,15 +620,19 @@ def hold_before_put(
         if entry is None:
             return
     existing = _listed(entry.metadata.get(REBIND_PENDING_KEY))
-    merged = [ref for ref in existing if tuple(str(part) for part in ref) in referenced]
-    merged += [ref for ref in refs if ref not in merged]
+    if referenced is None:
+        merged = existing + [ref for ref in refs if ref not in existing]
+    else:
+        merged = [ref for ref in existing if tuple(str(part) for part in ref) in referenced]
+        merged += [ref for ref in refs if ref not in merged]
     if merged == existing:
         return
     if merged:
         entry.metadata[REBIND_PENDING_KEY] = merged
     else:
         entry.metadata.pop(REBIND_PENDING_KEY, None)
-    checkpoint(f"{component_id}/{config_id}")
+    if referenced is None:
+        checkpoint(f"{component_id}/{config_id}")
 
 
 def _link_error(component_id: str, config_id: str, exc: KeboolaApiError) -> dict[str, str]:

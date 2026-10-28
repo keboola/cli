@@ -116,7 +116,7 @@ from ._sync_promote_remap import (
     PromoteRemap,
     diff_decisions,
     finish_promote_rebind,
-    hold_before_put,
+    hold_pending,
     pending_rebinds,
 )
 from ._sync_pull_dirs import (
@@ -1659,7 +1659,7 @@ class SyncService(BaseService):
             remap = PromoteRemap() if promoting else None
             if remap is not None:
                 remap.plan(changes)
-                remap.hold = partial(hold_before_put, client, manifest, target, checkpoint)
+                remap.hold = partial(hold_pending, client, manifest, target, checkpoint)
 
             # ---- Phase A: config creates / updates / deletes -------------
             for change in config_changes:

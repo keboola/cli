@@ -899,6 +899,7 @@ def push_update(
     )
     logger.info("Updated config %s/%s", component_id, config_id)
     if remap is not None:
+        remap.after_update(component_id, config_id, original)
         remap.record(
             component_id,
             config_id,
