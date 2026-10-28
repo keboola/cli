@@ -521,7 +521,7 @@ and `_keboola.component_id`, diff lists it under `moves[]` (`moved_from`,
 `moved_to`) and classifies the content as usual. Push creates and deletes
 nothing for the move (also with `--force`) and saves the new path in the
 manifest. The next pull renames the directory to the config name; to keep a
-new name, rename the config with `kbagent config rename --directory DIR`.
+new name, rename the config with `kbagent config rename --project P --component-id C --config-id ID --name NAME --directory DIR`.
 When two or more directories carry the id of a missing directory, the move is
 ambiguous: a `CONFLICT` with `ambiguous_move` and `candidates`, nothing pushed
 or deleted, nothing pulled into them -- keep one and remove the others.

@@ -613,3 +613,20 @@ def test_m14_rename_directory_relocates_the_promoted_copy(orders: Tree) -> None:
     orders.push(branch=DEV, force=True)
     assert orders.api.writes("CREATE") == [] and orders.api.writes("DELETE") == []
     assert remote_ids(orders.api, DEV) == [dev_id]
+
+
+def test_human_output_names_the_move_and_the_ambiguous_one(orders: Tree) -> None:
+    from types import SimpleNamespace
+
+    from rich.console import Console
+
+    from keboola_agent_cli.commands._sync_diff_render import print_moves
+
+    new = orders.move(orders.dir_of("500"), "orders-moved")
+    console = Console(record=True, width=300)
+    print_moves(SimpleNamespace(console=console), orders.diff())
+    shutil.copytree(new, new.parent / "orders-copy")
+    print_moves(SimpleNamespace(console=console), orders.diff())
+    text = console.export_text()
+    assert f"MOVED {HTTP}/500: extractor/{HTTP}/orders -> {orders.rel(new)}" in text
+    assert "AMBIGUOUS MOVE" in text and "orders-copy" in text
