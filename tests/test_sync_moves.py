@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import json
 import shutil
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 import yaml
@@ -25,36 +27,53 @@ MANIFEST = Path(".keboola") / "manifest.json"
 
 
 class LoggingApi(FakeApi):
-    """FakeApi that records every config/row create and delete."""
+    """FakeApi whose clients record every config/row create, update and delete."""
 
     def __init__(self) -> None:
         super().__init__()
         self.log: list[str] = []
-        self.fail_update: Exception | BaseException | None = None
+        self.fail_update: BaseException | None = None
 
-    def _create(self, component_id: str, name: str, configuration: dict, **kw: Any) -> dict:
-        out = super()._create(component_id, name, configuration, **kw)
-        self.log.append(f"CREATE {component_id}/{out['id']}")
-        return out
+    def client(self) -> MagicMock:
+        c = super().client()
+        create, update, delete = (
+            c.create_config.side_effect,
+            c.update_config.side_effect,
+            (c.delete_config.side_effect),
+        )
+        create_row, delete_row = c.create_config_row.side_effect, c.delete_config_row.side_effect
 
-    def _delete(self, component_id: str, config_id: str, branch_id: int | None = None) -> None:
-        self.log.append(f"DELETE {component_id}/{config_id}")
-        super()._delete(component_id, config_id, branch_id)
+        def logged_create(*args: Any, **kw: Any) -> dict:
+            out = create(*args, **kw)
+            self.log.append(f"CREATE {out['id']}")
+            return out
 
-    def _update(self, component_id: str, config_id: str, **kw: Any) -> dict:
-        if self.fail_update is not None:
-            raise self.fail_update
-        self.log.append(f"UPDATE {component_id}/{config_id}")
-        return super()._update(component_id, config_id, **kw)
+        def logged_update(*args: Any, **kw: Any) -> dict:
+            if self.fail_update is not None:
+                raise self.fail_update
+            out = update(*args, **kw)
+            self.log.append(f"UPDATE {out['id']}")
+            return out
 
-    def _create_row(self, component_id: str, config_id: str, name: str, configuration: dict, **kw):
-        out = super()._create_row(component_id, config_id, name, configuration, **kw)
-        self.log.append(f"CREATE-ROW {config_id}/{out['id']}")
-        return out
+        def logged_delete(*args: Any, **kw: Any) -> None:
+            delete(*args, **kw)
+            self.log.append(f"DELETE {args or kw}")
 
-    def _delete_row(self, component_id: str, config_id: str, row_id: str, **kw: Any) -> None:
-        self.log.append(f"DELETE-ROW {config_id}/{row_id}")
-        super()._delete_row(component_id, config_id, row_id, **kw)
+        def logged_create_row(*args: Any, **kw: Any) -> dict:
+            out = create_row(*args, **kw)
+            self.log.append(f"CREATE-ROW {out['id']}")
+            return out
+
+        def logged_delete_row(*args: Any, **kw: Any) -> None:
+            delete_row(*args, **kw)
+            self.log.append(f"DELETE-ROW {args or kw}")
+
+        c.create_config.side_effect = logged_create
+        c.update_config.side_effect = logged_update
+        c.delete_config.side_effect = logged_delete
+        c.create_config_row.side_effect = logged_create_row
+        c.delete_config_row.side_effect = logged_delete_row
+        return c
 
     def writes(self, kind: str) -> list[str]:
         return [e for e in self.log if e.startswith(kind)]
@@ -68,7 +87,7 @@ def put(
     value: str,
     *,
     component: str = HTTP,
-    rows: tuple[tuple[str, str, str], ...] = (),
+    rows: Sequence[tuple[str, str, str]] = (),
 ) -> None:
     api.remote[branch][(component, cid)] = {
         "id": cid,
@@ -570,7 +589,7 @@ def test_two_moved_configs_in_one_push(tmp_path: Path) -> None:
 
 
 def _config_service(t: Tree) -> ConfigService:
-    return ConfigService(config_store=t.svc._config_store, client_factory=lambda u, k: None)
+    return ConfigService(config_store=t.svc._config_store, client_factory=lambda u, k: MagicMock())
 
 
 def test_m14_rename_directory_picks_the_entry_of_the_branch(orders: Tree) -> None:
