@@ -704,16 +704,22 @@ def _source_row_ids(manifest: Manifest, cfg: ManifestConfiguration) -> dict[str,
     target entry but tracked, with its source id, under the source entry. The
     source id is kept apart from the target diff identity (risk 71): it is
     what the row map and ``promoted_from_id`` record once the row is created.
+    The source entry is the one on the branch registered for the source tree.
     """
     promoted = promoted_from(cfg)
     if promoted is None or not promoted.config_id:
+        return {}
+    # The source branch by identity, never via branch_tree_path: that maps an
+    # unregistered id to the default tree (D28, risk 73).
+    trees = [b.id for b in manifest.branches if b.path == promoted.tree]
+    if not trees:
         return {}
     for source in manifest.configurations:
         if (
             source is not cfg
             and source.component_id == cfg.component_id
             and source.id == promoted.config_id
-            and branch_tree_path(manifest, source.branch_id) == promoted.tree
+            and same_branch(manifest, source.branch_id, trees[0])
         ):
             return {row.path: row.id for row in source.rows}
     return {}

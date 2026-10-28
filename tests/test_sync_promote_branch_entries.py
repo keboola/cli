@@ -34,7 +34,7 @@ from keboola_agent_cli.services._sync_push_create import CreateTarget, ManifestC
 from keboola_agent_cli.services._sync_push_ops import push_update
 from keboola_agent_cli.services._sync_writeback import writeback_create_config_in_manifest
 from keboola_agent_cli.services.component_service import materialize_pushed_config
-from keboola_agent_cli.sync.branch_scope import same_branch
+from keboola_agent_cli.sync.branch_scope import find_untracked_rows, same_branch
 from keboola_agent_cli.sync.code_extraction import merge_code_files
 from keboola_agent_cli.sync.config_format import api_config_to_local, dump_config_yaml
 from keboola_agent_cli.sync.diff_engine import config_hash
@@ -2508,3 +2508,92 @@ def test_row_added_to_a_promoted_config_is_mapped_when_a_flow_selects_it(
     (row_entry,) = [r for r in dev_entry.rows if r.id == d2]
     assert row_entry.metadata["promoted_from_id"] == r2  # recorded on create
     assert not any(c.metadata.get("rebind_pending") for c in manifest.configurations)
+
+
+# ===========================================================================
+# Round 14 (risks 72-73): source row identity in planning and source lookup
+# ===========================================================================
+
+
+def test_flow_selecting_a_new_source_row_stays_pending_when_its_rebind_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    v = VARIANTS["rows"]
+    w = World(tmp_path)
+    ext_id = w.api.seed(v)
+    w.api.types["keboola.flow"] = "other"
+    w.api.remote[PROD][("keboola.flow", "cfg-flow")] = {
+        "id": "cfg-flow",
+        "name": "Nightly",
+        "description": "",
+        "configuration": _flow_body(v.component_id, ext_id),
+        "rows": [],
+        "isDisabled": False,
+    }
+    w.api.branch_from_prod()  # DEV holds P under the production id
+    w.init()
+    w.pull()
+    semantic_edit(w.config_dir(ext_id) / CONFIG_FILE)
+    w.push(branch=DEV)  # the dev entry of P exists from here on
+
+    r2 = w.api._create_row(
+        v.component_id, ext_id, name="Row 3", configuration={"parameters": {"table": "t3"}}
+    )["id"]
+    w.pull()
+    flow_file = w.config_dir("cfg-flow") / CONFIG_FILE
+    data = _yaml(flow_file.parent)
+    data["_configuration_extra"]["tasks"][0]["task"]["configRowIds"] = [r2]
+    flow_file.write_text(dump_config_yaml(data), encoding="utf-8", newline="")
+
+    original = w.api._update
+
+    def remap_put_fails(*args: Any, **kwargs: Any) -> dict:
+        if str(kwargs.get("change_description", "")).startswith("Remap"):
+            raise KeboolaApiError("refused", 500, ErrorCode.API_ERROR)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(w.api, "_update", remap_put_fails)
+    assert w.svc.push(alias="prod", project_root=w.root, branch_override=DEV)["errors"]
+    monkeypatch.undo()
+    (flow_entry,) = [
+        c
+        for c in load_manifest(w.root).configurations
+        if c.component_id == "keboola.flow" and c.branch_id == DEV
+    ]
+    assert flow_entry.metadata.get("rebind_pending")  # marked before the PUT
+
+    w.push(branch=DEV)  # no local edit since: recovery finishes it
+    (d2,) = [
+        row["id"]
+        for row in w.api.get(DEV, v.component_id, ext_id)["rows"]
+        if row["name"] == "Row 3"
+    ]
+    task = _dev_flow(w)["configuration"]["tasks"][0]["task"]
+    assert (task["configId"], task["configRowIds"]) == (ext_id, [d2])
+
+
+def test_source_row_lookup_ignores_an_unregistered_branch_entry(tmp_path: Path) -> None:
+    def entry(branch_id: int, config_id: str, row_id: str | None) -> ManifestConfiguration:
+        return ManifestConfiguration(
+            branchId=branch_id,
+            componentId="keboola.ex-http",
+            id=config_id,
+            path="extractor/keboola.ex-http/orders",
+            rows=[ManifestConfigRow(id=row_id, path="rows/new")] if row_id else [],
+        )
+
+    dev = entry(DEV, "D", None)
+    dev.metadata["promoted_from"] = {"tree": "main", "config_id": "P"}
+    manifest = _manifest(
+        (PROD, "main"),
+        (DEV, "dev"),
+        configurations=[entry(999, "P", "wrong"), entry(PROD, "P", "r2"), dev],
+    )
+    row_dir = tmp_path / "main" / dev.path / "rows" / "new"
+    row_dir.mkdir(parents=True)
+    (row_dir / CONFIG_FILE).write_text("name: New\n", encoding="utf-8")
+
+    found = find_untracked_rows(
+        tmp_path, manifest, lambda d: yaml.safe_load((d / CONFIG_FILE).read_text()), "main", [dev]
+    )
+    assert [r["source_row_id"] for r in found] == ["r2"]

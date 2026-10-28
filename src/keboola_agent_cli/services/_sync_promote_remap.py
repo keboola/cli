@@ -148,8 +148,12 @@ class PromoteRemap:
             for c in added
             if not c.get("is_row") and c.get("config_id")
         }
+        # A row's source identity: its id in the source config (risk 72), which
+        # is all a new row under an already promoted config has.
         self.expected_rows = {
-            str(c["config_id"]) for c in added if c.get("is_row") and c.get("config_id")
+            str(c.get("source_row_id") or c["config_id"])
+            for c in added
+            if c.get("is_row") and (c.get("source_row_id") or c.get("config_id"))
         }
 
     def pending_refs(self, component_id: str, original: dict[str, Any]) -> list[list[str]]:
