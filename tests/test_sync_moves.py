@@ -843,8 +843,11 @@ def test_f4_foreign_id_at_a_tracked_path_is_never_pushed_to_that_config(tmp_path
     assert t.api.remote[PROD][(HTTP, "600")]["configuration"]["parameters"]["value"] == "b"
     t.pull()
     assert t.api.log == []
-    assert t.dir_of("600") != b
-    t.dir_of("500")
+    # Each config has its own directory again, with its own content.
+    for cid, value in (("500", "a"), ("600", "b")):
+        data = yaml.safe_load((t.dir_of(cid) / "_config.yml").read_text())
+        assert data["parameters"]["value"] == value
+    assert t.dir_of("500") != t.dir_of("600")
     assert len(load_manifest(t.root).configurations) == 2
     assert t.diff()["changes"] == []
 
