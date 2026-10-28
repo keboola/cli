@@ -986,3 +986,83 @@ def test_remote_config_delete_keeps_a_moved_unknown_base_row(
     _pull(sim)
 
     assert "tk900z" in (moved / "_config.yml").read_text()
+
+
+# ---------------------------------------------------------------------------
+# Round 10: ambiguous carriers keep the parent; a nested config is not work
+# ---------------------------------------------------------------------------
+
+
+def test_remote_config_delete_keeps_ambiguous_carriers_of_a_row(tmp_path: Path) -> None:
+    """Round 10 P1 (Astra): unchanged copies a and b of row 1001, original removed."""
+    sim = _world(tmp_path)
+    rows = _rows_of_1000(sim)
+    shutil.copytree(rows / "row-tk2z", rows / "a")
+    shutil.copytree(rows / "row-tk2z", rows / "b")
+    shutil.rmtree(rows / "row-tk2z")
+    del sim.api.remote[PROD][HTTP_1]
+
+    result = _pull(sim)
+
+    assert (rows / "a").exists() and (rows / "b").exists()
+    assert any(
+        d.get("action") == "skipped" and d.get("path") == HTTP_DIR for d in result["details"]
+    )
+
+
+def _nest_config_b_in_a(sim: Sim) -> Path:
+    """Astra's A/B input: config 1003 (B) at ``<A>/child`` inside config 1000 (A)."""
+    child = _dir(sim, f"{HTTP_DIR}/child")
+    shutil.move(str(_dir(sim, HTTP_2_DIR)), str(child))
+    manifest = load_manifest(sim.root)
+    for entry in manifest.configurations:
+        if entry.id == "1003":
+            entry.path = f"{HTTP_DIR}/child"
+    save_manifest(sim.root, manifest)
+    del sim.api.remote[PROD][HTTP_1]
+    del sim.api.remote[PROD][HTTP_2]
+    return child
+
+
+@pytest.mark.parametrize("force", [False, True], ids=["pull", "pull-force"])
+def test_a_nested_config_is_not_work_of_its_outer_config(tmp_path: Path, force: bool) -> None:
+    """Round 10 P2: both clean and deleted remotely -- both swept, no conflict."""
+    sim = _world(tmp_path)
+    child = _nest_config_b_in_a(sim)
+
+    result = _pull(sim, force=force)  # --force must not raise a false conflict
+
+    assert not child.exists()
+    assert not _dir(sim, HTTP_DIR).exists()
+    removed = {d["path"] for d in result["details"] if d.get("action") == "removed"}
+    assert {HTTP_DIR, f"{HTTP_DIR}/child"} <= removed
+
+
+def test_a_genuine_untracked_row_next_to_a_nested_config_keeps_the_outer(tmp_path: Path) -> None:
+    sim = _world(tmp_path)
+    child = _nest_config_b_in_a(sim)
+    new_row = _rows_of_1000(sim) / "new-row"
+    shutil.copytree(_rows_of_1000(sim) / "row-tk4z", new_row)
+    data = read_yaml(new_row / "_config.yml")
+    data["_keboola"].pop("row_id")
+    write_yaml(new_row / "_config.yml", data)
+
+    _pull(sim)
+
+    assert (new_row / "_config.yml").exists()  # A kept for its new row
+    assert not child.exists()  # B, clean, swept
+
+
+def test_an_edited_nested_config_survives_its_outer_configs_removal(tmp_path: Path) -> None:
+    """Round 10: A (clean) is removed around B (edited, kept) -- never with it."""
+    sim = _world(tmp_path)
+    child = _nest_config_b_in_a(sim)
+    data = read_yaml(child / "_config.yml")
+    data["parameters"]["value"] = "tk900z"
+    write_yaml(child / "_config.yml", data)
+
+    _pull(sim)
+
+    assert "tk900z" in (child / "_config.yml").read_text()
+    assert not (_dir(sim, HTTP_DIR) / "_config.yml").exists()
+    assert not _rows_of_1000(sim).exists()

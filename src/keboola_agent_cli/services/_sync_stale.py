@@ -62,7 +62,10 @@ class StaleEntry:
 
 
 def _entry_locally_modified(
-    service: SyncService, config_dir: Path, entry: ManifestConfiguration
+    service: SyncService,
+    config_dir: Path,
+    entry: ManifestConfiguration,
+    other_configs: frozenset[Path] = frozenset(),
 ) -> bool:
     """True iff ``_config.yml``, a companion file or a row file changed since pull.
 
@@ -83,31 +86,39 @@ def _entry_locally_modified(
     # sweep deleted it with the directory before.
     if config_locally_modified(service, config_dir, entry.component_id, entry.metadata):
         return True
-    return _rows_locally_modified(service, config_dir, entry)
+    return _rows_locally_modified(service, config_dir, entry, other_configs)
 
 
 def _rows_locally_modified(
-    service: SyncService, config_dir: Path, entry: ManifestConfiguration
+    service: SyncService,
+    config_dir: Path,
+    entry: ManifestConfiguration,
+    other_configs: frozenset[Path] = frozenset(),
 ) -> bool:
-    """True iff any row dir under *config_dir* holds work a delete would lose (rounds 8, 9).
+    """True iff any row dir under *config_dir* holds work a delete would lose (rounds 8-10).
 
     Every tracked row is checked at its actual manifest path, whatever the
     row naming (``naming.configRow`` may be ``records/{config_row_name}`` or
     nested). Every other ``_config.yml`` below the config dir is found by a
-    recursive walk: one whose file carries a tracked row's id while that row's
-    own dir is gone is that row, moved, and is judged by that row's baseline
-    -- an unknown base counts as edited; any other is user content without a
-    baseline (a new row, a copy) and is kept.
+    walk that stops at another manifest config's directory (*other_configs*:
+    that subtree has its own baseline and its own sweep decision). Those files
+    are grouped by the row id they carry:
+
+    - one that carries no tracked row's id, or the id of a tracked row whose
+      own dir still exists, is user content without a baseline (a new row, a
+      copy) -- kept;
+    - two or more carrying the id of a tracked row whose dir is gone: which
+      one is the row is unknown -- kept;
+    - the one dir carrying it is that row, moved, judged by its baseline (an
+      unknown base counts as edited).
     """
     by_path = {row.path: row for row in entry.rows}
     by_id = {row.id: row for row in entry.rows}
     for row in entry.rows:
         if _row_edited(service, config_dir / row.path / CONFIG_FILENAME, row.metadata):
             return True
-    own = config_dir / CONFIG_FILENAME
-    for row_file in sorted(config_dir.rglob(CONFIG_FILENAME)):
-        if row_file == own:
-            continue
+    carriers: dict[str, list[Path]] = {}
+    for row_file in _row_files(config_dir, other_configs):
         if row_file.parent.relative_to(config_dir).as_posix() in by_path:
             continue  # a tracked row at its own path: checked above
         data = service._read_config_file(row_file.parent)
@@ -116,9 +127,23 @@ def _rows_locally_modified(
         moved = by_id.get(row_id)
         if moved is None or (config_dir / moved.path / CONFIG_FILENAME).exists():
             return True  # no tracked row it stands for: user content
-        if _row_edited(service, row_file, moved.metadata, unknown_counts=True):
+        carriers.setdefault(row_id, []).append(row_file)
+    for row_id, files in carriers.items():
+        if len(files) > 1:
+            return True  # several dirs carry the id: which is the row is unknown
+        if _row_edited(service, files[0], by_id[row_id].metadata, unknown_counts=True):
             return True
     return False
+
+
+def _row_files(config_dir: Path, other_configs: frozenset[Path]) -> list[Path]:
+    """Every ``_config.yml`` below *config_dir* but its own, not entering another config's dir."""
+    found: list[Path] = []
+    for root, dirs, files in config_dir.walk():
+        dirs[:] = sorted(d for d in dirs if root / d not in other_configs)
+        if root != config_dir and CONFIG_FILENAME in files:
+            found.append(root / CONFIG_FILENAME)
+    return found
 
 
 def _row_edited(
@@ -147,13 +172,17 @@ def find_stale_entries(
         if component.get("id", "") not in ignored_components
         for cfg in component.get("configurations", [])
     }
+    # A config dir nested in another one is that config's, not the outer one's work.
+    other_configs = frozenset(branch_dir / e.path for e in entries if e.path)
     stale: list[StaleEntry] = []
     for entry in entries:
         if f"{entry.component_id}/{entry.id}" in remote_keys:
             continue
         action = "ignored" if entry.component_id in ignored_components else "removed"
         guarded = action == "removed" or entry.component_id == SANDBOXES_COMPONENT_ID
-        modified = guarded and _entry_locally_modified(service, branch_dir / entry.path, entry)
+        modified = guarded and _entry_locally_modified(
+            service, branch_dir / entry.path, entry, other_configs - {branch_dir / entry.path}
+        )
         stale.append(StaleEntry(entry=entry, action=action, locally_modified=modified))
     return stale
 
@@ -196,6 +225,20 @@ def _remove_dir(orphan_dir: Path, branch_dir: Path) -> None:
         parent = parent.parent
 
 
+def _remove_around(orphan_dir: Path, keep: set[Path]) -> None:
+    """Remove *orphan_dir*'s own files and dirs, leaving the config dirs in *keep* below it."""
+    for root, dirs, files in orphan_dir.walk(top_down=False):
+        if any(root == k or root.is_relative_to(k) for k in keep):
+            continue
+        for name in files:
+            (root / name).unlink()
+        for name in dirs:
+            child = root / name
+            if child.is_dir() and not any(child.iterdir()):
+                child.rmdir()
+    logger.info("Removed orphaned config files around nested configs: %s", orphan_dir)
+
+
 def apply_stale_sweep(
     stale: list[StaleEntry],
     branch_dir: Path,
@@ -214,6 +257,9 @@ def apply_stale_sweep(
     pull owns (written or kept by the fetch loop) is never deleted.
     """
     live_paths = {c.path for c in new_configurations}
+    # Config dirs that stay (written by this pull, or a kept edited entry): a
+    # stale config whose dir holds one is removed around it, never with it.
+    staying = live_paths | {s.entry.path for s in stale if s.locally_modified and not theirs}
     for s in stale:
         if s.locally_modified and not theirs:
             new_configurations.append(s.entry)
@@ -236,7 +282,11 @@ def apply_stale_sweep(
             }
         )
         if not dry_run and s.entry.path and s.entry.path not in live_paths:
-            _remove_dir(branch_dir / s.entry.path, branch_dir)
+            nested = {branch_dir / p for p in staying if p.startswith(f"{s.entry.path}/")}
+            if nested:
+                _remove_around(branch_dir / s.entry.path, nested)
+            else:
+                _remove_dir(branch_dir / s.entry.path, branch_dir)
 
 
 def sweep_stale_rows(

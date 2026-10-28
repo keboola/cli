@@ -162,8 +162,10 @@ These lists keep `error`, because their entries are not failed items with an err
   a local edit, which then pushes normally); when the remote deleted that row, pull removes
   the moved folder if it is unedited and keeps and reports it otherwise. When the remote
   deletes the whole CONFIG, pull keeps its folder (reported `skipped`) if any row folder in
-  it holds work: an edited row at any path, moved ones included, or a row folder no
-  tracked row stands for (a new row). A new row (no row id) under such a config is created
+  it holds work: an edited row at any path, moved ones included, a row folder no tracked
+  row stands for (a new row), or several folders carrying one row's id. Another config's
+  folder nested inside it is that config's, not this one's work: it is judged (and kept or
+  removed) on its own, and a removed outer config never takes a kept nested one with it. A new row (no row id) under such a config is created
   when the config itself equals the remote; otherwise run `sync pull` first. Pushing the
   adopted config registers its rows, so a later push never creates them a second time.
 - **A flow, orchestration or schedule created in the same push as a row it selects**
