@@ -106,6 +106,38 @@ class PromoteRemap:
     expected: set[tuple[str, str]] = field(default_factory=set)
     expected_rows: set[str] = field(default_factory=set)
     hold: Callable[[str, str, list[list[str]], set[tuple[str, ...]] | None], None] | None = None
+    row_reader: Callable[[str, str], set[str] | None] | None = None
+    _dev_rows: dict[tuple[str, str], set[str] | None] = field(default_factory=dict)
+
+    def use_target(self, client: Any, branch_id: int | None) -> None:
+        """Read the rows of identity parents from *client*'s target branch (D33)."""
+
+        def read(component_id: str, config_id: str) -> set[str] | None:
+            try:
+                detail = client.get_config_detail(
+                    component_id=component_id, config_id=config_id, branch_id=branch_id
+                )
+            except KeboolaApiError:
+                return None
+            rows = detail.get("rows") if isinstance(detail, dict) else None
+            if not isinstance(rows, list):
+                return None
+            return {str(row.get("id", "")) for row in rows if isinstance(row, dict)}
+
+        self.row_reader = read
+        self._dev_rows.clear()
+
+    def _existing_rows(self, component_id: str, config_id: str) -> set[str] | None:
+        """Row ids the target's copy of a config holds, cached; ``None`` when unreadable."""
+        key = (component_id, config_id)
+        if key not in self._dev_rows:
+            reader = self.row_reader
+            self._dev_rows[key] = reader(component_id, config_id) if reader else None
+        return self._dev_rows[key]
+
+    def _identity(self, key: tuple[str, str]) -> bool:
+        """True iff the target holds this config under its production id."""
+        return self.configs.get(key) == key[1]
 
     def plan(self, changes: list[dict[str, Any]]) -> None:
         """Note what this push creates: a reference to it resolves only after the create."""
@@ -148,8 +180,11 @@ class PromoteRemap:
             open_unit = (parent != config_id) or (
                 key not in self.configs and (key in self.expected or key in marked)
             )
+            # On an identity parent a row the target's copy holds is target form (D33).
+            existing = self._existing_rows(*key) if self._identity(key) and row_ids else None
             open_unit = open_unit or any(
-                (parent, r) in self.rows or r in self.expected_rows or (*key, r) in marked
+                (existing is None or r not in existing)
+                and ((parent, r) in self.rows or r in self.expected_rows or (*key, r) in marked)
                 for r in row_ids
             )
             if open_unit:
@@ -173,6 +208,8 @@ class PromoteRemap:
         A promote-created config maps only with ALL its rows mapped.
         """
         key = (component, config_id)
+        if self._identity(key) and row_ids:
+            return self._identity_unit(component, config_id, row_ids)
         if key in self.configs:
             parent = self.configs[key]
         elif key in self.expected or config_id in self._targets():
@@ -189,6 +226,29 @@ class PromoteRemap:
             else:
                 mapped.append(row_id)
         return parent, mapped
+
+    def _identity_unit(
+        self, component: str, config_id: str, row_ids: list[str]
+    ) -> tuple[str, list[str]] | None:
+        """An identity parent's unit, decided by the rows its target copy holds (D33).
+
+        The parent id does not tell source from target form here, so each row
+        does: one the target's copy holds is target form (never remapped
+        again), one the row map knows is source form (remapped), anything else
+        leaves the whole unit as it is -- as do unreadable target rows.
+        """
+        existing = self._existing_rows(component, config_id)
+        if existing is None:
+            return None
+        mapped: list[str] = []
+        for row_id in row_ids:
+            if row_id in existing:
+                mapped.append(row_id)
+            elif (config_id, row_id) in self.rows:
+                mapped.append(self.rows[(config_id, row_id)])
+            else:
+                return None
+        return config_id, mapped
 
     def refresh(
         self,
@@ -369,6 +429,7 @@ def finish_promote_rebind(
     failed PUT keeps the old one.
     """
     branch_id = target.branch_id
+    remap.use_target(client, branch_id)  # target rows as they are after this push's creates
     for (component_id, config_id), sent in remap.sent.items():
         payload = _with_target_identity(
             component_id, remap.apply(component_id, sent.original), sent
@@ -427,6 +488,8 @@ def recover_pending(
     form is left alone, so nothing is mapped twice. The new pending list is
     what the target still holds in source form after the PUT.
     """
+    if remap.row_reader is None:
+        remap.use_target(client, branch_id)
     content = _rebind_on_target(client, manifest, remap, component_id, config_id, branch_id)
     if content is not None:
         _settle(manifest, remap, component_id, config_id, branch_id, content, warnings)

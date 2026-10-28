@@ -118,7 +118,9 @@ These lists keep `error`, because their entries are not failed items with an err
   final rewrite fails, a create fails, or the config is edited again meanwhile; a
   reference leaves the list once it is rewritten. A task's config and the rows it selects
   (likewise a shared-code or variables link and its rows) switch to the dev ids together,
-  only once all of them exist there. The next promote push then reads that config
+  only once all of them exist there (for a config the dev branch holds under the
+  production id, kbagent reads which rows its dev copy holds; when it cannot, the
+  reference stays pending). The next promote push then reads that config
   from the dev branch, rewrites only those references and sends only its configuration,
   so its name, description, enabled state and any other change made there are kept. A
   config deleted there, or of a component you have since added to `ignoredComponents`,

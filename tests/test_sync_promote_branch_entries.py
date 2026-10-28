@@ -2129,9 +2129,17 @@ def _pending_flow_on_dev(refs: list[list[str]], task: dict) -> PendingFlow:
     return PendingFlow(manifest=manifest, flow=flow, remote=remote)
 
 
-def _in_memory_target(remote: dict) -> MagicMock:
+def _in_memory_target(remote: dict, others: dict | None = None) -> MagicMock:
+    """The flow's target copy; *others* answers other configs' reads (an exception raises)."""
     client = MagicMock()
-    client.get_config_detail.side_effect = lambda **_: copy.deepcopy(remote)
+
+    def detail(**kwargs: Any) -> dict:
+        other = (others or {}).get((kwargs["component_id"], kwargs["config_id"]))
+        if isinstance(other, Exception):
+            raise other
+        return copy.deepcopy(remote if other is None else other)
+
+    client.get_config_detail.side_effect = detail
 
     def put(**kwargs: Any) -> dict:
         remote["configuration"] = copy.deepcopy(kwargs["configuration"])
@@ -2242,7 +2250,7 @@ def test_recovery_resolves_rows_under_a_config_the_branch_holds_under_its_own_id
     )
     remap = PromoteRemap()
     remap.refresh(pending.manifest, DEV, {}, {})
-    client = _in_memory_target(pending.remote)
+    client = _in_memory_target(pending.remote, {(http, "P"): {"rows": [{"id": "2"}]}})
     recover_pending(client, pending.manifest, remap, "keboola.flow", "F", DEV, [])
 
     assert _task_of(pending.remote) == ("P", ["2"])
@@ -2273,3 +2281,55 @@ def test_recovery_follows_a_row_selection_edited_on_the_branch(all_rows_exist: b
             [http, "P", "1"],
             [http, "P", "2"],
         ]
+
+
+# ===========================================================================
+# Round 11 (D33; risks 67-68): identity parents decided by the target's rows
+# ===========================================================================
+
+
+def test_identity_parent_row_already_on_the_branch_is_never_remapped_again() -> None:
+    http = "keboola.ex-http"
+    task = {"type": "job", "componentId": http, "configId": "P", "configRowIds": ["1"]}
+    pending = _pending_flow_on_dev([[http, "P"], [http, "P", "1"], [http, "E"]], task)
+    pending.remote["configuration"]["tasks"].append(
+        {"id": "t2", "task": {"type": "job", "componentId": http, "configId": "E"}}
+    )  # E is still missing, so the flow stays pending across recoveries
+    remap = PromoteRemap(configs={(http, "P"): "P"}, rows={("P", "1"): "2", ("P", "2"): "3"})
+    client = _in_memory_target(pending.remote, {(http, "P"): {"rows": [{"id": "2"}, {"id": "3"}]}})
+    for _ in range(2):
+        recover_pending(client, pending.manifest, remap, "keboola.flow", "F", DEV, [])
+
+    assert _task_of(pending.remote) == ("P", ["2"])
+    assert pending.flow.metadata["rebind_pending"] == [[http, "E"]]
+
+
+def test_identity_parent_unit_with_a_missing_row_is_left_whole() -> None:
+    http = "keboola.ex-http"
+    task = {"type": "job", "componentId": http, "configId": "P", "configRowIds": ["1", "2"]}
+    pending = _pending_flow_on_dev([[http, "P"], [http, "P", "1"]], task)
+    remap = PromoteRemap(configs={(http, "P"): "P"}, rows={("P", "1"): "11"})
+    client = _in_memory_target(pending.remote, {(http, "P"): {"rows": [{"id": "11"}]}})
+    recover_pending(client, pending.manifest, remap, "keboola.flow", "F", DEV, [])
+
+    client.update_config.assert_not_called()
+    assert _task_of(pending.remote) == ("P", ["1", "2"])
+    assert pending.flow.metadata["rebind_pending"] == [
+        [http, "P"],
+        [http, "P", "1"],
+        [http, "P", "2"],
+    ]
+
+
+def test_identity_parent_with_unreadable_rows_is_left_untouched_and_pending() -> None:
+    http = "keboola.ex-http"
+    task = {"type": "job", "componentId": http, "configId": "P", "configRowIds": ["1"]}
+    pending = _pending_flow_on_dev([[http, "P"], [http, "P", "1"]], task)
+    remap = PromoteRemap(configs={(http, "P"): "P"}, rows={("P", "1"): "2"})
+    unreadable = KeboolaApiError("rows unavailable", 500, ErrorCode.API_ERROR)
+    client = _in_memory_target(pending.remote, {(http, "P"): unreadable})
+    recover_pending(client, pending.manifest, remap, "keboola.flow", "F", DEV, [])
+
+    client.update_config.assert_not_called()
+    assert _task_of(pending.remote) == ("P", ["1"])
+    assert pending.flow.metadata["rebind_pending"] == [[http, "P"], [http, "P", "1"]]
