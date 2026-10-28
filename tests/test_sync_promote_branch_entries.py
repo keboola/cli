@@ -24,8 +24,14 @@ import yaml
 from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 from keboola_agent_cli.services._sync_bindings import _refresh_binding_hashes
 from keboola_agent_cli.services._sync_models import CreatedConfig
-from keboola_agent_cli.services._sync_promote_remap import PromoteRemap, recover_pending
-from keboola_agent_cli.services._sync_push_create import ManifestCheckpointError
+from keboola_agent_cli.services._sync_promote_remap import (
+    PromoteRemap,
+    SentPayload,
+    finish_promote_rebind,
+    recover_pending,
+)
+from keboola_agent_cli.services._sync_push_create import CreateTarget, ManifestCheckpointError
+from keboola_agent_cli.services._sync_push_ops import push_update
 from keboola_agent_cli.services._sync_writeback import writeback_create_config_in_manifest
 from keboola_agent_cli.services.component_service import materialize_pushed_config
 from keboola_agent_cli.sync.branch_scope import same_branch
@@ -2333,3 +2339,119 @@ def test_identity_parent_with_unreadable_rows_is_left_untouched_and_pending() ->
     client.update_config.assert_not_called()
     assert _task_of(pending.remote) == ("P", ["1"])
     assert pending.flow.metadata["rebind_pending"] == [[http, "P"], [http, "P", "1"]]
+
+
+# ===========================================================================
+# Round 12 (D34; risks 69-70): SOURCE mode for main/ payloads, TARGET mode for recovery
+# ===========================================================================
+
+
+def _flow_selecting(tmp_path: Path, row_id: str) -> World:
+    """A pulled production flow whose task runs extractor P, row *row_id*."""
+    w = World(tmp_path)
+    w.api.types["keboola.flow"] = "other"
+    body = _flow_body("keboola.ex-http", "P")
+    body["tasks"][0]["task"]["configRowIds"] = [row_id]
+    w.api.remote[PROD][("keboola.flow", "cfg-flow")] = {
+        "id": "cfg-flow",
+        "name": "Nightly",
+        "description": "",
+        "configuration": body,
+        "rows": [],
+        "isDisabled": False,
+    }
+    w.init()
+    w.pull()
+    return w
+
+
+def _overlapping_identity_remap() -> PromoteRemap:
+    """P is held on the dev branch under its own id; rows 1 -> 2 and 2 -> 3 overlap."""
+    remap = PromoteRemap(
+        configs={("keboola.ex-http", "P"): "P"}, rows={("P", "1"): "2", ("P", "2"): "3"}
+    )
+    remap.row_reader = lambda component_id, config_id: {"2", "3"}  # the dev copy's rows
+    return remap
+
+
+def _sent_rows(client: MagicMock) -> list[str]:
+    configuration = client.update_config.call_args.kwargs["configuration"]
+    return configuration["tasks"][0]["task"]["configRowIds"]
+
+
+# -- risk 69: a main/ payload maps its source rows, never by dev existence ----
+
+
+def test_promote_update_maps_a_source_row_even_when_the_dev_copy_holds_that_id(
+    tmp_path: Path,
+) -> None:
+    w = _flow_selecting(tmp_path, "2")  # source row 2 -> dev row 3
+    client = MagicMock()
+    client.update_config.return_value = {}
+    push_update(
+        w.svc,
+        client,
+        "keboola.flow",
+        "cfg-flow",
+        w.config_dir("cfg-flow").relative_to(w.root / "main").as_posix(),
+        w.root,
+        load_manifest(w.root),
+        DEV,
+        remap=_overlapping_identity_remap(),
+    )
+    assert _sent_rows(client) == ["3"]
+
+
+def test_final_backfill_maps_a_source_row_even_when_the_dev_copy_holds_that_id(
+    tmp_path: Path,
+) -> None:
+    w = _flow_selecting(tmp_path, "2")
+    config_dir = w.config_dir("cfg-flow")
+    original = copy.deepcopy(w.api.remote[PROD][("keboola.flow", "cfg-flow")]["configuration"])
+    remap = _overlapping_identity_remap()
+    remap.sent[("keboola.flow", "cfg-flow")] = SentPayload(
+        config_dir=config_dir,
+        config_path=config_dir.relative_to(w.root / "main").as_posix(),
+        original=original,
+        configuration=original,  # sent before the row map knew row 2
+    )
+    client = MagicMock()
+    client.get_config_detail.return_value = {"rows": [{"id": "2"}, {"id": "3"}]}
+    client.update_config.side_effect = lambda **kwargs: {"configuration": kwargs["configuration"]}
+    finish_promote_rebind(
+        w.svc,
+        client,
+        remap,
+        manifest=load_manifest(w.root),
+        target=CreateTarget(w.root, "main", DEV),
+        warnings=[],
+        errors=[],
+        diff_changes={},
+        ignored_components=frozenset(),
+    )
+    assert _sent_rows(client) == ["3"]
+
+
+# -- risk 70: a TARGET-mode identity unit with an unresolved row stays pending --
+
+
+@pytest.mark.parametrize("rows_readable", [True, False], ids=["row-not-on-dev", "rows-unreadable"])
+def test_identity_unit_edited_to_an_unknown_row_keeps_the_config_pending(
+    rows_readable: bool,
+) -> None:
+    http = "keboola.ex-http"
+    # Pending for P/["1"]; on the dev branch the task was edited to row 99.
+    task = {"type": "job", "componentId": http, "configId": "P", "configRowIds": ["99"]}
+    pending = _pending_flow_on_dev([[http, "P"], [http, "P", "1"]], task)
+    remap = PromoteRemap(configs={(http, "P"): "P"}, rows={("P", "1"): "2"})
+    dev_rows: object = (
+        {"rows": [{"id": "2"}]}
+        if rows_readable
+        else KeboolaApiError("rows unavailable", 500, ErrorCode.API_ERROR)
+    )
+    client = _in_memory_target(pending.remote, {(http, "P"): dev_rows})
+    recover_pending(client, pending.manifest, remap, "keboola.flow", "F", DEV, [])
+
+    client.update_config.assert_not_called()
+    assert _task_of(pending.remote) == ("P", ["99"])
+    assert pending.flow.metadata["rebind_pending"] == [[http, "P"], [http, "P", "99"]]

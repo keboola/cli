@@ -108,6 +108,7 @@ class PromoteRemap:
     hold: Callable[[str, str, list[list[str]], set[tuple[str, ...]] | None], None] | None = None
     row_reader: Callable[[str, str], set[str] | None] | None = None
     _dev_rows: dict[tuple[str, str], set[str] | None] = field(default_factory=dict)
+    _target_mode: bool = False
 
     def use_target(self, client: Any, branch_id: int | None) -> None:
         """Read the rows of identity parents from *client*'s target branch (D33)."""
@@ -152,8 +153,15 @@ class PromoteRemap:
         }
 
     def pending_refs(self, component_id: str, original: dict[str, Any]) -> list[list[str]]:
-        """The references *original* still carries in source form once remapped (D30, D31)."""
-        return self.open_refs(component_id, self.apply(component_id, original), [])
+        """The references of *original*'s units SOURCE mode cannot rewrite yet (D30, D31, D34)."""
+        refs: list[list[str]] = []
+        for (component, config_id), row_ids in _references(component_id, original):
+            if self._unit(component, config_id, row_ids) is not None:
+                continue
+            for ref in [[component, config_id]] + [[component, config_id, r] for r in row_ids]:
+                if ref not in refs:
+                    refs.append(ref)
+        return refs
 
     def open_refs(
         self, component_id: str, content: dict[str, Any], stored: list[Any]
@@ -167,7 +175,10 @@ class PromoteRemap:
         whole), a create of this push, or a reference *stored* as pending (a
         dependency missing on the branch -- the stored list only marks it, it
         never limits what is rewritten). Computed from what the target holds,
-        so a selection edited on the branch counts as it is now.
+        so a selection edited on the branch counts as it is now. An identity
+        parent's unit (TARGET mode, D33/D34) stays open while any selected row
+        is not on the target's copy, or that copy's rows cannot be read --
+        also a row that was never stored (risk 70).
         """
         marked = {tuple(str(part) for part in ref) for ref in stored if isinstance(ref, list)}
         targets = self._targets()
@@ -180,13 +191,14 @@ class PromoteRemap:
             open_unit = (parent != config_id) or (
                 key not in self.configs and (key in self.expected or key in marked)
             )
-            # On an identity parent a row the target's copy holds is target form (D33).
-            existing = self._existing_rows(*key) if self._identity(key) and row_ids else None
-            open_unit = open_unit or any(
-                (existing is None or r not in existing)
-                and ((parent, r) in self.rows or r in self.expected_rows or (*key, r) in marked)
-                for r in row_ids
-            )
+            if self._identity(key) and row_ids:
+                existing = self._existing_rows(*key)
+                open_unit = existing is None or any(r not in existing for r in row_ids)
+            else:
+                open_unit = open_unit or any(
+                    (parent, r) in self.rows or r in self.expected_rows or (*key, r) in marked
+                    for r in row_ids
+                )
             if open_unit:
                 for ref in [[component, config_id]] + [[component, config_id, r] for r in row_ids]:
                     if ref not in refs:
@@ -208,7 +220,7 @@ class PromoteRemap:
         A promote-created config maps only with ALL its rows mapped.
         """
         key = (component, config_id)
-        if self._identity(key) and row_ids:
+        if self._target_mode and self._identity(key) and row_ids:
             return self._identity_unit(component, config_id, row_ids)
         if key in self.configs:
             parent = self.configs[key]
@@ -276,19 +288,28 @@ class PromoteRemap:
         rows.update(created_rows)
         self.configs, self.rows = configs, rows
 
-    def apply(self, component_id: str, configuration: dict[str, Any]) -> dict[str, Any]:
+    def apply(
+        self, component_id: str, configuration: dict[str, Any], *, target: bool = False
+    ) -> dict[str, Any]:
         """A copy of *configuration* with every known source id replaced.
 
-        *configuration* must hold SOURCE ids (an original payload): every
-        reference is looked up once, by its source identity. Applying it to an
-        already remapped payload could map a target id again when source and
-        target ids overlap.
+        Two modes, never mixed (D34). SOURCE mode (default): *configuration*
+        was built from main/ (a create, an update, the final backfill from
+        ``sent.original``), so every id in it is a source id and is mapped
+        strictly through the map, once. TARGET mode (*target*): it is the
+        target's own copy (recovery), where a unit may already be in target
+        form; an identity parent's unit is then decided by the rows the
+        target's copy holds (D33).
         """
         out = copy.deepcopy(configuration)
-        if component_id in _RUN_TARGET_COMPONENTS:
-            self._remap_run_targets(component_id, out)
-        self._remap_variables(out)
-        self._remap_shared_code(out)
+        self._target_mode = target
+        try:
+            if component_id in _RUN_TARGET_COMPONENTS:
+                self._remap_run_targets(component_id, out)
+            self._remap_variables(out)
+            self._remap_shared_code(out)
+        finally:
+            self._target_mode = False
         if out == configuration:
             return configuration
         return out
@@ -528,7 +549,7 @@ def _rebind_on_target(
     configuration = (remote or {}).get("configuration")
     if not isinstance(configuration, dict):
         return None
-    rewritten = remap.apply(component_id, configuration)
+    rewritten = remap.apply(component_id, configuration, target=True)
     if rewritten == configuration:
         return configuration
     response = _put_configuration(client, component_id, config_id, rewritten, branch_id)
