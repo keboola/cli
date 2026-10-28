@@ -39,6 +39,21 @@ SCHEDULER_COMPONENT_ID = "keboola.scheduler"
 # use each row as a ``{{<row id>}}`` placeholder.
 SHARED_CODE_COMPONENT_ID = "keboola.shared-code"
 
+# Manifest metadata of a promote write (``push --branch DEV`` reading main/)
+# whose references may still name source ids on the target: the list of those
+# source references, cleared once every one maps to a target id (D24, D30).
+REBIND_PENDING_KEY = "rebind_pending"
+# Row metadata: the source row a promote push created this row from (D24).
+PROMOTED_ROW_KEY = "promoted_from_id"
+# Config metadata: the source config a promoted entry stands for, kept when a
+# pull of its branch moves the entry's files into that branch's own tree (its
+# ``promoted_from`` then no longer applies) -- what a pending rebind needs.
+PROMOTED_SOURCE_KEY = "promoted_source"
+# Row metadata: a row a promote push created from a row file with no source id
+# (authored in the source tree). Linked by path, once, when the source tree's
+# own branch creates that row (risk 83).
+AUTHORED_ROW_KEY = "promoted_authored"
+
 
 @dataclass
 class WritebackResult:
@@ -52,6 +67,25 @@ class WritebackResult:
 
     entry: ManifestConfiguration
     previous_id: str
+
+
+@dataclass
+class CreateOutcome:
+    """A config ``push_create`` POSTed, before any local bookkeeping (D25).
+
+    The caller records the new id in the manifest and saves it FIRST, then
+    writes the local file back (``pristine_data`` + the encrypted
+    ``configuration``) and stamps the baselines. ``file_config_id`` is the id
+    the local file may carry: empty on the promote path (D19, D23).
+    """
+
+    result: dict[str, Any]
+    pristine_data: dict[str, Any]
+    configuration: dict[str, Any]
+    config_dir: Path
+    file_config_id: str
+    # Promote path: the source references this push still creates (D30).
+    pending_refs: list[list[str]] = field(default_factory=list)
 
 
 @dataclass

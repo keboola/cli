@@ -155,6 +155,20 @@ directory. Re-running the same push creates nothing; a later edit in `main/`
 updates the dev copy, never production. Older versions created another dev copy
 on every push (see gotchas.md).
 
+The dev branch's record of each promoted `main/` folder is its own (since vNEXT):
+the production record is never changed by a `--branch` push, so production
+`sync diff` keeps showing an edit you only promoted as a local `modified` change,
+and a production `sync pull` neither overwrites it nor deletes a promoted folder.
+A promote push never writes a dev id into `main/`: a production config keeps its
+production id, a config authored there keeps none (a plain `sync push` later
+creates it in production), and the dev-branch record (`promoted_from` in the
+manifest) maps the folder to the dev id. A production rename moves that record
+with the folder; deleting the folder is a local delete for the dev branch
+(`--force` deletes the dev config). Every promote push rewrites the references
+of what it sends (flow tasks, schedule targets, variables and shared-code links)
+to the dev ids of the configs promote pushes created there; `main/` keeps the
+production ids.
+
 ## Switching back to production after a `--branch` pull (since v0.89.0)
 
 `sync pull --branch <dev>` does two things: it materializes the
@@ -189,7 +203,10 @@ kbagent sync diff --project prod                  # target: production
   `path`, `branch_id`, `branch_path`, `exists_on_target`, `reason`, `hint`) plus
   a `summary.orphaned` counter; human mode previews the first 10.
 - The fix: `kbagent sync pull --project prod` re-targets the manifest back to
-  production. Then diff/push behave normally and the warning disappears.
+  production. Then diff/push behave normally and the warning disappears. That pull
+  reads no dev-branch baselines (since vNEXT): it writes each config into the `main/`
+  folder whose `_config.yml` carries its id, and keeps (`skipped`) a folder that
+  differs from production, which then diffs as a `conflict`.
 
 Before this landed, that production diff classified the whole orphaned `main/`
 tree as `added` with an empty `config_id`, and `sync push` would have created a
@@ -528,6 +545,9 @@ internal state:
   `sync pull` drops its manifest entries and removes their local directories.
   Those removals are reported with pull action `"ignored"` -- distinct from
   `"removed"`, which means the config was genuinely deleted on the remote.
+  *(since vNEXT)* A dev-branch record a promote push made (`sync push --branch
+  <dev>` from `main/`) is kept untouched instead, so un-ignoring the component
+  does not make the next promote create a duplicate dev config.
 - **Diff/push never see ignored configs**, on either side of the comparison:
   a stale local directory for an ignored component is filtered out too, so it
   can never be classified as `DELETED` and pushed as a remote deletion.

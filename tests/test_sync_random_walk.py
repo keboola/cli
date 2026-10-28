@@ -479,7 +479,15 @@ class Sim:
         # remote intent: (branch, comp, cid, slot) -> value written remotely
         # and not yet pulled into that branch's tree
         self.remote_pending: dict[tuple[int, str, str, str], Any] = {}
+        # The value a pending slot had at the last sync, i.e. before its first
+        # unpulled remote change: a later change back to it leaves nothing
+        # unpulled (ABA), so a push applying a local change there is correct.
+        self.remote_base: dict[tuple[int, str, str, str], Any] = {}
         self.log: list[str] = []
+        # The walk's own record of what a promote push created (D18): main/
+        # keeps the source ids, so a dir's DEV id is known only from the push.
+        # (component, "id:<source id>" | "path:<dir>") -> DEV config id.
+        self.promoted: dict[tuple[str, str], str] = {}
 
     # -- helpers ---------------------------------------------------------
     def tok(self) -> str:
@@ -729,12 +737,22 @@ class Sim:
     def _remote_pick(self, branch: int, f: float) -> tuple[str, str] | None:
         return _pick(sorted(self.api.remote[branch]), f)
 
-    def _remote_set(self, branch: int, key: tuple[str, str], slot: str) -> None:
+    def _remote_set(
+        self, branch: int, key: tuple[str, str], slot: str, before: dict[str, Any]
+    ) -> None:
+        """Record a remote change of *slot*; *before* is the projection before it."""
         comp, cid = key
         cfg = self.api.remote[branch][key]
         if branch == DEV and not self.dev_synced:
             return
-        self.remote_pending[(branch, comp, cid, slot)] = remote_projection(comp, cfg).get(slot)
+        pkey = (branch, comp, cid, slot)
+        if pkey not in self.remote_pending:
+            self.remote_base[pkey] = before.get(slot)
+        now = remote_projection(comp, cfg).get(slot)
+        if now == self.remote_base[pkey]:
+            self.remote_pending.pop(pkey, None)  # back at the synced value
+        else:
+            self.remote_pending[pkey] = now
 
     def remote_edit(self, a: float, b: float, c: float) -> None:
         branch = self._remote_branch(c)
@@ -743,6 +761,7 @@ class Sim:
             return
         comp, _cid = key
         cfg = self.api.remote[branch][key]
+        before = remote_projection(comp, cfg)
         slots = [s for s in COMPONENT_SLOTS[comp] if s != "name"]
         if cfg["rows"]:
             slots.append("row")
@@ -770,7 +789,7 @@ class Sim:
             row = _pick(cfg["rows"], (b * 7) % 1)
             row["configuration"].setdefault("parameters", {})["value"] = new
             slot = f"row:{row['name']}"
-        self._remote_set(branch, key, slot)
+        self._remote_set(branch, key, slot, before)
         self.note(f"  remote edit {branch} {key} [{slot}] -> {new}")
 
     def remote_create(self, a: float, _b: float, c: float) -> None:
@@ -796,8 +815,9 @@ class Sim:
         if key is None:
             return
         cfg = self.api.remote[branch][key]
+        before = remote_projection(key[0], cfg)
         cfg["isDisabled"] = not cfg["isDisabled"]
-        self._remote_set(branch, key, "disabled")
+        self._remote_set(branch, key, "disabled", before)
         self.note(f"  remote toggle disabled {branch} {key} -> {cfg['isDisabled']}")
 
     def remote_rename(self, a: float, _b: float, c: float) -> None:
@@ -807,8 +827,9 @@ class Sim:
         key = self._remote_pick(branch, a)
         if key is None:
             return
+        before = remote_projection(key[0], self.api.remote[branch][key])
         self.api.remote[branch][key]["name"] = f"Name {self.tok()}"
-        self._remote_set(branch, key, "name")
+        self._remote_set(branch, key, "name", before)
         self.note(f"  remote rename {branch} {key} -> {self.api.remote[branch][key]['name']}")
 
     def remote_row_add(self, a: float, _b: float, c: float) -> None:
@@ -819,9 +840,10 @@ class Sim:
         key = _pick(keys, a)
         if key is None:
             return
+        before = remote_projection(key[0], self.api.remote[branch][key])
         row = self._remote_row(f"Row {self.tok()}")
         self.api.remote[branch][key]["rows"].append(row)
-        self._remote_set(branch, key, f"row:{row['name']}")
+        self._remote_set(branch, key, f"row:{row['name']}", before)
         self.note(f"  remote row add {branch} {key} {row['name']}")
 
     def remote_row_delete(self, a: float, b: float, c: float) -> None:
@@ -836,9 +858,10 @@ class Sim:
         key = _pick(keys, a)
         if key is None:
             return
+        before = remote_projection(key[0], self.api.remote[branch][key])
         rows = self.api.remote[branch][key]["rows"]
         row = rows.pop(min(int(b * len(rows)), len(rows) - 1))
-        self._remote_set(branch, key, f"row:{row['name']}")
+        self._remote_set(branch, key, f"row:{row['name']}", before)
         self.note(f"  remote row delete {branch} {key} {row['name']}")
 
     # -- commands -------------------------------------------------------------
@@ -937,6 +960,8 @@ class Sim:
         )
         if result is None:
             return
+        if target == DEV and not self.tree(DEV).is_dir():
+            self.record_promoted(before)
         self.note(
             f"  {label} -> created={result.get('created')} updated={result.get('updated')} "
             f"deleted={result.get('deleted')} errors={len(result.get('errors') or [])} "
@@ -1039,12 +1064,15 @@ class Sim:
                 if isinstance(item, dict) and item.get("config_id"):
                     listed_ids.setdefault(str(item["config_id"]), set()).add(key)
         tree = self.tree(branch)
-        if not tree.is_dir():  # push --branch DEV promotes main/
+        promote = branch == DEV and not tree.is_dir()
+        if promote:  # push --branch DEV promotes main/
             tree = self.tree(PROD)
         remote = self.api.remote[branch]
+        local_ids: set[str] = set()
         for d in config_dirs(tree):
             rel = d.relative_to(tree).as_posix()
-            comp, cid = dir_identity(d)
+            comp, cid = self.dev_identity(d) if promote else dir_identity(d)
+            local_ids.add(cid)
             local = local_projection(d)
             if not cid:
                 if rel not in listed_paths:
@@ -1084,13 +1112,49 @@ class Sim:
                 )
         # A config that exists only on the remote (created in the UI, not
         # pulled yet) must show up in diff too, not only local directories.
-        local_ids = {dir_identity(d)[1] for d in config_dirs(tree)}
         for comp, cid in remote:
             if cid not in local_ids and cid not in listed_ids:
                 raise Violation(
                     "invisible_remote_config",
                     f"{comp}/{cid} exists only on branch {branch} but diff is silent",
                 )
+
+    @staticmethod
+    def _source_key(d: Path, tree: Path) -> tuple[str, str]:
+        comp, cid = dir_identity(d)
+        return comp, f"id:{cid}" if cid else f"path:{d.relative_to(tree).as_posix()}"
+
+    def record_promoted(self, before: dict[tuple[str, str], Any]) -> None:
+        """Map each config a promote push created on DEV to its main/ dir.
+
+        The dir is the one whose name the new config carries (every name in
+        the walk is unique). Independent of the manifest, so a wrong mapping
+        written there is caught by the consistency check.
+        """
+        main = self.tree(PROD)
+        for comp, cid in set(self.api.remote[DEV]) - set(before):
+            name = self.api.remote[DEV][(comp, cid)].get("name")
+            dirs = [
+                d
+                for d in config_dirs(main)
+                if dir_identity(d)[0] == comp and read_yaml(d / "_config.yml").get("name") == name
+            ]
+            if len(dirs) == 1:
+                self.promoted[self._source_key(dirs[0], main)] = cid
+
+    def rekey_promoted(self) -> None:
+        """A promoted authored dir that got a production id is now known by it."""
+        main = self.tree(PROD)
+        for d in config_dirs(main):
+            comp, cid = dir_identity(d)
+            path_key = (comp, f"path:{d.relative_to(main).as_posix()}")
+            if cid and path_key in self.promoted:
+                self.promoted.setdefault((comp, f"id:{cid}"), self.promoted.pop(path_key))
+
+    def dev_identity(self, d: Path) -> tuple[str, str]:
+        """The DEV config a main/ dir stands for on the promote path."""
+        comp, cid = dir_identity(d)
+        return comp, self.promoted.get(self._source_key(d, self.tree(PROD)), cid)
 
     def step(self, step: Step) -> None:
         name, a, b, c = step
@@ -1099,6 +1163,7 @@ class Sim:
         getattr(self, name)(a, b, c)
         if self.skipped_step:
             return
+        self.rekey_promoted()
         self.deliver()
         self.check_no_lost_edit(name)
         if name in ("pull", "pull_force", "pull_theirs", "push", "push_force"):
@@ -1167,10 +1232,7 @@ MASKS = frozenset(
         "new-description-file",
         "new-config-rows",
         "remote-row-add-invisible",
-        "promote-then-pull",
-        "rename-across-trees",
         "untracked-row-overwrite",
-        "retarget-reuses-other-tree-baseline",
         # Not a bug by itself: after `pull --branch DEV` main/ is orphaned by
         # design (#649), so the masked user keeps working in dev/ with
         # --branch DEV. Unmasked, it surfaces the row variant of
@@ -1394,19 +1456,13 @@ def test_finding_remote_added_row_is_visible_in_diff(tmp_path: Path) -> None:
     assert any(cid == "1000" for _, cid in _changes(sim))
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "FINDING promote-then-pull (edit): `push --branch DEV` from main/ "
-        "re-stamps the shared manifest baseline with the DEV result "
-        "(stamp_updated_config). `sync diff` on production then calls the "
-        "local edit `remote_modified` (production never changed), and the "
-        "next plain `sync pull` silently replaces the edited transform.sql "
-        "with production's code. The edit survives only on DEV; the next "
-        "promote from the reverted main/ has nothing of it."
-    ),
-)
 def test_finding_promote_then_pull_keeps_local_edit(tmp_path: Path) -> None:
+    """Was FINDING promote-then-pull (edit): `push --branch DEV` from main/ re-stamps
+    the shared manifest baseline with the DEV result (stamp_updated_config). `sync diff`
+    on production then calls the local edit `remote_modified` (production never
+    changed), and the next plain `sync pull` silently replaces the edited transform.sql
+    with production's code. The edit survives only on DEV; the next promote from the
+    reverted main/ has nothing of it."""
     sim = _world(tmp_path)
     sql = _dir(sim, "transformation/keboola.snowflake-transformation/name-tk16z/transform.sql")
     sql.write_text(sql.read_text().replace("tk15z", "tk900z"), encoding="utf-8")
@@ -1417,17 +1473,11 @@ def test_finding_promote_then_pull_keeps_local_edit(tmp_path: Path) -> None:
     assert "tk900z" in sql.read_text()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "FINDING promote-then-pull (new config): a config authored in main/ "
-        "and promoted with `push --branch DEV` exists only on DEV. The next "
-        "plain `sync pull` (production) reports it 'removed' -- the label "
-        "for 'deleted on the remote' -- and deletes the authored directory "
-        "from main/ (stale-entry sweep, _sync_stale.py)."
-    ),
-)
 def test_finding_promoted_new_config_dir_survives_pull(tmp_path: Path) -> None:
+    """Was FINDING promote-then-pull (new config): a config authored in main/ and
+    promoted with `push --branch DEV` exists only on DEV. The next plain `sync pull`
+    (production) reports it 'removed' -- the label for 'deleted on the remote' -- and
+    deletes the authored directory from main/ (stale-entry sweep, _sync_stale.py)."""
     sim = _world(tmp_path)
     sim.local_new(0.6, 0.0, 0.0)  # a python-transformation-v2 copy
     (new_dir,) = (sim.root / "main/transformation/keboola.python-transformation-v2").glob("new-*")
@@ -1436,18 +1486,12 @@ def test_finding_promoted_new_config_dir_survives_pull(tmp_path: Path) -> None:
     assert new_dir.is_dir()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "FINDING rename-across-trees: one manifest entry (one path) serves "
-        "both branch trees. A config renamed on DEV gets a new path on `pull "
-        "--branch DEV`; the next plain `sync pull` writes production's copy "
-        "under that NEW path in main/ and leaves the old main/ directory, "
-        "which still carries the config id. diff calls it 'added' and a plain "
-        "`sync push` CREATES A DUPLICATE config in production."
-    ),
-)
 def test_finding_rename_on_dev_does_not_duplicate_prod_config(tmp_path: Path) -> None:
+    """Was FINDING rename-across-trees: one manifest entry (one path) serves both branch
+    trees. A config renamed on DEV gets a new path on `pull --branch DEV`; the next
+    plain `sync pull` writes production's copy under that NEW path in main/ and leaves
+    the old main/ directory, which still carries the config id. diff calls it 'added'
+    and a plain `sync push` CREATES A DUPLICATE config in production."""
     sim = _world(tmp_path)
     _pull(sim, DEV)
     sim.api.remote[DEV][PYT_1]["name"] = "Renamed on dev"
@@ -1458,17 +1502,14 @@ def test_finding_rename_on_dev_does_not_duplicate_prod_config(tmp_path: Path) ->
     assert set(sim.api.remote[PROD]) == before, "push created a duplicate config"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "FINDING untracked-row-overwrite: rows have no #792 E adopt guard. "
-        "A row deleted on production is dropped from the SHARED manifest by "
-        "a plain `sync pull`; the dev/ copy of that row file, edited locally, "
-        "is now untracked and the next `pull --branch DEV` overwrites it "
-        "without a conflict or skip (sync_service.py:931 write branch)."
-    ),
-)
 def test_finding_untracked_row_edit_survives_dev_pull(tmp_path: Path) -> None:
+    """Was FINDING untracked-row-overwrite: rows have no #792 E adopt guard. A row
+    deleted on production is dropped from the SHARED manifest by a plain `sync pull`;
+    the dev/ copy of that row file, edited locally, is now untracked and the next `pull
+    --branch DEV` overwrites it without a conflict or skip (sync_service.py:931 write
+    branch). Fixed by D15: a row pull rediscovers by its row id and has no baseline for
+    keeps a local file that differs from the remote (skipped); only --theirs overwrites
+    it. The walk keeps its mask until a seed sweep without it is green."""
     sim = _world(tmp_path)
     rows = sim.api.remote[PROD][HTTP_2]["rows"]
     sim.api.remote[PROD][HTTP_2]["rows"] = [r for r in rows if r["name"] != "Row tk11z"]
@@ -1481,18 +1522,12 @@ def test_finding_untracked_row_edit_survives_dev_pull(tmp_path: Path) -> None:
     assert "tk900z" in row.read_text()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "FINDING retarget-reuses-other-tree-baseline: `pull --branch DEV` "
-        "re-stamps the shared manifest entry (incl. pull_extra_hashes) from "
-        "dev/. A later plain `sync pull` judges main/ against dev/'s "
-        "baseline: a main/ config whose _description.md was removed (and "
-        "pushed) is reported 'skipped: locally modified' and diffs as a "
-        "conflict although main/ equals production."
-    ),
-)
 def test_finding_retarget_pull_has_no_false_conflict(tmp_path: Path) -> None:
+    """Was FINDING retarget-reuses-other-tree-baseline: `pull --branch DEV` re-stamps
+    the shared manifest entry (incl. pull_extra_hashes) from dev/. A later plain `sync
+    pull` judges main/ against dev/'s baseline: a main/ config whose _description.md was
+    removed (and pushed) is reported 'skipped: locally modified' and diffs as a conflict
+    although main/ equals production."""
     sim = _world(tmp_path)
     d = _dir(sim, "transformation/keboola.python-transformation-v2/name-tk21z")
     (d / "_description.md").unlink()
@@ -1563,3 +1598,101 @@ def test_finding_force_delete_of_config_with_rows_reports_no_errors(tmp_path: Pa
     result = _push(sim, force=True)
     assert HTTP_2 not in sim.api.remote[PROD]
     assert result["errors"] == []
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "FINDING force-delete-over-remote-edit (row variant): a row dir deleted "
+        "locally whose row was edited on the remote since the last pull diffs "
+        "as plain 'deleted' (compute_row_changeset never weighs the remote "
+        "change), so `push --force` deletes the row and the remote edit with "
+        "it. Deferred with the config variant (group 4)."
+    ),
+)
+def test_finding_force_push_does_not_delete_remotely_edited_row(tmp_path: Path) -> None:
+    sim = _world(tmp_path)
+    shutil.rmtree(_dir(sim, "extractor/keboola.ex-http/name-tk6z/rows/row-tk4z"))
+    (row,) = [r for r in sim.api.remote[PROD][HTTP_1]["rows"] if r["name"] == "Row tk4z"]
+    row["configuration"]["parameters"]["value"] = "tk900z"
+    _push(sim, force=True)
+    assert any(r["id"] == row["id"] for r in sim.api.remote[PROD][HTTP_1]["rows"]), (
+        "the unpulled remote row edit was deleted"
+    )
+
+
+def test_remote_change_undone_before_a_push_is_no_unpulled_change(tmp_path: Path) -> None:
+    """Seed 2956 (ABA): remote toggle, local toggle, remote toggle back, push.
+
+    The remote's net state is the synced baseline again, so the 3-way push
+    applying the local change clobbers nothing.
+    """
+    sim = _world(tmp_path)
+    sim.remote_toggle(0.0, 0.0, 0.0)  # 1. production, the first config
+    key = min(sim.api.remote[PROD])
+    assert sim.api.remote[PROD][key]["isDisabled"] is True  # disabled -> True
+    (d,) = [d for d in config_dirs(sim.root / "main") if dir_identity(d) == key]
+    data = read_yaml(d / "_config.yml")
+    data["is_disabled"] = True  # 2. local toggle -> True
+    write_yaml(d / "_config.yml", data)
+    sim.remote_toggle(0.0, 0.0, 0.0)  # 3. -> False, the last-synced value
+    assert (PROD, *key, "disabled") not in sim.remote_pending
+    sim.push()  # 4. sets True; raises Violation on a clobber
+    assert sim.api.remote[PROD][key]["isDisabled"] is True
+
+
+# ===========================================================================
+# Round 2 regressions found by the 500-seed walk: shrunk reproductions run as
+# deterministic tests (the walk's own invariants decide).
+# ===========================================================================
+
+WALK_REGRESSIONS: dict[str, list[Step]] = {
+    # remote row edit -> pull --branch DEV -> pull -> push clobbered it (D22)
+    "seed-271": [
+        ("remote_edit", 0.35550746574436043, 0.6770491017017181, 0.3726971263203732),
+        ("pull_dev", 0.39402594476208674, 0.09162580950101207, 0.9237018429078202),
+        ("pull", 0.05324355645395262, 0.8223788420226907, 0.5246801890174003),
+        ("push", 0.8857476477294035, 0.8712173081193795, 0.33126045977162843),
+    ],
+    "seed-233": [
+        ("remote_edit", 0.2184030271117674, 0.8204275661688327, 0.29244447115860983),
+        ("pull_dev", 0.5022213939686381, 0.7377292459558832, 0.41143752577108217),
+        ("pull_force", 0.13509570215303002, 0.8476217872679043, 0.5317099889572965),
+        ("push", 0.5371233876119833, 0.7850284902102761, 0.9909448349908669),
+    ],
+    "seed-153": [
+        ("pull_dev", 0.07566715804768631, 0.26001041161707716, 0.8515491218429709),
+        ("remote_edit", 0.4966182107510705, 0.9033367455974916, 0.09210438456708558),
+        ("pull", 0.2643210692995429, 0.5267996481451631, 0.717666018877777),
+        ("push_force", 0.8465725752856048, 0.8585732408992508, 0.21888965336514288),
+    ],
+    "seed-108": [
+        ("pull_dev", 0.3905354232573156, 0.627635098096424, 0.6914911911849517),
+        ("pull", 0.05532920916119577, 0.7229520795060453, 0.8136064185879031),
+        ("remote_edit", 0.345675914045974, 0.7227325836703358, 0.9892431695016232),
+        ("pull_dev", 0.5139125737055625, 0.10244230598366189, 0.650429031182478),
+        ("push_dev", 0.42739849115091066, 0.9912625026060519, 0.3756852421336002),
+    ],
+    # promote, then a DEV update wrote the DEV id into main/ (D23)
+    "seed-98": [
+        ("remote_create", 0.37223067629228457, 0.6638616290689402, 0.012630742360005165),
+        ("pull", 0.042817846844177554, 0.6070172700735184, 0.03508934726560298),
+        ("push_dev", 0.6939440256092885, 0.782579085617098, 0.35910827980674653),
+        ("local_edit", 0.8582773805722889, 0.32990546952085587, 0.690911002537553),
+        ("push", 0.6653205060158662, 0.12303173448719418, 0.8571904631325935),
+        ("push_dev", 0.8635074959160928, 0.6778366075345966, 0.0977998267460558),
+    ],
+    "seed-322": [
+        ("local_new", 0.9915432599897419, 0.15535947166203223, 0.18663384497324276),
+        ("push_dev", 0.7988587742559923, 0.597274646456379, 0.12945429120308038),
+        ("local_edit", 0.9908417071814976, 0.056457000464619655, 0.894342196818189),
+        ("push", 0.9328414561347542, 0.6201898702247746, 0.23825548181722989),
+        ("push_dev", 0.06711082277734404, 0.9225645857690428, 0.6646808985414843),
+    ],
+}
+
+
+@pytest.mark.parametrize("name", sorted(WALK_REGRESSIONS))
+def test_walk_regression(name: str) -> None:
+    violation, log = run_walk(WALK_REGRESSIONS[name], MASKS)
+    assert violation is None, f"{name}: {violation}\n" + "\n".join(log)

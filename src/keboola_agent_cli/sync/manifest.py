@@ -6,7 +6,10 @@ directories written by kbagent are compatible with `kbc` tooling.
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -198,7 +201,41 @@ def save_manifest(project_root: Path, manifest: Manifest) -> None:
     payload = manifest.model_dump(mode="json", by_alias=True)
     if not manifest.sync_workspaces:
         payload.pop("syncWorkspaces", None)
-    manifest_path.write_text(
-        json.dumps(payload, indent=4, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
+    data = (json.dumps(payload, indent=4, ensure_ascii=False) + "\n").encode("utf-8")
+    # Atomic: a temp file in the same directory, flushed to disk, then renamed
+    # over the manifest. ``sync push`` saves after every create (a crash must
+    # not lose the record of a created config), so an interrupted save must
+    # leave the previous manifest whole, never a truncated one. The temp file
+    # is created with 0666 so the OS applies the umask, exactly as a plain
+    # write of a new file would; an existing manifest's mode is copied over.
+    tmp_path = keboola_dir / f".{MANIFEST_FILENAME}.{os.getpid()}.{uuid.uuid4().hex}"
+    fd = os.open(tmp_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0), 0o666)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if manifest_path.exists():
+            os.chmod(tmp_path, manifest_path.stat().st_mode & 0o777)
+        os.replace(tmp_path, manifest_path)
+        _fsync_dir(keboola_dir)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            tmp_path.unlink()
+        raise
+
+
+def _fsync_dir(directory: Path) -> None:
+    """Flush the rename to disk (POSIX; best effort, a no-op on Windows).
+
+    ``os.replace`` is atomic, but only a sync of the directory makes the new
+    name survive a power loss.
+    """
+    if os.name != "posix":
+        return
+    with contextlib.suppress(OSError):
+        fd = os.open(directory, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)

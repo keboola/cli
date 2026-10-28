@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..errors import ErrorCode, KeboolaApiError
+from ..sync.branch_scope import find_branch_entry
 from ..sync.code_extraction import merge_code_files
 from ..sync.config_format import local_config_to_api
 from ..sync.manifest import Manifest
@@ -420,17 +421,13 @@ def _refresh_binding_hashes(
     )
     if stamp.warning is not None:
         warnings.append(stamp.warning)
-    target_branch = branch_id or 0
-    for cfg in manifest.configurations:
-        if (
-            cfg.branch_id == target_branch
-            and cfg.component_id == created.component_id
-            and cfg.id == created.config_id
-        ):
-            cfg.metadata["pull_hash"] = hashes.file_hash
-            cfg.metadata["pull_extra_hashes"] = hashes.extra_hashes
-            apply_stamp(cfg.metadata, stamp)
-            break
+    # ``same_branch``: a push to branch None updates an entry recorded under the
+    # default branch id (and the other way round) -- a raw ``==`` missed it.
+    cfg = find_branch_entry(manifest, created.component_id, created.config_id, branch_id)
+    if cfg is not None:
+        cfg.metadata["pull_hash"] = hashes.file_hash
+        cfg.metadata["pull_extra_hashes"] = hashes.extra_hashes
+        apply_stamp(cfg.metadata, stamp)
 
 
 # ---------------------------------------------------------------------------

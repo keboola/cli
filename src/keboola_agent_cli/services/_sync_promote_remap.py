@@ -1,0 +1,854 @@
+"""Config references on the promote path (D24, D29, D30).
+
+``sync push --branch DEV`` with no ``dev/`` tree reads ``main/``, whose files
+name PRODUCTION ids -- a flow's task ``configId``, a transformation's
+``variables_id`` / ``shared_code_id``, a schedule's target. A config the
+promote push created on the dev branch has another id there. The source files
+keep the production ids (D19, D23), so every payload sent to the dev branch is
+remapped in memory on EVERY promote push, create and update alike:
+
+- :class:`PromoteRemap` holds source id -> target id for the configs (from the
+  ``promoted_from`` of every promote entry of the target branch, plus this
+  push's creates) and for their rows (``promoted_from_id`` of each row a
+  promote push created), and rewrites one payload for every reference kind
+  at once, each reference once from its source id.
+- A config sent before a config it references was created (same push) is
+  fixed by :func:`finish_promote_rebind` after all creates, from its original
+  payload: ``main/`` is not read again.
+- Such a config records ``rebind_pending``: the references it still carries in
+  source form (D30), checkpointed before its PUT. A push that dies, or whose
+  dependency create fails, leaves it; a later promote push reads the config
+  FROM THE TARGET, rewrites every unit there that now resolves (D31, D32) and
+  PUTs only ``configuration`` (D29) -- every other change made on the branch
+  since survives by construction. The new list is what the target still holds
+  in source form; the stored one only marks missing dependencies.
+"""
+
+from __future__ import annotations
+
+import copy
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+from ..errors import ErrorCode, KeboolaApiError
+from ..sync.branch_scope import find_branch_entry, promoted_from, same_branch, scope_manifest
+from ..sync.config_format import api_config_to_local
+from ..sync.diff_engine import config_hash
+from ..sync.manifest import Manifest
+from ._data_app_bodies import DATA_APP_COMPONENT_ID
+from ._sync_baseline import apply_stamp, config_baseline
+from ._sync_bindings import _rewrite_list_placeholders, task_config_ref
+from ._sync_models import (
+    FLOW_COMPONENT_ID,
+    ORCHESTRATOR_COMPONENT_ID,
+    PROMOTED_ROW_KEY,
+    PROMOTED_SOURCE_KEY,
+    REBIND_PENDING_KEY,
+    SCHEDULER_COMPONENT_ID,
+    SHARED_CODE_COMPONENT_ID,
+    VARIABLES_COMPONENT_ID,
+)
+from ._sync_writeback import promote_shadow, stamp_updated_config
+
+if TYPE_CHECKING:
+    from ._sync_push_create import CreateTarget
+    from .sync_service import SyncService
+
+
+_RUN_TARGET_COMPONENTS = frozenset(
+    {FLOW_COMPONENT_ID, ORCHESTRATOR_COMPONENT_ID, SCHEDULER_COMPONENT_ID}
+)
+_LINK_KEYS = ("variables_id", "shared_code_id")
+
+
+def has_references(component_id: str, configuration: dict[str, Any]) -> bool:
+    """True iff the payload carries a reference kind the remap rewrites."""
+    if component_id in _RUN_TARGET_COMPONENTS:
+        return True
+    return any(configuration.get(key) for key in _LINK_KEYS)
+
+
+@dataclass
+class SentPayload:
+    """What one config was sent to the target with, and where its files are.
+
+    ``original`` is the payload before any remap (source ids, secrets
+    encrypted); every remap starts from it, so a reference is mapped exactly
+    once from its source identity, never again from an id already mapped.
+    """
+
+    config_dir: Path
+    config_path: str
+    original: dict[str, Any]
+    configuration: dict[str, Any]
+
+
+@dataclass
+class PromoteRemap:
+    """Source id -> target id for one promote push, and the payloads it sent.
+
+    Attributes:
+        configs: ``(component_id, source id)`` -> target config id.
+        rows: ``(target parent id, source row id)`` -> target row id.
+        sent: ``(component_id, target id)`` -> the payload a config that
+            references others was sent with this push.
+        expected: Source keys of the configs this push plans to create.
+        expected_rows: Source ids of the rows this push plans to create.
+        gone_configs: ``(component_id, target id)`` of configs the diff found
+            deleted on the target (``remote_deleted``) -- never a resolved target.
+        gone_rows: ``(target parent id, target row id)`` likewise (risk 84).
+        hold: Called with ``(component_id, config_id, new pending references,
+            all references of the payload)`` before an update is PUT: it
+            checkpoints the merged ``rebind_pending`` first.
+    """
+
+    configs: dict[tuple[str, str], str] = field(default_factory=dict)
+    rows: dict[tuple[str, str], str] = field(default_factory=dict)
+    sent: dict[tuple[str, str], SentPayload] = field(default_factory=dict)
+    expected: set[tuple[str, str]] = field(default_factory=set)
+    expected_rows: set[str] = field(default_factory=set)
+    gone_configs: set[tuple[str, str]] = field(default_factory=set)
+    gone_rows: set[tuple[str, str]] = field(default_factory=set)
+    hold: Callable[[str, str, list[list[str]], set[tuple[str, ...]] | None], None] | None = None
+    row_reader: Callable[[str, str], set[str] | None] | None = None
+    _dev_rows: dict[tuple[str, str], set[str] | None] = field(default_factory=dict)
+    _target_mode: bool = False
+
+    def use_target(self, client: Any, branch_id: int | None) -> None:
+        """Read the rows of identity parents from *client*'s target branch (D33)."""
+
+        def read(component_id: str, config_id: str) -> set[str] | None:
+            try:
+                detail = client.get_config_detail(
+                    component_id=component_id, config_id=config_id, branch_id=branch_id
+                )
+            except KeboolaApiError as exc:
+                if exc.status_code == 404:  # absent on the target (risk 84)
+                    self.gone_configs.add((component_id, config_id))
+                    return set()
+                return None
+            rows = detail.get("rows") if isinstance(detail, dict) else None
+            if not isinstance(rows, list):
+                return None
+            return {str(row.get("id", "")) for row in rows if isinstance(row, dict)}
+
+        self.row_reader = read
+        self._dev_rows.clear()
+
+    def _existing_rows(self, component_id: str, config_id: str) -> set[str] | None:
+        """Row ids the target's copy of a config holds, cached; ``None`` when unreadable."""
+        key = (component_id, config_id)
+        if key not in self._dev_rows:
+            reader = self.row_reader
+            self._dev_rows[key] = reader(component_id, config_id) if reader else None
+        return self._dev_rows[key]
+
+    def _identity(self, key: tuple[str, str]) -> bool:
+        """True iff the target holds this config under its production id."""
+        return self.configs.get(key) == key[1]
+
+    def plan(self, changes: list[dict[str, Any]]) -> None:
+        """Note what this push creates: a reference to it resolves only after the create."""
+        added = [c for c in changes if c["change_type"] == "added"]
+        self.expected = {
+            (c["component_id"], c["config_id"])
+            for c in added
+            if not c.get("is_row") and c.get("config_id")
+        }
+        # A row's source identity: its id in the source config (risk 72), which
+        # is all a new row under an already promoted config has.
+        self.expected_rows = {
+            str(c.get("source_row_id") or c["config_id"])
+            for c in added
+            if c.get("is_row") and (c.get("source_row_id") or c.get("config_id"))
+        }
+
+    def note_gone(self, changes: list[dict[str, Any]]) -> None:
+        """Note the target configs and rows the diff found deleted there (risk 84).
+
+        A saved mapping to one of them is no resolved target: the unit stays
+        in source form and pending. Read from the diff the push already made.
+        """
+        for change in changes:
+            if change.get("change_type") != "remote_deleted":
+                continue
+            if change.get("is_row"):
+                self.gone_rows.add((str(change["parent_config_id"]), str(change["config_id"])))
+            else:
+                self.gone_configs.add((change["component_id"], str(change["config_id"])))
+
+    def _target_held(self, component: str, parent: str, row_ids: list[str], *, read: bool) -> bool:
+        """True unless a target this unit maps to is known deleted or absent (risk 84).
+
+        Both modes know the deletions the diff found. TARGET mode (recovery)
+        also reads the target's copy of a parent the unit maps to (*read*),
+        cached: a parent the target answers 404 for, or a copy lacking a
+        selected row, is not held. An unreadable copy proves no absence.
+        """
+        if (component, parent) in self.gone_configs or any(
+            (parent, r) in self.gone_rows for r in row_ids
+        ):
+            return False
+        if not (self._target_mode and read):
+            return True
+        existing = self._existing_rows(component, parent)
+        if (component, parent) in self.gone_configs:
+            return False
+        return existing is None or all(r in existing for r in row_ids)
+
+    def pending_refs(self, component_id: str, original: dict[str, Any]) -> list[list[str]]:
+        """The references of *original*'s units SOURCE mode cannot rewrite yet (D30, D31, D34)."""
+        refs: list[list[str]] = []
+        for (component, config_id), row_ids in _references(component_id, original):
+            if self._unit(component, config_id, row_ids) is not None:
+                continue
+            for ref in [[component, config_id]] + [[component, config_id, r] for r in row_ids]:
+                if ref not in refs:
+                    refs.append(ref)
+        return refs
+
+    def open_refs(
+        self, component_id: str, content: dict[str, Any], stored: list[Any]
+    ) -> list[list[str]]:
+        """The references of the units of *content* still in source form (D32).
+
+        ``[component, config id]`` plus ``[component, config id, row id]`` per
+        row, for each unit -- a config and the rows it selects -- that is not
+        in target form yet and names something still to be resolved: a
+        promoted config or row the map knows (its unit could not be rewritten
+        whole), a create of this push, or a reference *stored* as pending (a
+        dependency missing on the branch -- the stored list only marks it, it
+        never limits what is rewritten). Computed from what the target holds,
+        so a selection edited on the branch counts as it is now. An identity
+        parent's unit (TARGET mode, D33/D34) stays open while any selected row
+        is not on the target's copy, or that copy's rows cannot be read --
+        also a row that was never stored (risk 70).
+        """
+        marked = {tuple(str(part) for part in ref) for ref in stored if isinstance(ref, list)}
+        targets = self._targets()
+        refs: list[list[str]] = []
+        for (component, config_id), row_ids in _references(component_id, content):
+            key = (component, config_id)
+            if config_id in targets:
+                continue
+            parent = self.configs.get(key, config_id)
+            open_unit = (parent != config_id) or (
+                key not in self.configs and (key in self.expected or key in marked)
+            )
+            if self._identity(key) and row_ids:
+                existing = self._existing_rows(*key)
+                open_unit = existing is None or any(r not in existing for r in row_ids)
+            else:
+                open_unit = open_unit or any(
+                    (parent, r) in self.rows or r in self.expected_rows or (*key, r) in marked
+                    for r in row_ids
+                )
+            if open_unit:
+                for ref in [[component, config_id]] + [[component, config_id, r] for r in row_ids]:
+                    if ref not in refs:
+                        refs.append(ref)
+        return refs
+
+    def _targets(self) -> set[str]:
+        """Target ids of promoted configs (identity mappings excluded): target form."""
+        return {target for (_, source), target in self.configs.items() if target != source}
+
+    def _unit(
+        self, component: str, config_id: str, row_ids: list[str]
+    ) -> tuple[str, list[str]] | None:
+        """The target ids of one unit -- a config and the rows it selects -- or ``None`` (D31).
+
+        ``None`` leaves the unit as it is: a part of it is still to be
+        created, or it already names the target (target form). A config the
+        map does not know keeps its id; its rows map where the map knows them.
+        A promote-created config maps only with ALL its rows mapped.
+        """
+        key = (component, config_id)
+        if self._target_mode and self._identity(key) and row_ids:
+            return self._identity_unit(component, config_id, row_ids)
+        if key in self.configs:
+            parent = self.configs[key]
+        elif key in self.expected or config_id in self._targets():
+            return None
+        else:
+            parent = config_id
+        mapped: list[str] = []
+        for row_id in row_ids:
+            target_row = self.rows.get((parent, row_id))
+            if target_row is not None:
+                mapped.append(target_row)
+            elif row_id in self.expected_rows or parent != config_id:
+                return None
+            else:
+                mapped.append(row_id)
+        if not self._target_held(component, parent, mapped, read=parent != config_id):
+            return None
+        return parent, mapped
+
+    def _identity_unit(
+        self, component: str, config_id: str, row_ids: list[str]
+    ) -> tuple[str, list[str]] | None:
+        """An identity parent's unit, decided by the rows its target copy holds (D33).
+
+        The parent id does not tell source from target form here, so each row
+        does: one the target's copy holds is target form (never remapped
+        again), one the row map knows is source form (remapped), anything else
+        leaves the whole unit as it is -- as do unreadable target rows.
+        """
+        existing = self._existing_rows(component, config_id)
+        if existing is None:
+            return None
+        mapped: list[str] = []
+        for row_id in row_ids:
+            if row_id in existing:
+                mapped.append(row_id)
+            elif self.rows.get((config_id, row_id)) in existing:  # a held target (risk 84)
+                mapped.append(self.rows[(config_id, row_id)])
+            else:
+                return None
+        return config_id, mapped
+
+    def refresh(
+        self,
+        manifest: Manifest,
+        branch_id: int | None,
+        created_configs: dict[tuple[str, str], str],
+        created_rows: dict[tuple[str, str], str],
+    ) -> None:
+        """Rebuild the id maps from the target's promote entries and this push's creates."""
+        configs: dict[tuple[str, str], str] = {}
+        rows: dict[tuple[str, str], str] = {}
+        for entry in manifest.configurations:
+            if not same_branch(manifest, entry.branch_id, branch_id):
+                continue
+            association = promoted_from(entry)
+            source = association.config_id if association is not None else ""
+            # Identity mappings too: a config the branch holds under the
+            # production id is resolved, even though its id does not change.
+            # A pull of the branch keeps the source under its own key.
+            source = source or str(entry.metadata.get(PROMOTED_SOURCE_KEY) or "")
+            if source:
+                configs[(entry.component_id, source)] = entry.id
+            for row in entry.rows:
+                source = str((row.metadata or {}).get(PROMOTED_ROW_KEY) or "")
+                if source:  # a row mapped to its own id is resolved too (risk 77)
+                    rows[(entry.id, source)] = row.id
+        configs.update(created_configs)
+        rows.update(created_rows)
+        self.configs, self.rows = configs, rows
+
+    def apply(
+        self, component_id: str, configuration: dict[str, Any], *, target: bool = False
+    ) -> dict[str, Any]:
+        """A copy of *configuration* with every known source id replaced.
+
+        Two modes, never mixed (D34). SOURCE mode (default): *configuration*
+        was built from main/ (a create, an update, the final backfill from
+        ``sent.original``), so every id in it is a source id and is mapped
+        strictly through the map, once. TARGET mode (*target*): it is the
+        target's own copy (recovery), where a unit may already be in target
+        form; an identity parent's unit is then decided by the rows the
+        target's copy holds (D33).
+        """
+        out = copy.deepcopy(configuration)
+        self._target_mode = target
+        try:
+            if component_id in _RUN_TARGET_COMPONENTS:
+                self._remap_run_targets(component_id, out)
+            self._remap_variables(out)
+            self._remap_shared_code(out)
+        finally:
+            self._target_mode = False
+        if out == configuration:
+            return configuration
+        return out
+
+    def _remap_run_targets(self, component_id: str, out: dict[str, Any]) -> None:
+        """Map a schedule's target, or each task's ``configId`` with its ``configRowIds``."""
+        if component_id == SCHEDULER_COMPONENT_ID:
+            target = out.get("target")
+            if isinstance(target, dict) and isinstance(target.get("componentId"), str):
+                unit = self._unit(target["componentId"], str(target.get("configurationId", "")), [])
+                if unit is not None and unit[0] != str(target.get("configurationId", "")):
+                    target["configurationId"] = unit[0]
+            return
+        tasks = out.get("tasks")
+        for task_entry in tasks if isinstance(tasks, list) else []:
+            ref = task_config_ref(component_id, task_entry)
+            if ref is None:
+                continue
+            task = task_entry["task"]
+            row_ids = task.get("configRowIds")
+            rows = [str(r) for r in row_ids] if isinstance(row_ids, list) else []
+            unit = self._unit(ref[0], ref[1], rows)
+            if unit is None:
+                continue
+            if unit[0] != ref[1]:
+                task["configId"] = unit[0]
+            if isinstance(row_ids, list) and unit[1] != rows:
+                task["configRowIds"] = [
+                    new if new != str(old) else old
+                    for old, new in zip(row_ids, unit[1], strict=True)
+                ]
+
+    def _remap_variables(self, out: dict[str, Any]) -> None:
+        variables_id = out.get("variables_id")
+        if not isinstance(variables_id, (str, int)) or variables_id == "":
+            return
+        values_id = out.get("variables_values_id")
+        has_values = isinstance(values_id, (str, int)) and values_id != ""
+        unit = self._unit(
+            VARIABLES_COMPONENT_ID, str(variables_id), [str(values_id)] if has_values else []
+        )
+        if unit is None:
+            return
+        if unit[0] != str(variables_id):
+            out["variables_id"] = unit[0]
+        if has_values and unit[1][0] != str(values_id):
+            out["variables_values_id"] = unit[1][0]
+
+    def _remap_shared_code(self, out: dict[str, Any]) -> None:
+        shared_code_id = out.get("shared_code_id")
+        if not isinstance(shared_code_id, (str, int)) or shared_code_id == "":
+            return
+        row_ids = out.get("shared_code_row_ids")
+        listed = [str(r) for r in row_ids] if isinstance(row_ids, list) else []
+        unit = self._unit(SHARED_CODE_COMPONENT_ID, str(shared_code_id), listed)
+        if unit is None:
+            return
+        if unit[0] != str(shared_code_id):
+            out["shared_code_id"] = unit[0]
+        row_map = {old: new for old, new in zip(listed, unit[1], strict=True) if old != new}
+        if not row_map:
+            return
+        out["shared_code_row_ids"] = [row_map.get(str(r), r) for r in row_ids or []]
+        if "parameters" in out:
+            out["parameters"] = _rewrite_list_placeholders(out["parameters"], row_map)
+
+    def record(
+        self,
+        component_id: str,
+        config_id: str,
+        *,
+        config_dir: Path,
+        config_path: str,
+        original: dict[str, Any],
+        configuration: dict[str, Any],
+    ) -> None:
+        """Keep the payload a referencing config was sent with, for the final rebind."""
+        if has_references(component_id, original):
+            self.sent[(component_id, config_id)] = SentPayload(
+                config_dir=config_dir,
+                config_path=config_path,
+                original=original,
+                configuration=configuration,
+            )
+
+    def before_update(self, component_id: str, config_id: str, original: dict[str, Any]) -> None:
+        """Checkpoint ``rebind_pending`` before an update naming a config this push creates.
+
+        Before the PUT, not after it: a push that dies after the PUT would
+        otherwise leave a target config naming a source id and no record that
+        its links are unfinished.
+        """
+        if self.hold is not None:
+            self.hold(component_id, config_id, self.pending_refs(component_id, original), None)
+
+    def after_update(self, component_id: str, config_id: str, original: dict[str, Any]) -> None:
+        """After a successful PUT: drop pending references the payload no longer names.
+
+        Only now (D30, risk 64): a PUT that fails leaves the target with the
+        old references, so they must stay pending until one succeeds.
+        """
+        if self.hold is not None:
+            self.hold(
+                component_id,
+                config_id,
+                self.pending_refs(component_id, original),
+                _reference_keys(component_id, original),
+            )
+
+
+def finish_promote_rebind(
+    service: SyncService,
+    client: Any,
+    remap: PromoteRemap | None,
+    *,
+    manifest: Manifest,
+    target: CreateTarget,
+    warnings: list[dict[str, Any]],
+    errors: list[dict[str, str]],
+    diff_changes: dict[tuple[str, str], str],
+    ignored_components: frozenset[str],
+) -> bool:
+    """Finish the references of a promote push; True when the manifest changed.
+
+    Runs after every create of the push:
+
+    1. Each payload sent this push that the final id map still changes is PUT
+       again -- its original (source ids, secrets encrypted) remapped with the
+       final map; ``main/`` is not read again, and no id is mapped twice.
+    2. A config still ``rebind_pending`` from an earlier push is read from the
+       target; every unit in source form that now resolves is rewritten, and
+       only ``configuration`` is PUT -- when anything changed (D29, D32). Its
+       name, description, enabled state and every other field changed on
+       the branch since survive. A config deleted on the target, or of an
+       ignored component, drops the flag; one out of the diff's scope keeps it.
+
+    The new flag is what the target still holds in source form (D32); a
+    failed PUT keeps the old one.
+
+    Without *remap* (a push from the branch's own tree, after a pull moved
+    the promoted entries there) only step 2 runs, with the map the manifest
+    keeps, and no baseline moves: the local file still names the source ids,
+    so diff shows the rewrite as a remote change for the next pull to fetch.
+    """
+    branch_id = target.branch_id
+    keep_baselines = remap is None
+    if remap is None:
+        if not pending_rebinds(manifest, branch_id):
+            return False
+        remap = PromoteRemap()
+        remap.refresh(manifest, branch_id, {}, {})
+    remap.use_target(client, branch_id)  # target rows as they are after this push's creates
+    for (component_id, config_id), sent in remap.sent.items():
+        payload = _with_target_identity(
+            component_id, remap.apply(component_id, sent.original), sent
+        )
+        if payload != sent.configuration:
+            try:
+                response = _put_configuration(client, component_id, config_id, payload, branch_id)
+            except KeboolaApiError as exc:
+                errors.append(_link_error(component_id, config_id, exc))
+                continue
+            _stamp(
+                service, client, manifest, target, component_id, config_id, sent, response, warnings
+            )
+        _settle(manifest, remap, component_id, config_id, branch_id, payload, warnings)
+    pending = pending_rebinds(manifest, branch_id)
+    eligible = {
+        (cfg.component_id, cfg.id)
+        for cfg in scope_manifest(
+            manifest,
+            target.project_root,
+            target.branch_path,
+            set(),
+            ignored_components=ignored_components,
+            target_branch_id=branch_id,
+        ).in_tree
+    }
+    for component_id, config_id, _refs in pending:
+        key = (component_id, config_id)
+        if key in remap.sent:
+            continue
+        if component_id in ignored_components or diff_changes.get(key) == "remote_deleted":
+            _clear_pending(manifest, component_id, config_id, branch_id)
+            continue
+        if key not in eligible:
+            continue
+        try:
+            recover_pending(
+                client,
+                manifest,
+                remap,
+                component_id,
+                config_id,
+                branch_id,
+                warnings,
+                keep_baseline=keep_baselines,
+            )
+        except KeboolaApiError as exc:
+            errors.append(_link_error(component_id, config_id, exc))
+    return bool(pending or remap.sent)
+
+
+def recover_pending(
+    client: Any,
+    manifest: Manifest,
+    remap: PromoteRemap,
+    component_id: str,
+    config_id: str,
+    branch_id: int | None,
+    warnings: list[dict[str, Any]],
+    *,
+    keep_baseline: bool = False,
+) -> None:
+    """Finish a pending config from what the TARGET holds, with the full map (D29, D32).
+
+    Every unit still in source form whose config and rows all resolve is
+    rewritten -- the stored list does not limit it; a unit already in target
+    form is left alone, so nothing is mapped twice. The new pending list is
+    what the target still holds in source form after the PUT.
+    """
+    if remap.row_reader is None:
+        remap.use_target(client, branch_id)
+    content = _rebind_on_target(
+        client, manifest, remap, component_id, config_id, branch_id, keep_baseline
+    )
+    if content is not None:
+        _settle(manifest, remap, component_id, config_id, branch_id, content, warnings)
+
+
+def _put_configuration(
+    client: Any, component_id: str, config_id: str, configuration: dict[str, Any], branch_id: Any
+) -> Any:
+    """PUT only ``configuration``: name, description and enabled state stay as they are."""
+    return client.update_config(
+        component_id=component_id,
+        config_id=config_id,
+        configuration=configuration,
+        change_description="Remap promoted config IDs via kbagent sync push",
+        branch_id=branch_id,
+    )
+
+
+def _rebind_on_target(
+    client: Any,
+    manifest: Manifest,
+    remap: PromoteRemap,
+    component_id: str,
+    config_id: str,
+    branch_id: int | None,
+    keep_baseline: bool = False,
+) -> dict[str, Any] | None:
+    """Remap the TARGET's own config and PUT it if changed; return what it now holds (D29).
+
+    The baseline moves to the response only when the target held exactly what
+    the baseline described before this PUT: then the PUT is the only change.
+    Otherwise it stays, so a change made on the branch keeps showing in diff.
+    """
+    remote = client.get_config_detail(
+        component_id=component_id, config_id=config_id, branch_id=branch_id
+    )
+    configuration = (remote or {}).get("configuration")
+    if not isinstance(configuration, dict):
+        return None
+    rewritten = remap.apply(component_id, configuration, target=True)
+    if rewritten == configuration:
+        return configuration
+    response = _put_configuration(client, component_id, config_id, rewritten, branch_id)
+    entry = find_branch_entry(manifest, component_id, config_id, branch_id)
+    before = config_hash(api_config_to_local(component_id, remote, config_id))
+    if not keep_baseline and entry is not None and entry.metadata.get("pull_config_hash") == before:
+        stamp = config_baseline(
+            client,
+            component_id=component_id,
+            config_id=config_id,
+            branch_id=branch_id,
+            response=response,
+        )
+        apply_stamp(entry.metadata, stamp)
+    return rewritten
+
+
+def _settle(
+    manifest: Manifest,
+    remap: PromoteRemap,
+    component_id: str,
+    config_id: str,
+    branch_id: int | None,
+    content: dict[str, Any],
+    warnings: list[dict[str, Any]],
+) -> None:
+    """Set ``rebind_pending`` to what *content* (the target's config now) holds in source form.
+
+    Called after a successful PUT, or when nothing needed one. Cleared when
+    no unit is left in source form (D32).
+    """
+    entry = find_branch_entry(manifest, component_id, config_id, branch_id)
+    if entry is None or REBIND_PENDING_KEY not in entry.metadata:
+        return
+    remaining = remap.open_refs(component_id, content, _listed(entry.metadata[REBIND_PENDING_KEY]))
+    if not remaining:
+        entry.metadata.pop(REBIND_PENDING_KEY, None)
+        return
+    entry.metadata[REBIND_PENDING_KEY] = remaining
+    warnings.append(_dependency_warning(component_id, config_id))
+
+
+def _with_target_identity(
+    component_id: str, payload: dict[str, Any], sent: SentPayload
+) -> dict[str, Any]:
+    """Carry the target's own identity fields from the first PUT into a rebuilt payload.
+
+    A data app's ``parameters.id`` names its Data Science app; the original
+    holds the source app, the first PUT the target's (``_keep_target_app_id``
+    / the create). The final backfill must not send the source app back.
+    """
+    if component_id != DATA_APP_COMPONENT_ID:
+        return payload
+    target_app = (sent.configuration.get("parameters") or {}).get("id")
+    params = payload.get("parameters")
+    if not target_app or not isinstance(params, dict) or params.get("id") == target_app:
+        return payload
+    payload = copy.deepcopy(payload)
+    payload["parameters"]["id"] = target_app
+    return payload
+
+
+def _references(
+    component_id: str, configuration: dict[str, Any]
+) -> list[tuple[tuple[str, str], list[str]]]:
+    """``((component_id, config_id), [row ids])`` of every reference in a source payload."""
+    refs: list[tuple[tuple[str, str], list[str]]] = []
+    if component_id == SCHEDULER_COMPONENT_ID:
+        target = configuration.get("target")
+        if isinstance(target, dict) and isinstance(target.get("componentId"), str):
+            refs.append(((target["componentId"], str(target.get("configurationId", ""))), []))
+    elif component_id in _RUN_TARGET_COMPONENTS:
+        tasks = configuration.get("tasks")
+        for task_entry in tasks if isinstance(tasks, list) else []:
+            ref = task_config_ref(component_id, task_entry)
+            if ref is not None:
+                row_ids = task_entry["task"].get("configRowIds")
+                refs.append((ref, [str(r) for r in row_ids] if isinstance(row_ids, list) else []))
+    for key, component, rows_key in (
+        ("variables_id", VARIABLES_COMPONENT_ID, "variables_values_id"),
+        ("shared_code_id", SHARED_CODE_COMPONENT_ID, "shared_code_row_ids"),
+    ):
+        value = configuration.get(key)
+        if isinstance(value, (str, int)) and value != "":
+            rows = configuration.get(rows_key)
+            row_list = rows if isinstance(rows, list) else ([rows] if rows else [])
+            refs.append(((component, str(value)), [str(r) for r in row_list]))
+    return refs
+
+
+def _reference_keys(component_id: str, original: dict[str, Any]) -> set[tuple[str, ...]]:
+    """Every reference a source payload names, as pending-list keys."""
+    keys: set[tuple[str, ...]] = set()
+    for (component, config_id), row_ids in _references(component_id, original):
+        keys.add((component, config_id))
+        keys.update((component, config_id, row_id) for row_id in row_ids)
+    return keys
+
+
+def _dependency_warning(component_id: str, config_id: str) -> dict[str, str]:
+    return {
+        "change_type": "promote_link_pending",
+        "component_id": component_id,
+        "config_id": config_id,
+        "message": (
+            f"{component_id}/{config_id} still names a config or row that does not exist on "
+            f"the branch yet; the 'kbagent sync push --branch' that creates it sends the link."
+        ),
+    }
+
+
+def hold_pending(
+    client: Any,
+    manifest: Manifest,
+    target: CreateTarget,
+    checkpoint: Callable[[str], None],
+    component_id: str,
+    config_id: str,
+    refs: list[list[str]],
+    referenced: set[tuple[str, ...]] | None,
+) -> None:
+    """Update ``rebind_pending`` around an update's PUT (D30, risk 64).
+
+    Before the PUT (*referenced* ``None``) references are only ADDED, then
+    checkpointed: the target may end up holding them. After a successful PUT
+    the list keeps the references already pending that the payload still
+    names (a dependency missing since an earlier push -- ignored, say -- is
+    never forgotten by a later edit) plus this push's unresolved ones; the
+    rest are dropped, saved with the end of the push. The target entry may
+    not exist yet (the first write of a branched config on the promote
+    path); its shadow is recorded here, so the flag has a home.
+    """
+    entry = find_branch_entry(manifest, component_id, config_id, target.branch_id)
+    if entry is None:
+        if not refs or referenced is not None:
+            return
+        entry = promote_shadow(
+            client,
+            manifest,
+            component_id=component_id,
+            config_id=config_id,
+            branch_id=target.branch_id,
+            source_tree=target.branch_path,
+        )
+        if entry is None:
+            return
+    existing = _listed(entry.metadata.get(REBIND_PENDING_KEY))
+    if referenced is None:
+        merged = existing + [ref for ref in refs if ref not in existing]
+    else:
+        merged = [ref for ref in existing if tuple(str(part) for part in ref) in referenced]
+        merged += [ref for ref in refs if ref not in merged]
+    if merged == existing:
+        return
+    if merged:
+        entry.metadata[REBIND_PENDING_KEY] = merged
+    else:
+        entry.metadata.pop(REBIND_PENDING_KEY, None)
+    if referenced is None:
+        checkpoint(f"{component_id}/{config_id}")
+
+
+def _link_error(component_id: str, config_id: str, exc: KeboolaApiError) -> dict[str, str]:
+    return {
+        "change_type": "promote_link",
+        "error_code": ErrorCode.LINK_UNRESOLVED,
+        "component_id": component_id,
+        "config_id": config_id,
+        "message": f"{exc} The next 'kbagent sync push --branch' sends the links again.",
+    }
+
+
+def _stamp(
+    service: SyncService,
+    client: Any,
+    manifest: Manifest,
+    target: CreateTarget,
+    component_id: str,
+    config_id: str,
+    sent: SentPayload,
+    response: Any,
+    warnings: list[dict[str, Any]],
+) -> None:
+    stamp_updated_config(
+        client,
+        manifest=manifest,
+        component_id=component_id,
+        config_id=config_id,
+        branch_id=target.branch_id,
+        config_path_str=sent.config_path,
+        hashes=service._compute_config_hashes(sent.config_dir, component_id),
+        response=response,
+        warnings=warnings,
+        source_tree=target.branch_path,
+    )
+
+
+def _clear_pending(
+    manifest: Manifest, component_id: str, config_id: str, branch_id: int | None
+) -> None:
+    entry = find_branch_entry(manifest, component_id, config_id, branch_id)
+    if entry is not None:
+        entry.metadata.pop(REBIND_PENDING_KEY, None)
+
+
+def pending_rebinds(manifest: Manifest, branch_id: int | None) -> list[tuple[str, str, list[Any]]]:
+    """``(component_id, config_id, references)`` of the target's entries still to rebind."""
+    return [
+        (entry.component_id, entry.id, _listed(entry.metadata[REBIND_PENDING_KEY]))
+        for entry in manifest.configurations
+        if REBIND_PENDING_KEY in entry.metadata
+        and same_branch(manifest, entry.branch_id, branch_id)
+    ]
+
+
+def _listed(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
+
+
+def diff_decisions(changes: list[dict[str, Any]]) -> dict[tuple[str, str], str]:
+    """Config change type by ``(component_id, config_id)`` from a diff's changes."""
+    return {
+        (c["component_id"], c["config_id"]): c["change_type"]
+        for c in changes
+        if not c.get("is_row") and c.get("config_id")
+    }

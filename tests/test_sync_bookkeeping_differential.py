@@ -383,8 +383,17 @@ class World:
         return self.root / self.svc._resolve_source_branch_path(manifest, self.root, branch)
 
     def config_dir(self, config_id: str, branch: int | None = None) -> Path:
+        """The dir of *config_id*'s entry on *branch* (production by default).
+
+        A dev branch made from production holds the same ids, so a promote
+        push can record a second entry with this id for the dev branch.
+        """
         manifest = load_manifest(self.root)
-        (entry,) = [c for c in manifest.configurations if c.id == config_id]
+        (entry,) = [
+            c
+            for c in manifest.configurations
+            if c.id == config_id and (c.branch_id or PROD) == (branch or PROD)
+        ]
         return self.source_tree(branch) / entry.path
 
 
@@ -469,6 +478,7 @@ def bookkeeping(world: World, branch: int | None) -> dict[tuple[str, str], dict[
             "rows": rows,
             "_path": c.path,
             "_row_paths": {r.id: r.path for r in c.rows},
+            "_promoted_from": c.metadata.get("promoted_from"),
         }
     return out
 
@@ -513,6 +523,37 @@ def self_consistency(world: World, branch: int | None) -> list[str]:
     return problems
 
 
+def _promoted_identity_only(
+    world: World, fresh: World, branch: int | None, config_id: str, mine: dict, theirs: dict
+) -> bool:
+    """True iff the config's file differs from the fresh pull's ONLY by the promoted id.
+
+    A promote push (``push --branch DEV``, no ``dev/`` tree) never writes the
+    dev id into ``main/`` (D19): the file keeps the source config's id (or
+    none, for a config authored there), which the entry records in
+    ``promoted_from``. Its ``pull_hash`` then describes that file, which a
+    fresh pull of the dev branch (dev id in the file) cannot reproduce byte
+    for byte. The exception holds only for an entry carrying ``promoted_from``
+    whose file names exactly that source id, and only when the two files are
+    otherwise equal; ``self_consistency`` still checks the hash against the
+    file on disk.
+    """
+    association = mine.get("_promoted_from")
+    if not isinstance(association, dict):
+        return False
+    local = yaml.safe_load(
+        (world.source_tree(branch) / mine["_path"] / CONFIG_FILE).read_text(encoding="utf-8")
+    )
+    meta = local.setdefault("_keboola", {})
+    if str(meta.get("config_id", "") or "") != str(association.get("config_id") or ""):
+        return False
+    meta["config_id"] = config_id
+    pulled = yaml.safe_load(
+        (fresh.source_tree(branch) / theirs["_path"] / CONFIG_FILE).read_text(encoding="utf-8")
+    )
+    return local == pulled
+
+
 def compare_to_fresh(world: World, fresh: World, branch: int | None) -> list[str]:
     """Field-by-field bookkeeping difference against a fresh pull."""
     mine = bookkeeping(world, branch)
@@ -526,7 +567,12 @@ def compare_to_fresh(world: World, fresh: World, branch: int | None) -> list[str
             problems.append(f"{key}: tracked, but a fresh pull does not track it")
             continue
         a, b = mine[key], theirs[key]
+        promoted_id = a["pull_hash"] != b["pull_hash"] and _promoted_identity_only(
+            world, fresh, branch, key[1], a, b
+        )
         for field in ("branch_id", *BOOKKEEPING_KEYS):
+            if field == "pull_hash" and promoted_id:
+                continue
             if field == "pull_extra_hashes":
                 if a[field] != b[field]:
                     ka, kb = sorted(a[field]), sorted(b[field])
@@ -1006,29 +1052,9 @@ SCENARIOS: dict[str, tuple[Callable[[Path, Variant], int | None], tuple[str, ...
 }
 
 # Finding texts (severity first). Full stories: the explicit tests at the end.
-F1 = (
-    "F1 (MED): push --branch DEV of a config authored in main/ records a DEV entry "
-    "whose branch tree is dev/, so diff also scans its main/ dir as an untracked "
-    "adopted config: any edit diffs as modified AND conflict, push says 'Remote "
-    "changes detected' (branch_scope.find_untracked_configs)"
-)
-F2 = (
-    "F2 (HIGH): push --branch DEV to a dev branch holding the same config id "
-    "re-stamps the PRODUCTION entry with the dev state and records no DEV entry "
-    "(_sync_writeback.stamp_updated_config matches component+id, not branch)"
-)
-F3 = (
-    "F3 (HIGH): a row created by push --branch DEV is recorded under the "
-    "PRODUCTION entry (_sync_push_ops.push_row_change parent lookup ignores branch)"
-)
 F5 = (
     "F5 (HIGH): a new config authored with rows is created without its rows -- "
     "diff lists no rows under an untracked parent; a second push creates them"
-)
-F6 = (
-    "F6 (MED): promoting a pulled config with rows to a dev branch without it "
-    "POSTs the rows under the production config id (sync_service.push fills "
-    "created_id_map only from a placeholder entry's previous_id)"
 )
 L1 = (
     "L1 (LOW): pyproject.toml carries config-derived fields (name, "
@@ -1051,15 +1077,12 @@ L4 = (
 
 # (scenario, variant) -> FINDING reason, from the actual run.
 FINDINGS: dict[tuple[str, str], str] = {
-    **{("push_create_promote_dev", v): F1 for v in ("extractor", "sql", "python")},
-    # The rows are never pushed at all (F4) -- invisible to this oracle because a
-    # fresh pull has no rows either; see test_new_config_with_rows_promoted_...
-    ("push_create_promote_dev", "rows"): f"{F1}; F4 (HIGH) see explicit test",
-    ("push_create_promote_dev", "app"): f"{F1}; {L1}",
-    **{("promote_edit_to_branched_dev", v): F2 for v in CONFIG_VARIANTS},
-    ("promote_row_create_to_branched_dev", "rows"): F3,
+    # The new config's rows go up on the second push, like on production (F5).
+    ("push_create_promote_dev", "rows"): F5,
+    ("push_create_promote_dev", "app"): L1,
+    ("promote_row_create_to_branched_dev", "rows"): f"{L3}; {L4}",
     ("push_create", "rows"): F5,
-    ("promote_pulled_to_dev", "rows"): F6,
+    ("promote_pulled_to_dev", "rows"): f"{L3}; {L4}",
     ("push_create", "app"): L1,
     ("promote_pulled_to_dev", "app"): L1,
     ("push_rename_in_yaml", "python"): L1,
@@ -1194,16 +1217,11 @@ def _rows_variant() -> Variant:
     return VARIANTS["rows"]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "FINDING F2 (HIGH): push --branch DEV re-stamps the PRODUCTION manifest "
-        "entry with the dev branch's state (stamp_updated_config matches on "
-        "component+id, not branch); the prod diff then calls the un-promoted local "
-        "edit a REMOTE change and the next `sync pull` overwrites it"
-    ),
-)
 def test_promote_edit_to_dev_then_prod_pull_keeps_local_edit(tmp_path: Path) -> None:
+    """Was FINDING F2 (HIGH): push --branch DEV re-stamps the PRODUCTION manifest entry
+    with the dev branch's state (stamp_updated_config matches on component+id, not
+    branch); the prod diff then calls the un-promoted local edit a REMOTE change and the
+    next `sync pull` overwrites it"""
     v = VARIANTS["sql"]
     seeded = _seeded(tmp_path, v)
     w, cid = seeded.world, seeded.config_id
@@ -1218,15 +1236,10 @@ def test_promote_edit_to_dev_then_prod_pull_keeps_local_edit(tmp_path: Path) -> 
     assert "edit_marker" in cfg.read_text(), "sync pull overwrote the local edit"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "FINDING F3 (HIGH): a row created by push --branch DEV is recorded under "
-        "the PRODUCTION entry (push_row_change parent lookup ignores branch); prod "
-        "diff calls it remote_deleted and the next `sync pull` deletes the new row dir"
-    ),
-)
 def test_promote_new_row_to_dev_then_prod_pull_keeps_row(tmp_path: Path) -> None:
+    """Was FINDING F3 (HIGH): a row created by push --branch DEV is recorded under the
+    PRODUCTION entry (push_row_change parent lookup ignores branch); prod diff calls it
+    remote_deleted and the next `sync pull` deletes the new row dir"""
     v = _rows_variant()
     seeded = _seeded(tmp_path, v)
     w, cid = seeded.world, seeded.config_id
@@ -1239,16 +1252,10 @@ def test_promote_new_row_to_dev_then_prod_pull_keeps_row(tmp_path: Path) -> None
     assert row_dir.exists(), "sync pull deleted the locally authored row"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "FINDING F4 (HIGH): rows of a config authored in main/ and promoted with "
-        "push --branch DEV are never pushed -- find_untracked_rows looks for them "
-        "under dev/ (branch_tree_path of the DEV entry), every later push says "
-        "no_changes"
-    ),
-)
 def test_new_config_with_rows_promoted_to_dev_gets_its_rows(tmp_path: Path) -> None:
+    """Was FINDING F4 (HIGH): rows of a config authored in main/ and promoted with push
+    --branch DEV are never pushed -- find_untracked_rows looks for them under dev/
+    (branch_tree_path of the DEV entry), every later push says no_changes"""
     v = _rows_variant()
     w = World(tmp_path)
     w.api.types[v.component_id] = v.component_type
@@ -1281,16 +1288,11 @@ def test_new_config_with_rows_is_complete_after_one_push(tmp_path: Path) -> None
     assert len(cfg["rows"]) == 2
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "FINDING F1 (MED): after push --branch DEV creates a config authored in "
-        "main/, the DEV entry does not claim its main/ dir; diff sees the dir a "
-        "second time as an adopted untracked config, so an edit diffs as modified "
-        "AND conflict and push reports 'Remote changes detected. Run sync pull first.'"
-    ),
-)
 def test_edit_after_promote_create_is_not_a_conflict(tmp_path: Path) -> None:
+    """Was FINDING F1 (MED): after push --branch DEV creates a config authored in main/,
+    the DEV entry does not claim its main/ dir; diff sees the dir a second time as an
+    adopted untracked config, so an edit diffs as modified AND conflict and push reports
+    'Remote changes detected. Run sync pull first.'"""
     v = VARIANTS["sql"]
     w = World(tmp_path)
     w.api.types[v.component_id] = v.component_type
@@ -1304,16 +1306,11 @@ def test_edit_after_promote_create_is_not_a_conflict(tmp_path: Path) -> None:
     assert "skipped" not in w.push(branch=DEV)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "FINDING F6 (MED): promoting a pulled config with rows to a dev branch that "
-        "lacks it creates the config but every row fails -- the rows are POSTed "
-        "under the PRODUCTION config id (created_id_map is only filled from a "
-        "placeholder entry's previous_id)"
-    ),
-)
 def test_promote_pulled_config_with_rows_to_dev_without_it(tmp_path: Path) -> None:
+    """Was FINDING F6 (MED): promoting a pulled config with rows to a dev branch that
+    lacks it creates the config but every row fails -- the rows are POSTed under the
+    PRODUCTION config id (created_id_map is only filled from a placeholder entry's
+    previous_id)"""
     v = _rows_variant()
     w = _seeded(tmp_path, v).world
     result = w.svc.push(alias="prod", project_root=w.root, branch_override=DEV)
@@ -1322,16 +1319,11 @@ def test_promote_pulled_config_with_rows_to_dev_without_it(tmp_path: Path) -> No
     assert len(cfg["rows"]) == 2
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "FINDING F7 (MED): after promoting a pulled config to a dev branch that "
-        "lacks it, the main/ _config.yml carries the DEV config id and a DEV entry "
-        "shares the PROD entry's path; the next production `sync pull` deletes "
-        "that directory and re-writes the config under '<name>-<id>'"
-    ),
-)
 def test_prod_pull_after_promote_to_dev_keeps_the_config_dir(tmp_path: Path) -> None:
+    """Was FINDING F7 (MED): after promoting a pulled config to a dev branch that lacks
+    it, the main/ _config.yml carries the DEV config id and a DEV entry shares the PROD
+    entry's path; the next production `sync pull` deletes that directory and re-writes
+    the config under '<name>-<id>'"""
     v = VARIANTS["extractor"]
     seeded = _seeded(tmp_path, v)
     w, cid = seeded.world, seeded.config_id

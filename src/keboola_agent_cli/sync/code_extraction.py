@@ -322,10 +322,20 @@ def _extract_description(config_data: dict[str, Any], config_dir: Path) -> None:
 
 
 def _merge_description(config_data: dict[str, Any], config_dir: Path) -> None:
-    """Read _description.md back into config_data."""
+    """Read _description.md back into config_data.
+
+    With neither the file nor a ``description`` key the description is empty,
+    which is what push sends (``local_config_to_api`` defaults it to ``""``)
+    and what pull writes. Spelling it out keeps an untracked file whose
+    ``_description.md`` was deleted equal to its remote: without it the
+    adopt guard (#792 E) read the missing key as a local change and kept
+    the file out of the manifest.
+    """
     desc_file = config_dir / DESCRIPTION_FILENAME
     if desc_file.exists():
         config_data["description"] = desc_file.read_text(encoding="utf-8")
+    else:
+        config_data.setdefault("description", "")
 
 
 def extract_code_files(

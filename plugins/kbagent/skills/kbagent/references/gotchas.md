@@ -79,6 +79,130 @@ These lists keep `error`, because their entries are not failed items with an err
   own folder (not `main/`), so edit the files there. If you already edited code files after
   such a push, copy them aside first: a pull that takes a remote change overwrites them.
 
+## `sync push --branch <dev>` from `main/` no longer changes what production sees
+
+*(since vNEXT)*
+
+- **The promote push** (`sync push --branch <dev>` with no `<dev>/` folder, so kbagent
+  reads `main/`) now records what it wrote under the dev branch only. A dev branch made
+  from production holds the same config ids, and before, the push re-stamped the
+  production entry with the dev state: `sync diff` on production then called your
+  un-promoted edit a remote change, `sync push` refused it, and the `sync pull` it
+  recommended overwrote the edit in `main/`. Now production `sync diff` keeps showing the
+  edit as a local `modified` change until you push it to production, and `sync pull`
+  keeps it.
+- **A row added in `main/` and pushed to the dev branch** is recorded for the dev branch.
+  Before, production recorded it, and the next production `sync pull` deleted the new row
+  folder.
+- **A promote push never writes a dev config id into `main/`**, neither when it creates
+  the config on the dev branch nor when it updates it later. The dev branch's record
+  of the folder (`promoted_from` in `.keboola/manifest.json`) maps it to the dev id. A
+  production config the dev branch lacks is created there with its rows (before, every
+  row failed) and its `main/_config.yml` keeps the PRODUCTION id; before, the push wrote
+  the dev id into it and the next production `sync pull` renamed the folder to
+  `<name>-<id>`. A config authored in `main/` keeps no id at all, so a plain `sync push`
+  later creates it in production as a new config (before, production `sync diff` called
+  the folder an orphan and suggested deleting it).
+- **Every promote push rewrites references to the dev ids** -- a flow's or
+  orchestration's task `configId` and its `configRowIds` (mapped to the rows created
+  on the dev branch), a schedule's target, a data app's `parameters.id` (the dev
+  branch's own app), a
+  transformation's `variables_id` / `variables_values_id` / `shared_code_id` /
+  `shared_code_row_ids` and its `{{<row id>}}` placeholders -- for every config the
+  promote pushes created on the dev branch, on creates and on later updates alike, all
+  in one payload. Before, they kept the production ids, which do not exist there, and a
+  later edit sent the production ids again. Only the dev branch's copy changes; the
+  `main/` files keep the production ids. A config sent while a config it references
+  was not created yet stays pending in the manifest (`rebind_pending` lists the missing
+  references) until every one exists on the dev branch -- also when the push dies, the
+  final rewrite fails, a create fails, or the config is edited again meanwhile; a
+  reference leaves the list once it is rewritten. A task's config and the rows it selects
+  (likewise a shared-code or variables link and its rows) switch to the dev ids together,
+  only once all of them exist there (for a config the dev branch holds under the
+  production id, kbagent reads which rows its dev copy holds only while it rewrites that
+  dev copy; a row it selects that is neither there nor mapped, or rows it cannot read,
+  keep the reference pending. A payload built from the `main/` files maps its rows
+  through the row map alone). A dev config or row deleted on the dev branch is never
+  used as a target: a reference to it stays pending in its production form. The next promote push then reads that config
+  from the dev branch, rewrites only those references and sends only its configuration,
+  so its name, description, enabled state and any other change made there are kept. A
+  config deleted there, or of a component you have since added to `ignoredComponents`,
+  is dropped from the rewrite.
+- **A config created in `main/` and promoted** is no longer reported `removed` by the next
+  production `sync pull`, which used to delete its folder. Pull keeps the folder and keeps
+  the dev-branch record, and moves the record with the folder when production renames
+  the config, so the next promote updates that dev config instead of creating another
+  one. Its new rows are pushed by the second promote push, like on production. A row
+  added on production to a config already promoted (and pulled into `main/`) is created
+  under the dev copy with its production row id recorded, so a flow or other reference
+  that selects it switches to the new dev row in the same push. Rows promoted before
+  production created them are linked to their production ids when production does, so
+  a reference to such a production row maps to the dev row that already exists. An edit to
+  it after the promote is `modified`, not `modified` plus `conflict`. Production
+  `sync diff` lists the record under `orphaned` with reason `promoted_from_this_tree`
+  (nothing to do). A pull of any branch keeps the dev-branch record of a component you
+  add to `ignoredComponents` as it is (diff and push skip it while it is ignored), so
+  after you remove the ignore and pull, the next promote updates that dev config again.
+  Before, the pull dropped the record and the promote created a second config there.
+  The ignored production pull still removes the component's `main/` folders, so an
+  edit that only lived there is gone after you un-ignore and pull. A record left
+  without its production id by a push that died right after creating the config is
+  linked by the next push, also one with nothing else to send. A `sync pull --branch
+  <dev>` keeps a pending rewrite, so the next `sync push --branch <dev>` (now from the
+  dev branch's own tree) still finishes it; the rewritten ids then show as a remote
+  change for the next pull. When a promote push cannot save the manifest right after a
+  create, its error names the dev config and the recovery: `kbagent sync pull --branch
+  <dev>`, which tracks it in the dev branch's own tree (a plain retry would create it
+  again). `sync status` reads a promoted config from `main/` instead of calling it
+  deleted. A row folder that names a row id the manifest lost is adopted by pull under
+  its tracked config too; when it differs from the remote it is a conflict, never a new
+  row. A promoted config whose record still points at `main/` after a `sync pull
+  --branch <dev>` left it out (its component was ignored then) is listed under
+  `orphaned` with reason `promoted_from_other_tree` by a push from `dev/`; even `--force`
+  never deletes it. Before, it read as deleted and `--force` deleted it on the branch.
+- **Deleting a promoted folder from `main/`** is a local delete for the dev branch:
+  `sync push --branch <dev>` lists it under `skipped_deletions`, and
+  `sync push --force --branch <dev>` deletes the dev config only. Production is untouched.
+- **A push that dies after creating a config or row** (a killed process, a crash) does not
+  create it again on the retry: the manifest is saved right after every create, before
+  anything else, and every save is atomic (a temp file renamed over the manifest, never
+  a half-written one). When that save fails (permissions, full disk), push stops at once
+  with `CONFIG_ERROR` (exit 5) naming the config it created; fix the cause before the
+  next push. The manifest keeps an existing file's mode; a new one gets the mode a
+  normal file write gives under your umask. A create whose response was lost (the
+  server created it, kbagent never saw the id) can still be created twice.
+- **`sync pull` reads only the records of the branch it pulls.** After
+  `sync pull --branch <dev>`, a plain `sync pull` no longer judges `main/` by the dev
+  branch's baselines (a false "locally modified") and no longer reuses a folder name the
+  dev branch renamed (it left the old folder as a copy that `sync push` created again in
+  production). It writes each config, and each row, into the folder whose `_config.yml`
+  carries its id. A config folder that differs from production then has no baseline: pull
+  keeps it (`skipped`) and `sync diff` calls it a `conflict`, as for any file with a
+  config id and no manifest entry. A row file that differs is kept too (`skipped`, reason
+  "row locally modified, not tracked in the manifest") with an unknown base: pull cannot
+  tell a stale file from an edited one, so `sync diff` calls the row a `conflict`,
+  `sync push` neither sends nor deletes it (so it can never overwrite a change made in
+  the UI; deleting the row folder locally is a conflict too, also with `--force`), and a
+  later pull never deletes it -- not when the row is deleted remotely, and not the
+  config folder holding it when the whole config is deleted remotely. Only
+  `sync pull --theirs`, or a pull that finds the file equal to the remote, resolves it. An id carried by two folders is adopted by neither: pull
+  leaves both alone and adds a `warnings[]` entry (`ambiguous_config_id` /
+  `ambiguous_row_id`).
+- **`sync pull` never writes a new config or row into a folder that already belongs to
+  another one** -- a tracked config, a promoted folder, a folder carrying an id, or a
+  config authored locally and never pushed -- whatever order the remote lists them in.
+  Before, a new remote config named like an existing one could be written into that
+  folder. The new one gets a `<name>-<id>` folder (`<name>-<id>-2`, ... when that one is
+  taken too).
+- **`sync pull --branch <other dev>` keeps the record of a promote to another dev
+  branch**, so the next `sync push --branch <dev>` still updates the config it created
+  there. Before, pulling a third branch dropped it and the next promote created the
+  config again.
+- **On an older version**, do not edit in `main/` and promote with `--branch` while you
+  also push the same configs to production. Run `sync pull --branch <dev>` once and work
+  in the `<dev>/` folder instead. If production `sync diff` shows `remote_modified` for a
+  config you only promoted, do not run `sync pull`: copy the folder aside first.
+
 ## Config folder is the configuration's `folder` field, not the `KBC.configuration.folderName` metadata key
 
 *(since vNEXT)* (DMD-2348)
