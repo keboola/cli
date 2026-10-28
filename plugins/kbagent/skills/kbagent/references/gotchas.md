@@ -6806,9 +6806,21 @@ untracked directory of the same branch tree carries, is a **move**:
   none of the directories and reports it `skipped`. Keep one directory, and
   remove the others or remove their `_keboola.config_id` (then they are new
   configs).
+- **Rotations and swaps.** A tracked directory whose `_config.yml` now carries
+  the id of another tracked config counts as left by its own config: moving
+  B away and A into B (or swapping A and B) is two moves, and each config
+  keeps its content. When no directory carries the displaced config, diff
+  lists it under `displaced[]` and as remote-only: push neither updates it
+  with the other config's content nor deletes it, and `sync pull` writes it
+  to a new directory.
+- `config rename --directory` renames the directory of the entry of the
+  target branch only. When the sync tree tracks the config on another branch
+  only, the local tree is not changed and `--json` says so in
+  `sync_skipped`.
 - Not a move: the original directory still exists (a copy is a new config,
-  fork by copy, as before), the original `_config.yml` is there but is not
-  valid YAML, or the component is ignored.
+  fork by copy, as before; also when only its `_config.yml` was removed), the
+  original `_config.yml` is there but is not valid YAML, or the component is
+  ignored.
 
 ## `sync push` encrypts every secret before its first write (#792)
 
