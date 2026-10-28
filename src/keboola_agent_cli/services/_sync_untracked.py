@@ -20,6 +20,7 @@ altogether, which hid two things from ``sync diff`` and ``sync push``:
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -28,8 +29,14 @@ import yaml
 
 from ..constants import CONFIG_FILENAME
 from ..errors import ConfigError
-from ..sync.branch_scope import UNKNOWN_BASE_ADOPTED, UNKNOWN_BASE_HASH, UNKNOWN_BASE_KEY
-from ..sync.manifest import ManifestConfigRow
+from ..sync.branch_scope import (
+    UNKNOWN_BASE_ADOPTED,
+    UNKNOWN_BASE_HASH,
+    UNKNOWN_BASE_KEY,
+    find_untracked_rows,
+)
+from ..sync.diff_engine import ConfigChange
+from ..sync.manifest import Manifest, ManifestConfigRow, ManifestConfiguration
 
 if TYPE_CHECKING:
     from .sync_service import SyncService
@@ -88,6 +95,7 @@ def collect_untracked_rows(
             "path": f"rows/{row_dir.name}",
             "data": data,
             "parent_path": config_path,
+            "untracked": True,
             # A row id in a NEW config's row file was copied from another
             # config: a placeholder, never a source identity (S2). The row is
             # created as authored and linked by its path later (risk 83).
@@ -107,6 +115,100 @@ def collect_untracked_rows(
         if key.startswith(prefix):
             found.tracked_row_keys.add(key)
             found.base_hashes[key] = UNKNOWN_BASE_HASH
+
+
+def collect_tracked_parent_rows(
+    service: SyncService,
+    found: UntrackedRows,
+    project_root: Path,
+    manifest: Manifest,
+    source_branch_path: str,
+    entries: list[ManifestConfiguration],
+    *,
+    file_ids_as_source: bool,
+    ignored_components: frozenset[str],
+) -> None:
+    """Add the untracked row dirs under tracked configs (new rows) to *found*.
+
+    They have no row id on the target yet, so the row diff flags them
+    ``added`` and push creates them. A still-tracked ignored parent
+    contributes none: push would re-add what pull refuses to fetch.
+    """
+    for untracked in find_untracked_rows(
+        project_root,
+        manifest,
+        service._read_config_file,
+        source_branch_path,
+        entries,
+        file_ids_as_source=file_ids_as_source,
+    ):
+        if untracked["component_id"] in ignored_components:
+            continue
+        found.local_rows.append(
+            {
+                "component_id": untracked["component_id"],
+                "parent_config_id": untracked["parent_config_id"],
+                "row_id": "",  # target diff identity: not on the target yet
+                "source_row_id": untracked["source_row_id"],  # risk 71
+                "row_name": untracked["row_name"],
+                "path": untracked["path"],
+                "data": untracked["data"],
+                "untracked": True,
+            }
+        )
+
+
+def _file_row_id(entry: dict[str, Any]) -> str:
+    data = entry.get("data")
+    meta = data.get("_keboola") if isinstance(data, dict) else None
+    return str(meta.get("row_id") or "") if isinstance(meta, dict) else ""
+
+
+def split_ambiguous_rows(local_rows: list[dict[str, Any]]) -> list[ConfigChange]:
+    """Take the untracked row dirs whose row id another dir of the config carries out of the diff.
+
+    Two row dirs of one config carrying the same row id (a copied row dir)
+    say nothing about which one is the row: pull writes into neither (its
+    ambiguous-id rule), and push must create neither -- a row that the
+    remote deleted was POSTed again from the copy. Each untracked one becomes
+    a ``conflict`` naming every dir that carries the id; a tracked dir keeps
+    its own diff. A new config's row ids are placeholders and never count.
+    Mutates *local_rows*; returns the conflicts.
+    """
+    paths: dict[tuple[str, str, str], list[str]] = {}
+    for entry in local_rows:
+        row_id = _file_row_id(entry)
+        if entry.get("parent_config_id") and row_id:
+            key = (entry["component_id"], str(entry["parent_config_id"]), row_id)
+            paths.setdefault(key, []).append(str(entry.get("path", "")))
+    conflicts: list[ConfigChange] = []
+    kept: list[dict[str, Any]] = []
+    for entry in local_rows:
+        key = (entry["component_id"], str(entry.get("parent_config_id") or ""), _file_row_id(entry))
+        carriers = paths.get(key, [])
+        if not entry.get("untracked") or len(carriers) < 2:
+            kept.append(entry)
+            continue
+        conflicts.append(
+            ConfigChange(
+                change_type="conflict",
+                component_id=entry["component_id"],
+                config_id=key[2],
+                config_name=entry.get("row_name", ""),
+                path=str(entry.get("path", "")),
+                details=[
+                    (
+                        f"row id {key[2]} is carried by {len(carriers)} row directories "
+                        f"({', '.join(sorted(carriers))}); keep one and remove the others' "
+                        f"'row_id'"
+                    )
+                ],
+                is_row=True,
+                parent_config_id=key[1],
+            )
+        )
+    local_rows[:] = kept
+    return conflicts
 
 
 def component_change_problem(
@@ -161,12 +263,13 @@ def adopted_row_entries(config_dir: Path) -> list[ManifestConfigRow]:
     A row dir without an id stays untracked: the next push creates it.
     """
     rows: list[ManifestConfigRow] = []
-    seen: set[str] = set()
-    for row_dir in _row_dirs(config_dir):
-        row_id = _row_id_of(row_dir)
-        if not row_id or row_id in seen:
+    ids = [(row_dir, _row_id_of(row_dir)) for row_dir in _row_dirs(config_dir)]
+    counts = Counter(row_id for _, row_id in ids)
+    for row_dir, row_id in ids:
+        # An id two dirs carry is ambiguous: neither is registered, and the
+        # row diff reports both as a conflict (split_ambiguous_rows).
+        if not row_id or counts[row_id] > 1:
             continue
-        seen.add(row_id)
         rows.append(
             ManifestConfigRow(
                 id=row_id,

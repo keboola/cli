@@ -198,6 +198,56 @@ def plan_push(all_changes: list[dict[str, Any]], *, force: bool) -> PushPlan:
     return plan
 
 
+def create_refusals(
+    service: SyncService,
+    changes: list[dict[str, Any]],
+    manifest: Manifest,
+    project_root: Path,
+    branch_id: int | None,
+) -> list[dict[str, str]]:
+    """The config creates a real push would refuse, as push ``errors`` records (dry run).
+
+    The same check :func:`push_create` makes before its POST: a new config
+    whose ``pyproject.toml`` states no package list and whose ``_config.yml``
+    has none inline has no remote to take them from (``COMPANION_UNREADABLE``,
+    T1). ``push --dry-run`` and ``clone --dry-run`` report it instead of
+    showing a create the real run refuses.
+    """
+    refusals: list[dict[str, str]] = []
+    creates = [c for c in changes if c["change_type"] == "added" and not c.get("is_row")]
+    if not creates:
+        return refusals
+    source_dir = project_root / service._resolve_source_branch_path(
+        manifest, project_root, branch_id
+    )
+    for change in creates:
+        config_dir = source_dir / change.get("path", "")
+        local_data = service._read_config_file(config_dir)
+        if not isinstance(local_data, dict):
+            continue
+        merge_code_files(change["component_id"], local_data, config_dir)
+        try:
+            require_decided_packages(
+                None,
+                component_id=change["component_id"],
+                config_id="",
+                branch_id=None,
+                local_data=local_data,
+                config_path=change.get("path", ""),
+            )
+        except KeboolaApiError as exc:
+            refusals.append(
+                {
+                    "change_type": "added",
+                    "component_id": change["component_id"],
+                    "config_id": change.get("config_id", ""),
+                    "message": exc.message,
+                    "error_code": str(exc.error_code),
+                }
+            )
+    return refusals
+
+
 def detect_name_drift(
     service: SyncService, manifest: Manifest, project_root: Path
 ) -> list[dict[str, str]]:

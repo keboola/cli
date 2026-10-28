@@ -43,7 +43,6 @@ from ..sync.branch_scope import (
     classify_untracked,
     entry_tree,
     find_untracked_configs,
-    find_untracked_rows,
     same_branch,
     scope_manifest,
     stale_tree_record,
@@ -70,6 +69,7 @@ from ..sync.manifest import (
     save_manifest,
 )
 from ..sync.naming import config_path
+from . import _sync_push_ops as push_ops
 from . import _sync_workspace as sql_workspaces
 from ._encryption import (
     encrypt_secrets_in_config,
@@ -163,9 +163,11 @@ from ._sync_storage import (
 )
 from ._sync_untracked import (
     UntrackedRows,
+    collect_tracked_parent_rows,
     collect_untracked_rows,
     component_change_problem,
     raise_on_component_change,
+    split_ambiguous_rows,
 )
 from ._sync_writeback import reconcile_promote_links, stamp_updated_config
 from .base import BaseService, ClientFactory, find_default_branch_id
@@ -1186,7 +1188,6 @@ class SyncService(BaseService):
             local_data = self._read_config_file(config_dir)
             if local_data is None:
                 continue
-            merge_code_files(component_id, local_data, config_dir)
             # Adopt-by-id guard (issues #482 / #649): an untracked file whose
             # ``_keboola.config_id`` resolves on the target branch and is not
             # claimed by a manifest entry IN THIS TREE refers to an EXISTING
@@ -1213,6 +1214,10 @@ class SyncService(BaseService):
                 continue
             if verdict == VERDICT_CREATE:
                 untracked_id = ""  # new config, push creates it
+            # Merged once the identity is known: packages a pyproject.toml left
+            # undecided are the adopted remote config's (T1).
+            remote_local = remote_configs.get(f"{component_id}/{untracked_id}")
+            merge_with_remote(component_id, local_data, config_dir, remote_local)
             # Its rows join the plan: created with it, or diffed by id (D7, D8).
             collect_untracked_rows(
                 self,
@@ -1303,33 +1308,18 @@ class SyncService(BaseService):
                     }
                 )
 
-        # Also add untracked local rows (new row dirs dropped under a tracked
-        # config). They have no row_id yet so compute_row_changeset flags
-        # them as "added" and push dispatches them via create_config_row.
-        for untracked in find_untracked_rows(
+        # Also add untracked local rows (new row dirs under a tracked config).
+        collect_tracked_parent_rows(
+            self,
+            untracked_rows,
             project_root,
             manifest,
-            self._read_config_file,
             source_branch_path,
             scope.in_tree,
             file_ids_as_source=source_branch_path == branch_tree_path(manifest, branch_id),
-        ):
-            # Same guard as the untracked configs above: the row walk keys off
-            # ``manifest.configurations`` directly, so a still-tracked ignored
-            # parent would otherwise contribute row creates.
-            if untracked["component_id"] in ignored_components:
-                continue
-            local_rows.append(
-                {
-                    "component_id": untracked["component_id"],
-                    "parent_config_id": untracked["parent_config_id"],
-                    "row_id": "",  # target diff identity: not on the target yet
-                    "source_row_id": untracked["source_row_id"],  # risk 71
-                    "row_name": untracked["row_name"],
-                    "path": untracked["path"],
-                    "data": untracked["data"],
-                }
-            )
+            ignored_components=ignored_components,
+        )
+        ambiguous_rows = split_ambiguous_rows(local_rows)
 
         row_changeset = compute_row_changeset(
             local_rows,
@@ -1347,7 +1337,7 @@ class SyncService(BaseService):
             key = f"{change.component_id}/{change.parent_config_id}/rows/{change.config_id}"
             if change.change_type == "deleted" and row_base_hashes.get(key) == UNKNOWN_BASE_HASH:
                 change.change_type = "conflict"
-        changeset.extend(row_changeset)
+        changeset.extend(row_changeset + ambiguous_rows)
 
         added = [c for c in changeset if c.change_type == "added"]
         modified = [c for c in changeset if c.change_type == "modified"]
@@ -1486,6 +1476,8 @@ class SyncService(BaseService):
                 "summary": {**diff_result["summary"], "deleted": plan.deletions},
                 **plan.report(),
                 **shown,
+                # The creates a real push refuses (T1, round 5).
+                "errors": push_ops.create_refusals(self, changes, stored, project_root, target_id),
             }
             if never_fetched:
                 dry_result["never_fetched"] = never_fetched

@@ -45,7 +45,7 @@ from ..sync.code_extraction import (
 from ..sync.config_format import BASE_CONFIG_HASH_KEY, api_config_to_local, api_row_to_local
 from ..sync.diff_engine import config_hash
 from ..sync.manifest import Manifest
-from ._sync_companions import config_locally_modified
+from ._sync_companions import config_locally_modified, merge_with_remote
 
 if TYPE_CHECKING:
     from .sync_service import SyncService
@@ -292,10 +292,10 @@ def adopted_skip_detail(
         return None
     if str(meta.get("config_id", "")) != config_id:
         return None
-    merge_code_files(component_id, local, config_dir)
-    base = meta.get(BASE_CONFIG_HASH_KEY) or config_hash(
-        api_config_to_local(component_id, remote, config_id)
-    )
+    remote_local = api_config_to_local(component_id, remote, config_id)
+    # Packages a pyproject.toml left undecided are the remote's (T1, R2 round 5).
+    merge_with_remote(component_id, local, config_dir, remote_local)
+    base = meta.get(BASE_CONFIG_HASH_KEY) or config_hash(remote_local)
     if config_hash(local) == base:
         return None
     return {

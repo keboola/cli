@@ -116,7 +116,8 @@ These lists keep `error`, because their entries are not failed items with an err
   such list -- no key, a Poetry-only file, not valid TOML -- never decides the packages:
   the inline `packages` apply, else push keeps the packages the remote config has (exactly,
   also a value an older kbagent wrote without escaping its quotes); a new config in that
-  state is refused with `COMPANION_UNREADABLE`, as is an update whose remote cannot be read.
+  state is refused with `COMPANION_UNREADABLE` (`push --dry-run` and `clone --dry-run`
+  report the same error), as is an update whose remote cannot be read.
   `sync diff` reports a file that is not valid TOML (`COMPANION_UNREADABLE` warning). A deleted companion sends the value inline in
   `_config.yml` (pull writes `description: ''` and `packages: []` there when they are
   empty), or none. After a push that cleared the
@@ -145,7 +146,9 @@ These lists keep `error`, because their entries are not failed items with an err
   remote row with no file, is a `conflict` -- never an update or a delete, because nothing
   records which side changed it. A row file carrying an id the remote no longer has is
   `remote_deleted`: push never creates it again, also after the adopted config was
-  registered (its rows are registered with it, that one included). A new row (no row id) under such a config is created
+  registered (its rows are registered with it, that one included). Two row folders of one
+  config carrying the same row id (a copied row folder) are both a `conflict` naming both
+  folders, and push creates neither -- keep one and remove the other's `row_id`. A new row (no row id) under such a config is created
   when the config itself equals the remote; otherwise run `sync pull` first. Pushing the
   adopted config registers its rows, so a later push never creates them a second time.
 - **A flow, orchestration or schedule created in the same push as a row it selects**

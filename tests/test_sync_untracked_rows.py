@@ -639,3 +639,35 @@ def test_registering_an_adopted_config_keeps_a_remotely_deleted_row_identity(
     assert second["created"] == 0
     assert ("remote_deleted", "1003") in _changes(sim)
     assert [r["name"] for r in sim.api.remote[PROD][HTTP_2]["rows"]] == ["Row tk9z", "Row tk903z"]
+
+
+def test_two_row_dirs_carrying_one_deleted_row_id_are_never_posted(tmp_path: Path) -> None:
+    """Round 5 P1 (Astra's input): rows/a and rows/b carry R, R is gone on the remote."""
+    sim = _world(tmp_path)
+    _forget(sim, HTTP_2)
+    rows = sim.api.remote[PROD][HTTP_2]["rows"]
+    rows[:] = [r for r in rows if r["id"] != "1005"]  # R deleted on the remote
+    shutil.copytree(
+        _dir(sim, f"{HTTP_2_DIR}/rows/row-tk11z"), _dir(sim, f"{HTTP_2_DIR}/rows/row-copy")
+    )
+    new_row = _dir(sim, f"{HTTP_2_DIR}/rows/row-tk903z")  # makes push register the parent
+    shutil.copytree(_dir(sim, f"{HTTP_2_DIR}/rows/row-tk9z"), new_row)
+    data = read_yaml(new_row / "_config.yml")
+    data["name"] = "Row tk903z"
+    data["_keboola"].pop("row_id")
+    write_yaml(new_row / "_config.yml", data)
+
+    for push_number in (1, 2):
+        diff = sim.svc.diff(alias="prod", project_root=sim.root)
+        conflicts = [
+            c for c in diff["changes"] if c.get("is_row") and c["change_type"] == "conflict"
+        ]
+        assert sorted(c["path"] for c in conflicts) == ["rows/row-copy", "rows/row-tk11z"]
+        assert all("rows/row-copy" in c["details"][0] for c in conflicts)
+        assert all("rows/row-tk11z" in c["details"][0] for c in conflicts)
+        result = _push(sim)
+        assert result["created"] == (1 if push_number == 1 else 0)
+
+    (entry,) = [c for c in load_manifest(sim.root).configurations if c.id == "1003"]
+    assert "1005" not in {r.id for r in entry.rows}
+    assert [r["name"] for r in sim.api.remote[PROD][HTTP_2]["rows"]] == ["Row tk9z", "Row tk903z"]

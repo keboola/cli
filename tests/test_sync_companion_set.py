@@ -751,3 +751,77 @@ def test_invalid_pyproject_leaves_the_remote_packages_byte_for_byte(
     assert result["errors"] == []
     packages = sim.api.remote[PROD][APP_1]["configuration"]["parameters"]["packages"]
     assert packages == remote_packages
+
+
+# ---------------------------------------------------------------------------
+# Round 5: adopted comparisons settle packages; dry runs report the refusal
+# ---------------------------------------------------------------------------
+
+
+def _silent_app_pyproject_without_its_entry(sim: Any) -> None:
+    sim.api.remote[PROD][APP_1]["configuration"]["parameters"]["packages"] = ["pandas"]
+    _pull(sim)
+    (_dir(sim, APP_DIR) / "pyproject.toml").write_text(
+        '[project]\nname = "app"\n', encoding="utf-8"
+    )
+    manifest = load_manifest(sim.root)
+    manifest.configurations = [
+        c for c in manifest.configurations if (c.component_id, c.id) != APP_1
+    ]
+    save_manifest(sim.root, manifest)
+
+
+def test_adopted_diff_settles_undecided_packages_from_the_remote(tmp_path: Path) -> None:
+    """Round 5 P2: no false conflict 'parameters.packages removed' on an adopted dir."""
+    sim = _world(tmp_path)
+    _silent_app_pyproject_without_its_entry(sim)
+    assert _changes(sim) == []
+
+
+def test_adopted_pull_comparison_settles_undecided_packages(tmp_path: Path) -> None:
+    """Round 5 P2: pull does not keep the adopted dir as 'locally modified'."""
+    sim = _world(tmp_path)
+    _silent_app_pyproject_without_its_entry(sim)
+    result = _pull(sim)
+    assert not [d for d in result["details"] if d.get("action") == "skipped"]
+
+
+def test_push_dry_run_reports_the_create_a_real_push_refuses(tmp_path: Path) -> None:
+    """Round 5 P2: the dry run runs the same COMPANION_UNREADABLE check."""
+    sim = _world(tmp_path)
+    src = _dir(sim, APP_DIR)
+    dst = src.parent / "new-app"
+    shutil.copytree(src, dst)
+    data = read_yaml(dst / "_config.yml")
+    data["_keboola"].pop("config_id")
+    data["name"] = "Name tk901z"
+    write_yaml(dst / "_config.yml", data)
+    (dst / "pyproject.toml").write_text('[project]\nname = "app"\n', encoding="utf-8")
+
+    dry = sim.svc.push(alias="prod", project_root=sim.root, dry_run=True)
+    real = _push(sim)
+
+    assert [e["error_code"] for e in dry["errors"]] == ["COMPANION_UNREADABLE"]
+    assert [e["error_code"] for e in real["errors"]] == ["COMPANION_UNREADABLE"]
+
+
+def test_clone_dry_run_reports_the_create_a_real_clone_refuses(tmp_path: Path) -> None:
+    from test_sync_bookkeeping_differential import VARIANTS, Api, World
+
+    variant = VARIANTS["app"]
+    src = World(tmp_path, name="source")
+    cid = src.api.seed(variant)
+    src.init()
+    src.pull()
+    (src.config_dir(cid) / "pyproject.toml").write_text(
+        '[project]\nname = "app"\n', encoding="utf-8"
+    )
+    target_api = Api(first_id=5000)
+    target_api.types = dict(src.api.types)
+    target = World(tmp_path, target_api, name="target")
+    target.root.rmdir()
+
+    result = target.svc.clone_project(src.root, "prod", target.root, dry_run=True)
+
+    assert [e["error_code"] for e in result["errors"]] == ["COMPANION_UNREADABLE"]
+    assert target_api.remote[PROD] == {}
