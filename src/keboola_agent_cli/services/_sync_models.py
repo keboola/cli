@@ -66,6 +66,10 @@ CREATED_FROM_KEY = "created_from_id"
 # the promote path whose references may still name placeholder ids: set in its
 # create checkpoint, cleared once every reference resolves (D9).
 LINK_PENDING_KEY = "link_pending"
+# Config metadata of a config registered by its id (adopted): every row id its
+# local row dirs carried then, an ambiguous one included. A row dir that later
+# carries one of them alone is that row, never a new one (round 6).
+ADOPTED_ROW_IDS_KEY = "adopted_row_ids"
 
 
 @dataclass

@@ -825,3 +825,64 @@ def test_clone_dry_run_reports_the_create_a_real_clone_refuses(tmp_path: Path) -
 
     assert [e["error_code"] for e in result["errors"]] == ["COMPANION_UNREADABLE"]
     assert target_api.remote[PROD] == {}
+
+
+# ---------------------------------------------------------------------------
+# Round 6 P2: human dry-run output prints each refusal and counts separately
+# ---------------------------------------------------------------------------
+
+_REFUSAL = {
+    "change_type": "added",
+    "component_id": APP,
+    "config_id": "",
+    "message": "Refusing to push: new-app/pyproject.toml states no usable list. Fix pyproject.toml.",
+    "error_code": "COMPANION_UNREADABLE",
+}
+
+
+def test_push_dry_run_renderer_prints_refusals_and_counts(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from keboola_agent_cli.commands._sync_push_render import push_summary, push_total
+    from keboola_agent_cli.commands.sync import _render_push_result
+    from keboola_agent_cli.output import OutputFormatter
+
+    result = {
+        "status": "dry_run",
+        "changes": [
+            {"change_type": "added", "component_id": APP, "config_id": "", "path": "new-app"},
+            {"change_type": "added", "component_id": HTTP, "config_id": "", "path": "new-x"},
+        ],
+        "summary": {"added": 2, "modified": 0, "deleted": 0},
+        "errors": [_REFUSAL],
+    }
+    _render_push_result(OutputFormatter(json_mode=False, no_color=True), result)
+    out = capsys.readouterr().out
+    assert "Fix pyproject.toml." in out
+    assert push_total(result) == 2
+    assert push_summary(result) == (
+        "2 config(s) planned, 1 refused, 1 would be pushed: 2 created, 0 updated, 0 deleted."
+    )
+
+
+def test_clone_dry_run_renderer_prints_refusals_and_counts(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from keboola_agent_cli.commands._sync_clone_render import (
+        clone_summary,
+        clone_total,
+        print_clone_result,
+    )
+    from keboola_agent_cli.output import OutputFormatter
+
+    result = {
+        "status": "dry_run",
+        "target_alias": "prod",
+        "summary": {"added": 2},
+        "errors": [_REFUSAL],
+        "warnings": [],
+    }
+    print_clone_result(OutputFormatter(json_mode=False, no_color=True), result)
+    assert "Fix pyproject.toml." in capsys.readouterr().out
+    assert clone_total(result, failed=1) == 2
+    assert clone_summary(result) == "2 config(s) planned, 1 refused, 1 would be cloned into prod."

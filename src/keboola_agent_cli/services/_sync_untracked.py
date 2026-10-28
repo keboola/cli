@@ -33,10 +33,12 @@ from ..sync.branch_scope import (
     UNKNOWN_BASE_ADOPTED,
     UNKNOWN_BASE_HASH,
     UNKNOWN_BASE_KEY,
+    branch_tree_path,
     find_untracked_rows,
 )
 from ..sync.diff_engine import ConfigChange
 from ..sync.manifest import Manifest, ManifestConfigRow, ManifestConfiguration
+from ._sync_models import ADOPTED_ROW_IDS_KEY
 
 if TYPE_CHECKING:
     from .sync_service import SyncService
@@ -125,22 +127,27 @@ def collect_tracked_parent_rows(
     source_branch_path: str,
     entries: list[ManifestConfiguration],
     *,
-    file_ids_as_source: bool,
+    branch_id: int | None,
+    remote_rows: dict[str, dict[str, Any]],
     ignored_components: frozenset[str],
-) -> None:
-    """Add the untracked row dirs under tracked configs (new rows) to *found*.
+) -> list[ConfigChange]:
+    """Add the untracked row dirs under tracked configs to *found*, then settle every identity.
 
-    They have no row id on the target yet, so the row diff flags them
-    ``added`` and push creates them. A still-tracked ignored parent
-    contributes none: push would re-add what pull refuses to fetch.
+    Without a row id on the target the row diff flags them ``added`` and push
+    creates them; :func:`settle_row_identities` then decides, for these and
+    the adopted configs' rows, which ones are a known row or ambiguous --
+    the conflicts it returns join the changeset. A still-tracked ignored
+    parent contributes none: push would re-add what pull refuses to fetch.
+    Off the promote path, a row file's own id counts as its identity.
     """
+    not_promoting = source_branch_path == branch_tree_path(manifest, branch_id)
     for untracked in find_untracked_rows(
         project_root,
         manifest,
         service._read_config_file,
         source_branch_path,
         entries,
-        file_ids_as_source=file_ids_as_source,
+        file_ids_as_source=not_promoting,
     ):
         if untracked["component_id"] in ignored_components:
             continue
@@ -156,6 +163,7 @@ def collect_tracked_parent_rows(
                 "untracked": True,
             }
         )
+    return settle_row_identities(found, remote_rows, entries, adopt_ids=not_promoting)
 
 
 def _file_row_id(entry: dict[str, Any]) -> str:
@@ -164,51 +172,101 @@ def _file_row_id(entry: dict[str, Any]) -> str:
     return str(meta.get("row_id") or "") if isinstance(meta, dict) else ""
 
 
-def split_ambiguous_rows(local_rows: list[dict[str, Any]]) -> list[ConfigChange]:
-    """Take the untracked row dirs whose row id another dir of the config carries out of the diff.
-
-    Two row dirs of one config carrying the same row id (a copied row dir)
-    say nothing about which one is the row: pull writes into neither (its
-    ambiguous-id rule), and push must create neither -- a row that the
-    remote deleted was POSTed again from the copy. Each untracked one becomes
-    a ``conflict`` naming every dir that carries the id; a tracked dir keeps
-    its own diff. A new config's row ids are placeholders and never count.
-    Mutates *local_rows*; returns the conflicts.
-    """
+def _carriers(local_rows: list[dict[str, Any]]) -> dict[tuple[str, str, str], list[str]]:
+    """``(component, parent id, row id)`` -> the row dirs whose file carries that id."""
     paths: dict[tuple[str, str, str], list[str]] = {}
     for entry in local_rows:
         row_id = _file_row_id(entry)
         if entry.get("parent_config_id") and row_id:
             key = (entry["component_id"], str(entry["parent_config_id"]), row_id)
             paths.setdefault(key, []).append(str(entry.get("path", "")))
+    return paths
+
+
+def _ambiguity_conflict(
+    entry: dict[str, Any], key: tuple[str, str, str], carriers: list[str]
+) -> ConfigChange:
+    listed = ", ".join(sorted(carriers))
+    return ConfigChange(
+        change_type="conflict",
+        component_id=entry["component_id"],
+        config_id=key[2],
+        config_name=entry.get("row_name", ""),
+        path=str(entry.get("path", "")),
+        details=[
+            (
+                f"row id {key[2]} is carried by {len(carriers)} row directories ({listed}). "
+                f"Delete every directory that is not row {key[2]}: the one left with row id "
+                f"{key[2]} is that row. To keep one as a NEW row instead, remove the "
+                f"'row_id' line from its _config.yml."
+            )
+        ],
+        is_row=True,
+        parent_config_id=key[1],
+    )
+
+
+def settle_row_identities(
+    found: UntrackedRows,
+    remote_rows: dict[str, dict[str, Any]],
+    entries: list[ManifestConfiguration],
+    *,
+    adopt_ids: bool,
+) -> list[ConfigChange]:
+    """Decide what each untracked row dir is, by the row id its file carries (round 5, 6).
+
+    - Two or more row dirs of one config carrying the same row id say nothing
+      about which one is the row: pull writes into neither (its ambiguous-id
+      rule) and push creates neither -- each untracked one becomes a
+      ``conflict`` naming every carrier; a tracked dir keeps its own diff.
+    - A row dir that ALONE carries an id the config knows -- a row of the
+      remote config, a row the manifest tracks (its own dir gone), or an id
+      recorded when the config was registered by its id (``adopted_row_ids``)
+      -- IS that row (*adopt_ids*, any push but the promote path): diffed by
+      id with an unknown base, ``remote_deleted`` when the remote lost it,
+      never POSTed as a new row. Resolving an ambiguity therefore never
+      creates the row again, and the dir that lost its ``row_id`` is new.
+    - Any other id is a copied placeholder: the row is new.
+
+    A new config's row ids are placeholders and never count. Mutates
+    ``found.local_rows`` (and its baselines); returns the conflicts.
+    """
+    known: dict[tuple[str, str], set[str]] = {}
+    for cfg in entries:
+        ids = {row.id for row in cfg.rows}
+        ids.update(str(i) for i in cfg.metadata.get(ADOPTED_ROW_IDS_KEY) or [])
+        known[(cfg.component_id, cfg.id)] = ids
+    carriers = _carriers(found.local_rows)
     conflicts: list[ConfigChange] = []
     kept: list[dict[str, Any]] = []
-    for entry in local_rows:
-        key = (entry["component_id"], str(entry.get("parent_config_id") or ""), _file_row_id(entry))
-        carriers = paths.get(key, [])
-        if not entry.get("untracked") or len(carriers) < 2:
+    for entry in found.local_rows:
+        row_id = _file_row_id(entry)
+        key = (entry["component_id"], str(entry.get("parent_config_id") or ""), row_id)
+        if not entry.get("untracked") or not key[1] or not row_id:
             kept.append(entry)
             continue
-        conflicts.append(
-            ConfigChange(
-                change_type="conflict",
-                component_id=entry["component_id"],
-                config_id=key[2],
-                config_name=entry.get("row_name", ""),
-                path=str(entry.get("path", "")),
-                details=[
-                    (
-                        f"row id {key[2]} is carried by {len(carriers)} row directories "
-                        f"({', '.join(sorted(carriers))}); keep one and remove the others' "
-                        f"'row_id'"
-                    )
-                ],
-                is_row=True,
-                parent_config_id=key[1],
-            )
-        )
-    local_rows[:] = kept
+        if len(carriers.get(key, [])) > 1:
+            conflicts.append(_ambiguity_conflict(entry, key, carriers[key]))
+            continue
+        kept.append(entry)
+        remote_key = f"{key[0]}/{key[1]}/rows/{row_id}"
+        if entry.get("row_id") or not adopt_ids:
+            continue
+        if remote_key in remote_rows or row_id in known.get(key[:2], set()):
+            entry["row_id"] = row_id
+            found.base_hashes.setdefault(remote_key, UNKNOWN_BASE_HASH)
+            if remote_key not in remote_rows:
+                found.gone_row_keys.add(remote_key)
+    found.local_rows[:] = kept
     return conflicts
+
+
+def register_adopted_rows(entry: ManifestConfiguration, config_dir: Path) -> None:
+    """Track the rows of a config being registered by its id, and remember every row id (D8)."""
+    entry.rows = adopted_row_entries(config_dir)
+    entry.metadata[ADOPTED_ROW_IDS_KEY] = sorted(
+        {row_id for row_dir in _row_dirs(config_dir) if (row_id := _row_id_of(row_dir))}
+    )
 
 
 def component_change_problem(
@@ -266,8 +324,9 @@ def adopted_row_entries(config_dir: Path) -> list[ManifestConfigRow]:
     ids = [(row_dir, _row_id_of(row_dir)) for row_dir in _row_dirs(config_dir)]
     counts = Counter(row_id for _, row_id in ids)
     for row_dir, row_id in ids:
-        # An id two dirs carry is ambiguous: neither is registered, and the
-        # row diff reports both as a conflict (split_ambiguous_rows).
+        # An id two dirs carry is ambiguous: neither is registered as the
+        # row (register_adopted_rows still records the id), and the row diff
+        # reports both as a conflict (settle_row_identities).
         if not row_id or counts[row_id] > 1:
             continue
         rows.append(

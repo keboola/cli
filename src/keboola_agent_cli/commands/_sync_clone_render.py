@@ -46,7 +46,11 @@ def clone_summary(result: dict[str, Any]) -> str:
     target = escape(str(result.get("target_alias")))
     if status == "dry_run":
         added = result.get("summary", {}).get("added", 0)
-        return f"{added} config(s) would be cloned into {target}."
+        refused = len(result.get("errors", []))
+        return (
+            f"{added} config(s) planned, {refused} refused, {added - refused} would be "
+            f"cloned into {target}."
+        )
     if status == "no_changes":
         return f"0 config(s) cloned into {target}, already cloned."
     overrides = (
@@ -70,12 +74,25 @@ def _format_clone_result(formatter: Any, result: dict[str, Any]) -> None:
             f"variables={result.get('variable_overrides', 0)}, "
             f"renamed={result.get('renamed_instances', 0)}"
         )
+        # The creates the real clone would refuse, each with its remedy.
+        _print_errors(formatter, result)
         return
     _print_clone_buckets(formatter, result)
     if status == "no_changes":
         return
+    _print_errors(formatter, result)
+
+
+def _print_errors(formatter: Any, result: dict[str, Any]) -> None:
     for err in result.get("errors", []):
         formatter.item_error(
             f"{err.get('change_type')} {err.get('component_id')}/{err.get('config_id')}",
             err.get("message") or "",
         )
+
+
+def clone_total(result: dict[str, Any], failed: int) -> int:
+    """The items a clone headline counts: planned on a dry run, else done plus failed."""
+    if result.get("status") == "dry_run":
+        return result.get("summary", {}).get("added", 0) + len(result.get("bucket_errors", []))
+    return result.get("created", 0) + failed

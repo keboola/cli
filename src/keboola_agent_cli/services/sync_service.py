@@ -167,7 +167,6 @@ from ._sync_untracked import (
     collect_untracked_rows,
     component_change_problem,
     raise_on_component_change,
-    split_ambiguous_rows,
 )
 from ._sync_writeback import reconcile_promote_links, stamp_updated_config
 from .base import BaseService, ClientFactory, find_default_branch_id
@@ -1309,17 +1308,17 @@ class SyncService(BaseService):
                 )
 
         # Also add untracked local rows (new row dirs under a tracked config).
-        collect_tracked_parent_rows(
+        ambiguous_rows = collect_tracked_parent_rows(
             self,
             untracked_rows,
             project_root,
             manifest,
             source_branch_path,
             scope.in_tree,
-            file_ids_as_source=source_branch_path == branch_tree_path(manifest, branch_id),
+            branch_id=branch_id,
+            remote_rows=remote_rows,
             ignored_components=ignored_components,
         )
-        ambiguous_rows = split_ambiguous_rows(local_rows)
 
         row_changeset = compute_row_changeset(
             local_rows,

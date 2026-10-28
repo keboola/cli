@@ -44,7 +44,7 @@ from ._sync_models import (
     CreatedConfig,
     CreateOutcome,
 )
-from ._sync_untracked import adopted_row_entries
+from ._sync_untracked import register_adopted_rows
 from ._sync_writeback import (
     link_promote_entries,
     link_promote_rows,
@@ -358,7 +358,7 @@ def register_adopted_parent(
             ).entry
             entry.metadata[CONFIG_HASH_VERSION_KEY] = CONFIG_HASH_VERSION
             record_companions(entry.metadata, hashes.extra_hashes)
-            entry.rows = adopted_row_entries(config_dir)
+            register_adopted_rows(entry, config_dir)
             return
     raise KeboolaApiError(
         message=(

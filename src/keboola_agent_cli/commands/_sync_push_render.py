@@ -86,3 +86,49 @@ def _emit(formatter: Any, result: dict[str, Any], project: str) -> None:
             extra["project"] = project
         message = f"{project}: {entry['message']}" if project else entry["message"]
         formatter.warning(escape(message), code=entry["code"], **extra)
+
+
+def print_dry_run_refusals(formatter: Any, result: dict[str, Any]) -> None:
+    """Print each change a dry run found the real run would refuse, with its remedy.
+
+    The record's message names the file and what to do (``COMPANION_UNREADABLE``).
+    """
+    for err in result.get("errors", []):
+        label = f"{err.get('change_type')} {err.get('component_id')}/{err.get('config_id') or ''}"
+        formatter.item_error(label.rstrip("/"), err.get("message") or "")
+
+
+def push_total(result: dict[str, Any]) -> int:
+    """Every config change that a single-project ``sync push`` tried or would try."""
+    if result.get("status") == "dry_run":
+        summary = result.get("summary", {})
+        return sum(summary.get(key, 0) for key in ("added", "modified", "deleted"))
+    created = result.get("created", 0) + result.get("updated", 0) + result.get("deleted", 0)
+    return created + len(result.get("errors", []))
+
+
+def push_summary(result: dict[str, Any]) -> str:
+    """The headline text of a single-project ``sync push``.
+
+    A dry run counts what it planned, what the real run would refuse, and
+    what would actually be pushed, separately.
+    """
+    status = result.get("status", "")
+    if status == "no_changes":
+        return "0 config(s) pushed, no changes."
+    if status == "dry_run":
+        summary = result.get("summary", {})
+        added, modified = summary.get("added", 0), summary.get("modified", 0)
+        deleted = summary.get("deleted", 0)
+        planned = added + modified + deleted
+        refused = len(result.get("errors", []))
+        return (
+            f"{planned} config(s) planned, {refused} refused, {planned - refused} would be "
+            f"pushed: {added} created, {modified} updated, {deleted} deleted."
+        )
+    created, updated = result.get("created", 0), result.get("updated", 0)
+    deleted = result.get("deleted", 0)
+    return (
+        f"{created + updated + deleted} config(s) pushed: {created} created, "
+        f"{updated} updated, {deleted} deleted."
+    )

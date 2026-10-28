@@ -671,3 +671,88 @@ def test_two_row_dirs_carrying_one_deleted_row_id_are_never_posted(tmp_path: Pat
     (entry,) = [c for c in load_manifest(sim.root).configurations if c.id == "1003"]
     assert "1005" not in {r.id for r in entry.rows}
     assert [r["name"] for r in sim.api.remote[PROD][HTTP_2]["rows"]] == ["Row tk9z", "Row tk903z"]
+
+
+# ---------------------------------------------------------------------------
+# Round 6: resolving an ambiguous row id never creates the row again
+# ---------------------------------------------------------------------------
+
+
+def _ambiguous_adopted_row(sim: Sim, *, delete_remotely: bool) -> None:
+    """Astra's input: adopted 1003, rows/row-tk11z and rows/row-copy both carry 1005."""
+    _forget(sim, HTTP_2)
+    if delete_remotely:
+        rows = sim.api.remote[PROD][HTTP_2]["rows"]
+        rows[:] = [r for r in rows if r["id"] != "1005"]
+    shutil.copytree(
+        _dir(sim, f"{HTTP_2_DIR}/rows/row-tk11z"), _dir(sim, f"{HTTP_2_DIR}/rows/row-copy")
+    )
+    new_row = _dir(sim, f"{HTTP_2_DIR}/rows/row-tk903z")  # makes push register the parent
+    shutil.copytree(_dir(sim, f"{HTTP_2_DIR}/rows/row-tk9z"), new_row)
+    data = read_yaml(new_row / "_config.yml")
+    data["name"] = "Row tk903z"
+    data["_keboola"].pop("row_id")
+    write_yaml(new_row / "_config.yml", data)
+
+
+def _remove_row_id(sim: Sim, row_dir: str) -> None:
+    path = _dir(sim, f"{HTTP_2_DIR}/rows/{row_dir}") / "_config.yml"
+    data = read_yaml(path)
+    data["_keboola"].pop("row_id")
+    write_yaml(path, data)
+
+
+def test_deleting_one_carrier_of_a_deleted_row_id_never_recreates_the_row(tmp_path: Path) -> None:
+    """Round 6 P1 (Astra's sequence, 3 pushes): the dir left with R IS row R."""
+    sim = _world(tmp_path)
+    _ambiguous_adopted_row(sim, delete_remotely=True)
+
+    assert _push(sim)["created"] == 1  # only the row without an id
+    shutil.rmtree(_dir(sim, f"{HTTP_2_DIR}/rows/row-copy"))
+    assert ("remote_deleted", "1003") in _changes(sim)
+    assert _push(sim)["created"] == 0
+    assert _push(sim)["created"] == 0
+
+    assert [r["name"] for r in sim.api.remote[PROD][HTTP_2]["rows"]] == ["Row tk9z", "Row tk903z"]
+
+
+def test_removing_a_carriers_row_id_makes_only_that_dir_a_new_row(tmp_path: Path) -> None:
+    """Round 6 P1: the other resolution path -- the dir left with R is still never POSTed."""
+    sim = _world(tmp_path)
+    _ambiguous_adopted_row(sim, delete_remotely=True)
+
+    assert _push(sim)["created"] == 1
+    _remove_row_id(sim, "row-copy")
+    assert _push(sim)["created"] == 1  # rows/row-copy, now a new row
+    assert _push(sim)["created"] == 0
+
+    rows = sim.api.remote[PROD][HTTP_2]["rows"]
+    assert len(rows) == 3
+    assert "1005" not in {r["id"] for r in rows}
+    assert ("remote_deleted", "1003") in _changes(sim)
+
+
+def test_resolving_an_ambiguity_while_the_row_still_exists_leaves_no_duplicate(
+    tmp_path: Path,
+) -> None:
+    """Round 6 P1: R still on the remote -- the dir left with R is row R, unchanged."""
+    sim = _world(tmp_path)
+    _ambiguous_adopted_row(sim, delete_remotely=False)
+
+    assert _push(sim)["created"] == 1
+    shutil.rmtree(_dir(sim, f"{HTTP_2_DIR}/rows/row-copy"))
+    assert _changes(sim) == []
+    assert _push(sim)["created"] == 0
+    assert _push(sim)["created"] == 0
+
+    names = [r["name"] for r in sim.api.remote[PROD][HTTP_2]["rows"]]
+    assert names == ["Row tk9z", "Row tk11z", "Row tk903z"]
+
+
+def test_the_ambiguity_conflict_says_what_to_do(tmp_path: Path) -> None:
+    sim = _world(tmp_path)
+    _ambiguous_adopted_row(sim, delete_remotely=True)
+    diff = sim.svc.diff(alias="prod", project_root=sim.root)
+    [detail, *_] = next(c for c in diff["changes"] if c["change_type"] == "conflict")["details"]
+    assert "Delete every directory that is not row 1005" in detail
+    assert "remove the 'row_id' line" in detail

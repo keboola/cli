@@ -32,7 +32,7 @@ from ._encryption import apply_encrypted_to_local
 from ._sync_baseline import apply_stamp, config_baseline
 from ._sync_companions import canonical_description, record_companions
 from ._sync_models import AUTHORED_ROW_KEY, PROMOTED_ROW_KEY, LocalConfigHashes, WritebackResult
-from ._sync_untracked import adopted_row_entries
+from ._sync_untracked import register_adopted_rows
 
 if TYPE_CHECKING:
     from ..sync.manifest import Manifest
@@ -240,7 +240,7 @@ def stamp_updated_config(
     apply_stamp(entry.metadata, stamp)
     record_companions(entry.metadata, hashes.extra_hashes)
     if config_dir is not None:
-        entry.rows = adopted_row_entries(config_dir)
+        register_adopted_rows(entry, config_dir)
 
 
 def promote_shadow(
