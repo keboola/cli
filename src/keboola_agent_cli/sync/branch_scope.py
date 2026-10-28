@@ -168,6 +168,12 @@ def promoted_from(cfg: ManifestConfiguration) -> PromotedFrom | None:
     return PromotedFrom(tree=str(raw["tree"]), config_id=str(raw.get("config_id") or ""))
 
 
+def entry_tree(manifest: Manifest, cfg: ManifestConfiguration) -> str:
+    """The tree an entry's files live in: a promote entry's source tree, else its branch's."""
+    association = promoted_from(cfg)
+    return association.tree if association else branch_tree_path(manifest, cfg.branch_id)
+
+
 def find_branch_entry(
     manifest: Manifest, component_id: str, config_id: str, branch_id: int | None
 ) -> ManifestConfiguration | None:

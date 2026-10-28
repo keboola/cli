@@ -61,16 +61,39 @@ def is_fatal_push_error(exc: Exception) -> bool:
     return isinstance(exc, KeboolaApiError) and exc.error_code == ErrorCode.ENCRYPTION_FAILED
 
 
-def checkpoint_manifest(project_root: Path, manifest: Manifest, created: str) -> None:
-    """Save the manifest after the create of *created*, or stop the push."""
+def checkpoint_manifest(
+    project_root: Path,
+    manifest: Manifest,
+    created: str,
+    *,
+    promote_branch_id: int | None = None,
+) -> None:
+    """Save the manifest after the create of *created*, or stop the push.
+
+    On the promote path (*promote_branch_id*) the source file keeps its
+    source id, so only the manifest knew the new id: the message names the
+    pull that tracks the created config in the branch's own tree instead.
+    """
     try:
         save_manifest(project_root, manifest)
     except OSError as exc:
+        if promote_branch_id is not None:
+            recovery = (
+                f"{created} exists on dev branch {promote_branch_id}, but main/ keeps the "
+                f"source id, so the next `push --branch {promote_branch_id}` would create it "
+                f"again. Fix the cause (permissions, disk space), then run "
+                f"`kbagent sync pull --branch {promote_branch_id}`: it tracks the created "
+                f"config in that branch's own tree, and later pushes to the branch read it."
+            )
+        else:
+            recovery = (
+                f"Fix the cause (permissions, disk space) before the next push: the next "
+                f"push does not create {created} again only when the manifest records it "
+                f"or its local file carries its id."
+            )
         raise ManifestCheckpointError(
             f"{created} was created, but the manifest could not be saved ({exc}). Push "
-            f"stopped before any further write. Fix the cause (permissions, disk space) "
-            f"before the next push: the next push does not create {created} again only "
-            f"when the manifest records it or its local file carries its id."
+            f"stopped before any further write. {recovery}"
         ) from exc
 
 
@@ -162,7 +185,12 @@ def record_created_config(
         )
         link_promote_rows(manifest, tree=target.branch_path, source=entry)
     try:
-        checkpoint_manifest(target.project_root, manifest, f"{component_id}/{new_id}")
+        checkpoint_manifest(
+            target.project_root,
+            manifest,
+            f"{component_id}/{new_id}",
+            promote_branch_id=branch_id if promote else None,
+        )
     except ManifestCheckpointError as fatal:
         # Best effort: outside the promote path the file then carries the id,
         # and the next push adopts it instead of creating it again. A failure

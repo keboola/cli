@@ -147,7 +147,16 @@ These lists keep `error`, because their entries are not failed items with an err
   The ignored production pull still removes the component's `main/` folders, so an
   edit that only lived there is gone after you un-ignore and pull. A record left
   without its production id by a push that died right after creating the config is
-  linked by the next push, also one with nothing else to send.
+  linked by the next push, also one with nothing else to send. A `sync pull --branch
+  <dev>` keeps a pending rewrite, so the next `sync push --branch <dev>` (now from the
+  dev branch's own tree) still finishes it; the rewritten ids then show as a remote
+  change for the next pull. When a promote push cannot save the manifest right after a
+  create, its error names the dev config and the recovery: `kbagent sync pull --branch
+  <dev>`, which tracks it in the dev branch's own tree (a plain retry would create it
+  again). `sync status` reads a promoted config from `main/` instead of calling it
+  deleted. A row folder that names a row id the manifest lost is adopted by pull under
+  its tracked config too; when it differs from the remote it is a conflict, never a new
+  row.
 - **Deleting a promoted folder from `main/`** is a local delete for the dev branch:
   `sync push --branch <dev>` lists it under `skipped_deletions`, and
   `sync push --force --branch <dev>` deletes the dev config only. Production is untouched.

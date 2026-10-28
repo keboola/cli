@@ -43,6 +43,7 @@ from ..sync.branch_scope import (
     VERDICT_ORPHAN,
     branch_tree_path,
     classify_untracked,
+    entry_tree,
     find_untracked_configs,
     find_untracked_rows,
     same_branch,
@@ -122,6 +123,7 @@ from ._sync_promote_remap import (
 from ._sync_pull_dirs import (
     RowPullContext,
     ambiguous_id_warnings,
+    carry_promote_metadata,
     finalize_kept_entries,
     free_path,
     partition_pull_entries,
@@ -608,6 +610,7 @@ class SyncService(BaseService):
         ignored_components = sql_workspaces.effective_ignored_components(manifest)
         entries.hold_ignored_promotes(ignored_components)
         own_entries = entries.own
+        old_entries = {f"{c.component_id}/{c.id}": c for c in own_entries}
         untracked_dirs = scan_config_dirs(self, project_root, manifest, branch_dir_name)
         pull_warnings: list[dict[str, Any]] = ambiguous_id_warnings(untracked_dirs)
         # Paths owned on disk before this pull allocates any (D14): a new or
@@ -986,6 +989,7 @@ class SyncService(BaseService):
                     folder_name = existing_metadata.get(lookup_key, {}).get(FOLDER_METADATA_KEY)
                 if folder_name:
                     cfg_metadata[FOLDER_METADATA_KEY] = folder_name
+                carry_promote_metadata(old_entries.get(lookup_key), cfg_metadata, row_manifests)
                 new_configurations.append(
                     ManifestConfiguration(
                         branchId=branch_id or 0,
@@ -1073,8 +1077,7 @@ class SyncService(BaseService):
 
         # Check each manifest entry against local files
         for cfg in manifest.configurations:
-            branch_path = self._find_branch_path(manifest, cfg.branch_id)
-            config_dir = project_root / branch_path / cfg.path
+            config_dir = project_root / entry_tree(manifest, cfg) / cfg.path
             config_file = config_dir / CONFIG_FILENAME
 
             if not config_file.exists():
@@ -1668,7 +1671,6 @@ class SyncService(BaseService):
             # The ids this push creates, for the rows and the link backfill.
             ledger = CreateLedger()
             target = CreateTarget(project_root, branch_path, branch_id)
-            checkpoint = partial(checkpoint_manifest, project_root, manifest)
             # (ULID parent, row placeholder id) -> row ULID; ULID parent -> rows
             # created under it. Keyed per parent: two configs can use one row id.
             created_row_id_map: dict[tuple[str, str], str] = {}
@@ -1676,6 +1678,12 @@ class SyncService(BaseService):
             # Promote path (no tree of the target's own): every payload sent is
             # remapped source id -> target id in memory (D24).
             promoting = branch_path != self._find_branch_path(manifest, branch_id)
+            checkpoint = partial(
+                checkpoint_manifest,
+                project_root,
+                manifest,
+                promote_branch_id=branch_id if promoting else None,
+            )
             remap = PromoteRemap() if promoting else None
             if remap is not None:
                 remap.plan(changes)
@@ -1858,19 +1866,20 @@ class SyncService(BaseService):
                     self._record_push_error(errors, change_type, component_id, config_id, exc)
 
             # ---- Promote path: references to configs created this push (D24)
+            # Also after a pull moved promoted entries into their own tree.
             if remap is not None:
                 remap.refresh(manifest, branch_id, ledger.created_id_map, created_row_id_map)
-                manifest_dirty |= finish_promote_rebind(
-                    self,
-                    client,
-                    remap,
-                    manifest=manifest,
-                    target=target,
-                    warnings=warnings,
-                    errors=errors,
-                    diff_changes=diff_decisions(all_changes),
-                    ignored_components=sql_workspaces.effective_ignored_components(manifest),
-                )
+            manifest_dirty |= finish_promote_rebind(
+                self,
+                client,
+                remap,
+                manifest=manifest,
+                target=target,
+                warnings=warnings,
+                errors=errors,
+                diff_changes=diff_decisions(all_changes),
+                ignored_components=sql_workspaces.effective_ignored_components(manifest),
+            )
 
             # ---- Phase C: variable + shared-code links (KFR-03, CLI-24) --
             binding = resolve_transformation_bindings(

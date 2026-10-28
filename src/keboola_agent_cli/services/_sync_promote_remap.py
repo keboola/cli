@@ -44,6 +44,7 @@ from ._sync_models import (
     FLOW_COMPONENT_ID,
     ORCHESTRATOR_COMPONENT_ID,
     PROMOTED_ROW_KEY,
+    PROMOTED_SOURCE_KEY,
     REBIND_PENDING_KEY,
     SCHEDULER_COMPONENT_ID,
     SHARED_CODE_COMPONENT_ID,
@@ -323,10 +324,13 @@ class PromoteRemap:
             if not same_branch(manifest, entry.branch_id, branch_id):
                 continue
             association = promoted_from(entry)
+            source = association.config_id if association is not None else ""
             # Identity mappings too: a config the branch holds under the
             # production id is resolved, even though its id does not change.
-            if association is not None and association.config_id:
-                configs[(entry.component_id, association.config_id)] = entry.id
+            # A pull of the branch keeps the source under its own key.
+            source = source or str(entry.metadata.get(PROMOTED_SOURCE_KEY) or "")
+            if source:
+                configs[(entry.component_id, source)] = entry.id
             for row in entry.rows:
                 source = str((row.metadata or {}).get(PROMOTED_ROW_KEY) or "")
                 if source:  # a row mapped to its own id is resolved too (risk 77)
@@ -470,7 +474,7 @@ class PromoteRemap:
 def finish_promote_rebind(
     service: SyncService,
     client: Any,
-    remap: PromoteRemap,
+    remap: PromoteRemap | None,
     *,
     manifest: Manifest,
     target: CreateTarget,
@@ -495,8 +499,19 @@ def finish_promote_rebind(
 
     The new flag is what the target still holds in source form (D32); a
     failed PUT keeps the old one.
+
+    Without *remap* (a push from the branch's own tree, after a pull moved
+    the promoted entries there) only step 2 runs, with the map the manifest
+    keeps, and no baseline moves: the local file still names the source ids,
+    so diff shows the rewrite as a remote change for the next pull to fetch.
     """
     branch_id = target.branch_id
+    keep_baselines = remap is None
+    if remap is None:
+        if not pending_rebinds(manifest, branch_id):
+            return False
+        remap = PromoteRemap()
+        remap.refresh(manifest, branch_id, {}, {})
     remap.use_target(client, branch_id)  # target rows as they are after this push's creates
     for (component_id, config_id), sent in remap.sent.items():
         payload = _with_target_identity(
@@ -534,7 +549,16 @@ def finish_promote_rebind(
         if key not in eligible:
             continue
         try:
-            recover_pending(client, manifest, remap, component_id, config_id, branch_id, warnings)
+            recover_pending(
+                client,
+                manifest,
+                remap,
+                component_id,
+                config_id,
+                branch_id,
+                warnings,
+                keep_baseline=keep_baselines,
+            )
         except KeboolaApiError as exc:
             errors.append(_link_error(component_id, config_id, exc))
     return bool(pending or remap.sent)
@@ -548,6 +572,8 @@ def recover_pending(
     config_id: str,
     branch_id: int | None,
     warnings: list[dict[str, Any]],
+    *,
+    keep_baseline: bool = False,
 ) -> None:
     """Finish a pending config from what the TARGET holds, with the full map (D29, D32).
 
@@ -558,7 +584,9 @@ def recover_pending(
     """
     if remap.row_reader is None:
         remap.use_target(client, branch_id)
-    content = _rebind_on_target(client, manifest, remap, component_id, config_id, branch_id)
+    content = _rebind_on_target(
+        client, manifest, remap, component_id, config_id, branch_id, keep_baseline
+    )
     if content is not None:
         _settle(manifest, remap, component_id, config_id, branch_id, content, warnings)
 
@@ -583,6 +611,7 @@ def _rebind_on_target(
     component_id: str,
     config_id: str,
     branch_id: int | None,
+    keep_baseline: bool = False,
 ) -> dict[str, Any] | None:
     """Remap the TARGET's own config and PUT it if changed; return what it now holds (D29).
 
@@ -602,7 +631,7 @@ def _rebind_on_target(
     response = _put_configuration(client, component_id, config_id, rewritten, branch_id)
     entry = find_branch_entry(manifest, component_id, config_id, branch_id)
     before = config_hash(api_config_to_local(component_id, remote, config_id))
-    if entry is not None and entry.metadata.get("pull_config_hash") == before:
+    if not keep_baseline and entry is not None and entry.metadata.get("pull_config_hash") == before:
         stamp = config_baseline(
             client,
             component_id=component_id,

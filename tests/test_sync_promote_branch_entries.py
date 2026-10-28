@@ -2969,3 +2969,96 @@ def test_recovery_never_rewrites_to_a_row_missing_on_dev() -> None:
     client.update_config.assert_not_called()
     assert _task_of(pending.remote) == ("P", ["r1"])
     assert pending.flow.metadata["rebind_pending"] == refs
+
+
+# ===========================================================================
+# PR #929 review (Devin)
+# ===========================================================================
+
+
+# -- 4396491005: a pull of the dev branch keeps a pending rebind ---------------
+
+
+def test_dev_pull_between_an_interrupted_promote_and_its_retry_keeps_the_rebind(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    w = _crash_before_rebind(tmp_path, monkeypatch)  # the flow still names cfg-ext
+    w.pull(branch=DEV)  # rebuilds the dev branch's own entries in dev/
+    pending = [c for c in load_manifest(w.root).configurations if c.metadata.get("rebind_pending")]
+    assert [c.component_id for c in pending] == ["keboola.flow"]
+
+    w.push(branch=DEV)
+
+    assert _dev_task_target(w) == _dev_id_of(w, VARIANTS["extractor"].component_id)
+    assert not any(c.metadata.get("rebind_pending") for c in load_manifest(w.root).configurations)
+
+
+# -- 4396491122: a failed promote checkpoint names its recovery, which works ---
+
+
+def test_failed_promote_checkpoint_names_the_dev_pull_that_recovers_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    v = VARIANTS["extractor"]
+    w = World(tmp_path)
+    w.api.types[v.component_id] = v.component_type
+    w.init()
+    w.pull()
+    author_config(w.root / "main", v)
+
+    def save_fails(*_: Any, **__: Any) -> None:
+        raise PermissionError("manifest is read-only")
+
+    monkeypatch.setattr("keboola_agent_cli.services._sync_push_create.save_manifest", save_fails)
+    with pytest.raises(ManifestCheckpointError) as raised:
+        w.svc.push(alias="prod", project_root=w.root, branch_override=DEV)
+    monkeypatch.undo()
+    dev_id = _dev_id_of(w, v.component_id)
+    assert dev_id in raised.value.message
+    assert f"kbagent sync pull --branch {DEV}" in raised.value.message
+
+    w.pull(branch=DEV)  # the recovery the message names
+    w.push(branch=DEV)
+    assert list(w.api.remote[DEV]) == [(v.component_id, dev_id)]  # no duplicate
+
+
+# -- 4396491252: an untracked row dir carrying a row id is adopted -------------
+
+
+def test_untracked_row_dir_under_a_tracked_parent_is_adopted_by_its_id(
+    tmp_path: Path,
+) -> None:
+    v = VARIANTS["rows"]
+    seeded = _seeded(tmp_path, v)
+    w, cid = seeded.world, seeded.config_id
+    config_dir = w.config_dir(cid)
+    manifest = load_manifest(w.root)
+    (entry,) = [c for c in manifest.configurations if c.id == cid]
+    (row,) = [r for r in entry.rows if r.path == "rows/row-1"]
+    entry.rows.remove(row)  # the manifest lost the row; its dir still names it
+    save_manifest(w.root, manifest)
+    semantic_edit(config_dir / "rows" / "row-1" / CONFIG_FILE)  # and differs
+
+    w.pull()
+    (entry,) = _entries(w, cid, PROD)
+    assert [r.path for r in entry.rows if r.id == row.id] == ["rows/row-1"]
+    assert sorted(p.name for p in (config_dir / "rows").iterdir()) == ["row-1", "row-2"]
+
+    rows_before = copy.deepcopy(w.api.get(PROD, v.component_id, cid)["rows"])
+    w.svc.push(alias="prod", project_root=w.root)
+    assert w.api.get(PROD, v.component_id, cid)["rows"] == rows_before  # nothing POSTed
+    assert ("conflict", row.id) in {(c["change_type"], c["config_id"]) for c in w.diff()["changes"]}
+
+
+# -- 4396491361: status finds a promoted entry in its source tree --------------
+
+
+def test_status_reads_a_promoted_entry_from_its_source_tree(tmp_path: Path) -> None:
+    v = VARIANTS["extractor"]
+    seeded = _seeded(tmp_path, v)
+    w, cid = seeded.world, seeded.config_id
+    semantic_edit(w.config_dir(cid) / CONFIG_FILE)
+    w.push(branch=DEV)  # promoted, no dev/ tree
+
+    status = w.svc.status(w.root)
+    assert status["deleted"] == []

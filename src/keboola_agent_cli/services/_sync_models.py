@@ -45,6 +45,10 @@ SHARED_CODE_COMPONENT_ID = "keboola.shared-code"
 REBIND_PENDING_KEY = "rebind_pending"
 # Row metadata: the source row a promote push created this row from (D24).
 PROMOTED_ROW_KEY = "promoted_from_id"
+# Config metadata: the source config a promoted entry stands for, kept when a
+# pull of its branch moves the entry's files into that branch's own tree (its
+# ``promoted_from`` then no longer applies) -- what a pending rebind needs.
+PROMOTED_SOURCE_KEY = "promoted_source"
 # Row metadata: a row a promote push created from a row file with no source id
 # (authored in the source tree). Linked by path, once, when the source tree's
 # own branch creates that row (risk 83).

@@ -31,6 +31,12 @@ from ..sync.config_format import api_row_to_local
 from ..sync.diff_engine import config_hash
 from ..sync.manifest import Manifest, ManifestConfigRow, ManifestConfiguration
 from ..sync.naming import config_row_path
+from ._sync_models import (
+    AUTHORED_ROW_KEY,
+    PROMOTED_ROW_KEY,
+    PROMOTED_SOURCE_KEY,
+    REBIND_PENDING_KEY,
+)
 from ._sync_stale import sweep_stale_rows
 
 if TYPE_CHECKING:
@@ -261,6 +267,34 @@ def ambiguous_id_warnings(dirs: IdDirs, *, parent: str = "") -> list[dict[str, A
     ]
 
 
+def carry_promote_metadata(
+    old: ManifestConfiguration | None,
+    metadata: dict[str, Any],
+    rows: list[ManifestConfigRow],
+) -> None:
+    """Carry an entry's promote bookkeeping into the entry a pull rebuilt for it.
+
+    A pending rebind, the source config the entry was promoted from and its
+    rows' source ids survive a pull of the entry's branch, so a later push
+    still finishes the rewrite. ``promoted_from`` itself is not carried: the
+    pull has just written the entry's files into its own tree.
+    """
+    if old is None:
+        return
+    if old.metadata.get(REBIND_PENDING_KEY):
+        metadata[REBIND_PENDING_KEY] = old.metadata[REBIND_PENDING_KEY]
+    association = promoted_from(old)
+    source = association.config_id if association is not None else ""
+    source = source or str(old.metadata.get(PROMOTED_SOURCE_KEY) or "")
+    if source:
+        metadata[PROMOTED_SOURCE_KEY] = source
+    old_rows = {row.id: row.metadata for row in old.rows}
+    for row in rows:
+        for key in (PROMOTED_ROW_KEY, AUTHORED_ROW_KEY):
+            if key in old_rows.get(row.id, {}):
+                row.metadata[key] = old_rows[row.id][key]
+
+
 @dataclass
 class RowPullResult:
     """The manifest rows of one pulled config and what the pull wrote."""
@@ -305,7 +339,11 @@ def pull_config_rows(
     result = RowPullResult(rows=[])
     dirs = scan_row_dirs(service, ctx.config_dir)
     warnings += ambiguous_id_warnings(dirs, parent=f"{ctx.component_id}/{ctx.config_id}")
-    adopted = dirs.by_id if ctx.adopt else {}
+    # A row dir carrying an id is adopted by that id under a tracked parent
+    # too, unless a manifest row owns its path (D22 guards a differing file).
+    prefix = f"{ctx.component_id}/{ctx.config_id}/"
+    owned = {v["path"] for k, v in existing_rows.items() if k.startswith(prefix)}
+    adopted = {rid: path for rid, path in dirs.by_id.items() if path not in owned}
     used: set[str] = set()
     for row in remote_rows:
         row_id = str(row.get("id", ""))
