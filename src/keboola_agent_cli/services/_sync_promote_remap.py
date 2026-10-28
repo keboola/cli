@@ -15,13 +15,13 @@ remapped in memory on EVERY promote push, create and update alike:
 - A config sent before a config it references was created (same push) is
   fixed by :func:`finish_promote_rebind` after all creates, from its original
   payload: ``main/`` is not read again.
-- Such a config records ``rebind_pending``: the list of source references it
-  names that this push creates (D30), checkpointed before its PUT. The flag is
-  cleared only when every listed reference maps to a target id. A push that
-  dies, or whose dependency create fails, leaves it; a later promote push
-  reads the config FROM THE TARGET, rewrites only those references and PUTs
-  only ``configuration`` (D29) -- every other change made on the branch since
-  survives by construction.
+- Such a config records ``rebind_pending``: the references it still carries in
+  source form (D30), checkpointed before its PUT. A push that dies, or whose
+  dependency create fails, leaves it; a later promote push reads the config
+  FROM THE TARGET, rewrites every unit there that now resolves (D31, D32) and
+  PUTs only ``configuration`` (D29) -- every other change made on the branch
+  since survives by construction. The new list is what the target still holds
+  in source form; the stored one only marks missing dependencies.
 """
 
 from __future__ import annotations
@@ -120,57 +120,47 @@ class PromoteRemap:
         }
 
     def pending_refs(self, component_id: str, original: dict[str, Any]) -> list[list[str]]:
-        """The references of *original* whose unit does not resolve yet (D30, D31).
+        """The references *original* still carries in source form once remapped (D30, D31)."""
+        return self.open_refs(component_id, self.apply(component_id, original), [])
 
-        ``[component, config id]`` plus ``[component, config id, row id]`` for
-        each row the unit selects. A unit (a config and the rows it selects)
-        is sent either wholly in target ids or wholly in source ids; only the
-        latter are listed, so nothing is ever mapped twice.
+    def open_refs(
+        self, component_id: str, content: dict[str, Any], stored: list[Any]
+    ) -> list[list[str]]:
+        """The references of the units of *content* still in source form (D32).
+
+        ``[component, config id]`` plus ``[component, config id, row id]`` per
+        row, for each unit -- a config and the rows it selects -- that is not
+        in target form yet and names something still to be resolved: a
+        promoted config or row the map knows (its unit could not be rewritten
+        whole), a create of this push, or a reference *stored* as pending (a
+        dependency missing on the branch -- the stored list only marks it, it
+        never limits what is rewritten). Computed from what the target holds,
+        so a selection edited on the branch counts as it is now.
         """
+        marked = {tuple(str(part) for part in ref) for ref in stored if isinstance(ref, list)}
+        targets = self._targets()
         refs: list[list[str]] = []
-        for (component, config_id), row_ids in _references(component_id, original):
-            if self._unit(component, config_id, row_ids) is not None:
+        for (component, config_id), row_ids in _references(component_id, content):
+            key = (component, config_id)
+            if config_id in targets:
                 continue
-            for ref in [[component, config_id]] + [[component, config_id, r] for r in row_ids]:
-                if ref not in refs:
-                    refs.append(ref)
+            parent = self.configs.get(key, config_id)
+            open_unit = (parent != config_id) or (
+                key not in self.configs and (key in self.expected or key in marked)
+            )
+            open_unit = open_unit or any(
+                (parent, r) in self.rows or r in self.expected_rows or (*key, r) in marked
+                for r in row_ids
+            )
+            if open_unit:
+                for ref in [[component, config_id]] + [[component, config_id, r] for r in row_ids]:
+                    if ref not in refs:
+                        refs.append(ref)
         return refs
 
-    def unresolved_of(self, refs: list[Any]) -> list[list[str]]:
-        """The listed references whose unit does not fully map to target ids yet (D30, D31).
-
-        Per unit, never per value: while one part of a unit is missing, every
-        listed reference of that unit stays.
-        """
-        listed = [
-            [str(part) for part in ref] for ref in refs if isinstance(ref, list) and len(ref) >= 2
-        ]
-        open_units = set()
-        for ref in listed:
-            key = (ref[0], ref[1])
-            parent = self.configs.get(key, key[1])
-            if (len(ref) == 2 and key not in self.configs) or (
-                len(ref) == 3 and (parent, ref[2]) not in self.rows
-            ):
-                open_units.add(key)
-        return [ref for ref in listed if (ref[0], ref[1]) in open_units]
-
-    def subset(self, refs: list[Any]) -> PromoteRemap:
-        """A remap holding only the listed units that resolve completely."""
-        open_units = {(ref[0], ref[1]) for ref in self.unresolved_of(refs)}
-        sub = PromoteRemap()
-        for ref in refs:
-            if not isinstance(ref, list) or len(ref) < 2:
-                continue
-            key = (str(ref[0]), str(ref[1]))
-            if key in open_units:
-                continue
-            parent = self.configs.get(key, key[1])
-            if len(ref) == 2 and key in self.configs:
-                sub.configs[key] = parent
-            elif len(ref) == 3:
-                sub.rows[(parent, str(ref[2]))] = self.rows[(parent, str(ref[2]))]
-        return sub
+    def _targets(self) -> set[str]:
+        """Target ids of promoted configs (identity mappings excluded): target form."""
+        return {target for (_, source), target in self.configs.items() if target != source}
 
     def _unit(
         self, component: str, config_id: str, row_ids: list[str]
@@ -185,7 +175,7 @@ class PromoteRemap:
         key = (component, config_id)
         if key in self.configs:
             parent = self.configs[key]
-        elif key in self.expected or config_id in self.configs.values():
+        elif key in self.expected or config_id in self._targets():
             return None
         else:
             parent = config_id
@@ -214,7 +204,9 @@ class PromoteRemap:
             if not same_branch(manifest, entry.branch_id, branch_id):
                 continue
             association = promoted_from(entry)
-            if association is not None and association.config_id not in ("", entry.id):
+            # Identity mappings too: a config the branch holds under the
+            # production id is resolved, even though its id does not change.
+            if association is not None and association.config_id:
                 configs[(entry.component_id, association.config_id)] = entry.id
             for row in entry.rows:
                 source = str((row.metadata or {}).get(PROMOTED_ROW_KEY) or "")
@@ -366,15 +358,15 @@ def finish_promote_rebind(
     1. Each payload sent this push that the final id map still changes is PUT
        again -- its original (source ids, secrets encrypted) remapped with the
        final map; ``main/`` is not read again, and no id is mapped twice.
-    2. A config still ``rebind_pending`` from an earlier push (D29) is read
-       from the target, only its listed references are rewritten, and only
-       ``configuration`` is PUT -- when anything changed. Its name,
-       description, enabled state and every other field changed on the
-       branch since survive. A config deleted on the target, or of an ignored
-       component, drops the flag; one out of the diff's scope keeps it.
+    2. A config still ``rebind_pending`` from an earlier push is read from the
+       target; every unit in source form that now resolves is rewritten, and
+       only ``configuration`` is PUT -- when anything changed (D29, D32). Its
+       name, description, enabled state and every other field changed on
+       the branch since survive. A config deleted on the target, or of an
+       ignored component, drops the flag; one out of the diff's scope keeps it.
 
-    A flag is cleared only when every listed reference maps to a target id
-    (D30); a failed PUT or a dependency not created yet keeps it.
+    The new flag is what the target still holds in source form (D32); a
+    failed PUT keeps the old one.
     """
     branch_id = target.branch_id
     for (component_id, config_id), sent in remap.sent.items():
@@ -390,7 +382,7 @@ def finish_promote_rebind(
             _stamp(
                 service, client, manifest, target, component_id, config_id, sent, response, warnings
             )
-        _settle(manifest, remap, component_id, config_id, branch_id, warnings)
+        _settle(manifest, remap, component_id, config_id, branch_id, payload, warnings)
     pending = pending_rebinds(manifest, branch_id)
     eligible = {
         (cfg.component_id, cfg.id)
@@ -428,16 +420,16 @@ def recover_pending(
     branch_id: int | None,
     warnings: list[dict[str, Any]],
 ) -> None:
-    """Rewrite a pending config's listed references on the target, then prune the list.
+    """Finish a pending config from what the TARGET holds, with the full map (D29, D32).
 
-    Only the references still listed are applied -- each one once: after the
-    PUT, the resolved ones leave the list (per-reference completion), so a
-    later recovery never maps an id that already names the target.
+    Every unit still in source form whose config and rows all resolve is
+    rewritten -- the stored list does not limit it; a unit already in target
+    form is left alone, so nothing is mapped twice. The new pending list is
+    what the target still holds in source form after the PUT.
     """
-    entry = find_branch_entry(manifest, component_id, config_id, branch_id)
-    refs = _listed(entry.metadata.get(REBIND_PENDING_KEY)) if entry is not None else []
-    _rebind_on_target(client, manifest, remap.subset(refs), component_id, config_id, branch_id)
-    _settle(manifest, remap, component_id, config_id, branch_id, warnings)
+    content = _rebind_on_target(client, manifest, remap, component_id, config_id, branch_id)
+    if content is not None:
+        _settle(manifest, remap, component_id, config_id, branch_id, content, warnings)
 
 
 def _put_configuration(
@@ -456,12 +448,12 @@ def _put_configuration(
 def _rebind_on_target(
     client: Any,
     manifest: Manifest,
-    listed: PromoteRemap,
+    remap: PromoteRemap,
     component_id: str,
     config_id: str,
     branch_id: int | None,
-) -> None:
-    """Rewrite the listed references of the TARGET's config and PUT it if changed (D29).
+) -> dict[str, Any] | None:
+    """Remap the TARGET's own config and PUT it if changed; return what it now holds (D29).
 
     The baseline moves to the response only when the target held exactly what
     the baseline described before this PUT: then the PUT is the only change.
@@ -472,10 +464,10 @@ def _rebind_on_target(
     )
     configuration = (remote or {}).get("configuration")
     if not isinstance(configuration, dict):
-        return
-    rewritten = listed.apply(component_id, configuration)
+        return None
+    rewritten = remap.apply(component_id, configuration)
     if rewritten == configuration:
-        return
+        return configuration
     response = _put_configuration(client, component_id, config_id, rewritten, branch_id)
     entry = find_branch_entry(manifest, component_id, config_id, branch_id)
     before = config_hash(api_config_to_local(component_id, remote, config_id))
@@ -488,6 +480,7 @@ def _rebind_on_target(
             response=response,
         )
         apply_stamp(entry.metadata, stamp)
+    return rewritten
 
 
 def _settle(
@@ -496,18 +489,18 @@ def _settle(
     component_id: str,
     config_id: str,
     branch_id: int | None,
+    content: dict[str, Any],
     warnings: list[dict[str, Any]],
 ) -> None:
-    """Prune ``rebind_pending`` to the references still unresolved; clear it when none is.
+    """Set ``rebind_pending`` to what *content* (the target's config now) holds in source form.
 
-    Called after a successful PUT (or when nothing needed one): every listed
-    reference the map resolves is now a target id on the target, so it leaves
-    the list and is never applied again.
+    Called after a successful PUT, or when nothing needed one. Cleared when
+    no unit is left in source form (D32).
     """
     entry = find_branch_entry(manifest, component_id, config_id, branch_id)
     if entry is None or REBIND_PENDING_KEY not in entry.metadata:
         return
-    remaining = remap.unresolved_of(_listed(entry.metadata[REBIND_PENDING_KEY]))
+    remaining = remap.open_refs(component_id, content, _listed(entry.metadata[REBIND_PENDING_KEY]))
     if not remaining:
         entry.metadata.pop(REBIND_PENDING_KEY, None)
         return

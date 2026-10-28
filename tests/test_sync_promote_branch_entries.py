@@ -35,6 +35,7 @@ from keboola_agent_cli.sync.diff_engine import config_hash
 from keboola_agent_cli.sync.manifest import (
     Manifest,
     ManifestBranch,
+    ManifestConfigRow,
     ManifestConfiguration,
     ManifestNaming,
     ManifestProject,
@@ -2011,7 +2012,11 @@ def test_repeated_recovery_never_remaps_a_resolved_row_again() -> None:
                         "configId": "P",
                         "configRowIds": ["1", "2"],
                     },
-                }
+                },
+                {  # E is still missing on the branch
+                    "id": "t2",
+                    "task": {"type": "job", "componentId": http, "configId": "E"},
+                },
             ]
         }
     }
@@ -2101,9 +2106,16 @@ def test_editing_a_pending_flow_never_forgets_an_ignored_dependency(
 # ===========================================================================
 
 
-def _pending_flow_on_dev(
-    refs: list[list[str]], task: dict
-) -> tuple[Manifest, ManifestConfiguration, dict]:
+@dataclass
+class PendingFlow:
+    """A dev-branch flow F pending a rebind, and the target's own copy of it."""
+
+    manifest: Manifest
+    flow: ManifestConfiguration
+    remote: dict
+
+
+def _pending_flow_on_dev(refs: list[list[str]], task: dict) -> PendingFlow:
     manifest = _manifest((PROD, "main"), (DEV, "dev"))
     flow = ManifestConfiguration(
         branchId=DEV,
@@ -2114,7 +2126,7 @@ def _pending_flow_on_dev(
     )
     manifest.configurations.append(flow)
     remote = {"configuration": {"tasks": [{"id": "t", "task": task}]}}
-    return manifest, flow, remote
+    return PendingFlow(manifest=manifest, flow=flow, remote=remote)
 
 
 def _in_memory_target(remote: dict) -> MagicMock:
@@ -2136,7 +2148,8 @@ def test_staggered_row_resolution_rewrites_the_task_only_when_complete() -> None
     http = "keboola.ex-http"
     refs = [[http, "P"], [http, "P", "1"], [http, "P", "2"]]
     task = {"type": "job", "componentId": http, "configId": "P", "configRowIds": ["1", "2"]}
-    manifest, flow, remote = _pending_flow_on_dev(refs, task)
+    pending = _pending_flow_on_dev(refs, task)
+    manifest, flow, remote = pending.manifest, pending.flow, pending.remote
     client = _in_memory_target(remote)
 
     # Only row 1 exists on the branch yet: the task stays wholly in source form.
@@ -2196,3 +2209,67 @@ def test_a_rejected_update_never_drops_a_pending_reference(
     w.push(branch=DEV)  # creates E, then rebinds the flow
     assert _dev_task_target(w) == _dev_id_of(w, http)
     assert not [c for c in load_manifest(w.root).configurations if c.metadata.get("rebind_pending")]
+
+
+# ===========================================================================
+# Round 10 (D32; risks 65-66)
+# ===========================================================================
+
+
+def _task_of(remote: dict) -> tuple[str, list[str]]:
+    task = remote["configuration"]["tasks"][0]["task"]
+    return task["configId"], task["configRowIds"]
+
+
+# -- risk 65: a config the branch holds under the production id resolves -----
+
+
+def test_recovery_resolves_rows_under_a_config_the_branch_holds_under_its_own_id() -> None:
+    http = "keboola.ex-http"
+    task = {"type": "job", "componentId": http, "configId": "P", "configRowIds": ["1"]}
+    pending = _pending_flow_on_dev([[http, "P"], [http, "P", "1"]], task)
+    # The dev branch holds P under the same id (a shadow); row "1" was created
+    # there as "2", then the push died before its final rebind.
+    pending.manifest.configurations.append(
+        ManifestConfiguration(
+            branchId=DEV,
+            componentId=http,
+            id="P",
+            path="extractor/keboola.ex-http/p",
+            metadata={"promoted_from": {"tree": "main", "config_id": "P"}},
+            rows=[ManifestConfigRow(id="2", path="rows/r", metadata={"promoted_from_id": "1"})],
+        )
+    )
+    remap = PromoteRemap()
+    remap.refresh(pending.manifest, DEV, {}, {})
+    client = _in_memory_target(pending.remote)
+    recover_pending(client, pending.manifest, remap, "keboola.flow", "F", DEV, [])
+
+    assert _task_of(pending.remote) == ("P", ["2"])
+    assert "rebind_pending" not in pending.flow.metadata
+
+
+# -- risk 66: completion is computed from what the target holds now ---------
+
+
+@pytest.mark.parametrize("all_rows_exist", [True, False], ids=["complete", "row-missing"])
+def test_recovery_follows_a_row_selection_edited_on_the_branch(all_rows_exist: bool) -> None:
+    http = "keboola.ex-http"
+    # Pending for P/["1"]; meanwhile someone on the dev branch selected row 2 too.
+    task = {"type": "job", "componentId": http, "configId": "P", "configRowIds": ["1", "2"]}
+    pending = _pending_flow_on_dev([[http, "P"], [http, "P", "1"]], task)
+    rows = {("D", "1"): "11", ("D", "2"): "22"} if all_rows_exist else {("D", "1"): "11"}
+    remap = PromoteRemap(configs={(http, "P"): "D"}, rows=rows)
+    client = _in_memory_target(pending.remote)
+    recover_pending(client, pending.manifest, remap, "keboola.flow", "F", DEV, [])
+
+    if all_rows_exist:
+        assert _task_of(pending.remote) == ("D", ["11", "22"])
+        assert "rebind_pending" not in pending.flow.metadata
+    else:
+        assert _task_of(pending.remote) == ("P", ["1", "2"])
+        assert pending.flow.metadata["rebind_pending"] == [
+            [http, "P"],
+            [http, "P", "1"],
+            [http, "P", "2"],
+        ]
