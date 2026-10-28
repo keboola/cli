@@ -70,6 +70,18 @@ def has_references(component_id: str, configuration: dict[str, Any]) -> bool:
     return any(configuration.get(key) for key in _LINK_KEYS)
 
 
+@dataclass(frozen=True)
+class PromoteUnit:
+    """The target ids of one unit: a config and the rows it selects.
+
+    ``row_ids`` keeps the order of the reference's own row list, so a caller
+    can zip it with the ids it was computed from.
+    """
+
+    config_id: str
+    row_ids: list[str]
+
+
 @dataclass
 class SentPayload:
     """What one config was sent to the target with, and where its files are.
@@ -255,9 +267,7 @@ class PromoteRemap:
         """Target ids of promoted configs (identity mappings excluded): target form."""
         return {target for (_, source), target in self.configs.items() if target != source}
 
-    def _unit(
-        self, component: str, config_id: str, row_ids: list[str]
-    ) -> tuple[str, list[str]] | None:
+    def _unit(self, component: str, config_id: str, row_ids: list[str]) -> PromoteUnit | None:
         """The target ids of one unit -- a config and the rows it selects -- or ``None`` (D31).
 
         ``None`` leaves the unit as it is: a part of it is still to be
@@ -285,11 +295,11 @@ class PromoteRemap:
                 mapped.append(row_id)
         if not self._target_held(component, parent, mapped, read=parent != config_id):
             return None
-        return parent, mapped
+        return PromoteUnit(parent, mapped)
 
     def _identity_unit(
         self, component: str, config_id: str, row_ids: list[str]
-    ) -> tuple[str, list[str]] | None:
+    ) -> PromoteUnit | None:
         """An identity parent's unit, decided by the rows its target copy holds (D33).
 
         The parent id does not tell source from target form here, so each row
@@ -308,7 +318,7 @@ class PromoteRemap:
                 mapped.append(self.rows[(config_id, row_id)])
             else:
                 return None
-        return config_id, mapped
+        return PromoteUnit(config_id, mapped)
 
     def refresh(
         self,
@@ -371,8 +381,8 @@ class PromoteRemap:
             target = out.get("target")
             if isinstance(target, dict) and isinstance(target.get("componentId"), str):
                 unit = self._unit(target["componentId"], str(target.get("configurationId", "")), [])
-                if unit is not None and unit[0] != str(target.get("configurationId", "")):
-                    target["configurationId"] = unit[0]
+                if unit is not None and unit.config_id != str(target.get("configurationId", "")):
+                    target["configurationId"] = unit.config_id
             return
         tasks = out.get("tasks")
         for task_entry in tasks if isinstance(tasks, list) else []:
@@ -385,12 +395,12 @@ class PromoteRemap:
             unit = self._unit(ref[0], ref[1], rows)
             if unit is None:
                 continue
-            if unit[0] != ref[1]:
-                task["configId"] = unit[0]
-            if isinstance(row_ids, list) and unit[1] != rows:
+            if unit.config_id != ref[1]:
+                task["configId"] = unit.config_id
+            if isinstance(row_ids, list) and unit.row_ids != rows:
                 task["configRowIds"] = [
                     new if new != str(old) else old
-                    for old, new in zip(row_ids, unit[1], strict=True)
+                    for old, new in zip(row_ids, unit.row_ids, strict=True)
                 ]
 
     def _remap_variables(self, out: dict[str, Any]) -> None:
@@ -404,10 +414,10 @@ class PromoteRemap:
         )
         if unit is None:
             return
-        if unit[0] != str(variables_id):
-            out["variables_id"] = unit[0]
-        if has_values and unit[1][0] != str(values_id):
-            out["variables_values_id"] = unit[1][0]
+        if unit.config_id != str(variables_id):
+            out["variables_id"] = unit.config_id
+        if has_values and unit.row_ids[0] != str(values_id):
+            out["variables_values_id"] = unit.row_ids[0]
 
     def _remap_shared_code(self, out: dict[str, Any]) -> None:
         shared_code_id = out.get("shared_code_id")
@@ -418,9 +428,9 @@ class PromoteRemap:
         unit = self._unit(SHARED_CODE_COMPONENT_ID, str(shared_code_id), listed)
         if unit is None:
             return
-        if unit[0] != str(shared_code_id):
-            out["shared_code_id"] = unit[0]
-        row_map = {old: new for old, new in zip(listed, unit[1], strict=True) if old != new}
+        if unit.config_id != str(shared_code_id):
+            out["shared_code_id"] = unit.config_id
+        row_map = {old: new for old, new in zip(listed, unit.row_ids, strict=True) if old != new}
         if not row_map:
             return
         out["shared_code_row_ids"] = [row_map.get(str(r), r) for r in row_ids or []]

@@ -391,6 +391,25 @@ def config_dirs(tree: Path) -> list[Path]:
     )
 
 
+@dataclass(frozen=True)
+class SourceKey:
+    """How the walk knows a main/ dir it promoted: by its id, or by its path.
+
+    ``source`` is ``"id:<source config id>"`` or ``"path:<dir under main/>"``.
+    """
+
+    component_id: str
+    source: str
+
+
+@dataclass(frozen=True)
+class DevIdentity:
+    """The DEV config a main/ dir stands for on the promote path."""
+
+    component_id: str
+    config_id: str
+
+
 def dir_identity(config_dir: Path) -> tuple[str, str]:
     meta = read_yaml(config_dir / "_config.yml").get("_keboola") or {}
     return str(meta.get("component_id", "")), str(meta.get("config_id", "") or "")
@@ -486,8 +505,8 @@ class Sim:
         self.log: list[str] = []
         # The walk's own record of what a promote push created (D18): main/
         # keeps the source ids, so a dir's DEV id is known only from the push.
-        # (component, "id:<source id>" | "path:<dir>") -> DEV config id.
-        self.promoted: dict[tuple[str, str], str] = {}
+        # SourceKey(component, "id:<source id>" | "path:<dir>") -> DEV config id.
+        self.promoted: dict[SourceKey, str] = {}
 
     # -- helpers ---------------------------------------------------------
     def tok(self) -> str:
@@ -1071,7 +1090,11 @@ class Sim:
         local_ids: set[str] = set()
         for d in config_dirs(tree):
             rel = d.relative_to(tree).as_posix()
-            comp, cid = self.dev_identity(d) if promote else dir_identity(d)
+            if promote:
+                identity = self.dev_identity(d)
+                comp, cid = identity.component_id, identity.config_id
+            else:
+                comp, cid = dir_identity(d)
             local_ids.add(cid)
             local = local_projection(d)
             if not cid:
@@ -1120,9 +1143,9 @@ class Sim:
                 )
 
     @staticmethod
-    def _source_key(d: Path, tree: Path) -> tuple[str, str]:
+    def _source_key(d: Path, tree: Path) -> SourceKey:
         comp, cid = dir_identity(d)
-        return comp, f"id:{cid}" if cid else f"path:{d.relative_to(tree).as_posix()}"
+        return SourceKey(comp, f"id:{cid}" if cid else f"path:{d.relative_to(tree).as_posix()}")
 
     def record_promoted(self, before: dict[tuple[str, str], Any]) -> None:
         """Map each config a promote push created on DEV to its main/ dir.
@@ -1147,14 +1170,14 @@ class Sim:
         main = self.tree(PROD)
         for d in config_dirs(main):
             comp, cid = dir_identity(d)
-            path_key = (comp, f"path:{d.relative_to(main).as_posix()}")
+            path_key = SourceKey(comp, f"path:{d.relative_to(main).as_posix()}")
             if cid and path_key in self.promoted:
-                self.promoted.setdefault((comp, f"id:{cid}"), self.promoted.pop(path_key))
+                self.promoted.setdefault(SourceKey(comp, f"id:{cid}"), self.promoted.pop(path_key))
 
-    def dev_identity(self, d: Path) -> tuple[str, str]:
+    def dev_identity(self, d: Path) -> DevIdentity:
         """The DEV config a main/ dir stands for on the promote path."""
         comp, cid = dir_identity(d)
-        return comp, self.promoted.get(self._source_key(d, self.tree(PROD)), cid)
+        return DevIdentity(comp, self.promoted.get(self._source_key(d, self.tree(PROD)), cid))
 
     def step(self, step: Step) -> None:
         name, a, b, c = step
