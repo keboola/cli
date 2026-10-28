@@ -38,10 +38,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from ..sync.branch_scope import UNKNOWN_BASE_HASH
+from ..sync.branch_scope import UNKNOWN_BASE_HASH, promote_source, promoted_from, same_branch
 from ..sync.diff_engine import ConfigChange, config_hash
-from ..sync.manifest import ManifestConfiguration
-from ._sync_models import DELETED_ROWS_KEY
+from ..sync.manifest import Manifest, ManifestConfiguration
+from ._sync_models import DELETED_ROWS_KEY, PROMOTED_ROW_KEY
 
 CHANGED_WHY = "it changed remotely since the recorded baseline"
 UNKNOWN_WHY = "there is no trustworthy baseline for this target"
@@ -129,7 +129,7 @@ def _settle_one(change: ConfigChange, inputs: DeleteInputs, target: DeleteTarget
     unknown = not base or base == UNKNOWN_BASE_HASH
     if not unknown and change.remote_data is not None and config_hash(change.remote_data) == base:
         return
-    change.change_type = "conflict"
+    change.change_type, change.refused_delete = "conflict", True
     change.details = [delete_conflict_detail(target, key, UNKNOWN_WHY if unknown else CHANGED_WHY)]
 
 
@@ -173,7 +173,7 @@ def settle_deletions(
         if change.change_type == "deleted" and _rows_changed(
             change.component_id, change.config_id, changes, inputs
         ):
-            change.change_type = "conflict"
+            change.change_type, change.refused_delete = "conflict", True
             key = f"{change.component_id}/{change.config_id}"
             change.details = [delete_conflict_detail(target, key, ROWS_CHANGED_WHY)]
         if change.change_type == "conflict":
@@ -183,36 +183,78 @@ def settle_deletions(
             continue
         parent = (change.component_id, change.parent_config_id)
         if parent in blocked:
-            change.change_type = "conflict"
+            change.change_type, change.refused_delete = "conflict", True
             why = f"its configuration {parent[0]}/{parent[1]} cannot be deleted (see its conflict)"
             change.details = [delete_conflict_detail(target, _row_key(change), why)]
 
 
+def _deletion_records(entry: ManifestConfiguration) -> dict[str, str]:
+    recorded = entry.metadata.get(DELETED_ROWS_KEY)
+    return {str(k): str(v or "") for k, v in recorded.items()} if isinstance(recorded, dict) else {}
+
+
+def source_deletions(
+    manifest: Manifest, entry: ManifestConfiguration, target_branch_id: int | None
+) -> dict[str, str]:
+    """Target row id -> baseline of each row the source tree deleted, for a promote-path entry (D7).
+
+    Two kinds of entry read their files from the source tree (``main/``) on
+    the promote path: a production entry diffed against the dev branch, and
+    a promote shadow (``promoted_from``) recorded for it by an earlier
+    promote write. The shadow hides the production entry, so its records
+    come from both: the copy it took when it was made and the source entry's
+    own, which later pulls of production keep adding to. A source row id
+    maps to the shadow's row that records it as its source
+    (``promoted_from_id``), or to the same id when the shadow stands for the
+    source config under its own id. Empty for any other entry.
+    """
+    association = promoted_from(entry)
+    if association is None:
+        if same_branch(manifest, entry.branch_id, target_branch_id):
+            return {}
+        return _deletion_records(entry)
+    records = _deletion_records(entry)
+    source = promote_source(manifest, entry, association)
+    if source is not None:
+        records = {**_deletion_records(source), **records}
+    by_source = {
+        str(row.metadata.get(PROMOTED_ROW_KEY)): row.id
+        for row in entry.rows
+        if row.metadata.get(PROMOTED_ROW_KEY)
+    }
+    same_identity = entry.id == association.config_id
+    mapped: dict[str, str] = {}
+    for row_id, base in records.items():
+        target_id = by_source.get(row_id) or (row_id if same_identity else "")
+        if target_id:
+            mapped[target_id] = base
+    return mapped
+
+
 def track_source_deletions(
+    records: dict[str, str],
     entry: ManifestConfiguration,
     remote_rows: dict[str, dict[str, Any]],
     tracked_row_keys: set[str],
     row_bases: dict[str, str],
 ) -> None:
-    """Track the target rows a source-tree entry's pulls deleted (promote path, D7).
+    """Track the target rows the source tree deleted (promote path, D7).
 
-    *entry* is an entry of another branch than the target (production, read
-    from ``main/`` by ``push --branch DEV``). A row its pulls removed because
-    production deleted it, still on the target, is tracked with the row's last
-    production baseline: the row diff calls it ``deleted`` (local file gone),
-    and :func:`settle_deletions` keeps it ``deleted`` only while the target's
-    row equals that baseline. A row nothing in the source ever represented is
-    not tracked: it is a remote-only row (D5). No baseline recorded: unknown,
-    so a conflict -- never one made up from the current listing.
+    *records* is :func:`source_deletions` of *entry*: a row production
+    deleted and a pull removed from ``main/``, still on the target, is
+    tracked with its last production baseline. The row diff calls it
+    ``deleted`` (local file gone), and :func:`settle_deletions` keeps it
+    ``deleted`` only while the target's row equals that baseline. A row
+    nothing in the source ever represented is not tracked: it is a
+    remote-only row (D5). No baseline recorded: unknown, so a conflict --
+    never one made up from the current listing.
     """
-    deleted = entry.metadata.get(DELETED_ROWS_KEY)
-    if not isinstance(deleted, dict):
-        return
-    for row_id, base in deleted.items():
+    own = {row.id for row in entry.rows}  # a row the entry tracks keeps its own baseline
+    for row_id, base in records.items():
         key = f"{entry.component_id}/{entry.id}/rows/{row_id}"
-        if key in remote_rows and key not in tracked_row_keys:
+        if row_id not in own and key in remote_rows and key not in tracked_row_keys:
             tracked_row_keys.add(key)
-            row_bases[key] = str(base or "") or UNKNOWN_BASE_HASH
+            row_bases[key] = base or UNKNOWN_BASE_HASH
 
 
 def _is_config_delete(change: dict[str, Any]) -> bool:
@@ -242,7 +284,7 @@ def fold_covered_rows(changes: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if _is_config_delete(change):
             key = (change["component_id"], change["config_id"])
             if key in held:
-                change["change_type"] = "conflict"
+                _refuse(change, f"Cannot delete {key[0]}/{key[1]}: {ROWS_CHANGED_WHY}.")
                 blocked.add(key)
             else:
                 parents[key] = change
@@ -251,7 +293,7 @@ def fold_covered_rows(changes: list[dict[str, Any]]) -> list[dict[str, Any]]:
         row_delete = bool(change.get("is_row")) and change["change_type"] == "deleted"
         key = (change["component_id"], change.get("parent_config_id", ""))
         if row_delete and key in blocked:
-            change["change_type"] = "conflict"  # never deleted on its own either (D3)
+            _refuse(change, f"Cannot delete it: its configuration {key[0]}/{key[1]} is held back.")
         parent = parents.get(key) if row_delete else None
         if parent is None:
             planned.append(change)
@@ -264,3 +306,10 @@ def fold_covered_rows(changes: list[dict[str, Any]]) -> list[dict[str, Any]]:
             }
         )
     return planned
+
+
+def _refuse(change: dict[str, Any], why: str) -> None:
+    """Turn a planned delete into a refused one (``conflict``) that says why (D4)."""
+    change["change_type"] = "conflict"
+    change["refused_delete"] = True
+    change["details"] = [f"{why} --force enables deletions but does not override conflicts."]

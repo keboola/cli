@@ -101,6 +101,19 @@ class PushPlan:
         if self.skipped:
             report["skipped"] = len(self.skipped)
             report["skipped_reason"] = SKIPPED_REASON
+        # Each local delete push refuses, with its own reason and next step (D4).
+        refused = [
+            {
+                key: change[key]
+                for key in ("component_id", "config_id", "parent_config_id", "is_row", "path")
+                if key in change
+            }
+            | {"message": (change.get("details") or [""])[0]}
+            for change in self.skipped
+            if change.get("refused_delete")
+        ]
+        if refused:
+            report["refused_deletions"] = refused
         if self.skipped_deletions:
             report["skipped_deletions"] = self.skipped_deletions
             report["skipped_deletions_reason"] = SKIPPED_DELETIONS_REASON

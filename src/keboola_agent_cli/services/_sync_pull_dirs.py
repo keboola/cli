@@ -17,6 +17,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import yaml
+
 from ..constants import CONFIG_FILENAME
 from ..sync.branch_scope import (
     UNKNOWN_BASE_ADOPTED,
@@ -74,37 +76,58 @@ class PullEntries:
     dropped: list[ManifestConfiguration] = field(default_factory=list)
     retired: dict[str, dict[str, str]] = field(default_factory=dict)
 
-    def retired_rows_for(self, own_keys: set[str]) -> dict[str, dict[str, str]]:
-        """The pulled tree's retired rows of configs this branch has no entry for (D6).
+    def retired_rows_for(
+        self, own_keys: set[str], components: list[dict[str, Any]]
+    ) -> dict[str, dict[str, str]]:
+        """The pulled tree's retired rows the remote deleted, of configs with no entry here (D6).
 
         Keyed like pull's ``existing_rows`` (``"{component}/{config}/{row}"``):
         pull then judges such a row by its own last baseline in this tree --
         an unedited row the remote deleted is removed, an edited one kept and
-        reported -- instead of leaving its file behind as a new row.
+        reported -- instead of leaving its file behind as a new row. Only rows
+        the fresh listing no longer has: a row still on the remote keeps the
+        rediscovery rule (D15, D22) -- its file is kept with an UNKNOWN base,
+        so any difference is a conflict, and two dirs carrying its id adopt
+        neither. The retired baseline is deletion provenance, never a way to
+        turn a rediscovered row into a proven, pushable one.
         """
+        listed = {
+            f"{component.get('id', '')}/{cfg.get('id', '')}/{row.get('id', '')}"
+            for component in components
+            for cfg in component.get("configurations", [])
+            for row in cfg.get("rows", [])
+        }
         return {
             key: dict(value)
             for key, value in self.retired.items()
-            if key.rsplit("/", 1)[0] not in own_keys
+            if key.rsplit("/", 1)[0] not in own_keys and key not in listed
         }
 
-    def retire(self, manifest: Manifest, tree: str, pulled: list[ManifestConfiguration]) -> None:
+    def retire(
+        self,
+        manifest: Manifest,
+        project_root: Path,
+        tree: str,
+        pulled: list[ManifestConfiguration],
+    ) -> None:
         """Record the dropped entries' rows for their trees; consume the pulled tree's (D6).
 
         The pulled tree keeps the records of configs this pull did not rebuild
         (one skipped as locally modified, say); a rebuilt config's are now in
         its entry. A dropped entry's rows replace the records of its config in
-        its own tree.
+        its own tree. Every tree's records are then pruned
+        (:func:`_prune_retired`), so they never grow without bound.
         """
         rebuilt = {f"{c.component_id}/{c.id}" for c in pulled}
-        records = {
-            tree: {k: v for k, v in self.retired.items() if k.rsplit("/", 1)[0] not in rebuilt}
+        records = {branch.path: retired_rows(manifest, branch.path) for branch in manifest.branches}
+        records[tree] = {
+            k: v for k, v in self.retired.items() if k.rsplit("/", 1)[0] not in rebuilt
         }
         for entry in self.dropped:
             own_tree = branch_tree_path(manifest, entry.branch_id)
             if own_tree == tree:
                 continue
-            bucket = records.setdefault(own_tree, retired_rows(manifest, own_tree))
+            bucket = records.setdefault(own_tree, {})
             prefix = f"{entry.component_id}/{entry.id}/"
             for key in [k for k in bucket if k.startswith(prefix)]:
                 del bucket[key]
@@ -115,12 +138,13 @@ class PullEntries:
                     "pull_config_hash": str(row.metadata.get("pull_config_hash", "") or ""),
                     UNKNOWN_BASE_KEY: str(row.metadata.get(UNKNOWN_BASE_KEY) or ""),
                 }
+        tracked = {f"{c.component_id}/{c.id}" for c in manifest.configurations}
         for branch in manifest.branches:
-            if branch.path in records:
-                if records[branch.path]:
-                    branch.metadata[RETIRED_ROWS_KEY] = records[branch.path]
-                else:
-                    branch.metadata.pop(RETIRED_ROWS_KEY, None)
+            kept = _prune_retired(records.get(branch.path, {}), tracked, project_root / branch.path)
+            if kept:
+                branch.metadata[RETIRED_ROWS_KEY] = kept
+            else:
+                branch.metadata.pop(RETIRED_ROWS_KEY, None)
 
     def hold_ignored_promotes(self, ignored_components: frozenset[str]) -> None:
         """Move the pulled branch's promote entries of ignored components to *kept* (risk 79).
@@ -224,6 +248,45 @@ def retired_rows(manifest: Manifest, tree: str) -> dict[str, dict[str, str]]:
             if isinstance(raw, dict):
                 return {str(k): dict(v) for k, v in raw.items() if isinstance(v, dict)}
     return {}
+
+
+def _prune_retired(
+    records: dict[str, dict[str, str]], tracked: set[str], tree_dir: Path
+) -> dict[str, dict[str, str]]:
+    """*records* minus those nothing can need any more (bounded growth, D6).
+
+    A record goes only when BOTH hold: its config is in no manifest entry of
+    any tree (a pull that rebuilt it consumed it already; one whose remote
+    config is gone never rebuilds it), and no row dir under *tree_dir*
+    carries one of that config's retired row ids. While a carrier survives
+    on disk the record is what tells a later pull that its row was deleted
+    on the remote, so it is never pruned then.
+    """
+    if not records:
+        return {}
+    carried: set[tuple[str, str]] = set()
+    if tree_dir.is_dir():
+        for row_file in tree_dir.rglob(CONFIG_FILENAME):
+            if "rows" not in row_file.relative_to(tree_dir).parts[:-1]:
+                continue
+            try:
+                data = yaml.safe_load(row_file.read_text(encoding="utf-8"))
+            except (OSError, yaml.YAMLError):
+                continue
+            meta = data.get("_keboola") if isinstance(data, dict) else None
+            if isinstance(meta, dict) and meta.get("row_id"):
+                carried.add((str(meta.get("component_id") or ""), str(meta["row_id"])))
+    by_config: dict[str, list[str]] = {}
+    for key in records:
+        parent, _, row_id = key.rpartition("/")
+        by_config.setdefault(parent, []).append(row_id)
+    keep = {
+        parent
+        for parent, row_ids in by_config.items()
+        if parent in tracked
+        or any((parent.split("/", 1)[0], row_id) in carried for row_id in row_ids)
+    }
+    return {key: value for key, value in records.items() if key.rpartition("/")[0] in keep}
 
 
 def finalize_kept_entries(

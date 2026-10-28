@@ -121,7 +121,7 @@ from ._sync_data_app import (
     resolve_pull_type,
     type_needs_rewrite,
 )
-from ._sync_deletes import DeleteInputs, DeleteTarget, track_source_deletions
+from ._sync_deletes import DeleteInputs, DeleteTarget, source_deletions, track_source_deletions
 from ._sync_diff_report import DiffExtras, DiffSides, diff_report
 from ._sync_link_pending import link_pending_entries, planned_row_refs
 from ._sync_link_recovery import resolve_transformation_links
@@ -630,11 +630,18 @@ class SyncService(BaseService):
                     UNKNOWN_BASE_KEY: str(r.metadata.get(UNKNOWN_BASE_KEY) or ""),
                 }
         # Rows of this tree an earlier re-targeting pull dropped (D6).
-        existing_rows.update(entries.retired_rows_for(existing_keys))
+        existing_rows.update(entries.retired_rows_for(existing_keys, components))
 
         # Entries the remote no longer lists (#792 A/C); their on-disk dirs are
         # reserved so a same-named new config cannot land in one.
-        stale = find_stale_entries(self, own_entries, components, branch_dir, ignored_components)
+        stale = find_stale_entries(
+            self,
+            own_entries,
+            components,
+            branch_dir,
+            ignored_components,
+            manifest.ignored_components,
+        )
         used_paths |= reserved_paths(stale, branch_dir)
 
         # Force-pull conflict guard (force-pull baseline corruption fix).
@@ -919,7 +926,7 @@ class SyncService(BaseService):
             manifest.configurations = new_configurations + finalize_kept_entries(
                 entries.kept, new_configurations, branch_dir, ignored_components
             )
-            entries.retire(manifest, branch_dir_name, new_configurations)
+            entries.retire(manifest, project_root, branch_dir_name, new_configurations)
             save_manifest(project_root, manifest)
 
         return {
@@ -1287,8 +1294,9 @@ class SyncService(BaseService):
         # (whose rows belong to that branch -- issue #649).
         for cfg in scope.in_tree:
             parent_dir = project_root / source_branch_path / cfg.path
-            if not same_branch(manifest, cfg.branch_id, branch_id):  # promote path (D7)
-                track_source_deletions(cfg, remote_rows, tracked_row_keys, row_base_hashes)
+            if source_branch_path != branch_tree_path(manifest, branch_id):  # promote (D7)
+                deleted = source_deletions(manifest, cfg, branch_id)
+                track_source_deletions(deleted, cfg, remote_rows, tracked_row_keys, row_base_hashes)
             for row in cfg.rows:
                 row_key = f"{cfg.component_id}/{cfg.id}/rows/{row.id}"
                 tracked_row_keys.add(row_key)

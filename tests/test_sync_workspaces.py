@@ -36,7 +36,10 @@ from keboola_agent_cli.permissions import (
     PermissionPolicy,
 )
 from keboola_agent_cli.services._sync_push_ops import SKIPPED_DELETIONS_REASON
-from keboola_agent_cli.services._sync_stale import WORKSPACE_SYNC_OFF_REASON
+from keboola_agent_cli.services._sync_stale import (
+    IGNORED_COMPONENT_REASON,
+    WORKSPACE_SYNC_OFF_REASON,
+)
 from keboola_agent_cli.services._sync_workspace import (
     SANDBOXES_COMPONENT_ID,
     is_shared_sql_workspace,
@@ -427,6 +430,32 @@ class TestPullDiff:
         assert {d["action"] for d in result["details"]} == {"ignored"}
         assert _tracked(root) == set()
         assert not _config_file(root).exists()
+
+    def test_explicitly_ignored_workspace_is_kept_also_by_theirs(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """#927 / D8: keboola.sandboxes named in ``ignoredComponents`` (workspace sync
+        still on) gets the normal rule: an edited workspace is kept, ``--theirs``
+        included. Only a tree whose workspace sync is off keeps the CLI-25
+        ``--theirs`` rule (test above)."""
+        root = tmp_path / "project"
+        root.mkdir()
+        store = _init(tmp_config_dir, root, sync_workspaces=True)
+        _pull(store, root, _remote(SHARED_SQL))
+        _edit(root, lambda d: d["parameters"]["blocks"][0]["codes"][0].update(script=["SELECT 3;"]))
+        _set_manifest_key(root, "ignoredComponents", [SANDBOXES_COMPONENT_ID])
+
+        for theirs in (False, True):
+            result = _svc(store, _client(_remote(SHARED_SQL))).pull(
+                alias="prod", project_root=root, theirs=theirs, no_storage=True, no_jobs=True
+            )
+            [kept] = [d for d in result["details"] if d["component_id"] == SANDBOXES_COMPONENT_ID]
+            assert kept["action"] == "skipped"
+            assert kept["reason"] == IGNORED_COMPONENT_REASON.format(
+                component_id=SANDBOXES_COMPONENT_ID
+            )
+            assert _tracked(root) == {"ws-shared"}
+            assert "SELECT 3;" in _config_file(root).read_text(encoding="utf-8")
 
     def test_tracked_workspace_made_private_stays_tracked(
         self, tmp_config_dir: Path, tmp_path: Path

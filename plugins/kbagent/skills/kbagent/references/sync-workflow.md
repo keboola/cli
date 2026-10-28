@@ -477,6 +477,8 @@ deletions; it never overrides a conflict. The conflict's `details` say what to
 do: run `kbagent sync pull` (with `--branch <id>` for a dev branch), review the
 restored files, then delete them again and `sync push --force`. Before, such a
 delete was `DELETED` and `push --force` deleted the remote edit with it.
+`sync push` lists each refused delete with that message under
+`refused_deletions[]` (also `--dry-run`).
 
 A config delete covers its rows: push sends one DELETE for the config and none
 for its rows (they used to fail with 404 and make a successful push exit 1).
@@ -499,7 +501,10 @@ and the Storage API has no conditional delete, so a UI edit made between
   `sync pull` judges each row in `main/` by the baseline it had there: a row
   production deleted meanwhile is removed (kept and reported `skipped` when you
   edited it), so the next push no longer creates it again. The baselines are
-  kept in the manifest's branch metadata (`retired_rows`).
+  kept in the manifest's branch metadata (`retired_rows`). A row still on
+  the remote keeps the old rule (kept with an unknown base when edited, a
+  `CONFLICT`). A record is dropped once its config is in no manifest entry and
+  no row folder carries its row ids.
 - A promote push (`sync push --branch <dev>` reading `main/`) lists a dev row
   that production deleted and a pull removed from `main/` as a `DELETED` row
   (`skipped_deletions` without `--force`; three-way with it). A dev row that
@@ -620,7 +625,10 @@ internal state:
   unpushed edits. To drop the kept work, delete the directory yourself. After
   un-ignoring, the kept directory diffs against its old baseline: `MODIFIED`
   when only you changed it, `CONFLICT` when the remote changed meanwhile.
-  Shared SQL workspaces keep their rule (`--theirs` deletes them).
+  A row without a hash counts as unproven even when the config's own
+  `_config.yml` is gone. `keboola.sandboxes` named in `ignoredComponents`
+  follows this rule too; only a shared SQL workspace dropped because
+  `syncWorkspaces` is off keeps the CLI-25 rule (`--theirs` deletes it).
 - **Un-ignoring** a component: remove it from `ignoredComponents` and run
   `sync pull` again -- it re-materializes like any newly-tracked config.
 

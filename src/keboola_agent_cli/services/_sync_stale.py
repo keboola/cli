@@ -68,20 +68,29 @@ class StaleEntry:
     entry: ManifestConfiguration
     action: str  # "removed" (gone from the remote) or "ignored" (component ignored)
     locally_modified: bool
+    # A shared SQL workspace swept only because ``syncWorkspaces`` is off
+    # (CLI-25) -- not because ``ignoredComponents`` names keboola.sandboxes.
+    workspace_sync_off: bool = False
 
     @property
     def keep_reason(self) -> str:
         """The ``skipped`` reason pull reports when it keeps this edited entry."""
         if self.action == "removed":
             return REMOTE_DELETED_REASON
-        if self.entry.component_id == SANDBOXES_COMPONENT_ID:
+        if self.workspace_sync_off:
             return WORKSPACE_SYNC_OFF_REASON
         return IGNORED_COMPONENT_REASON.format(component_id=self.entry.component_id)
 
     @property
     def theirs_deletes(self) -> bool:
-        """``--theirs`` deletes this entry's dir even when it holds local work (D8)."""
-        return self.action == "removed" or self.entry.component_id == SANDBOXES_COMPONENT_ID
+        """``--theirs`` deletes this entry's dir even when it holds local work (D8).
+
+        Only for a config the remote deleted and for a shared SQL workspace of
+        a tree whose workspace sync is off (the CLI-25 rule). A component named
+        in ``ignoredComponents`` -- keboola.sandboxes included -- never: ignoring
+        it is no evidence that its remote content is gone.
+        """
+        return self.action == "removed" or self.workspace_sync_off
 
 
 def _entry_locally_modified(
@@ -261,8 +270,14 @@ def find_stale_entries(
     components: list[dict[str, Any]],
     branch_dir: Path,
     ignored_components: frozenset[str],
+    explicitly_ignored: list[str] | frozenset[str] = frozenset(),
 ) -> list[StaleEntry]:
-    """Manifest entries absent from the fresh (non-ignored) remote listing."""
+    """Manifest entries absent from the fresh (non-ignored) remote listing.
+
+    *explicitly_ignored* is the manifest's own ``ignoredComponents``: a
+    keboola.sandboxes entry ignored without being named there is swept
+    because workspace sync is off (CLI-25), which keeps its ``--theirs`` rule.
+    """
     remote_keys = {
         f"{component.get('id', '')}/{cfg.get('id', '')}"
         for component in components
@@ -282,7 +297,19 @@ def find_stale_entries(
         modified = (action == "ignored" and _unproven(service, config_dir, entry)) or (
             _entry_locally_modified(service, config_dir, entry, other_configs - {config_dir})
         )
-        stale.append(StaleEntry(entry=entry, action=action, locally_modified=modified))
+        workspace_sync_off = (
+            action == "ignored"
+            and entry.component_id == SANDBOXES_COMPONENT_ID
+            and SANDBOXES_COMPONENT_ID not in explicitly_ignored
+        )
+        stale.append(
+            StaleEntry(
+                entry=entry,
+                action=action,
+                locally_modified=modified,
+                workspace_sync_off=workspace_sync_off,
+            )
+        )
     return stale
 
 
@@ -294,19 +321,26 @@ def _unproven(service: SyncService, config_dir: Path, entry: ManifestConfigurati
     over the file. For a sweep that DELETES the file it is the wrong one:
     without a baseline nothing proves the file holds no local work (an
     adopted config, a create checkpoint, a legacy companion map, a row
-    without a hash).
+    without a hash). The config's own files and each row are judged
+    independently: a parent without a baseline and without its
+    ``_config.yml`` must not hide a surviving row that has no baseline either.
     """
-    companions = current_companions(service, config_dir, entry.component_id)
-    if not entry.metadata.get("pull_hash"):
-        return (config_dir / CONFIG_FILENAME).exists() or bool(companions)
-    base = companion_baseline(entry.component_id, entry.metadata)
-    if not base.known and set(companions) - set(base.hashes):
+    if _parent_unproven(service, config_dir, entry):
         return True
     return any(
         not (row.metadata or {}).get("pull_hash")
         and (config_dir / row.path / CONFIG_FILENAME).exists()
         for row in entry.rows
     )
+
+
+def _parent_unproven(service: SyncService, config_dir: Path, entry: ManifestConfiguration) -> bool:
+    """True iff the config's own ``_config.yml`` or a companion cannot be proven unchanged."""
+    companions = current_companions(service, config_dir, entry.component_id)
+    if not entry.metadata.get("pull_hash"):
+        return (config_dir / CONFIG_FILENAME).exists() or bool(companions)
+    base = companion_baseline(entry.component_id, entry.metadata)
+    return not base.known and bool(set(companions) - set(base.hashes))
 
 
 def reserved_paths(stale: list[StaleEntry], branch_dir: Path) -> set[str]:

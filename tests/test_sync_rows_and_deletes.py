@@ -515,21 +515,46 @@ def test_seed_210_edited_row_is_kept_and_never_recreated(tmp_path: Path) -> None
     assert len(sim.api.remote[PROD][HTTP_2]["rows"]) == 1
 
 
-def test_seed_210_retired_baseline_makes_a_row_edit_pushable(tmp_path: Path) -> None:
-    """A row edited in main/ while the manifest pointed at DEV is a known
-    edit after the next production pull (its baseline survived), not an
-    unknown-base conflict."""
+def test_seed_210_retired_rows_still_on_the_remote_keep_the_rediscovery_rule(
+    tmp_path: Path,
+) -> None:
+    """Round 2 regression guard: a retired baseline is deletion provenance only.
+
+    A row still on the remote, edited in main/ while the manifest pointed at
+    DEV, keeps the #929 rediscovery rule (D15, D22): kept with an UNKNOWN base,
+    a conflict, never pushed over the remote. Round 1 seeded it with the old
+    baseline and made it a pushable edit."""
     sim = _world(tmp_path)
     _pull(sim, DEV)
     row_file = _dir(sim, f"{HTTP_2_DIR}/rows/row-tk11z") / "_config.yml"
     row_file.write_text(row_file.read_text().replace("tk12z", "tk900z"), encoding="utf-8")
 
     _pull(sim)
-    _push(sim)
+    _push(sim, force=True)
 
-    assert _row(sim, PROD, HTTP_2, "Row tk11z")["configuration"]["parameters"]["value"] == (
-        "tk900z"
-    )
+    assert ("conflict", "1003") in _changes(sim)
+    assert _row(sim, PROD, HTTP_2, "Row tk11z")["configuration"]["parameters"]["value"] == ("tk12z")
+    (row,) = [r for r in _entry(sim, "1003").rows if r.id == "1005"]
+    assert row.metadata.get("unknown_base") == "adopted"
+
+
+def test_retired_rows_are_pruned_only_when_no_carrier_survives(tmp_path: Path) -> None:
+    """A retired record goes once its config is in no manifest entry AND no row
+    dir on disk carries its row ids -- never while a carrier survives."""
+    sim = _world(tmp_path)
+    _pull(sim, DEV)
+    del sim.api.remote[DEV][HTTP_2]
+    _pull(sim, DEV)  # 1003 is in no manifest entry now; main/ still carries its rows
+    assert all(c.id != "1003" for c in load_manifest(sim.root).configurations)
+    retired = load_manifest(sim.root).branches[0].metadata[RETIRED_ROWS_KEY]
+    assert f"{HTTP}/1003/1005" in retired
+
+    shutil.rmtree(_dir(sim, HTTP_2_DIR))
+    _pull(sim, DEV)
+
+    retired = load_manifest(sim.root).branches[0].metadata.get(RETIRED_ROWS_KEY) or {}
+    assert not [k for k in retired if k.startswith(f"{HTTP}/1003/")]
+    assert f"{HTTP}/1000/1001" in retired  # 1000 is still tracked (on DEV)
 
 
 # ===========================================================================
@@ -796,3 +821,106 @@ def test_kept_ignored_entry_survives_write_yaml_roundtrip(tmp_path: Path) -> Non
     _pull(sim)
 
     assert cfg.read_text() == text
+
+
+# ===========================================================================
+# Round 2 (review findings)
+# ===========================================================================
+
+
+def test_ignoring_keeps_a_baseline_free_row_under_a_parent_without_its_file(
+    tmp_path: Path,
+) -> None:
+    """P1 (#927 hole): a parent with no baseline and no ``_config.yml`` must not
+    hide a surviving row that has no baseline either -- the row is never
+    "proven unchanged", so the ignored sweep keeps it."""
+    sim = _world(tmp_path)
+    manifest = load_manifest(sim.root)
+    (entry,) = [c for c in manifest.configurations if c.id == "1003"]
+    entry.metadata = {}
+    for row in entry.rows:
+        row.metadata = {}
+    save_manifest(sim.root, manifest)
+    (_dir(sim, HTTP_2_DIR) / "_config.yml").unlink()
+    (_dir(sim, HTTP_2_DIR) / "_description.md").unlink(missing_ok=True)
+    row_file = _dir(sim, f"{HTTP_2_DIR}/rows/row-tk11z") / "_config.yml"
+    row_file.write_text(row_file.read_text().replace("tk12z", "tk900z"), encoding="utf-8")
+    _set_ignored(sim, HTTP)
+
+    result = _pull(sim)
+
+    assert "tk900z" in row_file.read_text()
+    assert any(d["path"] == HTTP_2_DIR and d["action"] == "skipped" for d in result["details"])
+    assert any(c.id == "1003" for c in load_manifest(sim.root).configurations)
+
+
+def test_promote_shadow_keeps_a_deferred_source_row_deletion(tmp_path: Path) -> None:
+    """P2 (D7): a promote update of the parent creates its DEV shadow while the
+    row deletion is held back; the shadow must not hide that deletion, so the
+    forced retry deletes the dev row."""
+    sim = _world(tmp_path)
+    row_id = _drop_row(sim, PROD, HTTP_1, "Row tk2z")
+    _pull(sim)
+    sim._local_edit_slot(_dir(sim, HTTP_1_DIR), "value")
+
+    first = _push(sim, DEV)
+    assert first["updated"] == 1
+    assert [d["config_id"] for d in first["skipped_deletions"]] == [row_id]
+    assert any(
+        c.id == "1000" and c.metadata.get("promoted_from")
+        for c in load_manifest(sim.root).configurations
+        if (c.branch_id or PROD) == DEV
+    ), "the update recorded no DEV shadow -- the test premise is gone"
+
+    assert ("deleted", "1000") in _changes(sim, DEV)
+    forced = _push(sim, DEV, force=True)
+
+    assert forced["errors"] == []
+    assert all(r["id"] != row_id for r in sim.api.remote[DEV][HTTP_1]["rows"])
+
+
+def test_push_result_carries_each_refused_deletion_with_its_message(tmp_path: Path) -> None:
+    """D4: the actionable message reaches the push result, not only diff."""
+    sim = _world(tmp_path)
+    shutil.rmtree(_dir(sim, SQL_1_DIR))
+    params = sim.api.remote[PROD][SQL_1]["configuration"]["parameters"]
+    params["blocks"][0]["codes"][0]["script"] = ["SELECT 'tk900z';"]
+
+    for result in (_push(sim, force=True), _push(sim, force=True, dry_run=True), _push(sim)):
+        (refused,) = result["refused_deletions"]
+        assert (refused["component_id"], refused["config_id"]) == (SQL, "1006")
+        assert refused["message"].startswith(f"Cannot delete {SQL}/1006 on branch production")
+        assert FORCE_DOES_NOT_OVERRIDE in refused["message"]
+        assert "kbagent sync pull" in refused["message"]
+
+
+def test_push_human_output_prints_the_refusal_message() -> None:
+    from unittest.mock import MagicMock
+
+    from keboola_agent_cli.commands._sync_push_render import print_push_skips
+
+    formatter = MagicMock()
+    print_push_skips(
+        formatter,
+        {"refused_deletions": [{"component_id": SQL, "config_id": "1006", "message": "Cannot X"}]},
+    )
+    printed = " ".join(str(c.args[0]) for c in formatter.err_console.print.call_args_list)
+    assert "Cannot X" in printed
+
+
+def test_remote_row_added_under_an_adopted_config_is_remote_only(tmp_path: Path) -> None:
+    """D5: an adopted dir (no manifest entry) says nothing about a remote row no
+    local dir carries -- it is a remote-only row, not a false deletion conflict."""
+    sim = _world(tmp_path)
+    manifest = load_manifest(sim.root)
+    manifest.configurations = [c for c in manifest.configurations if c.id != "1003"]
+    save_manifest(sim.root, manifest)
+    row = sim._remote_row("Row extra")
+    sim.api.remote[PROD][HTTP_2]["rows"].append(row)
+
+    diff = _diff(sim)
+
+    assert [r["row_id"] for r in diff["remote_only_rows"]] == [row["id"]]
+    assert not [c for c in diff["changes"] if c["config_id"] == row["id"]]
+    _push(sim, force=True)
+    assert any(r["id"] == row["id"] for r in sim.api.remote[PROD][HTTP_2]["rows"])

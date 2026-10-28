@@ -238,7 +238,10 @@ These lists keep `error`, because their entries are not failed items with an err
   row) and the remote edit with it. The conflict's `details` start with `Cannot delete
   <component>/<config>[/rows/<row>] on branch <target>` and say the next step: `kbagent sync
   pull` (`--branch <id>` for a dev branch), review the restored files, delete them again,
-  `sync push --force`.
+  `sync push --force`. `sync push` (also `--dry-run`, with or without `--force`) lists every
+  delete it refuses under `refused_deletions[]` (`component_id`, `config_id`,
+  `parent_config_id`/`is_row` for a row, `path`, `message` = that text), and human mode
+  prints the message; the change itself carries `refused_delete: true`.
 - **A config delete covers its rows.** Push sends one DELETE for the config and none for its
   rows; the config change lists them as `covered_rows` (in `--dry-run` `changes`,
   `skipped_deletions` and `pushed_details`), and `--dry-run` `summary.deleted` counts the
@@ -250,27 +253,36 @@ These lists keep `error`, because their entries are not failed items with an err
   tracks, each `{component_id, parent_config_id, row_id, row_name}`. Before, such a row was
   invisible to `sync diff`. It is not a `changes[]` item (no new `change_type`); `sync pull`
   fetches it and push never creates or deletes it. `sync pull` `details[]` now has a record
-  for every row file it writes (`action` `new` or `updated`, with `row_id`).
+  for every row file it writes (`action` `new` or `updated`, with `row_id`). Under a folder
+  that carries a config id but has no manifest entry (adopted), a remote row no local row
+  folder carries is listed here too -- before, it was a `conflict` (push never deleted it
+  either way).
 - **`summary.unchanged` counts configs only**: it used to subtract row changes from the
   config count and could go negative.
 - **After `sync pull --branch <dev>`, a plain `sync pull` no longer leaves a deleted row
-  behind.** Production rows of `main/` keep their baselines in the manifest's branch
-  metadata (`retired_rows`), so a row production deleted meanwhile is removed (or kept and
-  reported when edited). Before, its folder stayed with no manifest entry and the next
-  `sync push` created the row again.
+  behind.** The bookkeeping of `main/`'s rows is kept in the manifest's branch metadata
+  (`retired_rows`), so a row production deleted meanwhile is removed (or kept and reported
+  when edited). Before, its folder stayed with no manifest entry and the next `sync push`
+  created the row again. A row still on the remote keeps the old rule: an edited one is kept
+  with an unknown base and is a `conflict`. A record is dropped once its config is in no
+  manifest entry and no row folder on disk carries its row ids.
 - **A promote push (`sync push --branch <dev>` reading `main/`) sees the rows production
   deleted.** A dev row whose production copy a pull removed is `deleted`
   (`skipped_deletions` without `--force`, three-way with it -- `conflict` when the dev row
-  changed or no baseline is recorded). The config entry records these rows under
-  `deleted_rows`. A dev row `main/` never had is in `remote_only_rows[]`. Before, the diff
-  was silent about both.
+  changed or no baseline is recorded), also after a promote push of the config itself
+  recorded its dev-branch entry. The config entry records these rows under `deleted_rows`.
+  A dev row `main/` never had is in `remote_only_rows[]`. Before, the diff was silent about
+  both.
 - **Ignoring a component keeps local work** (#927). `sync pull` after a component is added to
   `ignoredComponents` deletes only folders it can prove unchanged. An edited folder, or one
-  with no baseline (an adopted config, a row of unknown base), is kept with its manifest
-  entry and reported `skipped` (reason names the component), also with `--force` and
-  `--theirs`. Before, the folders were deleted with the unpushed edits. After un-ignoring,
-  the kept folder diffs against its old baseline (`modified`, or `conflict` when the remote
-  changed meanwhile). Shared SQL workspaces keep their rule: `--theirs` deletes them.
+  with a file that has no baseline (an adopted config, a row without a hash -- also when
+  the config's own `_config.yml` is gone), is kept with its manifest entry and reported
+  `skipped` (reason names the component), also with `--force` and `--theirs`. Before, the
+  folders were deleted with the unpushed edits. After un-ignoring, the kept folder diffs
+  against its old baseline (`modified`, or `conflict` when the remote changed meanwhile).
+  `keboola.sandboxes` in `ignoredComponents` follows this rule too; only a shared SQL
+  workspace dropped because `syncWorkspaces` is off keeps the CLI-25 rule (`--theirs`
+  deletes it).
 - **Limits, not fixed:** an edit that changes ONLY an encrypted value (`KBC::...`) is
   invisible to the comparison, so such a config is still `deleted`; and the Storage API has
   no conditional delete, so a UI edit made between `sync diff` and the DELETE is not

@@ -247,13 +247,18 @@ def test_edited_row_of_an_adopted_config_is_a_conflict_not_an_update(tmp_path: P
 
 
 def test_deleted_rows_of_an_adopted_config_are_not_deleted(tmp_path: Path) -> None:
-    """Risk 14: no row baseline, so a missing row is no intentional delete."""
+    """Risk 14: no row baseline, so a missing row is no intentional delete.
+
+    Since sync group 3 (D5) such a row is listed under ``remote_only_rows[]``
+    -- nothing tells it from a row added in the UI -- instead of as a
+    conflict; push still never deletes it."""
     sim = _world(tmp_path)
     _forget(sim, HTTP_2)
     shutil.rmtree(_dir(sim, f"{HTTP_2_DIR}/rows"))
 
     changes = _changes(sim)
-    assert ("conflict", "1003") in changes
+    diff = sim.svc.diff(alias="prod", project_root=sim.root)
+    assert sorted(r["row_id"] for r in diff["remote_only_rows"]) == ["1004", "1005"]
     assert not any(kind == "deleted" for kind, _ in changes)
     _push(sim, force=True)
     assert len(sim.api.remote[PROD][HTTP_2]["rows"]) == 2

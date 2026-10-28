@@ -73,6 +73,9 @@ class ConfigChange:
         # until push creates it (empty ``parent_config_id``) or registers the
         # adopted config it names (``parent_config_id`` set).
         self.parent_path = parent_path
+        # A local delete push refuses (sync group 3, D4): ``details[0]`` says
+        # why and what to do. Serialized as ``refused_delete: true``.
+        self.refused_delete = False
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to dict for JSON output."""
@@ -91,6 +94,8 @@ class ConfigChange:
                 data["source_row_id"] = self.source_row_id
             if self.parent_path:
                 data["parent_path"] = self.parent_path
+        if self.refused_delete:
+            data["refused_delete"] = True
         return data
 
 
