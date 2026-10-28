@@ -234,13 +234,12 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   take a NEW alias (`--alias`). gotchas.md (CLI-22).
 
 **Which branch did a command use? (0.96.1+)**
-- Every command that picks a branch names it: `Target: project 'P', branch ID
-  (from 'kbagent branch use')` on stderr, `targets` in `--json`
-  (`branch_source` `active_branch` = chosen by `branch use`). Read it before
-  you report a write as done on production. No `targets` key = no branch was
-  chosen, NOT production. Below 0.96.1, `workspace create` and most config /
-  flow writes applied the active branch silently: check `branch list` (Active
-  column) first. gotchas.md (#766).
+- Every command that picks a branch names it: `Target:` on stderr, `targets`
+  in `--json` (`branch_source: active_branch` = set by `branch use`). Read it
+  before you report a write as done on production; no `targets` key = no
+  branch chosen, NOT production. Below 0.96.1 `workspace create` and most
+  config / flow writes used the active branch silently: check `branch list`
+  (Active column) first. gotchas.md (#766).
 
 **Reading job logs / table usage / narrow config search (0.88.0+)**
 - `job detail --log-tail-lines N` -- the ONLY route to an already-finished job's
@@ -280,13 +279,12 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   **full-replace** of phases+tasks -- fetch `flow detail` first, merge locally,
   `flow validate --file @merged.yaml --project P` until clean, then push.
 - **"No schedules found" is not "no trigger" (0.92.0+)**: `schedule list` /
-  `schedule find` / `search` only ever read `keboola.scheduler` configs. A
-  **table trigger** is a separate Storage resource (`GET /v2/storage/triggers`)
-  and a **cross-project trigger** is a config in ANOTHER project -- neither is a
-  schedule. Use `kbagent flow triggers` and read
-  `cross_project_triggers_checked` (always `false`) before reporting that a flow
-  is unscheduled. `job detail` on a flow job carries `trigger_hint`: a run with no
-  matching cron schedule is NOT proof of a manual run.
+  `find` / `search` read only `keboola.scheduler` configs; a **table trigger**
+  (separate Storage resource) and a **cross-project trigger** are not
+  schedules. Use `kbagent flow triggers` and read
+  `cross_project_triggers_checked` (always `false`) before calling a flow
+  unscheduled. A flow job's `trigger_hint`: no matching cron is NOT proof of a
+  manual run.
 - **`flow schedule` activates on the Scheduler Service**: older
   versions only wrote the `keboola.scheduler` config -- it showed `enabled` but
   the cron NEVER fired. Confirm `activated: true`; `activated: false` + warning
@@ -335,6 +333,10 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   status` is local-only -- audit real drift with `sync diff`. A
   `SYNC_LEGACY_BOUNDARY` push error = tree pulled by <= 0.90.1 (phantom
   `REMOTE MODIFIED`, #686): `sync pull` first.
+- **`sync push --branch <dev>` from `main/`** (since vNEXT, #929): production
+  `sync diff` still shows the edit as local; a promoted config gets its own dev
+  entry; flow, schedule, variables and shared-code references are remapped to
+  the dev ids. gotchas.md.
 - **Ignored components** (0.91.0, #689): `keboola.sandboxes` +
   `keboola.mcp-server-tool` (+ the manifest's `ignoredComponents`) never sync.
   On <= 0.90.1 delete-dir-then-push still deletes such a config in production.
@@ -391,16 +393,14 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   shows `Git: {}`): 0.99.0+ `deploy` backfills `parameters.dataApp.git`; pass
   `--git-branch` with the branch the code is on (an app with runs refuses
   without it). Older: merge the block by hand, redeploy. data-app-workflow.md.
-- **`data-app password` keeps the password out of the chat (0.96.1+)**: it
-  never prints it without `--reveal`; the user copies it with `c` in their own
-  terminal, or you run `--copy`. Project token only -- no Manage token. Below
-  0.96.1 the same command PRINTS the password and needs a Manage token: do not
-  run it there; send the user to the Keboola UI. Non-password apps (oidc,
-  public) fail with `VALIDATION_ERROR`. `create --wait` / `deploy --wait`
-  deliver the password the same way (the password exists only after a
-  deploy); `--copy` / `--reveal` there need `--wait`. Never redeploy just to
-  get the password. gotchas.md.
-- **Data-app type in `sync`**: a `keboola.data-apps` config's runtime type (`python-js` / `streamlit`) lives only on the Data Science `/apps` record. `sync pull` records it as `_keboola.data_app_type`, and `sync push` / `sync clone` send it through `create_app`. A tree pulled before this carries no type (since 0.94.0). A type-less data app is created as `python-js`, the default, with a `data_app_type_default` push warning *(since 0.96.1)*. So re-pull the source before you clone a Streamlit app, or set `_keboola.data_app_type: streamlit`.
+- **`data-app password` keeps the password out of the chat (0.96.1+)**: no
+  output without `--reveal`; the user presses `c` in their own terminal, or you
+  run `--copy`. Project token only. Below 0.96.1 it PRINTS the password and
+  needs a Manage token: do not run it there; send the user to the Keboola UI.
+  Non-password apps (oidc, public) fail `VALIDATION_ERROR`. `create --wait` /
+  `deploy --wait` deliver it the same way (`--copy` / `--reveal` need
+  `--wait`). Never redeploy just to get the password. gotchas.md.
+- **Data-app type in `sync`** (0.94.0+): a `keboola.data-apps` runtime type (`python-js` / `streamlit`) lives only on the `/apps` record; pull records it as `_keboola.data_app_type`, push / clone send it. A type-less app (tree pulled before 0.94.0) is created as `python-js` with a `data_app_type_default` warning (0.96.1+): re-pull before cloning a Streamlit app, or set `_keboola.data_app_type: streamlit`.
 - **`ENCRYPTION_FAILED` on an Azure stack is a VERSION GATE, not a bad token**:
   <= 0.85.0 rejected the Azure `KBC::ProjectSecureKV::` cipher, so private-repo
   `create` and `secrets-set` could not work there at all. Upgrade to 0.86.0+; do
@@ -431,26 +431,22 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   with stdout+stderr captured (human mode -- `--json` writes the URL/code to
   stderr and leaves stdout empty until the end), relay the verification URL +
   user code, then poll `auth status` (exit 0 = signed in, exit 3 = not yet).
-  NEVER in a foreground tool shell (PKCE waits 115 s on the loopback callback,
-  the device flow polls until `expires_in`; a ~120 s timeout kills it
-  mid-flight and tells you nothing), NEVER unattended, NEVER a blind re-run --
+  NEVER in a foreground tool shell (a ~120 s tool timeout kills the flow
+  mid-flight, silently), NEVER unattended, NEVER a blind re-run --
   check `auth status` first or you orphan a session. No background shell ->
   hand the plain command to the user, then `auth status`/`auth logout` as usual.
   **`auth login-password` (0.84.0+) IS the headless path** -- email + password
   (+ TOTP seed), agent-runnable; WebAuthn-only -> `AUTH_MFA_INVALID`.
 - **`project create` (0.95.0+) is the only command that works from nothing**
-  -- no account, no token, no `auth login` first; it needs the
-  `agent-provisioning` stack feature (`STACK_FEATURES__AGENT_PROVISIONING`),
-  which is OFF on most stacks. The COMMAND is always registered, so its
-  presence proves nothing -- a stack without the feature answers 404 ->
-  `AUTH_NOT_SUPPORTED_ON_STACK`, exit 5 (since vNEXT, 1 before), whose message names the flag and the
-  fallback; not a routing or credential problem, and not worth retrying. The project it creates is
-  **owned by nobody** until a human opens the single-use `confirm_url`;
-  relay it verbatim, and do not call the task done before they have. `auth
-  status` re-prints it as `agent_confirm_url` while the claim is pending.
-  Confirming **revokes the session it gave you** -- that is the design, not
-  a failure: follow it with `auth login --stack URL`, and note the alias
-  survives (the sentinel keys on project id + stack, never the session).
+  -- no account, token or `auth login`; it needs the `agent-provisioning`
+  stack feature (`STACK_FEATURES__AGENT_PROVISIONING`), OFF on most stacks.
+  The command is always registered, so its presence proves nothing: without
+  the feature it answers `AUTH_NOT_SUPPORTED_ON_STACK`, exit 5 (since vNEXT,
+  1 before), naming the flag and the fallback -- do not retry. The project is
+  **owned by nobody** until a human opens the single-use `confirm_url`: relay
+  it verbatim; the task is not done before they have (`auth status`
+  re-prints it as `agent_confirm_url`). Confirming **revokes your session**
+  by design: follow with `auth login --stack URL`; the alias survives.
 - **Aliases derive from the project NAME, never the numeric id.**
   `--project 9840` resolves only once project 9840 is registered (0.96.1+;
   never below). Use `kbagent project list` or `auth register-projects` to
@@ -478,9 +474,8 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   import/promote/build`, `flow schedule-remove`, ...) exits 1 when any item
   failed. The items that succeeded ARE written: read `errors[]` /
   `projects_failed` / `projects_refresh_failed` / `failed` / `summary.failed`
-  and retry only the failed
-  items, never the whole command blind. A `--dry-run` of these exits 1 when it
-  reports a failed item, like the real run. The 18 fan-out reads
+  and retry only the failed items, never the whole command blind (`--dry-run`
+  exits 1 the same way). The 18 fan-out reads
   (`billing credits`, `job list`, ...) exit 1 too (since vNEXT, 0 before).
   On 0.97.0 and older these writes exit 0 even when items failed: check the
   same keys.
