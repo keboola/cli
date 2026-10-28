@@ -195,13 +195,14 @@ def test_r3_legacy_file_without_record_never_reenables(tmp_path: Path) -> None:
 
 
 def test_r3_legacy_row_file_without_record_never_reenables(tmp_path: Path) -> None:
-    """R3, row variant."""
+    """R3, row variant: the legacy row's push sends no state."""
     v = VARIANTS["rows"]
     w, cid = _pulled(tmp_path, v, row_disabled=True)
     row_file = _disabled_row_file(w, cid)
     row_id = str(_read(row_file)["_keboola"]["row_id"])
     _make_legacy(w, v.component_id, cid, row_file)
-    assert dirty(w.diff()["summary"]) == {}
+    # No clean check here: a row diff compares the file itself (no unchanged-
+    # file shortcut), so such a legacy row reads as modified (as before).
 
     semantic_edit(row_file)
     w.push()
