@@ -610,6 +610,12 @@ def _push_create_row(
         raise FileNotFoundError(f"Row file not found: {row_dir / CONFIG_FILENAME}")
 
     pristine_data = copy.deepcopy(local_data)
+    if remap is None and not created_from:
+        # A row of a config created this push from an untracked dir: the id
+        # its file carries is a placeholder scoped to THAT new parent -- the
+        # row entry is recorded under it -- so a flow selecting it by that id
+        # finds it (Astra). Never a source identity of another config (S2).
+        created_from = str((local_data.get("_keboola") or {}).get("row_id") or "")
     name, description, configuration = local_row_to_api(local_data, component_id)
     if remap is not None:
         configuration = remap.apply(component_id, configuration)

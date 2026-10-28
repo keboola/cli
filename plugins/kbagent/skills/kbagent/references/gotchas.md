@@ -189,7 +189,15 @@ These lists keep `error`, because their entries are not failed items with an err
   the UI since is kept, one repaired in the UI clears `link_pending` without a write, and
   every config it is about to name is read first -- one that is gone or cannot be read
   (a 5xx) is never written; the link stays pending and the push reports it
-  (`change_type: link_target`). Each linked config is read once per push.
+  (`change_type: link_target`) -- once per push, not again for each link that names it.
+  A row the selected config has on the target is never remapped, also not when an
+  earlier create recorded that id as a placeholder.
+- **A new config folder whose `_config.yml` carries an id nothing tracks** (a
+  placeholder, e.g. `config_id: ex-ref`) is created as before, and now a flow created
+  in the same push that selects it by that id -- and its rows by the `row_id`s in its
+  row files -- is linked to the new config and rows. Those row ids count only under the
+  new config: a flow that selects the ORIGINAL config's row by a copied id keeps it. A
+  folder copied from a tracked config (its id is still tracked) is no placeholder.
 - **A transformation created in the same push as its variables values row or shared-code
   row** keeps `link_pending` the same way while that row is missing: the push that creates
   the row also sets `variables_values_id` / `shared_code_row_ids` and the `{{<row id>}}`

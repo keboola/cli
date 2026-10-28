@@ -1412,19 +1412,6 @@ def test_a_fully_bound_clone_leaves_no_transformation_pending(
 # ---------------------------------------------------------------------------
 
 
-def _record_updates(world: CloneWorld, monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
-    """Every PUT the target receives: component, config id and the configuration sent."""
-    calls: list[dict[str, Any]] = []
-    original = world.tgt_api.update_config
-
-    def recording(component_id: str, config_id: str, **kwargs: Any) -> Any:
-        calls.append({"component_id": component_id, "config_id": config_id, **kwargs})
-        return original(component_id, config_id, **kwargs)
-
-    monkeypatch.setattr(world.tgt_api, "update_config", recording)
-    return calls
-
-
 def test_pending_transformation_keeps_a_link_edited_on_the_remote(
     tmp_path: Path, tmp_config_dir: Path
 ) -> None:
@@ -1480,28 +1467,21 @@ def test_unreadable_link_target_is_never_written(
     _crash_once_before_phase_d(monkeypatch)
     with pytest.raises(Crash):
         world.clone()
-    original = world.tgt_api.get_config_detail
-
-    def unavailable(component_id: str, config_id: str, branch_id: int | None = None) -> Any:
-        if component_id == EXTRACTOR:
-            raise KeboolaApiError("Service Unavailable", status_code=503)
-        return original(component_id, config_id, branch_id)
-
-    monkeypatch.setattr(world.tgt_api, "get_config_detail", unavailable)
+    # The clients are MagicMock(wraps=...) proxies that bind the fake's methods on first
+    # use, so the fault is injected through the fake's state, never by patching a method.
+    world.tgt_api.unreadable_components.add(EXTRACTOR)
 
     second = world.clone()
 
     assert _flow_task(world, 14)["configId"] == "ex-ref"
     assert _flow_task(world, 14)["configRowIds"] == ["exrow-1"]
-    assert any(
-        e["change_type"] == "link_target" and e["error_code"] == ErrorCode.API_ERROR
-        for e in second["errors"]
-    )
+    (error,) = second["errors"]  # the failed read is the push's one error for it
+    assert (error["change_type"], error["error_code"]) == ("link_target", ErrorCode.API_ERROR)
     assert _flow_entry_metadata(world).get("link_pending") is True
 
 
 def test_link_repaired_in_the_ui_clears_pending_without_a_write(
-    tmp_path: Path, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, tmp_config_dir: Path
 ) -> None:
     """Astra P2: the remote names a live row now -- pending clears, nothing is PUT."""
     world = CloneWorld(tmp_path, tmp_config_dir)
@@ -1514,10 +1494,105 @@ def test_link_repaired_in_the_ui_clears_pending_without_a_write(
     transformation = world.target(SQL, "SQL vars only")
     transformation["configuration"]["variables_id"] = variables["id"]
     transformation["configuration"]["variables_values_id"] = "live-row"
-    updates = _record_updates(world, monkeypatch)
+    world.tgt_api.update_calls.clear()
 
     world.clone()
 
-    assert [u for u in updates if u["config_id"] == transformation["id"]] == []
+    assert [c for c in world.tgt_api.update_calls if c["config_id"] == transformation["id"]] == []
     assert world.target(SQL, "SQL vars only")["configuration"]["variables_values_id"] == "live-row"
     assert "link_pending" not in _entry_metadata(world, SQL, "SQL vars only")
+
+
+# ---------------------------------------------------------------------------
+# Astra on 531fffeb
+# ---------------------------------------------------------------------------
+
+
+def test_a_live_row_selected_in_the_ui_is_never_remapped(
+    tmp_path: Path, tmp_config_dir: Path
+) -> None:
+    """Astra P1: B lists both "r" and "new-r", (B, "r") -> "new-r" is mapped, the remote selects "r"."""
+    world = CloneWorld(tmp_path, tmp_config_dir)
+    world.tgt_api.fail_row_names.add("Default values")
+    world.clone()
+    remote = world.target(SQL, "SQL vars only")["configuration"]
+    remote["variables_id"] = world.target(VARS)["id"]
+    remote["variables_values_id"] = "vrow-ref"
+    # A row with the id "vrow-ref" is added in the UI right after the push
+    # creates "Default values" -- the row the mapping (B, "vrow-ref") names.
+    world.tgt_api.rows_added_with["Default values"] = {
+        "id": "vrow-ref",
+        "name": "UI values",
+        "description": "",
+        "configuration": {"values": []},
+    }
+    world.tgt_api.fail_row_names.clear()
+
+    world.clone()
+
+    assert len(world.target(VARS)["rows"]) == 2
+    assert world.target(SQL, "SQL vars only")["configuration"]["variables_values_id"] == "vrow-ref"
+    assert "link_pending" not in _entry_metadata(world, SQL, "SQL vars only")
+
+
+def test_a_flow_selects_the_row_of_a_new_untracked_config_by_its_placeholder(
+    tmp_path: Path,
+) -> None:
+    """Astra P1: new dir "ex-ref" with row "orders-ref", a new flow selects ex-ref/["orders-ref"].
+
+    The copied row id of the same new dir is scoped to it: a flow selecting
+    the ORIGINAL config's row by that id keeps it (S2).
+    """
+    variant = VARIANTS["rows"]
+    w = DiffWorld(tmp_path)
+    cid = w.api.seed(variant)
+    w.api.types["keboola.flow"] = "other"
+    w.init()
+    w.pull()
+    authored = _copy_config(w, cid, "Authored")
+    data = read_yaml(authored / "_config.yml")
+    data["_keboola"]["config_id"] = "ex-ref"
+    write_yaml(authored / "_config.yml", data)
+    first_row, copied_row = sorted(authored.glob("rows/*/_config.yml"))[:2]
+    row = read_yaml(first_row)
+    row["_keboola"]["row_id"] = "orders-ref"
+    write_yaml(first_row, row)
+    copied_id = str(read_yaml(copied_row)["_keboola"]["row_id"])
+    version = read_yaml(w.config_dir(cid) / "_config.yml")["version"]
+    _write_flow(w, "Nightly", _job(variant.component_id, "ex-ref", ["orders-ref"]), version)
+    _write_flow(w, "Daily", _job(variant.component_id, cid, [copied_id]), version)
+
+    w.push()
+
+    (created,) = [c for c in w.api.remote[PROD].values() if c["name"] == "Authored"]
+    flows = {
+        c["name"]: c["configuration"]["tasks"][0]["task"]
+        for (comp, _), c in w.api.remote[PROD].items()
+        if comp == "keboola.flow"
+    }
+    nightly, daily = flows["Nightly"], flows["Daily"]
+    assert (nightly["configId"], nightly["configRowIds"]) == (
+        created["id"],
+        [_by_name(created, row["name"])],
+    )
+    assert (daily["configId"], daily["configRowIds"]) == (cid, [copied_id])
+
+
+def test_an_unreadable_variables_target_is_one_error_per_push(
+    tmp_path: Path, tmp_config_dir: Path
+) -> None:
+    """Astra P2: three pending transformations name a variables config that answers 503."""
+    world = CloneWorld(tmp_path, tmp_config_dir)
+    world.tgt_api.fail_row_names.add("Default values")
+    world.clone()
+    world.tgt_api.unreadable_components.add(VARS)
+
+    second = world.clone()
+
+    link_errors = [
+        e for e in second["errors"] if e["change_type"] in ("link_target", "variable_link")
+    ]
+    (error,) = link_errors
+    assert (error["change_type"], error["config_id"]) == ("link_target", world.target(VARS)["id"])
+    for component_id, name in ((SQL, "SQL vars only"), (SQL, "SQL step"), (PY, "Py step")):
+        assert _entry_metadata(world, component_id, name).get("link_pending") is True

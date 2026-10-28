@@ -226,8 +226,11 @@ def record_created_config(
         # Also in the create's own checkpoint (D9): the placeholder it was
         # created from, and -- for a flow, orchestration or schedule -- that its
         # references are not rewritten yet; Phase D clears the flag.
-        if writeback.previous_id and writeback.previous_id != new_id:
-            entry.metadata[CREATED_FROM_KEY] = writeback.previous_id
+        placeholder = writeback.previous_id or _file_placeholder(
+            manifest, component_id, branch_id, outcome.pristine_data
+        )
+        if placeholder and placeholder != new_id:
+            entry.metadata[CREATED_FROM_KEY] = placeholder
         if component_id in RUN_TARGET_COMPONENTS or carries_transformation_link(
             component_id, outcome.configuration
         ):
@@ -288,7 +291,9 @@ def record_created_config(
     record_companions(entry.metadata, hashes.extra_hashes)
     apply_stamp(entry.metadata, stamp)
 
-    if writeback.previous_id:
+    if not promote and entry.metadata.get(CREATED_FROM_KEY):
+        ledger.created_id_map[(component_id, str(entry.metadata[CREATED_FROM_KEY]))] = new_id
+    elif writeback.previous_id:
         ledger.created_id_map[(component_id, writeback.previous_id)] = new_id
     elif source_config_id:
         ledger.promoted_id_map[(component_id, source_config_id)] = new_id
@@ -372,3 +377,20 @@ def register_adopted_parent(
         status_code=0,
         error_code=ErrorCode.PARENT_CONFIG_NOT_TRACKED,
     )
+
+
+def _file_placeholder(
+    manifest: Manifest, component_id: str, branch_id: int | None, pristine: dict[str, Any]
+) -> str:
+    """The id an untracked new config's file carries, when it is a placeholder (Astra).
+
+    A file id no entry of the branch tracks (and the remote does not have,
+    or the config would have been adopted) names nothing but this new
+    config: a flow may select it, and its rows, by that id. A copied file
+    still carrying a TRACKED config's id (fork by copy, #482) is no
+    placeholder -- mapping it would redirect every link to the original.
+    """
+    file_id = str((pristine.get("_keboola") or {}).get("config_id") or "")
+    if not file_id or find_branch_entry(manifest, component_id, file_id, branch_id) is not None:
+        return ""
+    return file_id

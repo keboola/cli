@@ -311,6 +311,12 @@ class StorageFake:
         self.create_calls: list[dict[str, Any]] = []
         self.fail_update_once: set[tuple[str, str, str]] = set()
         self.fail_row_names: set[str] = set()
+        # Reads of these components' configs answer HTTP 503 (a target that cannot be read).
+        self.unreadable_components: set[str] = set()
+        # Row name -> a row someone adds in the UI right after that row is created.
+        self.rows_added_with: dict[str, dict[str, Any]] = {}
+        # Every update_config call: component id, config id, configuration sent.
+        self.update_calls: list[dict[str, Any]] = []
 
     def find(self, component_id: str, config_id: str) -> dict[str, Any]:
         for config in self.configs_of(component_id):
@@ -355,6 +361,8 @@ class StorageFake:
     def get_config_detail(
         self, component_id: str, config_id: str, branch_id: int | None = None
     ) -> dict[str, Any]:
+        if component_id in self.unreadable_components:
+            raise KeboolaApiError("Service Unavailable", status_code=503)
         return copy.deepcopy(self.find(component_id, config_id))
 
     def get_config_row(
@@ -392,6 +400,9 @@ class StorageFake:
         is_disabled: bool | None = None,
         folder: str | None = None,
     ) -> dict[str, Any]:
+        self.update_calls.append(
+            {"component_id": component_id, "config_id": config_id, "configuration": configuration}
+        )
         config = self.find(component_id, config_id)
         for key in list(self.fail_update_once):
             fail_component, fail_name, fail_description = key
@@ -418,7 +429,10 @@ class StorageFake:
         if name in self.fail_row_names:
             raise KeboolaApiError("Storage refused the row", status_code=500)
         row = _row(f"newrow-{next(self._ids)}", name, copy.deepcopy(configuration))
-        self.find(component_id, config_id)["rows"].append(row)
+        rows = self.find(component_id, config_id)["rows"]
+        rows.append(row)
+        if name in self.rows_added_with:
+            rows.append(copy.deepcopy(self.rows_added_with[name]))
         return copy.deepcopy(row)
 
 

@@ -67,6 +67,10 @@ class LinkMaps:
     planned_rows: set[tuple[str, str]] = field(default_factory=set)
     # Target ids of the configs this push created (known to exist).
     created_ids: set[str] = field(default_factory=set)
+    # ``(component_id, id)`` -- placeholder or target form -- of the targets a
+    # read failed for: already reported once, so a link to one stays pending
+    # without an error of its own.
+    failed: set[tuple[str, str]] = field(default_factory=set)
 
 
 def target_entries(manifest: Manifest, branch_id: int | None) -> list[ManifestConfiguration]:
@@ -198,12 +202,14 @@ def validate_targets(
 
 
 def _forget_config(maps: LinkMaps, component_id: str, config_id: str) -> None:
-    """A target config deleted on the remote: references to it stay pending."""
+    """A target config gone or unreadable: references to it stay pending, reported once."""
     for key, target in list(maps.configs.items()):
         if key[0] == component_id and target == config_id:
             del maps.configs[key]
             maps.uncreated.add(key)
+            maps.failed.add(key)
     maps.uncreated.add((component_id, config_id))
+    maps.failed.add((component_id, config_id))
     maps.rows = {key: row for key, row in maps.rows.items() if key[0] != config_id}
     maps.target_rows.pop((component_id, config_id), None)
 

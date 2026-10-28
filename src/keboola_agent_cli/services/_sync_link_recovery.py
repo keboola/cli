@@ -83,6 +83,12 @@ class TransformationLinks:
     shared_code: SharedCodeLink | None = None
     parents: set[str] = field(default_factory=set)
     unresolved: list[str] = field(default_factory=list)
+    # A link to a target whose read failed: pending, reported by that read.
+    blocked: bool = False
+
+    @property
+    def pending(self) -> bool:
+        return bool(self.unresolved) or self.blocked
 
     @property
     def rewrites(self) -> bool:
@@ -191,9 +197,10 @@ def _target_of(
     key = (component_id, str(raw))
     target = maps.configs.get(key)
     if target is None and key in maps.uncreated:
-        links.unresolved.append(
-            f"{component_id} config {raw} is not created yet or cannot be read."
-        )
+        if key in maps.failed:  # its failed read is the push's one error for it
+            links.blocked = True
+        else:
+            links.unresolved.append(f"{component_id} config {raw} is not created yet.")
         return None
     if target is None and key not in maps.target_rows:
         return None  # a config outside this tree: left as it is
@@ -204,14 +211,21 @@ def _target_of(
 def _row_of(
     component_id: str, parent: str, raw: str, maps: LinkMaps, links: TransformationLinks
 ) -> str | None:
-    """The target row id of *raw* under *parent*: mapped, already there, or unresolved."""
+    """The target row id of *raw* under *parent*: already there, mapped, or unresolved.
+
+    A row the parent has on the target is in target form and never remapped --
+    also not when a historical mapping names it as a placeholder (the user
+    selected that live row), like the flow resolver.
+    """
+    known = maps.target_rows.get((component_id, parent))
+    if known is not None and raw in known:
+        return None
     mapped = maps.rows.get((parent, raw))
     if mapped is not None:
         return mapped
     if raw in maps.rows.values():
         return None  # already the target row
-    known = maps.target_rows.get((component_id, parent))
-    if known is not None and raw not in known:
+    if known is not None:
         links.unresolved.append(
             f"Row {raw} of {component_id} config {parent} is not on the target."
         )
@@ -301,7 +315,7 @@ def _recover(
     for message in links.unresolved:
         result.errors.append(_error(created, ErrorCode.VARIABLE_LINK_UNRESOLVED, message))
     if not links.rewrites:
-        return bool(links.unresolved)
+        return links.pending
     rewritten = copy.deepcopy(configuration)
     _apply_to_api(rewritten, links)
     local_data = service._read_config_file(created.config_dir)
@@ -335,7 +349,7 @@ def _recover(
             response=response,
             warnings=result.warnings,
         )
-    return bool(links.unresolved)
+    return links.pending
 
 
 def _error(created: CreatedConfig, error_code: ErrorCode, message: str) -> dict[str, str]:
