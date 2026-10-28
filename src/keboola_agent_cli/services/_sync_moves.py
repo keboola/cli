@@ -61,6 +61,12 @@ if TYPE_CHECKING:
 
 MOVES_KEY = "moves"
 AMBIGUOUS_MOVES_KEY = "ambiguous_moves"
+DISPLACED_KEY = "displaced"
+# ``config rename --directory`` for a branch the sync tree does not track the config on.
+SKIPPED_OTHER_BRANCH = (
+    "The sync directory tracks this config on another branch only; the local tree was "
+    "not changed. Pull that branch (sync pull --branch) to rename its directory."
+)
 
 
 @dataclass(frozen=True)
@@ -97,7 +103,7 @@ class AmbiguousMove:
     def message(self) -> str:
         """Why nothing is pushed for it, and what to do."""
         return (
-            f"The directory of config {self.config_id} ({self.path}) is gone and "
+            f"The directory of config {self.config_id} ({self.path}) no longer holds it and "
             f"{len(self.candidates)} directories carry its id: {', '.join(self.candidates)}. "
             "Push creates and deletes nothing for it, also with --force. Keep one of them "
             "(remove the others, or remove their _keboola.config_id to make them new "
@@ -128,12 +134,56 @@ class AmbiguousMove:
         }
 
 
+@dataclass(frozen=True)
+class DisplacedConfig:
+    """A tracked config whose directory now holds another tracked config, found nowhere else.
+
+    Its entry is set aside in memory: the directory is the other config's now,
+    so its content is never compared with (or pushed to) this config. Diff
+    lists the config as remote-only, pull writes it to a new directory, push
+    neither updates nor deletes it.
+    """
+
+    component_id: str
+    config_id: str
+    path: str
+    carried_config_id: str
+
+    def to_dict(self) -> dict[str, Any]:
+        """The ``displaced[]`` record."""
+        return {
+            "component_id": self.component_id,
+            "config_id": self.config_id,
+            "path": self.path,
+            "carried_config_id": self.carried_config_id,
+            "message": (
+                f"Directory {self.path} of config {self.config_id} now holds config "
+                f"{self.carried_config_id}, and no directory carries config {self.config_id}: "
+                "it is left out of this diff and push (neither updated nor deleted); "
+                "`sync pull` writes it to a new directory."
+            ),
+        }
+
+
 @dataclass
 class MovePlan:
-    """The moves of one tree, and the ambiguous ones held back."""
+    """The moves of one tree, the ambiguous ones held back, the displaced ones set aside."""
 
     moves: list[ConfigMove] = field(default_factory=list)
     ambiguous: list[AmbiguousMove] = field(default_factory=list)
+    displaced: list[DisplacedConfig] = field(default_factory=list)
+
+    def holds(self, entry: ManifestConfiguration) -> bool:
+        """True for an entry an ambiguous move holds."""
+        return config_key(entry.component_id, entry.id) in self.held_keys
+
+    def held_in(self, entries: list[ManifestConfiguration]) -> list[ManifestConfiguration]:
+        """The *entries* an ambiguous move holds: pull keeps them as they are (F2)."""
+        return [e for e in entries if self.holds(e)]
+
+    def unheld(self, entries: list[ManifestConfiguration]) -> list[ManifestConfiguration]:
+        """The other *entries*: only these may be swept as stale by pull."""
+        return [e for e in entries if not self.holds(e)]
 
     @property
     def held_keys(self) -> set[str]:
@@ -167,6 +217,8 @@ class MovePlan:
             result[MOVES_KEY] = [m.to_dict() for m in self.moves]
         if self.ambiguous:
             result[AMBIGUOUS_MOVES_KEY] = [item.to_dict() for item in self.ambiguous]
+        if self.displaced:
+            result[DISPLACED_KEY] = [item.to_dict() for item in self.displaced]
         return result
 
     def pull_details(self) -> list[dict[str, str]]:
@@ -229,6 +281,47 @@ def _carriers(
     return found
 
 
+def _carried(service: SyncService, config_dir: Path) -> tuple[str, str] | None:
+    """The ``(component_id, config_id)`` a config dir's ``_config.yml`` carries, if any."""
+    data = service._read_config_file(config_dir)
+    meta = data.get("_keboola") if isinstance(data, dict) else None
+    if not isinstance(meta, dict) or not meta.get("config_id"):
+        return None
+    return str(meta.get("component_id") or ""), str(meta["config_id"])
+
+
+def _sources(
+    service: SyncService, in_tree: list[ManifestConfiguration], tree_dir: Path, ignored: frozenset
+) -> tuple[dict[tuple[str, str, str], list[ManifestConfiguration]], dict[str, str]]:
+    """The entries whose config left their directory, grouped by (path, component, identity).
+
+    A source is an entry whose whole directory is gone (F1: a directory that is
+    still there, with only its ``_config.yml`` removed, keeps its rows and
+    companions and is no move source), or an entry whose ``_config.yml`` now
+    carries the identity of ANOTHER tracked config of the same component (F4:
+    the other config was moved into this directory). Returns the groups and the
+    displaced paths (path -> the config id its file carries now).
+    """
+    eligible = [e for e in in_tree if e.component_id not in ignored and e.metadata.get("pull_hash")]
+    known = {(e.component_id, _identity(e)) for e in eligible}
+    groups: dict[tuple[str, str, str], list[ManifestConfiguration]] = defaultdict(list)
+    displaced: dict[str, str] = {}
+    for entry in eligible:
+        entry_dir = tree_dir / entry.path
+        identity = _identity(entry)
+        if entry_dir.exists():
+            carried = _carried(service, entry_dir)
+            if carried is None or carried[1] == identity:
+                continue
+            if carried[0] not in ("", entry.component_id):
+                continue  # a relabelled component: diff refuses it
+            if (entry.component_id, carried[1]) not in known:
+                continue  # an id no tracked config has: the old behavior
+            displaced[entry.path] = carried[1]
+        groups[(entry.path, entry.component_id, identity)].append(entry)
+    return groups, displaced
+
+
 def settle_moves(
     service: SyncService,
     manifest: Manifest,
@@ -242,30 +335,31 @@ def settle_moves(
 
     *drop_held* removes the entries of an ambiguous move from *manifest* (diff:
     no delete is planned for them); pull keeps them and writes nothing for
-    them (``MovePlan.held_keys``).
+    them (``MovePlan.held_keys``). A displaced entry no directory carries is
+    always removed from *manifest* (``MovePlan.displaced``).
     """
     in_tree = [c for c in manifest.configurations if entry_tree(manifest, c) == tree]
-    groups: dict[tuple[str, str, str], list[ManifestConfiguration]] = defaultdict(list)
-    for entry in in_tree:
-        if (
-            entry.component_id in ignored
-            or not entry.metadata.get("pull_hash")
-            or (project_root / tree / entry.path / CONFIG_FILENAME).exists()
-        ):
-            continue
-        groups[(entry.path, entry.component_id, _identity(entry))].append(entry)
+    tree_dir = project_root / tree
+    groups, displaced = _sources(service, in_tree, tree_dir, ignored)
     plan = MovePlan()
     if not groups:
         return plan
-    carriers = _carriers(service, project_root / tree, {c.path for c in in_tree}, ignored)
+    owned = {c.path for c in in_tree} - set(displaced)
+    carriers = _carriers(service, tree_dir, owned, ignored)
     claimed: dict[str, int] = defaultdict(int)
     for _path, component_id, identity in groups:
         for candidate in carriers.get((component_id, identity), []):
             claimed[candidate] += 1
+    dropped: list[ManifestConfiguration] = []
     for (path, component_id, identity), entries in groups.items():
         candidates = carriers.get((component_id, identity), [])
         if not candidates:
-            continue  # a local delete
+            if path in displaced:  # its dir is another config's now (F4)
+                plan.displaced.append(
+                    DisplacedConfig(component_id, identity, path, displaced[path])
+                )
+                dropped += entries
+            continue  # else a local delete
         if len(candidates) == 1 and claimed[candidates[0]] == 1:
             for entry in entries:
                 plan.moves.append(
@@ -283,9 +377,10 @@ def settle_moves(
             )
         )
         if drop_held:
-            manifest.configurations = [
-                c for c in manifest.configurations if all(c is not e for e in entries)
-            ]
+            dropped += entries
+    manifest.configurations = [
+        c for c in manifest.configurations if all(c is not e for e in dropped)
+    ]
     return plan
 
 
@@ -333,7 +428,8 @@ def persist_moves(project_root: Path, diff_result: dict[str, Any], *, dry_run: b
 
 def move_fields(diff_result: dict[str, Any]) -> dict[str, Any]:
     """The ``moves`` / ``ambiguous_moves`` of a diff, for every push result."""
-    return {k: diff_result[k] for k in (MOVES_KEY, AMBIGUOUS_MOVES_KEY) if diff_result.get(k)}
+    keys = (MOVES_KEY, AMBIGUOUS_MOVES_KEY, DISPLACED_KEY)
+    return {k: diff_result[k] for k in keys if diff_result.get(k)}
 
 
 def rename_entries(
@@ -341,22 +437,16 @@ def rename_entries(
 ) -> list[ManifestConfiguration]:
     """The entries ``config rename --directory`` relocates (B8).
 
-    The entry of *branch_id* (the first matching entry when that branch has
-    none), and the promote entries that share its directory as their source.
-    Empty when the manifest does not track the config.
+    The entry of *branch_id*, and the promote entries that share its directory
+    as their source. Empty when the manifest does not track the config on that
+    branch: another branch's entry is never renamed (its directory and
+    baselines belong to that branch). The promote entries keep their hashes:
+    their baselines are their own branch's remote state and the content of
+    the files, and a rename changes neither (only the target's remote name).
     """
     target = find_branch_entry(manifest, component_id, config_id, branch_id)
     if target is None:
-        target = next(
-            (
-                c
-                for c in manifest.configurations
-                if (c.component_id, c.id) == (component_id, config_id)
-            ),
-            None,
-        )
-    if target is None:
-        return []
+        return []  # not tracked on that branch: the local tree is not touched (F3)
     tree = entry_tree(manifest, target)
     associates = [
         c

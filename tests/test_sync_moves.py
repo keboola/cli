@@ -480,19 +480,36 @@ def test_m10_promoted_config_and_its_source_keep_their_ids(orders: Tree) -> None
 def test_m11_retired_rows_survive_a_move_of_an_orphaned_dir(orders: Tree) -> None:
     put(orders.api, DEV, "500", "Orders", "a", rows=[("r1", "One", "x"), ("r2", "Two", "y")])
     orders.pull(branch=DEV)  # main/ entries retired, main/ files stay
+
+    def retired() -> dict:
+        (main,) = [b for b in load_manifest(orders.root).branches if b.path == "main"]
+        return main.metadata.get("retired_rows") or {}
+
+    record = retired()
+    assert any(key.endswith("/r2") for key in record), record
     moved = orders.move(orders.dir_of("500"), "orders-moved")
+    orders.diff()
+    orders.svc.status(orders.root)
+    orders.push(dry_run=True)
+    assert retired() == record, "a move or a read-only command changed the retirement record"
+
     cfg = orders.api.remote[PROD][(HTTP, "500")]
     cfg["rows"] = [r for r in cfg["rows"] if r["id"] != "r2"]  # UI deletes r2
     orders.pull()
     (main_dir,) = orders.dirs_of("500")
+    assert main_dir == moved or not moved.exists()
     row_ids = sorted(
         yaml.safe_load(f.read_text())["_keboola"]["row_id"]
         for f in (main_dir / "rows").rglob("_config.yml")
     )
     assert row_ids == ["r1"], "a row the remote deleted came back"
-    assert moved.exists() or main_dir.exists()
+    (entry,) = [e for e in orders.entries("500") if e.path == orders.rel(main_dir)]
+    assert [r.id for r in entry.rows] == ["r1"]
     diff = orders.diff()
-    assert not any(c["change_type"] == "added" for c in diff["changes"])
+    assert not any(c["change_type"] in ("added", "deleted") for c in diff["changes"])
+    orders.push(force=True)
+    assert orders.api.writes("CREATE") == [] and orders.api.writes("DELETE") == []
+    assert [r["id"] for r in orders.api.remote[PROD][(HTTP, "500")]["rows"]] == ["r1"]
 
 
 # ---------------------------------------------------------------------------
@@ -628,8 +645,11 @@ def test_m14_rename_directory_relocates_the_promoted_copy(orders: Tree) -> None:
     assert result is not None
     paths = {c.id: c.path for c in load_manifest(orders.root).configurations}
     assert paths == {"500": result["new_path"], dev_id: result["new_path"]}
-    diff = orders.diff(branch=DEV)
-    assert not any(c["change_type"] in ("added", "deleted") for c in diff["changes"])
+    # The promoted copy keeps its baseline: a rename changes neither its
+    # branch's remote state nor the files, so its diff stays clean.
+    (dev_entry,) = orders.entries(dev_id)
+    assert dev_entry.metadata.get("pull_config_hash")
+    assert orders.diff(branch=DEV)["changes"] == []
     orders.push(branch=DEV, force=True)
     assert orders.api.writes("CREATE") == [] and orders.api.writes("DELETE") == []
     assert remote_ids(orders.api, DEV) == [dev_id]
@@ -675,3 +695,189 @@ def test_status_reports_a_move_not_a_delete_plus_add(orders: Tree) -> None:
     assert [m["moved_to"] for m in status["moves"]] == [orders.rel(new)]
     assert status["unchanged"] == 1
     assert orders.manifest_bytes() == before
+
+
+# ---------------------------------------------------------------------------
+# Round-1 review findings (F1-F5)
+# ---------------------------------------------------------------------------
+
+
+def _row_dir(config_dir: Path, row_id: str) -> Path:
+    (found,) = [
+        f.parent
+        for f in (config_dir / "rows").rglob("_config.yml")
+        if yaml.safe_load(f.read_text())["_keboola"]["row_id"] == row_id
+    ]
+    return found
+
+
+def test_f1_removed_config_file_in_a_surviving_dir_is_no_move(orders: Tree) -> None:
+    a = orders.dir_of("500")
+    b = a.parent / "orders-copy"
+    shutil.copytree(a, b)
+    (a / "_config.yml").unlink()
+    r1 = _row_dir(a, "r1") / "_config.yml"
+    data = yaml.safe_load(r1.read_text())
+    data["parameters"]["value"] = "edited-in-a"
+    r1.write_text(yaml.safe_dump(data, sort_keys=False))
+    shutil.rmtree(_row_dir(b, "r1"))
+
+    diff = orders.diff()
+    assert "moves" not in diff
+    r1_changes = [c for c in diff["changes"] if c.get("is_row") and c["config_id"] == "r1"]
+    assert not any(c["change_type"] == "deleted" for c in r1_changes), r1_changes
+    orders.push(force=True)
+    assert not any(e.startswith("DELETE-ROW") and "r1" in e for e in orders.api.log)
+
+
+@pytest.mark.parametrize("pull_kw", [{}, {"force": True}, {"theirs": True}])
+def test_f2_held_move_survives_a_remote_delete_and_pull(orders: Tree, pull_kw: dict) -> None:
+    (entry_before,) = orders.entries("500")
+    new = orders.move(orders.dir_of("500"), "orders-moved")
+    shutil.copytree(new, new.parent / "orders-copy")
+    del orders.api.remote[PROD][(HTTP, "500")]
+    pulled = orders.pull(**pull_kw)
+    assert not any(d["action"] == "removed" for d in pulled["details"])
+    (entry,) = orders.entries("500")
+    assert entry.path == entry_before.path
+    diff = orders.diff()
+    assert not any(c["change_type"] == "added" for c in diff["changes"])
+    assert diff["ambiguous_moves"][0]["config_id"] == "500"
+    orders.push(force=True)
+    assert orders.api.log == [], "a held ambiguous move was created"
+    assert remote_ids(orders.api) == []
+
+
+def test_f3_rename_on_a_branch_the_tree_does_not_track_touches_nothing(orders: Tree) -> None:
+    main_dir = orders.dir_of("500")
+    before = orders.manifest_bytes()
+    result = _config_service(orders)._rename_sync_directory(
+        directory=orders.root,
+        component_id=HTTP,
+        config_id="500",
+        new_name="Renamed On Dev",
+        branch_id=DEV,
+    )
+    assert result is not None and "skipped" in result
+    assert main_dir.exists(), "a dev-branch rename renamed the production dir"
+    assert orders.manifest_bytes() == before
+
+
+def test_f3_rename_config_reports_the_skipped_local_rename(orders: Tree) -> None:
+    client = MagicMock()
+    client.get_config_detail.return_value = {"name": "Orders"}
+    svc = ConfigService(config_store=orders.svc._config_store, client_factory=lambda u, k: client)
+    result = svc.rename_config(
+        alias="prod",
+        component_id=HTTP,
+        config_id="500",
+        name="Renamed",
+        branch_id=DEV,
+        directory=orders.root,
+    )
+    assert "sync" not in result
+    assert "not changed" in result["sync_skipped"]
+    orders.dir_of("500")
+
+
+def test_f4_rotating_two_dirs_keeps_both_ids(tmp_path: Path) -> None:
+    t = Tree(tmp_path)
+    put(t.api, PROD, "500", "Orders", "a")
+    put(t.api, PROD, "600", "Query", "b")
+    t.init()
+    t.pull()
+    a, b = t.dir_of("500"), t.dir_of("600")
+    old = b.parent / "query-old"
+    shutil.move(str(b), str(old))
+    shutil.move(str(a), str(b))
+    diff = t.diff()
+    assert diff["changes"] == []
+    assert {(m["config_id"], m["moved_to"]) for m in diff["moves"]} == {
+        ("500", t.rel(b)),
+        ("600", t.rel(old)),
+    }
+    t.push(force=True)
+    assert t.api.log == []
+    assert t.api.remote[PROD][(HTTP, "500")]["configuration"]["parameters"]["value"] == "a"
+    assert t.api.remote[PROD][(HTTP, "600")]["configuration"]["parameters"]["value"] == "b"
+    assert t.diff()["changes"] == []
+
+
+def test_f4_swapping_two_dirs_keeps_both_ids(tmp_path: Path) -> None:
+    t = Tree(tmp_path)
+    put(t.api, PROD, "500", "Orders", "a")
+    put(t.api, PROD, "600", "Query", "b")
+    t.init()
+    t.pull()
+    a, b = t.dir_of("500"), t.dir_of("600")
+    tmp = a.parent / "swap-tmp"
+    shutil.move(str(a), str(tmp))
+    shutil.move(str(b), str(a))
+    shutil.move(str(tmp), str(b))
+    edit_value(b, "edited-500")
+    diff = t.diff()
+    assert [(c["change_type"], c["config_id"]) for c in diff["changes"]] == [("modified", "500")]
+    t.push(force=True)
+    assert t.api.writes("CREATE") == [] and t.api.writes("DELETE") == []
+    assert t.api.writes("UPDATE") == ["UPDATE 500"]
+    assert t.api.remote[PROD][(HTTP, "600")]["configuration"]["parameters"]["value"] == "b"
+
+
+def test_f4_foreign_id_at_a_tracked_path_is_never_pushed_to_that_config(tmp_path: Path) -> None:
+    t = Tree(tmp_path)
+    put(t.api, PROD, "500", "Orders", "a")
+    put(t.api, PROD, "600", "Query", "b")
+    t.init()
+    t.pull()
+    a, b = t.dir_of("500"), t.dir_of("600")
+    shutil.rmtree(b)
+    shutil.move(str(a), str(b))  # 500 now lives in 600's old directory
+    diff = t.diff()
+    assert not any(
+        c["config_id"] == "600" and c["change_type"] == "modified" for c in diff["changes"]
+    )
+    assert [d["config_id"] for d in diff["displaced"]] == ["600"]
+    assert [m["config_id"] for m in diff["moves"]] == ["500"]
+    t.push(force=True)
+    assert t.api.log == [], "600 was updated with 500's content, or something was created"
+    assert t.api.remote[PROD][(HTTP, "600")]["configuration"]["parameters"]["value"] == "b"
+    t.pull()
+    assert t.api.log == []
+    assert t.dir_of("600") != b
+    t.dir_of("500")
+    assert len(load_manifest(t.root).configurations) == 2
+    assert t.diff()["changes"] == []
+
+
+def test_f5_move_in_a_git_branching_tree(tmp_path: Path) -> None:
+    from unittest.mock import patch
+
+    t = Tree(tmp_path)
+    put(t.api, PROD, "500", "Orders", "a", rows=[("r1", "One", "x")])
+    with (
+        patch("keboola_agent_cli.services.sync_service.is_git_repo", return_value=True),
+        patch("keboola_agent_cli.services.sync_service.get_default_branch", return_value="main"),
+        patch("keboola_agent_cli.sync.git_utils.get_current_branch", return_value="main"),
+    ):
+        t.svc.init_sync(alias="prod", project_root=t.root, git_branching=True)
+        assert load_manifest(t.root).git_branching.enabled
+        t.pull()
+        new = t.move(t.dir_of("500"), "orders-moved")
+        edit_value(new, "moved-and-edited")
+        before = t.manifest_bytes()
+        diff = t.diff()
+        assert [(c["change_type"], c["config_id"]) for c in diff["changes"]] == [
+            ("modified", "500")
+        ]
+        assert diff["moves"][0]["moved_to"] == t.rel(new)
+        assert t.manifest_bytes() == before
+        t.push(force=True)
+        assert t.api.writes("CREATE") == [] and t.api.writes("DELETE") == []
+        (entry,) = t.entries("500")
+        assert entry.path == t.rel(new)
+        assert t.diff()["changes"] == []
+        t.pull()
+        assert t.api.writes("CREATE") == [] and len(t.entries("500")) == 1
+        assert t.diff()["changes"] == []
+    value = t.api.remote[PROD][(HTTP, "500")]["configuration"]["parameters"]["value"]
+    assert value == "moved-and-edited"

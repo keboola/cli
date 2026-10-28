@@ -32,7 +32,7 @@ from ._config_clone import clone_config_method
 from ._config_folder import set_config_folder_method
 from ._config_set_guard import validate_set_paths
 from ._encryption import collect_secrets, encrypt_secrets_in_config, find_plaintext_secret_keys
-from ._sync_moves import rename_entries
+from ._sync_moves import SKIPPED_OTHER_BRANCH, rename_entries
 from .base import (
     BaseService,
     ClientFactory,
@@ -1322,7 +1322,9 @@ class ConfigService(BaseService):
             new_name=name,
             branch_id=effective_branch_id,
         )
-        if sync_result:
+        if sync_result and "skipped" in sync_result:
+            result["sync_skipped"] = sync_result["skipped"]  # local tree not changed (F3)
+        elif sync_result:
             result["sync"] = sync_result
 
         return result
@@ -1361,6 +1363,10 @@ class ConfigService(BaseService):
         # The config's entry on this branch, and the promote entries sharing its dir.
         renamed = rename_entries(manifest, component_id, config_id, branch_id)
         if not renamed:
+            if any(
+                (c.component_id, c.id) == (component_id, config_id) for c in manifest.configurations
+            ):
+                return {"skipped": SKIPPED_OTHER_BRANCH}
             return None
         target_cfg = renamed[0]
 

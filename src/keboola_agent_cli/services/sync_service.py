@@ -603,6 +603,8 @@ class SyncService(BaseService):
         entries = partition_pull_entries(manifest, project_root, branch_id, branch_dir_name)
         entries.hold_ignored_promotes(ignored_components)
         own_entries = entries.own
+        # Held entries are kept as they are, listed by the remote or not (F2).
+        new_configurations += moves.held_in(own_entries)
         old_entries = {f"{c.component_id}/{c.id}": c for c in own_entries}
         untracked_dirs = scan_config_dirs(self, project_root, manifest, branch_dir_name)
         pull_warnings: list[dict[str, Any]] = ambiguous_id_warnings(untracked_dirs)
@@ -643,7 +645,7 @@ class SyncService(BaseService):
         # reserved so a same-named new config cannot land in one.
         stale = find_stale_entries(
             self,
-            own_entries,
+            moves.unheld(own_entries),
             components,
             branch_dir,
             ignored_components,
@@ -690,9 +692,8 @@ class SyncService(BaseService):
 
                 # Reuse existing path if config is already tracked (stable paths)
                 lookup_key = f"{component_id}/{config_id}"
-                if lookup_key in moves.held_keys and lookup_key in old_entries:
-                    new_configurations.append(old_entries[lookup_key])  # kept as it was
-                    continue
+                if lookup_key in moves.held_keys:
+                    continue  # kept as it was, above
                 is_new = lookup_key not in existing_keys
                 generated = False
                 if lookup_key in existing_paths:
