@@ -861,7 +861,7 @@ def test_push_dry_run_renderer_prints_refusals_and_counts(
     assert "Fix pyproject.toml." in out
     assert push_total(result) == 2
     assert push_summary(result) == (
-        "2 config(s) planned, 1 refused, 1 would be pushed: 2 created, 0 updated, 0 deleted."
+        "2 config(s) planned, 1 refused, 1 would be pushed: 1 created, 0 updated, 0 deleted."
     )
 
 
@@ -886,3 +886,27 @@ def test_clone_dry_run_renderer_prints_refusals_and_counts(
     assert "Fix pyproject.toml." in capsys.readouterr().out
     assert clone_total(result, failed=1) == 2
     assert clone_summary(result) == "2 config(s) planned, 1 refused, 1 would be cloned into prod."
+
+
+def test_all_projects_dry_run_lines_count_only_executable_creates(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Round 7 P2: a refused create is never 'Would create 1' / 'would: +1'."""
+    from keboola_agent_cli.commands._sync_push_render import push_summary
+    from keboola_agent_cli.commands.sync import _format_push_result, _push_one_liner
+    from keboola_agent_cli.output import OutputFormatter
+
+    result = {
+        "status": "dry_run",
+        "changes": [{"change_type": "added", "component_id": APP, "path": "new-app"}],
+        "summary": {"added": 1, "modified": 0, "deleted": 0},
+        "errors": [_REFUSAL],
+    }
+    _format_push_result(OutputFormatter(json_mode=False, no_color=True), result)
+    out = capsys.readouterr().out
+    assert "Would create 0, update 0, delete 0, 1 refused" in out
+    assert "Fix pyproject.toml." in out
+    assert _push_one_liner(result).startswith("would: +0 ~0 -0, [red]1 refused[/red]")
+    assert push_summary(result) == (
+        "1 config(s) planned, 1 refused, 0 would be pushed: 0 created, 0 updated, 0 deleted."
+    )

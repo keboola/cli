@@ -34,6 +34,7 @@ from test_sync_clone_links import World as CloneWorld
 from test_sync_random_walk import (
     DEV,
     HTTP,
+    HTTP_1,
     HTTP_2,
     PROD,
     Sim,
@@ -756,3 +757,119 @@ def test_the_ambiguity_conflict_says_what_to_do(tmp_path: Path) -> None:
     [detail, *_] = next(c for c in diff["changes"] if c["change_type"] == "conflict")["details"]
     assert "Delete every directory that is not row 1005" in detail
     assert "remove the 'row_id' line" in detail
+
+
+# ---------------------------------------------------------------------------
+# Round 7: carriers of a tracked row id -- never deleted, never forgotten
+# ---------------------------------------------------------------------------
+
+
+def _rows_of_1000(sim: Sim) -> Path:
+    return _dir(sim, f"{HTTP_DIR}/rows")
+
+
+def _row_value(sim: Sim, key: tuple[str, str], row_id: str) -> str:
+    row = next(r for r in sim.api.remote[PROD][key]["rows"] if r["id"] == row_id)
+    return row["configuration"]["parameters"]["value"]
+
+
+def _set_value(row_dir: Path, value: str) -> None:
+    data = read_yaml(row_dir / "_config.yml")
+    data["parameters"]["value"] = value
+    write_yaml(row_dir / "_config.yml", data)
+
+
+def test_ambiguous_carriers_of_a_tracked_row_never_delete_it(tmp_path: Path) -> None:
+    """Round 7 P1 (Astra): original copied to a and b, original removed, push --force."""
+    sim = _world(tmp_path)
+    rows = _rows_of_1000(sim)
+    shutil.copytree(rows / "row-tk2z", rows / "a")
+    shutil.copytree(rows / "row-tk2z", rows / "b")
+    shutil.rmtree(rows / "row-tk2z")
+
+    changes = sim.svc.diff(alias="prod", project_root=sim.root)["changes"]
+    assert not [c for c in changes if c["change_type"] == "deleted"]
+    assert sorted(c["path"] for c in changes if c["change_type"] == "conflict") == [
+        "rows/a",
+        "rows/b",
+    ]
+    result = _push(sim, force=True)
+
+    assert (result["created"], result["deleted"]) == (0, 0)
+    assert [r["id"] for r in sim.api.remote[PROD][HTTP_1]["rows"]] == ["1001", "1002"]
+
+
+def test_every_carrier_conflicts_also_an_edited_tracked_one(tmp_path: Path) -> None:
+    """Round 7 P2 (Astra): edited tracked row + an untracked copy -- no update."""
+    sim = _world(tmp_path)
+    rows = _rows_of_1000(sim)
+    _set_value(rows / "row-tk2z", "tk900z")
+    shutil.copytree(rows / "row-tk2z", rows / "copy")
+
+    changes = sim.svc.diff(alias="prod", project_root=sim.root)["changes"]
+    row_changes = [c for c in changes if c.get("is_row")]
+    assert sorted((c["change_type"], c["path"]) for c in row_changes) == [
+        ("conflict", "rows/copy"),
+        ("conflict", "rows/row-tk2z"),
+    ]
+    _push(sim)
+    assert _row_value(sim, HTTP_1, "1001") == "tk3z"
+
+
+def test_moved_row_dir_has_no_baseline_until_a_pull_records_it(tmp_path: Path) -> None:
+    """Round 7: a moved, edited row is a conflict -- after a pull, an ordinary edit."""
+    sim = _world(tmp_path)
+    rows = _rows_of_1000(sim)
+    shutil.move(str(rows / "row-tk2z"), str(rows / "moved"))
+    _set_value(rows / "moved", "tk900z")
+
+    assert ("conflict", "1000") in _changes(sim)
+    _push(sim)
+    assert _row_value(sim, HTTP_1, "1001") == "tk3z"
+
+    _pull(sim)  # tracks the row at its new path, keeping the local edit
+    assert ("modified", "1000") in _changes(sim)
+    _push(sim)
+    assert _row_value(sim, HTTP_1, "1001") == "tk900z"
+
+
+@pytest.mark.parametrize("edited", [False, True], ids=["unedited", "edited"])
+def test_pull_follows_a_moved_row_whose_remote_row_was_deleted(
+    tmp_path: Path, edited: bool
+) -> None:
+    """Round 7 P1 (Astra): move, delete remotely, plain pull, push -- never POSTed."""
+    sim = _world(tmp_path)
+    rows = _rows_of_1000(sim)
+    shutil.move(str(rows / "row-tk2z"), str(rows / "moved"))
+    if edited:
+        _set_value(rows / "moved", "tk900z")
+    remote_rows = sim.api.remote[PROD][HTTP_1]["rows"]
+    remote_rows[:] = [r for r in remote_rows if r["id"] != "1001"]
+
+    _pull(sim)
+
+    assert (rows / "moved").exists() is edited
+    if edited:
+        assert ("remote_deleted", "1000") in _changes(sim)
+    assert _push(sim)["created"] == 0
+    assert [r["id"] for r in sim.api.remote[PROD][HTTP_1]["rows"]] == ["1002"]
+
+
+def test_pull_keeps_ambiguous_carriers_of_a_remotely_deleted_row(tmp_path: Path) -> None:
+    """Round 7 P1: the id is never forgotten while dirs carry it."""
+    sim = _world(tmp_path)
+    rows = _rows_of_1000(sim)
+    shutil.copytree(rows / "row-tk2z", rows / "a")
+    shutil.copytree(rows / "row-tk2z", rows / "b")
+    shutil.rmtree(rows / "row-tk2z")
+    remote_rows = sim.api.remote[PROD][HTTP_1]["rows"]
+    remote_rows[:] = [r for r in remote_rows if r["id"] != "1001"]
+
+    _pull(sim)
+
+    assert (rows / "a").exists() and (rows / "b").exists()
+    (entry,) = [c for c in load_manifest(sim.root).configurations if c.id == "1000"]
+    assert "1001" in {r.id for r in entry.rows}
+    result = _push(sim, force=True)
+    assert (result["created"], result["deleted"]) == (0, 0)
+    assert [r["id"] for r in sim.api.remote[PROD][HTTP_1]["rows"]] == ["1002"]

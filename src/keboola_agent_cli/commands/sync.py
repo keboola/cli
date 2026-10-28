@@ -28,6 +28,8 @@ from ._project_ref import PROJECT_HELP
 from ._sync_clone_render import clone_summary, clone_total, print_clone_result
 from ._sync_push_render import (
     REMOTE_CHANGE_LABELS,
+    dry_run_line,
+    dry_run_one_liner,
     emit_companion_warnings,
     print_dry_run_refusals,
     print_push_skips,
@@ -390,12 +392,8 @@ def _format_push_result(formatter: Any, result: dict) -> None:
         _format_orphaned(formatter, result.get("orphaned", []))
         return
     if status == "dry_run":
-        summary = result.get("summary", {})
-        formatter.console.print(
-            f"  Would create {summary.get('added', 0)}, "
-            f"update {summary.get('modified', 0)}, "
-            f"delete {summary.get('deleted', 0)}"
-        )
+        formatter.console.print(f"  {dry_run_line(result)}")
+        print_dry_run_refusals(formatter, result)
         print_push_skips(formatter, result)
         _format_never_fetched(formatter, result.get("never_fetched", []))
         _format_orphaned(formatter, result.get("orphaned", []))
@@ -494,8 +492,7 @@ def _push_one_liner(result: dict) -> str:
     if status == "no_changes":
         return f"[green]nothing to push[/green]{held}"
     if status == "dry_run":
-        s = result.get("summary", {})
-        return f"would: +{s.get('added', 0)} ~{s.get('modified', 0)} -{s.get('deleted', 0)}{held}"
+        return f"{dry_run_one_liner(result)}{held}"
     c = result.get("created", 0)
     u = result.get("updated", 0)
     d = result.get("deleted", 0)

@@ -349,6 +349,7 @@ def pull_config_rows(
     # A row dir carrying an id is adopted by that id under a tracked parent
     # too, unless a manifest row owns its path (D22 guards a differing file).
     prefix = f"{ctx.component_id}/{ctx.config_id}/"
+    carried = _follow_moved_rows(ctx.config_dir, existing_rows, prefix, dirs)
     owned = {v["path"] for k, v in existing_rows.items() if k.startswith(prefix)}
     adopted = {rid: path for rid, path in dirs.by_id.items() if path not in owned}
     used: set[str] = set()
@@ -380,8 +381,36 @@ def pull_config_rows(
         dry_run=ctx.dry_run,
         rel_path=ctx.rel_path,
         pull_details=pull_details,
+        carried=carried,
     )
     return result
+
+
+def _follow_moved_rows(
+    config_dir: Path, existing_rows: dict[str, dict[str, str]], prefix: str, dirs: IdDirs
+) -> set[str]:
+    """Point each tracked row whose dir is gone at the one dir that now carries its id (round 7).
+
+    A row dir moved (renamed) by the user is that row at its new path: pull
+    then writes into it, and the stale sweep judges it there -- unedited and
+    gone on the remote, it is removed; edited, it is kept and reported.
+    Before, the sweep looked at the old path only, dropped the entry and left
+    the moved dir, which the next push created as a new row. Returns the ids
+    of tracked rows whose dir is gone while two or more dirs carry the id:
+    those entries are never swept (the id is never forgotten while a dir
+    carries it).
+    """
+    ambiguous: set[str] = set()
+    owned = {v["path"] for k, v in existing_rows.items() if k.startswith(prefix)}
+    for key, tracked in existing_rows.items():
+        row_id = key.removeprefix(prefix)
+        if row_id == key or (config_dir / tracked["path"] / CONFIG_FILENAME).exists():
+            continue
+        if row_id in dirs.ambiguous:
+            ambiguous.add(row_id)
+        elif row_id in dirs.by_id and dirs.by_id[row_id] not in owned:
+            tracked["path"] = dirs.by_id[row_id]
+    return ambiguous
 
 
 def _pull_row(

@@ -172,11 +172,22 @@ def _file_row_id(entry: dict[str, Any]) -> str:
     return str(meta.get("row_id") or "") if isinstance(meta, dict) else ""
 
 
+def _identity(entry: dict[str, Any]) -> str:
+    """The row id a row dir stands for: its manifest id when tracked, else its file's id.
+
+    A tracked row is the row the manifest says, whatever its file carries (a
+    row created before push wrote ``row_id`` may carry a copied one).
+    """
+    if not entry.get("untracked") and entry.get("row_id"):
+        return str(entry["row_id"])
+    return _file_row_id(entry)
+
+
 def _carriers(local_rows: list[dict[str, Any]]) -> dict[tuple[str, str, str], list[str]]:
-    """``(component, parent id, row id)`` -> the row dirs whose file carries that id."""
+    """``(component, parent id, row id)`` -> the row dirs that stand for that row."""
     paths: dict[tuple[str, str, str], list[str]] = {}
     for entry in local_rows:
-        row_id = _file_row_id(entry)
+        row_id = _identity(entry)
         if entry.get("parent_config_id") and row_id:
             key = (entry["component_id"], str(entry["parent_config_id"]), row_id)
             paths.setdefault(key, []).append(str(entry.get("path", "")))
@@ -215,15 +226,19 @@ def settle_row_identities(
 ) -> list[ConfigChange]:
     """Decide what each untracked row dir is, by the row id its file carries (round 5, 6).
 
-    - Two or more row dirs of one config carrying the same row id say nothing
-      about which one is the row: pull writes into neither (its ambiguous-id
-      rule) and push creates neither -- each untracked one becomes a
-      ``conflict`` naming every carrier; a tracked dir keeps its own diff.
+    - Two or more row dirs of one config standing for the same row id (a
+      tracked one by its manifest id, an untracked one by its file) say
+      nothing about which one is the row: pull writes into neither (its
+      ambiguous-id rule), push creates, updates and deletes none -- EVERY
+      carrier becomes a ``conflict`` naming them all, and the id is taken out
+      of the delete inference (a tracked row whose dir is gone while copies
+      carry its id is never ``deleted``).
     - A row dir that ALONE carries an id the config knows -- a row of the
       remote config, a row the manifest tracks (its own dir gone), or an id
       recorded when the config was registered by its id (``adopted_row_ids``)
       -- IS that row (*adopt_ids*, any push but the promote path): diffed by
-      id with an unknown base, ``remote_deleted`` when the remote lost it,
+      id with an unknown base (a moved dir has no proven baseline at its new
+      path), ``remote_deleted`` when the remote lost it,
       never POSTed as a new row. Resolving an ambiguity therefore never
       creates the row again, and the dir that lost its ``row_id`` is new.
     - Any other id is a copied placeholder: the row is new.
@@ -240,21 +255,26 @@ def settle_row_identities(
     conflicts: list[ConfigChange] = []
     kept: list[dict[str, Any]] = []
     for entry in found.local_rows:
-        row_id = _file_row_id(entry)
+        row_id = _identity(entry)
         key = (entry["component_id"], str(entry.get("parent_config_id") or ""), row_id)
-        if not entry.get("untracked") or not key[1] or not row_id:
-            kept.append(entry)
-            continue
-        if len(carriers.get(key, [])) > 1:
+        remote_key = f"{key[0]}/{key[1]}/rows/{row_id}"
+        if key[1] and row_id and len(carriers.get(key, [])) > 1:
+            # Every carrier -- a tracked one too -- is a conflict, and the row
+            # is never inferred deleted while dirs carry its id (round 7).
             conflicts.append(_ambiguity_conflict(entry, key, carriers[key]))
+            found.tracked_row_keys.discard(remote_key)
             continue
         kept.append(entry)
-        remote_key = f"{key[0]}/{key[1]}/rows/{row_id}"
-        if entry.get("row_id") or not adopt_ids:
+        if not entry.get("untracked") or not key[1] or not row_id or not adopt_ids:
             continue
+        if entry.get("row_id"):
+            continue  # an adopted config's row: already diffed by its id
         if remote_key in remote_rows or row_id in known.get(key[:2], set()):
+            # A lone carrier of a known id IS that row. At a path other than
+            # its tracked one nothing proves its baseline: unknown, so any
+            # difference is a conflict until a pull records it there (round 7).
             entry["row_id"] = row_id
-            found.base_hashes.setdefault(remote_key, UNKNOWN_BASE_HASH)
+            found.base_hashes[remote_key] = UNKNOWN_BASE_HASH
             if remote_key not in remote_rows:
                 found.gone_row_keys.add(remote_key)
     found.local_rows[:] = kept

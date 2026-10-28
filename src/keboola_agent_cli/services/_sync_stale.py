@@ -210,6 +210,7 @@ def sweep_stale_rows(
     dry_run: bool,
     rel_path: str,
     pull_details: list[dict[str, str]],
+    carried: set[str] | None = None,
 ) -> list[ManifestConfigRow]:
     """Handle the tracked rows of one config that are gone from the remote.
 
@@ -219,6 +220,9 @@ def sweep_stale_rows(
     again under a new id (issue #792 H). Now an unedited row directory is
     deleted (``removed``). An edited one is kept with its entry (``skipped``),
     so diff keeps reporting it as ``remote_deleted``; ``--theirs`` deletes it.
+
+    *carried* holds the ids whose own dir is gone while several dirs carry
+    them: such an entry is always kept.
 
     Returns the entries to keep in the manifest.
     """
@@ -236,9 +240,13 @@ def sweep_stale_rows(
         edited = row_file.exists() and (
             bool(unknown_base) or (bool(pull_hash) and service._file_hash(row_file) != pull_hash)
         )
+        # Its dir is gone but copies carry its id (*carried*): which one is
+        # the row is unknown, so the entry is kept -- and every copy -- until
+        # the user resolves it (round 7). ``--theirs`` does not decide it either.
+        edited = edited or row_id in (carried or set())
         path = f"{rel_path}/{tracked['path']}"
         detail = {"component_id": row_key_prefix.split("/", 1)[0], "config_name": "", "path": path}
-        if edited and not theirs:
+        if edited and (not theirs or row_id in (carried or set())):
             kept.append(
                 ManifestConfigRow(
                     id=row_id,

@@ -10,6 +10,7 @@ removes, CLI-25).
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from rich.markup import escape
@@ -107,6 +108,55 @@ def push_total(result: dict[str, Any]) -> int:
     return created + len(result.get("errors", []))
 
 
+@dataclass(frozen=True)
+class DryRunCounts:
+    """What a push dry run planned, what the real run would refuse, and the rest.
+
+    Every refusal is a config create (``COMPANION_UNREADABLE``), so the
+    executable creates are the planned ones minus the refused ones.
+    """
+
+    added: int
+    modified: int
+    deleted: int
+    refused: int
+
+    @property
+    def planned(self) -> int:
+        return self.added + self.modified + self.deleted
+
+    @property
+    def creates(self) -> int:
+        return max(self.added - self.refused, 0)
+
+    @property
+    def executable(self) -> int:
+        return self.planned - self.refused
+
+
+def dry_run_counts(result: dict[str, Any]) -> DryRunCounts:
+    summary = result.get("summary", {})
+    return DryRunCounts(
+        added=summary.get("added", 0),
+        modified=summary.get("modified", 0),
+        deleted=summary.get("deleted", 0),
+        refused=len(result.get("errors", [])),
+    )
+
+
+def dry_run_line(result: dict[str, Any]) -> str:
+    """The per-project dry-run line (``--all-projects``): executable counts, then refusals."""
+    n = dry_run_counts(result)
+    refused = f", [red]{n.refused} refused[/red]" if n.refused else ""
+    return f"Would create {n.creates}, update {n.modified}, delete {n.deleted}{refused}"
+
+
+def dry_run_one_liner(result: dict[str, Any]) -> str:
+    n = dry_run_counts(result)
+    refused = f", [red]{n.refused} refused[/red]" if n.refused else ""
+    return f"would: +{n.creates} ~{n.modified} -{n.deleted}{refused}"
+
+
 def push_summary(result: dict[str, Any]) -> str:
     """The headline text of a single-project ``sync push``.
 
@@ -117,14 +167,10 @@ def push_summary(result: dict[str, Any]) -> str:
     if status == "no_changes":
         return "0 config(s) pushed, no changes."
     if status == "dry_run":
-        summary = result.get("summary", {})
-        added, modified = summary.get("added", 0), summary.get("modified", 0)
-        deleted = summary.get("deleted", 0)
-        planned = added + modified + deleted
-        refused = len(result.get("errors", []))
+        n = dry_run_counts(result)
         return (
-            f"{planned} config(s) planned, {refused} refused, {planned - refused} would be "
-            f"pushed: {added} created, {modified} updated, {deleted} deleted."
+            f"{n.planned} config(s) planned, {n.refused} refused, {n.executable} would be "
+            f"pushed: {n.creates} created, {n.modified} updated, {n.deleted} deleted."
         )
     created, updated = result.get("created", 0), result.get("updated", 0)
     deleted = result.get("deleted", 0)
