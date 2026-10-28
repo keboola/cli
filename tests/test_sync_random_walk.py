@@ -1073,6 +1073,9 @@ class Sim:
             for item in result.get(key) or []:
                 if isinstance(item, dict) and item.get("config_id"):
                     listed_ids.setdefault(str(item["config_id"]), set()).add(key)
+        # A row added on the remote is reported under its config (D5).
+        for item in result.get("remote_only_rows") or []:
+            listed_ids.setdefault(str(item["parent_config_id"]), set()).add("remote_only_rows")
         tree = self.tree(branch)
         promote = branch == DEV and not tree.is_dir()
         if promote:  # push --branch DEV promotes main/
@@ -1242,14 +1245,11 @@ def shrink(steps: list[Step], kind: str, masks: frozenset[str] = frozenset()) ->
 # exercising that path again.
 MASKS = frozenset(
     {
-        "remote-row-add-invisible",
-        "untracked-row-overwrite",
         # Not a bug by itself: after `pull --branch DEV` main/ is orphaned by
         # design (#649), so the masked user keeps working in dev/ with
         # --branch DEV.
         "pull-dev-orphans-main",
         "sparse-disabled-reenable",
-        "force-delete-over-remote-edit",
         "move-is-delete-create",  # #792 I
     }
 )
@@ -1413,19 +1413,17 @@ def test_finding_row_edit_in_untracked_config_is_visible(tmp_path: Path) -> None
     assert any(cid == "1003" for _, cid in _changes(sim))
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "FINDING remote-row-add-invisible: a row added on the remote (UI) "
-        "has no manifest entry, so compute_row_changeset never reports it: "
-        "diff is clean and pull writes it without any detail entry. A user "
-        "reviewing `sync diff` before `sync pull` does not see it."
-    ),
-)
 def test_finding_remote_added_row_is_visible_in_diff(tmp_path: Path) -> None:
+    """Was FINDING remote-row-add-invisible: a row added on the remote (UI) has no
+    manifest entry, so compute_row_changeset never reported it: diff was clean and
+    pull wrote it without any detail entry. Diff now lists it under
+    ``remote_only_rows[]`` (no new change_type, D5) and pull reports the write."""
     sim = _world(tmp_path)
     sim.api.remote[PROD][HTTP_1]["rows"].append(sim._remote_row("Row extra"))
-    assert any(cid == "1000" for _, cid in _changes(sim))
+    diff = sim.svc.diff(alias="prod", project_root=sim.root)
+    assert [r["parent_config_id"] for r in diff["remote_only_rows"]] == ["1000"]
+    pulled = _pull(sim)
+    assert any(d.get("row_id") and d["action"] == "new" for d in pulled["details"])
 
 
 def test_finding_promote_then_pull_keeps_local_edit(tmp_path: Path) -> None:
@@ -1481,7 +1479,9 @@ def test_finding_untracked_row_edit_survives_dev_pull(tmp_path: Path) -> None:
     --branch DEV` overwrites it without a conflict or skip (sync_service.py:931 write
     branch). Fixed by D15: a row pull rediscovers by its row id and has no baseline for
     keeps a local file that differs from the remote (skipped); only --theirs overwrites
-    it. The walk keeps its mask until a seed sweep without it is green."""
+    it. The walk's mask is gone since group 3 (D6, D7): a re-target keeps the
+    dropped rows' bookkeeping for their tree (walk seed 210) and a promote push
+    sees the rows production deleted (seed 257) -- test_sync_rows_and_deletes.py."""
     sim = _world(tmp_path)
     rows = sim.api.remote[PROD][HTTP_2]["rows"]
     sim.api.remote[PROD][HTTP_2]["rows"] = [r for r in rows if r["name"] != "Row tk11z"]
@@ -1535,17 +1535,11 @@ def test_finding_reenable_by_removing_flag_is_pushed_or_reported(tmp_path: Path)
     assert sim.api.remote[PROD][SQL_1]["isDisabled"] is False or _changes(sim)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "FINDING force-delete-over-remote-edit: a config deleted locally and "
-        "edited on the remote since the last pull diffs as plain 'deleted' "
-        "(not a conflict), so `push --force` deletes it and the remote edit "
-        "goes with it. Everywhere else --force only enables deletes and "
-        "never overrides a conflict (plan_push, _sync_push_ops.py:155)."
-    ),
-)
 def test_finding_force_push_does_not_delete_remotely_edited_config(tmp_path: Path) -> None:
+    """Was FINDING force-delete-over-remote-edit: a config deleted locally and
+    edited on the remote since the last pull diffed as plain 'deleted' (not a
+    conflict), so `push --force` deleted it and the remote edit went with it.
+    A local delete is three-way now (D1): a conflict, which --force never overrides."""
     sim = _world(tmp_path)
     shutil.rmtree(_dir(sim, "transformation/keboola.snowflake-transformation/name-tk16z"))
     params = sim.api.remote[PROD][SQL_1]["configuration"]["parameters"]
@@ -1554,17 +1548,12 @@ def test_finding_force_push_does_not_delete_remotely_edited_config(tmp_path: Pat
     assert SQL_1 in sim.api.remote[PROD], "the unpulled remote edit was deleted"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "FINDING force-delete-row-errors: `push --force` of a deleted config "
-        "dir with rows deletes the config first and then each row; the row "
-        "DELETEs answer 404 (the config is already gone) and land in "
-        "errors[], so a fully successful delete reports failures and exits "
-        "1 (#745 partial-failure rule)."
-    ),
-)
 def test_finding_force_delete_of_config_with_rows_reports_no_errors(tmp_path: Path) -> None:
+    """Was FINDING force-delete-row-errors: `push --force` of a deleted config dir
+    with rows deleted the config first and then each row; the row DELETEs answered
+    404 (the config was already gone) and landed in errors[], so a fully successful
+    delete reported failures and exited 1. The config's DELETE now covers its rows
+    (D3): no row DELETE is sent."""
     sim = _world(tmp_path)
     shutil.rmtree(_dir(sim, "extractor/keboola.ex-http/name-tk13z"))
     result = _push(sim, force=True)
@@ -1572,17 +1561,11 @@ def test_finding_force_delete_of_config_with_rows_reports_no_errors(tmp_path: Pa
     assert result["errors"] == []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "FINDING force-delete-over-remote-edit (row variant): a row dir deleted "
-        "locally whose row was edited on the remote since the last pull diffs "
-        "as plain 'deleted' (compute_row_changeset never weighs the remote "
-        "change), so `push --force` deletes the row and the remote edit with "
-        "it. Deferred with the config variant (group 4)."
-    ),
-)
 def test_finding_force_push_does_not_delete_remotely_edited_row(tmp_path: Path) -> None:
+    """Was FINDING force-delete-over-remote-edit (row variant): a row dir deleted
+    locally whose row was edited on the remote since the last pull diffed as plain
+    'deleted' (compute_row_changeset never weighed the remote change), so `push
+    --force` deleted the row and the remote edit with it. Three-way now (D1)."""
     sim = _world(tmp_path)
     shutil.rmtree(_dir(sim, "extractor/keboola.ex-http/name-tk6z/rows/row-tk4z"))
     (row,) = [r for r in sim.api.remote[PROD][HTTP_1]["rows"] if r["name"] == "Row tk4z"]

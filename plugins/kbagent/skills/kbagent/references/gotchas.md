@@ -226,6 +226,59 @@ These lists keep `error`, because their entries are not failed items with an err
   row folder moved to another name and edited, whose remote row was edited too, is
   `SYNC_CONFLICT` -- before, the check looked only at the old folder and missed it.
 
+## `sync push --force` never deletes a remote change; rows added in the UI are reported
+
+*(since vNEXT)*
+
+- **A local delete is three-way.** A config or row folder you deleted is `deleted` only
+  while the remote still equals the baseline of the last pull of that branch. Edited,
+  renamed or disabled in the UI since -- or, for a config, any of its rows edited, added or
+  deleted -- it is a `conflict`, and so is a delete with no trustworthy baseline recorded.
+  `push --force` never deletes a conflict. Before, `push --force` deleted the config (or
+  row) and the remote edit with it. The conflict's `details` start with `Cannot delete
+  <component>/<config>[/rows/<row>] on branch <target>` and say the next step: `kbagent sync
+  pull` (`--branch <id>` for a dev branch), review the restored files, delete them again,
+  `sync push --force`.
+- **A config delete covers its rows.** Push sends one DELETE for the config and none for its
+  rows; the config change lists them as `covered_rows` (in `--dry-run` `changes`,
+  `skipped_deletions` and `pushed_details`), and `--dry-run` `summary.deleted` counts the
+  config once. Before, each row DELETE answered 404 after the config was gone, landed in
+  `errors[]` and a successful push exited 1. A failed or timed-out config DELETE deletes no
+  row and keeps the manifest entry: run the same `push --force` again.
+- **`remote_only_rows[]`** (new `--json` key of `sync diff`, beside `remote_only[]`, with a
+  `summary.remote_only_rows` count): rows added on the remote under a config the tree
+  tracks, each `{component_id, parent_config_id, row_id, row_name}`. Before, such a row was
+  invisible to `sync diff`. It is not a `changes[]` item (no new `change_type`); `sync pull`
+  fetches it and push never creates or deletes it. `sync pull` `details[]` now has a record
+  for every row file it writes (`action` `new` or `updated`, with `row_id`).
+- **`summary.unchanged` counts configs only**: it used to subtract row changes from the
+  config count and could go negative.
+- **After `sync pull --branch <dev>`, a plain `sync pull` no longer leaves a deleted row
+  behind.** Production rows of `main/` keep their baselines in the manifest's branch
+  metadata (`retired_rows`), so a row production deleted meanwhile is removed (or kept and
+  reported when edited). Before, its folder stayed with no manifest entry and the next
+  `sync push` created the row again.
+- **A promote push (`sync push --branch <dev>` reading `main/`) sees the rows production
+  deleted.** A dev row whose production copy a pull removed is `deleted`
+  (`skipped_deletions` without `--force`, three-way with it -- `conflict` when the dev row
+  changed or no baseline is recorded). The config entry records these rows under
+  `deleted_rows`. A dev row `main/` never had is in `remote_only_rows[]`. Before, the diff
+  was silent about both.
+- **Ignoring a component keeps local work** (#927). `sync pull` after a component is added to
+  `ignoredComponents` deletes only folders it can prove unchanged. An edited folder, or one
+  with no baseline (an adopted config, a row of unknown base), is kept with its manifest
+  entry and reported `skipped` (reason names the component), also with `--force` and
+  `--theirs`. Before, the folders were deleted with the unpushed edits. After un-ignoring,
+  the kept folder diffs against its old baseline (`modified`, or `conflict` when the remote
+  changed meanwhile). Shared SQL workspaces keep their rule: `--theirs` deletes them.
+- **Limits, not fixed:** an edit that changes ONLY an encrypted value (`KBC::...`) is
+  invisible to the comparison, so such a config is still `deleted`; and the Storage API has
+  no conditional delete, so a UI edit made between `sync diff` and the DELETE is not
+  protected. Check `sync diff` right before `sync push --force`.
+- **On an older version**: run `kbagent sync pull` before every `sync push --force`, and
+  `sync diff` after it; check the UI for rows added since the last pull; copy edited
+  folders aside before adding their component to `ignoredComponents`.
+
 ## `sync push --branch <dev>` from `main/` no longer changes what production sees
 
 *(since vNEXT)*

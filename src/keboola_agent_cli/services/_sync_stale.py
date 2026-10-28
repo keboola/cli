@@ -16,10 +16,18 @@ directories. Two data-loss paths used to hide in that sweep:
   ``skipped``), ``--force`` aborts with SYNC_CONFLICT, and only ``--theirs``
   (remote wins) still deletes it.
 
-An ``ignored`` entry is deleted even when edited, except a shared SQL
-workspace (CLI-25): turning ``syncWorkspaces`` off must not delete SQL typed
-into its ``_config.yml`` and never pushed. Plain pull and ``--force`` keep such
-an entry and report it as ``skipped``; only ``--theirs`` deletes it.
+An ``ignored`` entry gets the same keep rules (issue #927, D8): adding a
+component to ``ignoredComponents`` used to delete its directories with every
+unpushed edit in them. Now a directory pull cannot prove unchanged -- edited,
+or with no baseline to compare (an adopted config, a row of unknown base) --
+is kept with its manifest entry unchanged (row baselines and promote
+associations included) and reported ``skipped``; an unchanged one is cleaned
+up with its entry, as #689 designed. ``--theirs`` does not delete kept work
+either: ignoring a component is no evidence that its remote content is gone.
+While ignored the entry stays out of diff and push; once un-ignored its files
+are compared with the preserved baseline, so a remote change made meanwhile
+is a conflict, never a new baseline. The one exception is a shared SQL
+workspace (CLI-25, ``syncWorkspaces`` turned off): ``--theirs`` deletes it.
 """
 
 from __future__ import annotations
@@ -34,7 +42,7 @@ from typing import TYPE_CHECKING, Any
 from ..constants import CONFIG_FILENAME
 from ..sync.branch_scope import UNKNOWN_BASE_KEY
 from ..sync.manifest import ManifestConfigRow, ManifestConfiguration
-from ._sync_companions import config_locally_modified
+from ._sync_companions import companion_baseline, config_locally_modified, current_companions
 from ._sync_workspace import SANDBOXES_COMPONENT_ID
 
 if TYPE_CHECKING:
@@ -45,6 +53,11 @@ logger = logging.getLogger(__name__)
 REMOTE_DELETED_REASON = "locally modified, deleted on remote"
 WORKSPACE_SYNC_OFF_REASON = (
     "locally modified, workspace sync is off; set syncWorkspaces and push, or pull --theirs"
+)
+IGNORED_COMPONENT_REASON = (
+    "locally modified or not provably unchanged, and {component_id} is in ignoredComponents; "
+    "remove it from ignoredComponents to sync this config again, or delete the directory "
+    "yourself"
 )
 
 
@@ -59,7 +72,16 @@ class StaleEntry:
     @property
     def keep_reason(self) -> str:
         """The ``skipped`` reason pull reports when it keeps this edited entry."""
-        return REMOTE_DELETED_REASON if self.action == "removed" else WORKSPACE_SYNC_OFF_REASON
+        if self.action == "removed":
+            return REMOTE_DELETED_REASON
+        if self.entry.component_id == SANDBOXES_COMPONENT_ID:
+            return WORKSPACE_SYNC_OFF_REASON
+        return IGNORED_COMPONENT_REASON.format(component_id=self.entry.component_id)
+
+    @property
+    def theirs_deletes(self) -> bool:
+        """``--theirs`` deletes this entry's dir even when it holds local work (D8)."""
+        return self.action == "removed" or self.entry.component_id == SANDBOXES_COMPONENT_ID
 
 
 def _entry_locally_modified(
@@ -254,12 +276,37 @@ def find_stale_entries(
         if f"{entry.component_id}/{entry.id}" in remote_keys:
             continue
         action = "ignored" if entry.component_id in ignored_components else "removed"
-        guarded = action == "removed" or entry.component_id == SANDBOXES_COMPONENT_ID
-        modified = guarded and _entry_locally_modified(
-            service, branch_dir / entry.path, entry, other_configs - {branch_dir / entry.path}
+        config_dir = branch_dir / entry.path
+        # Every stale entry is checked, an ignored one too (#927); for an
+        # ignored one "no baseline" counts as local work (D8).
+        modified = (action == "ignored" and _unproven(service, config_dir, entry)) or (
+            _entry_locally_modified(service, config_dir, entry, other_configs - {config_dir})
         )
         stale.append(StaleEntry(entry=entry, action=action, locally_modified=modified))
     return stale
+
+
+def _unproven(service: SyncService, config_dir: Path, entry: ManifestConfiguration) -> bool:
+    """True iff *config_dir* holds a file whose baseline cannot prove it unchanged (D8).
+
+    :func:`_entry_locally_modified` reads a missing ``pull_hash`` as "not
+    modified" -- the conservative reading for a pull that writes the remote
+    over the file. For a sweep that DELETES the file it is the wrong one:
+    without a baseline nothing proves the file holds no local work (an
+    adopted config, a create checkpoint, a legacy companion map, a row
+    without a hash).
+    """
+    companions = current_companions(service, config_dir, entry.component_id)
+    if not entry.metadata.get("pull_hash"):
+        return (config_dir / CONFIG_FILENAME).exists() or bool(companions)
+    base = companion_baseline(entry.component_id, entry.metadata)
+    if not base.known and set(companions) - set(base.hashes):
+        return True
+    return any(
+        not (row.metadata or {}).get("pull_hash")
+        and (config_dir / row.path / CONFIG_FILENAME).exists()
+        for row in entry.rows
+    )
 
 
 def reserved_paths(stale: list[StaleEntry], branch_dir: Path) -> set[str]:
@@ -313,8 +360,8 @@ def _keep_reasons(
 
     Decided for ALL entries before anything is deleted, so the outcome never
     depends on manifest order. Kept: a symlinked config dir, one with a link
-    anywhere inside it, and an edited one (unless ``--theirs``) -- then, to a
-    fixed point, every config dir that holds a config that stays (written by
+    anywhere inside it, and an edited one (unless ``--theirs`` may delete it,
+    D8) -- then, to a fixed point, every config dir that holds a config that stays (written by
     this pull or kept here), by path or by real location (:func:`holds`).
     """
     others = frozenset(branch_dir / p for p in live_paths | {x.entry.path for x in stale} if p)
@@ -328,7 +375,7 @@ def _keep_reasons(
             reasons[index] = SYMLINK_ROOT_REASON
         elif tree.symlinks:
             reasons[index] = SYMLINK_INSIDE_REASON
-        elif item.locally_modified and not theirs:
+        elif item.locally_modified and not (theirs and item.theirs_deletes):
             reasons[index] = item.keep_reason
     changed = True
     while changed:
@@ -367,8 +414,8 @@ def apply_stale_sweep(
     """Report stale entries and delete their directories, safely, in two passes (round 12).
 
     Pass 1 (:func:`_keep_reasons`) decides every keep: an edited entry
-    (unless ``--theirs``), a symlinked config dir or one with a link inside,
-    and a dir that holds a config that stays. A kept entry's manifest entry is
+    (unless ``--theirs`` may delete it, D8), a symlinked config dir or one
+    with a link inside, and a dir that holds a config that stays. A kept entry's manifest entry is
     carried over unchanged (the manifest still matches disk) and it is
     reported ``skipped`` with its reason. Pass 2 deletes the rest.
     ``--force`` never reaches an edited entry -- the conflict guard has
@@ -413,6 +460,7 @@ def sweep_stale_rows(
     rel_path: str,
     pull_details: list[dict[str, str]],
     carried: set[str] | None = None,
+    deleted_rows: dict[str, str] | None = None,
 ) -> list[ManifestConfigRow]:
     """Handle the tracked rows of one config that are gone from the remote.
 
@@ -425,6 +473,10 @@ def sweep_stale_rows(
 
     *carried* holds the ids whose own dir is gone while several dirs carry
     them: such an entry is always kept.
+
+    *deleted_rows* receives, for every row removed, its id and last
+    ``pull_config_hash``: the record a later promote push weighs a target row
+    with the same id against (D7).
 
     Returns the entries to keep in the manifest.
     """
@@ -463,6 +515,8 @@ def sweep_stale_rows(
             pull_details.append({**detail, "action": "skipped", "reason": REMOTE_DELETED_REASON})
             continue
         pull_details.append({**detail, "action": "removed"})
+        if deleted_rows is not None:
+            deleted_rows[row_id] = tracked["pull_config_hash"]
         if not dry_run and row_dir.is_dir():
             shutil.rmtree(row_dir)
     return kept
