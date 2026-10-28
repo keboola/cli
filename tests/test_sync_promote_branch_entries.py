@@ -2597,3 +2597,56 @@ def test_source_row_lookup_ignores_an_unregistered_branch_entry(tmp_path: Path) 
         tmp_path, manifest, lambda d: yaml.safe_load((d / CONFIG_FILE).read_text()), "main", [dev]
     )
     assert [r["source_row_id"] for r in found] == ["r2"]
+
+
+# ===========================================================================
+# Round 15 (risk 74): rows promoted before production created them
+# ===========================================================================
+
+
+def test_rows_promoted_before_production_created_them_map_to_the_dev_rows(
+    tmp_path: Path,
+) -> None:
+    v = VARIANTS["rows"]
+    w = World(tmp_path)
+    w.api.types[v.component_id] = v.component_type
+    w.api.types["keboola.flow"] = "other"
+    w.init()
+    w.pull()
+    author_config(w.root / "main", v)  # a config with rows, no ids
+    for _ in range(2):  # a second push is a no-op once every row exists
+        w.push(branch=DEV)  # 1. promoted first: D, d1
+    for _ in range(2):
+        w.push()  # 2. then created on production: P, r1
+
+    prod_ext = _prod_id_of(w, v.component_id)
+    dev_ext = _dev_id_of(w, v.component_id)
+    (r1,) = [
+        r["id"] for r in w.api.get(PROD, v.component_id, prod_ext)["rows"] if r["name"] == "Row 1"
+    ]
+    (d1,) = [
+        r["id"] for r in w.api.get(DEV, v.component_id, dev_ext)["rows"] if r["name"] == "Row 1"
+    ]
+
+    # 3. a flow selecting P / [r1], promoted
+    body = _flow_body(v.component_id, prod_ext)
+    body["tasks"][0]["task"]["configRowIds"] = [r1]
+    w.api.remote[PROD][("keboola.flow", "cfg-flow")] = {
+        "id": "cfg-flow",
+        "name": "Nightly",
+        "description": "",
+        "configuration": body,
+        "rows": [],
+        "isDisabled": False,
+    }
+    w.pull()
+    w.push(branch=DEV)
+
+    task = _dev_flow(w)["configuration"]["tasks"][0]["task"]
+    assert (task["configId"], task["configRowIds"]) == (dev_ext, [d1])
+    assert not any(c.metadata.get("rebind_pending") for c in load_manifest(w.root).configurations)
+
+
+def _prod_id_of(w: World, component_id: str) -> str:
+    (prod_id,) = [cid for comp, cid in w.api.remote[PROD] if comp == component_id]
+    return prod_id

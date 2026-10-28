@@ -30,6 +30,7 @@ from ._sync_baseline import apply_stamp, config_baseline
 from ._sync_models import REBIND_PENDING_KEY, CreatedConfig, CreateOutcome
 from ._sync_writeback import (
     link_promote_entries,
+    link_promote_rows,
     propagate_kbc_metadata,
     writeback_after_push,
     writeback_create_config_in_manifest,
@@ -201,6 +202,7 @@ def record_created_config(
             path=config_path_str,
             config_id=new_id,
         )
+        link_promote_rows(manifest, tree=target.branch_path, source=entry)
         ledger.created_configs.append(
             CreatedConfig(
                 component_id=component_id, config_id=new_id, config_dir=outcome.config_dir

@@ -134,7 +134,9 @@ These lists keep `error`, because their entries are not failed items with an err
   one. Its new rows are pushed by the second promote push, like on production. A row
   added on production to a config already promoted (and pulled into `main/`) is created
   under the dev copy with its production row id recorded, so a flow or other reference
-  that selects it switches to the new dev row in the same push. An edit to
+  that selects it switches to the new dev row in the same push. Rows promoted before
+  production created them are linked to their production ids when production does, so
+  a reference to such a production row maps to the dev row that already exists. An edit to
   it after the promote is `modified`, not `modified` plus `conflict`. Production
   `sync diff` lists the record under `orphaned` with reason `promoted_from_this_tree`
   (nothing to do).

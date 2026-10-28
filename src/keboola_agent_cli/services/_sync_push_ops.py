@@ -43,6 +43,7 @@ from ._sync_data_app import create_synced_data_app
 from ._sync_models import PROMOTED_ROW_KEY, CreateOutcome
 from ._sync_workspace import SANDBOXES_COMPONENT_ID, warn_on_backend_size_change
 from ._sync_writeback import (
+    link_promote_rows,
     manifest_folder,
     promote_shadow,
     writeback_after_push,
@@ -455,6 +456,10 @@ def push_row_change(
             source_row_id=(source_row_id or row_id) if remap is not None else "",
             checkpoint=checkpoint,
             remap=remap,
+            # A create on the source tree's own branch: its promote entries'
+            # rows learn the id they came from (risk 74).
+            link_rows_in=None if remap is not None else manifest,
+            source_tree=source_branch_path,
         )
 
     if change_type == "modified":
@@ -495,12 +500,16 @@ def _push_create_row(
     source_row_id: str = "",
     checkpoint: Callable[[str], None] | None = None,
     remap: PromoteRemap | None = None,
+    link_rows_in: Manifest | None = None,
+    source_tree: str = "",
 ) -> str:
     """POST a new row; record API-assigned id + hashes in the parent's row list.
 
     The row is recorded and *checkpoint* saves the manifest right after the
     API returned its id, before the local file is written back (D25).
     *source_row_id* (promote path) is recorded as the row it was created from.
+    *link_rows_in* (the manifest, on any other push) links the promote
+    entries of *source_tree* to the new row before the checkpoint (risk 74).
 
     Returns the API-assigned row id.
     """
@@ -537,6 +546,8 @@ def _push_create_row(
     )
     if source_row_id:
         row_entry.metadata[PROMOTED_ROW_KEY] = source_row_id
+    if link_rows_in is not None:
+        link_promote_rows(link_rows_in, tree=source_tree, source=parent)
     if checkpoint is not None:
         checkpoint(f"{component_id}/{parent_config_id}/rows/{new_row_id}")
 
