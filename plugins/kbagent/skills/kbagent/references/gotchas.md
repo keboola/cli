@@ -6794,6 +6794,8 @@ untracked directory of the same branch tree carries, is a **move**:
   then renames it to the name of the config (action `renamed`), as for any
   directory whose name differs from the config name. To change the directory
   name for good, use `kbagent config rename --project P --component-id C --config-id ID --name NAME --directory DIR`.
+- `sync status` lists it under `moves[]` instead of a deleted plus an added
+  config.
 - The component is read from the file, not from the directory: a directory
   moved into another component's folder is a move too, and the next pull
   moves it back.
