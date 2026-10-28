@@ -91,40 +91,31 @@ def resolve_transformation_bindings(
     created_rows_by_parent: dict[str, list[str]],
     manifest: Manifest,
     branch_id: int | None,
-    promoted_id_map: dict[tuple[str, str], str] | None = None,
 ) -> VariableBindingResult:
     """Rebind transformation links to the configs and rows created this push.
 
     Runs the variables pass, then the shared-code pass (CLI-24). The second
     pass re-reads the local file that the first one rewrote, so a
     transformation that has both links gets both.
-
-    *promoted_id_map* maps source-branch ids of configs a promote push created
-    on the target to their new ids (D16). They resolve exact references only:
-    the "single variables config created this push" fallback stays limited to
-    placeholder creates, so a promoted transformation that names a variables
-    config already on the target is never bound to another one.
     """
     result = VariableBindingResult()
-    lookup = {**(promoted_id_map or {}), **created_id_map}
     _bind_variables(
         service,
         client,
         result,
         created_configs=created_configs,
-        created_id_map=lookup,
+        created_id_map=created_id_map,
         created_row_id_map=created_row_id_map,
         created_rows_by_parent=created_rows_by_parent,
         manifest=manifest,
         branch_id=branch_id,
-        placeholder_id_map=created_id_map,
     )
     _bind_shared_code(
         service,
         client,
         result,
         created_configs=created_configs,
-        created_id_map=lookup,
+        created_id_map=created_id_map,
         created_row_id_map=created_row_id_map,
         manifest=manifest,
         branch_id=branch_id,
@@ -143,7 +134,6 @@ def _bind_variables(
     created_rows_by_parent: dict[str, list[str]],
     manifest: Manifest,
     branch_id: int | None,
-    placeholder_id_map: dict[tuple[str, str], str],
 ) -> None:
     """Rebind transformation -> variables links from placeholders to ULIDs.
 
@@ -164,7 +154,7 @@ def _bind_variables(
     """
     created_variables_ulids = [
         ulid
-        for (component_id, _placeholder), ulid in placeholder_id_map.items()
+        for (component_id, _placeholder), ulid in created_id_map.items()
         if component_id == VARIABLES_COMPONENT_ID
     ]
 
@@ -382,8 +372,7 @@ def _apply_variable_binding(
             branch_id=branch_id,
         )
     finally:
-        if created.write_local:
-            service._write_config_file(created.config_dir, local_data)
+        service._write_config_file(created.config_dir, local_data)
     logger.info(
         "Resolved variables link for %s/%s -> variables_id=%s variables_values_id=%s",
         created.component_id,
@@ -674,9 +663,8 @@ def _apply_shared_code_binding(
             branch_id=branch_id,
         )
     finally:
-        if created.write_local:
-            service._write_config_file(created.config_dir, local_data)
-            _rewrite_script_files(created.config_dir, link.row_id_map)
+        service._write_config_file(created.config_dir, local_data)
+        _rewrite_script_files(created.config_dir, link.row_id_map)
     logger.info(
         "Resolved shared code link for %s/%s -> shared_code_id=%s rows=%s",
         created.component_id,
@@ -723,13 +711,8 @@ def resolve_run_target_bindings(
     created_row_id_map: dict[tuple[str, str], str],
     manifest: Manifest,
     branch_id: int | None,
-    promoted_id_map: dict[tuple[str, str], str] | None = None,
 ) -> FlowBindingResult:
     """Remap the configs that flows, orchestrations and schedules run (Phase D).
-
-    *promoted_id_map* adds the configs a promote push created on the target
-    under new ids (D16); their references are rewritten in the target payload
-    only (``CreatedConfig.write_local`` is False for promote creates).
 
     A ``keboola.flow`` or legacy ``keboola.orchestrator`` config runs other
     configs via ``configuration.tasks[].task.configId`` (and optionally only
@@ -749,7 +732,6 @@ def resolve_run_target_bindings(
     it may legitimately point at a pre-existing config).
     """
     result = FlowBindingResult()
-    lookup = {**(promoted_id_map or {}), **created_id_map}
     for created in created_configs:
         link_type = _RUN_TARGET_LINK_TYPES.get(created.component_id)
         if link_type is None:
@@ -761,7 +743,9 @@ def resolve_run_target_bindings(
         if not isinstance(extra, dict):
             continue
 
-        remap = remap_run_targets_in_place(created.component_id, extra, lookup, created_row_id_map)
+        remap = remap_run_targets_in_place(
+            created.component_id, extra, created_id_map, created_row_id_map
+        )
         for message in remap.unmapped_rows:
             result.errors.append(
                 {
@@ -946,8 +930,7 @@ def _apply_run_target_binding(
             branch_id=branch_id,
         )
     finally:
-        if created.write_local:
-            service._write_config_file(created.config_dir, local_data)
+        service._write_config_file(created.config_dir, local_data)
     logger.info(
         "Remapped linked config IDs for %s/%s",
         created.component_id,

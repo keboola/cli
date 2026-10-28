@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..constants import CONFIG_FILENAME
+from ..sync.branch_scope import UNKNOWN_BASE_KEY
 from ..sync.manifest import ManifestConfigRow, ManifestConfiguration
 from ._sync_baseline import extras_modified
 from ._sync_workspace import SANDBOXES_COMPONENT_ID
@@ -222,7 +223,12 @@ def sweep_stale_rows(
         row_dir = config_dir / tracked["path"]
         row_file = row_dir / CONFIG_FILENAME
         pull_hash = tracked["pull_hash"]
-        edited = bool(pull_hash) and row_file.exists() and service._file_hash(row_file) != pull_hash
+        # A row kept with an unknown base (D22) counts as edited: pull cannot
+        # tell its file from the remote's last state, so it never deletes it.
+        unknown_base = tracked.get(UNKNOWN_BASE_KEY, "")
+        edited = row_file.exists() and (
+            bool(unknown_base) or (bool(pull_hash) and service._file_hash(row_file) != pull_hash)
+        )
         path = f"{rel_path}/{tracked['path']}"
         detail = {"component_id": row_key_prefix.split("/", 1)[0], "config_name": "", "path": path}
         if edited and not theirs:
@@ -233,6 +239,7 @@ def sweep_stale_rows(
                     metadata={
                         "pull_hash": pull_hash,
                         "pull_config_hash": tracked["pull_config_hash"],
+                        **({UNKNOWN_BASE_KEY: unknown_base} if unknown_base else {}),
                     },
                 )
             )

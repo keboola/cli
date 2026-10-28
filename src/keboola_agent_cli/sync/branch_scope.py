@@ -124,6 +124,19 @@ def same_branch(manifest: Manifest, a: int | None, b: int | None) -> bool:
     return a == b
 
 
+# Row metadata: the row's base is unknown (D22). ``adopted``: pull kept a local
+# row file it has no baseline for, the row was on the branch then (D15).
+# ``unread``: a promote shadow could not read the branch's rows, so whether
+# the row is there at all is unknown. Diff calls any local/remote difference
+# a conflict and a local delete a conflict; push never sends or deletes such
+# a row; pull never overwrites or deletes it. ``pull --theirs``, or a pull
+# that finds local == remote, gives it a baseline again.
+UNKNOWN_BASE_KEY = "unknown_base"
+UNKNOWN_BASE_ADOPTED = "adopted"
+UNKNOWN_BASE_UNREAD = "unread"
+# The 3-way base diff uses for such a row: equal to neither side.
+UNKNOWN_BASE_HASH = "<unknown base>"
+
 # Metadata key of a target-branch entry recorded by a promote push
 # (``sync push --branch <dev>`` reading ``main/``): which tree the files live in
 # and which source-tree config the entry stands for (issue #792 D).
@@ -238,7 +251,11 @@ class TreeScope:
             f"{config_key(cfg.component_id, cfg.id)}/rows/{row.id}"
             for cfg in self.on_target
             for row in cfg.rows
-            if row.metadata and row.metadata.get("pull_hash")
+            if row.metadata
+            and (
+                row.metadata.get("pull_hash")
+                or row.metadata.get(UNKNOWN_BASE_KEY) == UNKNOWN_BASE_ADOPTED
+            )
         }
 
     @property
@@ -305,7 +322,10 @@ def scope_manifest(
         # tracked would classify it "deleted" and ``push --force`` would delete
         # a remote config nobody ever deleted. It also lays no claim on its id:
         # nothing local refers to it until the next ``sync pull``.
-        config_file = project_root / tree_path / cfg.path / CONFIG_FILENAME
+        # A promote entry's files are in its source tree, not its own (D13).
+        association = promoted_from(cfg)
+        files_tree = association.tree if association is not None else tree_path
+        config_file = project_root / files_tree / cfg.path / CONFIG_FILENAME
         if not cfg.metadata.get("pull_hash") and not config_file.exists():
             never_fetched.append(
                 {
@@ -341,7 +361,6 @@ def scope_manifest(
                 on_target.append(cfg)
             continue
 
-        association = promoted_from(cfg)
         if association is not None and association.tree == source_branch_path:
             orphaned.append(_promoted_record(cfg, tree_path=tree_path))
             continue

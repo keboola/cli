@@ -164,8 +164,10 @@ production id, a config authored there keeps none (a plain `sync push` later
 creates it in production), and the dev-branch record (`promoted_from` in the
 manifest) maps the folder to the dev id. A production rename moves that record
 with the folder; deleting the folder is a local delete for the dev branch
-(`--force` deletes the dev config). Flows and transformations promoted together
-with the configs they run point at the dev ids on the dev branch.
+(`--force` deletes the dev config). Every promote push rewrites the references
+of what it sends (flow tasks, schedule targets, variables and shared-code links)
+to the dev ids of the configs promote pushes created there; `main/` keeps the
+production ids.
 
 ## Switching back to production after a `--branch` pull (since v0.89.0)
 

@@ -1579,3 +1579,81 @@ def test_finding_force_delete_of_config_with_rows_reports_no_errors(tmp_path: Pa
     result = _push(sim, force=True)
     assert HTTP_2 not in sim.api.remote[PROD]
     assert result["errors"] == []
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "FINDING force-delete-over-remote-edit (row variant): a row dir deleted "
+        "locally whose row was edited on the remote since the last pull diffs "
+        "as plain 'deleted' (compute_row_changeset never weighs the remote "
+        "change), so `push --force` deletes the row and the remote edit with "
+        "it. Deferred with the config variant (group 4)."
+    ),
+)
+def test_finding_force_push_does_not_delete_remotely_edited_row(tmp_path: Path) -> None:
+    sim = _world(tmp_path)
+    shutil.rmtree(_dir(sim, "extractor/keboola.ex-http/name-tk6z/rows/row-tk4z"))
+    (row,) = [r for r in sim.api.remote[PROD][HTTP_1]["rows"] if r["name"] == "Row tk4z"]
+    row["configuration"]["parameters"]["value"] = "tk900z"
+    _push(sim, force=True)
+    assert any(r["id"] == row["id"] for r in sim.api.remote[PROD][HTTP_1]["rows"]), (
+        "the unpulled remote row edit was deleted"
+    )
+
+
+# ===========================================================================
+# Round 2 regressions found by the 500-seed walk: shrunk reproductions run as
+# deterministic tests (the walk's own invariants decide).
+# ===========================================================================
+
+WALK_REGRESSIONS: dict[str, list[Step]] = {
+    # remote row edit -> pull --branch DEV -> pull -> push clobbered it (D22)
+    "seed-271": [
+        ("remote_edit", 0.35550746574436043, 0.6770491017017181, 0.3726971263203732),
+        ("pull_dev", 0.39402594476208674, 0.09162580950101207, 0.9237018429078202),
+        ("pull", 0.05324355645395262, 0.8223788420226907, 0.5246801890174003),
+        ("push", 0.8857476477294035, 0.8712173081193795, 0.33126045977162843),
+    ],
+    "seed-233": [
+        ("remote_edit", 0.2184030271117674, 0.8204275661688327, 0.29244447115860983),
+        ("pull_dev", 0.5022213939686381, 0.7377292459558832, 0.41143752577108217),
+        ("pull_force", 0.13509570215303002, 0.8476217872679043, 0.5317099889572965),
+        ("push", 0.5371233876119833, 0.7850284902102761, 0.9909448349908669),
+    ],
+    "seed-153": [
+        ("pull_dev", 0.07566715804768631, 0.26001041161707716, 0.8515491218429709),
+        ("remote_edit", 0.4966182107510705, 0.9033367455974916, 0.09210438456708558),
+        ("pull", 0.2643210692995429, 0.5267996481451631, 0.717666018877777),
+        ("push_force", 0.8465725752856048, 0.8585732408992508, 0.21888965336514288),
+    ],
+    "seed-108": [
+        ("pull_dev", 0.3905354232573156, 0.627635098096424, 0.6914911911849517),
+        ("pull", 0.05532920916119577, 0.7229520795060453, 0.8136064185879031),
+        ("remote_edit", 0.345675914045974, 0.7227325836703358, 0.9892431695016232),
+        ("pull_dev", 0.5139125737055625, 0.10244230598366189, 0.650429031182478),
+        ("push_dev", 0.42739849115091066, 0.9912625026060519, 0.3756852421336002),
+    ],
+    # promote, then a DEV update wrote the DEV id into main/ (D23)
+    "seed-98": [
+        ("remote_create", 0.37223067629228457, 0.6638616290689402, 0.012630742360005165),
+        ("pull", 0.042817846844177554, 0.6070172700735184, 0.03508934726560298),
+        ("push_dev", 0.6939440256092885, 0.782579085617098, 0.35910827980674653),
+        ("local_edit", 0.8582773805722889, 0.32990546952085587, 0.690911002537553),
+        ("push", 0.6653205060158662, 0.12303173448719418, 0.8571904631325935),
+        ("push_dev", 0.8635074959160928, 0.6778366075345966, 0.0977998267460558),
+    ],
+    "seed-322": [
+        ("local_new", 0.9915432599897419, 0.15535947166203223, 0.18663384497324276),
+        ("push_dev", 0.7988587742559923, 0.597274646456379, 0.12945429120308038),
+        ("local_edit", 0.9908417071814976, 0.056457000464619655, 0.894342196818189),
+        ("push", 0.9328414561347542, 0.6201898702247746, 0.23825548181722989),
+        ("push_dev", 0.06711082277734404, 0.9225645857690428, 0.6646808985414843),
+    ],
+}
+
+
+@pytest.mark.parametrize("name", sorted(WALK_REGRESSIONS))
+def test_walk_regression(name: str) -> None:
+    violation, log = run_walk(WALK_REGRESSIONS[name], MASKS)
+    assert violation is None, f"{name}: {violation}\n" + "\n".join(log)

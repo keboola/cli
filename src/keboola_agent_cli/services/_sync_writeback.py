@@ -17,6 +17,8 @@ from ..constants import FOLDER_METADATA_KEY
 from ..errors import KeboolaApiError
 from ..sync.branch_scope import (
     PROMOTED_FROM_KEY,
+    UNKNOWN_BASE_KEY,
+    UNKNOWN_BASE_UNREAD,
     PromotedFrom,
     branch_tree_path,
     find_branch_entry,
@@ -192,9 +194,11 @@ def promote_shadow(
     own: a *shadow* at the same path, recording which source config it stands
     for (``promoted_from``, D13), so ``scope_manifest`` diffs that directory
     against it from then on and the production entry keeps describing
-    production. The source is the entry of that id in *source_tree* -- never
-    "the first entry with that id on any branch" -- and, when *path* is given,
-    it must be the directory just pushed.
+    production. The source is PRODUCTION's entry of that id (the promote source
+    tree is the default tree, production's) -- chosen by ``same_branch``, never
+    by tree path, which maps an unregistered branch to the default tree too
+    (D28), and never "the first entry with that id on any branch". When *path*
+    is given, it must be the directory just pushed.
 
     The shadow starts as a copy of the production entry's baselines -- the dev
     branch was a copy of production when it was created, and a baseline that
@@ -218,8 +222,7 @@ def promote_shadow(
             for c in manifest.configurations
             if c.component_id == component_id
             and c.id == config_id
-            and branch_tree_path(manifest, c.branch_id) == source_tree
-            and not same_branch(manifest, c.branch_id, branch_id)
+            and same_branch(manifest, c.branch_id, None)
         ),
         None,
     )
@@ -234,12 +237,36 @@ def promote_shadow(
         id=config_id,
         path=source.path,
         metadata=metadata,
-        rows=[
-            copy.deepcopy(row) for row in source.rows if on_branch is None or row.id in on_branch
-        ],
+        rows=_shadow_rows(source.rows, on_branch),
     )
     manifest.configurations.append(shadow)
     return shadow
+
+
+def _shadow_rows(
+    rows: list[ManifestConfigRow], on_branch: set[str] | None
+) -> list[ManifestConfigRow]:
+    """The source rows a shadow tracks: those on the branch, or all with an unknown base.
+
+    When the branch's rows cannot be read, each row is tracked with no
+    baseline and ``unknown_base: unread`` (D22): diff then lists a row the
+    branch lacks as ``added`` (the next push creates it once), and a row the
+    branch has but that differs as a conflict -- never as an edit to send.
+    """
+    if on_branch is not None:
+        return [copy.deepcopy(row) for row in rows if row.id in on_branch]
+    return [
+        ManifestConfigRow(
+            id=row.id,
+            path=row.path,
+            metadata={
+                "pull_hash": "",
+                "pull_config_hash": "",
+                UNKNOWN_BASE_KEY: UNKNOWN_BASE_UNREAD,
+            },
+        )
+        for row in rows
+    ]
 
 
 def _branch_row_ids(

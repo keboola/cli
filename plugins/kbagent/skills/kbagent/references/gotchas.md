@@ -94,7 +94,8 @@ These lists keep `error`, because their entries are not failed items with an err
 - **A row added in `main/` and pushed to the dev branch** is recorded for the dev branch.
   Before, production recorded it, and the next production `sync pull` deleted the new row
   folder.
-- **A promote push never writes a dev config id into `main/`.** The dev branch's record
+- **A promote push never writes a dev config id into `main/`**, neither when it creates
+  the config on the dev branch nor when it updates it later. The dev branch's record
   of the folder (`promoted_from` in `.keboola/manifest.json`) maps it to the dev id. A
   production config the dev branch lacks is created there with its rows (before, every
   row failed) and its `main/_config.yml` keeps the PRODUCTION id; before, the push wrote
@@ -102,11 +103,15 @@ These lists keep `error`, because their entries are not failed items with an err
   `<name>-<id>`. A config authored in `main/` keeps no id at all, so a plain `sync push`
   later creates it in production as a new config (before, production `sync diff` called
   the folder an orphan and suggested deleting it).
-- **Flows, orchestrations, schedules and transformations promoted together** with the
-  configs they reference now point, on the dev branch, at the dev ids of those configs.
-  Before, they kept the production ids, which do not exist there. Only the dev branch's
-  copy is rewritten; the `main/` files keep the production ids. A later edit of such a
-  flow in `main/` that you push with `--branch <dev>` sends the production ids again.
+- **Every promote push rewrites references to the dev ids** -- a flow's or
+  orchestration's task `configId` / `configRowIds`, a schedule's target, a
+  transformation's `variables_id` / `variables_values_id` / `shared_code_id` /
+  `shared_code_row_ids` and its `{{<row id>}}` placeholders -- for every config the
+  promote pushes created on the dev branch, on creates and on later updates alike, all
+  in one payload. Before, they kept the production ids, which do not exist there, and a
+  later edit sent the production ids again. Only the dev branch's copy changes; the
+  `main/` files keep the production ids. If a push dies before it finished rewriting,
+  the next promote push finishes it, also with no local edit.
 - **A config created in `main/` and promoted** is no longer reported `removed` by the next
   production `sync pull`, which used to delete its folder. Pull keeps the folder and keeps
   the dev-branch record, and moves the record with the folder when production renames
@@ -119,9 +124,12 @@ These lists keep `error`, because their entries are not failed items with an err
   `sync push --branch <dev>` lists it under `skipped_deletions`, and
   `sync push --force --branch <dev>` deletes the dev config only. Production is untouched.
 - **A push that dies after creating a config or row** (a killed process, a crash) does not
-  create it again on the retry: the manifest is saved after every create. A create whose
-  response was lost (the server created it, kbagent never saw the id) can still be
-  created twice.
+  create it again on the retry: the manifest is saved right after every create, before
+  anything else, and every save is atomic (a temp file renamed over the manifest, never
+  a half-written one). When that save fails (permissions, full disk), push stops at once
+  with `CONFIG_ERROR` (exit 5) naming the config it created; fix the cause before the
+  next push. A create whose response was lost (the server created it, kbagent never saw
+  the id) can still be created twice.
 - **`sync pull` reads only the records of the branch it pulls.** After
   `sync pull --branch <dev>`, a plain `sync pull` no longer judges `main/` by the dev
   branch's baselines (a false "locally modified") and no longer reuses a folder name the
@@ -130,14 +138,23 @@ These lists keep `error`, because their entries are not failed items with an err
   carries its id. A config folder that differs from production then has no baseline: pull
   keeps it (`skipped`) and `sync diff` calls it a `conflict`, as for any file with a
   config id and no manifest entry. A row file that differs is kept too (`skipped`, reason
-  "row locally modified, not tracked in the manifest") and diffs as `modified`; only
-  `--theirs` overwrites either. An id carried by two folders is adopted by neither: pull
+  "row locally modified, not tracked in the manifest") with an unknown base: pull cannot
+  tell a stale file from an edited one, so `sync diff` calls the row a `conflict`,
+  `sync push` neither sends nor deletes it (so it can never overwrite a change made in
+  the UI), and a later pull never deletes it, even when the row is deleted remotely. Only
+  `sync pull --theirs`, or a pull that finds the file equal to the remote, resolves it. An id carried by two folders is adopted by neither: pull
   leaves both alone and adds a `warnings[]` entry (`ambiguous_config_id` /
   `ambiguous_row_id`).
 - **`sync pull` never writes a new config or row into a folder that already belongs to
-  another one** -- a tracked config, a promoted folder, or a folder carrying an id --
-  whatever order the remote lists them in. Before, a new remote config named like an
-  existing one could be written into that folder. The new one gets a `<name>-<id>` folder.
+  another one** -- a tracked config, a promoted folder, a folder carrying an id, or a
+  config authored locally and never pushed -- whatever order the remote lists them in.
+  Before, a new remote config named like an existing one could be written into that
+  folder. The new one gets a `<name>-<id>` folder (`<name>-<id>-2`, ... when that one is
+  taken too).
+- **`sync pull --branch <other dev>` keeps the record of a promote to another dev
+  branch**, so the next `sync push --branch <dev>` still updates the config it created
+  there. Before, pulling a third branch dropped it and the next promote created the
+  config again.
 - **On an older version**, do not edit in `main/` and promote with `--branch` while you
   also push the same configs to production. Run `sync pull --branch <dev>` once and work
   in the `<dev>/` folder instead. If production `sync diff` shows `remote_modified` for a

@@ -14,13 +14,19 @@ from __future__ import annotations
 
 import copy
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..constants import CONFIG_FILENAME
 from ..errors import ErrorCode, KeboolaApiError
-from ..sync.branch_scope import branch_tree_path, find_branch_entry, same_branch
+from ..sync.branch_scope import (
+    UNKNOWN_BASE_KEY,
+    branch_tree_path,
+    find_branch_entry,
+    same_branch,
+)
 from ..sync.code_extraction import merge_code_files, normalize_blocks_codes_script
 from ..sync.config_format import local_config_to_api, local_row_to_api
 from ..sync.manifest import Manifest, ManifestConfiguration
@@ -34,6 +40,7 @@ from ._encryption import (
 )
 from ._sync_baseline import apply_stamp, row_baseline
 from ._sync_data_app import create_synced_data_app
+from ._sync_models import PROMOTED_ROW_KEY, CreateOutcome
 from ._sync_workspace import SANDBOXES_COMPONENT_ID, warn_on_backend_size_change
 from ._sync_writeback import (
     manifest_folder,
@@ -44,6 +51,7 @@ from ._sync_writeback import (
 from .data_app_service import DATA_APP_COMPONENT_ID, DEFAULT_TYPE
 
 if TYPE_CHECKING:
+    from ._sync_promote_remap import PromoteRemap
     from .sync_service import SyncService
 
 logger = logging.getLogger(__name__)
@@ -124,16 +132,18 @@ class PushPlan:
         project_id = manifest.project.id if manifest.project else None
         if not project_id or allow_plaintext_fallback:
             return {}
-        # A row's parent dir: the push target's own entry wins over another
-        # branch's entry of the same id (a dev branch shares production ids).
-        parent_paths = {(c.component_id, c.id): c.path for c in manifest.configurations}
-        parent_paths.update(
-            {
-                (c.component_id, c.id): c.path
-                for c in manifest.configurations
-                if same_branch(manifest, c.branch_id, branch_id)
-            }
-        )
+        # A row's parent dir: the push target's own entry, else (promote path,
+        # first write) production's entry of the same id (D28). Never another
+        # branch's entry: a dev branch shares production ids.
+        parent_paths: dict[tuple[str, str], str] = {}
+        for owner in (None, branch_id):
+            parent_paths.update(
+                {
+                    (c.component_id, c.id): c.path
+                    for c in manifest.configurations
+                    if same_branch(manifest, c.branch_id, owner)
+                }
+            )
         plaintexts: dict[str, set[str]] = {}
         for change in self.changes:
             if change["change_type"] not in ("added", "modified"):
@@ -356,8 +366,15 @@ def push_row_change(
     allow_plaintext_fallback: bool = False,
     warnings: list[dict[str, Any]] | None = None,
     known_secrets: SecretCache | None = None,
+    checkpoint: Callable[[str], None] | None = None,
+    remap: PromoteRemap | None = None,
 ) -> str | None:
     """Dispatch a single row-level change (added/modified/deleted) to the API.
+
+    *checkpoint* saves the manifest right after a row create returned its id
+    (D25). *remap* is given on the promote path (D24); a row a promote push
+    creates also records the source row it came from, so later promote
+    pushes can map references to it.
 
     ``#``-prefixed secrets in the row's configuration are encrypted via
     :func:`encrypt_secrets_in_config` before POST/PUT (same fail-closed semantics
@@ -434,6 +451,9 @@ def push_row_change(
             allow_plaintext_fallback=allow_plaintext_fallback,
             warnings=warnings,
             known_secrets=known_secrets,
+            source_row_id=row_id if remap is not None else "",
+            checkpoint=checkpoint,
+            remap=remap,
         )
 
     if change_type == "modified":
@@ -450,6 +470,7 @@ def push_row_change(
             allow_plaintext_fallback=allow_plaintext_fallback,
             warnings=warnings,
             known_secrets=known_secrets,
+            remap=remap,
         )
         return None
 
@@ -470,8 +491,15 @@ def _push_create_row(
     allow_plaintext_fallback: bool,
     warnings: list[dict[str, Any]] | None = None,
     known_secrets: SecretCache | None = None,
+    source_row_id: str = "",
+    checkpoint: Callable[[str], None] | None = None,
+    remap: PromoteRemap | None = None,
 ) -> str:
     """POST a new row; record API-assigned id + hashes in the parent's row list.
+
+    The row is recorded and *checkpoint* saves the manifest right after the
+    API returned its id, before the local file is written back (D25).
+    *source_row_id* (promote path) is recorded as the row it was created from.
 
     Returns the API-assigned row id.
     """
@@ -481,6 +509,8 @@ def _push_create_row(
 
     pristine_data = copy.deepcopy(local_data)
     name, description, configuration = local_row_to_api(local_data, component_id)
+    if remap is not None:
+        configuration = remap.apply(component_id, configuration)
     configuration = encrypt_secrets_in_config(
         client,
         project_id,
@@ -501,6 +531,13 @@ def _push_create_row(
     )
     new_row_id = str(result.get("id", ""))
     logger.info("Created row %s/%s/%s", component_id, parent_config_id, new_row_id)
+    row_entry = writeback_create_row_in_manifest(
+        parent=parent, row_path_str=row_path_str, new_row_id=new_row_id, file_hash="", cfg_hash=""
+    )
+    if source_row_id:
+        row_entry.metadata[PROMOTED_ROW_KEY] = source_row_id
+    if checkpoint is not None:
+        checkpoint(f"{component_id}/{parent_config_id}/rows/{new_row_id}")
 
     # Write-back: encrypted secrets land in the local file so a subsequent diff
     # sees local == remote. ``config_id=""`` tells the shared helper to skip
@@ -508,7 +545,6 @@ def _push_create_row(
     writeback_after_push(service, pristine_data, row_dir, "", configuration)
 
     row_file = row_dir / CONFIG_FILENAME
-    new_file_hash = service._file_hash(row_file) if row_file.exists() else ""
     stamp = row_baseline(
         client,
         component_id=component_id,
@@ -517,13 +553,9 @@ def _push_create_row(
         branch_id=branch_id,
         response=result,
     )
-    row_entry = writeback_create_row_in_manifest(
-        parent=parent,
-        row_path_str=row_path_str,
-        new_row_id=new_row_id,
-        file_hash=new_file_hash,
-        cfg_hash=stamp.cfg_hash,
-    )
+    row_entry.metadata["pull_hash"] = service._file_hash(row_file) if row_file.exists() else ""
+    row_entry.metadata["pull_config_hash"] = stamp.cfg_hash
+    row_entry.metadata.pop(UNKNOWN_BASE_KEY, None)  # the row now has a known base
     apply_stamp(row_entry.metadata, stamp)
     if stamp.warning is not None and warnings is not None:
         warnings.append(stamp.warning)
@@ -544,6 +576,7 @@ def push_update_row(
     allow_plaintext_fallback: bool,
     warnings: list[dict[str, Any]] | None = None,
     known_secrets: SecretCache | None = None,
+    remap: PromoteRemap | None = None,
 ) -> None:
     """PUT an existing row; refresh its hashes in the parent's row list.
 
@@ -557,6 +590,8 @@ def push_update_row(
 
     pristine_data = copy.deepcopy(local_data)
     name, description, configuration = local_row_to_api(local_data, component_id)
+    if remap is not None:
+        configuration = remap.apply(component_id, configuration)
     configuration = encrypt_secrets_in_config(
         client,
         project_id,
@@ -637,8 +672,15 @@ def push_create(
     known_secrets: SecretCache | None = None,
     ds_client: Any = None,
     ds_branch_id: int | None = None,
-) -> dict[str, Any] | None:
+    remap: PromoteRemap | None = None,
+) -> CreateOutcome | None:
     """Create a new config from a local _config.yml file.
+
+    Returns what was created; the caller records it in the manifest BEFORE the
+    local file is written back (D25). *remap* is given on the promote path
+    (``push --branch DEV`` reading main/): the payload's references are
+    remapped to the target's ids (D24), and the local file never receives a
+    target id (D19, D23) -- also not a data app's new ``parameters.id``.
 
     ``warnings`` accumulates the ``script[]`` normalization records of
     :func:`guard_script_shape` for the push envelope.
@@ -671,6 +713,9 @@ def push_create(
     configuration = guard_script_shape(
         component_id, configuration, warnings, config_path=config_path_str
     )
+    promote = branch_path != branch_tree_path(manifest, branch_id)
+    if remap is not None:
+        configuration = remap.apply(component_id, configuration)
 
     # Encrypt #-prefixed secrets before sending to API
     project_id = manifest.project.id if manifest.project else None
@@ -715,7 +760,7 @@ def push_create(
         # app id. Persist it locally too, or the next push (an update) would send
         # the stale source id and revert the remote back-pointer.
         new_app_id = (configuration.get("parameters") or {}).get("id")
-        if new_app_id:
+        if new_app_id and not promote:
             pristine_params = pristine_data.setdefault("parameters", {})
             if isinstance(pristine_params, dict):
                 pristine_params["id"] = new_app_id
@@ -741,18 +786,27 @@ def push_create(
             )
         )
 
-    # Write back: update local file with config_id + encrypted secrets. Use
-    # pristine_data so blocks/code stay only in their code files. On the
-    # promote path (no tree of the target's own) the source tree keeps its
-    # own ids (D19): writing the dev id into main/ made the next production
-    # pull rename a pulled config's directory, and an authored one could no
-    # longer be pushed to production. The dev-branch entry's
+    if remap is not None:
+        remap.record(
+            component_id,
+            str(new_config_id),
+            config_dir=config_dir,
+            config_path=config_path_str,
+            configuration=configuration,
+        )
+    # The local file gets config_id + encrypted secrets only after the caller
+    # recorded the create (D25). On the promote path the source tree keeps
+    # its own ids (D19): writing the dev id into main/ made the next
+    # production pull rename a pulled config's directory, and an authored one
+    # could no longer be pushed to production. The dev-branch entry's
     # ``promoted_from`` maps the directory to the new id instead.
-    promote = branch_path != branch_tree_path(manifest, branch_id)
-    file_config_id = "" if promote else new_config_id
-    writeback_after_push(service, pristine_data, config_dir, file_config_id, configuration)
-
-    return result
+    return CreateOutcome(
+        result=result,
+        pristine_data=pristine_data,
+        configuration=configuration,
+        config_dir=config_dir,
+        file_config_id="" if promote else str(new_config_id),
+    )
 
 
 def push_update(
@@ -768,8 +822,12 @@ def push_update(
     allow_plaintext_fallback: bool = False,
     warnings: list[dict[str, Any]] | None = None,
     known_secrets: SecretCache | None = None,
+    remap: PromoteRemap | None = None,
 ) -> dict[str, Any]:
     """Update an existing config from a local _config.yml file.
+
+    On the promote path (*remap* given) the payload's references are remapped
+    to the target's ids (D24) and the local file keeps its own id (D23).
 
     Returns the API response so the caller can stamp the manifest baseline
     from the remote's own view of the config (issue #686). ``warnings``
@@ -796,6 +854,8 @@ def push_update(
     configuration = guard_script_shape(
         component_id, configuration, warnings, config_id=config_id, config_path=config_path_str
     )
+    if remap is not None:
+        configuration = remap.apply(component_id, configuration)
 
     # Encrypt #-prefixed secrets before sending to API
     project_id = manifest.project.id if manifest.project else None
@@ -830,9 +890,21 @@ def push_update(
         branch_id=branch_id,
     )
     logger.info("Updated config %s/%s", component_id, config_id)
+    if remap is not None:
+        remap.record(
+            component_id,
+            config_id,
+            config_dir=config_dir,
+            config_path=config_path_str,
+            configuration=configuration,
+        )
 
     # Write back: update local file with encrypted secrets. Use pristine_data so
-    # blocks/code stay only in their code files.
-    writeback_after_push(service, pristine_data, config_dir, config_id, configuration)
+    # blocks/code stay only in their code files. Never the target id on the
+    # promote path (D23): main/ keeps the source branch's id.
+    promote = branch_path != branch_tree_path(manifest, branch_id)
+    writeback_after_push(
+        service, pristine_data, config_dir, "" if promote else config_id, configuration
+    )
 
     return result if isinstance(result, dict) else {}

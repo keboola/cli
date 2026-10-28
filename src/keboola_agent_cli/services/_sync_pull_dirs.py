@@ -19,6 +19,8 @@ from typing import TYPE_CHECKING, Any
 
 from ..constants import CONFIG_FILENAME
 from ..sync.branch_scope import (
+    UNKNOWN_BASE_ADOPTED,
+    UNKNOWN_BASE_KEY,
     branch_tree_path,
     find_untracked_configs,
     is_production,
@@ -45,15 +47,36 @@ class PullEntries:
     Attributes:
         own: Entries of the pulled branch -- the only ones pull looks up,
             refreshes, or sweeps as stale.
-        kept: Promote entries of another branch whose files live in the pulled
-            tree (``push --branch DEV`` with no ``dev/`` tree). Pull carries
-            them over (:func:`finalize_kept_entries`): they map a directory to
-            its config on the other branch, and dropping them made the next
-            promote create that config on the branch again.
+        kept: Promote entries of other branches (``push --branch DEV`` with no
+            ``dev/`` tree) whose source tree exists -- whichever branch is
+            pulled (D27). Pull carries them over (:func:`finalize_kept_entries`):
+            they map a directory to its config on the other branch, and
+            dropping them made the next promote create that config again.
     """
 
     own: list[ManifestConfiguration]
     kept: list[ManifestConfiguration]
+
+    def kept_paths_in(self, tree: str) -> set[str]:
+        """Paths of the kept entries whose files live in *tree* (reserved by a pull of it)."""
+        paths = set()
+        for entry in self.kept:
+            association = promoted_from(entry)
+            if association is None or association.tree == tree:
+                paths.add(entry.path)
+        return paths
+
+
+def free_path(base: str, suffix: str, taken: set[str]) -> str:
+    """*base*, else ``base-suffix``, else ``base-suffix-2``, ... -- the first not in *taken*.
+
+    Every candidate is checked (D26): a suffixed path can be owned too.
+    """
+    candidate, attempt = base, 1
+    while candidate in taken:
+        candidate = f"{base}-{suffix}" if attempt == 1 else f"{base}-{suffix}-{attempt}"
+        attempt += 1
+    return candidate
 
 
 def partition_pull_entries(
@@ -72,9 +95,12 @@ def partition_pull_entries(
         if same_branch(manifest, entry.branch_id, branch_id):
             own.append(entry)
             continue
+        # A promote entry of ANY other branch is kept while its source tree
+        # exists (D27): pulling a third branch must not lose the mapping, or
+        # the next promote creates the config on its branch again.
         association = promoted_from(entry)
         if association is not None:
-            if association.tree == branch_dir_name:
+            if (project_root / association.tree).is_dir():
                 kept.append(entry)
             continue
         registered = any(b.id == entry.branch_id for b in manifest.branches)
@@ -113,6 +139,9 @@ def finalize_kept_entries(
         if entry.component_id in ignored_components:
             continue
         association = promoted_from(entry)
+        if association is not None and branch_dir.parent / association.tree != branch_dir:
+            carried.append(entry)  # its source tree was not pulled: unchanged (D27)
+            continue
         source = association.config_id if association is not None else ""
         if source and (entry.component_id, source) in paths:
             entry.path = paths[(entry.component_id, source)]
@@ -166,6 +195,8 @@ def scan_config_dirs(
     ):
         if item["config_id"]:
             found.add(f"{item['component_id']}/{item['config_id']}", item["path"])
+        else:
+            found.paths.add(item["path"])  # authored, never pushed: reserved too (D26)
     return found
 
 
@@ -266,9 +297,9 @@ def pull_config_rows(
         elif row_id in adopted:
             row_rel_path = adopted[row_id]
         else:
-            row_rel_path = config_row_path(ctx.row_naming, row_name)
-            if row_rel_path in used or row_rel_path in dirs.paths:
-                row_rel_path = f"{row_rel_path}-{row_id[:8]}"
+            row_rel_path = free_path(
+                config_row_path(ctx.row_naming, row_name), row_id[:8], used | dirs.paths
+            )
         used.add(row_rel_path)
         row_dir = ctx.config_dir / row_rel_path
         result.rows.append(
@@ -321,8 +352,14 @@ def _pull_row(
             return _row_entry(row, row_rel_path, old_file_hash, old_cfg_hash)
         local = service._read_config_file(row_dir)
         if not old_file_hash and local is not None and config_hash(local) != row_api_cfg_hash:
+            # No baseline: pull cannot tell a stale file from an edited one. It
+            # keeps the file, and the row's base stays unknown (D22) -- never a
+            # baseline stamped from the remote, which made push send the stale
+            # file over a remote edit.
             pull_details.append({**detail, "reason": ADOPTED_ROW_SKIP_REASON})
-            return _row_entry(row, row_rel_path, "", old_cfg_hash)
+            entry = _row_entry(row, row_rel_path, "", "")
+            entry.metadata[UNKNOWN_BASE_KEY] = UNKNOWN_BASE_ADOPTED
+            return entry
     if (
         existing
         and old_cfg_hash

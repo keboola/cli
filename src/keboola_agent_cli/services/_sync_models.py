@@ -39,6 +39,13 @@ SCHEDULER_COMPONENT_ID = "keboola.scheduler"
 # use each row as a ``{{<row id>}}`` placeholder.
 SHARED_CODE_COMPONENT_ID = "keboola.shared-code"
 
+# Manifest metadata of a promote create (``push --branch DEV`` reading main/)
+# whose references may still name source ids on the target; cleared once the
+# rebind PUT succeeded (D24).
+REBIND_PENDING_KEY = "rebind_pending"
+# Row metadata: the source row a promote push created this row from (D24).
+PROMOTED_ROW_KEY = "promoted_from_id"
+
 
 @dataclass
 class WritebackResult:
@@ -55,6 +62,23 @@ class WritebackResult:
 
 
 @dataclass
+class CreateOutcome:
+    """A config ``push_create`` POSTed, before any local bookkeeping (D25).
+
+    The caller records the new id in the manifest and saves it FIRST, then
+    writes the local file back (``pristine_data`` + the encrypted
+    ``configuration``) and stamps the baselines. ``file_config_id`` is the id
+    the local file may carry: empty on the promote path (D19, D23).
+    """
+
+    result: dict[str, Any]
+    pristine_data: dict[str, Any]
+    configuration: dict[str, Any]
+    config_dir: Path
+    file_config_id: str
+
+
+@dataclass
 class CreatedConfig:
     """A config created during a single ``push`` create pass.
 
@@ -66,10 +90,6 @@ class CreatedConfig:
     component_id: str
     config_id: str
     config_dir: Path
-    # False on the promote path (``push --branch DEV`` reading ``main/``): the
-    # link backfill then rewrites only the remote DEV payload. The source
-    # files keep the source branch's ids (D16, D19).
-    write_local: bool = True
 
 
 @dataclass

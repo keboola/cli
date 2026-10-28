@@ -6,7 +6,10 @@ directories written by kbagent are compatible with `kbc` tooling.
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -198,7 +201,23 @@ def save_manifest(project_root: Path, manifest: Manifest) -> None:
     payload = manifest.model_dump(mode="json", by_alias=True)
     if not manifest.sync_workspaces:
         payload.pop("syncWorkspaces", None)
-    manifest_path.write_text(
-        json.dumps(payload, indent=4, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
+    data = (json.dumps(payload, indent=4, ensure_ascii=False) + "\n").encode("utf-8")
+    # Atomic: a temp file in the same directory, flushed to disk, then renamed
+    # over the manifest. ``sync push`` saves after every create (a crash must
+    # not lose the record of a created config), so an interrupted save must
+    # leave the previous manifest whole, never a truncated one.
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{MANIFEST_FILENAME}.", dir=keboola_dir)
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        # mkstemp creates 0600; keep the mode a plain write gave the manifest.
+        mode = manifest_path.stat().st_mode & 0o777 if manifest_path.exists() else 0o644
+        os.chmod(tmp_path, mode)
+        os.replace(tmp_path, manifest_path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            tmp_path.unlink()
+        raise

@@ -10,6 +10,7 @@ import json
 import logging
 import shutil
 import subprocess
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -28,7 +29,7 @@ from ..constants import (
     KEBOOLA_DIR_NAME,
     MANIFEST_VERSION,
 )
-from ..errors import ConfigError, ErrorCode, KeboolaApiError, SyncConflictError
+from ..errors import ConfigError, KeboolaApiError, SyncConflictError
 from ..sync.branch_registry import (
     ScaffoldPlacement,
     ensure_branch_registered,
@@ -36,6 +37,8 @@ from ..sync.branch_registry import (
     resolve_scaffold_placement,
 )
 from ..sync.branch_scope import (
+    UNKNOWN_BASE_HASH,
+    UNKNOWN_BASE_KEY,
     VERDICT_CREATE,
     VERDICT_ORPHAN,
     branch_tree_path,
@@ -109,15 +112,23 @@ from ._sync_data_app import (
 )
 from ._sync_models import LocalConfigHashes
 from ._sync_project_guard import adopt_existing_manifest, load_project_manifest
+from ._sync_promote_remap import PromoteRemap, finish_promote_rebind, has_pending_rebind
 from ._sync_pull_dirs import (
     RowPullContext,
     ambiguous_id_warnings,
     finalize_kept_entries,
+    free_path,
     partition_pull_entries,
     pull_config_rows,
     scan_config_dirs,
 )
-from ._sync_push_create import CreateLedger, record_created_config
+from ._sync_push_create import (
+    CreateLedger,
+    CreateTarget,
+    checkpoint_manifest,
+    is_fatal_push_error,
+    record_created_config,
+)
 from ._sync_push_ops import detect_name_drift, plan_push, push_create, push_row_change, push_update
 from ._sync_stale import (
     apply_stale_sweep,
@@ -577,7 +588,11 @@ class SyncService(BaseService):
         pull_warnings: list[dict[str, Any]] = ambiguous_id_warnings(untracked_dirs)
         # Paths owned on disk before this pull allocates any (D14): a new or
         # renamed config never lands in one, whatever order the remote lists.
-        reserved = untracked_dirs.paths | {c.path for c in own_entries + entries.kept}
+        reserved = (
+            untracked_dirs.paths
+            | {c.path for c in own_entries}
+            | entries.kept_paths_in(branch_dir_name)
+        )
         existing_paths: dict[str, str] = {f"{c.component_id}/{c.id}": c.path for c in own_entries}
         existing_keys: set[str] = set(existing_paths.keys())
         # Full metadata per entry -- the shape-migration checks need the
@@ -608,6 +623,7 @@ class SyncService(BaseService):
                     "path": r.path,
                     "pull_hash": r.metadata.get("pull_hash", ""),
                     "pull_config_hash": r.metadata.get("pull_config_hash", ""),
+                    UNKNOWN_BASE_KEY: str(r.metadata.get(UNKNOWN_BASE_KEY) or ""),
                 }
 
         # Resolved once and shared by the conflict guard, the fetch loop and
@@ -673,9 +689,9 @@ class SyncService(BaseService):
                     if rel_path != expected_path and not dry_run:
                         rename_target = expected_path
                         # Collision: if target already used, add suffix
-                        if rename_target in used_paths or rename_target in reserved:
-                            suffix = config_id[:8] if len(config_id) > 8 else config_id
-                            rename_target = f"{rename_target}-{suffix}"
+                        rename_target = free_path(
+                            rename_target, config_id[:8], used_paths | reserved
+                        )
 
                         old_dir = branch_dir / rel_path
                         new_dir = branch_dir / rename_target
@@ -709,10 +725,11 @@ class SyncService(BaseService):
                         config_name,
                     )
                     generated = True
-                if rel_path in used_paths or (generated and rel_path in reserved):
-                    # Append short config ID suffix to resolve collision
-                    suffix = config_id[:8] if len(config_id) > 8 else config_id
-                    rel_path = f"{rel_path}-{suffix}"
+                # Short config ID suffix on a collision; every candidate is
+                # checked against the owned paths (D26).
+                rel_path = free_path(
+                    rel_path, config_id[:8], used_paths | reserved if generated else used_paths
+                )
                 used_paths.add(rel_path)
                 config_dir = branch_dir / rel_path
                 # Defense-in-depth: refuse to write outside the branch dir
@@ -1384,6 +1401,8 @@ class SyncService(BaseService):
                 pch = row.metadata.get("pull_config_hash") if row.metadata else ""
                 if pch:
                     row_base_hashes[row_key] = pch
+                elif row.metadata.get(UNKNOWN_BASE_KEY):
+                    row_base_hashes[row_key] = UNKNOWN_BASE_HASH  # D22: a difference conflicts
 
         # Also add untracked local rows (new row dirs dropped under a tracked
         # config). They have no row_id yet so compute_row_changeset flags
@@ -1419,6 +1438,10 @@ class SyncService(BaseService):
                 if c.change_type == "remote_deleted"
             },
         )
+        for change in row_changeset:  # D22: an unknown-base row is never deleted by push
+            key = f"{change.component_id}/{change.parent_config_id}/rows/{change.config_id}"
+            if change.change_type == "deleted" and row_base_hashes.get(key) == UNKNOWN_BASE_HASH:
+                change.change_type = "conflict"
         changeset.extend(row_changeset)
 
         added = [c for c in changeset if c.change_type == "added"]
@@ -1523,7 +1546,9 @@ class SyncService(BaseService):
         plan = plan_push(all_changes, force=force)
         changes = plan.changes
 
-        if not changes:
+        # A promote create whose references still need a rebind (D24) is pushed
+        # again although nothing changed locally.
+        if not changes and not has_pending_rebind(load_manifest(project_root)):
             result: dict[str, Any] = {
                 "status": "no_changes",
                 "created": 0,
@@ -1612,6 +1637,15 @@ class SyncService(BaseService):
 
             # The ids this push creates, for the rows and the link backfill.
             ledger = CreateLedger()
+            target = CreateTarget(project_root, branch_path, branch_id)
+            # (ULID parent, row placeholder id) -> row ULID; ULID parent -> rows
+            # created under it. Keyed per parent: two configs can use one row id.
+            created_row_id_map: dict[tuple[str, str], str] = {}
+            created_rows_by_parent: dict[str, list[str]] = {}
+            # Promote path (no tree of the target's own): every payload sent is
+            # remapped source id -> target id in memory (D24).
+            promoting = branch_path != self._find_branch_path(manifest, branch_id)
+            remap = PromoteRemap() if promoting else None
 
             # ---- Phase A: config creates / updates / deletes -------------
             for change in config_changes:
@@ -1619,6 +1653,8 @@ class SyncService(BaseService):
                 component_id = change["component_id"]
                 config_id = change["config_id"]
                 config_path_str = change.get("path", "")
+                if remap is not None:
+                    remap.refresh(manifest, branch_id, ledger.created_id_map, created_row_id_map)
 
                 try:
                     if change_type == "added":
@@ -1635,24 +1671,23 @@ class SyncService(BaseService):
                             ds_client=ds_client,
                             ds_branch_id=ds_branch_id,
                             known_secrets=known_secrets,
+                            remap=remap,
                         )
                         if result:
+                            manifest_dirty = True
                             record_created_config(
                                 self,
                                 client,
                                 ledger,
                                 manifest=manifest,
-                                project_root=project_root,
-                                branch_path=branch_path,
-                                branch_id=branch_id,
+                                target=target,
                                 component_id=component_id,
                                 source_config_id=config_id,
                                 config_path_str=config_path_str,
-                                result=result,
+                                outcome=result,
                                 warnings=warnings,
                                 errors=errors,
                             )
-                            manifest_dirty = True
                             created += 1
                             pushed_details.append(change)
 
@@ -1679,6 +1714,7 @@ class SyncService(BaseService):
                             allow_plaintext_fallback=allow_plaintext_fallback,
                             warnings=warnings,
                             known_secrets=known_secrets,
+                            remap=remap,
                         )
                         # Update hashes so pull knows local == remote
                         if (config_dir / CONFIG_FILENAME).exists():
@@ -1722,19 +1758,13 @@ class SyncService(BaseService):
                     # omits the failed change would leave a plaintext secret
                     # elsewhere or a caller believing the push "mostly succeeded".
                     # Surface to the CLI (exit non-zero) rather than burying in
-                    # result["errors"].
-                    if (
-                        isinstance(exc, KeboolaApiError)
-                        and exc.error_code == ErrorCode.ENCRYPTION_FAILED
-                    ):
+                    # result["errors"]. Same for a create the manifest could not
+                    # record (D25).
+                    if is_fatal_push_error(exc):
                         raise
                     self._record_push_error(errors, change_type, component_id, config_id, exc)
 
             # ---- Phase B: row creates / updates / deletes ----------------
-            # (ULID parent, row placeholder id) -> row ULID; ULID parent -> rows
-            # created under it. Keyed per parent: two configs can use one row id.
-            created_row_id_map: dict[tuple[str, str], str] = {}
-            created_rows_by_parent: dict[str, list[str]] = {}
             for change in row_changes:
                 change_type = change["change_type"]
                 component_id = change["component_id"]
@@ -1746,6 +1776,8 @@ class SyncService(BaseService):
                 # the real config (KFR-05). UPDATE/DELETE parents already carry
                 # a ULID and pass through unchanged.
                 effective_parent_id = ledger.parent_id(component_id, parent_config_id)
+                if remap is not None:
+                    remap.refresh(manifest, branch_id, ledger.created_id_map, created_row_id_map)
 
                 try:
                     new_row_id = push_row_change(
@@ -1762,10 +1794,11 @@ class SyncService(BaseService):
                         allow_plaintext_fallback=allow_plaintext_fallback,
                         warnings=warnings,
                         known_secrets=known_secrets,
+                        checkpoint=partial(checkpoint_manifest, project_root, manifest),
+                        remap=remap,
                     )
                     manifest_dirty = True
                     if change_type == "added":
-                        save_manifest(project_root, manifest)  # checkpoint (D17)
                         created += 1
                         if new_row_id:
                             if config_id:
@@ -1780,12 +1813,24 @@ class SyncService(BaseService):
                     pushed_details.append(change)
 
                 except Exception as exc:
-                    if (
-                        isinstance(exc, KeboolaApiError)
-                        and exc.error_code == ErrorCode.ENCRYPTION_FAILED
-                    ):
+                    if is_fatal_push_error(exc):
                         raise
                     self._record_push_error(errors, change_type, component_id, config_id, exc)
+
+            # ---- Promote path: references to configs created this push (D24)
+            if remap is not None:
+                remap.refresh(manifest, branch_id, ledger.created_id_map, created_row_id_map)
+                manifest_dirty |= finish_promote_rebind(
+                    self,
+                    client,
+                    remap,
+                    manifest=manifest,
+                    target=target,
+                    known_secrets=known_secrets,
+                    warnings=warnings,
+                    errors=errors,
+                    allow_plaintext_fallback=allow_plaintext_fallback,
+                )
 
             # ---- Phase C: variable + shared-code links (KFR-03, CLI-24) --
             binding = resolve_transformation_bindings(
@@ -1797,7 +1842,6 @@ class SyncService(BaseService):
                 created_rows_by_parent=created_rows_by_parent,
                 manifest=manifest,
                 branch_id=branch_id,
-                promoted_id_map=ledger.promoted_id_map,
             )
             errors.extend(binding.errors)
             warnings.extend(binding.warnings)
@@ -1816,7 +1860,6 @@ class SyncService(BaseService):
                 created_row_id_map=created_row_id_map,
                 manifest=manifest,
                 branch_id=branch_id,
-                promoted_id_map=ledger.promoted_id_map,
             )
             errors.extend(flow_binding.errors)
             warnings.extend(flow_binding.warnings)

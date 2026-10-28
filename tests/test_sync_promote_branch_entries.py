@@ -10,6 +10,7 @@ the bookkeeping differential test.
 
 from __future__ import annotations
 
+import copy
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,6 +22,7 @@ import yaml
 from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 from keboola_agent_cli.services._sync_bindings import _refresh_binding_hashes
 from keboola_agent_cli.services._sync_models import CreatedConfig
+from keboola_agent_cli.services._sync_push_create import ManifestCheckpointError
 from keboola_agent_cli.services._sync_writeback import writeback_create_config_in_manifest
 from keboola_agent_cli.services.component_service import materialize_pushed_config
 from keboola_agent_cli.sync.branch_scope import same_branch
@@ -601,18 +603,11 @@ def test_crash_after_the_first_row_create_does_not_create_rows_again(
     assert len(cfg["rows"]) == 2
 
 
-# -- risk 11: unreadable dev rows stay visible -------------------------------
+# -- risks 11 / 23: unreadable dev rows stay visible, are never created twice
 
 
-def test_unreadable_dev_rows_are_listed_not_hidden(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    v = VARIANTS["rows"]
-    seeded = _seeded(tmp_path, v)
-    w, cid = seeded.world, seeded.config_id
-    config_dir = w.config_dir(cid)
-    w.api.branch_from_prod()
-    gone = w.api.get(DEV, v.component_id, cid)["rows"].pop(0)["id"]
+def _rows_unreadable(w: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The update response carries no rows and the detail read fails."""
     original_update = w.api._update
 
     def update_without_rows(*args: Any, **kwargs: Any) -> dict:
@@ -625,11 +620,51 @@ def test_unreadable_dev_rows_are_listed_not_hidden(
 
     monkeypatch.setattr(w.api, "_update", update_without_rows)
     monkeypatch.setattr(w.api, "_detail", detail_fails)
+
+
+def test_unreadable_dev_rows_create_a_missing_row_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    v = VARIANTS["rows"]
+    seeded = _seeded(tmp_path, v)
+    w, cid = seeded.world, seeded.config_id
+    config_dir = w.config_dir(cid)
+    w.api.branch_from_prod()
+    w.api.get(DEV, v.component_id, cid)["rows"].pop(0)
+    _rows_unreadable(w, monkeypatch)
     semantic_edit(config_dir / CONFIG_FILE)
-    w.push(branch=DEV)
+    w.push(branch=DEV)  # the missing row is "added" before the push: created here
+
+    assert len(w.api.get(DEV, v.component_id, cid)["rows"]) == 2
+    assert w.diff(branch=DEV)["summary"]["added"] == 0
+    assert w.push(branch=DEV)["status"] == "no_changes"
+    assert len(w.api.get(DEV, v.component_id, cid)["rows"]) == 2
+
+
+def test_unreadable_dev_rows_list_a_row_whose_create_failed_and_recover(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    v = VARIANTS["rows"]
+    seeded = _seeded(tmp_path, v)
+    w, cid = seeded.world, seeded.config_id
+    config_dir = w.config_dir(cid)
+    w.api.branch_from_prod()
+    gone = w.api.get(DEV, v.component_id, cid)["rows"].pop(0)["id"]
+    _rows_unreadable(w, monkeypatch)
+
+    def create_row_fails(*_: Any, **__: Any) -> dict:
+        raise KeboolaApiError("row create refused", 500, ErrorCode.API_ERROR)
+
+    monkeypatch.setattr(w.api, "_create_row", create_row_fails)
+    semantic_edit(config_dir / CONFIG_FILE)
+    assert w.svc.push(alias="prod", project_root=w.root, branch_override=DEV)["errors"]
 
     changes = w.diff(branch=DEV)["changes"]
-    assert any(c["config_id"] == gone and c["change_type"] == "remote_deleted" for c in changes)
+    assert [c["change_type"] for c in changes if c["config_id"] == gone] == ["added"]
+    monkeypatch.undo()  # rows readable, creates succeed
+    w.push(branch=DEV)
+    assert len(w.api.get(DEV, v.component_id, cid)["rows"]) == 2
+    assert w.push(branch=DEV)["status"] == "no_changes"
 
 
 # -- risk 14: the shadow's source is the source tree's entry -----------------
@@ -785,6 +820,481 @@ def test_binding_refresh_finds_an_entry_recorded_under_branch_zero(tmp_path: Pat
         created=CreatedConfig(component_id=v.component_id, config_id=cid, config_dir=config_dir),
         manifest=manifest,
         branch_id=PROD,
+        response=w.api.get(PROD, v.component_id, cid),
+        warnings=[],
+    )
+    assert entry.metadata["pull_config_hash"] != "stale"
+
+
+# ===========================================================================
+# Round 3 (design D22-D28): regression tests per risk
+# ===========================================================================
+
+
+def _flow_body(component_id: str, config_id: str) -> dict:
+    return {
+        "phases": [{"id": "1", "name": "P", "dependsOn": []}],
+        "tasks": [
+            {
+                "id": "t1",
+                "name": "T",
+                "phase": "1",
+                "enabled": True,
+                "task": {
+                    "type": "job",
+                    "componentId": component_id,
+                    "configId": config_id,
+                    "mode": "run",
+                },
+            }
+        ],
+    }
+
+
+@dataclass(frozen=True)
+class FlowWorld:
+    """Production with an extractor (``cfg-ext``) and a flow (``cfg-flow``) that runs it."""
+
+    world: World
+    extractor_id: str
+    flow_id: str
+
+
+def _seed_flow_world(tmp_path: Path, *, flow_first: bool = False) -> FlowWorld:
+    v = VARIANTS["extractor"]
+    w = World(tmp_path)
+    w.api.types[v.component_id] = v.component_type
+    w.api.types["keboola.flow"] = "other"
+    extractor = {
+        "id": "cfg-ext",
+        "name": "Orders",
+        "description": "",
+        "configuration": v.body(),
+        "rows": [],
+        "isDisabled": False,
+    }
+    flow = {
+        "id": "cfg-flow",
+        "name": "Nightly",
+        "description": "",
+        "configuration": _flow_body(v.component_id, "cfg-ext"),
+        "rows": [],
+        "isDisabled": False,
+    }
+    items = [(("keboola.flow", "cfg-flow"), flow), ((v.component_id, "cfg-ext"), extractor)]
+    for key, cfg in items if flow_first else reversed(items):
+        w.api.remote[PROD][key] = cfg
+    w.init()
+    w.pull()
+    return FlowWorld(world=w, extractor_id="cfg-ext", flow_id="cfg-flow")
+
+
+def _dev_task_target(w: World) -> str:
+    (flow,) = [cfg for (comp, _), cfg in w.api.remote[DEV].items() if comp == "keboola.flow"]
+    return flow["configuration"]["tasks"][0]["task"]["configId"]
+
+
+def _dev_id_of(w: World, component_id: str) -> str:
+    (dev_id,) = [cid for comp, cid in w.api.remote[DEV] if comp == component_id]
+    return dev_id
+
+
+# -- risk 24 / D22: an adopted stale row is never pushed over a remote edit ---
+
+
+def test_adopted_stale_row_is_a_conflict_not_pushed_over_a_remote_edit(tmp_path: Path) -> None:
+    v = VARIANTS["rows"]
+    seeded = _seeded(tmp_path, v)
+    w, cid = seeded.world, seeded.config_id
+    w.api.branch_from_prod()
+    w.pull(branch=DEV)  # re-targets: main/ is rediscovered next
+    row = w.api.get(PROD, v.component_id, cid)["rows"][0]
+    row["configuration"]["parameters"]["table"] = "edited in the UI"
+    w.pull()  # keeps the stale main/ row: no baseline to tell stale from edited
+
+    changes = [c for c in w.diff()["changes"] if c["config_id"] == row["id"]]
+    assert [c["change_type"] for c in changes] == ["conflict"]
+    w.push()
+    assert row["configuration"]["parameters"]["table"] == "edited in the UI"
+    w.pull(theirs=True)  # the one way to resolve it
+    assert w.diff()["changes"] == []
+
+
+# -- risk 26 / D23: a later promote update never writes the DEV id into main/ --
+
+
+def test_promote_update_keeps_the_production_id_in_main(tmp_path: Path) -> None:
+    v = VARIANTS["extractor"]
+    seeded = _seeded(tmp_path, v)
+    w, cid = seeded.world, seeded.config_id
+    config_dir = w.config_dir(cid)
+    w.push(branch=DEV)  # created under a new id
+    semantic_edit(config_dir / CONFIG_FILE)
+    assert w.push(branch=DEV)["updated"] == 1
+    assert _file_id(config_dir) == cid
+
+
+def test_promote_update_of_an_authored_config_keeps_it_pushable_to_production(
+    tmp_path: Path,
+) -> None:
+    p = _authored_and_promoted(tmp_path)
+    w, config_dir = p.world, p.config_dir
+    semantic_edit(config_dir / CONFIG_FILE)
+    assert w.push(branch=DEV)["updated"] == 1
+    assert "config_id" not in (_yaml(config_dir).get("_keboola") or {})
+    assert w.push()["created"] == 1
+    ((_, prod_id),) = w.api.remote[PROD]
+    assert _file_id(config_dir) == prod_id
+
+
+# -- risk 27 / D24: references are remapped on EVERY promote push -----------
+
+
+def test_flow_edited_after_promote_still_runs_the_dev_extractor(tmp_path: Path) -> None:
+    f = _seed_flow_world(tmp_path)
+    w = f.world
+    flow_file = w.config_dir(f.flow_id) / CONFIG_FILE
+    w.push(branch=DEV)
+    semantic_edit(flow_file)
+    w.push(branch=DEV)
+
+    assert _dev_task_target(w) == _dev_id_of(w, VARIANTS["extractor"].component_id)
+    assert "cfg-ext" in flow_file.read_text(encoding="utf-8")  # main/ keeps production ids
+
+
+def test_flow_on_dev_runs_an_extractor_promoted_in_the_same_push(tmp_path: Path) -> None:
+    f = _seed_flow_world(tmp_path)
+    w = f.world
+    w.api.branch_from_prod()
+    del w.api.remote[DEV][(VARIANTS["extractor"].component_id, f.extractor_id)]
+    semantic_edit(w.config_dir(f.flow_id) / CONFIG_FILE)
+    w.push(branch=DEV)
+
+    new_ext = _dev_id_of(w, VARIANTS["extractor"].component_id)
+    assert new_ext != f.extractor_id
+    assert _dev_task_target(w) == new_ext
+
+
+def test_promoted_schedule_targets_the_dev_config(tmp_path: Path) -> None:
+    v = VARIANTS["extractor"]
+    w = World(tmp_path)
+    ext_id = w.api.seed(v)
+    w.api.types["keboola.scheduler"] = "other"
+    w.api.remote[PROD][("keboola.scheduler", "cfg-sched")] = {
+        "id": "cfg-sched",
+        "name": "Daily",
+        "description": "",
+        "configuration": {
+            "schedule": {"cronTab": "0 6 * * *", "timezone": "UTC", "state": "disabled"},
+            "target": {"componentId": v.component_id, "configurationId": ext_id, "mode": "run"},
+        },
+        "rows": [],
+        "isDisabled": False,
+    }
+    w.init()
+    w.pull()
+    w.push(branch=DEV)
+
+    (schedule,) = [c for (comp, _), c in w.api.remote[DEV].items() if comp == "keboola.scheduler"]
+    assert schedule["configuration"]["target"]["configurationId"] == _dev_id_of(w, v.component_id)
+
+
+# -- risk 28 / D24: all reference kinds remapped in ONE payload -------------
+
+
+def test_transformation_promoted_with_variables_and_shared_code_gets_both_dev_ids(
+    tmp_path: Path,
+) -> None:
+    w = World(tmp_path)
+    sql = "keboola.snowflake-transformation"
+    w.api.types.update(
+        {"keboola.variables": "other", "keboola.shared-code": "other", sql: "transformation"}
+    )
+    w.api.remote[PROD][("keboola.variables", "cfg-vars")] = {
+        "id": "cfg-vars",
+        "name": "Vars",
+        "description": "",
+        "configuration": {"variables": [{"name": "x", "type": "string"}]},
+        "rows": [
+            {
+                "id": "row-vals",
+                "name": "Default",
+                "description": "",
+                "configuration": {"values": [{"name": "x", "value": TOKEN}]},
+                "isDisabled": False,
+            }
+        ],
+        "isDisabled": False,
+    }
+    w.api.remote[PROD][("keboola.shared-code", "cfg-sc")] = {
+        "id": "cfg-sc",
+        "name": "Snippets",
+        "description": "",
+        "configuration": {"componentId": sql},
+        "rows": [
+            {
+                "id": "row-sc",
+                "name": "Snippet",
+                "description": "",
+                "configuration": {"code_content": ["SELECT 1;"]},
+                "isDisabled": False,
+            }
+        ],
+        "isDisabled": False,
+    }
+    w.api.remote[PROD][(sql, "cfg-trans")] = {
+        "id": "cfg-trans",
+        "name": "Orders",
+        "description": "",
+        "configuration": {
+            "parameters": {
+                "blocks": [
+                    {"name": "B", "codes": [{"name": "C", "script": ["{{row-sc}}", "SELECT 2;"]}]}
+                ]
+            },
+            "variables_id": "cfg-vars",
+            "variables_values_id": "row-vals",
+            "shared_code_id": "cfg-sc",
+            "shared_code_row_ids": ["row-sc"],
+        },
+        "rows": [],
+        "isDisabled": False,
+    }
+    w.init()
+    w.pull()
+    w.push(branch=DEV)
+
+    dev = w.api.remote[DEV]
+    (dev_vars,) = [c for (comp, _), c in dev.items() if comp == "keboola.variables"]
+    (dev_sc,) = [c for (comp, _), c in dev.items() if comp == "keboola.shared-code"]
+    (dev_trans,) = [c for (comp, _), c in dev.items() if comp == sql]
+    conf = dev_trans["configuration"]
+    sc_row = dev_sc["rows"][0]["id"]
+    assert conf["variables_id"] == dev_vars["id"] != "cfg-vars"
+    assert conf["variables_values_id"] == dev_vars["rows"][0]["id"]
+    assert conf["shared_code_id"] == dev_sc["id"] != "cfg-sc"
+    assert conf["shared_code_row_ids"] == [sc_row]
+    assert "{{" + sc_row + "}}" in str(conf["parameters"])
+
+
+# -- risk 29 / D25: a checkpoint that cannot be written stops the push ------
+
+
+def test_failed_checkpoint_stops_the_push_and_the_retry_creates_nothing_twice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    v = VARIANTS["extractor"]
+    w = World(tmp_path)
+    w.api.types[v.component_id] = v.component_type
+    w.init()
+    w.pull()
+    author_config(w.root / "main", v, "First")
+    author_config(w.root / "main", v, "Second")
+
+    def save_fails(*_: Any, **__: Any) -> None:
+        raise PermissionError("manifest is read-only")
+
+    monkeypatch.setattr("keboola_agent_cli.services._sync_push_create.save_manifest", save_fails)
+    with pytest.raises(ManifestCheckpointError) as raised:
+        w.svc.push(alias="prod", project_root=w.root)
+    ((_, created),) = w.api.remote[PROD]
+    assert created in raised.value.message  # names the config it created
+    monkeypatch.undo()
+    w.push()  # the retry
+    assert len(w.api.remote[PROD]) == 2
+
+
+def test_manifest_save_is_atomic(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    v = VARIANTS["extractor"]
+    seeded = _seeded(tmp_path, v)
+    w = seeded.world
+    manifest_path = w.root / ".keboola" / "manifest.json"
+    before = manifest_path.read_bytes()
+    manifest = load_manifest(w.root)
+    manifest.configurations = []
+
+    def replace_dies(*_: Any, **__: Any) -> None:
+        raise OSError("killed mid-write")
+
+    monkeypatch.setattr("keboola_agent_cli.sync.manifest.os.replace", replace_dies)
+    with pytest.raises(OSError):
+        save_manifest(w.root, manifest)
+    monkeypatch.undo()
+    assert manifest_path.read_bytes() == before
+    assert len(load_manifest(w.root).configurations) == 1
+    assert not [p for p in manifest_path.parent.iterdir() if p.name.startswith(".manifest")]
+
+
+# -- risk 30 / D24: a crash before the rebind is finished by the next push ---
+
+
+def test_crash_before_the_rebind_is_finished_by_the_next_push(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    w = _seed_flow_world(tmp_path, flow_first=True).world
+
+    def crash(*_: Any, **__: Any) -> bool:
+        raise _Crash
+
+    monkeypatch.setattr("keboola_agent_cli.services.sync_service.finish_promote_rebind", crash)
+    with pytest.raises(_Crash):
+        w.svc.push(alias="prod", project_root=w.root, branch_override=DEV)
+    monkeypatch.undo()
+    w.push(branch=DEV)  # no local edit
+
+    assert len(w.api.remote[DEV]) == 2  # nothing created twice
+    assert _dev_task_target(w) == _dev_id_of(w, VARIANTS["extractor"].component_id)
+
+
+# -- risk 31 / D26: every candidate path is checked; ID-less dirs reserved ---
+
+
+def test_suffixed_path_owned_by_another_config_is_not_overwritten(tmp_path: Path) -> None:
+    v = VARIANTS["extractor"]
+    w = World(tmp_path)
+    first = w.api.seed(v, name="Foo")  # path foo
+    w.api.seed(v, name="Foo cfg-1002")  # path foo-cfg-1002
+    w.init()
+    w.pull()
+    taken = {c.path for c in load_manifest(w.root).configurations}
+    before = {p: (w.root / "main" / p / CONFIG_FILE).read_bytes() for p in taken}
+    new = w.api._create(v.component_id, "Foo", v.body(), "third")
+    assert new["id"] == "cfg-1002"
+    w.pull()
+
+    assert {p: (w.root / "main" / p / CONFIG_FILE).read_bytes() for p in taken} == before
+    paths = {c.id: c.path for c in load_manifest(w.root).configurations}
+    assert paths[new["id"]] not in taken
+    assert first in paths
+
+
+def test_row_suffix_collision_gets_distinct_dirs(tmp_path: Path) -> None:
+    v = VARIANTS["rows"]
+    seeded = _seeded(tmp_path, v)
+    w, cid = seeded.world, seeded.config_id
+    rows = w.api.get(PROD, v.component_id, cid)["rows"]
+    for row_id in ("row-new-a", "row-new-b"):  # same first 8 characters
+        rows.append(
+            {
+                "id": row_id,
+                "name": "Row 1",
+                "description": "",
+                "configuration": {"parameters": {"table": row_id}},
+                "isDisabled": False,
+            }
+        )
+    w.pull()
+
+    (entry,) = _entries(w, cid, PROD)
+    paths = [r.path for r in entry.rows]
+    assert len(set(paths)) == len(paths) == 4
+    config_dir = w.config_dir(cid)
+    for row_id in ("row-new-a", "row-new-b"):
+        (path,) = [r.path for r in entry.rows if r.id == row_id]
+        assert row_id in (config_dir / path / CONFIG_FILE).read_text(encoding="utf-8")
+
+
+def test_pull_never_writes_into_an_authored_id_less_dir(tmp_path: Path) -> None:
+    v = VARIANTS["extractor"]
+    w = World(tmp_path)
+    w.api.types[v.component_id] = v.component_type
+    w.init()
+    w.pull()
+    authored = author_config(w.root / "main", v, "Foo")
+    before = (authored / CONFIG_FILE).read_bytes()
+    new = w.api._create(v.component_id, "Foo", v.body(), "same name, from the UI")
+    w.pull()
+
+    assert (authored / CONFIG_FILE).read_bytes() == before
+    paths = {c.id: c.path for c in load_manifest(w.root).configurations}
+    assert paths[new["id"]] != authored.relative_to(w.root / "main").as_posix()
+
+
+# -- risk 32 / D22: a kept adopted row survives a remote delete --------------
+
+
+def test_kept_adopted_row_survives_a_remote_delete(tmp_path: Path) -> None:
+    r = _retargeted(tmp_path, "rows")
+    w, cid, config_dir = r.world, r.config_id, r.config_dir
+    row_file = config_dir / "rows" / "row-1" / CONFIG_FILE
+    semantic_edit(row_file)
+    w.pull()  # kept, base unknown
+    rows = w.api.get(PROD, VARIANTS["rows"].component_id, cid)["rows"]
+    rows[:] = [row for row in rows if row["name"] != "Row 1"]
+    result = w.pull()
+
+    assert "edit_marker" in row_file.read_text(encoding="utf-8")
+    assert not [d for d in result["details"] if d["action"] == "removed"]
+    assert any(
+        d["action"] == "skipped" and d["path"].endswith("rows/row-1") for d in result["details"]
+    )
+
+
+# -- risk 33 / D27: pulling a third branch keeps the promote association -----
+
+
+def test_pull_of_another_dev_branch_keeps_the_promote_association(tmp_path: Path) -> None:
+    v = VARIANTS["extractor"]
+    seeded = _seeded(tmp_path, v)
+    w = seeded.world
+    w.push(branch=DEV)  # DEV lacks it: created there
+    other = 88888
+    w.api.remote[other] = copy.deepcopy(w.api.remote[PROD])
+    w.pull(branch=other)
+    w.pull()
+    w.push(branch=DEV)
+    assert len(w.api.remote[DEV]) == 1, sorted(w.api.remote[DEV])
+
+
+# -- risk 34 / D28: an unregistered branch never supplies the shadow ---------
+
+
+def test_unregistered_branch_entry_never_becomes_the_shadow_source(tmp_path: Path) -> None:
+    v = VARIANTS["rows"]
+    seeded = _seeded(tmp_path, v)
+    w, cid = seeded.world, seeded.config_id
+    config_dir = w.config_dir(cid)
+    manifest = load_manifest(w.root)
+    (prod,) = manifest.configurations
+    stray = ManifestConfiguration(
+        branchId=999,  # not registered: its tree falls back to main/
+        componentId=v.component_id,
+        id=cid,
+        path="extractor/elsewhere",
+        metadata={"pull_hash": "UNKNOWN", "pull_config_hash": "UNKNOWN"},
+    )
+    manifest.configurations.insert(0, stray)
+    save_manifest(w.root, manifest)
+    w.api.branch_from_prod()
+    semantic_edit(config_dir / CONFIG_FILE)
+    w.push(branch=DEV)
+
+    (shadow,) = _entries(w, cid, DEV)
+    assert shadow.path == prod.path
+    assert {r.id for r in shadow.rows} == {r.id for r in prod.rows}
+    assert shadow.metadata["pull_hash"] != "UNKNOWN"
+
+
+# -- risk 36 / D21: push branch None finds an entry under the default id ------
+
+
+def test_binding_refresh_with_branch_none_finds_an_entry_under_the_default_id(
+    tmp_path: Path,
+) -> None:
+    v = VARIANTS["extractor"]
+    seeded = _seeded(tmp_path, v)
+    w, cid = seeded.world, seeded.config_id
+    config_dir = w.config_dir(cid)
+    manifest = load_manifest(w.root)
+    (entry,) = manifest.configurations
+    entry.branch_id = PROD
+    entry.metadata["pull_config_hash"] = "stale"
+    _refresh_binding_hashes(
+        w.svc,
+        None,
+        created=CreatedConfig(component_id=v.component_id, config_id=cid, config_dir=config_dir),
+        manifest=manifest,
+        branch_id=None,
         response=w.api.get(PROD, v.component_id, cid),
         warnings=[],
     )
