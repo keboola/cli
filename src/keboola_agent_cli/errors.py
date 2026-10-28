@@ -118,6 +118,7 @@ class ErrorCode(StrEnum):
     LINK_UNRESOLVED = "LINK_UNRESOLVED"
     SYNC_CONFLICT = "SYNC_CONFLICT"
     SYNC_LEGACY_BOUNDARY = "SYNC_LEGACY_BOUNDARY"
+    COMPANION_UNREADABLE = "COMPANION_UNREADABLE"
 
     # Encryption
     ENCRYPTION_FAILED = "ENCRYPTION_FAILED"
@@ -481,6 +482,7 @@ ERROR_CODE_TABLE: dict[str, ErrorClass] = {
     ErrorCode.LINK_UNRESOLVED: ErrorClass("api", 1),
     ErrorCode.SYNC_CONFLICT: ErrorClass("conflict", 1),
     ErrorCode.SYNC_LEGACY_BOUNDARY: ErrorClass("conflict", 1),
+    ErrorCode.COMPANION_UNREADABLE: ErrorClass("conflict", 1),
     # Encryption
     ErrorCode.ENCRYPTION_FAILED: ErrorClass("api", 1),
     # Job / queue: local --timeout elapsed and the remote job was cancelled.

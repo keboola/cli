@@ -39,13 +39,17 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..constants import CONFIG_FILENAME, CONFIG_HASH_VERSION, CONFIG_HASH_VERSION_KEY
+from ..errors import ErrorCode, KeboolaApiError
 from ..sync.code_extraction import (
     DESCRIPTION_FILENAME,
+    PACKAGES_UNDECIDED_KEY,
     PYPROJECT_FILENAME,
+    merge_code_files,
     owned_companions,
     pyproject_unreadable,
     render_code_files,
 )
+from ..sync.config_format import api_config_to_local
 
 if TYPE_CHECKING:
     from .sync_service import SyncService
@@ -455,3 +459,93 @@ def canonical_description(local_data: dict[str, Any], config_dir: Path) -> dict[
     if "description" not in out:
         out = {"description": "", **out}
     return out
+
+
+# ---------------------------------------------------------------------------
+# T1 / T2: packages a pyproject.toml left undecided come from the remote
+# ---------------------------------------------------------------------------
+
+
+def settle_undecided_packages(
+    local_data: dict[str, Any], remote_local: dict[str, Any] | None
+) -> str | None:
+    """Take undecided packages from *remote_local*; the companion's name when that is impossible.
+
+    A merged config whose ``pyproject.toml`` states no package list and whose
+    ``_config.yml`` has none inline carries :data:`PACKAGES_UNDECIDED_KEY`.
+    Its packages are whatever the remote config has now -- copied exactly, so
+    a legacy file the old writer could not quote never changes a remote
+    string (T2). A remote without packages leaves none to keep. Returns
+    ``None`` when settled (or nothing was undecided).
+    """
+    meta = local_data.get("_keboola")
+    name = meta.pop(PACKAGES_UNDECIDED_KEY, None) if isinstance(meta, dict) else None
+    if not name:
+        return None
+    if remote_local is None:
+        return str(name)
+    parameters = remote_local.get("parameters")
+    if isinstance(parameters, dict) and "packages" in parameters:
+        local_data.setdefault("parameters", {})["packages"] = copy.deepcopy(parameters["packages"])
+    return None
+
+
+def merge_with_remote(
+    component_id: str,
+    local_data: dict[str, Any],
+    config_dir: Path,
+    remote_local: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """``merge_code_files`` for a comparison with *remote_local* (diff): undecided packages settled."""
+    merge_code_files(component_id, local_data, config_dir)
+    settle_undecided_packages(local_data, remote_local)
+    return local_data
+
+
+def require_decided_packages(
+    client: Any,
+    *,
+    component_id: str,
+    config_id: str,
+    branch_id: int | None,
+    local_data: dict[str, Any],
+    config_path: str,
+) -> None:
+    """Settle undecided packages from the target's config before a push sends them (T1).
+
+    Read from the target only when something is undecided (rare). A create
+    (no *config_id*) has no remote to take them from, and a failed read
+    proves nothing: both refuse the change -- a replacement payload without
+    the remote's packages would clear them.
+
+    Raises:
+        KeboolaApiError: ``COMPANION_UNREADABLE``, collected as a per-change error.
+    """
+    meta = local_data.get("_keboola")
+    if not (isinstance(meta, dict) and meta.get(PACKAGES_UNDECIDED_KEY)):
+        return
+    remote_local = None
+    if config_id:
+        try:
+            remote = client.get_config_detail(
+                component_id=component_id, config_id=config_id, branch_id=branch_id
+            )
+        except Exception:
+            logger.warning("Could not read %s/%s for its packages", component_id, config_id)
+            remote = None
+        if isinstance(remote, dict) and isinstance(remote.get("configuration"), (dict, list)):
+            remote_local = api_config_to_local(component_id, remote, config_id)
+    name = settle_undecided_packages(local_data, remote_local)
+    if name is None:
+        return
+    raise KeboolaApiError(
+        message=(
+            f"Refusing to push {component_id} {config_path}: {config_path}/{name} states no "
+            f"usable [project].dependencies list (no such key, or not valid TOML), _config.yml "
+            f"has no inline 'packages', and the packages on the remote could not be read -- the "
+            f"push would drop them. Fix {name}, or add 'packages' under 'parameters' in "
+            f"_config.yml."
+        ),
+        status_code=0,
+        error_code=ErrorCode.COMPANION_UNREADABLE,
+    )

@@ -39,6 +39,7 @@ from ._encryption import (
     is_already_encrypted,
 )
 from ._sync_baseline import apply_stamp, row_baseline
+from ._sync_companions import require_decided_packages
 from ._sync_data_app import create_synced_data_app
 from ._sync_models import AUTHORED_ROW_KEY, CREATED_FROM_KEY, PROMOTED_ROW_KEY, CreateOutcome
 from ._sync_workspace import SANDBOXES_COMPONENT_ID, warn_on_backend_size_change
@@ -746,6 +747,15 @@ def push_create(
 
     # Merge code files (transform.sql, transform.py, code.py) back into config
     merge_code_files(component_id, local_data, config_dir)
+    # A new config has no remote packages to keep (T1).
+    require_decided_packages(
+        client,
+        component_id=component_id,
+        config_id="",
+        branch_id=branch_id,
+        local_data=local_data,
+        config_path=config_path_str,
+    )
 
     name, description, configuration = local_config_to_api(local_data)
     folder = manifest_folder(manifest, component_id, branch_id, config_path_str)
@@ -890,6 +900,15 @@ def push_update(
 
     # Merge code files (transform.sql, transform.py, code.py) back into config
     merge_code_files(component_id, local_data, config_dir)
+    # Packages a silent pyproject.toml left undecided: the target's own (T1).
+    require_decided_packages(
+        client,
+        component_id=component_id,
+        config_id=config_id,
+        branch_id=branch_id,
+        local_data=local_data,
+        config_path=config_path_str,
+    )
 
     name, description, configuration = local_config_to_api(local_data)
 

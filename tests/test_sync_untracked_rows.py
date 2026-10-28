@@ -612,3 +612,30 @@ def test_copied_row_id_does_not_make_the_original_row_pending(tmp_path: Path) ->
         if c.component_id == "keboola.flow" and c.branch_id == DEV
     ]
     assert "rebind_pending" not in entry.metadata
+
+
+def test_registering_an_adopted_config_keeps_a_remotely_deleted_row_identity(
+    tmp_path: Path,
+) -> None:
+    """T3 (Astra's sequence): adopt, R gone remotely, a new row -- two pushes, no POST of R."""
+    sim = _world(tmp_path)
+    _forget(sim, HTTP_2)
+    rows = sim.api.remote[PROD][HTTP_2]["rows"]
+    rows[:] = [r for r in rows if r["id"] != "1005"]  # R deleted on the remote
+    new_row = _dir(sim, f"{HTTP_2_DIR}/rows/row-tk903z")
+    shutil.copytree(_dir(sim, f"{HTTP_2_DIR}/rows/row-tk9z"), new_row)
+    data = read_yaml(new_row / "_config.yml")
+    data["name"] = "Row tk903z"
+    data["_keboola"].pop("row_id")
+    write_yaml(new_row / "_config.yml", data)
+
+    first = _push(sim)
+    assert first["created"] == 1  # the new row, under the registered parent
+    (entry,) = [c for c in load_manifest(sim.root).configurations if c.id == "1003"]
+    assert "1005" in {r.id for r in entry.rows}
+
+    second = _push(sim)
+
+    assert second["created"] == 0
+    assert ("remote_deleted", "1003") in _changes(sim)
+    assert [r["name"] for r in sim.api.remote[PROD][HTTP_2]["rows"]] == ["Row tk9z", "Row tk903z"]

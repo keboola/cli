@@ -112,10 +112,12 @@ These lists keep `error`, because their entries are not failed items with an err
 - **Empty versus deleted:** a companion file always wins over the same value inline, so an
   empty `_description.md`, `code.py`, `transform.sql` or `transform.py` sends an empty
   value. `pyproject.toml` is read as TOML: its `[project].dependencies` list is the package
-  list (`dependencies = []` is an empty one, a one-line list works); a file without that
-  key says nothing and the inline `packages` apply -- such a file never clears the remote's
-  packages. A file that is not valid TOML keeps the inline value too, and `sync diff`
-  reports it (`COMPANION_UNREADABLE`). A deleted companion sends the value inline in
+  list (`dependencies = []` is an empty one, a one-line list works). A file that states no
+  such list -- no key, a Poetry-only file, not valid TOML -- never decides the packages:
+  the inline `packages` apply, else push keeps the packages the remote config has (exactly,
+  also a value an older kbagent wrote without escaping its quotes); a new config in that
+  state is refused with `COMPANION_UNREADABLE`, as is an update whose remote cannot be read.
+  `sync diff` reports a file that is not valid TOML (`COMPANION_UNREADABLE` warning). A deleted companion sends the value inline in
   `_config.yml` (pull writes `description: ''` and `packages: []` there when they are
   empty), or none. After a push that cleared the
   description, `_config.yml` has the `description: ''` line a fresh pull writes.
@@ -142,7 +144,8 @@ These lists keep `error`, because their entries are not failed items with an err
   existing config id) are compared by row id. A row that differs from the remote, or a
   remote row with no file, is a `conflict` -- never an update or a delete, because nothing
   records which side changed it. A row file carrying an id the remote no longer has is
-  `remote_deleted`: push never creates it again. A new row (no row id) under such a config is created
+  `remote_deleted`: push never creates it again, also after the adopted config was
+  registered (its rows are registered with it, that one included). A new row (no row id) under such a config is created
   when the config itself equals the remote; otherwise run `sync pull` first. Pushing the
   adopted config registers its rows, so a later push never creates them a second time.
 - **A flow, orchestration or schedule created in the same push as a row it selects**

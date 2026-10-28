@@ -199,9 +199,9 @@ def stamp_updated_config(
     ``_keboola.config_id`` resolved on the branch. It is registered at
     *config_path_str*, the directory just pushed, never at another branch's
     path or with another branch's rows. Its own row dirs (in *config_dir*)
-    that carry the id of a row the config has are registered too, with an
-    unknown base (D8): left out, the next diff read them as new rows and the
-    next push created every one of them a second time.
+    that carry a row id are registered too, with an unknown base (D8, T3):
+    left out, the next diff read them as new rows and the next push created
+    every one of them a second time -- also a row deleted on the remote.
     """
     stamp = config_baseline(
         client,
@@ -240,9 +240,7 @@ def stamp_updated_config(
     apply_stamp(entry.metadata, stamp)
     record_companions(entry.metadata, hashes.extra_hashes)
     if config_dir is not None:
-        entry.rows = adopted_row_entries(
-            config_dir, _branch_row_ids(client, component_id, config_id, branch_id, response)
-        )
+        entry.rows = adopted_row_entries(config_dir)
 
 
 def promote_shadow(

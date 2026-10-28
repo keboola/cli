@@ -31,12 +31,11 @@ from ..sync.branch_scope import (
     branch_tree_path,
     find_branch_entry,
 )
-from ..sync.code_extraction import merge_code_files
 from ..sync.config_format import api_config_to_local
 from ..sync.diff_engine import config_hash
 from ..sync.manifest import Manifest, save_manifest
 from ._sync_baseline import apply_stamp, config_baseline
-from ._sync_companions import record_companions
+from ._sync_companions import merge_with_remote, record_companions
 from ._sync_models import (
     CREATED_FROM_KEY,
     LINK_PENDING_KEY,
@@ -342,8 +341,9 @@ def register_adopted_parent(
             component_id=component_id, config_id=config_id, branch_id=target.branch_id
         )
     if local is not None and isinstance(remote, dict):
-        merge_code_files(component_id, local, config_dir)
-        remote_hash = config_hash(api_config_to_local(component_id, remote, config_id))
+        remote_local = api_config_to_local(component_id, remote, config_id)
+        merge_with_remote(component_id, local, config_dir, remote_local)
+        remote_hash = config_hash(remote_local)
         if config_hash(local) == remote_hash:
             hashes = service._compute_config_hashes(config_dir, component_id)
             entry = writeback_create_config_in_manifest(
@@ -358,13 +358,7 @@ def register_adopted_parent(
             ).entry
             entry.metadata[CONFIG_HASH_VERSION_KEY] = CONFIG_HASH_VERSION
             record_companions(entry.metadata, hashes.extra_hashes)
-            rows = remote.get("rows")
-            remote_rows = (
-                {str(r.get("id", "")) for r in rows if isinstance(r, dict)}
-                if isinstance(rows, list)
-                else None
-            )
-            entry.rows = adopted_row_entries(config_dir, remote_rows)
+            entry.rows = adopted_row_entries(config_dir)
             return
     raise KeboolaApiError(
         message=(

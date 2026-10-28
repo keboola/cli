@@ -108,6 +108,7 @@ from ._sync_companions import (
     current_companions,
     kept_companion_warning,
     local_unchanged,
+    merge_with_remote,
     preserved_baseline,
     pulled_baseline,
     write_pulled_config,
@@ -1150,7 +1151,7 @@ class SyncService(BaseService):
                 # All files match pull state -- use stored API hash
                 local_override_hashes[key] = stored_cfg_hash
             # Always merge for local_data (needed for deep_diff details)
-            merge_code_files(cfg.component_id, local_data, config_dir)
+            merge_with_remote(cfg.component_id, local_data, config_dir, remote_configs.get(key))
 
             local_configs.append(
                 {
@@ -1880,11 +1881,8 @@ class SyncService(BaseService):
         config_file = config_dir / CONFIG_FILENAME
         file_hash = self._file_hash(config_file) if config_file.exists() else ""
         local_data = self._read_config_file(config_dir)
-        if local_data is not None:
-            merge_code_files(component_id, local_data, config_dir)
-            cfg_hash = config_hash(local_data)
-        else:
-            cfg_hash = ""
+        merged = merge_code_files(component_id, local_data, config_dir) if local_data else None
+        cfg_hash = config_hash(merged) if merged is not None else ""
         return LocalConfigHashes(
             file_hash=file_hash,
             cfg_hash=cfg_hash,

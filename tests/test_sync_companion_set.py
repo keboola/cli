@@ -21,6 +21,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -650,3 +651,103 @@ def test_all_projects_results_emit_each_projects_companion_warnings(
 
     emit_companion_warnings(OutputFormatter(json_mode=False, no_color=True), bulk())
     assert f"prod: {HTTP_DIR}/code.py is not part of" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# T1 / T2: a pyproject.toml that states no package list never decides them
+# ---------------------------------------------------------------------------
+
+_SILENT_PYPROJECTS = {
+    "no-dependencies-key": '[project]\nname = "app"\n',  # Astra's input
+    "invalid-toml": "[project\n",
+    "poetry-only": '[tool.poetry.dependencies]\npython = "^3.11"\npandas = "*"\n',
+}
+
+
+def _rename_app(sim: Any, name: str) -> None:
+    config_file = _dir(sim, APP_DIR) / "_config.yml"
+    data = read_yaml(config_file)
+    data["name"] = name
+    write_yaml(config_file, data)
+
+
+@pytest.mark.parametrize("pyproject", list(_SILENT_PYPROJECTS), ids=list(_SILENT_PYPROJECTS))
+def test_silent_pyproject_keeps_the_remote_packages(tmp_path: Path, pyproject: str) -> None:
+    """T1: remote ["pandas"], no inline packages, a pyproject.toml without a usable list."""
+    sim = _world(tmp_path)
+    sim.api.remote[PROD][APP_1]["configuration"]["parameters"]["packages"] = ["pandas"]
+    _pull(sim)
+    assert "packages" not in read_yaml(_dir(sim, APP_DIR) / "_config.yml")["parameters"]
+    (_dir(sim, APP_DIR) / "pyproject.toml").write_text(
+        _SILENT_PYPROJECTS[pyproject], encoding="utf-8"
+    )
+    _rename_app(sim, "Name tk900z")
+
+    diff = sim.svc.diff(alias="prod", project_root=sim.root)
+    [change] = [c for c in diff["changes"] if c["config_id"] == "1009"]
+    assert not any("packages" in line for line in change["details"])
+    result = _push(sim)
+
+    assert result["errors"] == []
+    remote = sim.api.remote[PROD][APP_1]
+    assert remote["name"] == "Name tk900z"
+    assert remote["configuration"]["parameters"]["packages"] == ["pandas"]
+
+
+def test_new_config_with_a_silent_pyproject_and_no_inline_packages_is_refused(
+    tmp_path: Path,
+) -> None:
+    """T1: no inline value and no remote to take the packages from -- fail closed."""
+    sim = _world(tmp_path)
+    src = _dir(sim, APP_DIR)
+    dst = src.parent / "new-app"
+    shutil.copytree(src, dst)
+    data = read_yaml(dst / "_config.yml")
+    data["_keboola"].pop("config_id")
+    data["name"] = "Name tk901z"
+    write_yaml(dst / "_config.yml", data)
+    (dst / "pyproject.toml").write_text('[project]\nname = "app"\n', encoding="utf-8")
+
+    result = _push(sim)
+
+    [error] = result["errors"]
+    assert error["error_code"] == "COMPANION_UNREADABLE"
+    assert "pyproject.toml" in error["message"]
+    assert not [c for c in sim.api.remote[PROD].values() if c["name"] == "Name tk901z"]
+
+
+@pytest.mark.parametrize(
+    ("remote_packages", "pyproject"),
+    [
+        # Astra's legacy file: the old writer did not escape the marker's quotes.
+        (
+            ['pandas; python_version < "3.12"'],
+            (
+                "[project]\n"
+                'name = "name-tk25z"\n'
+                'requires-python = ">=3.11"\n'
+                "dependencies = [\n"
+                '    "pandas; python_version < "3.12"",\n'
+                "]\n"
+            ),
+        ),
+        # A tool section's dependencies are never read, also not after a syntax error.
+        (["pkgtk24z"], '[tool.other]\ndependencies = [\n    "numpy",\n]\n[broken\n'),
+    ],
+    ids=["legacy-quoted-marker", "tool-section-and-broken-toml"],
+)
+def test_invalid_pyproject_leaves_the_remote_packages_byte_for_byte(
+    tmp_path: Path, remote_packages: list[str], pyproject: str
+) -> None:
+    """T2: no line-reader fallback; invalid TOML takes the T1 path."""
+    sim = _world(tmp_path)
+    sim.api.remote[PROD][APP_1]["configuration"]["parameters"]["packages"] = remote_packages
+    _pull(sim)
+    (_dir(sim, APP_DIR) / "pyproject.toml").write_text(pyproject, encoding="utf-8")
+    _rename_app(sim, "Name tk900z")
+
+    result = _push(sim)
+
+    assert result["errors"] == []
+    packages = sim.api.remote[PROD][APP_1]["configuration"]["parameters"]["packages"]
+    assert packages == remote_packages

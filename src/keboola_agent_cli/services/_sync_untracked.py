@@ -150,25 +150,21 @@ def _row_id_of(row_dir: Path) -> str:
     return str(meta.get("row_id") or "") if isinstance(meta, dict) else ""
 
 
-def adopted_row_entries(
-    config_dir: Path, remote_row_ids: set[str] | None
-) -> list[ManifestConfigRow]:
-    """Manifest rows for the row dirs of a config dir being registered by its id (D8).
+def adopted_row_entries(config_dir: Path) -> list[ManifestConfigRow]:
+    """Manifest rows for the row dirs of a config dir being registered by its id (D8, T3).
 
-    A row dir carrying the id of a row the remote config has is tracked with
-    an UNKNOWN base: nothing proves which side changed it, so a difference is
-    a conflict, never an update -- and it is never created a second time. A
-    row dir without an id stays untracked: the next push creates it. When the
-    remote rows cannot be read, every row carrying an id is tracked (the safe
-    side: a missing one reads ``remote_deleted``, which push never acts on).
+    Every row dir carrying a row id is tracked with an UNKNOWN base: nothing
+    proves which side changed it, so a difference is a conflict, never an
+    update. That includes an id the remote config no longer has -- it stays
+    ``remote_deleted``, which push never acts on. Left out, registration
+    erased its identity and the next push created the deleted row again (T3).
+    A row dir without an id stays untracked: the next push creates it.
     """
     rows: list[ManifestConfigRow] = []
     seen: set[str] = set()
     for row_dir in _row_dirs(config_dir):
         row_id = _row_id_of(row_dir)
         if not row_id or row_id in seen:
-            continue
-        if remote_row_ids is not None and row_id not in remote_row_ids:
             continue
         seen.add(row_id)
         rows.append(

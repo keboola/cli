@@ -737,23 +737,29 @@ def _merge_packages(config_data: dict[str, Any], path: Path) -> None:
 
     Parsed as TOML (a one-line ``dependencies = [...]`` included). Only a
     dependency list the file actually states replaces the package list --
-    an explicit ``dependencies = []`` is an empty one. A file without the key,
-    or one that is not valid TOML, says nothing: the inline value (or none)
-    applies, so such a file can never clear the remote's packages. For a
-    file not valid TOML that an older kbagent wrote (a package spec with a
-    quote broke its output), the old line reader's non-empty answer is
-    used, as that version did; ``sync diff`` reports such a file
-    (``COMPANION_UNREADABLE``).
+    an explicit ``dependencies = []`` is an empty one. A file that states
+    none (no key, a Poetry-only file, not valid TOML) never decides the
+    packages (T1, T2): the inline value applies; without one the packages
+    are marked undecided (:data:`PACKAGES_UNDECIDED_KEY` in ``_keboola``, which
+    no hash and no payload sees) and the caller takes them from the remote
+    config, or refuses to push (``COMPANION_UNREADABLE``). A replacement
+    payload without them would clear the remote's packages.
     """
-    text = path.read_text(encoding="utf-8")
-    declared = declared_dependencies(text)
+    declared = declared_dependencies(path.read_text(encoding="utf-8"))
     if isinstance(declared, list):
         config_data.setdefault("parameters", {})["packages"] = declared
         return
-    if declared is _UNREADABLE and not _has_inline_packages(config_data):
-        legacy = _parse_pyproject_packages(text)
-        if legacy:
-            config_data.setdefault("parameters", {})["packages"] = legacy
+    if _has_inline_packages(config_data):
+        return
+    meta = config_data.setdefault("_keboola", {})
+    if isinstance(meta, dict):
+        meta[PACKAGES_UNDECIDED_KEY] = path.name
+
+
+# ``_keboola`` marker of a merged config whose pyproject.toml stated no package
+# list and whose ``_config.yml`` has no inline one (T1). Never written to disk:
+# merge runs on a copy of the file's data.
+PACKAGES_UNDECIDED_KEY = "packages_undecided"
 
 
 _UNREADABLE = object()
@@ -828,27 +834,6 @@ def _render_pyproject_toml(
 
 def _toml_string(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)
-
-
-def _parse_pyproject_packages(content: str) -> list[str]:
-    """The pre-TOML line reader of a pyproject.toml's dependencies (fallback only)."""
-    packages: list[str] = []
-    in_deps = False
-
-    for line in content.split("\n"):
-        stripped = line.strip()
-        if stripped == "dependencies = [":
-            in_deps = True
-            continue
-        if in_deps:
-            if stripped == "]":
-                break
-            # Strip quotes and trailing comma
-            pkg = stripped.strip('", ')
-            if pkg:
-                packages.append(pkg)
-
-    return packages
 
 
 # The registry (D1): every companion file and the payload field it carries.
