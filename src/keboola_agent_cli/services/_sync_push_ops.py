@@ -38,10 +38,16 @@ from ._encryption import (
     encrypt_secrets_in_config,
     is_already_encrypted,
 )
-from ._sync_baseline import apply_stamp, row_baseline
+from ._sync_baseline import apply_row_stamp, row_baseline
 from ._sync_companions import require_decided_packages
 from ._sync_data_app import create_synced_data_app
 from ._sync_deletes import fold_covered_rows
+from ._sync_disabled import (
+    baseline_entry,
+    file_disables,
+    pushed_disabled,
+    record_disabled,
+)
 from ._sync_models import AUTHORED_ROW_KEY, CREATED_FROM_KEY, PROMOTED_ROW_KEY, CreateOutcome
 from ._sync_workspace import SANDBOXES_COMPONENT_ID, warn_on_backend_size_change
 from ._sync_writeback import (
@@ -688,7 +694,8 @@ def _push_create_row(
     row_entry.metadata["pull_hash"] = service._file_hash(row_file) if row_file.exists() else ""
     row_entry.metadata["pull_config_hash"] = stamp.cfg_hash
     row_entry.metadata.pop(UNKNOWN_BASE_KEY, None)  # the row now has a known base
-    apply_stamp(row_entry.metadata, stamp)
+    record_disabled(row_entry.metadata, disabled=file_disables(pristine_data))
+    apply_row_stamp(row_entry.metadata, stamp)
     if stamp.warning is not None and warnings is not None:
         warnings.append(stamp.warning)
     return new_row_id
@@ -714,11 +721,15 @@ def push_update_row(
 
     The baseline comes from the API's own view of the row (issue #686), so a
     row disabled remotely whose local file carries no ``is_disabled`` key does
-    not leave a permanent phantom diff behind.
+    not leave a permanent phantom diff behind. A missing key re-enables the
+    row when its recorded baseline file had ``is_disabled: true``
+    (``_sync_disabled``); the record read is the one of the row this update
+    re-stamps, under the target branch's entry.
     """
     local_data = service._read_config_file(row_dir)
     if local_data is None:
         raise FileNotFoundError(f"Row file not found: {row_dir / CONFIG_FILENAME}")
+    row_entry = next((r for r in parent.rows if r.id == row_id), None)
 
     pristine_data = copy.deepcopy(local_data)
     name, description, configuration = local_row_to_api(local_data, component_id)
@@ -742,8 +753,11 @@ def push_update_row(
         description=description,
         change_description="Updated via kbagent sync push",
         # Explicit key in the local YAML pushes the state; an absent key
-        # leaves the remote enabled/disabled state untouched (issue #467).
-        is_disabled=(bool(local_data["is_disabled"]) if "is_disabled" in local_data else None),
+        # leaves the remote state untouched (issue #467) unless the baseline
+        # file had the line -- then deleting it re-enables.
+        is_disabled=pushed_disabled(
+            local_data, row_entry.metadata if row_entry is not None else None
+        ),
         branch_id=branch_id,
     )
     logger.info("Updated row %s/%s/%s", component_id, parent_config_id, row_id)
@@ -770,11 +784,10 @@ def push_update_row(
     )
     if stamp.warning is not None and warnings is not None:
         warnings.append(stamp.warning)
-    for r in parent.rows:
-        if r.id == row_id:
-            r.metadata["pull_hash"] = new_file_hash
-            apply_stamp(r.metadata, stamp)
-            break
+    if row_entry is not None:
+        row_entry.metadata["pull_hash"] = new_file_hash
+        record_disabled(row_entry.metadata, disabled=file_disables(pristine_data))
+        apply_row_stamp(row_entry.metadata, stamp)
 
 
 def _push_delete_row(
@@ -1009,6 +1022,14 @@ def push_update(
     )
 
     name, description, configuration = local_config_to_api(local_data)
+    baseline = baseline_entry(
+        manifest,
+        component_id=component_id,
+        config_id=config_id,
+        branch_id=branch_id,
+        source_tree=branch_path,
+        path=config_path_str,
+    )
 
     # Runtime-safety backstop on the assembled API body (issues #245/#274).
     configuration = guard_script_shape(
@@ -1051,8 +1072,10 @@ def push_update(
         description=description,
         change_description="Updated via kbagent sync push",
         # Explicit key in the local YAML pushes the state; an absent key
-        # leaves the remote enabled/disabled state untouched (issue #467).
-        is_disabled=(bool(local_data["is_disabled"]) if "is_disabled" in local_data else None),
+        # leaves the remote state untouched (issue #467) unless the baseline
+        # file the push's diff compared against had the line -- then
+        # deleting it re-enables (``_sync_disabled``).
+        is_disabled=pushed_disabled(local_data, baseline.metadata if baseline else None),
         branch_id=branch_id,
     )
     logger.info("Updated config %s/%s", component_id, config_id)
@@ -1072,7 +1095,12 @@ def push_update(
     # promote path (D23): main/ keeps the source branch's id.
     promote = branch_path != branch_tree_path(manifest, branch_id)
     writeback_after_push(
-        service, pristine_data, config_dir, "" if promote else config_id, configuration
+        service,
+        pristine_data,
+        config_dir,
+        "" if promote else config_id,
+        configuration,
+        component_id=component_id,
     )
 
     return result if isinstance(result, dict) else {}

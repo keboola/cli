@@ -79,6 +79,30 @@ These lists keep `error`, because their entries are not failed items with an err
   own folder (not `main/`), so edit the files there. If you already edited code files after
   such a push, copy them aside first: a pull that takes a remote change overwrites them.
 
+## Deleting `is_disabled: true` re-enables a config on `sync push`
+
+*(since vNEXT)*
+
+- **Re-enable by deleting the line.** `sync pull` writes `is_disabled: true` into the
+  `_config.yml` of a disabled config or row and writes no key for an enabled one. Delete
+  that line and run `sync push`: the config (or row) is enabled on the remote. Before, push
+  read a missing key as "leave the remote alone", reported `updated`, changed nothing, and
+  `sync diff` then said "in sync" while the config stayed disabled. `is_disabled: false`
+  still works on every version.
+- **How push knows.** The manifest records which pulled or pushed file had the line. A
+  missing key re-enables only when that file had it. A tree pulled before this version has
+  no record: there a missing key still leaves the remote alone until the next `sync pull`
+  that writes the file. A config disabled in the UI is never enabled by an unrelated push.
+- **A plain `sync pull` keeps the deleted line deleted** (the config is locally modified),
+  and the next push still re-enables. If the config was re-enabled in the UI meanwhile,
+  diff shows nothing to push; if it was also changed there in another way, diff shows a
+  conflict and push sends nothing.
+- **`pyproject.toml` follows a rename and a create.** After `sync push` renames a Python
+  transformation or custom Python app, or creates one, or `sync clone` copies one, the
+  file's `[project] name` (and an app's `[tool.keboola] config_id`) are the values a pull
+  would write. Nothing else in the file changes. A promote push (`push --branch <dev>`
+  from `main/`) never writes the dev config id into `main/`.
+
 ## Sync treats a config's companion files as one set; a new config's rows go up with it
 
 *(since vNEXT)*
@@ -5401,6 +5425,9 @@ Four related sync-engine behaviors landed together (issues #466 / #467 / #472 / 
   disabled in production no longer looks "in sync"), and push sends the state:
   an explicit `is_disabled:` key in the local YAML updates the remote; an
   absent key leaves the remote state untouched. Same semantics for rows.
+  *(updated vNEXT)* An absent key re-enables when the last pulled or pushed file
+  had `is_disabled: true` (you deleted the line); see "Deleting
+  `is_disabled: true` re-enables a config on `sync push`".
 - **Never-fetched guard.** A manifest entry with an EMPTY `pull_hash` and no
   local files (a phantom left by a pre-0.72 name-collision pull, issue #472) is
   excluded from delete planning: `sync push --force` will NOT delete that

@@ -28,9 +28,11 @@ from ..sync.branch_scope import (
 )
 from ..sync.config_format import BASE_CONFIG_HASH_KEY
 from ..sync.manifest import ManifestConfigRow, ManifestConfiguration
+from ..sync.pyproject_identity import refresh_pyproject_identity
 from ._encryption import apply_encrypted_to_local
 from ._sync_baseline import apply_stamp, config_baseline
 from ._sync_companions import canonical_description, record_companions
+from ._sync_disabled import record_disabled
 from ._sync_models import AUTHORED_ROW_KEY, PROMOTED_ROW_KEY, LocalConfigHashes, WritebackResult
 from ._sync_untracked import register_adopted_rows
 
@@ -83,6 +85,7 @@ def stamp_created_config(
     )
     apply_stamp(writeback.entry.metadata, stamp)
     record_companions(writeback.entry.metadata, hashes.extra_hashes)
+    record_disabled(writeback.entry.metadata, disabled=hashes.disabled)
     if promoted is not None:
         writeback.entry.metadata[PROMOTED_FROM_KEY] = promoted.as_metadata()
     return writeback
@@ -225,6 +228,7 @@ def stamp_updated_config(
     if target is not None:
         target.metadata["pull_hash"] = hashes.file_hash
         record_companions(target.metadata, hashes.extra_hashes)
+        record_disabled(target.metadata, disabled=hashes.disabled)
         apply_stamp(target.metadata, stamp)
         return
     entry = writeback_create_config_in_manifest(
@@ -239,6 +243,7 @@ def stamp_updated_config(
     ).entry
     apply_stamp(entry.metadata, stamp)
     record_companions(entry.metadata, hashes.extra_hashes)
+    record_disabled(entry.metadata, disabled=hashes.disabled)
     if config_dir is not None:
         register_adopted_rows(entry, config_dir)
 
@@ -528,6 +533,7 @@ def writeback_after_push(
     *,
     is_row: bool = False,
     row_id: str = "",
+    component_id: str = "",
 ) -> None:
     """Update local ``_config.yml`` after a successful push.
 
@@ -542,7 +548,9 @@ def writeback_after_push(
     could not find the row's directory by its id, wrote the row into a second
     directory, and the first one diffed as a new row -- a duplicate on the
     next push (R2). The promote path passes no *row_id*: ``main/`` keeps its
-    own ids (D19).
+    own ids (D19). A config's ``pyproject.toml`` gets the name and id a pull
+    would write (only those fields; *component_id* says whether it owns one),
+    before the caller hashes the companions -- also no id on the promote path.
     """
     if not is_row:
         local_data = canonical_description(local_data, config_dir)
@@ -559,4 +567,8 @@ def writeback_after_push(
         apply_encrypted_to_local(local_params, pushed_params)
 
     service._write_config_file(config_dir, local_data)
+    if not is_row and component_id:
+        refresh_pyproject_identity(
+            component_id, config_dir, name=str(local_data.get("name") or ""), config_id=config_id
+        )
     logger.debug("Updated local config at %s after push", config_dir)

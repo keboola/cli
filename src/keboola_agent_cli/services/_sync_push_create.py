@@ -37,6 +37,7 @@ from ..sync.diff_engine import config_hash
 from ..sync.manifest import Manifest, save_manifest
 from ._sync_baseline import apply_stamp, config_baseline
 from ._sync_companions import merge_with_remote, record_companions
+from ._sync_disabled import record_disabled
 from ._sync_link_pending import carries_transformation_link
 from ._sync_models import (
     AMBIGUOUS_ROW_PLACEHOLDERS_KEY,
@@ -349,6 +350,7 @@ def record_created_config(
                 outcome.config_dir,
                 outcome.file_config_id,
                 outcome.configuration,
+                component_id=component_id,
             )
         except Exception as secondary:
             logger.warning(
@@ -364,6 +366,7 @@ def record_created_config(
         outcome.config_dir,
         outcome.file_config_id,
         outcome.configuration,
+        component_id=component_id,
     )
     hashes = service._compute_config_hashes(outcome.config_dir, component_id)
     stamp = config_baseline(
@@ -374,6 +377,7 @@ def record_created_config(
     entry.metadata["pull_hash"] = hashes.file_hash
     entry.metadata["pull_config_hash"] = stamp.cfg_hash
     record_companions(entry.metadata, hashes.extra_hashes)
+    record_disabled(entry.metadata, disabled=hashes.disabled)
     apply_stamp(entry.metadata, stamp)
 
     if not promote and entry.metadata.get(CREATED_FROM_KEY):
@@ -451,6 +455,7 @@ def register_adopted_parent(
             ).entry
             entry.metadata[CONFIG_HASH_VERSION_KEY] = CONFIG_HASH_VERSION
             record_companions(entry.metadata, hashes.extra_hashes)
+            record_disabled(entry.metadata, disabled=hashes.disabled)
             register_adopted_rows(entry, config_dir)
             return
     raise KeboolaApiError(

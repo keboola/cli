@@ -50,6 +50,7 @@ from ..sync.code_extraction import (
     render_code_files,
 )
 from ..sync.config_format import api_config_to_local
+from ._sync_disabled import DISABLED_BASELINE_KEY, file_disables, record_disabled
 
 if TYPE_CHECKING:
     from .sync_service import SyncService
@@ -232,12 +233,16 @@ class PulledConfig:
         extra_hashes: The companion snapshot to record. Leaves out a kept
             obsolete companion, so diff shows it as a local change.
         kept: Obsolete companions pull did not delete (not provably unchanged).
+        disabled: The ``_config.yml`` now on disk explicitly disables the
+            config -- read from the FILE when pull kept it, never from the
+            remote (``_sync_disabled``).
     """
 
     file_hash: str
     written: bool
     extra_hashes: dict[str, str] = field(default_factory=dict)
     kept: list[str] = field(default_factory=list)
+    disabled: bool = False
 
 
 def _cleanup_plan(
@@ -304,6 +309,7 @@ def write_pulled_config(
             file_hash=service._file_hash(config_file),
             written=False,
             extra_hashes=current_companions(service, config_dir, component_id),
+            disabled=file_disables(service._read_config_file(config_dir)),
         )
     if dry_run:
         return PulledConfig(file_hash="", written=True)
@@ -328,6 +334,7 @@ def write_pulled_config(
         written=True,
         extra_hashes={name: value for name, value in current.items() if name not in kept},
         kept=kept,
+        disabled=file_disables(local_data),
     )
 
 
@@ -339,6 +346,8 @@ def preserved_baseline(old_metadata: dict[str, Any]) -> dict[str, Any]:
     of them would turn a real conflict into an ordinary-looking local edit
     (issue #792 B). The preserved hash was not produced by the current
     producer, so its version marker is carried, never stamped (issue #686).
+    The ``pulled_disabled`` record travels with its ``pull_hash``: dropped, a
+    deleted ``is_disabled: true`` line kept by this pull would push nothing.
     """
     keys = (
         "pull_hash",
@@ -347,6 +356,7 @@ def preserved_baseline(old_metadata: dict[str, Any]) -> dict[str, Any]:
         COMPANION_VERSION_KEY,
         COMPANION_CONFLICT_KEY,
         CONFIG_HASH_VERSION_KEY,
+        DISABLED_BASELINE_KEY,
     )
     return {key: old_metadata[key] for key in keys if key in old_metadata}
 
@@ -364,6 +374,7 @@ def pulled_baseline(file_hash: str, cfg_hash: str, pulled: PulledConfig) -> dict
         CONFIG_HASH_VERSION_KEY: CONFIG_HASH_VERSION,
     }
     record_companions(metadata, pulled.extra_hashes)
+    record_disabled(metadata, disabled=pulled.disabled)
     if pulled.kept:
         metadata[COMPANION_CONFLICT_KEY] = list(pulled.kept)
     return metadata

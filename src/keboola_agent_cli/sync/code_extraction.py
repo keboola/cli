@@ -804,35 +804,40 @@ def _render_pyproject_toml(
     config_id: str | None = None,
 ) -> str:
     """Render packages as a pyproject.toml file."""
-    # Sanitize name for pyproject
-    safe_name = name.lower().replace(" ", "-").replace("_", "-")
+    safe_name = pyproject_name(name)
 
     # Every value as a TOML basic string (JSON escaping is valid there): a
     # package spec with a quote, e.g. a marker ``python_version < "3.12"``,
     # used to make the file invalid TOML. Plain values render as before.
     lines = [
         "[project]",
-        f"name = {_toml_string(safe_name)}",
+        f"name = {toml_string(safe_name)}",
         'requires-python = ">=3.11"',
         "dependencies = [",
     ]
     for pkg in packages:
-        lines.append(f"    {_toml_string(str(pkg))},")
+        lines.append(f"    {toml_string(str(pkg))},")
     lines.append("]")
 
     if component_id or config_id:
         lines.append("")
         lines.append("[tool.keboola]")
         if component_id:
-            lines.append(f"component_id = {_toml_string(str(component_id))}")
+            lines.append(f"component_id = {toml_string(str(component_id))}")
         if config_id:
-            lines.append(f"config_id = {_toml_string(str(config_id))}")
+            lines.append(f"config_id = {toml_string(str(config_id))}")
 
     lines.append("")  # trailing newline
     return "\n".join(lines)
 
 
-def _toml_string(value: str) -> str:
+def pyproject_name(name: str) -> str:
+    """The ``[project] name`` pull derives from a config's name."""
+    return name.lower().replace(" ", "-").replace("_", "-")
+
+
+def toml_string(value: str) -> str:
+    """*value* as a TOML basic string (JSON escaping is valid TOML there)."""
     return json.dumps(value, ensure_ascii=False)
 
 
