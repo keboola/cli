@@ -524,6 +524,15 @@ def test_f1_valid_toml_the_edit_cannot_handle_is_left_unchanged(tmp_path: Path, 
     tomllib.loads(pyproject.read_text(encoding="utf-8"))
 
 
+def test_f1_unrelated_nan_float_does_not_block_the_refresh(tmp_path: Path) -> None:
+    """A float ``nan`` elsewhere in the file (never equal to itself) is still refreshed."""
+    text = PYPROJECT_HEAD + "\n[tool.custom]\nvalue = nan\nratio = 1.50\n"
+    pyproject = tmp_path / PYPROJECT
+    pyproject.write_bytes(text.encode("utf-8"))
+    assert refresh_pyproject_identity(PYTHON, tmp_path, name="Renamed", config_id="") is True
+    assert pyproject.read_bytes() == text.replace('"orders"', '"renamed"').encode("utf-8")
+
+
 def test_f1_push_warns_and_keeps_an_uneditable_pyproject(tmp_path: Path) -> None:
     """F1 end to end: the rename is pushed, the file stays valid and unchanged, and
     the push names it in warnings[] (it never fails: the remote write happened)."""

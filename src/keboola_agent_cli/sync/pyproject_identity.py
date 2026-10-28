@@ -60,7 +60,7 @@ def refresh_pyproject_identity(
     original = path.read_bytes()
     try:
         text = original.decode("utf-8")
-        before = tomllib.loads(text)
+        before = _parse(text)
     except (UnicodeDecodeError, tomllib.TOMLDecodeError):
         return False
     expected = _expected(before, component_id, name=name, config_id=config_id)
@@ -85,12 +85,21 @@ def refresh_pyproject_identity(
             ]
     updated = "".join(lines)
     try:
-        if tomllib.loads(updated) != expected:
+        if _parse(updated) != expected:
             return False
     except tomllib.TOMLDecodeError:
         return False
     path.write_bytes(updated.encode("utf-8"))
     return True
+
+
+def _parse(text: str) -> dict[str, Any]:
+    """Parse TOML with floats kept as their source text.
+
+    The before/after comparison must hold for any valid file, and a float
+    ``nan`` never equals itself: an unrelated ``value = nan`` refused the refresh.
+    """
+    return tomllib.loads(text, parse_float=str)
 
 
 def _expected(
