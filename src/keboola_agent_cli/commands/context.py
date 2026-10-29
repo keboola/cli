@@ -387,9 +387,14 @@ GROUP_NOTES: dict[str, str] = {
 
   branch create
     Create dev branch and auto-activate it. Async, CLI waits for completion.
+    Exception since vNEXT: on the environment project `__env__`
+    (KBAGENT_PROJECT_FROM_ENV) the branch is created but NOT activated --
+    `activated: false` and a warnings[] entry ACTIVE_BRANCH_NOT_STORED. Pass
+    `--branch <id>` on every later command, or it runs on production.
 
   branch use
-    Set existing branch as active for subsequent commands. Every command that
+    Set existing branch as active for subsequent commands (refused on `__env__`:
+    pass --branch instead; `branch reset` there is a no-op). Every command that
     then picks a branch names it: `Target: project 'P', branch ID 'NAME' (from
     'kbagent branch use')` on stderr, `targets` in --json (see Tips 2).
 
@@ -2021,7 +2026,9 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Default filename: TABLE_NAME.csv. Use --columns to select columns (see table-detail for names).
     Use --limit to cap row count. Handles sliced files and gzip decompression transparently. Branch-aware.
   storage add-column
-    Add a single column to an existing table (synchronous). Same name:TYPE(length) grammar as create-table --column.
+    Add a single column to an existing table. Same name:TYPE(length) grammar as create-table --column.
+    Waits for the Storage job, so a following table-detail lists the column. A failed job exits 1 (STORAGE_JOB_FAILED).
+    A wait timeout (exit 4, not retryable) leaves the job running: follow it with storage job-detail --job-id ID --wait; do not add the column again.
 
   storage delete-table
     Delete one or more tables. Batch: repeat --table-id. --force to cascade-delete aliased tables. --dry-run to preview. Branch-aware.
@@ -2232,6 +2239,11 @@ remain branch-aware because modifying a dev branch is the expected intent.
     a missing dir whose id 2+ dirs carry is an ambiguous move (conflict, nothing pushed).
     A swap/rotation/symlink (a tracked dir carrying another tracked config's id) is held as
     an identity conflict: nothing pushed, pulled or saved until the dirs are moved back.
+    Strict local files (since vNEXT): a _config.yml (config or row) that is not valid YAML,
+    not a mapping, or has an unknown top-level key is an errors[] entry
+    (SYNC_LOCAL_FILE_INVALID, path) in diff/push: the config is held (never deleted, created
+    or updated) and the command exits 1. Extra configuration keys go under
+    _configuration_extra. A missing description: equals ''.
     --branch: per-invocation dev-branch override. Same semantics as sync push/diff.
     Ignored components (since 0.91.0, #689): keboola.sandboxes + keboola.mcp-server-tool are
     always excluded (except shared SQL workspaces under syncWorkspaces, since 0.96.1),

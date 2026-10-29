@@ -216,3 +216,11 @@ does:
 
 Metadata and the folder in a dev branch are independent of production; a merge
 request carries them back to production with the rest of the branch. See [branch-workflow.md](branch-workflow.md).
+
+## Key characters and CI traceability
+
+Storage accepts metadata keys made of `a-z`, `A-Z`, `0-9`, `_`, `.` and `-`
+only; any other character (`#`, `[`, `]`, `/`, a space) is an HTTP 400. `sync push`
+writes a fixed change description, so a CI pipeline records the commit with
+`config set-metadata --key ci.commitSha`. See
+[gitops-cicd-workflow.md](gitops-cicd-workflow.md) pitfalls 5.1 and 5.6.

@@ -160,6 +160,7 @@ A command that fails with an error code exits with the code's `Exit` value below
 | `SYNC_CONFLICT` | 1 | `conflict` | `sync pull --force` aborted: local and remote both changed since the last pull (`details.conflicts` lists them) |
 | `SYNC_LEGACY_BOUNDARY` | 1 | `conflict` | `sync push` refused one config: the working tree predates statement-boundary tracking, so pushing it would merge separate SQL statements into one. Run `sync pull` first |
 | `COMPANION_UNREADABLE` | 1 | `conflict` | `sync push` refused one config: its `pyproject.toml` states no usable `[project].dependencies` list (no key, not valid TOML), `_config.yml` has no inline `packages`, and the remote packages could not be read, so a push would drop them. Fix the file or add `packages` inline |
+| `SYNC_LOCAL_FILE_INVALID` | 1 | `validation` | `sync diff` / `sync push` held one config back: its `_config.yml` (or a row's) is not valid YAML, is not a mapping, or has a top-level key sync does not know (`path` names the file). Nothing is created, updated or deleted for that config. Fix the file; put extra configuration keys under `_configuration_extra` |
 
 ### Encryption
 

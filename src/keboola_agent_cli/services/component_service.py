@@ -206,28 +206,27 @@ def _generate_from_schema(schema: dict[str, Any]) -> dict[str, Any]:
 
 
 def _build_storage_section(detail: ComponentDetail) -> list[str]:
-    """Generate storage input/output mapping skeleton based on component flags."""
+    """Generate the input/output mapping skeleton based on component flags.
+
+    Written as top-level ``input:`` / ``output:`` -- the shape ``sync pull``
+    writes and ``sync push`` reads (``local_config_to_api`` nests them under
+    ``configuration.storage``). A top-level ``storage:`` key is not part of the
+    local format, so push refuses it as an unknown key.
+    """
     flags = detail.component_flags
     lines: list[str] = []
-    has_input = "genericDockerUI-tableInput" in flags
-    has_output = "genericDockerUI-tableOutput" in flags
 
-    if not has_input and not has_output:
-        return lines
+    if "genericDockerUI-tableInput" in flags:
+        lines.append("input:")
+        lines.append("  tables:")
+        lines.append('    - source: "in.c-bucket.table"')
+        lines.append('      destination: "input.csv"')
 
-    lines.append("storage:")
-
-    if has_input:
-        lines.append("  input:")
-        lines.append("    tables:")
-        lines.append('      - source: "in.c-bucket.table"')
-        lines.append('        destination: "input.csv"')
-
-    if has_output:
-        lines.append("  output:")
-        lines.append("    tables:")
-        lines.append('      - source: "output.csv"')
-        lines.append('        destination: "out.c-bucket.table"')
+    if "genericDockerUI-tableOutput" in flags:
+        lines.append("output:")
+        lines.append("  tables:")
+        lines.append('    - source: "output.csv"')
+        lines.append('      destination: "out.c-bucket.table"')
 
     return lines
 

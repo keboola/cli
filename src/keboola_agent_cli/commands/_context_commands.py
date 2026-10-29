@@ -1092,7 +1092,7 @@ Browse and manage storage buckets, tables, and files
 
   kbagent storage add-column [--project PROJECT] --table-id ID --column COLUMN
       [--not-null] [--default DEFAULT] [--branch N]
-    Add a single column to an existing table (synchronous, typed).
+    Add a single column to an existing table (typed; waits for the job).
 
   kbagent storage bucket-detail [--project PROJECT] --bucket-id ID
       [--branch N]

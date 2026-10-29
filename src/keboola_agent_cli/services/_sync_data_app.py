@@ -115,7 +115,8 @@ def resolve_ds_branch_id(
     """Map the push branch onto the ``branchId`` Data Science ``POST /apps`` wants.
 
     DS wants ``null`` for the project's default (production) branch and the
-    numeric id for a dev branch. The production check compares against the
+    dev branch id for a dev branch (``create_app`` sends it as a JSON string;
+    a number is HTTP 422). The production check compares against the
     default branch reported by the API, never ``manifest.branches[0]``: after
     ``sync clone --branch <dev>`` that first manifest entry IS the dev branch,
     so equating the two created every data app in production while the rest

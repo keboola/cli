@@ -171,7 +171,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Export a storage table to a local CSV file | `kbagent storage download-table --project PROJECT --table-id TABLE-ID` |
 | Delete one or more storage tables | `kbagent storage delete-table --project PROJECT --table-id TABLE-ID` |
 | Truncate (delete all rows from) one or more storage tables | `kbagent storage truncate-table --project PROJECT --table-id TABLE-ID` |
-| Add a single column to an existing table (synchronous, typed) | `kbagent storage add-column --project PROJECT --table-id TABLE-ID --column COLUMN` |
+| Add a single column to an existing table (typed; waits for the job) | `kbagent storage add-column --project PROJECT --table-id TABLE-ID --column COLUMN` |
 | Delete one or more columns from a storage table | `kbagent storage delete-column --project PROJECT --table-id TABLE-ID --column COLUMN` |
 | Swap two storage tables (any branch, including the default/production branch) | `kbagent storage swap-tables --project PROJECT --table-id TABLE-ID --target-table-id TARGET-TABLE-ID` |
 | Clone (pull) a production table into a development branch | `kbagent storage clone-table --project PROJECT --table-id TABLE-ID` |
@@ -459,6 +459,7 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | **Authorizing an OAuth component** (`config oauth-url`; no browser under `--json`, always echo the URL in a fenced block, verify by the config `version` bump) | [oauth-workflow](references/oauth-workflow.md) |
 | Sync & Git-branching (GitOps) | [sync-workflow](references/sync-workflow.md) |
 | Sync row-level internals (manifest v3, hoist, encryption) | [sync-rows-workflow](references/sync-rows-workflow.md) |
+| **GitOps / CI/CD deploy pipeline** (headless `__env__`, `--branch` everywhere, pinned version, reading results, per-version pitfalls and workarounds) | [gitops-cicd-workflow](references/gitops-cicd-workflow.md) |
 | **Promote configs source -> destination project** (from-scratch GitHub Actions pull -> validate -> push pipeline built on `sync`; PR-gated, cross-project dry-run diff) -- a **separate skill**, not a reference doc | [kbagent-promotion-pipeline](../kbagent-promotion-pipeline/SKILL.md) |
 | **Migrating a `kbc` (keboola-as-code) GitHub CI/CD pipeline to kbagent sync** | [kbagent-cicd-migration](../kbagent-cicd-migration/SKILL.md) (sibling skill) |
 | **Variables (attach to any config)** | [variables-workflow](references/variables-workflow.md) |

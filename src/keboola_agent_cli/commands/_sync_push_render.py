@@ -15,6 +15,8 @@ from typing import Any
 
 from rich.markup import escape
 
+from ..services._sync_local_files import INVALID_CHANGE_TYPE
+
 # Remote-side change types in the diff, labelled for human output.
 REMOTE_CHANGE_LABELS = {
     "remote_modified": "~ REMOTE MODIFIED",
@@ -105,7 +107,8 @@ def push_total(result: dict[str, Any]) -> int:
     """Every config change that a single-project ``sync push`` tried or would try."""
     if result.get("status") == "dry_run":
         summary = result.get("summary", {})
-        return sum(summary.get(key, 0) for key in ("added", "modified", "deleted"))
+        planned = sum(summary.get(key, 0) for key in ("added", "modified", "deleted"))
+        return planned + invalid_file_count(result)
     created = result.get("created", 0) + result.get("updated", 0) + result.get("deleted", 0)
     return created + len(result.get("errors", []))
 
@@ -142,8 +145,13 @@ def dry_run_counts(result: dict[str, Any]) -> DryRunCounts:
         added=summary.get("added", 0),
         modified=summary.get("modified", 0),
         deleted=summary.get("deleted", 0),
-        refused=len(result.get("errors", [])),
+        refused=len(result.get("errors", [])) - invalid_file_count(result),
     )
+
+
+def invalid_file_count(result: dict[str, Any]) -> int:
+    """The ``errors[]`` entries of configs held by an unusable ``_config.yml``."""
+    return sum(1 for e in result.get("errors", []) if e.get("change_type") == INVALID_CHANGE_TYPE)
 
 
 def dry_run_line(result: dict[str, Any]) -> str:

@@ -55,6 +55,8 @@ class DiffExtras:
     never_fetched: list[dict[str, str]] = field(default_factory=list)
     orphaned: list[dict[str, Any]] = field(default_factory=list)
     companion_warnings: list[dict[str, str]] = field(default_factory=list)
+    # Unusable local files (SYNC_LOCAL_FILE_INVALID): their configs are held.
+    errors: list[dict[str, str]] = field(default_factory=list)
 
 
 def _local_keys(sides: DiffSides) -> set[str]:
@@ -154,6 +156,7 @@ def diff_report(
         "remote_only_rows": deletes.remote_only_rows,
         "never_fetched": extras.never_fetched,
         "orphaned": extras.orphaned,
+        "errors": extras.errors,
         "summary": {
             "added": count("added"),
             "modified": count("modified"),
@@ -166,5 +169,6 @@ def diff_report(
             "remote_only_rows": len(deletes.remote_only_rows),
             "never_fetched": len(extras.never_fetched),
             "orphaned": len(extras.orphaned),
+            "invalid": len(extras.errors),
         },
     }

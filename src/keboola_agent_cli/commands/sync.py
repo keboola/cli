@@ -471,9 +471,10 @@ def _diff_one_liner(result: dict) -> str:
     rmod = s.get("remote_modified", 0) + s.get("remote_deleted", 0)
     conf = s.get("conflict", 0)
     ro = s.get("remote_only", 0) + s.get("remote_only_rows", 0)
-    if not any([mod, add, dlt, rmod, conf, ro]):
+    invalid = s.get("invalid", 0)
+    if not any([mod, add, dlt, rmod, conf, ro, invalid]):
         return "[green]in sync[/green]"
-    parts = []
+    parts = [f"[red]{invalid} invalid file(s)[/red]"] if invalid else []
     if add:
         parts.append(f"[green]{add} to create[/green]")
     if mod:
@@ -902,106 +903,125 @@ def sync_diff(
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
     emit_companion_warnings(formatter, result)
-    if formatter.json_mode:
+    # A config held back by an unusable _config.yml fails the diff: the per-item
+    # exit goes through finish_items, with its headline (HO2, E4).
+    failed = len(result.get("errors", []))
+    if failed:
+
+        def render() -> None:
+            _render_diff_result(formatter, result)
+            print_dry_run_refusals(formatter, result)
+
+        finish_items(
+            formatter,
+            result,
+            failed=failed,
+            total=failed,
+            noun="configs",
+            summary=f"{failed} config(s) held back, the others compared.",
+            render=render,
+        )
+    elif formatter.json_mode:
         formatter.output(result)
     else:
-        changes = result["changes"]
-        summary = result["summary"]
-        remote_only = result.get("remote_only", [])
-        print_moves(formatter, result)  # before the clean-state return (#792 I)
+        _render_diff_result(formatter, result)
 
-        if not changes and not has_remote_only(result):
-            if result.get("never_fetched") or result.get("orphaned"):
-                _format_never_fetched(formatter, result.get("never_fetched", []))
-                _format_orphaned(formatter, result.get("orphaned", []))
-            else:
-                formatter.console.print(
-                    "[green]No differences found.[/green] Local and remote are in sync."
-                )
-            return
 
-        # Categorize changes by direction
-        prefix_map = {
-            "added": "[green]+ ",
-            "modified": "[yellow]~ ",
-            "remote_modified": "[cyan]~ ",
-            "conflict": "[red]! ",
-            "deleted": "[red]- ",
-        }
-        suffix_map = {
-            "added": "[/green]",
-            "modified": "[/yellow]",
-            "remote_modified": "[/cyan]",
-            "conflict": "[/red]",
-            "deleted": "[/red]",
-        }
-        label_map = {
-            "added": "ADDED",
-            "modified": "MODIFIED",
-            "remote_modified": "REMOTE MODIFIED",
-            "conflict": "CONFLICT",
-            "deleted": "DELETED",
-        }
+def _render_diff_result(formatter: Any, result: dict[str, Any]) -> None:
+    """Human-mode rendering for a single-project ``sync diff``."""
+    changes = result["changes"]
+    summary = result["summary"]
+    remote_only = result.get("remote_only", [])
+    print_moves(formatter, result)  # before the clean-state return (#792 I)
 
-        local_changes = [c for c in changes if c["change_type"] in ("added", "modified", "deleted")]
-        remote_changes = [c for c in changes if c["change_type"] in REMOTE_CHANGE_LABELS]
-        conflict_changes = [c for c in changes if c["change_type"] == "conflict"]
+    if not changes and not has_remote_only(result):
+        if result.get("never_fetched") or result.get("orphaned"):
+            _format_never_fetched(formatter, result.get("never_fetched", []))
+            _format_orphaned(formatter, result.get("orphaned", []))
+        elif not result.get("errors"):
+            formatter.console.print(
+                "[green]No differences found.[/green] Local and remote are in sync."
+            )
+        return
 
-        # Local changes (what push would do)
+    # Categorize changes by direction
+    prefix_map = {
+        "added": "[green]+ ",
+        "modified": "[yellow]~ ",
+        "remote_modified": "[cyan]~ ",
+        "conflict": "[red]! ",
+        "deleted": "[red]- ",
+    }
+    suffix_map = {
+        "added": "[/green]",
+        "modified": "[/yellow]",
+        "remote_modified": "[/cyan]",
+        "conflict": "[/red]",
+        "deleted": "[/red]",
+    }
+    label_map = {
+        "added": "ADDED",
+        "modified": "MODIFIED",
+        "remote_modified": "REMOTE MODIFIED",
+        "conflict": "CONFLICT",
+        "deleted": "DELETED",
+    }
+
+    local_changes = [c for c in changes if c["change_type"] in ("added", "modified", "deleted")]
+    remote_changes = [c for c in changes if c["change_type"] in REMOTE_CHANGE_LABELS]
+    conflict_changes = [c for c in changes if c["change_type"] == "conflict"]
+
+    # Local changes (what push would do)
+    if local_changes:
+        formatter.console.print("[bold]Local changes (push would apply):[/bold]")
+        for change in local_changes:
+            ct = change["change_type"]
+            label = _change_label(change)
+            formatter.console.print(f"  {prefix_map[ct]}{label_map[ct]} {label}{suffix_map[ct]}")
+            for detail in change.get("details", []):
+                formatter.console.print(f"    {detail}")
+        formatter.console.print(
+            f"\n{summary['added']} to create, {summary['modified']} to update, "
+            f"{summary['deleted']} to delete (push --force)"
+        )
+
+    # Remote changes (need pull)
+    if remote_changes:
         if local_changes:
-            formatter.console.print("[bold]Local changes (push would apply):[/bold]")
-            for change in local_changes:
-                ct = change["change_type"]
-                label = _change_label(change)
-                formatter.console.print(
-                    f"  {prefix_map[ct]}{label_map[ct]} {label}{suffix_map[ct]}"
-                )
-                for detail in change.get("details", []):
-                    formatter.console.print(f"    {detail}")
-            formatter.console.print(
-                f"\n{summary['added']} to create, {summary['modified']} to update, "
-                f"{summary['deleted']} to delete (push --force)"
-            )
+            formatter.console.print()
+        formatter.console.print("[bold]Remote changes (run 'sync pull' to fetch):[/bold]")
+        for change in remote_changes:
+            label = _change_label(change)
+            kind = REMOTE_CHANGE_LABELS[change["change_type"]]
+            formatter.console.print(f"  [cyan]{kind} {label}[/cyan]")
+            for detail in change.get("details", []):
+                formatter.console.print(f"    {detail}")
 
-        # Remote changes (need pull)
-        if remote_changes:
-            if local_changes:
-                formatter.console.print()
-            formatter.console.print("[bold]Remote changes (run 'sync pull' to fetch):[/bold]")
-            for change in remote_changes:
-                label = _change_label(change)
-                kind = REMOTE_CHANGE_LABELS[change["change_type"]]
-                formatter.console.print(f"  [cyan]{kind} {label}[/cyan]")
-                for detail in change.get("details", []):
-                    formatter.console.print(f"    {detail}")
+    # Conflicts (both sides changed)
+    if conflict_changes:
+        if local_changes or remote_changes:
+            formatter.console.print()
+        formatter.console.print("[bold red]Conflicts (both local and remote changed):[/bold red]")
+        for change in conflict_changes:
+            label = _change_label(change)
+            formatter.console.print(f"  [red]! CONFLICT {label}[/red]")
+            for detail in change.get("details", []):
+                formatter.console.print(f"    {detail}")
 
-        # Conflicts (both sides changed)
-        if conflict_changes:
-            if local_changes or remote_changes:
-                formatter.console.print()
-            formatter.console.print(
-                "[bold red]Conflicts (both local and remote changed):[/bold red]"
-            )
-            for change in conflict_changes:
-                label = _change_label(change)
-                formatter.console.print(f"  [red]! CONFLICT {label}[/red]")
-                for detail in change.get("details", []):
-                    formatter.console.print(f"    {detail}")
+    # Remote-only configs (new on server, not yet pulled)
+    if remote_only:
+        if changes:
+            formatter.console.print()
+        formatter.console.print(
+            f"[bold]Remote only ({len(remote_only)} new, run 'sync pull' to fetch):[/bold]"
+        )
+        for cfg in remote_only:
+            name = cfg.get("config_name", cfg.get("config_id", ""))
+            formatter.console.print(f"  [cyan]+ NEW {cfg['component_id']}/{name}[/cyan]")
 
-        # Remote-only configs (new on server, not yet pulled)
-        if remote_only:
-            if changes:
-                formatter.console.print()
-            formatter.console.print(
-                f"[bold]Remote only ({len(remote_only)} new, run 'sync pull' to fetch):[/bold]"
-            )
-            for cfg in remote_only:
-                name = cfg.get("config_name", cfg.get("config_id", ""))
-                formatter.console.print(f"  [cyan]+ NEW {cfg['component_id']}/{name}[/cyan]")
-
-        print_remote_only_rows(formatter, result)
-        _format_never_fetched(formatter, result.get("never_fetched", []))
-        _format_orphaned(formatter, result.get("orphaned", []))
+    print_remote_only_rows(formatter, result)
+    _format_never_fetched(formatter, result.get("never_fetched", []))
+    _format_orphaned(formatter, result.get("orphaned", []))
 
 
 @sync_app.command("push")
@@ -1148,6 +1168,7 @@ def _render_push_result(formatter: Any, result: dict[str, Any]) -> None:
     status = result.get("status", "")
 
     if status == "no_changes":
+        print_dry_run_refusals(formatter, result)  # files held back (SYNC_LOCAL_FILE_INVALID)
         print_push_skips(formatter, result)
         _format_never_fetched(formatter, result.get("never_fetched", []))
         _format_orphaned(formatter, result.get("orphaned", []))

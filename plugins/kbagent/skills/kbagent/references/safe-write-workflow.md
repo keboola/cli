@@ -266,3 +266,10 @@ to direct Snowflake paths or changing table prefixes.
 
 See `gotchas.md` "SQL editing: do NOT use global text replace on
 identifiers" for the full pattern, examples, and verification regexes.
+
+## Unattended deploy pipelines
+
+In CI there is no human for step 4. Replace it with checks the pipeline
+enforces: parse every `_config.yml`, review `sync push --dry-run`, and never
+pass `--force` without that review. See
+[gitops-cicd-workflow.md](gitops-cicd-workflow.md).

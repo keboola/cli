@@ -294,7 +294,7 @@
       "kind": "command",
       "hidden": false,
       "category": "write",
-      "help": "Create a new development branch and auto-activate it.\n\nThe created branch becomes the active branch for the project,\nso subsequent tool calls will automatically use it.",
+      "help": "Create a new development branch and auto-activate it.\n\nThe created branch becomes the active branch for the project,\nso subsequent tool calls will automatically use it. A project from\nenvironment variables (__env__) cannot store an active branch: the\nbranch is created, not activated, and a warning names --branch.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID to create the branch in (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "name", "opts": ["--name", "-n"], "type": "text", "required": true, "default": null, "help": "Name for the new development branch"},
@@ -3223,7 +3223,7 @@
       "kind": "command",
       "hidden": false,
       "category": "write",
-      "help": "Add a single column to an existing table (synchronous, typed).\n\nMirrors ``create-table --column``: ``name:TYPE(length)`` creates a typed\ncolumn; a bare ``name`` adds an untyped STRING column. The Storage\nadd-column endpoint is synchronous -- there is no job to wait on.",
+      "help": "Add a single column to an existing table (typed; waits for the job).\n\nMirrors ``create-table --column``: ``name:TYPE(length)`` creates a typed\ncolumn; a bare ``name`` adds an untyped STRING column. The command waits\nfor the Storage job, so a following table-detail lists the column; a\nfailed job is reported as an error.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "table_id", "opts": ["--table-id"], "type": "text", "required": true, "default": null, "help": "Table ID to add the column to (e.g. 'in.c-bucket.table')"},

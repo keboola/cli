@@ -225,8 +225,10 @@ def clone_project(
             "warnings": collect_clone_warnings(
                 service, changes=changes, encrypted=encrypted, dry_run=True, **tree_args
             ),
-            # The creates the real clone's push refuses (T1, round 5).
-            "errors": _dry_run_refusals(service, changes, tree_args),
+            # The files the real clone's push holds back (SYNC_LOCAL_FILE_INVALID)
+            # and the creates it refuses (T1, round 5).
+            "errors": list(diff_result.get("errors") or [])
+            + _dry_run_refusals(service, changes, tree_args),
             **override_counts,
         }
 

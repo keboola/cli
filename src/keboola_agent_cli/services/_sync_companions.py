@@ -403,7 +403,10 @@ def kept_companion_warning(component_id: str, rel_path: str, name: str) -> dict[
 
 
 def companion_diagnostics(
-    config_dir: Path, component_id: str, rel_path: str
+    config_dir: Path,
+    component_id: str,
+    rel_path: str,
+    local_data: dict[str, Any] | None = None,
 ) -> list[dict[str, str]]:
     """Diff ``companion_warnings`` for one config dir (D11, S1).
 
@@ -413,7 +416,8 @@ def companion_diagnostics(
     file is never sent. ``COMPANION_UNREADABLE``: a ``pyproject.toml`` that
     is not valid TOML (or whose dependencies are not a list of strings) says
     nothing about the packages, so push keeps the inline value instead.
-    Both said out loud instead of silently.
+    Both said out loud instead of silently. With *local_data* (the file as
+    read, before the merge) also :func:`description_shadowed`.
     """
     owned = set(owned_companions(component_id))
     found = [
@@ -447,7 +451,44 @@ def companion_diagnostics(
                 ),
             }
         )
+    if local_data is not None:
+        found += description_shadowed(config_dir, local_data, component_id, rel_path)
     return found
+
+
+DESCRIPTION_SHADOWED_CODE = "DESCRIPTION_SHADOWED"
+
+
+def description_shadowed(
+    config_dir: Path, local_data: dict[str, Any], component_id: str, rel_path: str
+) -> list[dict[str, str]]:
+    """Diff ``companion_warnings`` entry for a description stated twice.
+
+    ``DESCRIPTION_SHADOWED``: ``_description.md`` and a non-empty
+    ``description:`` in ``_config.yml`` that say different things. The file
+    wins (push sends it), so the inline text is silently ignored -- said out
+    loud, naming both paths. Call it with the file as read, before the merge.
+    """
+    inline = local_data.get("description")
+    md_file = config_dir / DESCRIPTION_FILENAME
+    if not (isinstance(inline, str) and inline.strip() and md_file.is_file()):
+        return []
+    if md_file.read_text(encoding="utf-8").strip() == inline.strip():
+        return []
+    md_path = f"{rel_path}/{DESCRIPTION_FILENAME}"
+    yml_path = f"{rel_path}/{CONFIG_FILENAME}"
+    return [
+        {
+            "code": DESCRIPTION_SHADOWED_CODE,
+            "component_id": component_id,
+            "path": md_path,
+            "message": (
+                f"{md_path} and the description: in {yml_path} differ. Push sends "
+                f"{md_path} and ignores the inline description. Keep the description "
+                f"in one place."
+            ),
+        }
+    ]
 
 
 def canonical_description(local_data: dict[str, Any], config_dir: Path) -> dict[str, Any]:

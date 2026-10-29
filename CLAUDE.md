@@ -1220,6 +1220,15 @@ kbagent sync push [--project ALIAS] [--all-projects] [--dry-run] [--force] [--al
 #   under skipped_deletions (+ skipped_deletions_reason), also in --dry-run, whose summary.deleted counts only
 #   what push would delete. A config/row deleted on the remote since the last pull diffs as remote_deleted and
 #   is never re-created (it lands in skipped). Version gate in gotchas.md.
+# sync diff/push strict local files: a _config.yml (config or row) that is not valid YAML, is
+#   empty / not a mapping, or has a top-level key outside version/name/description/is_disabled/
+#   parameters/input/output/processors/_configuration_extra/_keboola is an errors[] entry
+#   (change_type invalid_local_file, SYNC_LOCAL_FILE_INVALID, path). Its config and rows are held
+#   (never created, updated or deleted, also with --force) and diff/push exit 1; before, a broken
+#   tracked file read as deleted and push --force deleted the remote config (#827 item 9). Pull
+#   keeps such a file. A missing description: equals ''; _description.md plus a different inline
+#   description adds a DESCRIPTION_SHADOWED warning. `config new` writes top-level input/output,
+#   not storage:. Version gate in gotchas.md.
 # sync diff/push/pull and adopted files (#792 E): an untracked _config.yml whose _keboola.config_id
 #   exists on the target has no baseline unless it records _keboola.base_config_hash; without one a
 #   difference is a conflict (push skips it), two files with one id are both conflicts, and pull keeps

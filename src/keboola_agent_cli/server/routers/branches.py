@@ -8,8 +8,9 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from ...services.base import resolve_fanout_aliases
+from ...services.branch_service import active_branch_not_stored_warning
 from ..dependencies import ALL_PROJECTS_HELP, ServiceRegistry, get_registry
-from ..response_meta import warn_active_choice_shared
+from ..response_meta import add_warning, warn_active_choice_shared
 
 router = APIRouter(prefix="/branches", tags=["branches"])
 
@@ -42,10 +43,22 @@ def list_branches(
 def create(
     project: str, body: BranchCreate, registry: ServiceRegistry = Depends(get_registry)
 ) -> dict[str, Any]:
-    """Create a new development branch. Mirrors `kbagent branch create`."""
-    return registry.branch.create_branch(
+    """Create a new development branch. Mirrors `kbagent branch create`.
+
+    On a project from environment variables the branch is created but not
+    activated (``activated: false``) and a ``Kbagent-Warnings`` entry
+    ``ACTIVE_BRANCH_NOT_STORED`` (hint ``branch_id=<id>``) says to pass ``branch_id``.
+    """
+    result = registry.branch.create_branch(
         alias=project, name=body.name, description=body.description
     )
+    if not result["activated"]:
+        add_warning(
+            **active_branch_not_stored_warning(
+                result["project_alias"], result["branch_id"], rest=True
+            )
+        )
+    return result
 
 
 @router.post(
@@ -80,7 +93,10 @@ def reset(project: str, registry: ServiceRegistry = Depends(get_registry)) -> di
     was set) and a ``Kbagent-Warnings`` entry ``ACTIVE_CHOICE_SHARED``.
     """
     result = registry.branch.reset_branch(alias=project)
-    warn_active_choice_shared(registry.config_store.config_dir, "active branch")
+    stored = registry.config_store.get_project(project)
+    if stored is None or not stored.ephemeral:
+        # An environment project stores nothing, so nothing is shared.
+        warn_active_choice_shared(registry.config_store.config_dir, "active branch")
     return {**result, "active_branch_cleared": result.get("previous_branch_id")}
 
 

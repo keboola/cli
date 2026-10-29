@@ -1799,7 +1799,9 @@ class DataAppService(BaseService):
         workspace = bool(kwargs.get("workspace", True))
 
         post_body = {
-            "branchId": kwargs["branch_id"] or None,  # 0 (`--branch 0`) is production
+            # 0 (`--branch 0`) is production (null); a dev branch id is a string,
+            # as create_app sends it.
+            "branchId": str(kwargs["branch_id"]) if kwargs["branch_id"] else None,
             "type": type_,
             "name": kwargs["name"],
             "description": "",
