@@ -74,7 +74,9 @@ class TestCli:
         assert "--branch" in warning["message"]
         api_client.create_dev_branch.assert_called_once()
         # Nothing was written for the environment project.
-        assert ConfigStore(config_dir=tmp_path).get_project("__env__").active_branch_id is None
+        env_project = ConfigStore(config_dir=tmp_path).get_project("__env__")
+        assert env_project is not None
+        assert env_project.active_branch_id is None
 
     def test_reset_is_a_noop(self, tmp_path: Path, api_client: MagicMock) -> None:
         code, doc = _invoke(tmp_path, api_client, "reset")
