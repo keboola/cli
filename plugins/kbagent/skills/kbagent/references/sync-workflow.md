@@ -152,6 +152,13 @@ kbagent sync push --project prod --branch 388072
 When a per-branch subtree *does* exist (multi-branch-directory users), the
 target subtree is used as before — behaviour is unchanged.
 
+A subtree that `sync pull --branch <id>` wrote stays the source after you delete
+its last config directory (since vNEXT): `sync push --branch <id>` lists that config
+under `skipped_deletions`, and `--force` deletes it on the branch. Before, push read
+`main/` instead, reported the config as `orphaned` (`tracked_on_other_branch`) and
+deleted nothing. Deleting the whole `<branch_name>/` folder still means "promote
+`main/`".
+
 Promoting is idempotent (since 0.96.1): a config the dev branch lacks is created
 there once, and the manifest records that dev copy for the same `main/`
 directory. Re-running the same push creates nothing; a later edit in `main/`

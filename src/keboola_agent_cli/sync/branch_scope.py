@@ -125,6 +125,31 @@ def same_branch(manifest: Manifest, a: int | None, b: int | None) -> bool:
     return a == b
 
 
+def target_tree_is_source(manifest: Manifest, project_root: Path, branch_id: int | None) -> bool:
+    """True iff the target branch's own tree is what diff/push read, even with no file left.
+
+    Without a config file under the target tree, diff/push fall back to the
+    default tree (the promote path, KFR-07 / #929). A tree that is registered,
+    still on disk and backs entries a pull of that branch wrote (no
+    ``promoted_from`` association) is that branch's own checkout, though: the
+    user deleted its last config, and the push must read that as a delete.
+    Falling back to ``main/`` there made every entry of the branch an orphan of
+    "another" branch and the push a silent no-op. The directory must exist
+    because a promote push written before the association was recorded left
+    target-branch entries without one and never had a target tree.
+    """
+    if is_production(manifest, branch_id):
+        return False
+    target_path = branch_tree_path(manifest, branch_id)
+    default_path = branch_tree_path(manifest, None)
+    if target_path == default_path or not (project_root / target_path).is_dir():
+        return False
+    return any(
+        same_branch(manifest, cfg.branch_id, branch_id) and promoted_from(cfg) is None
+        for cfg in manifest.configurations
+    )
+
+
 # Row metadata: the row's base is unknown (D22). ``adopted``: pull kept a local
 # row file it has no baseline for, the row was on the branch then (D15).
 # ``unread``: a promote shadow could not read the branch's rows, so whether
@@ -383,7 +408,16 @@ def scope_manifest(
             orphaned.append(_promoted_record(cfg, tree_path=tree_path))
             continue
         orphaned.append(
-            _other_branch_record(cfg, tree_path=tree_path, exists_on_target=key in remote_keys)
+            _other_branch_record(
+                cfg,
+                tree_path=tree_path,
+                exists_on_target=key in remote_keys,
+                source_tree=(
+                    source_branch_path
+                    if same_branch(manifest, cfg.branch_id, target_branch_id)
+                    else None
+                ),
+            )
         )
 
     return TreeScope(
@@ -510,9 +544,22 @@ def _other_branch_record(
     *,
     tree_path: str,
     exists_on_target: bool,
+    source_tree: str | None = None,
 ) -> dict[str, Any]:
-    """Build the report record for an entry tracked on another branch."""
-    if exists_on_target:
+    """Build the report record for an entry whose tree is not the one read.
+
+    *source_tree* is set when the entry belongs to the branch being synced
+    itself: its own tree was not read (it holds no config and is not a pulled
+    checkout any more), so the hint must not call it another branch.
+    """
+    if source_tree is not None:
+        hint = (
+            f"tracked on branch {cfg.branch_id} ('{tree_path}/'), the branch being synced, "
+            f"but '{tree_path}/' holds no config, so this run read '{source_tree}/' "
+            f"instead -- restore the directory, or run 'kbagent sync pull --branch "
+            f"{cfg.branch_id}' to re-create the tree"
+        )
+    elif exists_on_target:
         hint = (
             f"tracked on branch {cfg.branch_id} ('{tree_path}/'), which is not the branch "
             f"being synced -- run 'kbagent sync pull' to re-target the manifest"
