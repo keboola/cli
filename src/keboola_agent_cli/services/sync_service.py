@@ -39,6 +39,7 @@ from ..sync.branch_scope import (
     UNKNOWN_BASE_KEY,
     VERDICT_CREATE,
     VERDICT_ORPHAN,
+    branch_tree_has_configs,
     branch_tree_path,
     classify_untracked,
     entry_tree,
@@ -2190,20 +2191,6 @@ class SyncService(BaseService):
         """
         return branch_tree_path(manifest, branch_id)
 
-    def _branch_path_has_configs(self, branch_dir: Path) -> bool:
-        """Return True if *branch_dir* exists and holds at least one config.
-
-        A config is any ``_config.yml`` below the branch root other than the
-        optional branch-level ``_config.yml`` itself. Used to decide whether a
-        target-branch subtree is materialized on disk.
-        """
-        if not branch_dir.is_dir():
-            return False
-        for config_file in branch_dir.rglob(CONFIG_FILENAME):
-            if config_file.parent != branch_dir:
-                return True
-        return False
-
     def _resolve_source_branch_path(
         self,
         manifest: Manifest,
@@ -2226,7 +2213,7 @@ class SyncService(BaseService):
         source (:func:`target_tree_is_source`), so the deletion is pushed.
         """
         target_path = self._find_branch_path(manifest, target_branch_id)
-        if self._branch_path_has_configs(project_root / target_path):
+        if branch_tree_has_configs(project_root / target_path):
             return target_path
         if target_tree_is_source(manifest, project_root, target_branch_id):
             return target_path
