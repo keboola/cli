@@ -5284,11 +5284,30 @@ slice -- `workspace query` with a `WHERE` clause needs a live workspace.
 
 ### `storage add-column --not-null` needs an empty table or `--default`
 
-`storage add-column --column name:TYPE(length) [--not-null] [--default VALUE]`
-hits the SYNCHRONOUS Storage endpoint (no job to poll). `--not-null` on a table
-that ALREADY HAS ROWS is rejected by the backend with an API error (not a local
-validation error) unless you also pass `--default` -- the existing rows need a
-value for the new non-null column. Add `--default` when the table is non-empty.
+`storage add-column --column name:TYPE(length) [--not-null] [--default VALUE]`:
+`--not-null` on a table that ALREADY HAS ROWS is rejected by the backend (not a
+local validation error) unless you also pass `--default` -- the existing rows
+need a value for the new non-null column. Add `--default` when the table is
+non-empty. The rejection comes from the storage job, so before vNEXT kbagent
+did not see it (next entry).
+
+### `storage add-column` waits for the storage job
+
+(since vNEXT) `POST /v2/storage[/branch/{id}]/tables/{id}/columns` answers `HTTP 202` with a
+queued `tableColumnAdd` storage job -- it is not synchronous. Before vNEXT,
+kbagent returned on that receipt: `add-column` reported success while the
+column did not exist yet, so an immediate `storage table-detail` (most visibly
+with `--branch` on a dev branch) did not list it, and a job that FAILED (for
+example `--not-null` on a table with rows) was reported as success and the
+column was never added. Since vNEXT the command waits for the Storage job, so
+a following `table-detail` lists the column; a failed job is
+`STORAGE_JOB_FAILED` (exit 1) with the backend's message; a job that runs past
+the wait is `STORAGE_JOB_TIMEOUT` (exit 4, `retryable: false`,
+`details.job_id`) -- the job keeps running server-side, so follow it with the
+`storage job-detail --job-id ID --wait` command the message names instead of
+adding the column again (a repeat queues a second add). On an
+older kbagent, poll `table-detail` until the column appears, and treat a column
+that never appears as a failed add.
 
 ### `job run --idempotency-key` is client-side dedup, scoped to one machine
 
