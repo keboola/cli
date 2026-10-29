@@ -50,3 +50,5 @@ def print_moves(formatter: Any, result: dict[str, Any]) -> None:
         )
     for item in result.get("ambiguous_moves") or []:
         formatter.console.print(f"  [yellow]! AMBIGUOUS MOVE {escape(item['message'])}[/yellow]")
+    for item in result.get("identity_conflicts") or []:
+        formatter.console.print(f"  [yellow]! IDENTITY CONFLICT {escape(item['message'])}[/yellow]")

@@ -525,6 +525,10 @@ new name, rename the config with `kbagent config rename --project P --component-
 When two or more directories carry the id of a missing directory, the move is
 ambiguous: a `CONFLICT` with `ambiguous_move` and `candidates`, nothing pushed
 or deleted, nothing pulled into them -- keep one and remove the others.
+A swap, a rotation or a symlink -- a tracked directory whose `_config.yml`
+carries another tracked config's id -- is held the same way as an identity
+conflict (`identity_conflict`, `identity_conflicts[]`) until the directories
+are moved back.
 
 ## Key behaviors
 

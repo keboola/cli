@@ -6806,13 +6806,17 @@ untracked directory of the same branch tree carries, is a **move**:
   none of the directories and reports it `skipped`. Keep one directory, and
   remove the others or remove their `_keboola.config_id` (then they are new
   configs).
-- **Rotations and swaps.** A tracked directory whose `_config.yml` now carries
-  the id of another tracked config counts as left by its own config: moving
-  B away and A into B (or swapping A and B) is two moves, and each config
-  keeps its content. When no directory carries the displaced config, diff
-  lists it under `displaced[]` and as remote-only: push neither updates it
-  with the other config's content nor deletes it, and `sync pull` writes it
-  to a new directory.
+- **Swaps, rotations and symlinks are held, not resolved.** When a tracked
+  directory's `_config.yml` carries the id of ANOTHER tracked config of the
+  same component (two directories swapped, B moved away and A moved into B,
+  a symlink to another config's directory), diff reports a `conflict` with
+  `identity_conflict: true` for every config involved (also
+  `identity_conflicts[]`: the configs, the directories, the hint). Push
+  creates, updates and deletes nothing for them, also with `--force`; pull
+  writes none of their directories (also with `--theirs`); nothing about
+  them is saved, so the manifest and any promoted dev copy stay as they
+  were. Move the directories back (the next diff is clean again), or use
+  `config rename --directory`. A symlinked directory is never a move target.
 - `config rename --directory` renames the directory of the entry of the
   target branch only. When the sync tree tracks the config on another branch
   only, the local tree is not changed and `--json` says so in

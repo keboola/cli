@@ -780,76 +780,150 @@ def test_f3_rename_config_reports_the_skipped_local_rename(orders: Tree) -> None
     orders.dir_of("500")
 
 
-def test_f4_rotating_two_dirs_keeps_both_ids(tmp_path: Path) -> None:
+def _three(tmp_path: Path) -> Tree:
     t = Tree(tmp_path)
     put(t.api, PROD, "500", "Orders", "a")
     put(t.api, PROD, "600", "Query", "b")
+    put(t.api, PROD, "700", "Report", "c")
     t.init()
     t.pull()
+    return t
+
+
+def _assert_held(t: Tree, ids: set[str], branch: int | None = None) -> dict:
+    """Diff holds every id in *ids* as an identity conflict; nothing else changes."""
+    diff = t.diff(branch=branch)
+    held = {c["config_id"] for c in diff["changes"] if c.get("identity_conflict")}
+    assert held == ids, diff["changes"]
+    assert all(c["change_type"] == "conflict" for c in diff["changes"]), diff["changes"]
+    assert "moves" not in diff
+    assert diff["identity_conflicts"]
+    return diff
+
+
+def _values(t: Tree) -> dict[str, str]:
+    return {
+        cid: cfg["configuration"]["parameters"]["value"]
+        for (_c, cid), cfg in t.api.remote[PROD].items()
+    }
+
+
+def _held_push_twice(t: Tree, ids: set[str]) -> None:
+    """Push and push --force twice: nothing reaches the remote, the manifest is unchanged."""
+    before_remote = _values(t)
+    before = t.manifest_bytes()
+    _assert_held(t, ids)
+    t.push()
+    assert t.manifest_bytes() == before, "an identity conflict was persisted"
+    t.push(force=True)
+    t.push(force=True)
+    assert t.api.log == []
+    assert _values(t) == before_remote
+    assert t.manifest_bytes() == before
+
+
+def test_f4_dir_replaced_by_another_config_is_held_across_two_pushes(tmp_path: Path) -> None:
+    t = _three(tmp_path)
+    a, b = t.dir_of("500"), t.dir_of("600")
+    shutil.rmtree(b)
+    shutil.move(str(a), str(b))  # 500 now lives in 600's old directory
+    _held_push_twice(t, {"500", "600"})
+
+
+def test_f4_rotation_of_two_is_held(tmp_path: Path) -> None:
+    t = _three(tmp_path)
+    a, b = t.dir_of("500"), t.dir_of("600")
+    shutil.move(str(b), str(b.parent / "query-old"))
+    shutil.move(str(a), str(b))
+    _held_push_twice(t, {"500", "600"})
+
+
+def test_f4_rotation_of_three_is_held(tmp_path: Path) -> None:
+    t = _three(tmp_path)
+    a, b, c = t.dir_of("500"), t.dir_of("600"), t.dir_of("700")
+    shutil.move(str(c), str(c.parent / "report-old"))
+    shutil.move(str(b), str(c))
+    shutil.move(str(a), str(b))
+    _held_push_twice(t, {"500", "600", "700"})
+
+
+def test_f4_rotation_plus_copy_is_held(tmp_path: Path) -> None:
+    t = _three(tmp_path)
     a, b = t.dir_of("500"), t.dir_of("600")
     old = b.parent / "query-old"
     shutil.move(str(b), str(old))
     shutil.move(str(a), str(b))
-    diff = t.diff()
-    assert diff["changes"] == []
-    assert {(m["config_id"], m["moved_to"]) for m in diff["moves"]} == {
-        ("500", t.rel(b)),
-        ("600", t.rel(old)),
-    }
-    t.push(force=True)
-    assert t.api.log == []
-    assert t.api.remote[PROD][(HTTP, "500")]["configuration"]["parameters"]["value"] == "a"
-    assert t.api.remote[PROD][(HTTP, "600")]["configuration"]["parameters"]["value"] == "b"
-    assert t.diff()["changes"] == []
+    shutil.copytree(old, b.parent / "query-copy")
+    _held_push_twice(t, {"500", "600"})
+    shutil.rmtree(b.parent / "query-copy")
+    _held_push_twice(t, {"500", "600"})
 
 
-def test_f4_swapping_two_dirs_keeps_both_ids(tmp_path: Path) -> None:
-    t = Tree(tmp_path)
-    put(t.api, PROD, "500", "Orders", "a")
-    put(t.api, PROD, "600", "Query", "b")
-    t.init()
-    t.pull()
+def test_f4_symlink_to_another_config_dir_is_held(tmp_path: Path) -> None:
+    t = _three(tmp_path)
+    a, b = t.dir_of("500"), t.dir_of("600")
+    shutil.move(str(b), str(b.parent / "query-old"))
+    try:
+        b.symlink_to(a, target_is_directory=True)
+    except OSError:
+        pytest.skip("no symlinks here")
+    _held_push_twice(t, {"500", "600"})
+
+
+def test_f4_symlink_is_never_a_move_target(orders: Tree) -> None:
+    a = orders.dir_of("500")
+    real = orders.root / "elsewhere" / "orders"
+    real.parent.mkdir()
+    shutil.move(str(a), str(real))
+    try:
+        (a.parent / "orders-link").symlink_to(real, target_is_directory=True)
+    except OSError:
+        pytest.skip("no symlinks here")
+    diff = orders.diff()
+    assert "moves" not in diff
+
+
+def test_f4_swap_is_held_and_moving_back_resolves_it(tmp_path: Path) -> None:
+    t = _three(tmp_path)
     a, b = t.dir_of("500"), t.dir_of("600")
     tmp = a.parent / "swap-tmp"
     shutil.move(str(a), str(tmp))
     shutil.move(str(b), str(a))
     shutil.move(str(tmp), str(b))
-    edit_value(b, "edited-500")
+    _held_push_twice(t, {"500", "600"})
+    pulled = t.pull(theirs=True)
+    assert {d["config_id"] for d in pulled["details"] if d["action"] == "skipped"} >= {"500", "600"}
+    assert t.api.log == []
+    shutil.move(str(a), str(tmp))  # move them back
+    shutil.move(str(b), str(a))
+    shutil.move(str(tmp), str(b))
     diff = t.diff()
-    assert [(c["change_type"], c["config_id"]) for c in diff["changes"]] == [("modified", "500")]
-    t.push(force=True)
-    assert t.api.writes("CREATE") == [] and t.api.writes("DELETE") == []
+    assert diff["changes"] == [] and "identity_conflicts" not in diff
+    edit_value(t.dir_of("500"), "after")
+    t.push()
     assert t.api.writes("UPDATE") == ["UPDATE 500"]
-    assert t.api.remote[PROD][(HTTP, "600")]["configuration"]["parameters"]["value"] == "b"
 
 
-def test_f4_foreign_id_at_a_tracked_path_is_never_pushed_to_that_config(tmp_path: Path) -> None:
-    t = Tree(tmp_path)
-    put(t.api, PROD, "500", "Orders", "a")
-    put(t.api, PROD, "600", "Query", "b")
-    t.init()
-    t.pull()
+def test_f4_held_conflict_keeps_the_promoted_copy(tmp_path: Path) -> None:
+    t = _three(tmp_path)
+    t.push(branch=DEV)  # 500, 600, 700 promoted to DEV
+    dev_before = remote_ids(t.api, DEV)
+    (dev_600,) = [
+        e.id
+        for e in load_manifest(t.root).configurations
+        if e.branch_id == DEV and (e.metadata.get("promoted_from") or {}).get("config_id") == "600"
+    ]
+    t.api.log.clear()
     a, b = t.dir_of("500"), t.dir_of("600")
     shutil.rmtree(b)
-    shutil.move(str(a), str(b))  # 500 now lives in 600's old directory
-    diff = t.diff()
-    assert not any(
-        c["config_id"] == "600" and c["change_type"] == "modified" for c in diff["changes"]
-    )
-    assert [d["config_id"] for d in diff["displaced"]] == ["600"]
-    assert [m["config_id"] for m in diff["moves"]] == ["500"]
-    t.push(force=True)
-    assert t.api.log == [], "600 was updated with 500's content, or something was created"
-    assert t.api.remote[PROD][(HTTP, "600")]["configuration"]["parameters"]["value"] == "b"
+    shutil.move(str(a), str(b))
     t.pull()
-    assert t.api.log == []
-    # Each config has its own directory again, with its own content.
-    for cid, value in (("500", "a"), ("600", "b")):
-        data = yaml.safe_load((t.dir_of(cid) / "_config.yml").read_text())
-        assert data["parameters"]["value"] == value
-    assert t.dir_of("500") != t.dir_of("600")
-    assert len(load_manifest(t.root).configurations) == 2
-    assert t.diff()["changes"] == []
+    assert dev_600 in {e.id for e in load_manifest(t.root).configurations}
+    t.push(branch=DEV)
+    t.push(branch=DEV, force=True)
+    assert t.api.log == [], "a held conflict created or changed a dev config"
+    assert remote_ids(t.api, DEV) == dev_before
+    assert dev_600 in {e.id for e in load_manifest(t.root).configurations}
 
 
 def test_f5_move_in_a_git_branching_tree(tmp_path: Path) -> None:
