@@ -597,12 +597,14 @@ def test_f1_refused_refresh_is_kept_by_pull_until_the_remote_changes(tmp_path: P
     _rename(config_dir / CONFIG_FILE, "Renamed")
     w.push()
 
-    w.pull()
+    w.pull()  # may move the directory to the new name; the file goes with it
+    pyproject = w.config_dir(cid) / PYPROJECT
     assert pyproject.read_bytes() == custom
     assert dirty(w.diff()["summary"]) == {}
 
     w.api.get(PROD, v.component_id, cid)["description"] = "changed in the UI"
     w.pull()
+    pyproject = w.config_dir(cid) / PYPROJECT
     assert 'name = "renamed"' in pyproject.read_text(encoding="utf-8")
     assert dirty(w.diff()["summary"]) == {}
 
