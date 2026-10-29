@@ -179,6 +179,48 @@ class TestAddColumnWaitsForJob:
 
         assert exc_info.value.error_code == ErrorCode.STORAGE_JOB_FAILED
 
+    def test_timeout_is_not_retryable_and_keeps_job_id(self, httpx_mock) -> None:
+        """A wait timeout leaves the job running: a retry would queue a second add.
+
+        A budget already in the past reaches the timeout branch without a poll.
+        """
+        httpx_mock.add_response(
+            method="POST",
+            url=f"{self.BASE}/tables/in.c-b.t/columns",
+            status_code=202,
+            json=self._queued(),
+        )
+        client = KeboolaClient(STACK, TEST_TOKEN)
+        with pytest.raises(KeboolaApiError) as exc_info:
+            client.add_column("in.c-b.t", name="status", branch_id=123, max_wait=-1.0)
+        client.close()
+
+        exc = exc_info.value
+        assert exc.error_code == ErrorCode.STORAGE_JOB_TIMEOUT
+        assert exc.retryable is False
+        assert exc.details["job_id"] == 777
+        assert "keeps running server-side" in exc.message
+
+    def test_service_timeout_names_job_detail_command(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.add_column.side_effect = KeboolaApiError(
+            message="Storage add-column job 777 did not finish within 60s.",
+            status_code=504,
+            error_code=ErrorCode.STORAGE_JOB_TIMEOUT,
+            retryable=False,
+            details={"job_id": 777},
+        )
+        service = _make_service(store, mock_client)
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            service.add_column(alias="test", table_id="in.c-b.t", column="status:VARCHAR(20)")
+
+        exc = exc_info.value
+        assert exc.retryable is False
+        assert exc.details["job_id"] == 777
+        assert "kbagent storage job-detail --project test --job-id 777 --wait" in exc.message
+
     def test_synchronous_200_is_returned_without_polling(self, httpx_mock) -> None:
         httpx_mock.add_response(
             method="POST",

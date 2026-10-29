@@ -5299,11 +5299,13 @@ kbagent returned on that receipt: `add-column` reported success while the
 column did not exist yet, so an immediate `storage table-detail` (most visibly
 with `--branch` on a dev branch) did not list it, and a job that FAILED (for
 example `--not-null` on a table with rows) was reported as success and the
-column was never added. Since vNEXT the command waits for the job: when it
-returns, `table-detail` lists the column; a failed job is `STORAGE_JOB_FAILED`
-(exit 1) with the backend's message; a job that runs past the wait is
-`STORAGE_JOB_TIMEOUT` (the job keeps running server-side -- check
-`storage job-detail --job-id ID --wait` before adding the column again). On an
+column was never added. Since vNEXT the command waits for the Storage job, so
+a following `table-detail` lists the column; a failed job is
+`STORAGE_JOB_FAILED` (exit 1) with the backend's message; a job that runs past
+the wait is `STORAGE_JOB_TIMEOUT` (exit 4, `retryable: false`,
+`details.job_id`) -- the job keeps running server-side, so follow it with the
+`storage job-detail --job-id ID --wait` command the message names instead of
+adding the column again (a repeat queues a second add). On an
 older kbagent, poll `table-detail` until the column appears, and treat a column
 that never appears as a failed add.
 

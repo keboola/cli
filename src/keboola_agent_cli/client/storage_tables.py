@@ -1547,6 +1547,7 @@ class _StorageTablesMixin(_CoreClient):
         name: str,
         definition: dict[str, Any] | None = None,
         branch_id: int | None = None,
+        max_wait: float | None = None,
     ) -> dict[str, Any]:
         """Add a single column to an existing table (async, waits for completion).
 
@@ -1566,14 +1567,17 @@ class _StorageTablesMixin(_CoreClient):
                 ``{"type": "NUMBER", "length": "18,2", "nullable": False,
                 "default": "0"}``. Omit for an untyped column.
             branch_id: If set, target a specific dev branch.
+            max_wait: Seconds to wait for the job (default
+                ``STORAGE_JOB_MAX_WAIT``).
 
         Returns:
             The completed storage job dict (202), or the API response body (200).
 
         Raises:
-            KeboolaApiError: ``STORAGE_JOB_FAILED`` when the job ends in error,
-                ``STORAGE_JOB_TIMEOUT`` when it does not finish in time (the job
-                keeps running server-side).
+            KeboolaApiError: ``STORAGE_JOB_FAILED`` when the job ends in error;
+                ``STORAGE_JOB_TIMEOUT`` (``retryable=False``, ``job_id`` in the
+                details) when it does not finish in time -- the job keeps
+                running server-side, and a repeat would queue a second add.
         """
         prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
         safe_id = quote(table_id, safe="")
@@ -1582,5 +1586,13 @@ class _StorageTablesMixin(_CoreClient):
             body["definition"] = definition
         response = self._request("POST", f"{prefix}/tables/{safe_id}/columns", json=body)
         if response.status_code == 202:
-            return self._wait_for_storage_job(response.json())
+            return self._wait_keeps_running(
+                response.json(),
+                budget=STORAGE_JOB_MAX_WAIT if max_wait is None else max_wait,
+                operation="add-column",
+                warning=(
+                    ". Adding the column again queues a second add next to it "
+                    "-- check the job before retrying."
+                ),
+            )
         return response.json()

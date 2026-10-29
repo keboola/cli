@@ -1413,6 +1413,8 @@ class StorageService(ColumnDescriptionsMixin):
                 definition=parsed["definition"],
                 branch_id=branch_id,
             )
+        except KeboolaApiError as exc:
+            raise with_job_timeout_hint(exc, alias, table_id, branch_id) from exc
         finally:
             client.close()
         return {

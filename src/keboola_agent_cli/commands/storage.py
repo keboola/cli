@@ -1214,9 +1214,9 @@ def storage_add_column(
     """Add a single column to an existing table (typed; waits for the job).
 
     Mirrors ``create-table --column``: ``name:TYPE(length)`` creates a typed
-    column; a bare ``name`` adds an untyped STRING column. The Storage API
-    queues a job; the command waits for it, so the column exists when it
-    returns and a failed job is reported as an error.
+    column; a bare ``name`` adds an untyped STRING column. The command waits
+    for the Storage job, so a following table-detail lists the column; a
+    failed job is reported as an error.
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
