@@ -35,3 +35,20 @@ def covered_suffix(change: dict[str, Any]) -> str:
     """`` (with N rows)`` for a config delete that removes its rows too, else ``""``."""
     covered = change.get("covered_rows") or []
     return f" (with {len(covered)} row{'s' if len(covered) != 1 else ''})" if covered else ""
+
+
+def print_moves(formatter: Any, result: dict[str, Any]) -> None:
+    """Print the hand-moved config dirs of a diff or push result (#792 I).
+
+    A move is no change of its own, so a pure move would otherwise read as
+    "No differences."; an ambiguous move says what to do.
+    """
+    for move in result.get("moves") or []:
+        label = escape(f"{move['component_id']}/{move['config_id']}")
+        formatter.console.print(
+            f"  > MOVED {label}: {escape(move['moved_from'])} -> {escape(move['moved_to'])}"
+        )
+    for item in result.get("ambiguous_moves") or []:
+        formatter.console.print(f"  [yellow]! AMBIGUOUS MOVE {escape(item['message'])}[/yellow]")
+    for item in result.get("identity_conflicts") or []:
+        formatter.console.print(f"  [yellow]! IDENTITY CONFLICT {escape(item['message'])}[/yellow]")

@@ -26,7 +26,7 @@ from ._helpers import (
 )
 from ._project_ref import PROJECT_HELP
 from ._sync_clone_render import clone_summary, clone_total, print_clone_result
-from ._sync_diff_render import covered_suffix, has_remote_only, print_remote_only_rows
+from ._sync_diff_render import covered_suffix, has_remote_only, print_moves, print_remote_only_rows
 from ._sync_push_render import (
     REMOTE_CHANGE_LABELS,
     dry_run_line,
@@ -197,7 +197,7 @@ def _format_pull_result(formatter: Any, result: dict) -> None:
     new_cfgs = [d for d in details if d["action"] == "new"]
     updated_cfgs = [d for d in details if d["action"] == "updated"]
     removed_cfgs = [d for d in details if d["action"] == "removed"]
-    renamed_cfgs = [d for d in details if d["action"] == "renamed"]
+    renamed_cfgs = [d for d in details if d["action"] in ("renamed", "moved")]  # #792 I
     skipped_cfgs = [d for d in details if d["action"] == "skipped"]
     ignored_cfgs = [d for d in details if d["action"] == "ignored"]
 
@@ -240,7 +240,7 @@ def _format_pull_result(formatter: Any, result: dict) -> None:
             formatter.console.print(f"  Jobs: {jobs_written} configs with job history")
 
     if renamed_cfgs:
-        formatter.console.print(f"  [magenta]Renamed ({len(renamed_cfgs)}):[/magenta]")
+        formatter.console.print(f"  [magenta]Renamed or moved ({len(renamed_cfgs)}):[/magenta]")
         for d in renamed_cfgs:
             formatter.console.print(
                 f"    > {d.get('old_path', '?')} -> {d['component_id']}/{d['config_name']}"
@@ -330,6 +330,7 @@ def _format_diff_result(formatter: Any, result: dict) -> None:
     remote_only = result.get("remote_only", [])
     never_fetched = result.get("never_fetched", [])
     orphaned = result.get("orphaned", [])
+    print_moves(formatter, result)
 
     if not changes and not has_remote_only(result):
         if never_fetched or orphaned:
@@ -387,6 +388,7 @@ def _format_conflict_list(formatter: Any, conflicts: list[dict[str, str]]) -> No
 def _format_push_result(formatter: Any, result: dict) -> None:
     """Format a single-project push result for human output."""
     status = result.get("status", "")
+    print_moves(formatter, result)
     if status == "no_changes":
         formatter.console.print("  No changes to push.")
         print_push_skips(formatter, result)
@@ -774,6 +776,7 @@ def sync_status(
         deleted = result["deleted"]
         unchanged = result["unchanged"]
         secret_warnings = result.get("plaintext_secret_warnings", [])
+        print_moves(formatter, result)  # a pure move is no change, so say it (#792 I)
 
         if not modified and not added and not deleted:
             formatter.console.print(
@@ -905,6 +908,7 @@ def sync_diff(
         changes = result["changes"]
         summary = result["summary"]
         remote_only = result.get("remote_only", [])
+        print_moves(formatter, result)  # before the clean-state return (#792 I)
 
         if not changes and not has_remote_only(result):
             if result.get("never_fetched") or result.get("orphaned"):

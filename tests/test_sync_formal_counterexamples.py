@@ -795,28 +795,14 @@ def test_g_dry_run_counts_only_the_deletions_push_applies(tmp_path: Path) -> Non
 # ===========================================================================
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "#792 I: the old path's manifest entry has no file left, so it is "
-        "classified 'deleted'; the moved directory carries the same "
-        "_keboola.config_id but a same-tree claim is always CREATE by "
-        "design (branch_scope.py:273-274, the #482/#497 fork-by-copy "
-        "protection). A hand `mv`/`git mv` of a tracked config directory "
-        "therefore destroys the original remote config id (job history, "
-        "schedules, flow references) and mints a new one -- with no warning "
-        "that `config rename --directory` was the supported path. Confirmed "
-        "via Lean F3 and replayed "
-        "(scratchpad/repro/test_lean_refutations.py::test_R4)."
-    ),
-)
 def test_i_moving_config_dir_is_not_delete_plus_create(tmp_path: Path) -> None:
     """Invariant: renaming a tracked config's directory on disk (outside of
     `config rename --directory`) must not be classified as delete-the-old
-    plus create-a-new-id -- the config's identity should survive a plain
-    filesystem move.
+    plus create-a-new-id -- the config's identity survives a plain
+    filesystem move: the push creates and deletes nothing (also with
+    --force), the manifest records the new path, and the next diff is clean.
 
-    Issue #792 finding I.
+    Issue #792 finding I. Fixed by move detection (services/_sync_moves.py).
     """
     w = World(tmp_path)
     w.api.put(PROD, "cfg-1", "Orders", "a")
@@ -824,14 +810,20 @@ def test_i_moving_config_dir_is_not_delete_plus_create(tmp_path: Path) -> None:
     w.pull()
 
     original_dir = w.config_dir("orders")
-    shutil.move(str(original_dir), str(original_dir.parent / "orders-renamed"))
+    moved_dir = original_dir.parent / "orders-renamed"
+    shutil.move(str(original_dir), str(moved_dir))
+    moved = moved_dir.relative_to(w.root / "main").as_posix()
 
     diff_result = w.diff()
-    change_types = sorted(c["change_type"] for c in diff_result["changes"])
+    assert changes(diff_result) == [], "a plain directory move was classified as a change"
+    assert [m["moved_to"] for m in diff_result["moves"]] == [moved]
 
-    assert change_types != ["added", "deleted"], (
-        "a plain directory move was classified as delete + create"
-    )
+    result = w.push(force=True)
+    assert result["errors"] == []
+    assert w.api.log == [], "a plain directory move created or deleted a remote config"
+    assert w.api.ids(PROD) == ["cfg-1"]
+    assert [(cid, path) for _b, cid, path in w.manifest()] == [("cfg-1", moved)]
+    assert changes(w.diff()) == []
 
 
 # ===========================================================================

@@ -6801,6 +6801,62 @@ whose manifest was lost or written again, a `main/` file that
   file with the same config id in another directory stays a separate copy
   after the pull, and push creates it as a new config (fork by copy, #482).
 
+## A config directory moved by hand keeps its config id (#792)
+
+*(since vNEXT)* Before, a hand move (`mv`, `git mv`) of a tracked config
+directory read as a deleted config plus a new one: `sync push` created a copy
+with a new id, and `sync push --force` also deleted the original (job history,
+schedules and flow references were lost). Now a tracked config whose directory
+is gone, and whose `_keboola.config_id` and `_keboola.component_id` exactly ONE
+untracked directory of the same branch tree carries, is a **move**:
+
+- `sync diff` lists it under `moves[]` (`component_id`, `config_id`,
+  `branch_id`, `moved_from`, `moved_to`; `summary.moved` counts them). The
+  content is compared as usual, so a moved and edited config is `modified`
+  (or `conflict` / `remote_modified` / `remote_deleted`), and that change
+  carries `moved_from` / `moved_to`. A pure move is no change.
+- `sync push` creates and deletes nothing for it, also with `--force`, and
+  records the new path in the manifest -- also when nothing else changed
+  (`status: no_changes` with `moves[]`). `--dry-run` and `sync diff` change
+  nothing on disk. Rows move with their config. A promoted dev copy that
+  shares the directory (`sync push --branch <dev>` from `main/`) moves too
+  and keeps its id.
+- `sync pull` pulls into the moved directory (`details[]` action `moved`) and
+  then renames it to the name of the config (action `renamed`), as for any
+  directory whose name differs from the config name. To change the directory
+  name for good, use `kbagent config rename --project P --component-id C --config-id ID --name NAME --directory DIR`.
+- `sync status` lists it under `moves[]` instead of a deleted plus an added
+  config.
+- The component is read from the file, not from the directory: a directory
+  moved into another component's folder is a move too, and the next pull
+  moves it back.
+- **Ambiguous move.** When the original directory is gone and two or more
+  directories carry its id (`mv A B; cp -r B C`), diff reports a `conflict`
+  with `ambiguous_move: true` and `candidates[]` (also `ambiguous_moves[]`).
+  Push creates and deletes nothing for it, also with `--force`; pull writes
+  none of the directories and reports it `skipped`. Keep one directory, and
+  remove the others or remove their `_keboola.config_id` (then they are new
+  configs).
+- **Swaps, rotations and symlinks are held, not resolved.** When a tracked
+  directory's `_config.yml` carries the id of ANOTHER tracked config of the
+  same component (two directories swapped, B moved away and A moved into B,
+  a symlink to another config's directory), diff reports a `conflict` with
+  `identity_conflict: true` for every config involved (also
+  `identity_conflicts[]`: the configs, the directories, the hint). Push
+  creates, updates and deletes nothing for them, also with `--force`; pull
+  writes none of their directories (also with `--theirs`); nothing about
+  them is saved, so the manifest and any promoted dev copy stay as they
+  were. Move the directories back (the next diff is clean again), or use
+  `config rename --directory`. A symlinked directory is never a move target.
+- `config rename --directory` renames the directory of the entry of the
+  target branch only. When the sync tree tracks the config on another branch
+  only, the local tree is not changed and `--json` says so in
+  `sync_skipped`.
+- Not a move: the original directory still exists (a copy is a new config,
+  fork by copy, as before; also when only its `_config.yml` was removed), the
+  original `_config.yml` is there but is not valid YAML, or the component is
+  ignored.
+
 ## `sync push` encrypts every secret before its first write (#792)
 
 *(since 0.99.0, #792)* Before, push encrypted the `#` secrets of each config

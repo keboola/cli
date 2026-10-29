@@ -127,6 +127,7 @@ from ._sync_disabled import file_disables
 from ._sync_link_pending import link_pending_entries, planned_row_refs
 from ._sync_link_recovery import resolve_transformation_links
 from ._sync_models import LocalConfigHashes
+from ._sync_moves import move_fields, persist_moves, relocate, settle_moves, status_moves
 from ._sync_project_guard import adopt_existing_manifest, load_project_manifest
 from ._sync_promote_remap import (
     PromoteRemap,
@@ -139,6 +140,7 @@ from ._sync_pull_dirs import (
     RowPullContext,
     ambiguous_id_warnings,
     carry_promote_metadata,
+    collect_config_folders,
     finalize_kept_entries,
     free_path,
     partition_pull_entries,
@@ -527,7 +529,7 @@ class SyncService(BaseService):
             components = client.list_components_with_configs(branch_id=branch_id)
             components = sql_workspaces.scope_listing(components, manifest)
             self._ensure_branch_registered(manifest, branch_id, client)
-            folder_map = self._collect_config_folders(components)
+            folder_map = collect_config_folders(components)
 
             if not no_storage:
                 try:
@@ -581,7 +583,15 @@ class SyncService(BaseService):
         files_written = 0
         new_configurations: list[ManifestConfiguration] = []
         used_paths: set[str] = set()  # detect naming collisions
-        pull_details: list[dict[str, str]] = []  # per-config change info
+        # Resolved once and shared by the moves, the conflict guard, the fetch
+        # loop and the stale-entry sweep below -- see ``effective_ignored_components``.
+        ignored_components = sql_workspaces.effective_ignored_components(manifest)
+        # A hand-moved config dir is pulled into where it is now (#792 I); an
+        # ambiguous move is held: pull writes none of its directories.
+        moves = settle_moves(
+            self, manifest, project_root, branch_dir_name, ignored_components, drop_held=False
+        )
+        pull_details: list[dict[str, str]] = moves.pull_details()  # per-config change info
 
         # Build lookups for existing manifest state -- of the PULLED branch only.
         # An entry belongs to exactly one branch, and a dev branch created from
@@ -593,11 +603,10 @@ class SyncService(BaseService):
         # looked up, never swept as stale and never delete a file; the promote
         # entries among them (files in this tree, none in their own) are kept.
         entries = partition_pull_entries(manifest, project_root, branch_id, branch_dir_name)
-        # Resolved once and shared by the conflict guard, the fetch loop and
-        # the stale-entry sweep below -- see ``effective_ignored_components``.
-        ignored_components = sql_workspaces.effective_ignored_components(manifest)
         entries.hold_ignored_promotes(ignored_components)
         own_entries = entries.own
+        # Held entries are kept as they are, listed by the remote or not (F2).
+        new_configurations += moves.held_in(own_entries)
         old_entries = {f"{c.component_id}/{c.id}": c for c in own_entries}
         untracked_dirs = scan_config_dirs(self, project_root, manifest, branch_dir_name)
         pull_warnings: list[dict[str, Any]] = ambiguous_id_warnings(untracked_dirs)
@@ -632,7 +641,7 @@ class SyncService(BaseService):
         # reserved so a same-named new config cannot land in one.
         stale = find_stale_entries(
             self,
-            own_entries,
+            moves.unheld(own_entries),
             components,
             branch_dir,
             ignored_components,
@@ -679,6 +688,8 @@ class SyncService(BaseService):
 
                 # Reuse existing path if config is already tracked (stable paths)
                 lookup_key = f"{component_id}/{config_id}"
+                if lookup_key in moves.held_keys:
+                    continue  # kept as it was, above
                 is_new = lookup_key not in existing_keys
                 generated = False
                 if lookup_key in existing_paths:
@@ -963,6 +974,7 @@ class SyncService(BaseService):
             whose ``#``-secrets are still plaintext on the remote (issue #378).
         """
         manifest = load_manifest(project_root)
+        moves = status_moves(self, manifest, project_root)  # in memory only (#792 I)
 
         modified: list[dict[str, str]] = []
         deleted: list[dict[str, str]] = []
@@ -1021,6 +1033,7 @@ class SyncService(BaseService):
             "unchanged": unchanged,
             "total_tracked": len(manifest.configurations),
             "plaintext_secret_warnings": plaintext_secret_warnings,
+            "moves": moves,
         }
 
     # ------------------------------------------------------------------
@@ -1100,6 +1113,10 @@ class SyncService(BaseService):
         # against production came out as ``added``, i.e. a duplicate create.
         # They are excluded and reported under ``orphaned`` instead.
         source_branch_path = self._resolve_source_branch_path(manifest, project_root, branch_id)
+        # A hand-moved config dir keeps its entry (#792 I), relocated in memory.
+        moves = settle_moves(
+            self, manifest, project_root, source_branch_path, ignored_components, drop_held=True
+        )
         remote_keys = set(remote_configs)
         scope = scope_manifest(
             manifest,
@@ -1185,7 +1202,8 @@ class SyncService(BaseService):
             # A promoted target-branch entry already diffs this directory (its
             # files are in the source tree, not its own); a second, adopted
             # reading of it doubled every change and called an edit a conflict.
-            if added_cfg["path"] in scope.in_tree_paths:
+            # An ambiguous move's candidate is neither created nor adopted.
+            if added_cfg["path"] in scope.in_tree_paths | moves.held_paths:
                 continue
             # An ignored component's leftover directory (its manifest entry is
             # gone, so the walk sees it as untracked) must not be planned as a
@@ -1346,7 +1364,7 @@ class SyncService(BaseService):
         )
         changeset.extend(row_changeset + ambiguous_rows)
         # Remote-only configs and rows, three-way local deletes, summary (D1-D5).
-        return diff_report(
+        report = diff_report(
             changeset,
             DiffSides(
                 local_configs=local_configs,
@@ -1371,6 +1389,7 @@ class SyncService(BaseService):
             ),
             DiffExtras(never_fetched, orphaned, diff_warnings),
         )
+        return moves.report(report)
 
     # ------------------------------------------------------------------
     # push
@@ -1423,6 +1442,7 @@ class SyncService(BaseService):
         all_changes = diff_result["changes"]
         companion_warnings = diff_result.get("companion_warnings") or []
         shown = {"companion_warnings": companion_warnings} if companion_warnings else {}
+        shown.update(move_fields(diff_result))  # #792 I: in every push result
         never_fetched = diff_result.get("never_fetched", [])
         # Configs excluded from the changeset because they belong to another
         # branch's tree (issue #649) -- reported, never pushed.
@@ -1439,6 +1459,8 @@ class SyncService(BaseService):
         target_id = self._resolve_branch_id(alias, stored, project_root, branch_override)
         pending = pending_rebinds(stored, target_id) or link_pending_entries(stored, target_id)
         if not changes and not pending:
+            # An unchanged pure move is still saved (#792 I).
+            persist_moves(project_root, diff_result, dry_run=dry_run)
             result: dict[str, Any] = {
                 "status": "no_changes",
                 "created": 0,
@@ -1493,7 +1515,8 @@ class SyncService(BaseService):
         # whose records carry non-string values such as ``after_length``).
         warnings: list[dict[str, Any]] = []
         pushed_details: list[dict[str, str]] = []
-        manifest_dirty = False
+        # The diff's moves, applied before any path is resolved (#792 I).
+        manifest_dirty = relocate(manifest, diff_result) > 0
 
         # A data-app CREATE needs a Data Science client so its runtime type
         # travels into the target (CLI-8). Built only when the changeset
@@ -1974,27 +1997,6 @@ class SyncService(BaseService):
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
-
-    @staticmethod
-    def _collect_config_folders(components: list[dict[str, Any]]) -> dict[str, str] | None:
-        """Map ``{component_id}/{config_id}`` to its UI folder name.
-
-        Read from the configuration's own ``folder`` field (null = no folder)
-        in the listing pull already fetched -- no extra request. Returns
-        ``None`` when a configuration lacks the field (a stack that predates
-        it): ``None`` means "unknown", NOT "no folders", so the caller keeps
-        each config's previously captured folder (CLI-9).
-        """
-        folders: dict[str, str] = {}
-        for component in components:
-            component_id = component.get("id", "")
-            for cfg in component.get("configurations", []) or []:
-                if "folder" not in cfg:
-                    logger.warning("config listing carries no folder field; folders kept")
-                    return None
-                if cfg["folder"]:
-                    folders[f"{component_id}/{cfg.get('id', '')}"] = cfg["folder"]
-        return folders
 
     def _resolve_branch_id(
         self,

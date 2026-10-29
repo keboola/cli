@@ -2227,6 +2227,11 @@ remain branch-aware because modifying a dev branch is the expected intent.
     --job-limit controls max recent jobs per config (default 5). For large projects,
     automatically falls back to per-config job fetching to ensure all configs get job history.
     Auto-detects renamed configs and renames local directories to match (uses git mv in git repos).
+    A config dir moved by hand keeps its id (since vNEXT, #792): diff lists moves[]
+    (moved_from/moved_to), push creates and deletes nothing for it and saves the new path;
+    a missing dir whose id 2+ dirs carry is an ambiguous move (conflict, nothing pushed).
+    A swap/rotation/symlink (a tracked dir carrying another tracked config's id) is held as
+    an identity conflict: nothing pushed, pulled or saved until the dirs are moved back.
     --branch: per-invocation dev-branch override. Same semantics as sync push/diff.
     Ignored components (since 0.91.0, #689): keboola.sandboxes + keboola.mcp-server-tool are
     always excluded (except shared SQL workspaces under syncWorkspaces, since 0.96.1),
