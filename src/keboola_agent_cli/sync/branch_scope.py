@@ -125,6 +125,21 @@ def same_branch(manifest: Manifest, a: int | None, b: int | None) -> bool:
     return a == b
 
 
+def branch_tree_has_configs(branch_dir: Path) -> bool:
+    """Return True if *branch_dir* exists and holds at least one config.
+
+    A config is any ``_config.yml`` below the branch root other than the
+    optional branch-level ``_config.yml`` itself. Used to decide whether a
+    target-branch subtree is materialized on disk.
+    """
+    if not branch_dir.is_dir():
+        return False
+    for config_file in branch_dir.rglob(CONFIG_FILENAME):
+        if config_file.parent != branch_dir:
+            return True
+    return False
+
+
 def target_tree_is_source(manifest: Manifest, project_root: Path, branch_id: int | None) -> bool:
     """True iff the target branch's own tree is what diff/push read, even with no file left.
 
