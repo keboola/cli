@@ -79,7 +79,7 @@ These lists keep `error`, because their entries are not failed items with an err
   folder, push still promotes `main/`; an entry of the synced branch is then `orphaned`
   with a hint that says its folder was not read and names `sync pull --branch <dev>`.
 - **On an older version**, keep one config directory in `<dev>/` and delete the config
-  with `kbagent config delete --branch <dev>`, then `sync pull --branch <dev>`.
+  with `kbagent config delete --project <alias> --branch <dev> --component-id <component> --config-id <id>`, then `sync pull --branch <dev>`.
 
 ## A code edit after `sync push` created the config is pushed
 
