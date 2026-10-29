@@ -930,10 +930,16 @@ class TestGenerateScaffold:
         )
 
         config_file = next(f for f in result["files"] if f["path"] == "_config.yml")
-        content = config_file["content"]
-        assert "storage:" in content, "Components with table flags must have storage section"
-        assert "input:" in content
-        assert "output:" in content
+        parsed = yaml.safe_load(config_file["content"])
+
+        # The mappings sit where `sync pull` writes them: top-level input/output.
+        # A top-level `storage:` block was silently dropped by `sync push`.
+        assert "storage" not in parsed
+        _name, _description, configuration = local_config_to_api(parsed)
+        assert configuration["storage"]["input"]["tables"][0]["source"] == "in.c-bucket.table"
+        assert configuration["storage"]["output"]["tables"][0]["destination"] == (
+            "out.c-bucket.table"
+        )
 
 
 # ===========================================================================
