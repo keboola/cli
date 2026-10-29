@@ -657,7 +657,7 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     index with Storage config names. Multi-project parallel.
 
   data-app detail
-    Full merged view: state, desiredState, url, deployed configVersion, slug,
+    Full merged view: state, url, deployed configVersion, slug,
     runtime size, git settings (PAT redacted as <encrypted>).
 
   data-app create
@@ -708,23 +708,23 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     before. With a flag, JSON adds only ui_url, password_delivered_to
     (+ password with --reveal); a failed password read or a non-password
     app with --copy is a `warnings[]` entry, exit 0.
-    The §9 redeploy contract. Default reads the latest Storage config version
+    POST /v2/apps/{id}/deployments pinned to a Storage config version and
+    promoted to production. Default reads the latest Storage config version
     and pins to it; --config-version pins an older version (rollback) and
     skips the git-block backfill. --git-branch only sets the branch of
-    that backfill; it has no effect otherwise.
-    Always sends {desiredState=running, configVersion, restartIfRunning=true}
-    together -- HTTP 422 otherwise.
+    that backfill; it has no effect otherwise. --wait blocks until the new
+    deployment serves production.
 
   data-app start
-    Wake an auto-suspended data app at its currently-pinned configVersion.
-    Distinct from deploy: does NOT bump the version.
+    Wake a suspended or disabled data app at the deployment production
+    already serves. Distinct from deploy: does NOT bump the version.
 
   data-app stop
-    Stop a running data app. Preserves URL and Storage config; container is
-    torn down.
+    Suspend a running data app now. Preserves URL and Storage config; the
+    next request to the URL wakes it again.
 
   data-app delete
-    Delete the deployment AND the Storage config (cascade, irreversible).
+    Delete the app: stops its deployments, Storage config to the trash.
     URL is permanently retired. Confirmation prompt unless --yes.
 
   data-app password

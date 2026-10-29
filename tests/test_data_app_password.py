@@ -63,7 +63,7 @@ runner = CliRunner()
 
 SENTINEL = "pw-sentinel-0f3c9a2b7e"
 STATIC_TOKEN = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
-DS_URL = "https://data-science.keboola.com"
+DS_URL = "https://data-science.keboola.com/v2"
 CONFIG_URL = "https://connection.keboola.com/v2/storage/components/keboola.data-apps/configs/cfg-1"
 APP_URL = "https://app-42.hub.keboola.com"
 UI_URL = "https://connection.keboola.com/admin/projects/258/branch/default/data-apps/cfg-1"
@@ -496,9 +496,9 @@ class TestAuthHeaders:
         assert result.password == SENTINEL
         requests = httpx_mock.get_requests()
         assert [r.url.path for r in requests] == [
-            "/apps/42",
+            "/v2/apps/42",
             "/v2/storage/components/keboola.data-apps/configs/cfg-1",
-            "/apps/42/password",
+            "/v2/apps/42/password",
         ]
         for request in requests:
             assert request.headers["X-StorageApi-Token"] == STATIC_TOKEN
@@ -622,8 +622,7 @@ _RUNNING_APP = {
     "branchId": None,
     "url": APP_URL,
     "state": "running",
-    "desiredState": "running",
-    "configVersion": "5",
+    "production": {"actualDeploymentId": "dep-1", "actualConfigVersion": "5"},
 }
 
 
@@ -657,8 +656,19 @@ def _mock_deployed_app(
 
 
 def _mock_deploy_patch(httpx_mock: Any) -> None:
+    deployment = {"id": "dep-1", "configVersion": "5", "buildState": "ready"}
     httpx_mock.add_response(
-        method="PATCH", url=f"{DS_URL}/apps/42", json={**_RUNNING_APP, "state": "starting"}
+        method="POST",
+        url=f"{DS_URL}/apps/42/deployments",
+        json={**deployment, "runState": "starting"},
+    )
+    # Read only by --wait.
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{DS_URL}/apps/42/deployments/dep-1",
+        json={**deployment, "runState": "running"},
+        is_reusable=True,
+        is_optional=True,
     )
 
 
