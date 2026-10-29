@@ -83,6 +83,15 @@ class DataScienceClient(BaseHttpClient):
             http_auth=http_auth,
         )
 
+    def _post_json(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
+        response = self._do_request(
+            "POST",
+            path,
+            content=json.dumps(body).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+        return response.json()
+
     def __enter__(self) -> Self:
         return self
 
@@ -131,8 +140,8 @@ class DataScienceClient(BaseHttpClient):
         ``failureReason`` and ``startupLogs`` for unsuccessful attempts --
         including setup-phase failures (e.g. a clone/build error) that never
         produce container logs and so are invisible to ``/v2/apps/{id}/logs/tail``.
-        This is the canonical way to find out *why* a deploy reverted to
-        ``stopped`` without the app ever serving.
+        This is the canonical way to find out *why* a deployment failed
+        without the app ever serving.
         """
         response = self._do_request(
             "GET",
@@ -177,13 +186,7 @@ class DataScienceClient(BaseHttpClient):
             "config": config,
             "useManagedGitRepo": use_managed_git_repo,
         }
-        response = self._do_request(
-            "POST",
-            "/v2/apps",
-            content=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-        )
-        return response.json()
+        return self._post_json("/v2/apps", payload)
 
     def create_deployment(self, app_id: str, *, config_version: str) -> dict[str, Any]:
         """Deploy the app at a pinned Storage config version and promote it to production.
@@ -193,13 +196,9 @@ class DataScienceClient(BaseHttpClient):
         - Returns the Deployment (``id``, ``configVersion``, ``buildState``,
           ``runState``); ``runState=failed`` means its runs carry the cause.
         """
-        response = self._do_request(
-            "POST",
-            f"{_app_path(app_id)}/deployments",
-            content=json.dumps({"configVersion": config_version}).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+        return self._post_json(
+            f"{_app_path(app_id)}/deployments", {"configVersion": config_version}
         )
-        return response.json()
 
     def get_deployment(self, app_id: str, deployment_id: str) -> dict[str, Any]:
         """Fetch one deployment of the app."""
@@ -354,10 +353,4 @@ class DataScienceClient(BaseHttpClient):
             payload["publicKey"] = public_key
         if name is not None:
             payload["name"] = name
-        response = self._do_request(
-            "POST",
-            f"{_app_path(app_id)}/git-repo/credentials",
-            content=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-        )
-        return response.json()
+        return self._post_json(f"{_app_path(app_id)}/git-repo/credentials", payload)

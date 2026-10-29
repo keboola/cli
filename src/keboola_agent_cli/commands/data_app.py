@@ -371,7 +371,7 @@ def data_app_create(
     keep_on_failure: bool = typer.Option(
         False,
         "--keep-on-failure",
-        help="Keep the orphan deployment shell if PUT or initial deploy fails (forensics).",
+        help="Keep the orphan app if PUT or initial deploy fails (forensics).",
     ),
     dry_run: bool = typer.Option(
         False,
@@ -603,7 +603,7 @@ def data_app_start(
         help=f"Max seconds to wait, with --wait. Default: {DEFAULT_JOB_RUN_TIMEOUT:g}.",
     ),
 ) -> None:
-    """Wake an auto-suspended data app at its currently-pinned configVersion."""
+    """Wake a suspended or disabled data app at the deployment production serves."""
     _run_lifecycle(
         ctx,
         "start_data_app",
@@ -628,7 +628,7 @@ def data_app_stop(
         help=f"Max seconds to wait, with --wait. Default: {DEFAULT_JOB_RUN_TIMEOUT:g}.",
     ),
 ) -> None:
-    """Stop a running data app (preserves the URL and Storage config)."""
+    """Suspend a data app; the next request to its URL wakes it (URL and config kept)."""
     _run_lifecycle(
         ctx,
         "stop_data_app",

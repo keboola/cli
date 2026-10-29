@@ -69,6 +69,11 @@ def _production_config_version(app: dict[str, Any]) -> str:
     return str((app.get("production") or {}).get("actualConfigVersion") or "")
 
 
+def _serving_deployment_id(app: dict[str, Any]) -> str:
+    """The deployment serving the app's production; ``""`` when none does."""
+    return str((app.get("production") or {}).get("actualDeploymentId") or "")
+
+
 def _configured_size(configuration: dict[str, Any]) -> str:
     """The backend size a data-app Storage config names."""
     backend = (configuration.get("runtime") or {}).get("backend") or {}
@@ -113,7 +118,6 @@ MAX_GIT_USERNAME_LENGTH = 255
 
 POLL_INTERVAL_SECONDS = 5.0
 RUNNING_STATE = "running"
-SUSPENDED_STATE = "suspended"
 # Stopped by a failure; only an explicit start clears it.
 DISABLED_STATE = "disabled"
 FAILED_DEPLOYMENT_STATE = "failed"
@@ -278,14 +282,13 @@ class DataAppService(BaseService):
         data_app_block = parameters.get("dataApp", {}) if isinstance(parameters, dict) else {}
         git_block = data_app_block.get("git", {}) if isinstance(data_app_block, dict) else {}
 
-        production = app.get("production") or {}
         return {
             "project_alias": alias,
             "app_id": str(app.get("id", "")),
             "config_id": config_id,
             "config_version_storage": str(storage_config.get("version", "") or ""),
             "config_version_deployed": _production_config_version(app),
-            "deployment_id": str(production.get("actualDeploymentId") or ""),
+            "deployment_id": _serving_deployment_id(app),
             "name": storage_config.get("name", ""),
             "description": storage_config.get("description", ""),
             "type": app.get("type", ""),
@@ -395,12 +398,12 @@ class DataAppService(BaseService):
         ds_client = self._ds_client_factory(project.stack_url, project.token)
         storage_client = self._client_factory(project.stack_url, project.token)
 
-        shell: dict[str, Any] | None = None
+        created: dict[str, Any] | None = None
         app_id: str | None = None
         config_id: str | None = None
 
         try:
-            # Step 2: create the shell. Smallest body the API will accept.
+            # Step 2: create the app. Smallest body the API will accept.
             initial_config = {
                 "parameters": {
                     "size": size,
@@ -410,7 +413,7 @@ class DataAppService(BaseService):
             }
             initial_config["authorization"] = _auth_block_for(auth)
 
-            shell = ds_client.create_app(
+            created = ds_client.create_app(
                 type_=type_,
                 name=name,
                 description="",  # full description goes onto the Storage config below
@@ -418,8 +421,8 @@ class DataAppService(BaseService):
                 branch_id=branch_id,
                 use_managed_git_repo=use_managed_git_repo,
             )
-            app_id = str(shell.get("id", ""))
-            config_id = str(shell.get("configId", ""))
+            app_id = str(created.get("id", ""))
+            config_id = str(created.get("configId", ""))
             if not app_id or not config_id:
                 raise KeboolaApiError(
                     message="POST /v2/apps response missing id or configId",
@@ -488,12 +491,11 @@ class DataAppService(BaseService):
                     poll_result = self._poll_until_terminal(
                         ds_client,
                         app_id,
-                        target_state=RUNNING_STATE,
                         deployment_id=str(deployment.get("id", "")),
                         timeout_seconds=timeout_seconds,
                     )
 
-            state_record = poll_result or shell
+            state_record = poll_result or created
             return {
                 "project_alias": alias,
                 "app_id": app_id,
@@ -593,7 +595,6 @@ class DataAppService(BaseService):
                 app = self._poll_until_terminal(
                     ds_client,
                     app_id,
-                    target_state=RUNNING_STATE,
                     deployment_id=deployment_id,
                     timeout_seconds=timeout_seconds,
                 )
@@ -602,9 +603,9 @@ class DataAppService(BaseService):
                 app_id=app_id,
                 action="deploy",
                 app=app,
-                config_version=str(deployment.get("configVersion") or effective_version),
+                config_version=effective_version,
+                deployment_id=deployment_id,
             )
-            result["deployment_id"] = deployment_id
             if backfilled_branch is not None:
                 result["git_backfilled"] = True
                 result["git_branch"] = backfilled_branch
@@ -622,8 +623,8 @@ class DataAppService(BaseService):
         ``failure_reason`` and ``startup_logs`` -- including setup-phase failures
         (e.g. a git-clone error during ``app_setup``) that never produce
         container logs and so are invisible to ``data-app logs``. This is the
-        canonical way to find out *why* a deploy reverted to ``stopped`` without
-        the app ever serving.
+        canonical way to find out *why* a deployment failed without the app ever
+        serving.
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
@@ -673,7 +674,6 @@ class DataAppService(BaseService):
                 app = self._poll_until_terminal(
                     ds_client,
                     app_id,
-                    target_state=RUNNING_STATE,
                     timeout_seconds=timeout_seconds,
                 )
             return self._format_lifecycle_result(
@@ -1892,7 +1892,6 @@ class DataAppService(BaseService):
         ds_client: DataScienceClient,
         app_id: str,
         *,
-        target_state: str,
         timeout_seconds: float,
         deployment_id: str | None = None,
     ) -> dict[str, Any]:
@@ -1900,7 +1899,7 @@ class DataAppService(BaseService):
 
         Terminal definition:
 
-        - success: ``state == target_state`` and, with ``deployment_id``,
+        - success: ``state == running`` and, with ``deployment_id``,
           ``production.actualDeploymentId == deployment_id`` -- the new
           deployment serves production, not the one it replaces
         - failure: the deployment's ``buildState`` or ``runState`` is
@@ -1910,7 +1909,7 @@ class DataAppService(BaseService):
         while True:
             app = ds_client.get_app(app_id)
             state = str(app.get("state", ""))
-            serving = str((app.get("production") or {}).get("actualDeploymentId") or "")
+            serving = _serving_deployment_id(app)
             if deployment_id:
                 deployment = ds_client.get_deployment(app_id, deployment_id)
                 failed = FAILED_DEPLOYMENT_STATE in (
@@ -1937,14 +1936,14 @@ class DataAppService(BaseService):
                     retryable=False,
                     details=details or None,
                 )
-            if state == target_state and (not deployment_id or serving == deployment_id):
+            if state == RUNNING_STATE and (not deployment_id or serving == deployment_id):
                 return app
             if time.monotonic() >= deadline:
                 suffix, details = self._deploy_failure_diagnostic(ds_client, app_id)
                 raise KeboolaApiError(
                     message=(
                         f"Timed out after {timeout_seconds:.0f}s waiting for data app "
-                        f"{app_id} to reach state={target_state} "
+                        f"{app_id} to reach state={RUNNING_STATE} "
                         f"(last observed: state={state}, serving deployment={serving or 'none'})."
                         f"{suffix}"
                     ),
@@ -1963,9 +1962,10 @@ class DataAppService(BaseService):
         action: str,
         app: dict[str, Any],
         config_version: str | None = None,
+        deployment_id: str | None = None,
     ) -> dict[str, Any]:
         state = app.get("state", "")
-        return {
+        result = {
             "project_alias": alias,
             "app_id": str(app_id),
             "action": action,
@@ -1974,6 +1974,9 @@ class DataAppService(BaseService):
             "url": app.get("url", ""),
             "message": f"Data app {app_id} {action} requested in project '{alias}'. state={state}.",
         }
+        if deployment_id is not None:
+            result["deployment_id"] = deployment_id
+        return result
 
     def _format_create_message(
         self,

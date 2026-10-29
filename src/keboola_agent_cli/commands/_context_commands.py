@@ -374,10 +374,11 @@ Keboola data-app lifecycle (create, deploy, manage)
 
   kbagent data-app start [--project PROJECT] --app-id ID [--wait]
       [--timeout N]
-    Wake an auto-suspended data app at its currently-pinned configVersion.
+    Wake a suspended or disabled data app at the deployment production serves.
 
   kbagent data-app stop [--project PROJECT] --app-id ID [--wait] [--timeout N]
-    Stop a running data app (preserves the URL and Storage config).
+    Suspend a data app; the next request to its URL wakes it (URL and config
+    kept).
 
   kbagent data-app validate-repo --git-repo REPO [--git-branch BRANCH]
       [--git-public/--no-git-public] [--git-pat-env ENV] [--git-pat-file PATH]

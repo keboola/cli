@@ -918,7 +918,7 @@
         {"kind": "option", "name": "no_deploy", "opts": ["--no-deploy"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip the deploy step; create the app + Storage config only."},
         {"kind": "option", "name": "wait", "opts": ["--wait"], "type": "boolean", "is_flag": true, "default": false, "help": "Block until the deployment serves production (or fails). Default: no wait."},
         {"kind": "option", "name": "timeout", "opts": ["--timeout"], "type": "float", "default": 300.0, "help": "Maximum seconds to wait for state == running, with --wait. Default: 300."},
-        {"kind": "option", "name": "keep_on_failure", "opts": ["--keep-on-failure"], "type": "boolean", "is_flag": true, "default": false, "help": "Keep the orphan deployment shell if PUT or initial deploy fails (forensics)."},
+        {"kind": "option", "name": "keep_on_failure", "opts": ["--keep-on-failure"], "type": "boolean", "is_flag": true, "default": false, "help": "Keep the orphan app if PUT or initial deploy fails (forensics)."},
         {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Print the three request bodies without making any API call."},
         {"kind": "option", "name": "copy", "opts": ["--copy"], "type": "boolean", "is_flag": true, "default": false, "help": "Copy the data-app password to the clipboard at once, without the terminal prompt. The only way to copy it when there is no terminal (an AI agent, CI) or with --json. On create / deploy it needs --wait."},
         {"kind": "option", "name": "reveal", "opts": ["--reveal"], "type": "boolean", "is_flag": true, "default": false, "help": "Print the data-app password (human and --json output). For scripts and CI; in an AI agent session the password then goes into the chat history. On create / deploy it needs --wait."}
@@ -1119,7 +1119,7 @@
       "kind": "command",
       "hidden": false,
       "category": "write",
-      "help": "Wake an auto-suspended data app at its currently-pinned configVersion.",
+      "help": "Wake a suspended or disabled data app at the deployment production serves.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "app_id", "opts": ["--app-id"], "type": "text", "required": true, "default": null, "help": "Data Science numeric app id"},
@@ -1132,7 +1132,7 @@
       "kind": "command",
       "hidden": false,
       "category": "write",
-      "help": "Stop a running data app (preserves the URL and Storage config).",
+      "help": "Suspend a data app; the next request to its URL wakes it (URL and config kept).",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "app_id", "opts": ["--app-id"], "type": "text", "required": true, "default": null, "help": "Data Science numeric app id"},

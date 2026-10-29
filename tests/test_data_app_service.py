@@ -1488,7 +1488,6 @@ class TestDataAppPoll:
             result = service._poll_until_terminal(
                 ds_mock,
                 "42",
-                target_state="running",
                 deployment_id="dep-1",
                 timeout_seconds=60.0,
             )
@@ -1516,7 +1515,6 @@ class TestDataAppPoll:
             service._poll_until_terminal(
                 ds_mock,
                 "42",
-                target_state="running",
                 deployment_id="dep-1",
                 timeout_seconds=60.0,
             )
@@ -1532,9 +1530,7 @@ class TestDataAppPoll:
             patch("keboola_agent_cli.services.data_app_service.time.sleep", lambda _: None),
             pytest.raises(KeboolaApiError) as excinfo,
         ):
-            service._poll_until_terminal(
-                ds_mock, "42", target_state="running", timeout_seconds=60.0
-            )
+            service._poll_until_terminal(ds_mock, "42", timeout_seconds=60.0)
         assert excinfo.value.error_code == ErrorCode.DATA_APP_BUILD_FAILED
         ds_mock.get_deployment.assert_not_called()
 
@@ -1556,7 +1552,6 @@ class TestDataAppPoll:
             service._poll_until_terminal(
                 ds_mock,
                 "42",
-                target_state="running",
                 timeout_seconds=1.0,
             )
         assert excinfo.value.error_code == ErrorCode.DATA_APP_DEPLOY_TIMEOUT
@@ -1588,7 +1583,7 @@ class TestDataAppPoll:
             ),
             pytest.raises(KeboolaApiError) as excinfo,
         ):
-            service._poll_until_terminal(ds_mock, "42", target_state="running", timeout_seconds=1.0)
+            service._poll_until_terminal(ds_mock, "42", timeout_seconds=1.0)
         exc = excinfo.value
         assert exc.error_code == ErrorCode.DATA_APP_DEPLOY_TIMEOUT
         assert "StartupProbeFailed" in exc.message
@@ -1610,7 +1605,7 @@ class TestDataAppPoll:
             ),
             pytest.raises(KeboolaApiError) as excinfo,
         ):
-            service._poll_until_terminal(ds_mock, "42", target_state="running", timeout_seconds=1.0)
+            service._poll_until_terminal(ds_mock, "42", timeout_seconds=1.0)
         assert excinfo.value.error_code == ErrorCode.DATA_APP_DEPLOY_TIMEOUT
 
 
