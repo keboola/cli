@@ -553,6 +553,60 @@ def test_f1_push_warns_and_keeps_an_uneditable_pyproject(tmp_path: Path) -> None
     assert str(pyproject) in warning["message"]
 
 
+def test_f1_unwritable_pyproject_warns_and_the_push_still_stamps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pyproject.toml that cannot be written (read-only) after the remote update
+    succeeded: a warning, not a failed push -- the manifest takes the new baseline."""
+    v = VARIANTS["python"]
+    w, cid = _pulled(tmp_path, v)
+    config_dir = w.config_dir(cid)
+    pyproject = config_dir / PYPROJECT
+    before = pyproject.read_bytes()
+    _rename(config_dir / CONFIG_FILE, "Renamed")
+    write_bytes = Path.write_bytes
+
+    def refuse_pyproject(self: Path, data: bytes) -> int:
+        if self.name == PYPROJECT:
+            raise PermissionError(13, "Permission denied", str(self))
+        return write_bytes(self, data)
+
+    monkeypatch.setattr(Path, "write_bytes", refuse_pyproject)
+    result = w.push()  # asserts errors == []
+    monkeypatch.undo()
+    assert w.api.get(PROD, v.component_id, cid)["name"] == "Renamed"
+    assert pyproject.read_bytes() == before
+    assert [x["change_type"] for x in result.get("warnings", [])] == ["pyproject_not_refreshed"]
+    assert dirty(w.diff()["summary"]) == {}
+
+
+def test_f1_refused_refresh_is_kept_by_pull_until_the_remote_changes(tmp_path: Path) -> None:
+    """What pull does with the unrefreshed file push recorded as the baseline.
+
+    Remote unchanged: pull keeps the file byte for byte (it is the baseline, and
+    the stale name never reaches the payload: diff is clean). The same safe edit
+    would refuse this file again, so pull cannot do better. Once the config
+    changes remotely, pull writes the pulled form, with the current name.
+    """
+    v = VARIANTS["python"]
+    w, cid = _pulled(tmp_path, v)
+    config_dir = w.config_dir(cid)
+    pyproject = config_dir / PYPROJECT
+    custom = pyproject.read_bytes().replace(b'name = "orders"', b'name = """orders"""')
+    pyproject.write_bytes(custom)
+    _rename(config_dir / CONFIG_FILE, "Renamed")
+    w.push()
+
+    w.pull()
+    assert pyproject.read_bytes() == custom
+    assert dirty(w.diff()["summary"]) == {}
+
+    w.api.get(PROD, v.component_id, cid)["description"] = "changed in the UI"
+    w.pull()
+    assert 'name = "renamed"' in pyproject.read_text(encoding="utf-8")
+    assert dirty(w.diff()["summary"]) == {}
+
+
 # ===========================================================================
 # D. Row entries carry no config_hash_version
 # ===========================================================================

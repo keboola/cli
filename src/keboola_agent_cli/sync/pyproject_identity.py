@@ -34,7 +34,11 @@ from .code_extraction import (
 _HEADER = re.compile(r"^\s*(\[\[?)\s*([^\[\]]+?)\s*\]\]?\s*(#.*)?$")
 # ``key = "value"`` or ``key = 'value'``, keeping the indent and anything after
 # the value (a comment). A value of any other shape is left alone.
-_VALUE = r"^(\s*{key}\s*=\s*)(\"(?:[^\"\\]|\\.)*\"|'[^']*')(.*)$"
+_STRING_VALUE = r"(\"(?:[^\"\\]|\\.)*\"|'[^']*')(.*)$"
+
+
+def _value_pattern(key: str) -> re.Pattern[str]:
+    return re.compile(rf"^(\s*{re.escape(key)}\s*=\s*)" + _STRING_VALUE)
 
 
 def refresh_pyproject_identity(
@@ -50,18 +54,18 @@ def refresh_pyproject_identity(
     (a multi-line string, a quoted key, an inline ``keboola = {...}`` table, a
     number) could turn into invalid TOML or a second definition, so the result
     is parsed and must equal the file's own content with only the owned values
-    changed. When it does not -- or the file is no valid TOML to begin with --
-    the file is left byte for byte as it was and False is returned: the remote
+    changed. When it does not -- or the file is no valid TOML to begin with,
+    or cannot be read or written -- the file is left as it was and False is returned: the remote
     write already happened, so the caller warns instead of failing.
     """
     path = config_dir / PYPROJECT_FILENAME
     if PYPROJECT_FILENAME not in owned_companions(component_id) or not path.is_file():
         return True
-    original = path.read_bytes()
     try:
+        original = path.read_bytes()
         text = original.decode("utf-8")
         before = _parse(text)
-    except (UnicodeDecodeError, tomllib.TOMLDecodeError):
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
         return False
     expected = _expected(before, component_id, name=name, config_id=config_id)
     if expected is None:
@@ -89,7 +93,13 @@ def refresh_pyproject_identity(
             return False
     except tomllib.TOMLDecodeError:
         return False
-    path.write_bytes(updated.encode("utf-8"))
+    try:
+        path.write_bytes(updated.encode("utf-8"))
+    except OSError:
+        # A read-only file: the remote write already happened, so the push
+        # warns and still stamps its baseline. Opening for write fails before
+        # any byte is written, so the file is as it was.
+        return False
     return True
 
 
@@ -129,7 +139,7 @@ def _set_value(lines: list[str], table: str, key: str, value: str, *, add: bool)
 
     Returns False when the table does not exist (nothing changed).
     """
-    pattern = re.compile(_VALUE.format(key=re.escape(key)))
+    pattern = _value_pattern(key)
     start: int | None = None
     end = len(lines)
     for i, line in enumerate(lines):
