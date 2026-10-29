@@ -373,7 +373,9 @@ class _Tree:
 def _scan(
     service: SyncService, in_tree: list[ManifestConfiguration], tree_dir: Path, ignored: frozenset
 ) -> _Tree:
-    eligible = [e for e in in_tree if e.component_id not in ignored and e.metadata.get("pull_hash")]
+    # Hold membership counts EVERY tracked entry, a hashless (checkpointed or
+    # adopted) one included; only a move source needs a baseline (see settle_moves).
+    eligible = [e for e in in_tree if e.component_id not in ignored]
     by_path: dict[str, list[ManifestConfiguration]] = defaultdict(list)
     by_identity: dict[tuple[str, str], list[ManifestConfiguration]] = defaultdict(list)
     for entry in eligible:
@@ -435,7 +437,7 @@ def settle_moves(
     groups: dict[tuple[str, str, str], list[ManifestConfiguration]] = defaultdict(list)
     for path in absent:
         for entry in scan.by_path[path]:
-            if all(entry is not e for e in held_entries):
+            if entry.metadata.get("pull_hash") and all(entry is not e for e in held_entries):
                 groups[(path, entry.component_id, _identity(entry))].append(entry)
     claimed: dict[str, int] = defaultdict(int)
     for _path, component_id, identity in groups:

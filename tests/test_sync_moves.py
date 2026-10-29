@@ -958,3 +958,33 @@ def test_f5_move_in_a_git_branching_tree(tmp_path: Path) -> None:
         assert t.diff()["changes"] == []
     value = t.api.remote[PROD][(HTTP, "500")]["configuration"]["parameters"]["value"]
     assert value == "moved-and-edited"
+
+
+def test_f4_hashless_promoted_entry_is_held_with_its_source(tmp_path: Path) -> None:
+    """A promoted entry an interrupted create left without pull_hash is held too."""
+    t = _three(tmp_path)
+    t.push(branch=DEV)
+    path = t.root / MANIFEST
+    data = json.loads(path.read_text())
+    (dev_600,) = [
+        c
+        for c in data["configurations"]
+        if c["branchId"] == DEV
+        and (c["metadata"].get("promoted_from") or {}).get("config_id") == "600"
+    ]
+    dev_600["metadata"].pop("pull_hash", None)  # as the create checkpoint leaves it
+    path.write_text(json.dumps(data))
+    dev_before = {cid: dict(cfg["configuration"]) for (_c, cid), cfg in t.api.remote[DEV].items()}
+    t.api.log.clear()
+    a, b = t.dir_of("500"), t.dir_of("600")
+    shutil.rmtree(b)
+    shutil.move(str(a), str(b))
+    before = t.manifest_bytes()
+    diff = t.diff(branch=DEV)
+    assert not any(c["change_type"] == "modified" for c in diff["changes"]), diff["changes"]
+    t.push(branch=DEV)
+    t.push(branch=DEV, force=True)
+    assert t.api.log == [], "the hashless promoted copy was pushed with another config's content"
+    after = {cid: dict(cfg["configuration"]) for (_c, cid), cfg in t.api.remote[DEV].items()}
+    assert after == dev_before
+    assert t.manifest_bytes() == before
