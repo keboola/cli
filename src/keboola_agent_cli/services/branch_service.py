@@ -23,20 +23,26 @@ PROJECT_DESCRIPTION_KEY = "KBC.projectDescription"
 ACTIVE_BRANCH_NOT_STORED_CODE = "ACTIVE_BRANCH_NOT_STORED"
 
 
-def active_branch_not_stored_warning(alias: str, branch_id: int) -> dict[str, Any]:
+def active_branch_not_stored_warning(
+    alias: str, branch_id: int, *, rest: bool = False
+) -> dict[str, Any]:
     """The ``warnings[]`` entry of `branch create` on an environment project.
 
     Returns ``{"code", "message", "hint"}``; the CLI passes it to
-    ``OutputFormatter.warning`` and ``serve`` to ``add_warning``.
+    ``OutputFormatter.warning`` and ``serve`` (``rest=True``) to
+    ``add_warning``. The hint names the option of the caller's surface:
+    ``--branch <id>`` on the CLI, ``branch_id=<id>`` over REST.
     """
+    param = f"branch_id={branch_id}" if rest else f"--branch {branch_id}"
+    where = "later requests" if rest else "later commands"
     return {
         "code": ACTIVE_BRANCH_NOT_STORED_CODE,
         "message": (
             f"Branch {branch_id} was created but not activated: project '{alias}' comes "
             "from environment variables and lives only in memory, so no active branch "
-            "can be stored for it. Pass --branch on later commands to use this branch."
+            f"can be stored for it. Pass {param} on {where} to use this branch."
         ),
-        "hint": f"--branch {branch_id}",
+        "hint": param,
     }
 
 

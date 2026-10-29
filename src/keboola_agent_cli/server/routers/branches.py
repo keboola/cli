@@ -47,14 +47,16 @@ def create(
 
     On a project from environment variables the branch is created but not
     activated (``activated: false``) and a ``Kbagent-Warnings`` entry
-    ``ACTIVE_BRANCH_NOT_STORED`` says to pass ``branch_id`` instead.
+    ``ACTIVE_BRANCH_NOT_STORED`` (hint ``branch_id=<id>``) says to pass ``branch_id``.
     """
     result = registry.branch.create_branch(
         alias=project, name=body.name, description=body.description
     )
     if not result["activated"]:
         add_warning(
-            **active_branch_not_stored_warning(result["project_alias"], result["branch_id"])
+            **active_branch_not_stored_warning(
+                result["project_alias"], result["branch_id"], rest=True
+            )
         )
     return result
 

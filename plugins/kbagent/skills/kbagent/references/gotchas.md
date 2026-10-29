@@ -71,7 +71,8 @@ These lists keep `error`, because their entries are not failed items with an err
   whose `hint` is `--branch <id>`. Before, the branch was created, then storing it as
   the active branch failed: the command printed `status: error` and exited 5,
   although the branch existed. A retry created a second branch. Over `kbagent serve`,
-  `POST /branches/__env__` answers 200 with the same warning in `Kbagent-Warnings`.
+  `POST /branches/__env__` answers 200 with the same warning in `Kbagent-Warnings`,
+  whose hint there is `branch_id=<id>`.
 - **An environment project has no active branch.** It lives only in memory, so pass
   `--branch <id>` (REST: `branch_id`) on every command that should use the branch.
 - **`branch reset --project __env__`** exits 0 and changes nothing

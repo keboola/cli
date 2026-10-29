@@ -387,9 +387,14 @@ GROUP_NOTES: dict[str, str] = {
 
   branch create
     Create dev branch and auto-activate it. Async, CLI waits for completion.
+    Exception since vNEXT: on the environment project `__env__`
+    (KBAGENT_PROJECT_FROM_ENV) the branch is created but NOT activated --
+    `activated: false` and a warnings[] entry ACTIVE_BRANCH_NOT_STORED. Pass
+    `--branch <id>` on every later command, or it runs on production.
 
   branch use
-    Set existing branch as active for subsequent commands. Every command that
+    Set existing branch as active for subsequent commands (refused on `__env__`:
+    pass --branch instead; `branch reset` there is a no-op). Every command that
     then picks a branch names it: `Target: project 'P', branch ID 'NAME' (from
     'kbagent branch use')` on stderr, `targets` in --json (see Tips 2).
 

@@ -70,7 +70,7 @@ class TestCli:
         assert doc["data"]["branch_id"] == NEW_BRANCH
         assert doc["data"]["activated"] is False
         warning = next(w for w in doc["warnings"] if w["code"] == "ACTIVE_BRANCH_NOT_STORED")
-        assert f"--branch {NEW_BRANCH}" in warning["hint"]
+        assert warning["hint"] == f"--branch {NEW_BRANCH}"
         assert "--branch" in warning["message"]
         api_client.create_dev_branch.assert_called_once()
         # Nothing was written for the environment project.
@@ -116,7 +116,12 @@ class TestServe:
 
         assert response.status_code == 200, response.text
         assert response.json()["activated"] is False
-        assert "ACTIVE_BRANCH_NOT_STORED" in self._warning_codes(response)
+        warnings = json.loads(response.headers["Kbagent-Warnings"])
+        warning = next(w for w in warnings if w["code"] == "ACTIVE_BRANCH_NOT_STORED")
+        # A REST caller targets the branch with `branch_id`, not the CLI option.
+        assert warning["hint"] == f"branch_id={NEW_BRANCH}"
+        assert f"branch_id={NEW_BRANCH}" in warning["message"]
+        assert "--branch" not in warning["message"]
 
     def test_reset_is_a_noop(self, client, api_client: MagicMock) -> None:
         response = client.post("/branches/__env__/reset", headers=AUTH)
