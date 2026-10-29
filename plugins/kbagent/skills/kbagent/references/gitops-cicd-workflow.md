@@ -73,17 +73,39 @@ kbagent --json sync pull --project __env__ --branch "$BR" --directory "$WORK"
 #   rsync -a repo/keboola/ "$WORK/<branch folder>/"
 # A dev-branch pull writes into that branch's own folder, not main/.
 
-# Validate every _config.yml before kbagent reads it (pitfall 2.2).
+# Validate every _config.yml before kbagent reads it (pitfall 2.2):
+python3 - "$WORK" <<'PY'
+import pathlib, sys, yaml   # needs PyYAML in the job image
+bad = []
+for path in pathlib.Path(sys.argv[1]).rglob("_config.yml"):
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        bad.append(f"{path}: {exc}")
+        continue
+    if not isinstance(data, dict) or not data:
+        bad.append(f"{path}: empty or not a mapping")
+print("\n".join(bad), file=sys.stderr)
+sys.exit(1 if bad else 0)
+PY
 
-kbagent --json sync push --project __env__ --branch "$BR" --directory "$WORK" --dry-run > plan.json
-# Review plan.json: data.changes[], data.skipped_deletions, data.errors.
+# Preview with EXACTLY the flags of the apply (here: with --force).
+kbagent --json sync push --project __env__ --branch "$BR" --directory "$WORK" --dry-run --force > plan.json
+# Review plan.json: data.status, data.changes[] (every change_type "deleted"),
+# data.summary.deleted, data.errors.
 
-kbagent --json sync push --project __env__ --branch "$BR" --directory "$WORK" [--force] > result.json
+kbagent --json sync push --project __env__ --branch "$BR" --directory "$WORK" --force > result.json
 ```
 
 `--force` is needed only to delete remote configs or rows whose folders are gone
 (since 0.96.1 a plain push deletes nothing and lists them under
-`skipped_deletions`). Never add `--force` without a reviewed `--dry-run` -- see
+`skipped_deletions`). **The preview must use the same flags as the apply.** A
+`--dry-run` without `--force` lists the deletions under `skipped_deletions`, not in
+`changes[]`, and its `summary.deleted` counts only the deletions that push would
+apply -- so it shows none, and a later `push --force` deletes configs the preview
+never showed as deletions. With `--dry-run --force` the deletions are `deleted`
+changes in `changes[]` and `summary.deleted` counts them: check both before you
+apply. A pipeline that never deletes runs both steps without `--force`. See
 pitfall 2.2.
 
 ## 4. Read results safely
@@ -142,10 +164,10 @@ next release; each entry says whether it is already in 1.0.0rc4.
   `skipped_deletions`, and **`sync push --force` deletes the remote config**
   (#827 item 9).
 - **Workaround:** before any push, parse every `_config.yml` of the tree with a
-  YAML parser (for example `python -c 'import sys,yaml; [yaml.safe_load(open(p)) for p in sys.argv[1:]]' $(find "$WORK" -name _config.yml)`)
-  and fail the pipeline on an error or on a file that is empty or not a mapping.
-  Never pass `--force` unless the `--dry-run` was reviewed and every `deleted`
-  change / `skipped_deletions` entry is intended.
+  YAML parser and fail the pipeline on an error or on a file that is empty or
+  not a mapping (the Python step in section 3 does this; it also handles paths
+  with spaces). Never pass `--force` unless a `--dry-run --force` was reviewed
+  and every `deleted` change in it is intended.
 - **Status:** fix in #941 *(since vNEXT)*, not in 1.0.0rc4: such a file is an
   `errors[]` entry (`change_type: invalid_local_file`, `error_code:
   SYNC_LOCAL_FILE_INVALID`), its config and rows are never created, updated or
@@ -254,10 +276,31 @@ next release; each entry says whether it is already in 1.0.0rc4.
   triggers. The `schedulerConfig` naming template in the manifest is not used.
   `sync push` writes the schedule config to Storage only; nothing in `sync`
   calls the Scheduler Service activation that `flow schedule` makes.
-- **Workaround:** keep schedule configs in that folder in the repository; after
-  a push that adds or changes a schedule, run
-  `kbagent --json flow schedule --project __env__ --flow-id ID --cron ... --branch <dev>`
-  for it and check `activated` (pitfall 2.5).
+- **Workaround:** keep schedule configs in that folder in the repository. After
+  a push that adds or changes a schedule, activate it:
+  - **A flow with exactly one schedule:**
+    `kbagent --json flow schedule --project __env__ --flow-id ID --cron "0 6 * * *" --timezone UTC --branch <dev>`
+    rewrites that schedule from these options and activates it; check
+    `activated` (pitfall 2.5). Pass the same cron and timezone as the file.
+  - **A flow with two or more schedules:** do not use `flow schedule` (pitfall
+    3.8). kbagent has no command that activates one given scheduler config.
+    Save that schedule once in the Keboola UI, or call the Scheduler Service
+    yourself: `POST https://scheduler.<stack>/schedules` with body
+    `{"configurationId": "<scheduler config id>"}` and the
+    `X-StorageApi-Token` header (what `flow schedule` sends).
+- **Status:** not changed.
+
+### 3.8 `flow schedule` overwrites the first schedule of a flow
+
+- **Symptom (all versions):** `flow schedule` updates the FIRST
+  `keboola.scheduler` config that targets the flow, if there is one, and creates a
+  new one only when there is none. On a flow with two or more schedules it
+  rewrites one of them -- its name, cron, timezone and state, and the whole
+  configuration body is replaced -- and never touches or activates the others.
+- **Workaround:** use `flow schedule` only on a flow with at most one schedule.
+  List a flow's schedules first with
+  `kbagent --json flow triggers --project __env__ --flow-id ID --branch <dev>`
+  (`cron_schedules`). For a flow with several schedules see pitfall 3.5.
 - **Status:** not changed.
 
 ### 3.6 `config new` scaffolds a `storage:` key that push drops

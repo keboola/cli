@@ -182,4 +182,6 @@ They are safe to run under `--deny-writes` and `--deny-destructive`.
 not under the flow it triggers, and `sync push` writes the schedule config only:
 nothing in `sync` activates it on the Scheduler Service. `flow schedule` exits 0
 with `activated: false` when activation is refused -- always check `activated`.
-See [gitops-cicd-workflow.md](gitops-cicd-workflow.md) pitfalls 2.5 and 3.5.
+`flow schedule` rewrites the first schedule of a flow, so on a flow with two or
+more schedules it overwrites one of them. See
+[gitops-cicd-workflow.md](gitops-cicd-workflow.md) pitfalls 2.5, 3.5 and 3.8.
