@@ -16,6 +16,7 @@ from helpers import setup_single_project
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.constants import CONFIG_FILENAME
 from keboola_agent_cli.models import TokenVerifyResponse
+from keboola_agent_cli.services._sync_baseline import adopted_skip_detail
 from keboola_agent_cli.services.sync_service import SyncService
 from keboola_agent_cli.sync.manifest import load_manifest
 
@@ -161,3 +162,147 @@ def test_matching_inline_description_does_not_warn(tmp_path: Path) -> None:
     result = svc.diff(alias="prod", project_root=root)
 
     assert not result.get("companion_warnings")
+
+
+# ---------------------------------------------------------------------------
+# Item 1 (#827 item 9): an unparseable _config.yml is an error, never a delete
+# ---------------------------------------------------------------------------
+
+BROKEN_YAML = "name: [unclosed\nparameters: {db: x\n"
+
+
+def _invalid(result: dict[str, Any]) -> list[dict[str, Any]]:
+    return [e for e in result["errors"] if e.get("error_code") == "SYNC_LOCAL_FILE_INVALID"]
+
+
+def test_o_unparseable_config_yaml_is_not_deleted_remotely(tmp_path: Path) -> None:
+    components = _components()
+    store, root = _pulled_tree(tmp_path, components)
+    (_config_dir(root) / CONFIG_FILENAME).write_text(BROKEN_YAML, encoding="utf-8")
+
+    svc, client = _service(store, components)
+    result = svc.push(alias="prod", project_root=root, force=True)
+
+    client.delete_config.assert_not_called()
+    client.delete_config_row.assert_not_called()
+    client.update_config.assert_not_called()
+    client.create_config.assert_not_called()
+    assert result["deleted"] == 0
+    (error,) = _invalid(result)
+    assert error["config_id"] == "cfg-001"
+    assert error["path"].startswith("main/") and error["path"].endswith(CONFIG_FILENAME)
+    assert "not valid YAML" in error["message"]
+
+
+def test_unparseable_config_yaml_diff_reports_error_not_delete(tmp_path: Path) -> None:
+    components = _components()
+    store, root = _pulled_tree(tmp_path, components)
+    (_config_dir(root) / CONFIG_FILENAME).write_text(BROKEN_YAML, encoding="utf-8")
+
+    svc, _ = _service(store, components)
+    result = svc.diff(alias="prod", project_root=root)
+
+    assert result["changes"] == []  # neither the config nor its row is "deleted"
+    assert result["summary"]["deleted"] == 0
+    assert result["summary"]["invalid"] == 1
+    assert len(_invalid(result)) == 1
+    assert result["remote_only"] == []
+
+
+def test_non_mapping_config_yaml_is_an_error(tmp_path: Path) -> None:
+    components = _components()
+    store, root = _pulled_tree(tmp_path, components)
+    (_config_dir(root) / CONFIG_FILENAME).write_text("- just\n- a list\n", encoding="utf-8")
+
+    svc, client = _service(store, components)
+    result = svc.push(alias="prod", project_root=root, force=True)
+
+    client.delete_config.assert_not_called()
+    (error,) = _invalid(result)
+    assert "must be a YAML mapping" in error["message"]
+
+
+def test_empty_config_yaml_is_an_error(tmp_path: Path) -> None:
+    components = _components()
+    store, root = _pulled_tree(tmp_path, components)
+    (_config_dir(root) / CONFIG_FILENAME).write_text("", encoding="utf-8")
+
+    svc, client = _service(store, components)
+    result = svc.push(alias="prod", project_root=root, force=True)
+
+    client.delete_config.assert_not_called()
+    assert len(_invalid(result)) == 1
+
+
+def test_unparseable_config_yaml_dry_run_reports_error(tmp_path: Path) -> None:
+    components = _components()
+    store, root = _pulled_tree(tmp_path, components)
+    (_config_dir(root) / CONFIG_FILENAME).write_text(BROKEN_YAML, encoding="utf-8")
+
+    svc, client = _service(store, components)
+    result = svc.push(alias="prod", project_root=root, force=True, dry_run=True)
+
+    # Nothing to plan once the config is held: no delete in any form.
+    assert result.get("summary", {}).get("deleted", 0) == 0
+    assert not [c for c in result.get("changes", []) if c["change_type"] == "deleted"]
+    assert len(_invalid(result)) == 1
+    client.delete_config.assert_not_called()
+
+
+def test_unparseable_row_yaml_is_not_deleted_remotely(tmp_path: Path) -> None:
+    components = _components()
+    store, root = _pulled_tree(tmp_path, components)
+    (_row_dir(root) / CONFIG_FILENAME).write_text(BROKEN_YAML, encoding="utf-8")
+
+    svc, client = _service(store, components)
+    result = svc.push(alias="prod", project_root=root, force=True)
+
+    client.delete_config_row.assert_not_called()
+    client.update_config_row.assert_not_called()
+    (error,) = _invalid(result)
+    assert "/rows/" in error["path"]
+    assert error["config_id"] == "cfg-001"
+
+
+def test_unparseable_untracked_config_is_reported_not_skipped(tmp_path: Path) -> None:
+    components = _components()
+    store, root = _pulled_tree(tmp_path, components)
+    new_dir = root / "main" / "extractor" / COMPONENT / "brand-new"
+    new_dir.mkdir(parents=True)
+    (new_dir / CONFIG_FILENAME).write_text(BROKEN_YAML, encoding="utf-8")
+
+    svc, client = _service(store, components)
+    result = svc.push(alias="prod", project_root=root, force=True)
+
+    client.create_config.assert_not_called()
+    (error,) = _invalid(result)
+    assert "brand-new" in error["path"]
+
+
+def test_pull_keeps_unparseable_tracked_file(tmp_path: Path) -> None:
+    components = _components()
+    store, root = _pulled_tree(tmp_path, components)
+    config_file = _config_dir(root) / CONFIG_FILENAME
+    config_file.write_text(BROKEN_YAML, encoding="utf-8")
+
+    svc, _ = _service(store, components)
+    svc.pull(alias="prod", project_root=root)
+
+    assert config_file.read_text(encoding="utf-8") == BROKEN_YAML
+
+
+def test_pull_does_not_overwrite_unparseable_untracked_file(tmp_path: Path) -> None:
+    """Pull's adopt guard keeps a broken file where it would write a new config."""
+    components = _components()
+    store, _root = _pulled_tree(tmp_path, components)
+    config_dir = tmp_path / "scratch" / "extractor" / COMPONENT / "my-extractor"
+    config_dir.mkdir(parents=True)
+    (config_dir / CONFIG_FILENAME).write_text(BROKEN_YAML, encoding="utf-8")
+    svc, _ = _service(store, components)
+    remote = components[0]["configurations"][0]
+
+    skipped = adopted_skip_detail(svc, config_dir, COMPONENT, remote, "rel/path")
+
+    assert skipped is not None
+    assert skipped["action"] == "skipped"
+    assert "cannot be parsed" in skipped["reason"]
