@@ -511,3 +511,13 @@ yours at runtime.
 | `POST` | `encryption.<stack>/encrypt` | `data-app create` step 2 (private repo) |
 | `PUT` | `connection.<stack>/v2/storage/.../keboola.data-apps/configs/{id}` | `data-app create` step 3, also `config update` |
 | `GET` | `connection.<stack>/v2/storage/.../keboola.data-apps/configs/{id}` | `data-app detail` (latest version), `data-app deploy` (read latest), `data-app password` (auth check) |
+
+## Data apps in a sync / CI deploy pipeline
+
+`sync push` creates a new data app but never deploys it, and does not redeploy a
+changed one. `sync push --force` and `config delete` remove only the Storage
+configuration; kbagent does not stop or delete the app there.
+`data-app create --branch <dev>` fails with HTTP 422 up to 1.0.0rc4 (fix pending
+in #937): create the app in the default branch. Manage the app with
+`data-app create` / `deploy` / `delete`. See
+[gitops-cicd-workflow.md](gitops-cicd-workflow.md) pitfalls 4.1 and 4.3.

@@ -304,3 +304,7 @@ an `error_code` / `message` pair; successful siblings still make it to
   to row YAML editing.
 - [`gotchas.md`](./gotchas.md) -- quick-reference footguns, including the
   row-level encryption caveat.
+- [`gitops-cicd-workflow.md`](./gitops-cicd-workflow.md) -- rows in a CI deploy
+  pipeline: a new config with `rows/` needed a second push on 0.100.4 (one push
+  *(since vNEXT)*, #931); `pushed_details[].config_id` is `""` for a created
+  config; a row without `description:` diffs on every push until #941.

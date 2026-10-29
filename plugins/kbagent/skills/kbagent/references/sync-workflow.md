@@ -887,6 +887,16 @@ should call instead of hand-rolling the mechanics.
 > reports is computed from that materialised tree). Use a throwaway path, or
 > delete it after inspecting.
 
+## Headless deploy pipelines (GitOps / CI/CD)
+
+To deploy configs from a git repository in CI (`KBAGENT_PROJECT_FROM_ENV=1`,
+`--project __env__`, `--branch <id>` on every command, an empty folder per run),
+follow [gitops-cicd-workflow.md](gitops-cicd-workflow.md). It lists the sync
+pitfalls such a pipeline hits, per version: a `_config.yml` that does not parse
+(a tracked one is deleted by `push --force` up to 1.0.0rc4), top-level keys push
+drops, the two `--dry-run` result shapes, keys that appear only when not empty,
+and plaintext secrets that create a new version on every push.
+
 ## Promoting between two live projects (dev -> prod) in CI
 
 `sync clone` seeds a *fresh* target once. For an ongoing **promotion loop**

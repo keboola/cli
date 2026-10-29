@@ -5,15 +5,15 @@ description: >
   Covers: searching configurations, job history, data
   lineage, dev branches, merge requests, workspace SQL debugging, GitOps sync,
   bucket sharing/linking, encrypting secrets,
-  Storage tables/files/snapshots, large (200 GB) file uploads, data apps,
-  flows/schedules, invitations,
+  Storage tables/files/snapshots, large file uploads, data apps,
+  flows/schedules,
   feature flags, OTLP data streams, scoped Storage tokens, semantic
-  layer, Developer Portal,
-  first-time setup and logout.
+  layer, CI/CD deploy pipelines,
+  first-time setup.
   Triggers: kbagent, Keboola, keboola
-  config, keboola job, keboola lineage, keboola sync, gitops, dev branch,
-  merge request,
-  data app, python-js app, semantic layer, sl, dev-portal,
+  config, keboola job, keboola lineage, keboola sync, gitops, GitOps deploy,
+  CI/CD, pipeline, headless, dev branch, merge request,
+  data app, semantic layer, dev-portal,
   data stream, OTLP, scoped token, encrypt secrets,
   feature flag, flow schedule, invite member, SQL transformation edit,
   sync action, keboola docs, table snapshot, auth, login, sign in,
@@ -459,6 +459,7 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | **Authorizing an OAuth component** (`config oauth-url`; no browser under `--json`, always echo the URL in a fenced block, verify by the config `version` bump) | [oauth-workflow](references/oauth-workflow.md) |
 | Sync & Git-branching (GitOps) | [sync-workflow](references/sync-workflow.md) |
 | Sync row-level internals (manifest v3, hoist, encryption) | [sync-rows-workflow](references/sync-rows-workflow.md) |
+| **GitOps / CI/CD deploy pipeline** (headless `__env__`, `--branch` everywhere, pinned version, reading results, per-version pitfalls and workarounds) | [gitops-cicd-workflow](references/gitops-cicd-workflow.md) |
 | **Promote configs source -> destination project** (from-scratch GitHub Actions pull -> validate -> push pipeline built on `sync`; PR-gated, cross-project dry-run diff) -- a **separate skill**, not a reference doc | [kbagent-promotion-pipeline](../kbagent-promotion-pipeline/SKILL.md) |
 | **Migrating a `kbc` (keboola-as-code) GitHub CI/CD pipeline to kbagent sync** | [kbagent-cicd-migration](../kbagent-cicd-migration/SKILL.md) (sibling skill) |
 | **Variables (attach to any config)** | [variables-workflow](references/variables-workflow.md) |

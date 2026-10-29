@@ -175,3 +175,11 @@ They are safe to run under `--deny-writes` and `--deny-destructive`.
 | "Full detail for schedule SC1 including parent name?" | `kbagent schedule detail --project X --schedule-id SC1` |
 | "Add a new cron schedule to flow F" | `kbagent flow schedule --project X --flow-id F --cron "0 6 * * *"` (see [flow-workflow.md](flow-workflow.md)) |
 | "Remove every schedule attached to flow F" | `kbagent flow schedule-remove --project X --flow-id F --yes` |
+
+## Schedules in a sync / CI deploy pipeline
+
+`sync pull` writes each schedule to `<branch folder>/other/keboola.scheduler/<name>/`,
+not under the flow it triggers, and `sync push` writes the schedule config only:
+nothing in `sync` activates it on the Scheduler Service. `flow schedule` exits 0
+with `activated: false` when activation is refused -- always check `activated`.
+See [gitops-cicd-workflow.md](gitops-cicd-workflow.md) pitfalls 2.5 and 3.5.
