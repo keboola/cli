@@ -144,17 +144,25 @@ class AmbiguousMove:
         }
 
 
+@dataclass(frozen=True, order=True)
+class ConfigIdentity:
+    """The identity a ``_config.yml`` carries: ``_keboola`` component and config id."""
+
+    component_id: str
+    config_id: str
+
+
 @dataclass(frozen=True)
 class IdentityConflict:
     """Tracked directories that carry the ids of other tracked configs, held as a whole."""
 
-    configs: tuple[tuple[str, str], ...]  # (component_id, config_id) of every config involved
+    configs: tuple[ConfigIdentity, ...]  # every config involved
     paths: tuple[str, ...]  # every directory involved
     entries: tuple[tuple[str, str, str], ...]  # (component_id, entry id, entry path) held
 
     def message(self) -> str:
         """Why nothing is pushed or pulled for it, and what to do."""
-        ids = ", ".join(sorted({cid for _comp, cid in self.configs}))
+        ids = ", ".join(sorted({c.config_id for c in self.configs}))
         return (
             f"Directories {', '.join(self.paths)} carry config ids ({ids}) that do not match "
             "the configs tracked there (a swap, a rotation or a symlink). Nothing is created, "
@@ -187,7 +195,9 @@ class IdentityConflict:
     def to_dict(self) -> dict[str, Any]:
         """The ``identity_conflicts[]`` record."""
         return {
-            "configs": [{"component_id": c, "config_id": i} for c, i in self.configs],
+            "configs": [
+                {"component_id": c.component_id, "config_id": c.config_id} for c in self.configs
+            ],
             "paths": list(self.paths),
             "message": self.message(),
         }
@@ -300,24 +310,24 @@ def _identity(entry: ManifestConfiguration) -> str:
     return entry.id
 
 
-def _carried(service: SyncService, config_dir: Path) -> tuple[str, str] | None:
-    """The ``(component_id, config_id)`` a config dir's ``_config.yml`` carries, if any."""
+def _carried(service: SyncService, config_dir: Path) -> ConfigIdentity | None:
+    """The identity a config dir's ``_config.yml`` carries, if any."""
     data = service._read_config_file(config_dir)
     meta = data.get("_keboola") if isinstance(data, dict) else None
     if not isinstance(meta, dict) or not meta.get("config_id"):
         return None
-    return str(meta.get("component_id") or ""), str(meta["config_id"])
+    return ConfigIdentity(str(meta.get("component_id") or ""), str(meta["config_id"]))
 
 
 def _unowned(
     service: SyncService, tree_dir: Path, owned: set[str], ignored: frozenset[str]
-) -> dict[str, tuple[str, str]]:
+) -> dict[str, ConfigIdentity]:
     """Unowned config dirs of the tree -> the ``(component_id, config_id)`` they carry.
 
     A directory reached through a symlink is never one: it is another
     directory's alias, not a place a config was moved to.
     """
-    found: dict[str, tuple[str, str]] = {}
+    found: dict[str, ConfigIdentity] = {}
     if not tree_dir.is_dir():
         return found
     real_tree = tree_dir.resolve()
@@ -328,9 +338,17 @@ def _unowned(
         if config_file.parent.resolve() != real_tree / rel:
             continue  # a symlinked directory (or one below a symlink)
         carried = _carried(service, config_file.parent)
-        if carried is not None and carried[0] not in ignored:
+        if carried is not None and carried.component_id not in ignored:
             found[rel.as_posix()] = carried
     return found
+
+
+@dataclass(frozen=True)
+class _Closure:
+    """Every config identity and directory connected to an identity conflict."""
+
+    ids: frozenset[ConfigIdentity]
+    paths: frozenset[str]
 
 
 @dataclass
@@ -338,8 +356,8 @@ class _Tree:
     """The tracked entries of one tree and what their directories carry."""
 
     by_path: dict[str, list[ManifestConfiguration]]
-    by_identity: dict[tuple[str, str], list[ManifestConfiguration]]
-    carried: dict[str, tuple[str, str]]  # existing dir -> (component, id), comp normalized
+    by_identity: dict[ConfigIdentity, list[ManifestConfiguration]]
+    carried: dict[str, ConfigIdentity]  # existing dir -> identity, component normalized
 
     def foreign(self) -> list[str]:
         """Tracked paths whose file carries ANOTHER tracked config's id (same component)."""
@@ -348,26 +366,28 @@ class _Tree:
             carried = self.carried.get(path)
             if carried is None:
                 continue
-            own = {(e.component_id, _identity(e)) for e in entries}
+            own = {ConfigIdentity(e.component_id, _identity(e)) for e in entries}
             if carried not in own and carried in self.by_identity:
                 out.append(path)
         return out
 
-    def closure(self, seeds: list[str]) -> tuple[set[tuple[str, str]], set[str]]:
+    def closure(self, seeds: list[str]) -> _Closure:
         """Every config id and directory connected to the *seeds* paths."""
-        ids: set[tuple[str, str]] = set()
+        ids: set[ConfigIdentity] = set()
         paths = set(seeds)
         while True:
             before = (len(ids), len(paths))
             for path in list(paths):
-                ids |= {(e.component_id, _identity(e)) for e in self.by_path.get(path, [])}
+                ids |= {
+                    ConfigIdentity(e.component_id, _identity(e)) for e in self.by_path.get(path, [])
+                }
                 if path in self.carried:
                     ids.add(self.carried[path])
             for key in list(ids):
                 paths |= {e.path for e in self.by_identity.get(key, [])}
                 paths |= {p for p, c in self.carried.items() if c == key}
             if (len(ids), len(paths)) == before:
-                return ids, paths
+                return _Closure(frozenset(ids), frozenset(paths))
 
 
 def _scan(
@@ -377,16 +397,17 @@ def _scan(
     # adopted) one included; only a move source needs a baseline (see settle_moves).
     eligible = [e for e in in_tree if e.component_id not in ignored]
     by_path: dict[str, list[ManifestConfiguration]] = defaultdict(list)
-    by_identity: dict[tuple[str, str], list[ManifestConfiguration]] = defaultdict(list)
+    by_identity: dict[ConfigIdentity, list[ManifestConfiguration]] = defaultdict(list)
     for entry in eligible:
         by_path[entry.path].append(entry)
-        by_identity[(entry.component_id, _identity(entry))].append(entry)
-    carried: dict[str, tuple[str, str]] = {}
+        by_identity[ConfigIdentity(entry.component_id, _identity(entry))].append(entry)
+    carried: dict[str, ConfigIdentity] = {}
     for path, entries in by_path.items():
         if (tree_dir / path).exists():
             found = _carried(service, tree_dir / path)
             if found is not None:
-                carried[path] = (found[0] or entries[0].component_id, found[1])
+                component = found.component_id or entries[0].component_id
+                carried[path] = ConfigIdentity(component, found.config_id)
     return _Tree(dict(by_path), dict(by_identity), carried)
 
 
@@ -417,20 +438,20 @@ def settle_moves(
     scan.carried.update(unowned)
     held_entries: list[ManifestConfiguration] = []
     if foreign:
-        ids, paths = scan.closure(foreign)
-        involved = [e for key in ids for e in scan.by_identity.get(key, [])]
-        involved += [e for p in paths for e in scan.by_path.get(p, [])]
+        closure = scan.closure(foreign)
+        involved = [e for key in closure.ids for e in scan.by_identity.get(key, [])]
+        involved += [e for p in closure.paths for e in scan.by_path.get(p, [])]
         unique = list({id(e): e for e in involved}.values())
         plan.conflicts.append(
             IdentityConflict(
-                configs=tuple(sorted(ids)),
-                paths=tuple(sorted(paths)),
+                configs=tuple(sorted(closure.ids)),
+                paths=tuple(sorted(closure.paths)),
                 entries=tuple((e.component_id, e.id, e.path) for e in unique),
             )
         )
         held_entries += unique
     held_paths = plan.held_paths
-    carriers: dict[tuple[str, str], list[str]] = defaultdict(list)
+    carriers: dict[ConfigIdentity, list[str]] = defaultdict(list)
     for path, key in unowned.items():
         if path not in held_paths:
             carriers[key].append(path)
@@ -441,10 +462,10 @@ def settle_moves(
                 groups[(path, entry.component_id, _identity(entry))].append(entry)
     claimed: dict[str, int] = defaultdict(int)
     for _path, component_id, identity in groups:
-        for candidate in carriers.get((component_id, identity), []):
+        for candidate in carriers.get(ConfigIdentity(component_id, identity), []):
             claimed[candidate] += 1
     for (path, component_id, identity), entries in groups.items():
-        candidates = carriers.get((component_id, identity), [])
+        candidates = carriers.get(ConfigIdentity(component_id, identity), [])
         if not candidates:
             continue  # a local delete
         if len(candidates) == 1 and claimed[candidates[0]] == 1:

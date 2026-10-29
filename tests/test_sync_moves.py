@@ -12,11 +12,12 @@ import shutil
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
 
+from helpers import setup_single_project
 from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 from keboola_agent_cli.services.config_service import ConfigService
 from keboola_agent_cli.sync.manifest import load_manifest
@@ -988,3 +989,104 @@ def test_f4_hashless_promoted_entry_is_held_with_its_source(tmp_path: Path) -> N
     after = {cid: dict(cfg["configuration"]) for (_c, cid), cfg in t.api.remote[DEV].items()}
     assert after == dev_before
     assert t.manifest_bytes() == before
+
+
+# ---------------------------------------------------------------------------
+# Human output through the CLI (PR #936 review): a pure move is no change, so
+# every human renderer must say it instead of "in sync" / "no local changes".
+# ---------------------------------------------------------------------------
+
+
+def _human(tmp_path: Path, args: list[str], method: str, result: dict) -> str:
+    from typer.testing import CliRunner
+
+    from keboola_agent_cli.cli import app
+    from keboola_agent_cli.services.project_service import ProjectService
+
+    store = setup_single_project(tmp_path / "cli-cfg")
+    service = MagicMock()
+    getattr(service, method).return_value = result
+    with (
+        patch("keboola_agent_cli.cli.ConfigStore", return_value=store),
+        patch(
+            "keboola_agent_cli.cli.ProjectService", return_value=ProjectService(config_store=store)
+        ),
+        patch("keboola_agent_cli.cli.SyncService", return_value=service),
+    ):
+        out = CliRunner().invoke(app, [*args, "--directory", str(tmp_path)])
+    assert out.exit_code == 0, out.output
+    return " ".join(out.output.split())
+
+
+MOVE = {
+    "component_id": HTTP,
+    "config_id": "500",
+    "branch_id": PROD,
+    "moved_from": "extractor/keboola.ex-http/orders",
+    "moved_to": "extractor/keboola.ex-http/orders-moved",
+}
+
+
+def test_cli_human_diff_names_a_pure_move(tmp_path: Path) -> None:
+    result = {
+        "changes": [],
+        "moves": [MOVE],
+        "summary": {"added": 0, "modified": 0, "deleted": 0, "unchanged": 1, "moved": 1},
+    }
+    text = _human(tmp_path, ["sync", "diff", "--project", "prod"], "diff", result)
+    assert f"MOVED {HTTP}/500: {MOVE['moved_from']} -> {MOVE['moved_to']}" in text
+
+
+def test_cli_human_diff_names_held_moves(tmp_path: Path) -> None:
+    result = {
+        "changes": [],
+        "ambiguous_moves": [{"message": "ambiguous-hint-text"}],
+        "identity_conflicts": [{"message": "identity-hint-text"}],
+        "summary": {"added": 0, "modified": 0, "deleted": 0, "unchanged": 0, "moved": 0},
+    }
+    text = _human(tmp_path, ["sync", "diff", "--project", "prod"], "diff", result)
+    assert "AMBIGUOUS MOVE ambiguous-hint-text" in text
+    assert "IDENTITY CONFLICT identity-hint-text" in text
+
+
+def test_cli_human_status_names_a_pure_move(tmp_path: Path) -> None:
+    result = {
+        "modified": [],
+        "added": [],
+        "deleted": [],
+        "never_fetched": [],
+        "unchanged": 1,
+        "total_tracked": 1,
+        "plaintext_secret_warnings": [],
+        "moves": [MOVE],
+    }
+    text = _human(tmp_path, ["sync", "status"], "status", result)
+    assert f"MOVED {HTTP}/500: {MOVE['moved_from']} -> {MOVE['moved_to']}" in text
+
+
+def test_cli_human_pull_names_a_pure_move(tmp_path: Path) -> None:
+    result = {
+        "status": "pulled",
+        "project_alias": "prod",
+        "branch_id": PROD,
+        "branch_dir": "main",
+        "folder_lookup_failed": False,
+        "configs_pulled": 0,
+        "rows_pulled": 0,
+        "files_written": 0,
+        "jobs_written": 0,
+        "storage": {},
+        "details": [
+            {
+                "action": "moved",
+                "component_id": HTTP,
+                "config_id": "500",
+                "config_name": "orders-moved",
+                "path": MOVE["moved_to"],
+                "old_path": MOVE["moved_from"],
+            }
+        ],
+    }
+    text = _human(tmp_path, ["sync", "pull", "--project", "prod"], "pull", result)
+    assert "Already up to date" not in text
+    assert f"{MOVE['moved_from']} -> {HTTP}/orders-moved" in text
