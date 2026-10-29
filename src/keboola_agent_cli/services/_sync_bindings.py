@@ -37,6 +37,7 @@ from ..sync.diff_engine import config_hash
 from ..sync.manifest import Manifest
 from ._sync_baseline import apply_stamp, config_baseline
 from ._sync_companions import record_companions
+from ._sync_disabled import record_disabled
 from ._sync_link_pending import (
     LinkMaps,
     build_link_maps,
@@ -545,6 +546,7 @@ def _refresh_binding_hashes(
     if cfg is not None:
         cfg.metadata["pull_hash"] = hashes.file_hash
         record_companions(cfg.metadata, hashes.extra_hashes)
+        record_disabled(cfg.metadata, disabled=hashes.disabled)
         apply_stamp(cfg.metadata, stamp)
 
 

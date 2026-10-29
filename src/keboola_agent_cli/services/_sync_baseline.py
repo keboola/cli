@@ -207,6 +207,18 @@ def apply_stamp(metadata: dict[str, Any], stamp: BaselineStamp) -> None:
     metadata[CONFIG_HASH_VERSION_KEY] = CONFIG_HASH_VERSION
 
 
+def apply_row_stamp(metadata: dict[str, Any], stamp: BaselineStamp) -> None:
+    """Record a ROW baseline: :func:`apply_stamp` without the shape-version marker.
+
+    Row hashes have no script-shape migration and nothing reads the marker on a
+    row, and a fresh pull writes none -- an older push stamped one anyway, so
+    it is removed whenever the row's baseline is refreshed.
+    """
+    metadata.pop(CONFIG_HASH_VERSION_KEY, None)
+    if stamp.stamped:
+        metadata["pull_config_hash"] = stamp.cfg_hash
+
+
 # ---------------------------------------------------------------------------
 # Migration: manifests written before the shape change
 # ---------------------------------------------------------------------------

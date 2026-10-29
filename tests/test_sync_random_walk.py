@@ -709,11 +709,8 @@ class Sim:
         data = read_yaml(d / "_config.yml")
         if data.get("is_disabled"):
             # Pull writes the flag sparsely, so deleting the line is the
-            # natural way to re-enable -- push then leaves the remote alone.
-            if "sparse-disabled-reenable" in self.masks:
-                data["is_disabled"] = False
-            else:
-                data.pop("is_disabled")
+            # natural way to re-enable.
+            data.pop("is_disabled")
         else:
             data["is_disabled"] = True
         write_yaml(d / "_config.yml", data)
@@ -1105,13 +1102,6 @@ class Sim:
                     )
                 continue
             rproj = remote_projection(comp, cfg)
-            # Absent `is_disabled` means "leave the remote alone" (#467): a
-            # disabled-only difference may or may not be listed.
-            ambiguous = (
-                "sparse-disabled-reenable" in self.masks
-                and "is_disabled" not in read_yaml(d / "_config.yml")
-                and local.pop("disabled") != rproj.pop("disabled")
-            )
             differs = {k for k in set(local) | set(rproj) if local.get(k) != rproj.get(k)}
             if differs and not listed:
                 pend = [t for t in self.pending if any(t in str(v) for v in local.values())]
@@ -1122,7 +1112,7 @@ class Sim:
                     f"remote={ {k: rproj.get(k) for k in differs} }) but diff is silent",
                 )
             phantom = listed & {"modified", "remote_modified", "conflict", "added", "deleted"}
-            if not differs and phantom and not ambiguous:
+            if not differs and phantom:
                 raise Violation(
                     "phantom_drift",
                     f"{rel} ({cid}) equals branch {branch} but diff lists {sorted(phantom)}",
@@ -1249,7 +1239,6 @@ MASKS = frozenset(
         # design (#649), so the masked user keeps working in dev/ with
         # --branch DEV.
         "pull-dev-orphans-main",
-        "sparse-disabled-reenable",
         "move-is-delete-create",  # #792 I
     }
 )
@@ -1511,18 +1500,13 @@ def test_finding_retarget_pull_has_no_false_conflict(tmp_path: Path) -> None:
     assert _changes(sim) == []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "FINDING sparse-disabled-reenable: pull writes `is_disabled: true` "
-        "only when disabled and omits the key otherwise, and push treats an "
-        "absent key as 'leave the remote alone' (#467, _sync_push_ops.py "
-        "~801). Re-enabling by deleting the line -- the natural edit of the "
-        "format pull wrote -- reports 'updated', changes nothing, and diff "
-        "stays clean, so the config silently stays disabled."
-    ),
-)
 def test_finding_reenable_by_removing_flag_is_pushed_or_reported(tmp_path: Path) -> None:
+    """Was FINDING sparse-disabled-reenable: pull writes `is_disabled: true` only
+    when disabled and omits the key otherwise, and push read an absent key as
+    'leave the remote alone' (#467). Re-enabling by deleting the line -- the
+    natural edit of the format pull wrote -- reported 'updated', changed nothing
+    and left diff clean. The manifest now records that the baseline file had the
+    line (R7: the remote is enabled AND diff is clean, not either)."""
     sim = _world(tmp_path)
     sim.api.remote[PROD][SQL_1]["isDisabled"] = True
     _pull(sim)
@@ -1531,8 +1515,10 @@ def test_finding_reenable_by_removing_flag_is_pushed_or_reported(tmp_path: Path)
     assert data.get("is_disabled") is True
     data.pop("is_disabled")
     write_yaml(cfg, data)
-    _push(sim)
-    assert sim.api.remote[PROD][SQL_1]["isDisabled"] is False or _changes(sim)
+    result = _push(sim)
+    assert result["errors"] == []
+    assert sim.api.remote[PROD][SQL_1]["isDisabled"] is False
+    assert _changes(sim) == []
 
 
 def test_finding_force_push_does_not_delete_remotely_edited_config(tmp_path: Path) -> None:

@@ -97,6 +97,9 @@ Related semantics (all since v0.72.0):
 - Config-level enabled/disabled state round-trips: `_config.yml` carries
   `is_disabled: true` for disabled configs (absent = enabled), `sync diff`
   shows the drift, push updates the remote state when the key is present.
+  *(since vNEXT)* Deleting the `is_disabled: true` line that pull wrote and
+  pushing re-enables the config (or row); a missing key in a file that never
+  had the line still leaves the remote state alone.
 - A manifest entry that was registered but never materialized (empty
   `pull_hash`, no files -- pre-0.72 name-collision phantom) is excluded from
   push delete-planning and reported as `never_fetched`; pull heals it.
