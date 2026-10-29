@@ -73,9 +73,11 @@ kbagent --json sync pull --project __env__ --branch "$BR" --directory "$WORK"
 #   rsync -a repo/keboola/ "$WORK/<branch folder>/"
 # A dev-branch pull writes into that branch's own folder, not main/.
 
-# Validate every _config.yml before kbagent reads it (pitfall 2.2):
-python3 - "$WORK" <<'PY'
-import pathlib, sys, yaml   # needs PyYAML in the job image
+# Validate every _config.yml before kbagent reads it (pitfall 2.2).
+# uv provides PyYAML for this one run (kbagent's own tool env is not on the path);
+# without uv: `pip install pyyaml` first, then `python3 - "$WORK" <<'PY'`.
+uv run --no-project --with pyyaml python - "$WORK" <<'PY'
+import pathlib, sys, yaml
 bad = []
 for path in pathlib.Path(sys.argv[1]).rglob("_config.yml"):
     try:
@@ -287,6 +289,21 @@ next release; each entry says whether it is already in 1.0.0rc4.
     Ask the user to save that schedule once in the Keboola UI.
 - **Status:** not changed.
 
+### 3.6 `config new` scaffolds a `storage:` key that push drops
+
+- **Symptom (<= 1.0.0rc4):** `kbagent config new` writes the table mappings as a
+  top-level `storage: {input, output}` block. Sync push drops it (pitfall 2.3),
+  so the mappings never reach Keboola.
+- **Workaround:** move `storage.input` / `storage.output` to top-level `input:` /
+  `output:` before the push.
+- **Status:** fix in #941 *(since vNEXT)*, not in 1.0.0rc4: the scaffold writes
+  top-level `input:` / `output:`; an old scaffold fails with
+  `SYNC_LOCAL_FILE_INVALID`.
+
+### 3.7 `branch use` / `branch reset` on `__env__`
+
+- See pitfall 2.6, which covers both.
+
 ### 3.8 `flow schedule` overwrites the first schedule of a flow
 
 - **Symptom (all versions):** `flow schedule` updates the FIRST
@@ -299,17 +316,6 @@ next release; each entry says whether it is already in 1.0.0rc4.
   `kbagent --json flow triggers --project __env__ --flow-id ID --branch <dev>`
   (`cron_schedules`). For a flow with several schedules see pitfall 3.5.
 - **Status:** not changed.
-
-### 3.6 `config new` scaffolds a `storage:` key that push drops
-
-- **Symptom (<= 1.0.0rc4):** `kbagent config new` writes the table mappings as a
-  top-level `storage: {input, output}` block. Sync push drops it (pitfall 2.3),
-  so the mappings never reach Keboola.
-- **Workaround:** move `storage.input` / `storage.output` to top-level `input:` /
-  `output:` before the push.
-- **Status:** fix in #941 *(since vNEXT)*, not in 1.0.0rc4: the scaffold writes
-  top-level `input:` / `output:`; an old scaffold fails with
-  `SYNC_LOCAL_FILE_INVALID`.
 
 ### 4.1 Creating a data app in a dev branch fails with 422
 

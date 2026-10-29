@@ -7105,11 +7105,15 @@ examples. Surprises worth knowing before you touch this:
 
 ## Headless GitOps / CI deploy pipelines: known pitfalls
 
-*(since 0.100.4)* A customer running `sync` unattended in a deploy pipeline on
+*(since vNEXT)* A customer running `sync` unattended in a deploy pipeline on
 0.100.4 hit a set of pitfalls; each is listed with the versions it affects, the
 workaround and its fix in
-[gitops-cicd-workflow.md](gitops-cicd-workflow.md). The ones that lose or hide
-work:
+[gitops-cicd-workflow.md](gitops-cicd-workflow.md). All were observed on
+0.100.4. Fixed in vNEXT: the unparseable and unknown-key `_config.yml` cases
+(#941), `branch create` on `__env__` (#940), `add-column` (#939), deleting the
+last config of a dev-branch tree (#938) and creating a data app in a dev branch
+(#943); `flow schedule`, the dry-run shapes and the optional keys are not
+changed. The ones that lose or hide work:
 
 - A `_config.yml` that does not parse is skipped with only a stderr warning
   (exit 0); a tracked one counts as deleted and `sync push --force` deletes the
