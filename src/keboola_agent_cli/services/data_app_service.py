@@ -579,9 +579,10 @@ class DataAppService(BaseService):
 
             # An explicit --config-version always wins as an escape hatch; see
             # resolve_effective_version's docstring for the resolution rules.
-            effective_version: str | None = config_version
             backfilled_branch: str | None = None
-            if config_version is None:
+            if config_version is not None:
+                effective_version = config_version
+            else:
                 storage_client = self._client_factory(project.stack_url, project.token)
                 resolved = resolve_effective_version(
                     ds_client, storage_client, app, app_id, config_id, branch_id, git_branch
