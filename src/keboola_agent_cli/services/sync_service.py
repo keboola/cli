@@ -107,6 +107,7 @@ from ._sync_companions import (
     companion_diagnostics,
     config_locally_modified,
     current_companions,
+    description_shadowed,
     kept_companion_warning,
     local_unchanged,
     merge_with_remote,
@@ -1162,6 +1163,9 @@ class SyncService(BaseService):
             if problem:
                 relabelled.append(problem)
             diff_warnings += companion_diagnostics(config_dir, cfg.component_id, cfg.path)
+            diff_warnings += description_shadowed(
+                config_dir, local_data, cfg.component_id, cfg.path
+            )
 
             # Check if ANY file of this config changed since pull: _config.yml
             # and the companion set -- a new, deleted or edited companion (D2).
@@ -1243,6 +1247,7 @@ class SyncService(BaseService):
             # Merged once the identity is known: packages a pyproject.toml left
             # undecided are the adopted remote config's (T1).
             remote_local = remote_configs.get(f"{component_id}/{untracked_id}")
+            shadowed = description_shadowed(config_dir, local_data, component_id, added_cfg["path"])
             merge_with_remote(component_id, local_data, config_dir, remote_local)
             # Its rows join the plan: created with it, or diffed by id (D7, D8).
             collect_untracked_rows(
@@ -1255,6 +1260,7 @@ class SyncService(BaseService):
                 remote_rows=remote_rows,
             )
             diff_warnings += companion_diagnostics(config_dir, component_id, added_cfg["path"])
+            diff_warnings += shadowed
             # An adopted file has no manifest baseline: compute_changeset reads
             # the one a `config new --push` scaffold records (issue #792 E).
             local_configs.append(
