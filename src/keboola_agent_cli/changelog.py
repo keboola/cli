@@ -29,8 +29,8 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
     "1.0.0rc4": [
-        "Note: this is the fourth release candidate of kbagent 1.0.0. It adds the `sync` "
-        "fixes found by the new bookkeeping tests to 1.0.0rc3; the command line is the same. "
+        "Note: the fourth release candidate of 1.0.0 adds sync fixes found by the new "
+        "bookkeeping tests. The command line is the same as in 1.0.0rc3. "
         "On 1.0.0rc1 to 1.0.0rc3, run `kbagent update --beta`. On kbagent 0.100.0 or later, "
         "run `kbagent update --beta --major`. PyPI and the native packages do not get "
         "pre-releases. Migration guide: "
@@ -40,8 +40,8 @@ CHANGELOG: dict[str, list[str]] = {
         "branch are tracked for that branch, dev ids are never written into `main/`, and a "
         "flow or transformation link that could not be repaired stays pending and is retried "
         "by the next push instead of pointing at the wrong config.",
-        "Fixed (#931): a config's code and package files and its new rows are pushed and "
-        "tracked as one set, so a new row or an edited `pyproject.toml` no longer reads as "
+        "Fixed (#931): a config's code files, package files and new rows are one set. They are "
+        "pushed and tracked together, so a new row or an edited `pyproject.toml` no longer reads as "
         "changed forever or is dropped. `sync pull` never deletes a row directory with local "
         "work in it. A push that cannot read a config's package list now fails with "
         "`COMPANION_UNREADABLE` instead of guessing.",
@@ -55,8 +55,8 @@ CHANGELOG: dict[str, list[str]] = {
         "the config or row on `sync push`. Before, push reported `updated` and the config "
         "stayed disabled with a clean diff. On a tree pulled with an older version, run "
         "`sync pull` once first; `is_disabled: false` works on every version.",
-        "Fixed (#935): `sync push` and `sync clone` refresh `[project] name` and "
-        "`[tool.keboola] config_id` in `pyproject.toml` the way `sync pull` writes them, and "
+        "Fixed (#935): `sync push` and `sync clone` keep `pyproject.toml` current. They refresh "
+        "`[project] name` and `[tool.keboola] config_id` the way `sync pull` writes them, and "
         "change nothing else in the file. A file they cannot edit safely stays as it is, with "
         "a `pyproject_not_refreshed` warning.",
         "Fixed (#936): a config directory moved by hand (`mv`, `git mv`) keeps its config id. "
