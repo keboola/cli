@@ -93,7 +93,7 @@ def reset(project: str, registry: ServiceRegistry = Depends(get_registry)) -> di
     was set) and a ``Kbagent-Warnings`` entry ``ACTIVE_CHOICE_SHARED``.
     """
     result = registry.branch.reset_branch(alias=project)
-    stored = registry.config_store.get_project(result["project_alias"])
+    stored = registry.config_store.get_project(project)
     if stored is None or not stored.ephemeral:
         # An environment project stores nothing, so nothing is shared.
         warn_active_choice_shared(registry.config_store.config_dir, "active branch")
