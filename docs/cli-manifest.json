@@ -915,8 +915,8 @@
         {"kind": "option", "name": "type_", "opts": ["--type", "-t"], "type": "text", "default": "python-js", "help": "Runtime type. Default 'python-js' covers Python AND Node apps."},
         {"kind": "option", "name": "workspace", "opts": ["--workspace"], "secondary_opts": ["--no-workspace"], "type": "boolean", "is_flag": true, "default": true, "help": "Grant the app Storage access by writing runtime.workspace.enabled=true (default). This is what makes the platform inject WORKSPACE_ID / QUERY_SERVICE_URL / KBC_WORKSPACE_MANIFEST_PATH -- without it an app that reads Storage deploys and reports running while serving no data. Pass --no-workspace only for an app that never touches Storage."},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Keboola dev branch ID (defaults to production)."},
-        {"kind": "option", "name": "no_deploy", "opts": ["--no-deploy"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip the deploy step; create the shell + Storage config only."},
-        {"kind": "option", "name": "wait", "opts": ["--wait"], "type": "boolean", "is_flag": true, "default": false, "help": "Block until state == running (or error). Respects pitfall #1: stopped is not terminal. Default: no wait."},
+        {"kind": "option", "name": "no_deploy", "opts": ["--no-deploy"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip the deploy step; create the app + Storage config only."},
+        {"kind": "option", "name": "wait", "opts": ["--wait"], "type": "boolean", "is_flag": true, "default": false, "help": "Block until the deployment serves production (or fails). Default: no wait."},
         {"kind": "option", "name": "timeout", "opts": ["--timeout"], "type": "float", "default": 300.0, "help": "Maximum seconds to wait for state == running, with --wait. Default: 300."},
         {"kind": "option", "name": "keep_on_failure", "opts": ["--keep-on-failure"], "type": "boolean", "is_flag": true, "default": false, "help": "Keep the orphan deployment shell if PUT or initial deploy fails (forensics)."},
         {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Print the three request bodies without making any API call."},
@@ -1136,7 +1136,7 @@
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "app_id", "opts": ["--app-id"], "type": "text", "required": true, "default": null, "help": "Data Science numeric app id"},
-        {"kind": "option", "name": "wait", "opts": ["--wait"], "type": "boolean", "is_flag": true, "default": false, "help": "Block until stopped. Default: no wait."},
+        {"kind": "option", "name": "wait", "opts": ["--wait"], "type": "boolean", "is_flag": true, "default": false, "help": "No effect: the app is suspended when the call returns."},
         {"kind": "option", "name": "timeout", "opts": ["--timeout"], "type": "float", "default": 300.0, "help": "Max seconds to wait, with --wait. Default: 300."}
       ]
     },

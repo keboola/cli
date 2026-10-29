@@ -802,25 +802,26 @@ For the full reference including the BOOLEAN/INTEGER gotchas, see
 
 ## 9. Data apps lifecycle
 
-A Keboola data app is **not one resource** -- it's a deployment record on
-the Data Science API plus a configuration on the Storage API
+A Keboola data app is **not one resource** -- it's an app record and its
+deployments on the Data Science `/v2` API plus a configuration on the Storage API
 (`keboola.data-apps`), and they have to stay in sync. Each API only owns
 part of the picture, and the obvious-looking calls have four documented
 footguns the platform does not surface as errors:
 
-1. **The redeploy contract.** `PATCH /apps/{id}` with bare
-   `desiredState=running` silently pins to the empty shell that
-   `POST /apps` minted, so the runner errors `dataApp.git.repository is
-   required in /data/config.json` -- only visible in the UI Terminal Log,
+1. **The redeploy contract.** A deployment pins one Storage config
+   version. Deploying the empty initial version that `POST /v2/apps`
+   minted makes the runner error `dataApp.git.repository is required in
+   /data/config.json` -- only visible in the app's runs and Terminal Log,
    never in any HTTP response.
 2. **Per-project KMS encryption.** Encrypted git PATs (`KBC::ProjectSecure*`)
    are bound to the project that minted them; ciphertext from project A
    does not decrypt in project B.
 3. **Cleanup-in-finally.** A failed initial deploy leaks the empty shell
-   from `POST /apps` if the caller does not delete it manually.
-4. **Transient `state == stopped`.** During the very first deploy the
-   platform transitions `created -> stopped -> starting -> running`, so a
-   naive poll that exits on `stopped` reports a phantom failure.
+   from `POST /v2/apps` if the caller does not delete it manually.
+4. **`running` is not "the deploy is live".** During a rollout the app
+   stays `running` on the deployment being replaced, so a naive poll on
+   `state` reports success before the new code serves. Only
+   `production.actualDeploymentId` naming the new deployment means that.
 
 `kbagent data-app` encodes all four in the service layer,
 so the `--json` output you see at the CLI is what would have happened if
@@ -855,7 +856,7 @@ kbagent --json data-app create \
 `app.py`). The runtime auto-detects from what's in the repo.
 
 The `configVersion=3` is the Storage config version after kbagent's PUT.
-Storage went `1 -> 2` (the empty shell that `POST /apps` minted, with an
+Storage went `1 -> 2` (the empty config that `POST /v2/apps` minted, with an
 auto-injected `parameters.id` back-pointer to the deployment record) and
 `2 -> 3` (the full body with the git block + runtime block + auth block).
 
@@ -974,12 +975,11 @@ kbagent --json data-app detail --project prod --app-id 12345678 \
 kbagent --json data-app deploy --project prod --app-id 12345678 --wait
 ```
 
-`data-app deploy` reads the latest Storage version, then PATCHes the
-deployment record with the trio
-`{desiredState=running, configVersion=<latest>, restartIfRunning=true}`
-together. Sending only one or two of those returns HTTP 422 from the
-platform; the CLI always sends all three. This is the **redeploy
-contract** -- the headline of the feature.
+`data-app deploy` reads the latest Storage version, then creates a
+deployment pinned to it (`POST /v2/apps/{id}/deployments
+{configVersion: <latest>}`), promoted to production once healthy. With
+`--wait` it returns when that deployment serves production. This is the
+**redeploy contract** -- the headline of the feature.
 
 `data-app start` is a different command for a different job. It wakes a
 container the platform parked due to `autoSuspendAfterSeconds` of
@@ -990,9 +990,10 @@ use `deploy` for rolling out a new code or config version.
 ### 9.4 `stop` is reversible, `delete` is not
 
 ```bash
-# Reversible: tears down the container, preserves the URL + Storage config.
-kbagent --json data-app stop --project prod --app-id 12345678 --wait
-# state=stopped, desiredState=stopped
+# Reversible: suspends the app, preserves the URL + Storage config.
+# The next request to the URL wakes it again.
+kbagent --json data-app stop --project prod --app-id 12345678
+# state=suspended
 
 # Wake it back up at the same configVersion (no version bump).
 kbagent --json data-app start --project prod --app-id 12345678 --wait
@@ -1004,8 +1005,8 @@ kbagent --json data-app start --project prod --app-id 12345678 --wait
 ```
 
 ```bash
-# Irreversible: the Data Science API cascade-deletes the deployment
-# record AND the linked Storage config server-side. The URL is
+# Irreversible: the Data Science API stops every deployment and moves
+# the linked Storage config to the trash server-side. The URL is
 # permanently retired.
 kbagent --json data-app delete --project prod --app-id 12345678 --yes
 ```

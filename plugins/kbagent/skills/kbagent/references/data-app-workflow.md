@@ -12,7 +12,7 @@ Two API surfaces own them:
 | Layer | What it owns |
 |---|---|
 | **Storage API** (`keboola.data-apps` config) | git block, encrypted secrets, slug, runtime size, name, description |
-| **Data Science API** (`/apps`) | deployment record: state, desiredState, url, configVersion |
+| **Data Science API** (`/v2/apps`, since vNEXT) | app record and its deployments: state, url, which deployment (and config version) serves production |
 
 `kbagent data-app` orchestrates both, plus the project's Encryption API for
 git PATs. The CLI encapsulates the documented footguns so callers cannot
@@ -81,7 +81,7 @@ what makes the platform provision the app's ephemeral workspace and inject:
 
 **Why this has its own section:** before 0.87.0 kbagent never wrote the flag
 and offered no option to. An app missing it **deploys successfully** --
-`state=running`, `desiredState=running`, health probe green, `setup_sh`
+`state=running`, health probe green, `setup_sh`
 completed -- and cannot read a row. **The platform emits no diagnostic**, so
 the only reliable check is the config itself:
 
@@ -138,12 +138,11 @@ An existing Streamlit repo still deploys, but you must pass `--type streamlit`.
 Without it the app is created as `python-js` and the Streamlit repo fails that
 contract.
 
-Three calls under the hood: `POST /apps` (mint id + configId) → `PUT
+Three calls under the hood: `POST /v2/apps` (mint id + configId) → `PUT
 Storage config` (full body with git block + parameters.id back-pointer) →
-`PATCH /apps {desiredState=running, configVersion, restartIfRunning=true}`.
-The `--wait` flag polls until `state == running` (writeup §8 pitfall #1
-encoded: a transient `state == stopped` during initial deploy is *not*
-treated as terminal).
+`POST /v2/apps/{id}/deployments {configVersion}` (deploy and promote to
+production). The `--wait` flag polls until that deployment serves production
+(`production.actualDeploymentId` names it and `state == running`), or fails.
 
 ### Private-repo simpleAuth app
 
@@ -206,7 +205,7 @@ git push origin main             # the app's configured branch
 kbagent data-app deploy --project prod --app-id 12345678 --wait
 ```
 
-`deploy` reads the latest Storage config version and PATCHes the §9 trio.
+`deploy` reads the latest Storage config version and creates a deployment pinned to it.
 The runner clones the configured git ref at container start, so a fresh
 `git push` is picked up by the next deploy without any Storage edit.
 
@@ -224,8 +223,8 @@ kbagent data-app deploy --project prod --app-id 12345678 --wait
 
 `config update` bumps the Storage version; `data-app deploy` reads the
 latest and pins the deployment to it. Without the deploy step, the running
-container keeps the OLD config (the deploy-record `configVersion` does not
-auto-advance when Storage advances -- writeup §9 mental model).
+container keeps the OLD config (a deployment pins its `configVersion` and
+never follows Storage).
 
 ### Wake an auto-suspended app
 
@@ -233,10 +232,12 @@ auto-advance when Storage advances -- writeup §9 mental model).
 kbagent data-app start --project prod --app-id 12345678 --wait
 ```
 
-Distinct from `deploy`: `start` does NOT bump the deployed configVersion.
-It is the cheap restart for an app the platform parked due to
-`autoSuspendAfterSeconds` of inactivity (writeup §8 pitfall #2). Hitting
-the app's URL also auto-wakes it (cold-boot ~30-60s).
+Distinct from `deploy`: `start` (`POST /v2/apps/{id}/resume`) does NOT bump
+the deployed configVersion. It wakes an app the platform parked after
+`autoSuspendAfterSeconds` of inactivity, and it is the only way to clear
+`state=disabled` (stopped by a failure). Hitting the URL of a `suspended` app
+also wakes it (cold-boot ~30-60s). `stop` (`POST /v2/apps/{id}/suspend`) parks
+the app the same way: the next request to its URL wakes it again.
 
 ### Rollback to an older config version
 
@@ -352,7 +353,7 @@ Keboola-managed repo with no credential wiring.
 **No credential wiring is needed.** The platform injects the `git clone`
 credentials at deploy time (the sandboxes-service `testManagedGitRepo.sh`
 contract), so `data-app deploy` on a pure managed repo deploys straight from
-`app.managedGitRepoId`. If a deploy ever reverts to stopped, diagnose it with
+`app.managedGitRepoId`. If a deploy ever fails, diagnose it with
 `data-app runs` (`failure_reason` + `startup_logs`).
 
 **Workspace access is a separate concern from cloning (since 0.99.0; CLI-15).**
@@ -422,11 +423,10 @@ yours at runtime.
 
 ## Gotchas encoded in the CLI (so you don't have to think about them)
 
-1. **§9 redeploy contract** — `data-app deploy` always sends the
-   `{desiredState=running, configVersion, restartIfRunning=true}` trio
-   together. Sending just `desiredState=running` would silently pin to the
-   empty-shell v2 from `POST /apps`; the runner then errors
-   `dataApp.git.repository is required in /data/config.json` (writeup §9).
+1. **Redeploy contract** — `data-app deploy` always pins the deployment to
+   an explicit Storage `configVersion` (the latest, or `--config-version`).
+   The version from `POST /v2/apps` is the empty initial config; a deploy of
+   it errors `dataApp.git.repository is required in /data/config.json`.
 
 2. **Per-project KMS encryption** — `data-app create` re-encrypts the PAT
    under the target project's KMS via the Encryption API. Pre-encrypted
@@ -436,16 +436,16 @@ yours at runtime.
    does not return a project-scoped ciphertext.
 
 3. **Cleanup-in-finally** — if the Storage PUT or initial deploy fails
-   after the `POST /apps` shell was created, the orphan shell is deleted
+   after the `POST /v2/apps` app was created, the orphan app is deleted
    automatically. Pass `--keep-on-failure` to preserve it for forensics.
 
-4. **Transient `state == stopped` during initial deploy** — the platform
-   transitions `created → stopped → starting → running` when the deploy
-   starts. The CLI's poll loop refuses to treat `stopped` as terminal
-   while `desiredState == running`. Naive callers that exit on `stopped`
-   would falsely report a failure (writeup §8 row 1).
+4. **`running` is not "the deploy is live"** — while a new deployment rolls
+   out, the app keeps `state=running` on the deployment it replaces. The
+   CLI's `--wait` ends only when `production.actualDeploymentId` names the
+   new deployment; it fails as soon as that deployment's `buildState` or
+   `runState` is `failed`.
 
-5. **Auto-injected `parameters.id`** — after `POST /apps`, the platform
+5. **Auto-injected `parameters.id`** — after `POST /v2/apps`, the platform
    writes the numeric app id into the Storage config's `parameters.id`. The
    service preserves it on every subsequent update. Stripping it breaks
    the URL minting and produces inconsistent state.
@@ -467,7 +467,7 @@ yours at runtime.
 | Roll out new code already pushed to git | `data-app deploy --app-id N` |
 | Roll out a new Storage config | `config update` (any field) → `data-app deploy` |
 | Wake an auto-suspended app | `data-app start --app-id N` |
-| Pause a running app temporarily | `data-app stop --app-id N` |
+| Pause a running app (wakes on the next request) | `data-app stop --app-id N` |
 | Give the user the simpleAuth password | `data-app password --app-id N` in the user's terminal (press `c`; `deploy --wait` does the same when a deploy is needed anyway), or `--copy` (since 0.96.1; never printed without `--reveal`) |
 | Set or rotate app-runtime secrets | `data-app secrets-set --app-id N --secret '#KEY=VAL'` then `data-app deploy --wait` |
 | Inspect what's set (secrets + plain env vars) | `data-app secrets-list --app-id N` (metadata only, never decrypts) |
@@ -475,7 +475,7 @@ yours at runtime.
 | Remove a key | `data-app secrets-remove --app-id N --key KEY --yes` (`#` optional; idempotent) |
 | Pre-flight a repo before create | `data-app validate-repo --git-repo URL` (GitHub-only, python-js for now) |
 | Triage a stuck deploy or runtime crash | `data-app logs --app-id N [--lines N \| --since ISO8601]` (since 0.43.8; plain-text container log tail, default `--lines 500`, `--lines 0` for full buffer) |
-| Tear it all down | `data-app delete --app-id N` (cascades to Storage config) |
+| Tear it all down | `data-app delete --app-id N` (Storage config goes to the trash) |
 
 ## What this command group deliberately does NOT cover
 
@@ -491,8 +491,7 @@ yours at runtime.
   Storage config body, not the deployment record. Use
   `kbagent config update --component-id keboola.data-apps --config-id ID
   --set 'runtime.backend.size="medium"' --merge` then `data-app deploy`.
-  `PATCH /apps {config:{...}}` is silently dropped by the API (writeup §8
-  row 3).
+  The `/v2` API has no endpoint that edits an app's config.
 - **Resetting the simpleAuth password** — done in the Keboola UI; kbagent
   has no command for it.
 
@@ -500,14 +499,18 @@ yours at runtime.
 
 | HTTP | Path | When |
 |---|---|---|
-| `POST` | `data-science.<stack>/apps` | `data-app create` step 1 |
-| `GET` | `data-science.<stack>/apps` | `data-app list` |
-| `GET` | `data-science.<stack>/apps/{id}` | `data-app detail`, poll loop, `data-app password` |
-| `PATCH` | `data-science.<stack>/apps/{id}` | `data-app deploy / start / stop` |
-| `DELETE` | `data-science.<stack>/apps/{id}` | `data-app delete` (cascades to Storage) |
-| `GET` | `data-science.<stack>/apps/{id}/password` | `data-app password` (project token only, since 0.96.1) |
-| `GET` | `data-science.<stack>/apps/{id}/logs/tail` | `data-app logs` (since 0.43.8; `lines` / `since` mutex) |
-| `GET` | `data-science.<stack>/apps/{id}/runs` | `data-app runs` (since 0.65.0; deployment attempts + failure_reason / startup_logs) |
+| `POST` | `data-science.<stack>/v2/apps` | `data-app create` step 1 |
+| `GET` | `data-science.<stack>/v2/apps` | `data-app list` (no filters; paged, branch picked client-side) |
+| `GET` | `data-science.<stack>/v2/apps/{id}` | `data-app detail`, poll loop, `data-app password` |
+| `POST` | `data-science.<stack>/v2/apps/{id}/deployments` | `data-app deploy`, `data-app create` (pinned `configVersion`, promoted to production) |
+| `GET` | `data-science.<stack>/v2/apps/{id}/deployments/{deploymentId}` | `--wait` poll loop of a deploy |
+| `POST` | `data-science.<stack>/v2/apps/{id}/resume` | `data-app start` |
+| `POST` | `data-science.<stack>/v2/apps/{id}/suspend` | `data-app stop` |
+| `DELETE` | `data-science.<stack>/v2/apps/{id}` | `data-app delete` (Storage config to the trash) |
+| `GET` | `data-science.<stack>/v2/apps/{id}/password` | `data-app password` (project token only, since 0.96.1) |
+| `GET` | `data-science.<stack>/v2/apps/{id}/logs/tail` | `data-app logs` (since 0.43.8; `lines` / `since` mutex) |
+| `GET` | `data-science.<stack>/v2/apps/{id}/runs` | `data-app runs` (since 0.65.0; deployment attempts + failure_reason / startup_logs) |
+| `GET` / `POST` | `data-science.<stack>/v2/apps/{id}/git-repo[/credentials]` | `data-app git-repo`, `git-credentials-list`, `git-credentials-create` |
 | `POST` | `encryption.<stack>/encrypt` | `data-app create` step 2 (private repo) |
 | `PUT` | `connection.<stack>/v2/storage/.../keboola.data-apps/configs/{id}` | `data-app create` step 3, also `config update` |
 | `GET` | `connection.<stack>/v2/storage/.../keboola.data-apps/configs/{id}` | `data-app detail` (latest version), `data-app deploy` (read latest), `data-app password` (auth check) |
