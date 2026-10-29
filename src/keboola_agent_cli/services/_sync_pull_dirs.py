@@ -35,6 +35,7 @@ from ..sync.diff_engine import config_hash
 from ..sync.manifest import Manifest, ManifestConfigRow, ManifestConfiguration
 from ..sync.naming import config_row_path
 from ._sync_disabled import DISABLED_BASELINE_KEY, carry_disabled, file_disables, record_disabled
+from ._sync_local_files import UNREADABLE_SKIP_REASON
 from ._sync_models import (
     ADOPTED_ROW_IDS_KEY,
     AMBIGUOUS_ROW_PLACEHOLDERS_KEY,
@@ -650,12 +651,14 @@ def _pull_row(
             carry_disabled(existing, entry.metadata)  # with the preserved pull_hash
             return entry
         local = service._read_config_file(row_dir)
-        if not old_file_hash and local is not None and config_hash(local) != row_api_cfg_hash:
+        if not old_file_hash and (local is None or config_hash(local) != row_api_cfg_hash):
             # No baseline: pull cannot tell a stale file from an edited one. It
             # keeps the file, and the row's base stays unknown (D22) -- never a
             # baseline stamped from the remote, which made push send the stale
-            # file over a remote edit.
-            pull_details.append({**detail, "reason": ADOPTED_ROW_SKIP_REASON})
+            # file over a remote edit. A file that cannot be parsed is local
+            # work too: kept, never overwritten (Devin 4416005309).
+            reason = UNREADABLE_SKIP_REASON if local is None else ADOPTED_ROW_SKIP_REASON
+            pull_details.append({**detail, "reason": reason})
             entry = _row_entry(row, row_rel_path, "", "")
             entry.metadata[UNKNOWN_BASE_KEY] = UNKNOWN_BASE_ADOPTED
             return entry

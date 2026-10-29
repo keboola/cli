@@ -541,6 +541,24 @@ carries another tracked config's id -- is held the same way as an identity
 conflict (`identity_conflict`, `identity_conflicts[]`) until the directories
 are moved back.
 
+### A `_config.yml` sync cannot read is held, never deleted
+
+*(since vNEXT)*
+
+`sync diff` and `sync push` check every `_config.yml` of the tree first. A file
+(config or row) that is not valid YAML, is empty or not a mapping, or has a
+top-level key sync does not know is an `errors[]` entry with `error_code`
+`SYNC_LOCAL_FILE_INVALID` and the file's `path`. Its config and rows are held:
+not created, updated or deleted, also with `--force`, and the command exits 1.
+Before, a broken tracked file read as a deleted config, and `push --force`
+deleted it on the remote; an unknown key was dropped on push. The keys sync
+reads are the ones pull writes: `version`, `name`, `description`,
+`is_disabled`, `parameters`, `input`, `output`, `processors`,
+`_configuration_extra`, `_keboola`. Put any other configuration key under
+`_configuration_extra`. A missing `description:` is `''`. When
+`_description.md` and a different inline `description:` both exist, the file
+wins and a `DESCRIPTION_SHADOWED` warning names both paths.
+
 ## Key behaviors
 
 - **One project per directory** *(since 0.100.0, CLI-31)*: pull, diff and push

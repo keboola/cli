@@ -7346,3 +7346,39 @@ The package was named `keboola-agent-cli` up to 0.62.0 and is named `keboola-cli
 - **`col_map.in_table` matched by substring**, so a mapping could land on the wrong input edge. It must now be the full input table id, its `alias:`-qualified form, or a unique input-mapping destination; anything else is skipped and counted in `ai_col_map_skipped`.
 - **Stale AI results are not applied** *(since 0.99.1)*: a result whose `_code_hash` differs from the config's current code hash describes code that no longer exists; it is skipped entirely and listed in `ai_status.ai_results_stale` (a fresh task is emitted for it). A result without `_code_hash` is still applied. A `col_map` naming a table the config reads under two aliases now maps onto both edges instead of being skipped as ambiguous.
 - `ai_status` keys: `ai_edges_added` (reads + writes), `ai_reads_added`, `ai_writes_added`, `ai_columns_merged`, `ai_external_added`, `ai_col_map_skipped`, `ai_outputs_unresolved`, `ai_results_stale`, `ai_tasks_missing_code_file`.
+
+## Sync reads `_config.yml` strictly: a bad file is an error, never a delete
+
+*(since vNEXT)* Before, a `_config.yml` that was not valid YAML (or empty, or
+not a mapping) was read as "no file": a tracked config was then `deleted` in
+`sync diff`, and `sync push --force` deleted it on the remote (#827 item 9).
+An untracked one was skipped without a word. A top-level key sync does not
+know (`storage:`, `runtime:`, a typo) was dropped on push without a word.
+Now:
+
+- `sync diff`, `sync push` and `sync push --dry-run` report every such file,
+  of a config or of a row, as one `errors[]` entry: `change_type`
+  `invalid_local_file`, `error_code` `SYNC_LOCAL_FILE_INVALID`, `path` (the
+  file), `component_id`, `config_id`, and a `message` that names the unknown
+  keys. `sync diff` also counts them in `summary.invalid`.
+- The config and all its rows are held: nothing is created, updated or
+  deleted for it, also with `--force`. The other configs are pushed.
+- The command exits **1** (`--json` still prints the result first).
+  `sync diff --all-projects` counts such a project as failed.
+- The keys sync reads are `version`, `name`, `description`, `is_disabled`,
+  `parameters`, `input`, `output`, `processors`, `_configuration_extra` and
+  `_keboola` -- exactly what `sync pull` writes. Put any other configuration
+  key under `_configuration_extra`. Rows of `keboola.variables` and
+  `keboola.shared-code` keep their top-level `values` / `code_content`.
+- `sync pull` keeps such a file (local work); `--theirs` overwrites it.
+- A `_config.yml` (config or row) without `description:` is the same as
+  `description: ''`. Before, a row without it diffed as "description
+  removed" on every push.
+- When `_description.md` and a different non-empty `description:` in
+  `_config.yml` both exist, the file still wins and diff/push add a
+  `DESCRIPTION_SHADOWED` entry to `warnings[]` naming both paths.
+- `kbagent config new` writes the table mappings as top-level `input:` /
+  `output:`, as pull does. Its old top-level `storage:` block was dropped by
+  push; a scaffold written by an older version now fails with
+  `SYNC_LOCAL_FILE_INVALID` -- move `storage.input` / `storage.output` to
+  the top level.

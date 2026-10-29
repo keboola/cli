@@ -126,11 +126,18 @@ def normalize_for_comparison(obj: Any) -> Any:
     diff on all configs (issue #467). Only the root key is dropped --
     a user parameter named ``is_disabled`` deeper in the config is data.
 
+    A missing (or null) ROOT-level ``description`` is ``""``: push sends an
+    empty description for it, so a row or config ``_config.yml`` without the
+    key is not a "description removed" change on every diff.
+
     Returns a deep copy -- the original object is never mutated.
     """
     normalized = copy.deepcopy(obj)
-    if isinstance(normalized, dict) and not normalized.get("is_disabled"):
-        normalized.pop("is_disabled", None)
+    if isinstance(normalized, dict):
+        if not normalized.get("is_disabled"):
+            normalized.pop("is_disabled", None)
+        if normalized.get("description") is None:
+            normalized["description"] = ""
     return _normalize(normalized)
 
 

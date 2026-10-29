@@ -127,6 +127,7 @@ from ._sync_diff_report import DiffExtras, DiffSides, diff_report
 from ._sync_disabled import file_disables
 from ._sync_link_pending import link_pending_entries, planned_row_refs
 from ._sync_link_recovery import resolve_transformation_links
+from ._sync_local_files import check_local_files, drop_held, load_config_yaml
 from ._sync_models import LocalConfigHashes
 from ._sync_moves import move_fields, persist_moves, relocate, settle_moves, status_moves
 from ._sync_project_guard import adopt_existing_manifest, load_project_manifest
@@ -1129,6 +1130,9 @@ class SyncService(BaseService):
         )
         never_fetched = scope.never_fetched
         never_fetched_keys = scope.never_fetched_keys
+        # An unusable _config.yml holds its config back: reported in errors[],
+        # never read as "no file" (a delete) nor pushed without its unknown keys.
+        bad = check_local_files(project_root, source_branch_path, scope.in_tree, ignored_components)
         tracked_keys = scope.tracked_keys
         orphaned: list[dict[str, Any]] = list(scope.orphaned)
 
@@ -1156,13 +1160,16 @@ class SyncService(BaseService):
                 raw_remote=remote_raw.get(key),
                 remote_local=remote_configs.get(key),
             )
-            local_data = self._read_config_file(config_dir)
+            held = cfg.path in bad.held_paths
+            local_data = None if held else self._read_config_file(config_dir)
             if local_data is None:
                 continue
             problem = component_change_problem(cfg.component_id, local_data, cfg.path)
             if problem:
                 relabelled.append(problem)
-            diff_warnings += companion_diagnostics(config_dir, cfg.component_id, cfg.path)
+            diff_warnings += companion_diagnostics(
+                config_dir, cfg.component_id, cfg.path, local_data
+            )
 
             # Check if ANY file of this config changed since pull: _config.yml
             # and the companion set -- a new, deleted or edited companion (D2).
@@ -1209,7 +1216,7 @@ class SyncService(BaseService):
             # An ignored component's leftover directory (its manifest entry is
             # gone, so the walk sees it as untracked) must not be planned as a
             # create -- push would re-add exactly what pull refuses to fetch.
-            if component_id in ignored_components:
+            if component_id in ignored_components or added_cfg["path"] in bad.held_paths:
                 continue
             config_dir = project_root / source_branch_path / added_cfg["path"]
             local_data = self._read_config_file(config_dir)
@@ -1244,6 +1251,10 @@ class SyncService(BaseService):
             # Merged once the identity is known: packages a pyproject.toml left
             # undecided are the adopted remote config's (T1).
             remote_local = remote_configs.get(f"{component_id}/{untracked_id}")
+            # Before the merge: it reads the file's own description (D11).
+            diff_warnings += companion_diagnostics(
+                config_dir, component_id, added_cfg["path"], local_data
+            )
             merge_with_remote(component_id, local_data, config_dir, remote_local)
             # Its rows join the plan: created with it, or diffed by id (D7, D8).
             collect_untracked_rows(
@@ -1255,7 +1266,6 @@ class SyncService(BaseService):
                 config_path=added_cfg["path"],
                 remote_rows=remote_rows,
             )
-            diff_warnings += companion_diagnostics(config_dir, component_id, added_cfg["path"])
             # An adopted file has no manifest baseline: compute_changeset reads
             # the one a `config new --push` scaffold records (issue #792 E).
             local_configs.append(
@@ -1297,6 +1307,7 @@ class SyncService(BaseService):
             local_override_hashes or None,
             scope.target_tracked_keys,
         )
+        changeset = drop_held(changeset, bad.held_keys)
 
         # Row-level diff: walk manifest rows, load local YAML, feed into
         # compute_row_changeset alongside remote_rows built above.
@@ -1363,7 +1374,7 @@ class SyncService(BaseService):
                 if c.change_type == "remote_deleted"
             },
         )
-        changeset.extend(row_changeset + ambiguous_rows)
+        changeset.extend(drop_held(row_changeset + ambiguous_rows, bad.held_keys))
         # Remote-only configs and rows, three-way local deletes, summary (D1-D5).
         report = diff_report(
             changeset,
@@ -1388,7 +1399,7 @@ class SyncService(BaseService):
                 source_tree=source_branch_path,
                 target_tree=branch_tree_path(manifest, branch_id),
             ),
-            DiffExtras(never_fetched, orphaned, diff_warnings),
+            DiffExtras(never_fetched, orphaned, diff_warnings, bad.errors),
         )
         return moves.report(report)
 
@@ -1445,6 +1456,8 @@ class SyncService(BaseService):
         shown = {"companion_warnings": companion_warnings} if companion_warnings else {}
         shown.update(move_fields(diff_result))  # #792 I: in every push result
         never_fetched = diff_result.get("never_fetched", [])
+        # Configs held back by an unusable _config.yml: errors in every result.
+        invalid_files: list[dict[str, str]] = diff_result.get("errors") or []
         # Configs excluded from the changeset because they belong to another
         # branch's tree (issue #649) -- reported, never pushed.
         orphaned = diff_result.get("orphaned", [])
@@ -1467,7 +1480,7 @@ class SyncService(BaseService):
                 "created": 0,
                 "updated": 0,
                 "deleted": 0,
-                "errors": [],
+                "errors": list(invalid_files),
                 **plan.report(),
                 **shown,
             }
@@ -1485,7 +1498,8 @@ class SyncService(BaseService):
                 **plan.report(),
                 **shown,
                 # The creates a real push refuses (T1, round 5).
-                "errors": push_ops.create_refusals(self, changes, stored, project_root, target_id),
+                "errors": invalid_files
+                + push_ops.create_refusals(self, changes, stored, project_root, target_id),
             }
             if never_fetched:
                 dry_result["never_fetched"] = never_fetched
@@ -1509,7 +1523,7 @@ class SyncService(BaseService):
         created = 0
         updated = 0
         deleted = 0
-        errors: list[dict[str, str]] = []
+        errors: list[dict[str, str]] = list(invalid_files)
         # Non-fatal push warnings: unstampable manifest baselines (issue #686,
         # the API state could not be read back after a write) and ``script[]``
         # runtime-safety normalizations (``change_type`` ``script_normalization``,
@@ -2110,15 +2124,21 @@ class SyncService(BaseService):
         return "shutil_move"
 
     def _read_config_file(self, config_dir: Path) -> dict[str, Any] | None:
-        """Read and parse a ``_config.yml`` file, returning None if missing."""
+        """Read and parse a ``_config.yml`` file.
+
+        Returns None when the file is missing, is not valid YAML or is not a
+        mapping. ``sync diff`` / ``sync push`` check every file first
+        (:func:`._sync_local_files.check_local_files`), so None there means
+        "no file", never "a file that could not be read".
+        """
         config_file = config_dir / CONFIG_FILENAME
         if not config_file.exists():
             return None
-        try:
-            return yaml.safe_load(config_file.read_text(encoding="utf-8"))
-        except yaml.YAMLError:
-            logger.warning("Failed to parse %s", config_file)
-            return None
+        parsed = load_config_yaml(config_file)
+        if parsed.problem:
+            # diff / push report it (check_local_files); never read as data.
+            logger.warning("%s %s", config_file, parsed.problem)
+        return parsed.data
 
     def register_branch_dir(
         self,
