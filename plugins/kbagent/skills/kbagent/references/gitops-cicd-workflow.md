@@ -284,10 +284,7 @@ next release; each entry says whether it is already in 1.0.0rc4.
     `activated` (pitfall 2.5). Pass the same cron and timezone as the file.
   - **A flow with two or more schedules:** do not use `flow schedule` (pitfall
     3.8). kbagent has no command that activates one given scheduler config.
-    Save that schedule once in the Keboola UI, or call the Scheduler Service
-    yourself: `POST https://scheduler.<stack>/schedules` with body
-    `{"configurationId": "<scheduler config id>"}` and the
-    `X-StorageApi-Token` header (what `flow schedule` sends).
+    Ask the user to save that schedule once in the Keboola UI.
 - **Status:** not changed.
 
 ### 3.8 `flow schedule` overwrites the first schedule of a flow
