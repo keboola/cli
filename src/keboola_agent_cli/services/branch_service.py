@@ -17,6 +17,34 @@ from .base import BaseService
 
 PROJECT_DESCRIPTION_KEY = "KBC.projectDescription"
 
+# The ``code`` of the ``warnings[]`` entry that `branch create` adds on a
+# project synthesized from the environment (KBAGENT_PROJECT_FROM_ENV): the
+# branch is created, but no active branch can be saved for such a project.
+ACTIVE_BRANCH_NOT_STORED_CODE = "ACTIVE_BRANCH_NOT_STORED"
+
+
+def active_branch_not_stored_warning(
+    alias: str, branch_id: int, *, rest: bool = False
+) -> dict[str, Any]:
+    """The ``warnings[]`` entry of `branch create` on an environment project.
+
+    Returns ``{"code", "message", "hint"}``; the CLI passes it to
+    ``OutputFormatter.warning`` and ``serve`` (``rest=True``) to
+    ``add_warning``. The hint names the option of the caller's surface:
+    ``--branch <id>`` on the CLI, ``branch_id=<id>`` over REST.
+    """
+    param = f"branch_id={branch_id}" if rest else f"--branch {branch_id}"
+    where = "later requests" if rest else "later commands"
+    return {
+        "code": ACTIVE_BRANCH_NOT_STORED_CODE,
+        "message": (
+            f"Branch {branch_id} was created but not activated: project '{alias}' comes "
+            "from environment variables and lives only in memory, so no active branch "
+            f"can be stored for it. Pass {param} on {where} to use this branch."
+        ),
+        "hint": param,
+    }
+
 
 class BranchService(BaseService):
     """Business logic for managing Keboola development branches.
@@ -165,15 +193,31 @@ class BranchService(BaseService):
 
         branch_id = int(branch_data["id"])
 
-        # Auto-activate the created branch
-        self._config_store.set_project_branch(alias, branch_id, branch_data.get("name", name))
-
-        return {
+        result: dict[str, Any] = {
             "project_alias": alias,
             "branch_id": branch_id,
             "branch_name": branch_data.get("name", name),
             "description": branch_data.get("description", description),
             "created": branch_data.get("created", ""),
+        }
+        if project.ephemeral:
+            # An environment project lives only in memory: it can hold no
+            # active branch. The branch exists now, so the command succeeds
+            # and the caller passes --branch (the warning says so).
+            return {
+                **result,
+                "activated": False,
+                "message": (
+                    f"Branch '{name}' (ID: {branch_id}) created in project '{alias}'. "
+                    f"It is not activated: pass --branch {branch_id} on later commands."
+                ),
+            }
+
+        # Auto-activate the created branch
+        self._config_store.set_project_branch(alias, branch_id, branch_data.get("name", name))
+
+        return {
+            **result,
             "activated": True,
             "message": (
                 f"Branch '{name}' (ID: {branch_id}) created and activated for project '{alias}'."
@@ -198,6 +242,13 @@ class BranchService(BaseService):
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
+        if project.ephemeral:
+            # Refuse before any API call: the choice could not be stored.
+            raise ConfigError(
+                f"Project '{alias}' comes from environment variables and lives only in "
+                "memory, so no active branch can be stored for it. Pass "
+                f"--branch {branch_id} on each command that should use the branch instead."
+            )
         resolve_branch(self._config_store, alias, branch_id)
 
         client = self._client_factory(project.stack_url, project.token)
@@ -244,6 +295,17 @@ class BranchService(BaseService):
             ConfigError: If the project alias is not found.
         """
         projects = self.resolve_projects([alias])
+        if projects[alias].ephemeral:
+            # An environment project never has an active branch: commands on
+            # it already use production, so there is nothing to clear.
+            return {
+                "project_alias": alias,
+                "previous_branch_id": None,
+                "message": (
+                    f"Project '{alias}' has no active branch (it comes from environment "
+                    "variables); commands use main unless given --branch."
+                ),
+            }
         previous_branch = projects[alias].active_branch_id
 
         self._config_store.set_project_branch(alias, None)

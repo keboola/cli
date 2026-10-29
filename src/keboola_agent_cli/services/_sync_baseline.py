@@ -46,6 +46,7 @@ from ..sync.config_format import BASE_CONFIG_HASH_KEY, api_config_to_local, api_
 from ..sync.diff_engine import config_hash
 from ..sync.manifest import Manifest
 from ._sync_companions import config_locally_modified, merge_with_remote
+from ._sync_local_files import UNREADABLE_SKIP_REASON
 from ._sync_pull_dirs import current_row_path, scan_row_dirs
 
 if TYPE_CHECKING:
@@ -296,10 +297,21 @@ def adopted_skip_detail(
     local edit was lost without a message (issue #792 E). Its baseline is the
     ``base_config_hash`` the scaffold records. Without one, pull cannot tell
     which side changed, so any difference from the remote counts as a local
-    change. Returns ``None`` when pull may write the remote version.
+    change. A file that cannot be parsed is kept too. Returns ``None`` when
+    pull may write the remote version.
     """
     config_id = str(remote.get("id", ""))
     local = service._read_config_file(config_dir)
+    if local is None and (config_dir / CONFIG_FILENAME).is_file():
+        # Not valid YAML (or not a mapping): whose file it is cannot be told,
+        # so it is local work pull must not overwrite. --theirs still does.
+        return {
+            "action": "skipped",
+            "component_id": component_id,
+            "config_name": remote.get("name", "untitled"),
+            "path": rel_path,
+            "reason": UNREADABLE_SKIP_REASON,
+        }
     meta = (local or {}).get("_keboola") or {}
     if local is None or meta.get("component_id") != component_id:
         return None

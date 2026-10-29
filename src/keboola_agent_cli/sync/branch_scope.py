@@ -125,6 +125,46 @@ def same_branch(manifest: Manifest, a: int | None, b: int | None) -> bool:
     return a == b
 
 
+def branch_tree_has_configs(branch_dir: Path) -> bool:
+    """Return True if *branch_dir* exists and holds at least one config.
+
+    A config is any ``_config.yml`` below the branch root other than the
+    optional branch-level ``_config.yml`` itself. Used to decide whether a
+    target-branch subtree is materialized on disk.
+    """
+    if not branch_dir.is_dir():
+        return False
+    for config_file in branch_dir.rglob(CONFIG_FILENAME):
+        if config_file.parent != branch_dir:
+            return True
+    return False
+
+
+def target_tree_is_source(manifest: Manifest, project_root: Path, branch_id: int | None) -> bool:
+    """True iff the target branch's own tree is what diff/push read, even with no file left.
+
+    Without a config file under the target tree, diff/push fall back to the
+    default tree (the promote path, KFR-07 / #929). A dev-branch tree that is
+    registered and still on disk is that branch's own checkout, though: only
+    ``sync pull --branch`` (or ``config new --push`` on that branch) creates
+    it -- a promote push registers the branch but never creates its directory.
+    So an emptied checkout means "every config deleted": the push must delete,
+    and once ``--force`` has deleted the last one (and its manifest entry), the
+    next push must still read the empty tree instead of promoting ``main/``
+    onto the branch again. A promote push written before the ``promoted_from``
+    association was recorded left target-branch entries without one but no
+    target directory, so it keeps reading ``main/``.
+    """
+    if is_production(manifest, branch_id):
+        return False
+    if not any(branch.id == branch_id for branch in manifest.branches):
+        return False
+    target_path = branch_tree_path(manifest, branch_id)
+    if target_path == branch_tree_path(manifest, None):
+        return False
+    return (project_root / target_path).is_dir()
+
+
 # Row metadata: the row's base is unknown (D22). ``adopted``: pull kept a local
 # row file it has no baseline for, the row was on the branch then (D15).
 # ``unread``: a promote shadow could not read the branch's rows, so whether
@@ -383,7 +423,16 @@ def scope_manifest(
             orphaned.append(_promoted_record(cfg, tree_path=tree_path))
             continue
         orphaned.append(
-            _other_branch_record(cfg, tree_path=tree_path, exists_on_target=key in remote_keys)
+            _other_branch_record(
+                cfg,
+                tree_path=tree_path,
+                exists_on_target=key in remote_keys,
+                source_tree=(
+                    source_branch_path
+                    if same_branch(manifest, cfg.branch_id, target_branch_id)
+                    else None
+                ),
+            )
         )
 
     return TreeScope(
@@ -510,9 +559,22 @@ def _other_branch_record(
     *,
     tree_path: str,
     exists_on_target: bool,
+    source_tree: str | None = None,
 ) -> dict[str, Any]:
-    """Build the report record for an entry tracked on another branch."""
-    if exists_on_target:
+    """Build the report record for an entry whose tree is not the one read.
+
+    *source_tree* is set when the entry belongs to the branch being synced
+    itself: its own tree was not read (it holds no config and is not a pulled
+    checkout any more), so the hint must not call it another branch.
+    """
+    if source_tree is not None:
+        hint = (
+            f"tracked on branch {cfg.branch_id} ('{tree_path}/'), the branch being synced, "
+            f"but '{tree_path}/' holds no config, so this run read '{source_tree}/' "
+            f"instead -- restore the directory, or run 'kbagent sync pull --branch "
+            f"{cfg.branch_id}' to re-create the tree"
+        )
+    elif exists_on_target:
         hint = (
             f"tracked on branch {cfg.branch_id} ('{tree_path}/'), which is not the branch "
             f"being synced -- run 'kbagent sync pull' to re-target the manifest"

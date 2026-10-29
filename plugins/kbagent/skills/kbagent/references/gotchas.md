@@ -61,6 +61,47 @@ These lists keep `error`, because their entries are not failed items with an err
 - **An unknown group** is `INVALID_ARGUMENT` (exit 2), and the message lists the valid groups.
 - **The command lists are generated from the command manifest**, so they always match `--help`. On 0.x, `kbagent context` takes no argument and prints the whole hand-written text.
 
+## `branch create` on the `__env__` project succeeds without activating the branch
+
+*(since vNEXT)*
+
+- **`branch create --project __env__`** (the headless project from
+  `KBAGENT_PROJECT_FROM_ENV`) now exits 0 with the created branch,
+  `activated: false`, and a top-level `warnings[]` entry `ACTIVE_BRANCH_NOT_STORED`
+  whose `hint` is `--branch <id>`. Before, the branch was created, then storing it as
+  the active branch failed: the command printed `status: error` and exited 5,
+  although the branch existed. A retry created a second branch. Over `kbagent serve`,
+  `POST /branches/__env__` answers 200 with the same warning in `Kbagent-Warnings`,
+  whose hint there is `branch_id=<id>`.
+- **An environment project has no active branch.** It lives only in memory, so pass
+  `--branch <id>` (REST: `branch_id`) on every command that should use the branch.
+- **`branch reset --project __env__`** exits 0 and changes nothing
+  (`previous_branch_id: null`). Before, it was refused with exit 5.
+- **`branch use --project __env__`** is refused with `CONFIG_ERROR` (exit 5) before any
+  API call; the message names `--branch`. Before, it read the branch list first.
+- **On an older version**, a failed `branch create` on `__env__` did create the branch:
+  run `kbagent branch list --project __env__` and use its ID, never create it again.
+
+## Deleting the last config of a pulled dev-branch folder is pushed
+
+*(since vNEXT)*
+
+- **`sync pull --branch <dev>` then deleting the folder's only config** (or the last
+  one left) and `sync push --branch <dev> --force` now deletes that config on the dev
+  branch; a plain push lists it under `skipped_deletions`, and `sync diff` shows it
+  `deleted`. Before, with no `_config.yml` left in `<dev>/`, push read `main/` instead
+  (the promote path), returned `no_changes` with exit 0, and listed the config under
+  `orphaned` with reason `tracked_on_other_branch` and a hint calling the synced branch
+  "not the branch being synced". Deleting one of several configs always worked.
+- **The folder decides, not its files**: a `<dev>/` folder that a pull of that branch
+  created is the source while it is on disk, also when it is empty. So once `--force` has
+  deleted the last config, the next `sync push --branch <dev>` reports `no_changes`
+  instead of promoting `main/` onto the branch you just emptied. Without a `<dev>/`
+  folder, push still promotes `main/`; an entry of the synced branch is then `orphaned`
+  with a hint that says its folder was not read and names `sync pull --branch <dev>`.
+- **On an older version**, keep one config directory in `<dev>/` and delete the config
+  with `kbagent config delete --project <alias> --branch <dev> --component-id <component> --config-id <id>`, then `sync pull --branch <dev>`.
+
 ## A code edit after `sync push` created the config is pushed
 
 *(since 0.100.4)*
@@ -4956,6 +4997,9 @@ Gotchas:
 - The alias is literally `__env__` (double underscore both sides) — chosen so it
   cannot collide with a real user alias. A real project already registered under
   `__env__` wins; no injection happens.
+- **`__env__` has no active branch.** `branch create` creates the branch but does
+  not activate it (warning `ACTIVE_BRANCH_NOT_STORED`), `branch reset` is a no-op and
+  `branch use` is refused; pass `--branch <id>` on each command *(since vNEXT)*.
 - **`__env__` shows `project_id` but a blank name in `project list`.** `load()`
   is offline, so the injection recovers `project_id` from the token prefix
   (`{projectId}-{tokenId}-{secret}`) but cannot fetch the real project name.
@@ -5284,11 +5328,30 @@ slice -- `workspace query` with a `WHERE` clause needs a live workspace.
 
 ### `storage add-column --not-null` needs an empty table or `--default`
 
-`storage add-column --column name:TYPE(length) [--not-null] [--default VALUE]`
-hits the SYNCHRONOUS Storage endpoint (no job to poll). `--not-null` on a table
-that ALREADY HAS ROWS is rejected by the backend with an API error (not a local
-validation error) unless you also pass `--default` -- the existing rows need a
-value for the new non-null column. Add `--default` when the table is non-empty.
+`storage add-column --column name:TYPE(length) [--not-null] [--default VALUE]`:
+`--not-null` on a table that ALREADY HAS ROWS is rejected by the backend (not a
+local validation error) unless you also pass `--default` -- the existing rows
+need a value for the new non-null column. Add `--default` when the table is
+non-empty. The rejection comes from the storage job, so before vNEXT kbagent
+did not see it (next entry).
+
+### `storage add-column` waits for the storage job
+
+(since vNEXT) `POST /v2/storage[/branch/{id}]/tables/{id}/columns` answers `HTTP 202` with a
+queued `tableColumnAdd` storage job -- it is not synchronous. Before vNEXT,
+kbagent returned on that receipt: `add-column` reported success while the
+column did not exist yet, so an immediate `storage table-detail` (most visibly
+with `--branch` on a dev branch) did not list it, and a job that FAILED (for
+example `--not-null` on a table with rows) was reported as success and the
+column was never added. Since vNEXT the command waits for the Storage job, so
+a following `table-detail` lists the column; a failed job is
+`STORAGE_JOB_FAILED` (exit 1) with the backend's message; a job that runs past
+the wait is `STORAGE_JOB_TIMEOUT` (exit 4, `retryable: false`,
+`details.job_id`) -- the job keeps running server-side, so follow it with the
+`storage job-detail --job-id ID --wait` command the message names instead of
+adding the column again (a repeat queues a second add). On an
+older kbagent, poll `table-detail` until the column appears, and treat a column
+that never appears as a failed add.
 
 ### `job run --idempotency-key` is client-side dedup, scoped to one machine
 
@@ -7306,3 +7369,39 @@ The package was named `keboola-agent-cli` up to 0.62.0 and is named `keboola-cli
 - **`col_map.in_table` matched by substring**, so a mapping could land on the wrong input edge. It must now be the full input table id, its `alias:`-qualified form, or a unique input-mapping destination; anything else is skipped and counted in `ai_col_map_skipped`.
 - **Stale AI results are not applied** *(since 0.99.1)*: a result whose `_code_hash` differs from the config's current code hash describes code that no longer exists; it is skipped entirely and listed in `ai_status.ai_results_stale` (a fresh task is emitted for it). A result without `_code_hash` is still applied. A `col_map` naming a table the config reads under two aliases now maps onto both edges instead of being skipped as ambiguous.
 - `ai_status` keys: `ai_edges_added` (reads + writes), `ai_reads_added`, `ai_writes_added`, `ai_columns_merged`, `ai_external_added`, `ai_col_map_skipped`, `ai_outputs_unresolved`, `ai_results_stale`, `ai_tasks_missing_code_file`.
+
+## Sync reads `_config.yml` strictly: a bad file is an error, never a delete
+
+*(since vNEXT)* Before, a `_config.yml` that was not valid YAML (or empty, or
+not a mapping) was read as "no file": a tracked config was then `deleted` in
+`sync diff`, and `sync push --force` deleted it on the remote (#827 item 9).
+An untracked one was skipped without a word. A top-level key sync does not
+know (`storage:`, `runtime:`, a typo) was dropped on push without a word.
+Now:
+
+- `sync diff`, `sync push` and `sync push --dry-run` report every such file,
+  of a config or of a row, as one `errors[]` entry: `change_type`
+  `invalid_local_file`, `error_code` `SYNC_LOCAL_FILE_INVALID`, `path` (the
+  file), `component_id`, `config_id`, and a `message` that names the unknown
+  keys. `sync diff` also counts them in `summary.invalid`.
+- The config and all its rows are held: nothing is created, updated or
+  deleted for it, also with `--force`. The other configs are pushed.
+- The command exits **1** (`--json` still prints the result first).
+  `sync diff --all-projects` counts such a project as failed.
+- The keys sync reads are `version`, `name`, `description`, `is_disabled`,
+  `parameters`, `input`, `output`, `processors`, `_configuration_extra` and
+  `_keboola` -- exactly what `sync pull` writes. Put any other configuration
+  key under `_configuration_extra`. Rows of `keboola.variables` and
+  `keboola.shared-code` keep their top-level `values` / `code_content`.
+- `sync pull` keeps such a file (local work); `--theirs` overwrites it.
+- A `_config.yml` (config or row) without `description:` is the same as
+  `description: ''`. Before, a row without it diffed as "description
+  removed" on every push.
+- When `_description.md` and a different non-empty `description:` in
+  `_config.yml` both exist, the file still wins and diff/push add a
+  `DESCRIPTION_SHADOWED` entry to `warnings[]` naming both paths.
+- `kbagent config new` writes the table mappings as top-level `input:` /
+  `output:`, as pull does. Its old top-level `storage:` block was dropped by
+  push; a scaffold written by an older version now fails with
+  `SYNC_LOCAL_FILE_INVALID` -- move `storage.input` / `storage.output` to
+  the top level.
