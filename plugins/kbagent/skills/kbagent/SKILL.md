@@ -143,8 +143,8 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Show merged Data Science + Storage detail for one data app | `kbagent data-app detail --project PROJECT --app-id APP-ID` |
 | Create a Keboola data app end-to-end (POST + encrypt + PUT + deploy) | `kbagent data-app create --project PROJECT --name NAME --slug SLUG` |
 | Deploy the latest Storage config (the §9 redeploy contract) | `kbagent data-app deploy --project PROJECT --app-id APP-ID` |
-| Wake an auto-suspended data app at its currently-pinned configVersion | `kbagent data-app start --project PROJECT --app-id APP-ID` |
-| Stop a running data app (preserves the URL and Storage config) | `kbagent data-app stop --project PROJECT --app-id APP-ID` |
+| Wake a suspended or disabled data app at the deployment production serves | `kbagent data-app start --project PROJECT --app-id APP-ID` |
+| Suspend a data app; the next request to its URL wakes it (URL and config kept) | `kbagent data-app stop --project PROJECT --app-id APP-ID` |
 | Delete the deployment AND the Storage config (cascade, irreversible) | `kbagent data-app delete --project PROJECT --app-id APP-ID` |
 | Tail the container logs for a deployed data app | `kbagent data-app logs --project PROJECT --app-id APP-ID` |
 | List a data app's recent deployment attempts (runs), newest first | `kbagent data-app runs --project PROJECT --app-id APP-ID` |
