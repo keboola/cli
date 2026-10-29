@@ -46,6 +46,7 @@ from ..sync.config_format import BASE_CONFIG_HASH_KEY, api_config_to_local, api_
 from ..sync.diff_engine import config_hash
 from ..sync.manifest import Manifest
 from ._sync_companions import config_locally_modified, merge_with_remote
+from ._sync_local_files import UNREADABLE_SKIP_REASON
 from ._sync_pull_dirs import current_row_path, scan_row_dirs
 
 if TYPE_CHECKING:
@@ -279,8 +280,6 @@ def effective_stored_hash(
 
 # Pull ``details[].reason`` for a kept file that only carries the config id.
 ADOPTED_SKIP_REASON = "locally modified, not tracked in the manifest"
-# The ``reason`` of a pull skip for a ``_config.yml`` that cannot be parsed.
-UNREADABLE_SKIP_REASON = "local _config.yml cannot be parsed; fix it, or pull --theirs"
 
 
 def adopted_skip_detail(

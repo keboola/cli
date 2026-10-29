@@ -2133,11 +2133,11 @@ class SyncService(BaseService):
         config_file = config_dir / CONFIG_FILENAME
         if not config_file.exists():
             return None
-        data, problem = load_config_yaml(config_file)
-        if problem:
+        parsed = load_config_yaml(config_file)
+        if parsed.problem:
             # diff / push report it (check_local_files); never read as data.
-            logger.warning("%s %s", config_file, problem)
-        return data
+            logger.warning("%s %s", config_file, parsed.problem)
+        return parsed.data
 
     def register_branch_dir(
         self,

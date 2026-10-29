@@ -903,15 +903,28 @@ def sync_diff(
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
     emit_companion_warnings(formatter, result)
-    # A config held back by an unusable _config.yml fails the diff (exit 1).
-    code = 1 if result.get("errors") else 0
-    if formatter.json_mode:
-        formatter.output(result, exit_code=code)
+    # A config held back by an unusable _config.yml fails the diff: the per-item
+    # exit goes through finish_items, with its headline (HO2, E4).
+    failed = len(result.get("errors", []))
+    if failed:
+
+        def render() -> None:
+            _render_diff_result(formatter, result)
+            print_dry_run_refusals(formatter, result)
+
+        finish_items(
+            formatter,
+            result,
+            failed=failed,
+            total=failed,
+            noun="configs",
+            summary=f"{failed} config(s) held back, the others compared.",
+            render=render,
+        )
+    elif formatter.json_mode:
+        formatter.output(result)
     else:
         _render_diff_result(formatter, result)
-        print_dry_run_refusals(formatter, result)
-    if code:
-        raise typer.Exit(code=code)
 
 
 def _render_diff_result(formatter: Any, result: dict[str, Any]) -> None:

@@ -20,10 +20,19 @@ from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.constants import CONFIG_FILENAME
 from keboola_agent_cli.models import TokenVerifyResponse
 from keboola_agent_cli.services._sync_baseline import adopted_skip_detail
+from keboola_agent_cli.services._sync_pull_dirs import RowPullContext, RowPullResult, _pull_row
 from keboola_agent_cli.services.project_service import ProjectService
 from keboola_agent_cli.services.sync_service import SyncService
 from keboola_agent_cli.sync.config_format import api_row_to_local, unknown_local_keys
-from keboola_agent_cli.sync.manifest import load_manifest
+from keboola_agent_cli.sync.manifest import (
+    Manifest,
+    ManifestBranch,
+    ManifestConfiguration,
+    ManifestNaming,
+    ManifestProject,
+    load_manifest,
+    save_manifest,
+)
 
 VERIFY = TokenVerifyResponse(
     token_id="tok-001",
@@ -505,3 +514,130 @@ def test_cli_diff_with_unknown_key_exits_1(tmp_path: Path) -> None:
     data = json.loads(result.output)["data"]
     assert data["summary"]["invalid"] == 1
     assert "storage" in data["errors"][0]["message"]
+
+
+# ---------------------------------------------------------------------------
+# Review follow-ups (PR #941)
+# ---------------------------------------------------------------------------
+
+
+def _with_rows_config() -> list[dict[str, Any]]:
+    """A config literally named "Rows": its dir is ``.../rows``, not a row dir."""
+    components = _components()
+    components[0]["configurations"].append(
+        {
+            "id": "cfg-rows",
+            "name": "Rows",
+            "description": "",
+            "configuration": {"parameters": {"db": "y"}},
+            "rows": [],
+        }
+    )
+    return components
+
+
+def test_broken_config_named_rows_is_held_not_deleted(tmp_path: Path) -> None:
+    """Devin 4416004404: a ``rows`` path segment is not by itself a row boundary."""
+    components = _with_rows_config()
+    store, root = _pulled_tree(tmp_path, components)
+    entry = next(c for c in load_manifest(root).configurations if c.id == "cfg-rows")
+    assert entry.path.split("/")[-1] == "rows"
+    (root / "main" / entry.path / CONFIG_FILENAME).write_text(BROKEN_YAML, encoding="utf-8")
+
+    svc, client = _service(store, components)
+    result = svc.push(alias="prod", project_root=root, force=True)
+
+    client.delete_config.assert_not_called()
+    (error,) = _invalid(result)
+    assert error["config_id"] == "cfg-rows"
+
+
+def test_broken_file_of_an_ignored_component_is_not_an_error(tmp_path: Path) -> None:
+    """Devin 4416004912: diff never reads an ignored component's dir, so no error."""
+    components = _components()
+    store, root = _pulled_tree(tmp_path, components)
+    leftover = root / "main" / "other" / "keboola.sandboxes" / "old-workspace"
+    leftover.mkdir(parents=True)
+    (leftover / CONFIG_FILENAME).write_text(BROKEN_YAML, encoding="utf-8")
+
+    svc, _ = _service(store, components)
+    result = svc.diff(alias="prod", project_root=root)
+
+    assert result["errors"] == []
+
+
+def test_pull_keeps_an_unparseable_row_without_a_baseline(tmp_path: Path) -> None:
+    """Devin 4416005309: the row pull path keeps an unreadable file like the config path."""
+    components = _components()
+    store, _root = _pulled_tree(tmp_path, components)
+    svc, _ = _service(store, components)
+    config_dir = tmp_path / "scratch" / "cfg"
+    row_dir = config_dir / "rows" / "orders"
+    row_dir.mkdir(parents=True)
+    (row_dir / CONFIG_FILENAME).write_text(BROKEN_YAML, encoding="utf-8")
+    ctx = RowPullContext(
+        component_id=COMPONENT,
+        config_id="cfg-001",
+        config_name="My Extractor",
+        rel_path="extractor/x/my-extractor",
+        config_dir=config_dir,
+        row_naming="rows/{config_row_name}",
+        adopt=True,
+        theirs=False,
+        dry_run=False,
+    )
+    details: list[dict[str, str]] = []
+    row = components[0]["configurations"][0]["rows"][0]
+
+    _pull_row(svc, ctx, row, "rows/orders", row_dir, None, details, RowPullResult(rows=[]))
+
+    assert (row_dir / CONFIG_FILENAME).read_text(encoding="utf-8") == BROKEN_YAML
+    assert [d["action"] for d in details] == ["skipped"]
+    assert "cannot be parsed" in details[0]["reason"]
+
+
+def test_clone_dry_run_reports_invalid_files(tmp_path: Path) -> None:
+    """Devin 4416004708: the clone preview lists what the real clone holds back."""
+    source = tmp_path / "golden"
+    rel = "extractor/keboola.ex-db/source"
+    (source / rel).mkdir(parents=True)
+    (source / rel / CONFIG_FILENAME).write_text(
+        yaml.safe_dump(
+            {
+                "version": 3,
+                "name": "Source",
+                "description": "",
+                "parameters": {},
+                "storage": {"input": {"tables": []}},
+                "_keboola": {"component_id": "keboola.ex-db", "config_id": "ext-golden"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    save_manifest(
+        source,
+        Manifest(
+            project=ManifestProject(id=1, apiHost="source.keboola.com"),
+            naming=ManifestNaming(),
+            branches=[ManifestBranch(id=12345, path="main")],
+            configurations=[
+                ManifestConfiguration(
+                    branchId=12345, componentId="keboola.ex-db", id="ext-golden", path=rel
+                )
+            ],
+        ),
+    )
+    client = _client([])
+    client.list_dev_branches.return_value = [{"id": 555, "name": "Main", "isDefault": True}]
+    cfg_dir = tmp_path / "cfg"
+    cfg_dir.mkdir()
+    store = setup_single_project(cfg_dir)
+    svc = SyncService(config_store=store, client_factory=lambda url, token: client)
+
+    result = svc.clone_project(
+        source=source, target_alias="prod", target_dir=tmp_path / "clone", dry_run=True
+    )
+
+    assert result["status"] == "dry_run"
+    assert len(_invalid(result)) == 1
+    client.create_config.assert_not_called()
