@@ -13,6 +13,7 @@ from rich.console import Console
 from ..effective_branch import report_branch_ref
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..output import format_branch_metadata_table, format_branches_table
+from ..services.branch_service import active_branch_not_stored_warning
 from ._all_projects import (
     FANOUT_PROJECT_HELP,
     AllProjectsOption,
@@ -92,13 +93,21 @@ def branch_create(
     """Create a new development branch and auto-activate it.
 
     The created branch becomes the active branch for the project,
-    so subsequent tool calls will automatically use it.
+    so subsequent tool calls will automatically use it. A project from
+    environment variables (__env__) cannot store an active branch: the
+    branch is created, not activated, and a warning names --branch.
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "branch_service")
 
     try:
         result = service.create_branch(alias=project, name=name, description=description)
+        if not result["activated"]:
+            # An environment project cannot store an active branch (the
+            # branch itself was created, so this is not an error).
+            formatter.warning(
+                **active_branch_not_stored_warning(result["project_alias"], result["branch_id"])
+            )
         formatter.output(
             result,
             lambda c, d: c.print(f"[bold green]Success:[/bold green] {d['message']}"),

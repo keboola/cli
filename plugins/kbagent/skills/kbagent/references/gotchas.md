@@ -61,6 +61,27 @@ These lists keep `error`, because their entries are not failed items with an err
 - **An unknown group** is `INVALID_ARGUMENT` (exit 2), and the message lists the valid groups.
 - **The command lists are generated from the command manifest**, so they always match `--help`. On 0.x, `kbagent context` takes no argument and prints the whole hand-written text.
 
+## `branch create` on the `__env__` project succeeds without activating the branch
+
+*(since vNEXT)*
+
+- **`branch create --project __env__`** (the headless project from
+  `KBAGENT_PROJECT_FROM_ENV`) now exits 0 with the created branch,
+  `activated: false`, and a top-level `warnings[]` entry `ACTIVE_BRANCH_NOT_STORED`
+  whose `hint` is `--branch <id>`. Before, the branch was created, then storing it as
+  the active branch failed: the command printed `status: error` and exited 5,
+  although the branch existed. A retry created a second branch. Over `kbagent serve`,
+  `POST /branches/__env__` answers 200 with the same warning in `Kbagent-Warnings`,
+  whose hint there is `branch_id=<id>`.
+- **An environment project has no active branch.** It lives only in memory, so pass
+  `--branch <id>` (REST: `branch_id`) on every command that should use the branch.
+- **`branch reset --project __env__`** exits 0 and changes nothing
+  (`previous_branch_id: null`). Before, it was refused with exit 5.
+- **`branch use --project __env__`** is refused with `CONFIG_ERROR` (exit 5) before any
+  API call; the message names `--branch`. Before, it read the branch list first.
+- **On an older version**, a failed `branch create` on `__env__` did create the branch:
+  run `kbagent branch list --project __env__` and use its ID, never create it again.
+
 ## Deleting the last config of a pulled dev-branch folder is pushed
 
 *(since vNEXT)*
@@ -4976,6 +4997,9 @@ Gotchas:
 - The alias is literally `__env__` (double underscore both sides) — chosen so it
   cannot collide with a real user alias. A real project already registered under
   `__env__` wins; no injection happens.
+- **`__env__` has no active branch.** `branch create` creates the branch but does
+  not activate it (warning `ACTIVE_BRANCH_NOT_STORED`), `branch reset` is a no-op and
+  `branch use` is refused; pass `--branch <id>` on each command *(since vNEXT)*.
 - **`__env__` shows `project_id` but a blank name in `project list`.** `load()`
   is offline, so the injection recovers `project_id` from the token prefix
   (`{projectId}-{tokenId}-{secret}`) but cannot fetch the real project name.

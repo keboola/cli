@@ -248,9 +248,9 @@ Bucket sharing + linking across projects in the same organization. `sharing edge
 
 ## Development Branches
 - `branch list [--project NAME | --all-projects]` -- list dev branches
-- `branch create --project ALIAS --name "..." [--description "..."]` -- create and auto-activate branch
-- `branch use --project ALIAS --branch ID` -- switch active branch
-- `branch reset --project ALIAS` -- reset to main/production
+- `branch create --project ALIAS --name "..." [--description "..."]` -- create and auto-activate branch. *(since vNEXT)* On the environment project `__env__` the branch is created but not activated: exit 0, `activated: false`, warning `ACTIVE_BRANCH_NOT_STORED` (hint `--branch <id>`); pass `--branch` on later commands
+- `branch use --project ALIAS --branch ID` -- switch active branch. *(since vNEXT)* Refused on `__env__` (`CONFIG_ERROR`, exit 5) before any API call
+- `branch reset --project ALIAS` -- reset to main/production. *(since vNEXT)* A no-op on `__env__` (`previous_branch_id: null`)
 - `branch delete --project ALIAS --branch ID [--dry-run] [--yes]` -- delete branch (resets if active). Asks unless `--yes` or `--json`. `--dry-run` reads the branch only (since vNEXT)
 - `branch merge` -- removed in 1.0.0 (since vNEXT). It was deprecated since 0.94.0. It only printed the merge URL of the Keboola UI and reset the active branch. Use `merge-request`, or merge in the Keboola UI
 - `branch metadata-list --project NAME [--branch ID|default]` -- list all metadata entries on a branch (id, key, value, provider, timestamp). `--branch` defaults to `default` (main branch)
