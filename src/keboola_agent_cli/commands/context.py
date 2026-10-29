@@ -387,7 +387,7 @@ GROUP_NOTES: dict[str, str] = {
 
   branch create
     Create dev branch and auto-activate it. Async, CLI waits for completion.
-    Exception since vNEXT: on the environment project `__env__`
+    Exception since 1.0.0rc5: on the environment project `__env__`
     (KBAGENT_PROJECT_FROM_ENV) the branch is created but NOT activated --
     `activated: false` and a warnings[] entry ACTIVE_BRANCH_NOT_STORED. Pass
     `--branch <id>` on every later command, or it runs on production.
@@ -2239,7 +2239,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
     a missing dir whose id 2+ dirs carry is an ambiguous move (conflict, nothing pushed).
     A swap/rotation/symlink (a tracked dir carrying another tracked config's id) is held as
     an identity conflict: nothing pushed, pulled or saved until the dirs are moved back.
-    Strict local files (since vNEXT): a _config.yml (config or row) that is not valid YAML,
+    Strict local files (since 1.0.0rc5): a _config.yml (config or row) that is not valid YAML,
     not a mapping, or has an unknown top-level key is an errors[] entry
     (SYNC_LOCAL_FILE_INVALID, path) in diff/push: the config is held (never deleted, created
     or updated) and the command exits 1. Extra configuration keys go under

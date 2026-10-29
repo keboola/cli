@@ -46,4 +46,4 @@ kbagent --json merge-request merge --project ALIAS --merge-request-id 42
 
 ## Headless `__env__` project (CI)
 
-The `KBAGENT_PROJECT_FROM_ENV` project `__env__` cannot store an active branch: pass `--branch <id>` on every command. Up to 1.0.0rc4, `branch create --project __env__` exits 5 although the branch was created -- look it up with `kbagent --json branch list --project __env__` before a retry, or you get a second branch -- and `branch use` / `branch reset` are refused (fixed *(since vNEXT)* by #940). See [gitops-cicd-workflow.md](gitops-cicd-workflow.md) pitfall 2.6.
+The `KBAGENT_PROJECT_FROM_ENV` project `__env__` cannot store an active branch: pass `--branch <id>` on every command. Up to 1.0.0rc4, `branch create --project __env__` exits 5 although the branch was created -- look it up with `kbagent --json branch list --project __env__` before a retry, or you get a second branch -- and `branch use` / `branch reset` are refused (fixed *(since 1.0.0rc5)* by #940). See [gitops-cicd-workflow.md](gitops-cicd-workflow.md) pitfall 2.6.

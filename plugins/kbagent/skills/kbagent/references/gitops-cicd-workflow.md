@@ -131,7 +131,7 @@ pitfall 2.2.
 ## 5. Pitfalls
 
 Version notes: "<= 0.100.4" is the stable line the customer used. 1.0.0rc4 is
-the pre-release cut from `main`. *(since vNEXT)* marks a fix that ships in the
+the pre-release cut from `main`. *(since 1.0.0rc5)* marks a fix that ships in the
 next release; each entry says whether it is already in 1.0.0rc4.
 
 ### 1. A transformation job is `success` but did not run the SQL (platform)
@@ -148,7 +148,7 @@ next release; each entry says whether it is already in 1.0.0rc4.
 
 - **Symptom (<= 0.100.4):** a new config folder with a `rows/` subfolder: one
   `sync push` created only the config; a second push created the rows.
-- **Status:** fixed *(since vNEXT)* by #931 -- already in 1.0.0rc4: the rows are
+- **Status:** fixed *(since 1.0.0rc5)* by #931 -- already in 1.0.0rc4: the rows are
   created in the same push, and each new row's `_config.yml` gets its
   `_keboola.row_id` (not on a promote push `--branch <dev>` from `main/`).
 - **Still true:** `pushed_details[].config_id` is `""` for a config the push
@@ -170,7 +170,7 @@ next release; each entry says whether it is already in 1.0.0rc4.
   not a mapping (the Python step in section 3 does this; it also handles paths
   with spaces). Never pass `--force` unless a `--dry-run --force` was reviewed
   and every `deleted` change in it is intended.
-- **Status:** fix in #941 *(since vNEXT)*, not in 1.0.0rc4: such a file is an
+- **Status:** fix in #941 *(since 1.0.0rc5)*, not in 1.0.0rc4: such a file is an
   `errors[]` entry (`change_type: invalid_local_file`, `error_code:
   SYNC_LOCAL_FILE_INVALID`), its config and rows are never created, updated or
   deleted (also with `--force`), and the command exits 1.
@@ -185,7 +185,7 @@ next release; each entry says whether it is already in 1.0.0rc4.
 - **Workaround:** put every other configuration key under `_configuration_extra:`
   (that is where `sync pull` writes a flow's `phases` and `tasks` and a
   `runtime` block). Compare your file with a freshly pulled one.
-- **Status:** fix in #941 *(since vNEXT)*, not in 1.0.0rc4: an unknown key is a
+- **Status:** fix in #941 *(since 1.0.0rc5)*, not in 1.0.0rc4: an unknown key is a
   `SYNC_LOCAL_FILE_INVALID` error naming the key, and the config is held.
 
 ### 2.4 One-line `dependencies = [...]` in `pyproject.toml` is ignored
@@ -194,7 +194,7 @@ next release; each entry says whether it is already in 1.0.0rc4.
   form (`dependencies = [` alone on a line, one package per line, `]` alone on a
   line). A one-line list is read as no packages, and push keeps the old packages.
 - **Workaround (<= 0.100.4):** use the multi-line form.
-- **Status:** fixed *(since vNEXT)* by #931 -- already in 1.0.0rc4: the file is
+- **Status:** fixed *(since 1.0.0rc5)* by #931 -- already in 1.0.0rc4: the file is
   parsed as TOML.
 
 ### 2.5 `flow schedule` exits 0 although the schedule is not active
@@ -218,7 +218,7 @@ next release; each entry says whether it is already in 1.0.0rc4.
 - **Workaround:** after a `branch create` error, look the branch up with
   `kbagent --json branch list --project __env__` (by name) before you retry. Never
   use `branch use` / `branch reset` on `__env__`; pass `--branch <id>` everywhere.
-- **Status:** fix in #940 *(since vNEXT)*, not in 1.0.0rc4: `branch create`
+- **Status:** fix in #940 *(since 1.0.0rc5)*, not in 1.0.0rc4: `branch create`
   exits 0 with `activated: false` and an `ACTIVE_BRANCH_NOT_STORED` warning;
   `branch reset` is a no-op; `branch use` is refused before any API call.
 
@@ -232,7 +232,7 @@ next release; each entry says whether it is already in 1.0.0rc4.
 - **Workaround:** delete it directly:
   `kbagent --json config delete --project __env__ --component-id C --config-id ID --branch <dev>`
   (a soft delete into the trash; `config restore` undoes it).
-- **Status:** fix in #938 *(since vNEXT)*, not in 1.0.0rc4.
+- **Status:** fix in #938 *(since 1.0.0rc5)*, not in 1.0.0rc4.
 
 ### 3.2 Deleting a config with rows reports row errors
 
@@ -241,7 +241,7 @@ next release; each entry says whether it is already in 1.0.0rc4.
   `errors[]` and the push exited 1, although the delete worked.
 - **Workaround (<= 0.100.4):** after such a push, confirm with
   `config detail` / `sync diff` that the config is gone and ignore the row errors.
-- **Status:** fixed *(since vNEXT)* by #933 -- already in 1.0.0rc4: one DELETE
+- **Status:** fixed *(since 1.0.0rc5)* by #933 -- already in 1.0.0rc4: one DELETE
   for the config covers its rows (`covered_rows` on the change).
 
 ### 3.3 A plaintext secret in source control creates a new version on every push
@@ -267,7 +267,7 @@ next release; each entry says whether it is already in 1.0.0rc4.
   silently wins over `description:` in `_config.yml`.
 - **Workaround:** write `description: ''` in every row `_config.yml`, and keep
   the description in one place only (`_description.md` or inline).
-- **Status:** fix in #941 *(since vNEXT)*, not in 1.0.0rc4: a missing description
+- **Status:** fix in #941 *(since 1.0.0rc5)*, not in 1.0.0rc4: a missing description
   equals `''`, and a different inline description next to `_description.md`
   adds a `DESCRIPTION_SHADOWED` warning (the file still wins).
 
@@ -296,7 +296,7 @@ next release; each entry says whether it is already in 1.0.0rc4.
   so the mappings never reach Keboola.
 - **Workaround:** move `storage.input` / `storage.output` to top-level `input:` /
   `output:` before the push.
-- **Status:** fix in #941 *(since vNEXT)*, not in 1.0.0rc4: the scaffold writes
+- **Status:** fix in #941 *(since 1.0.0rc5)*, not in 1.0.0rc4: the scaffold writes
   top-level `input:` / `output:`; an old scaffold fails with
   `SYNC_LOCAL_FILE_INVALID`.
 
@@ -323,7 +323,7 @@ next release; each entry says whether it is already in 1.0.0rc4.
   kbagent sends `branchId` as a number. `sync push` and `sync clone` that create
   a new data app in a dev branch hit the same 422.
 - **Workaround (<= 1.0.0rc4):** create the app in the default branch.
-- **Status:** fixed *(since vNEXT)* by #943 -- not in 1.0.0rc4.
+- **Status:** fixed *(since 1.0.0rc5)* by #943 -- not in 1.0.0rc4.
 
 ### 4.2 `add-column` returns before the column exists
 
@@ -335,7 +335,7 @@ next release; each entry says whether it is already in 1.0.0rc4.
 - **Workaround:** after `add-column`, re-read `storage table-detail` (same
   `--branch`) until the column is listed, and fail the pipeline if it never
   appears.
-- **Status:** fix in #939 *(since vNEXT)*, not in 1.0.0rc4: `add-column` waits
+- **Status:** fix in #939 *(since 1.0.0rc5)*, not in 1.0.0rc4: `add-column` waits
   for the job; a failed job is `STORAGE_JOB_FAILED` (exit 1), a timeout
   `STORAGE_JOB_TIMEOUT` (exit 4, `retryable: false`, the job keeps running).
 

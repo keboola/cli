@@ -63,7 +63,7 @@ These lists keep `error`, because their entries are not failed items with an err
 
 ## `branch create` on the `__env__` project succeeds without activating the branch
 
-*(since vNEXT)*
+*(since 1.0.0rc5)*
 
 - **`branch create --project __env__`** (the headless project from
   `KBAGENT_PROJECT_FROM_ENV`) now exits 0 with the created branch,
@@ -84,7 +84,7 @@ These lists keep `error`, because their entries are not failed items with an err
 
 ## Deleting the last config of a pulled dev-branch folder is pushed
 
-*(since vNEXT)*
+*(since 1.0.0rc5)*
 
 - **`sync pull --branch <dev>` then deleting the folder's only config** (or the last
   one left) and `sync push --branch <dev> --force` now deletes that config on the dev
@@ -4999,7 +4999,7 @@ Gotchas:
   `__env__` wins; no injection happens.
 - **`__env__` has no active branch.** `branch create` creates the branch but does
   not activate it (warning `ACTIVE_BRANCH_NOT_STORED`), `branch reset` is a no-op and
-  `branch use` is refused; pass `--branch <id>` on each command *(since vNEXT)*.
+  `branch use` is refused; pass `--branch <id>` on each command *(since 1.0.0rc5)*.
 - **`__env__` shows `project_id` but a blank name in `project list`.** `load()`
   is offline, so the injection recovers `project_id` from the token prefix
   (`{projectId}-{tokenId}-{secret}`) but cannot fetch the real project name.
@@ -5332,18 +5332,18 @@ slice -- `workspace query` with a `WHERE` clause needs a live workspace.
 `--not-null` on a table that ALREADY HAS ROWS is rejected by the backend (not a
 local validation error) unless you also pass `--default` -- the existing rows
 need a value for the new non-null column. Add `--default` when the table is
-non-empty. The rejection comes from the storage job, so before vNEXT kbagent
+non-empty. The rejection comes from the storage job, so before 1.0.0rc5 kbagent
 did not see it (next entry).
 
 ### `storage add-column` waits for the storage job
 
-(since vNEXT) `POST /v2/storage[/branch/{id}]/tables/{id}/columns` answers `HTTP 202` with a
-queued `tableColumnAdd` storage job -- it is not synchronous. Before vNEXT,
+(since 1.0.0rc5) `POST /v2/storage[/branch/{id}]/tables/{id}/columns` answers `HTTP 202` with a
+queued `tableColumnAdd` storage job -- it is not synchronous. Before 1.0.0rc5,
 kbagent returned on that receipt: `add-column` reported success while the
 column did not exist yet, so an immediate `storage table-detail` (most visibly
 with `--branch` on a dev branch) did not list it, and a job that FAILED (for
 example `--not-null` on a table with rows) was reported as success and the
-column was never added. Since vNEXT the command waits for the Storage job, so
+column was never added. Since 1.0.0rc5 the command waits for the Storage job, so
 a following `table-detail` lists the column; a failed job is
 `STORAGE_JOB_FAILED` (exit 1) with the backend's message; a job that runs past
 the wait is `STORAGE_JOB_TIMEOUT` (exit 4, `retryable: false`,
@@ -7105,11 +7105,11 @@ examples. Surprises worth knowing before you touch this:
 
 ## Headless GitOps / CI deploy pipelines: known pitfalls
 
-*(since vNEXT)* A customer running `sync` unattended in a deploy pipeline on
+*(since 1.0.0rc5)* A customer running `sync` unattended in a deploy pipeline on
 0.100.4 hit a set of pitfalls; each is listed with the versions it affects, the
 workaround and its fix in
 [gitops-cicd-workflow.md](gitops-cicd-workflow.md). All were observed on
-0.100.4. Fixed in vNEXT: the unparseable and unknown-key `_config.yml` cases
+0.100.4. Fixed in 1.0.0rc5: the unparseable and unknown-key `_config.yml` cases
 (#941), `branch create` on `__env__` (#940), `add-column` (#939), deleting the
 last config of a dev-branch tree (#938) and creating a data app in a dev branch
 (#943); `flow schedule`, the dry-run shapes and the optional keys are not
@@ -7376,7 +7376,7 @@ The package was named `keboola-agent-cli` up to 0.62.0 and is named `keboola-cli
 
 ## Sync reads `_config.yml` strictly: a bad file is an error, never a delete
 
-*(since vNEXT)* Before, a `_config.yml` that was not valid YAML (or empty, or
+*(since 1.0.0rc5)* Before, a `_config.yml` that was not valid YAML (or empty, or
 not a mapping) was read as "no file": a tracked config was then `deleted` in
 `sync diff`, and `sync push --force` deleted it on the remote (#827 item 9).
 An untracked one was skipped without a word. A top-level key sync does not
@@ -7412,7 +7412,7 @@ Now:
 
 ## `data-app create --branch` and `sync push` of a data app in a dev branch failed with HTTP 422
 
-*(since vNEXT)* `kbagent data-app create --project ALIAS --branch <dev-branch-id> ...`
+*(since 1.0.0rc5)* `kbagent data-app create --project ALIAS --branch <dev-branch-id> ...`
 failed with HTTP 422 from the Data Science API, because kbagent sent `branchId`
 in `POST /apps` as a number and the API takes only a string. Without `--branch`
 (production) it worked. `sync push` (and `sync clone`) into a dev branch went

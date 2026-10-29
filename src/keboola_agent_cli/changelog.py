@@ -28,6 +28,37 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "1.0.0rc5": [
+        "Note: the fifth release candidate of 1.0.0 fixes problems a customer found in a "
+        "GitOps pipeline. The command line is the same as in 1.0.0rc4. On 1.0.0rc1 to "
+        "1.0.0rc4, run `kbagent update --beta`. On kbagent 0.100.0 or later, run `kbagent "
+        "update --beta --major`. PyPI and the native packages do not get pre-releases. "
+        "Migration guide: https://github.com/keboola/cli/blob/main/docs/migrate-to-1.0.md",
+        "Fixed (#941): a `_config.yml` that sync cannot read is an error, never a delete. A "
+        "config or row file that is not valid YAML, is empty, is not a mapping or has an "
+        "unknown top-level key is an `errors[]` entry with `SYNC_LOCAL_FILE_INVALID`, and its "
+        "config and rows are not created, updated or deleted, also with `--force`. Before, "
+        "such a file read as missing and `sync push --force` deleted the config on the remote. "
+        "Extra configuration keys go under `_configuration_extra`, and `config new` writes "
+        "table mappings as top-level `input:` / `output:` as `sync pull` does.",
+        "Fixed (#938, #944): deleting the last config of a dev-branch tree is pushed. Before, "
+        "`sync push --branch DEV --force` reported `no_changes` and listed the config under "
+        "`orphaned` when the deleted config was the only one in the tree.",
+        "Fixed (#940): `branch create --project __env__` creates the branch without activating "
+        "it. It exits 0 with `activated: false` and an `ACTIVE_BRANCH_NOT_STORED` warning; pass "
+        "`--branch` on later commands. Before, it exited 5 although the branch was created, so "
+        "a retry created a second branch. `branch reset` is a no-op there, and `branch use` "
+        "is refused before any API call.",
+        "Fixed (#939): `storage add-column` waits for the storage job that adds the column. "
+        "Before, it returned before the column existed, so an immediate `storage table-detail` "
+        "did not list it.",
+        "Fixed (#943): `data-app create --branch` and a `sync push` of a new data app into a "
+        "dev-branch tree work. kbagent sent the branch id as a number, and the Data Science "
+        "API answered HTTP 422.",
+        "Docs (#942): the plugin has a new reference for running kbagent in a GitOps or CI/CD "
+        "pipeline: a pinned version, the headless `__env__` project, `--branch` on every "
+        "command, reading exit codes and `errors[]`, and the known pitfalls.",
+    ],
     "1.0.0rc4": [
         "Note: the fourth release candidate of 1.0.0 adds sync fixes found by the new "
         "bookkeeping tests. The command line is the same as in 1.0.0rc3. "

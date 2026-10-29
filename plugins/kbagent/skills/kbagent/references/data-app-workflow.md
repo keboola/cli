@@ -519,6 +519,6 @@ changed one. `sync push --force` and `config delete` remove only the Storage
 configuration; kbagent does not stop or delete the app there.
 Up to 1.0.0rc4, `data-app create --branch <dev>` -- and a `sync push` / `sync clone`
 that creates a data app in a dev branch -- fails with HTTP 422: create the app in
-the default branch (fixed *(since vNEXT)* by #943). Manage the app with
+the default branch (fixed *(since 1.0.0rc5)* by #943). Manage the app with
 `data-app create` / `deploy` / `delete`. See
 [gitops-cicd-workflow.md](gitops-cicd-workflow.md) pitfalls 4.1 and 4.3.

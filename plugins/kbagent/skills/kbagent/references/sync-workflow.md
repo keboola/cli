@@ -153,7 +153,7 @@ When a per-branch subtree *does* exist (multi-branch-directory users), the
 target subtree is used as before — behaviour is unchanged.
 
 A subtree that `sync pull --branch <id>` wrote stays the source after you delete
-its last config directory (since vNEXT): `sync push --branch <id>` lists that config
+its last config directory (since 1.0.0rc5): `sync push --branch <id>` lists that config
 under `skipped_deletions`, and `--force` deletes it on the branch. Before, push read
 `main/` instead, reported the config as `orphaned` (`tracked_on_other_branch`) and
 deleted nothing. The emptied folder stays the source, so a later push does not
@@ -543,7 +543,7 @@ are moved back.
 
 ### A `_config.yml` sync cannot read is held, never deleted
 
-*(since vNEXT)*
+*(since 1.0.0rc5)*
 
 `sync diff` and `sync push` check every `_config.yml` of the tree first. A file
 (config or row) that is not valid YAML, is empty or not a mapping, or has a

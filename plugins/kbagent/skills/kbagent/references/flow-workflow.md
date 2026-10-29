@@ -233,5 +233,5 @@ whatever the live stack serves.
 In a synced `_config.yml`, a flow's `phases` and `tasks` belong under
 `_configuration_extra:`, where `sync pull` writes them. Top-level `phases:` /
 `tasks:` are dropped by `sync push` without a message up to 1.0.0rc4 (an error
-*(since vNEXT)*, #941). See [gitops-cicd-workflow.md](gitops-cicd-workflow.md)
+*(since 1.0.0rc5)*, #941). See [gitops-cicd-workflow.md](gitops-cicd-workflow.md)
 pitfalls 2.3 and 3.5.
