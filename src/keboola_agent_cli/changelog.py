@@ -55,8 +55,8 @@ CHANGELOG: dict[str, list[str]] = {
         "Fixed (#943): `data-app create --branch` and a `sync push` of a new data app into a "
         "dev-branch tree work. kbagent sent the branch id as a number, and the Data Science "
         "API answered HTTP 422.",
-        "Docs (#942): the plugin has a new reference for running kbagent in a GitOps or CI/CD "
-        "pipeline: a pinned version, the headless `__env__` project, `--branch` on every "
+        "Docs (#942): the plugin has a new reference for GitOps and CI/CD pipelines. It covers "
+        "a pinned version, the headless `__env__` project, `--branch` on every "
         "command, reading exit codes and `errors[]`, and the known pitfalls.",
     ],
     "1.0.0rc4": [
