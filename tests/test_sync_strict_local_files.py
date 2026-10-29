@@ -600,8 +600,8 @@ def test_clone_dry_run_reports_invalid_files(tmp_path: Path) -> None:
     """Devin 4416004708: the clone preview lists what the real clone holds back."""
     source = tmp_path / "golden"
     rel = "extractor/keboola.ex-db/source"
-    (source / rel).mkdir(parents=True)
-    (source / rel / CONFIG_FILENAME).write_text(
+    (source / "main" / rel).mkdir(parents=True)  # the branch tree "main"
+    (source / "main" / rel / CONFIG_FILENAME).write_text(
         yaml.safe_dump(
             {
                 "version": 3,
