@@ -22,6 +22,7 @@ import yaml
 
 from ..constants import CONFIG_FILENAME
 from ..errors import ErrorCode
+from ..sync.config_format import unknown_local_keys
 from ..sync.manifest import ManifestConfiguration
 
 LOCAL_FILE_INVALID_CODE = ErrorCode.SYNC_LOCAL_FILE_INVALID.value
@@ -105,9 +106,17 @@ def check_local_files(
         rel_parts = config_file.parent.relative_to(branch_dir).parts
         if not rel_parts:
             continue  # the branch-level _config.yml
-        owner, _is_row = _owner(rel_parts)
+        owner, is_row = _owner(rel_parts)
         component_id, config_id = _identity(branch_dir, owner, tracked)
-        problem = load_config_yaml(config_file)[1]
+        data, problem = load_config_yaml(config_file)
+        if data is not None:
+            unknown = unknown_local_keys(data, component_id, is_row=is_row)
+            if unknown:
+                problem = (
+                    f"has top-level key(s) sync does not know: {', '.join(unknown)}. "
+                    f"Push would drop them. Put extra configuration keys under "
+                    f"_configuration_extra, or remove them"
+                )
         if not problem:
             continue
         path = "/".join((branch_path, *rel_parts, CONFIG_FILENAME))

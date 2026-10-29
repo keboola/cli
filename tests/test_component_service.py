@@ -19,7 +19,7 @@ from keboola_agent_cli.services.component_service import (
     _generate_from_schema,
     _mask_secrets,
 )
-from keboola_agent_cli.sync.config_format import local_config_to_api
+from keboola_agent_cli.sync.config_format import local_config_to_api, unknown_local_keys
 
 # ---------------------------------------------------------------------------
 # Sample API responses
@@ -828,6 +828,8 @@ class TestGenerateScaffold:
         )
         parsed = yaml.safe_load(content)
         assert parsed["_keboola"]["component_id"] == component_id
+        # Every key is one `sync push` reads (a `storage:` block used to be dropped).
+        assert unknown_local_keys(parsed, component_id, is_row=False) == []
 
     def test_scaffold_with_secrets(self, tmp_config_dir: Path) -> None:
         """Parameters with #password are masked to SECRET_PLACEHOLDER."""

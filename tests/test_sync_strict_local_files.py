@@ -18,6 +18,7 @@ from keboola_agent_cli.constants import CONFIG_FILENAME
 from keboola_agent_cli.models import TokenVerifyResponse
 from keboola_agent_cli.services._sync_baseline import adopted_skip_detail
 from keboola_agent_cli.services.sync_service import SyncService
+from keboola_agent_cli.sync.config_format import api_row_to_local, unknown_local_keys
 from keboola_agent_cli.sync.manifest import load_manifest
 
 VERIFY = TokenVerifyResponse(
@@ -306,3 +307,143 @@ def test_pull_does_not_overwrite_unparseable_untracked_file(tmp_path: Path) -> N
     assert skipped is not None
     assert skipped["action"] == "skipped"
     assert "cannot be parsed" in skipped["reason"]
+
+
+# ---------------------------------------------------------------------------
+# Item 2: an unknown top-level key is an error, never silently dropped
+# ---------------------------------------------------------------------------
+
+
+def test_unknown_top_level_key_in_config_is_an_error(tmp_path: Path) -> None:
+    components = _components()
+    store, root = _pulled_tree(tmp_path, components)
+    _edit_yaml(
+        _config_dir(root) / CONFIG_FILENAME,
+        lambda d: d.update(storage={"input": {"tables": []}}, runtime={"backend": "large"}),
+    )
+
+    svc, client = _service(store, components)
+    result = svc.push(alias="prod", project_root=root, force=True)
+
+    client.update_config.assert_not_called()
+    client.delete_config.assert_not_called()
+    (error,) = _invalid(result)
+    assert "runtime, storage" in error["message"]
+    assert "_configuration_extra" in error["message"]
+    assert error["config_id"] == "cfg-001"
+
+
+def test_unknown_top_level_key_in_row_is_an_error(tmp_path: Path) -> None:
+    components = _components()
+    store, root = _pulled_tree(tmp_path, components)
+    _edit_yaml(_row_dir(root) / CONFIG_FILENAME, lambda d: d.update(tables=["orders"]))
+
+    svc, client = _service(store, components)
+    result = svc.push(alias="prod", project_root=root, force=True)
+
+    client.update_config_row.assert_not_called()
+    client.update_config.assert_not_called()
+    (error,) = _invalid(result)
+    assert "/rows/" in error["path"]
+    assert "tables" in error["message"]
+
+
+def test_key_under_configuration_extra_is_not_an_error(tmp_path: Path) -> None:
+    """The documented escape hatch still works: no error, the change is planned."""
+    components = _components()
+    store, root = _pulled_tree(tmp_path, components)
+    _edit_yaml(
+        _config_dir(root) / CONFIG_FILENAME,
+        lambda d: d.update(_configuration_extra={"runtime": {"backend": "large"}}),
+    )
+
+    svc, _ = _service(store, components)
+    result = svc.diff(alias="prod", project_root=root)
+
+    assert result["errors"] == []
+    assert [c["change_type"] for c in result["changes"]] == ["modified"]
+
+
+def test_hoisted_row_keys_are_not_unknown() -> None:
+    """A keboola.variables row keeps ``values`` at the top level, as pull writes it."""
+    row = api_row_to_local(
+        {"id": "r", "name": "V", "configuration": {"values": [{"name": "x", "value": "1"}]}},
+        "keboola.variables",
+    )
+    assert "values" in row
+    assert unknown_local_keys(row, "keboola.variables", is_row=True) == []
+    assert unknown_local_keys({"values": []}, COMPONENT, is_row=True) == ["values"]
+
+
+VARIED_COMPONENTS: list[dict[str, Any]] = [
+    *_components(),
+    {
+        "id": "keboola.snowflake-transformation",
+        "type": "transformation",
+        "configurations": [
+            {
+                "id": "tr-001",
+                "name": "Transform",
+                "description": "Long text",
+                "isDisabled": True,
+                "configuration": {
+                    "parameters": {
+                        "blocks": [{"name": "B", "codes": [{"name": "C", "script": ["SELECT 1;"]}]}]
+                    },
+                    "storage": {
+                        "input": {"tables": [{"source": "in.c-a.t", "destination": "t"}]},
+                        "output": {"tables": [{"source": "o", "destination": "out.c-a.o"}]},
+                    },
+                    "processors": {"after": []},
+                    "runtime": {"backend": {"size": "small"}},
+                },
+                "rows": [],
+            }
+        ],
+    },
+    {
+        "id": "keboola.flow",
+        "type": "other",
+        "configurations": [
+            {
+                "id": "flow-001",
+                "name": "Flow",
+                "description": "",
+                "configuration": {"phases": [{"id": "p1", "name": "P1"}], "tasks": []},
+                "rows": [],
+            }
+        ],
+    },
+    {
+        "id": "keboola.variables",
+        "type": "other",
+        "configurations": [
+            {
+                "id": "var-001",
+                "name": "Vars",
+                "description": "",
+                "configuration": {"variables": [{"name": "x", "type": "string"}]},
+                "rows": [
+                    {
+                        "id": "vrow-001",
+                        "name": "Values",
+                        "description": "",
+                        "configuration": {"values": [{"name": "x", "value": "1"}]},
+                        "isDisabled": False,
+                    }
+                ],
+            }
+        ],
+    },
+]
+
+
+def test_every_file_pull_writes_passes_the_check(tmp_path: Path) -> None:
+    """Round trip: no key pull writes (configs, rows, hoisted rows) is unknown."""
+    store, root = _pulled_tree(tmp_path, VARIED_COMPONENTS)
+    assert len(list((root / "main").rglob(CONFIG_FILENAME))) >= 6
+
+    svc, _ = _service(store, VARIED_COMPONENTS)
+    result = svc.diff(alias="prod", project_root=root)
+
+    assert result["errors"] == []
