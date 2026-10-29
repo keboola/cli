@@ -61,6 +61,26 @@ These lists keep `error`, because their entries are not failed items with an err
 - **An unknown group** is `INVALID_ARGUMENT` (exit 2), and the message lists the valid groups.
 - **The command lists are generated from the command manifest**, so they always match `--help`. On 0.x, `kbagent context` takes no argument and prints the whole hand-written text.
 
+## Deleting the last config of a pulled dev-branch folder is pushed
+
+*(since vNEXT)*
+
+- **`sync pull --branch <dev>` then deleting the folder's only config** (or the last
+  one left) and `sync push --branch <dev> --force` now deletes that config on the dev
+  branch; a plain push lists it under `skipped_deletions`, and `sync diff` shows it
+  `deleted`. Before, with no `_config.yml` left in `<dev>/`, push read `main/` instead
+  (the promote path), returned `no_changes` with exit 0, and listed the config under
+  `orphaned` with reason `tracked_on_other_branch` and a hint calling the synced branch
+  "not the branch being synced". Deleting one of several configs always worked.
+- **The folder decides, not its files**: a `<dev>/` folder that a pull of that branch
+  created is the source while it is on disk, also when it is empty. So once `--force` has
+  deleted the last config, the next `sync push --branch <dev>` reports `no_changes`
+  instead of promoting `main/` onto the branch you just emptied. Without a `<dev>/`
+  folder, push still promotes `main/`; an entry of the synced branch is then `orphaned`
+  with a hint that says its folder was not read and names `sync pull --branch <dev>`.
+- **On an older version**, keep one config directory in `<dev>/` and delete the config
+  with `kbagent config delete --project <alias> --branch <dev> --component-id <component> --config-id <id>`, then `sync pull --branch <dev>`.
+
 ## A code edit after `sync push` created the config is pushed
 
 *(since 0.100.4)*

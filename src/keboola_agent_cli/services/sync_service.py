@@ -47,6 +47,7 @@ from ..sync.branch_scope import (
     same_branch,
     scope_manifest,
     stale_tree_record,
+    target_tree_is_source,
 )
 from ..sync.code_extraction import merge_code_files
 from ..sync.config_format import (
@@ -2201,10 +2202,13 @@ class SyncService(BaseService):
         (KFR-07 option-B).
 
         API calls still target ``target_branch_id``; only the *read* path is
-        affected.
+        affected. A pulled target tree whose last config was deleted stays the
+        source (:func:`target_tree_is_source`), so the deletion is pushed.
         """
         target_path = self._find_branch_path(manifest, target_branch_id)
         if self._branch_path_has_configs(project_root / target_path):
+            return target_path
+        if target_tree_is_source(manifest, project_root, target_branch_id):
             return target_path
         default_path = manifest.branches[0].path if manifest.branches else target_path
         if default_path != target_path:
