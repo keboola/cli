@@ -1211,11 +1211,12 @@ def storage_add_column(
         help="Dev branch ID (defaults to active branch if set via 'branch use')",
     ),
 ) -> None:
-    """Add a single column to an existing table (synchronous, typed).
+    """Add a single column to an existing table (typed; waits for the job).
 
     Mirrors ``create-table --column``: ``name:TYPE(length)`` creates a typed
-    column; a bare ``name`` adds an untyped STRING column. The Storage
-    add-column endpoint is synchronous -- there is no job to wait on.
+    column; a bare ``name`` adds an untyped STRING column. The Storage API
+    queues a job; the command waits for it, so the column exists when it
+    returns and a failed job is reported as an error.
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")

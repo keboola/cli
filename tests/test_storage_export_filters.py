@@ -9,6 +9,7 @@ from typer.testing import CliRunner
 from keboola_agent_cli.cli import app
 from keboola_agent_cli.client import KeboolaClient
 from keboola_agent_cli.config_store import ConfigStore
+from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 from keboola_agent_cli.models import AppConfig, ProjectConfig
 from keboola_agent_cli.services.storage_service import StorageService
 
@@ -117,6 +118,80 @@ class TestAddColumnClient:
             mock_req.return_value.json.return_value = {}
             client.add_column("in.c-b.t", name="notes", definition=None)
         assert mock_req.call_args.kwargs["json"] == {"name": "notes"}
+
+
+class TestAddColumnWaitsForJob:
+    """The add-column endpoint answers 202 + a queued tableColumnAdd job.
+
+    Customer report: add-column on a dev branch "succeeded", but an immediate
+    table-detail did not list the column -- kbagent returned the 202 receipt
+    without waiting for the job. A failed job was reported as success too.
+    """
+
+    BASE = f"{STACK}/v2/storage/branch/123"
+
+    def _queued(self, status: str = "waiting") -> dict:
+        return {"id": 777, "status": status, "operationName": "tableColumnAdd"}
+
+    def test_waits_for_queued_job_before_returning(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            method="POST",
+            url=f"{self.BASE}/tables/in.c-b.t/columns",
+            status_code=202,
+            json=self._queued(),
+        )
+        httpx_mock.add_response(
+            method="GET",
+            url=f"{STACK}/v2/storage/jobs/777",
+            json={**self._queued("success"), "results": None},
+        )
+        client = KeboolaClient(STACK, TEST_TOKEN)
+        with patch("keboola_agent_cli.client._core.time.sleep"):
+            result = client.add_column("in.c-b.t", name="status", branch_id=123)
+        client.close()
+
+        assert result["status"] == "success"
+        methods = [r.method for r in httpx_mock.get_requests()]
+        assert methods == ["POST", "GET"]
+
+    def test_failed_job_raises_instead_of_reporting_success(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            method="POST",
+            url=f"{self.BASE}/tables/in.c-b.t/columns",
+            status_code=202,
+            json=self._queued(),
+        )
+        httpx_mock.add_response(
+            method="GET",
+            url=f"{STACK}/v2/storage/jobs/777",
+            json={
+                **self._queued("error"),
+                "error": {"message": "Column cannot be NOT NULL on a non-empty table"},
+            },
+        )
+        client = KeboolaClient(STACK, TEST_TOKEN)
+        with (
+            patch("keboola_agent_cli.client._core.time.sleep"),
+            pytest.raises(KeboolaApiError) as exc_info,
+        ):
+            client.add_column("in.c-b.t", name="status", branch_id=123)
+        client.close()
+
+        assert exc_info.value.error_code == ErrorCode.STORAGE_JOB_FAILED
+
+    def test_synchronous_200_is_returned_without_polling(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            method="POST",
+            url=f"{STACK}/v2/storage/tables/in.c-b.t/columns",
+            status_code=200,
+            json={"id": "in.c-b.t", "columns": ["id", "status"]},
+        )
+        client = KeboolaClient(STACK, TEST_TOKEN)
+        result = client.add_column("in.c-b.t", name="status")
+        client.close()
+
+        assert result["columns"] == ["id", "status"]
+        assert len(httpx_mock.get_requests()) == 1
 
 
 class TestAddColumnService:

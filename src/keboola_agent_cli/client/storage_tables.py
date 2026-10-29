@@ -1548,11 +1548,16 @@ class _StorageTablesMixin(_CoreClient):
         definition: dict[str, Any] | None = None,
         branch_id: int | None = None,
     ) -> dict[str, Any]:
-        """Add a single column to an existing table (synchronous).
+        """Add a single column to an existing table (async, waits for completion).
 
-        Unlike ``delete_column`` (async storage job), the Storage API
-        ``POST /tables/{id}/columns`` endpoint is synchronous and returns the
-        updated table resource directly -- there is no job to poll.
+        ``POST /tables/{id}/columns`` answers ``HTTP 202`` with a queued
+        ``tableColumnAdd`` storage job (keboola/connection
+        ``ColumnCreateAction``), which is polled to completion here. Returning
+        the 202 body as-is (as kbagent did before) reported success while the
+        column did not exist yet -- an immediate ``table-detail`` did not list
+        it -- and a job that FAILED (e.g. ``--not-null`` on a table with rows)
+        was reported as success too. A synchronous 200 (older stacks) is
+        returned unchanged.
 
         Args:
             table_id: Full table ID (e.g. "in.c-bucket.table").
@@ -1563,7 +1568,12 @@ class _StorageTablesMixin(_CoreClient):
             branch_id: If set, target a specific dev branch.
 
         Returns:
-            The updated table resource dict from the API.
+            The completed storage job dict (202), or the API response body (200).
+
+        Raises:
+            KeboolaApiError: ``STORAGE_JOB_FAILED`` when the job ends in error,
+                ``STORAGE_JOB_TIMEOUT`` when it does not finish in time (the job
+                keeps running server-side).
         """
         prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
         safe_id = quote(table_id, safe="")
@@ -1571,4 +1581,6 @@ class _StorageTablesMixin(_CoreClient):
         if definition:
             body["definition"] = definition
         response = self._request("POST", f"{prefix}/tables/{safe_id}/columns", json=body)
+        if response.status_code == 202:
+            return self._wait_for_storage_job(response.json())
         return response.json()
