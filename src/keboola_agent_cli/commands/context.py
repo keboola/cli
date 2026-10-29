@@ -2026,7 +2026,9 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Default filename: TABLE_NAME.csv. Use --columns to select columns (see table-detail for names).
     Use --limit to cap row count. Handles sliced files and gzip decompression transparently. Branch-aware.
   storage add-column
-    Add a single column to an existing table (synchronous). Same name:TYPE(length) grammar as create-table --column.
+    Add a single column to an existing table. Same name:TYPE(length) grammar as create-table --column.
+    Waits for the Storage job, so a following table-detail lists the column. A failed job exits 1 (STORAGE_JOB_FAILED).
+    A wait timeout (exit 4, not retryable) leaves the job running: follow it with storage job-detail --job-id ID --wait; do not add the column again.
 
   storage delete-table
     Delete one or more tables. Batch: repeat --table-id. --force to cascade-delete aliased tables. --dry-run to preview. Branch-aware.

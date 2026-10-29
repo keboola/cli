@@ -1375,11 +1375,13 @@ class StorageService(ColumnDescriptionsMixin):
         default: str | None = None,
         branch_id: int | None = None,
     ) -> dict[str, Any]:
-        """Add a single column to an existing table (synchronous).
+        """Add a single column to an existing table and wait until it exists.
 
         Parses the ``name:TYPE(length)`` column spec (the same grammar as
         ``storage create-table --column``) into a Storage API column definition
-        and POSTs it to the synchronous add-column endpoint.
+        and POSTs it to the add-column endpoint, which queues a storage job;
+        the client waits for that job, so the column is listed by
+        ``table-detail`` as soon as this returns.
 
         Args:
             alias: Project alias.
@@ -1411,6 +1413,8 @@ class StorageService(ColumnDescriptionsMixin):
                 definition=parsed["definition"],
                 branch_id=branch_id,
             )
+        except KeboolaApiError as exc:
+            raise with_job_timeout_hint(exc, alias, table_id, branch_id) from exc
         finally:
             client.close()
         return {
