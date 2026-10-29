@@ -2232,6 +2232,11 @@ remain branch-aware because modifying a dev branch is the expected intent.
     a missing dir whose id 2+ dirs carry is an ambiguous move (conflict, nothing pushed).
     A swap/rotation/symlink (a tracked dir carrying another tracked config's id) is held as
     an identity conflict: nothing pushed, pulled or saved until the dirs are moved back.
+    Strict local files (since vNEXT): a _config.yml (config or row) that is not valid YAML,
+    not a mapping, or has an unknown top-level key is an errors[] entry
+    (SYNC_LOCAL_FILE_INVALID, path) in diff/push: the config is held (never deleted, created
+    or updated) and the command exits 1. Extra configuration keys go under
+    _configuration_extra. A missing description: equals ''.
     --branch: per-invocation dev-branch override. Same semantics as sync push/diff.
     Ignored components (since 0.91.0, #689): keboola.sandboxes + keboola.mcp-server-tool are
     always excluded (except shared SQL workspaces under syncWorkspaces, since 0.96.1),

@@ -6,17 +6,21 @@ mocked Storage client), edits files the way a user does, then runs diff/push.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import yaml
+from typer.testing import CliRunner
 
 from helpers import setup_single_project
+from keboola_agent_cli.cli import app
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.constants import CONFIG_FILENAME
 from keboola_agent_cli.models import TokenVerifyResponse
 from keboola_agent_cli.services._sync_baseline import adopted_skip_detail
+from keboola_agent_cli.services.project_service import ProjectService
 from keboola_agent_cli.services.sync_service import SyncService
 from keboola_agent_cli.sync.config_format import api_row_to_local, unknown_local_keys
 from keboola_agent_cli.sync.manifest import load_manifest
@@ -447,3 +451,57 @@ def test_every_file_pull_writes_passes_the_check(tmp_path: Path) -> None:
     result = svc.diff(alias="prod", project_root=root)
 
     assert result["errors"] == []
+
+
+# ---------------------------------------------------------------------------
+# The commands: errors[] -> exit 1, the result still printed
+# ---------------------------------------------------------------------------
+
+
+def _run_cli(store: ConfigStore, svc: SyncService, args: list[str]) -> Any:
+    with (
+        patch("keboola_agent_cli.cli.ConfigStore") as mock_store,
+        patch("keboola_agent_cli.cli.ProjectService") as mock_projects,
+        patch("keboola_agent_cli.cli.SyncService") as mock_sync,
+    ):
+        mock_store.return_value = store
+        mock_projects.return_value = ProjectService(config_store=store)
+        mock_sync.return_value = svc
+        return CliRunner().invoke(app, args)
+
+
+def test_cli_push_force_with_unparseable_file_exits_1_and_deletes_nothing(
+    tmp_path: Path,
+) -> None:
+    components = _components()
+    store, root = _pulled_tree(tmp_path, components)
+    (_config_dir(root) / CONFIG_FILENAME).write_text(BROKEN_YAML, encoding="utf-8")
+    svc, client = _service(store, components)
+
+    result = _run_cli(
+        store,
+        svc,
+        ["--json", "sync", "push", "--project", "prod", "--directory", str(root), "--force"],
+    )
+
+    assert result.exit_code == 1, result.output
+    envelope = json.loads(result.output)
+    assert envelope["exit_code"] == 1
+    assert len(_invalid(envelope["data"])) == 1
+    client.delete_config.assert_not_called()
+
+
+def test_cli_diff_with_unknown_key_exits_1(tmp_path: Path) -> None:
+    components = _components()
+    store, root = _pulled_tree(tmp_path, components)
+    _edit_yaml(_config_dir(root) / CONFIG_FILENAME, lambda d: d.update(storage={}))
+    svc, _ = _service(store, components)
+
+    result = _run_cli(
+        store, svc, ["--json", "sync", "diff", "--project", "prod", "--directory", str(root)]
+    )
+
+    assert result.exit_code == 1, result.output
+    data = json.loads(result.output)["data"]
+    assert data["summary"]["invalid"] == 1
+    assert "storage" in data["errors"][0]["message"]
