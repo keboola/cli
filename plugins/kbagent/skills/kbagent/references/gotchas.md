@@ -72,10 +72,12 @@ These lists keep `error`, because their entries are not failed items with an err
   (the promote path), returned `no_changes` with exit 0, and listed the config under
   `orphaned` with reason `tracked_on_other_branch` and a hint calling the synced branch
   "not the branch being synced". Deleting one of several configs always worked.
-- **The folder decides, not its files**: a `<dev>/` folder still on disk that holds
-  configs a pull of that branch recorded is the source. Without a `<dev>/` folder, push
-  still promotes `main/`; an entry of the synced branch is then `orphaned` with a hint
-  that says its folder was not read and names `sync pull --branch <dev>`.
+- **The folder decides, not its files**: a `<dev>/` folder that a pull of that branch
+  created is the source while it is on disk, also when it is empty. So once `--force` has
+  deleted the last config, the next `sync push --branch <dev>` reports `no_changes`
+  instead of promoting `main/` onto the branch you just emptied. Without a `<dev>/`
+  folder, push still promotes `main/`; an entry of the synced branch is then `orphaned`
+  with a hint that says its folder was not read and names `sync pull --branch <dev>`.
 - **On an older version**, keep one config directory in `<dev>/` and delete the config
   with `kbagent config delete --branch <dev>`, then `sync pull --branch <dev>`.
 

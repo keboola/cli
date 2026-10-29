@@ -104,3 +104,28 @@ def test_orphan_hint_never_calls_the_synced_branch_another_branch(tmp_path: Path
     assert "the branch being synced" in record["hint"]
     assert f"sync pull --branch {DEV}" in record["hint"]
     assert _dev_keys(w) == {cid}
+
+
+def test_the_next_push_after_deleting_the_last_config_promotes_nothing(tmp_path: Path) -> None:
+    """The emptied ``dev/`` stays the source once its last entry is gone (#938 review).
+
+    ``main/`` holds a production config; a push that read ``main/`` would
+    create it on the dev branch the user just emptied.
+    """
+    w = World(tmp_path)
+    variant = VARIANTS["extractor"]
+    w.api.seed(variant, name="Orders", branch=PROD)
+    cid = w.api.seed(variant, name="Test", branch=DEV)
+    w.init()
+    w.pull()
+    w.pull(branch=DEV)
+    assert any((w.root / "main").rglob("_config.yml"))
+    shutil.rmtree(w.config_dir(cid, DEV))
+    w.push(branch=DEV, force=True)
+    assert _dev_keys(w) == set()
+
+    result = w.push(branch=DEV)
+
+    assert result["status"] == "no_changes"
+    assert _dev_keys(w) == set()
+    assert w.source_tree(DEV) == w.root / "dev"

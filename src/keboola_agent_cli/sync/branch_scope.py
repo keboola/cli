@@ -129,25 +129,25 @@ def target_tree_is_source(manifest: Manifest, project_root: Path, branch_id: int
     """True iff the target branch's own tree is what diff/push read, even with no file left.
 
     Without a config file under the target tree, diff/push fall back to the
-    default tree (the promote path, KFR-07 / #929). A tree that is registered,
-    still on disk and backs entries a pull of that branch wrote (no
-    ``promoted_from`` association) is that branch's own checkout, though: the
-    user deleted its last config, and the push must read that as a delete.
-    Falling back to ``main/`` there made every entry of the branch an orphan of
-    "another" branch and the push a silent no-op. The directory must exist
-    because a promote push written before the association was recorded left
-    target-branch entries without one and never had a target tree.
+    default tree (the promote path, KFR-07 / #929). A dev-branch tree that is
+    registered and still on disk is that branch's own checkout, though: only
+    ``sync pull --branch`` (or ``config new --push`` on that branch) creates
+    it -- a promote push registers the branch but never creates its directory.
+    So an emptied checkout means "every config deleted": the push must delete,
+    and once ``--force`` has deleted the last one (and its manifest entry), the
+    next push must still read the empty tree instead of promoting ``main/``
+    onto the branch again. A promote push written before the ``promoted_from``
+    association was recorded left target-branch entries without one but no
+    target directory, so it keeps reading ``main/``.
     """
     if is_production(manifest, branch_id):
         return False
-    target_path = branch_tree_path(manifest, branch_id)
-    default_path = branch_tree_path(manifest, None)
-    if target_path == default_path or not (project_root / target_path).is_dir():
+    if not any(branch.id == branch_id for branch in manifest.branches):
         return False
-    return any(
-        same_branch(manifest, cfg.branch_id, branch_id) and promoted_from(cfg) is None
-        for cfg in manifest.configurations
-    )
+    target_path = branch_tree_path(manifest, branch_id)
+    if target_path == branch_tree_path(manifest, None):
+        return False
+    return (project_root / target_path).is_dir()
 
 
 # Row metadata: the row's base is unknown (D22). ``adopted``: pull kept a local

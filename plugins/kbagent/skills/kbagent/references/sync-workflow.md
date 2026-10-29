@@ -156,8 +156,9 @@ A subtree that `sync pull --branch <id>` wrote stays the source after you delete
 its last config directory (since vNEXT): `sync push --branch <id>` lists that config
 under `skipped_deletions`, and `--force` deletes it on the branch. Before, push read
 `main/` instead, reported the config as `orphaned` (`tracked_on_other_branch`) and
-deleted nothing. Deleting the whole `<branch_name>/` folder still means "promote
-`main/`".
+deleted nothing. The emptied folder stays the source, so a later push does not
+promote `main/` onto the branch. Deleting the whole `<branch_name>/` folder still
+means "promote `main/`".
 
 Promoting is idempotent (since 0.96.1): a config the dev branch lacks is created
 there once, and the manifest records that dev copy for the same `main/`
