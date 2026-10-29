@@ -1131,7 +1131,7 @@ class SyncService(BaseService):
         never_fetched_keys = scope.never_fetched_keys
         # An unusable _config.yml holds its config back: reported in errors[],
         # never read as "no file" (a delete) nor pushed without its unknown keys.
-        local_check = check_local_files(project_root, source_branch_path, scope.in_tree)
+        bad = check_local_files(project_root, source_branch_path, scope.in_tree, ignored_components)
         tracked_keys = scope.tracked_keys
         orphaned: list[dict[str, Any]] = list(scope.orphaned)
 
@@ -1159,7 +1159,7 @@ class SyncService(BaseService):
                 raw_remote=remote_raw.get(key),
                 remote_local=remote_configs.get(key),
             )
-            held = cfg.path in local_check.held_paths
+            held = cfg.path in bad.held_paths
             local_data = None if held else self._read_config_file(config_dir)
             if local_data is None:
                 continue
@@ -1215,7 +1215,7 @@ class SyncService(BaseService):
             # An ignored component's leftover directory (its manifest entry is
             # gone, so the walk sees it as untracked) must not be planned as a
             # create -- push would re-add exactly what pull refuses to fetch.
-            if component_id in ignored_components or added_cfg["path"] in local_check.held_paths:
+            if component_id in ignored_components or added_cfg["path"] in bad.held_paths:
                 continue
             config_dir = project_root / source_branch_path / added_cfg["path"]
             local_data = self._read_config_file(config_dir)
@@ -1306,7 +1306,7 @@ class SyncService(BaseService):
             local_override_hashes or None,
             scope.target_tracked_keys,
         )
-        changeset = drop_held(changeset, local_check.held_keys)
+        changeset = drop_held(changeset, bad.held_keys)
 
         # Row-level diff: walk manifest rows, load local YAML, feed into
         # compute_row_changeset alongside remote_rows built above.
@@ -1373,7 +1373,7 @@ class SyncService(BaseService):
                 if c.change_type == "remote_deleted"
             },
         )
-        changeset.extend(drop_held(row_changeset + ambiguous_rows, local_check.held_keys))
+        changeset.extend(drop_held(row_changeset + ambiguous_rows, bad.held_keys))
         # Remote-only configs and rows, three-way local deletes, summary (D1-D5).
         report = diff_report(
             changeset,
@@ -1398,7 +1398,7 @@ class SyncService(BaseService):
                 source_tree=source_branch_path,
                 target_tree=branch_tree_path(manifest, branch_id),
             ),
-            DiffExtras(never_fetched, orphaned, diff_warnings, local_check.errors),
+            DiffExtras(never_fetched, orphaned, diff_warnings, bad.errors),
         )
         return moves.report(report)
 

@@ -14,6 +14,7 @@ creates, updates nor deletes it, and the command exits 1.
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -88,7 +89,10 @@ def _identity(
 
 
 def check_local_files(
-    project_root: Path, branch_path: str, configs: list[ManifestConfiguration]
+    project_root: Path,
+    branch_path: str,
+    configs: list[ManifestConfiguration],
+    ignored: Collection[str] = (),
 ) -> LocalFileCheck:
     """Find every unusable ``_config.yml`` of one branch tree (configs and rows).
 
@@ -97,6 +101,7 @@ def check_local_files(
         branch_path: The branch tree diff reads from, the prefix of every
             reported ``path``.
         configs: The manifest entries of that tree, for each file's identity.
+        ignored: Ignored components: diff and push never read their files.
     """
     check = LocalFileCheck()
     branch_dir = project_root / branch_path
@@ -109,6 +114,8 @@ def check_local_files(
             continue  # the branch-level _config.yml
         owner, is_row = _owner(rel_parts)
         component_id, config_id = _identity(branch_dir, owner, tracked)
+        if component_id in ignored:
+            continue
         data, problem = load_config_yaml(config_file)
         if data is not None:
             unknown = unknown_local_keys(data, component_id, is_row=is_row)
