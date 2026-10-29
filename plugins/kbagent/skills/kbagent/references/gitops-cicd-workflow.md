@@ -311,12 +311,13 @@ next release; each entry says whether it is already in 1.0.0rc4.
   top-level `input:` / `output:`; an old scaffold fails with
   `SYNC_LOCAL_FILE_INVALID`.
 
-### 4.1 `data-app create --branch` fails with 422
+### 4.1 Creating a data app in a dev branch fails with 422
 
 - **Symptom (<= 1.0.0rc4):** `data-app create --branch <dev>` fails with HTTP 422:
-  kbagent sends `branchId` as a number.
-- **Workaround:** create the app in the default branch.
-- **Status:** fix pending in #937 (not merged yet).
+  kbagent sends `branchId` as a number. `sync push` and `sync clone` that create
+  a new data app in a dev branch hit the same 422.
+- **Workaround (<= 1.0.0rc4):** create the app in the default branch.
+- **Status:** fixed *(since vNEXT)* by #943 -- not in 1.0.0rc4.
 
 ### 4.2 `add-column` returns before the column exists
 

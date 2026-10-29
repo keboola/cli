@@ -517,7 +517,8 @@ yours at runtime.
 `sync push` creates a new data app but never deploys it, and does not redeploy a
 changed one. `sync push --force` and `config delete` remove only the Storage
 configuration; kbagent does not stop or delete the app there.
-`data-app create --branch <dev>` fails with HTTP 422 up to 1.0.0rc4 (fix pending
-in #937): create the app in the default branch. Manage the app with
+Up to 1.0.0rc4, `data-app create --branch <dev>` -- and a `sync push` / `sync clone`
+that creates a data app in a dev branch -- fails with HTTP 422: create the app in
+the default branch (fixed *(since vNEXT)* by #943). Manage the app with
 `data-app create` / `deploy` / `delete`. See
 [gitops-cicd-workflow.md](gitops-cicd-workflow.md) pitfalls 4.1 and 4.3.
