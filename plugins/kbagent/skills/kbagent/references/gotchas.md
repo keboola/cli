@@ -7103,6 +7103,33 @@ examples. Surprises worth knowing before you touch this:
   organization` call. Never loop this over a whole project's objects without
   the user having named which ones should become org-wide.
 
+## Headless GitOps / CI deploy pipelines: known pitfalls
+
+*(since vNEXT)* A customer running `sync` unattended in a deploy pipeline on
+0.100.4 hit a set of pitfalls; each is listed with the versions it affects, the
+workaround and its fix in
+[gitops-cicd-workflow.md](gitops-cicd-workflow.md). All were observed on
+0.100.4. Fixed in vNEXT: the unparseable and unknown-key `_config.yml` cases
+(#941), `branch create` on `__env__` (#940), `add-column` (#939), deleting the
+last config of a dev-branch tree (#938) and creating a data app in a dev branch
+(#943); `flow schedule`, the dry-run shapes and the optional keys are not
+changed. The ones that lose or hide work:
+
+- A `_config.yml` that does not parse is skipped with only a stderr warning
+  (exit 0); a tracked one counts as deleted and `sync push --force` deletes the
+  remote config. Parse every file before the push (fix: #941).
+- `sync push` drops every top-level key it does not know (flow `phases:` /
+  `tasks:`, `runtime:`, a `config new` `storage:` block) -- put them under
+  `_configuration_extra:` or top-level `input:` / `output:` (fix: #941).
+- `flow schedule` exits 0 with `activated: false` when activation is refused;
+  `sync push` never activates a schedule.
+- `branch create --project __env__` exits 5 although it created the branch;
+  check `branch list` before a retry (fix: #940).
+- `storage add-column` returns before the asynchronous column job finished, and
+  a failed job reported success (fix: #939).
+- `sync push --dry-run` has two result shapes (`dry_run` / `no_changes`), and
+  most list keys appear only when not empty.
+
 ## A partial failure is no longer reported as success
 
 *(since 0.98.0, closes #745)* A command that keeps going after one item fails
