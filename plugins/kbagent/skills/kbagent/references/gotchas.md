@@ -7382,3 +7382,15 @@ Now:
   push; a scaffold written by an older version now fails with
   `SYNC_LOCAL_FILE_INVALID` -- move `storage.input` / `storage.output` to
   the top level.
+
+## `data-app create --branch` and `sync push` of a data app in a dev branch failed with HTTP 422
+
+*(since vNEXT)* `kbagent data-app create --project ALIAS --branch <dev-branch-id> ...`
+failed with HTTP 422 from the Data Science API, because kbagent sent `branchId`
+in `POST /apps` as a number and the API takes only a string. Without `--branch`
+(production) it worked. `sync push` (and `sync clone`) into a dev branch went
+through the same request, so a new data-app config in a dev-branch tree failed
+the same way. Now a dev branch id is sent as a string (`"branchId": "12345"`);
+production and `--branch 0` stay `null`. The `--dry-run` body of `data-app
+create` shows the same string. On an older version, create the app in
+production or in the Keboola UI.

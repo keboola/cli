@@ -414,6 +414,13 @@ class TestDataAppCreateAuthBlock:
         result = service.create_data_app(**self._create_kwargs(dry_run=True, branch_id=0))
         assert result["requests"]["post_apps"]["branchId"] is None
 
+    def test_dry_run_dev_branch_renders_branch_id_string(self, tmp_path: Path) -> None:
+        """The dry-run body matches the real request: a dev branch id is a string."""
+        store = _make_store(tmp_path)
+        service, *_ = _make_service(store)
+        result = service.create_data_app(**self._create_kwargs(dry_run=True, branch_id=12345))
+        assert result["requests"]["post_apps"]["branchId"] == "12345"
+
     def test_invalid_auth_value_rejected(self, tmp_path: Path) -> None:
         # Use a clearly-invalid sentinel (NOT a future-supported provider
         # like 'oidc' / 'github' / 'gitlab' / 'jumpcloud') so this test
@@ -2344,6 +2351,45 @@ class TestCreateAppClient:
             stack_url="https://connection.keboola.com", token="901-test-token"
         ) as client:
             client.create_app(type_="streamlit", name="app", description="", config={}, branch_id=0)
+
+        body = json.loads(httpx_mock.get_requests()[0].content)
+        assert body["branchId"] is None
+
+    def test_dev_branch_posts_branch_id_as_string(self, httpx_mock) -> None:
+        """A dev branch id goes out as a JSON string: the Data Science API
+        answers HTTP 422 on a numeric ``branchId``."""
+        from keboola_agent_cli.data_science_client import DataScienceClient
+
+        httpx_mock.add_response(
+            url="https://data-science.keboola.com/apps",
+            method="POST",
+            json={"id": "10", "configId": "01CFG"},
+        )
+
+        with DataScienceClient(
+            stack_url="https://connection.keboola.com", token="901-test-token"
+        ) as client:
+            client.create_app(
+                type_="streamlit", name="app", description="", config={}, branch_id=12345
+            )
+
+        body = json.loads(httpx_mock.get_requests()[0].content)
+        assert body["branchId"] == "12345"
+
+    def test_no_branch_posts_branch_id_null(self, httpx_mock) -> None:
+        """Production (no branch) stays ``branchId: null``."""
+        from keboola_agent_cli.data_science_client import DataScienceClient
+
+        httpx_mock.add_response(
+            url="https://data-science.keboola.com/apps",
+            method="POST",
+            json={"id": "10", "configId": "01CFG"},
+        )
+
+        with DataScienceClient(
+            stack_url="https://connection.keboola.com", token="901-test-token"
+        ) as client:
+            client.create_app(type_="streamlit", name="app", description="", config={})
 
         body = json.loads(httpx_mock.get_requests()[0].content)
         assert body["branchId"] is None
