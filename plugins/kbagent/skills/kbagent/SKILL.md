@@ -5,15 +5,15 @@ description: >
   Covers: searching configurations, job history, data
   lineage, dev branches, merge requests, workspace SQL debugging, GitOps sync,
   bucket sharing/linking, encrypting secrets,
-  Storage tables/files/snapshots, large file uploads, data apps,
-  flows/schedules,
+  Storage tables/files/snapshots, large (200 GB) file uploads, data apps,
+  flows/schedules, invitations,
   feature flags, OTLP data streams, scoped Storage tokens, semantic
-  layer, CI/CD deploy pipelines,
-  first-time setup.
+  layer, Developer Portal,
+  first-time setup and logout.
   Triggers: kbagent, Keboola, keboola
-  config, keboola job, keboola lineage, keboola sync, gitops, GitOps deploy,
-  CI/CD, pipeline, headless, dev branch, merge request,
-  data app, semantic layer, dev-portal,
+  config, keboola job, keboola lineage, keboola sync, gitops, dev branch,
+  merge request,
+  data app, python-js app, semantic layer, sl, dev-portal,
   data stream, OTLP, scoped token, encrypt secrets,
   feature flag, flow schedule, invite member, SQL transformation edit,
   sync action, keboola docs, table snapshot, auth, login, sign in,
