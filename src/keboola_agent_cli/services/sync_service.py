@@ -107,7 +107,6 @@ from ._sync_companions import (
     companion_diagnostics,
     config_locally_modified,
     current_companions,
-    description_shadowed,
     kept_companion_warning,
     local_unchanged,
     merge_with_remote,
@@ -1132,10 +1131,7 @@ class SyncService(BaseService):
         never_fetched_keys = scope.never_fetched_keys
         # An unusable _config.yml holds its config back: reported in errors[],
         # never read as "no file" (a delete) nor pushed without its unknown keys.
-        local_check = check_local_files(
-            project_root / source_branch_path, source_branch_path, scope.in_tree
-        )
-        held_keys = local_check.held_keys(scope.in_tree)
+        local_check = check_local_files(project_root, source_branch_path, scope.in_tree)
         tracked_keys = scope.tracked_keys
         orphaned: list[dict[str, Any]] = list(scope.orphaned)
 
@@ -1163,17 +1159,15 @@ class SyncService(BaseService):
                 raw_remote=remote_raw.get(key),
                 remote_local=remote_configs.get(key),
             )
-            if cfg.path in local_check.held_paths:
-                continue
-            local_data = self._read_config_file(config_dir)
+            held = cfg.path in local_check.held_paths
+            local_data = None if held else self._read_config_file(config_dir)
             if local_data is None:
                 continue
             problem = component_change_problem(cfg.component_id, local_data, cfg.path)
             if problem:
                 relabelled.append(problem)
-            diff_warnings += companion_diagnostics(config_dir, cfg.component_id, cfg.path)
-            diff_warnings += description_shadowed(
-                config_dir, local_data, cfg.component_id, cfg.path
+            diff_warnings += companion_diagnostics(
+                config_dir, cfg.component_id, cfg.path, local_data
             )
 
             # Check if ANY file of this config changed since pull: _config.yml
@@ -1256,7 +1250,10 @@ class SyncService(BaseService):
             # Merged once the identity is known: packages a pyproject.toml left
             # undecided are the adopted remote config's (T1).
             remote_local = remote_configs.get(f"{component_id}/{untracked_id}")
-            shadowed = description_shadowed(config_dir, local_data, component_id, added_cfg["path"])
+            # Before the merge: it reads the file's own description (D11).
+            diff_warnings += companion_diagnostics(
+                config_dir, component_id, added_cfg["path"], local_data
+            )
             merge_with_remote(component_id, local_data, config_dir, remote_local)
             # Its rows join the plan: created with it, or diffed by id (D7, D8).
             collect_untracked_rows(
@@ -1268,8 +1265,6 @@ class SyncService(BaseService):
                 config_path=added_cfg["path"],
                 remote_rows=remote_rows,
             )
-            diff_warnings += companion_diagnostics(config_dir, component_id, added_cfg["path"])
-            diff_warnings += shadowed
             # An adopted file has no manifest baseline: compute_changeset reads
             # the one a `config new --push` scaffold records (issue #792 E).
             local_configs.append(
@@ -1311,7 +1306,7 @@ class SyncService(BaseService):
             local_override_hashes or None,
             scope.target_tracked_keys,
         )
-        changeset = drop_held(changeset, held_keys)
+        changeset = drop_held(changeset, local_check.held_keys)
 
         # Row-level diff: walk manifest rows, load local YAML, feed into
         # compute_row_changeset alongside remote_rows built above.
@@ -1378,7 +1373,7 @@ class SyncService(BaseService):
                 if c.change_type == "remote_deleted"
             },
         )
-        changeset.extend(drop_held(row_changeset + ambiguous_rows, held_keys))
+        changeset.extend(drop_held(row_changeset + ambiguous_rows, local_check.held_keys))
         # Remote-only configs and rows, three-way local deletes, summary (D1-D5).
         report = diff_report(
             changeset,
@@ -1403,10 +1398,8 @@ class SyncService(BaseService):
                 source_tree=source_branch_path,
                 target_tree=branch_tree_path(manifest, branch_id),
             ),
-            DiffExtras(never_fetched, orphaned, diff_warnings),
+            DiffExtras(never_fetched, orphaned, diff_warnings, local_check.errors),
         )
-        report["errors"] = local_check.errors
-        report["summary"]["invalid"] = len(local_check.errors)
         return moves.report(report)
 
     # ------------------------------------------------------------------

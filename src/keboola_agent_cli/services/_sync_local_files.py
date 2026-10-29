@@ -38,15 +38,14 @@ class LocalFileCheck:
     Attributes:
         held_paths: Config dir paths (relative to the branch dir) whose
             config or one of whose rows has an invalid file.
+        held_keys: ``"{component}/{config}"`` keys of the tracked configs
+            among them.
         errors: One ``errors[]`` entry per invalid file.
     """
 
     held_paths: set[str] = field(default_factory=set)
+    held_keys: set[str] = field(default_factory=set)
     errors: list[dict[str, str]] = field(default_factory=list)
-
-    def held_keys(self, configs: list[ManifestConfiguration]) -> set[str]:
-        """``"{component}/{config}"`` keys of the tracked configs that are held."""
-        return {f"{c.component_id}/{c.id}" for c in configs if c.path in self.held_paths}
 
 
 def load_config_yaml(config_file: Path) -> tuple[dict[str, Any] | None, str]:
@@ -89,16 +88,18 @@ def _identity(
 
 
 def check_local_files(
-    branch_dir: Path, branch_path: str, configs: list[ManifestConfiguration]
+    project_root: Path, branch_path: str, configs: list[ManifestConfiguration]
 ) -> LocalFileCheck:
-    """Find every unusable ``_config.yml`` under *branch_dir* (configs and rows).
+    """Find every unusable ``_config.yml`` of one branch tree (configs and rows).
 
     Args:
-        branch_dir: The tree diff reads from (``project_root / branch_path``).
-        branch_path: Its name, the prefix of every reported ``path``.
+        project_root: The sync working tree.
+        branch_path: The branch tree diff reads from, the prefix of every
+            reported ``path``.
         configs: The manifest entries of that tree, for each file's identity.
     """
     check = LocalFileCheck()
+    branch_dir = project_root / branch_path
     if not branch_dir.is_dir():
         return check
     tracked = {c.path: c for c in configs}
@@ -134,6 +135,7 @@ def check_local_files(
                 ),
             }
         )
+    check.held_keys = {f"{c.component_id}/{c.id}" for c in configs if c.path in check.held_paths}
     return check
 
 

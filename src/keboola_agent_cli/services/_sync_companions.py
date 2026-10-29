@@ -403,7 +403,10 @@ def kept_companion_warning(component_id: str, rel_path: str, name: str) -> dict[
 
 
 def companion_diagnostics(
-    config_dir: Path, component_id: str, rel_path: str
+    config_dir: Path,
+    component_id: str,
+    rel_path: str,
+    local_data: dict[str, Any] | None = None,
 ) -> list[dict[str, str]]:
     """Diff ``companion_warnings`` for one config dir (D11, S1).
 
@@ -413,7 +416,8 @@ def companion_diagnostics(
     file is never sent. ``COMPANION_UNREADABLE``: a ``pyproject.toml`` that
     is not valid TOML (or whose dependencies are not a list of strings) says
     nothing about the packages, so push keeps the inline value instead.
-    Both said out loud instead of silently.
+    Both said out loud instead of silently. With *local_data* (the file as
+    read, before the merge) also :func:`description_shadowed`.
     """
     owned = set(owned_companions(component_id))
     found = [
@@ -447,6 +451,8 @@ def companion_diagnostics(
                 ),
             }
         )
+    if local_data is not None:
+        found += description_shadowed(config_dir, local_data, component_id, rel_path)
     return found
 
 
