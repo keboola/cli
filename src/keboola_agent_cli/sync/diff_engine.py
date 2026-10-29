@@ -53,6 +53,8 @@ class ConfigChange:
         details: list[str] | None = None,
         is_row: bool = False,
         parent_config_id: str = "",
+        source_row_id: str = "",
+        parent_path: str = "",
     ):
         self.change_type = change_type
         self.component_id = component_id
@@ -64,6 +66,16 @@ class ConfigChange:
         self.details = details or []
         self.is_row = is_row
         self.parent_config_id = parent_config_id
+        # A promote push's new row: its id in the source config, kept apart
+        # from ``config_id`` (the target identity, empty until created).
+        self.source_row_id = source_row_id
+        # A row under an untracked parent dir: the parent's path, its identity
+        # until push creates it (empty ``parent_config_id``) or registers the
+        # adopted config it names (``parent_config_id`` set).
+        self.parent_path = parent_path
+        # A local delete push refuses (sync group 3, D4): ``details[0]`` says
+        # why and what to do. Serialized as ``refused_delete: true``.
+        self.refused_delete = False
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to dict for JSON output."""
@@ -78,6 +90,12 @@ class ConfigChange:
         if self.is_row:
             data["is_row"] = True
             data["parent_config_id"] = self.parent_config_id
+            if self.source_row_id:
+                data["source_row_id"] = self.source_row_id
+            if self.parent_path:
+                data["parent_path"] = self.parent_path
+        if self.refused_delete:
+            data["refused_delete"] = True
         return data
 
 
@@ -539,6 +557,8 @@ def compute_row_changeset(
                     local_data=local_data,
                     is_row=True,
                     parent_config_id=parent_config_id,
+                    source_row_id=entry.get("source_row_id", ""),
+                    parent_path=entry.get("parent_path", ""),
                 )
             )
             if remote_key:

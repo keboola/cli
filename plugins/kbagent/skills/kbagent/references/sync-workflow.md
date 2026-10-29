@@ -97,6 +97,9 @@ Related semantics (all since v0.72.0):
 - Config-level enabled/disabled state round-trips: `_config.yml` carries
   `is_disabled: true` for disabled configs (absent = enabled), `sync diff`
   shows the drift, push updates the remote state when the key is present.
+  *(since vNEXT)* Deleting the `is_disabled: true` line that pull wrote and
+  pushing re-enables the config (or row); a missing key in a file that never
+  had the line still leaves the remote state alone.
 - A manifest entry that was registered but never materialized (empty
   `pull_hash`, no files -- pre-0.72 name-collision phantom) is excluded from
   push delete-planning and reported as `never_fetched`; pull heals it.
@@ -155,6 +158,20 @@ directory. Re-running the same push creates nothing; a later edit in `main/`
 updates the dev copy, never production. Older versions created another dev copy
 on every push (see gotchas.md).
 
+The dev branch's record of each promoted `main/` folder is its own (since vNEXT):
+the production record is never changed by a `--branch` push, so production
+`sync diff` keeps showing an edit you only promoted as a local `modified` change,
+and a production `sync pull` neither overwrites it nor deletes a promoted folder.
+A promote push never writes a dev id into `main/`: a production config keeps its
+production id, a config authored there keeps none (a plain `sync push` later
+creates it in production), and the dev-branch record (`promoted_from` in the
+manifest) maps the folder to the dev id. A production rename moves that record
+with the folder; deleting the folder is a local delete for the dev branch
+(`--force` deletes the dev config). Every promote push rewrites the references
+of what it sends (flow tasks, schedule targets, variables and shared-code links)
+to the dev ids of the configs promote pushes created there; `main/` keeps the
+production ids.
+
 ## Switching back to production after a `--branch` pull (since v0.89.0)
 
 `sync pull --branch <dev>` does two things: it materializes the
@@ -189,7 +206,10 @@ kbagent sync diff --project prod                  # target: production
   `path`, `branch_id`, `branch_path`, `exists_on_target`, `reason`, `hint`) plus
   a `summary.orphaned` counter; human mode previews the first 10.
 - The fix: `kbagent sync pull --project prod` re-targets the manifest back to
-  production. Then diff/push behave normally and the warning disappears.
+  production. Then diff/push behave normally and the warning disappears. That pull
+  reads no dev-branch baselines (since vNEXT): it writes each config into the `main/`
+  folder whose `_config.yml` carries its id, and keeps (`skipped`) a folder that
+  differs from production, which then diffs as a `conflict`.
 
 Before this landed, that production diff classified the whole orphaned `main/`
 tree as `added` with an empty `config_id`, and `sync push` would have created a
@@ -306,6 +326,20 @@ Depending on component type, additional files are extracted:
 | Python transformation | `transform.py` + `pyproject.toml` (dependencies) |
 | Custom Python app | `code.py` + `pyproject.toml` |
 | Flow/orchestrator | phases, tasks, schedules inline in `_config.yml` |
+
+*(since vNEXT)* These companion files are one set per config. Creating one (for example
+`_description.md` for a config without a description) or deleting one is a local change
+that `sync diff` lists and `sync push` sends. When the remote clears a value, `sync pull`
+removes its file -- unless you edited it, then the config is `skipped` and diff shows the
+conflict. Only the files of the config's component count; any other of these names in
+the folder is ignored and reported as an `UNOWNED_COMPANION` warning. A companion file
+always wins over the same value inline; `pyproject.toml` counts only when it states
+`[project].dependencies` (`dependencies = []` is an empty list; a file without a usable
+list never decides them -- the inline or the remote packages are kept). An empty description is written inline as `description: ''`.
+
+A new config folder with a `rows/` subfolder is created with all its rows by one
+`sync push` (`--dry-run` lists the rows as `added`). If a create fails or the push stops
+half-way, run `sync push` again: it creates only what is still missing.
 
 Storage metadata is also pulled (read-only, not tracked in manifest):
 
@@ -425,8 +459,79 @@ Stored in `.keboola/branch-mapping.json`:
 | REMOTE MODIFIED | Remote changed, local unchanged | Run pull to fetch |
 | CONFLICT | Both sides changed, or a file with a config id and no manifest entry differs from the remote *(since 0.99.0, #792)* | Resolve manually, then push |
 | ADDED | New local config | Push creates it |
-| DELETED | Local file removed | `push --force` deletes from remote; a plain push lists it under `skipped_deletions` *(since 0.96.1)* |
+| DELETED | Local file removed, and the remote still equals the last pull *(since vNEXT)* | `push --force` deletes from remote; a plain push lists it under `skipped_deletions` *(since 0.96.1)* |
 | REMOTE DELETED | Deleted on the remote since the last pull | Run pull; push never re-creates it *(since 0.96.1)* |
+
+Not a change type: `remote_only[]` lists configs created on the remote and
+`remote_only_rows[]` *(since vNEXT)* lists rows created on the remote (in the
+UI) under a config the tree tracks. `sync pull` fetches both; push never
+creates or deletes them.
+
+### Local deletes are three-way
+
+*(since vNEXT)*
+
+A config or row whose local folder is gone is `DELETED` only while the remote
+still equals the baseline the last pull recorded for this branch. When the
+remote changed since (edited, renamed, disabled -- or, for a config, any of its
+rows edited, added or deleted in the UI) it is a `CONFLICT`, and when no
+trustworthy baseline is recorded it is a `CONFLICT` too. `push --force` enables
+deletions; it never overrides a conflict. The conflict's `details` say what to
+do: run `kbagent sync pull` (with `--branch <id>` for a dev branch), review the
+restored files, then delete them again and `sync push --force`. Before, such a
+delete was `DELETED` and `push --force` deleted the remote edit with it.
+`sync push` lists each refused delete with that message under
+`refused_deletions[]` (also `--dry-run`).
+
+A config delete covers its rows: push sends one DELETE for the config and none
+for its rows (they used to fail with 404 and make a successful push exit 1).
+The rows are listed on the config change as `covered_rows` (`--dry-run`,
+`skipped_deletions`, `pushed_details`), and `--dry-run` counts the config once.
+When the config DELETE fails (a 403, a timeout), its rows are not deleted one
+by one and its manifest entry stays, so the next `push --force` retries it.
+
+Limits: an edit that changes ONLY an encrypted value is invisible to the
+comparison (ciphertexts compare equal), so such a delete is still `DELETED`;
+and the Storage API has no conditional delete, so a UI edit made between
+`sync diff` and the DELETE is not protected. Review `sync diff` right before
+`sync push --force`.
+
+### Rows across `sync pull --branch` and promote pushes
+
+*(since vNEXT)*
+
+- After `sync pull --branch <dev>` re-targets the manifest, the next plain
+  `sync pull` judges each row in `main/` by the baseline it had there: a row
+  production deleted meanwhile is removed (kept and reported `skipped` when you
+  edited it), so the next push no longer creates it again. The baselines are
+  kept in the manifest's branch metadata (`retired_rows`). A row still on
+  the remote keeps the old rule (kept with an unknown base when edited, a
+  `CONFLICT`). A record is dropped once its config is in no manifest entry and
+  no row folder carries its row ids.
+- A promote push (`sync push --branch <dev>` reading `main/`) lists a dev row
+  that production deleted and a pull removed from `main/` as a `DELETED` row
+  (`skipped_deletions` without `--force`; three-way with it). A dev row that
+  `main/` never had is in `remote_only_rows[]`, never a deletion.
+
+### A directory moved by hand keeps its config id
+
+*(since vNEXT)*
+
+A hand move (`mv`, `git mv`) of a tracked config directory is a move, not a
+delete plus a create: when the old directory is gone and exactly one untracked
+directory of the same branch tree carries the config's `_keboola.config_id`
+and `_keboola.component_id`, diff lists it under `moves[]` (`moved_from`,
+`moved_to`) and classifies the content as usual. Push creates and deletes
+nothing for the move (also with `--force`) and saves the new path in the
+manifest. The next pull renames the directory to the config name; to keep a
+new name, rename the config with `kbagent config rename --project P --component-id C --config-id ID --name NAME --directory DIR`.
+When two or more directories carry the id of a missing directory, the move is
+ambiguous: a `CONFLICT` with `ambiguous_move` and `candidates`, nothing pushed
+or deleted, nothing pulled into them -- keep one and remove the others.
+A swap, a rotation or a symlink -- a tracked directory whose `_config.yml`
+carries another tracked config's id -- is held the same way as an identity
+conflict (`identity_conflict`, `identity_conflicts[]`) until the directories
+are moved back.
 
 ## Key behaviors
 
@@ -528,9 +633,25 @@ internal state:
   `sync pull` drops its manifest entries and removes their local directories.
   Those removals are reported with pull action `"ignored"` -- distinct from
   `"removed"`, which means the config was genuinely deleted on the remote.
+  *(since vNEXT)* A dev-branch record a promote push made (`sync push --branch
+  <dev>` from `main/`) is kept untouched instead, so un-ignoring the component
+  does not make the next promote create a duplicate dev config.
 - **Diff/push never see ignored configs**, on either side of the comparison:
   a stale local directory for an ignored component is filtered out too, so it
   can never be classified as `DELETED` and pushed as a remote deletion.
+- **Local work survives ignoring** *(since vNEXT, #927)*. The cleanup deletes
+  only a directory pull can prove unchanged since the last pull. One that is
+  edited, or has no baseline to compare with (an adopted config, a row of
+  unknown base), is kept with its manifest entry and reported `skipped`
+  (reason names the component and `ignoredComponents`), on a plain pull,
+  `--force` and `--theirs` alike. Before, the cleanup deleted it with the
+  unpushed edits. To drop the kept work, delete the directory yourself. After
+  un-ignoring, the kept directory diffs against its old baseline: `MODIFIED`
+  when only you changed it, `CONFLICT` when the remote changed meanwhile.
+  A row without a hash counts as unproven even when the config's own
+  `_config.yml` is gone. `keboola.sandboxes` named in `ignoredComponents`
+  follows this rule too; only a shared SQL workspace dropped because
+  `syncWorkspaces` is off keeps the CLI-25 rule (`--theirs` deletes it).
 - **Un-ignoring** a component: remove it from `ignoredComponents` and run
   `sync pull` again -- it re-materializes like any newly-tracked config.
 

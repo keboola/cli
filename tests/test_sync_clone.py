@@ -17,8 +17,9 @@ from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.errors import ConfigError, ErrorCode, KeboolaApiError
 from keboola_agent_cli.models import ProjectConfig
 from keboola_agent_cli.services._sync_bindings import resolve_run_target_bindings
+from keboola_agent_cli.services._sync_models import CreatedConfig
 from keboola_agent_cli.services._sync_storage import _parse_bucket_id, create_buckets_from_export
-from keboola_agent_cli.services.sync_service import CreatedConfig, SyncService
+from keboola_agent_cli.services.sync_service import SyncService
 from keboola_agent_cli.sync.clone import (
     _config_dir,
     _default_branch_dir,

@@ -23,6 +23,7 @@ from keboola_agent_cli.constants import (
     STORAGE_DIR_NAME,
 )
 from keboola_agent_cli.models import TokenVerifyResponse
+from keboola_agent_cli.services._sync_pull_dirs import collect_config_folders
 from keboola_agent_cli.services._sync_storage import (
     fetch_jobs_per_config,
     fetch_samples,
@@ -1626,7 +1627,7 @@ class TestPullConfigFolder:
 
 
 class TestCollectConfigFolders:
-    """Unit tests for SyncService._collect_config_folders."""
+    """Unit tests for collect_config_folders."""
 
     def test_maps_foldered_configs(self) -> None:
         """Configs with a folder are mapped; null folders are left out."""
@@ -1640,7 +1641,7 @@ class TestCollectConfigFolders:
             }
         ]
 
-        assert SyncService._collect_config_folders(components) == {"comp/1": "Folder A"}
+        assert collect_config_folders(components) == {"comp/1": "Folder A"}
 
     def test_none_when_a_config_lacks_the_field(self) -> None:
         """A config without ``folder`` (older stack) -> None (unknown)."""
@@ -1648,10 +1649,10 @@ class TestCollectConfigFolders:
             {"id": "comp", "configurations": [{"id": "1", "folder": "A"}, {"id": "2"}]},
         ]
 
-        assert SyncService._collect_config_folders(components) is None
+        assert collect_config_folders(components) is None
 
     def test_empty_dict_when_no_config_has_a_folder(self) -> None:
         """No foldered configs returns {} (known: no folders), not None."""
         components = [{"id": "comp", "configurations": [{"id": "1", "folder": None}]}]
 
-        assert SyncService._collect_config_folders(components) == {}
+        assert collect_config_folders(components) == {}

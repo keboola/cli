@@ -20,7 +20,7 @@ from keboola_agent_cli.constants import (
     KEBOOLA_DIR_NAME,
     MANIFEST_VERSION,
 )
-from keboola_agent_cli.errors import ConfigError
+from keboola_agent_cli.errors import ConfigError, KeboolaApiError
 from keboola_agent_cli.models import TokenVerifyResponse
 from keboola_agent_cli.services._sync_push_ops import push_update_row
 from keboola_agent_cli.services._sync_writeback import (
@@ -3714,7 +3714,8 @@ class TestFreshCreateVariableBinding:
                 for config in component["configurations"]:
                     if config["id"] == config_id:
                         return dict(config)
-            raise KeyError(config_id)
+            # Storage answers 404 for a config it does not have.
+            raise KeboolaApiError(f"Configuration {config_id} not found", status_code=404)
 
         def fake_row(
             component_id: str, config_id: str, row_id: str, branch_id: Any = None
