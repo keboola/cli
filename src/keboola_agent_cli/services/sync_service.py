@@ -123,6 +123,7 @@ from ._sync_data_app import (
 )
 from ._sync_deletes import DeleteInputs, DeleteTarget, source_deletions, track_source_deletions
 from ._sync_diff_report import DiffExtras, DiffSides, diff_report
+from ._sync_disabled import file_disables
 from ._sync_link_pending import link_pending_entries, planned_row_refs
 from ._sync_link_recovery import resolve_transformation_links
 from ._sync_models import LocalConfigHashes
@@ -145,6 +146,7 @@ from ._sync_pull_dirs import (
     partition_pull_entries,
     pull_config_rows,
     scan_config_dirs,
+    tracked_row,
 )
 from ._sync_push_create import (
     CreateLedger,
@@ -631,13 +633,7 @@ class SyncService(BaseService):
         existing_rows: dict[str, dict[str, str]] = {}
         for c in own_entries:
             for r in c.rows:
-                row_key = f"{c.component_id}/{c.id}/{r.id}"
-                existing_rows[row_key] = {
-                    "path": r.path,
-                    "pull_hash": r.metadata.get("pull_hash", ""),
-                    "pull_config_hash": r.metadata.get("pull_config_hash", ""),
-                    UNKNOWN_BASE_KEY: str(r.metadata.get(UNKNOWN_BASE_KEY) or ""),
-                }
+                existing_rows[f"{c.component_id}/{c.id}/{r.id}"] = tracked_row(r)
         # Rows of this tree an earlier re-targeting pull dropped (D6).
         existing_rows.update(entries.retired_rows_for(existing_keys, components))
 
@@ -1890,6 +1886,7 @@ class SyncService(BaseService):
             file_hash=file_hash,
             cfg_hash=cfg_hash,
             extra_hashes=current_companions(self, config_dir, component_id),
+            disabled=file_disables(local_data),
         )
 
     def _record_push_error(

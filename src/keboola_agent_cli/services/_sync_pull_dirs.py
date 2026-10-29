@@ -34,6 +34,7 @@ from ..sync.config_format import api_row_to_local
 from ..sync.diff_engine import config_hash
 from ..sync.manifest import Manifest, ManifestConfigRow, ManifestConfiguration
 from ..sync.naming import config_row_path
+from ._sync_disabled import DISABLED_BASELINE_KEY, carry_disabled, file_disables, record_disabled
 from ._sync_models import (
     ADOPTED_ROW_IDS_KEY,
     AMBIGUOUS_ROW_PLACEHOLDERS_KEY,
@@ -136,12 +137,7 @@ class PullEntries:
             for key in [k for k in bucket if k.startswith(prefix)]:
                 del bucket[key]
             for row in entry.rows:
-                bucket[f"{prefix}{row.id}"] = {
-                    "path": row.path,
-                    "pull_hash": str(row.metadata.get("pull_hash", "") or ""),
-                    "pull_config_hash": str(row.metadata.get("pull_config_hash", "") or ""),
-                    UNKNOWN_BASE_KEY: str(row.metadata.get(UNKNOWN_BASE_KEY) or ""),
-                }
+                bucket[f"{prefix}{row.id}"] = tracked_row(row)
             # Its record of rows the remote deleted (D7) travels too: the next
             # pull of its tree puts it back into the rebuilt entry, so a later
             # promote push still sees those rows as deleted by the source.
@@ -650,7 +646,9 @@ def _pull_row(
     if not ctx.theirs and row_file.exists():
         if old_file_hash and service._file_hash(row_file) != old_file_hash:
             pull_details.append({**detail, "reason": "row locally modified"})
-            return _row_entry(row, row_rel_path, old_file_hash, old_cfg_hash)
+            entry = _row_entry(row, row_rel_path, old_file_hash, old_cfg_hash)
+            carry_disabled(existing, entry.metadata)  # with the preserved pull_hash
+            return entry
         local = service._read_config_file(row_dir)
         if not old_file_hash and local is not None and config_hash(local) != row_api_cfg_hash:
             # No baseline: pull cannot tell a stale file from an edited one. It
@@ -671,7 +669,14 @@ def _pull_row(
         # Idempotent: remote unchanged since last pull, file untouched. The
         # existence guard keeps a new directory (first pull of a dev branch
         # that clones main -- same hash, no file yet) from being skipped.
-        return _row_entry(row, row_rel_path, service._file_hash(row_file), row_api_cfg_hash)
+        # The kept FILE says whether it disables the row, never the remote.
+        return _row_entry(
+            row,
+            row_rel_path,
+            service._file_hash(row_file),
+            row_api_cfg_hash,
+            disabled=file_disables(service._read_config_file(row_dir)),
+        )
     # New or remote-changed row: write the file, and say so (D5) -- a row
     # added in the UI used to arrive without a word.
     pull_details.append(
@@ -687,17 +692,28 @@ def _pull_row(
         file_hash = service._file_hash(row_file) if row_file.exists() else ""
     result.files_written += 1
     result.rows_pulled += 1
-    return _row_entry(row, row_rel_path, file_hash, row_api_cfg_hash)
+    return _row_entry(
+        row, row_rel_path, file_hash, row_api_cfg_hash, disabled=file_disables(row_local)
+    )
 
 
 def _row_entry(
-    row: dict[str, Any], row_rel_path: str, file_hash: str, cfg_hash: str
+    row: dict[str, Any], row_rel_path: str, file_hash: str, cfg_hash: str, *, disabled: bool = False
 ) -> ManifestConfigRow:
-    return ManifestConfigRow(
-        id=str(row.get("id", "")),
-        path=row_rel_path,
-        metadata={"pull_hash": file_hash, "pull_config_hash": cfg_hash},
-    )
+    metadata: dict[str, Any] = {"pull_hash": file_hash, "pull_config_hash": cfg_hash}
+    record_disabled(metadata, disabled=disabled)
+    return ManifestConfigRow(id=str(row.get("id", "")), path=row_rel_path, metadata=metadata)
+
+
+def tracked_row(row: ManifestConfigRow) -> dict[str, str]:
+    """A tracked row's baseline as the pull of its config reads it (``existing_rows``)."""
+    return {
+        "path": row.path,
+        "pull_hash": str(row.metadata.get("pull_hash", "") or ""),
+        "pull_config_hash": str(row.metadata.get("pull_config_hash", "") or ""),
+        UNKNOWN_BASE_KEY: str(row.metadata.get(UNKNOWN_BASE_KEY) or ""),
+        DISABLED_BASELINE_KEY: str(row.metadata.get(DISABLED_BASELINE_KEY) or ""),
+    }
 
 
 def collect_config_folders(components: list[dict[str, Any]]) -> dict[str, str] | None:

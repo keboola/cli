@@ -248,8 +248,11 @@ class LocalConfigHashes:
     normalized config hash (see :func:`config_hash`), and ``extra_hashes``
     maps each extracted code/companion file to its hash. Stored on the
     manifest entry so the next ``sync diff`` recognises local == remote.
+    ``disabled`` says the ``_config.yml`` explicitly disables the config (the
+    ``pulled_disabled`` record, see ``_sync_disabled``).
     """
 
     file_hash: str
     cfg_hash: str
     extra_hashes: dict[str, str] = field(default_factory=dict)
+    disabled: bool = False

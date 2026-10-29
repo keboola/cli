@@ -42,6 +42,7 @@ import yaml
 from helpers import setup_single_project
 from keboola_agent_cli.errors import KeboolaApiError
 from keboola_agent_cli.models import TokenVerifyResponse
+from keboola_agent_cli.services._sync_models import AUTHORED_ROW_KEY, PROMOTED_ROW_KEY
 from keboola_agent_cli.services.component_service import materialize_pushed_config
 from keboola_agent_cli.services.config_service import ConfigService
 from keboola_agent_cli.services.sync_service import SyncService
@@ -483,6 +484,14 @@ def bookkeeping(world: World, branch: int | None) -> dict[tuple[str, str], dict[
             "_path": c.path,
             "_row_paths": {r.id: r.path for r in c.rows},
             "_promoted_from": c.metadata.get("promoted_from"),
+            # The source row a promote created or copied each row from (or
+            # "" for one authored with no source id yet).
+            "_row_sources": {
+                r.id: str((r.metadata or {}).get(PROMOTED_ROW_KEY) or "")
+                for r in c.rows
+                if (r.metadata or {}).get(PROMOTED_ROW_KEY)
+                or (r.metadata or {}).get(AUTHORED_ROW_KEY)
+            },
         }
     return out
 
@@ -558,6 +567,68 @@ def _promoted_identity_only(
     return local == pulled
 
 
+def _promoted_row_identity_only(
+    world: World, fresh: World, branch: int | None, mine: dict, theirs: dict, row_id: str
+) -> bool:
+    """True iff a promoted row's file differs from the fresh pull's ONLY by its row id.
+
+    The promote path writes no target id into ``main/`` (D19): a row it
+    created or copied keeps the SOURCE row id the entry records in
+    ``promoted_from_id`` (none for a row authored there), while a fresh pull
+    of the dev branch writes the dev row id. Accepted only for a row carrying
+    that promote mapping; ``self_consistency`` still checks the hash.
+    """
+    if row_id not in mine["_row_sources"]:
+        return False
+    local = yaml.safe_load(
+        (
+            world.source_tree(branch) / mine["_path"] / mine["_row_paths"][row_id] / CONFIG_FILE
+        ).read_text(encoding="utf-8")
+    )
+    meta = local.setdefault("_keboola", {})
+    if str(meta.get("row_id", "") or "") != mine["_row_sources"][row_id]:
+        return False
+    meta["row_id"] = row_id
+    pulled = yaml.safe_load(
+        (
+            fresh.source_tree(branch) / theirs["_path"] / theirs["_row_paths"][row_id] / CONFIG_FILE
+        ).read_text(encoding="utf-8")
+    )
+    return local == pulled
+
+
+def _without_config_id(text: str) -> tuple[list[str], str | None]:
+    """pyproject.toml lines minus ``config_id``, and that id (``None`` when absent)."""
+    kept, found = [], None
+    for line in text.splitlines():
+        if line.startswith("config_id = "):
+            found = yaml.safe_load(line.split("=", 1)[1])
+        else:
+            kept.append(line)
+    return kept, found
+
+
+def _promoted_pyproject_identity_only(
+    world: World, fresh: World, branch: int | None, config_id: str, mine: dict, theirs: dict
+) -> bool:
+    """True iff a promoted app's pyproject.toml differs from the fresh pull's ONLY by its id.
+
+    Same rule as :func:`_promoted_identity_only`: ``main/`` keeps the source
+    config's ``[tool.keboola] config_id`` (none for an authored config).
+    """
+    association = mine.get("_promoted_from")
+    local_file = world.source_tree(branch) / mine["_path"] / "pyproject.toml"
+    fresh_file = fresh.source_tree(branch) / theirs["_path"] / "pyproject.toml"
+    if not isinstance(association, dict) or not local_file.exists() or not fresh_file.exists():
+        return False
+    local, local_id = _without_config_id(local_file.read_text(encoding="utf-8"))
+    pulled, pulled_id = _without_config_id(fresh_file.read_text(encoding="utf-8"))
+    if pulled_id != config_id or (local_id or "") != str(association.get("config_id") or ""):
+        return False
+    # An authored config's [tool.keboola] has no id line; the pull's has one more.
+    return local == pulled
+
+
 def compare_to_fresh(world: World, fresh: World, branch: int | None) -> list[str]:
     """Field-by-field bookkeeping difference against a fresh pull."""
     mine = bookkeeping(world, branch)
@@ -578,6 +649,13 @@ def compare_to_fresh(world: World, fresh: World, branch: int | None) -> list[str
             if field == "pull_hash" and promoted_id:
                 continue
             if field == "pull_extra_hashes":
+                differing = {
+                    f for f in set(a[field]) | set(b[field]) if a[field].get(f) != b[field].get(f)
+                }
+                if differing == {"pyproject.toml"} and _promoted_pyproject_identity_only(
+                    world, fresh, branch, key[1], a, b
+                ):
+                    continue
                 if a[field] != b[field]:
                     ka, kb = sorted(a[field]), sorted(b[field])
                     detail = (
@@ -593,8 +671,13 @@ def compare_to_fresh(world: World, fresh: World, branch: int | None) -> list[str
         if set(a["rows"]) != set(b["rows"]):
             problems.append(f"{key}: row ids {sorted(a['rows'])} != fresh {sorted(b['rows'])}")
         for rid in set(a["rows"]) & set(b["rows"]):
+            promoted_row = a["rows"][rid]["pull_hash"] != b["rows"][rid][
+                "pull_hash"
+            ] and _promoted_row_identity_only(world, fresh, branch, a, b, rid)
             for field, va in a["rows"][rid].items():
                 vb = b["rows"][rid][field]
+                if field == "pull_hash" and promoted_row:
+                    continue
                 if va != vb:
                     problems.append(f"{key} row {rid}: {field} {va!r} != fresh {vb!r}")
     return problems
@@ -1055,41 +1138,10 @@ SCENARIOS: dict[str, tuple[Callable[[Path, Variant], int | None], tuple[str, ...
     "promote_row_create_to_branched_dev": (sc_promote_row_create_to_branched_dev, ("rows",)),
 }
 
-# Finding texts (severity first). Full stories: the explicit tests at the end.
-L1 = (
-    "L1 (LOW): pyproject.toml carries config-derived fields (name, "
-    "[tool.keboola] config_id) that push/clone never refresh; pull writes them"
-)
-L3 = (
-    "L3 (LOW): push stamps config_hash_version on ROW entries, pull never does "
-    "(apply_stamp in _sync_push_ops vs the row metadata in sync_service.pull); "
-    "nothing reads it on rows"
-)
-L4 = (
-    "L4 (LOW): a row created by push keeps no/stale _keboola.row_id in its file "
-    "(writeback_after_push is called with config_id='' for rows), so pull_hash "
-    "differs from a fresh pull"
-)
-
-# (scenario, variant) -> FINDING reason, from the actual run.
-FINDINGS: dict[tuple[str, str], str] = {
-    # F5 is fixed: the rows go up in the same push. What is left is the row
-    # bookkeeping of every row push creates (L3, L4).
-    ("push_create_promote_dev", "rows"): f"{L3}; {L4}",
-    ("push_create_promote_dev", "app"): L1,
-    ("promote_row_create_to_branched_dev", "rows"): f"{L3}; {L4}",
-    ("push_create", "rows"): f"{L3}; {L4}",
-    ("promote_pulled_to_dev", "rows"): f"{L3}; {L4}",
-    ("push_create", "app"): L1,
-    ("promote_pulled_to_dev", "app"): L1,
-    ("push_rename_in_yaml", "python"): L1,
-    ("push_rename_in_yaml", "app"): L1,
-    ("clone", "app"): L1,
-    ("row_create", "rows"): f"{L3}; {L4}",
-    ("row_update", "rows"): L3,
-    ("row_disable", "rows"): L3,
-    ("clone", "rows"): f"{L3}; {L4}",
-}
+# (scenario, variant) -> FINDING reason, from the actual run. Empty: L1
+# (pyproject.toml identity), L3 (row config_hash_version) and L4 (promoted row
+# ids, an oracle gap) are fixed.
+FINDINGS: dict[tuple[str, str], str] = {}
 
 
 def _cases() -> list[Any]:
@@ -1118,7 +1170,6 @@ def test_bookkeeping_matches_fresh_pull(tmp_path: Path, scenario: str, variant: 
 # ===========================================================================
 
 
-@pytest.mark.xfail(strict=True, reason=f"FINDING: {L3}; {L4}")
 def test_clone_with_variable_and_flow_links_matches_fresh_pull(tmp_path: Path) -> None:
     """``sync clone`` of a tree whose transformation links a variables config and
     whose flow runs the transformation: Phase C (variables) and Phase D (flow

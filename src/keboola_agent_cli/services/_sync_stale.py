@@ -43,6 +43,7 @@ from ..constants import CONFIG_FILENAME
 from ..sync.branch_scope import UNKNOWN_BASE_ADOPTED, UNKNOWN_BASE_KEY
 from ..sync.manifest import ManifestConfigRow, ManifestConfiguration
 from ._sync_companions import companion_baseline, config_locally_modified, current_companions
+from ._sync_disabled import carry_disabled
 from ._sync_models import RETIRED_DELETION_KEY
 from ._sync_workspace import SANDBOXES_COMPONENT_ID
 
@@ -565,6 +566,9 @@ def sweep_stale_rows(
                     },
                 )
             )
+            # With its preserved pull_hash: a deleted is_disabled line still
+            # re-enables on a later (promote) push.
+            carry_disabled(tracked, kept[-1].metadata)
             pull_details.append({**detail, "action": "skipped", "reason": REMOTE_DELETED_REASON})
             continue
         pull_details.append({**detail, "action": "removed"})
