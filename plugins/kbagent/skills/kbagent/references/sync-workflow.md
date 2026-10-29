@@ -97,7 +97,7 @@ Related semantics (all since v0.72.0):
 - Config-level enabled/disabled state round-trips: `_config.yml` carries
   `is_disabled: true` for disabled configs (absent = enabled), `sync diff`
   shows the drift, push updates the remote state when the key is present.
-  *(since vNEXT)* Deleting the `is_disabled: true` line that pull wrote and
+  *(since 1.0.0rc4)* Deleting the `is_disabled: true` line that pull wrote and
   pushing re-enables the config (or row); a missing key in a file that never
   had the line still leaves the remote state alone.
 - A manifest entry that was registered but never materialized (empty
@@ -158,7 +158,7 @@ directory. Re-running the same push creates nothing; a later edit in `main/`
 updates the dev copy, never production. Older versions created another dev copy
 on every push (see gotchas.md).
 
-The dev branch's record of each promoted `main/` folder is its own (since vNEXT):
+The dev branch's record of each promoted `main/` folder is its own (since 1.0.0rc4):
 the production record is never changed by a `--branch` push, so production
 `sync diff` keeps showing an edit you only promoted as a local `modified` change,
 and a production `sync pull` neither overwrites it nor deletes a promoted folder.
@@ -207,7 +207,7 @@ kbagent sync diff --project prod                  # target: production
   a `summary.orphaned` counter; human mode previews the first 10.
 - The fix: `kbagent sync pull --project prod` re-targets the manifest back to
   production. Then diff/push behave normally and the warning disappears. That pull
-  reads no dev-branch baselines (since vNEXT): it writes each config into the `main/`
+  reads no dev-branch baselines (since 1.0.0rc4): it writes each config into the `main/`
   folder whose `_config.yml` carries its id, and keeps (`skipped`) a folder that
   differs from production, which then diffs as a `conflict`.
 
@@ -327,7 +327,7 @@ Depending on component type, additional files are extracted:
 | Custom Python app | `code.py` + `pyproject.toml` |
 | Flow/orchestrator | phases, tasks, schedules inline in `_config.yml` |
 
-*(since vNEXT)* These companion files are one set per config. Creating one (for example
+*(since 1.0.0rc4)* These companion files are one set per config. Creating one (for example
 `_description.md` for a config without a description) or deleting one is a local change
 that `sync diff` lists and `sync push` sends. When the remote clears a value, `sync pull`
 removes its file -- unless you edited it, then the config is `skipped` and diff shows the
@@ -459,17 +459,17 @@ Stored in `.keboola/branch-mapping.json`:
 | REMOTE MODIFIED | Remote changed, local unchanged | Run pull to fetch |
 | CONFLICT | Both sides changed, or a file with a config id and no manifest entry differs from the remote *(since 0.99.0, #792)* | Resolve manually, then push |
 | ADDED | New local config | Push creates it |
-| DELETED | Local file removed, and the remote still equals the last pull *(since vNEXT)* | `push --force` deletes from remote; a plain push lists it under `skipped_deletions` *(since 0.96.1)* |
+| DELETED | Local file removed, and the remote still equals the last pull *(since 1.0.0rc4)* | `push --force` deletes from remote; a plain push lists it under `skipped_deletions` *(since 0.96.1)* |
 | REMOTE DELETED | Deleted on the remote since the last pull | Run pull; push never re-creates it *(since 0.96.1)* |
 
 Not a change type: `remote_only[]` lists configs created on the remote and
-`remote_only_rows[]` *(since vNEXT)* lists rows created on the remote (in the
+`remote_only_rows[]` *(since 1.0.0rc4)* lists rows created on the remote (in the
 UI) under a config the tree tracks. `sync pull` fetches both; push never
 creates or deletes them.
 
 ### Local deletes are three-way
 
-*(since vNEXT)*
+*(since 1.0.0rc4)*
 
 A config or row whose local folder is gone is `DELETED` only while the remote
 still equals the baseline the last pull recorded for this branch. When the
@@ -498,7 +498,7 @@ and the Storage API has no conditional delete, so a UI edit made between
 
 ### Rows across `sync pull --branch` and promote pushes
 
-*(since vNEXT)*
+*(since 1.0.0rc4)*
 
 - After `sync pull --branch <dev>` re-targets the manifest, the next plain
   `sync pull` judges each row in `main/` by the baseline it had there: a row
@@ -515,7 +515,7 @@ and the Storage API has no conditional delete, so a UI edit made between
 
 ### A directory moved by hand keeps its config id
 
-*(since vNEXT)*
+*(since 1.0.0rc4)*
 
 A hand move (`mv`, `git mv`) of a tracked config directory is a move, not a
 delete plus a create: when the old directory is gone and exactly one untracked
@@ -633,13 +633,13 @@ internal state:
   `sync pull` drops its manifest entries and removes their local directories.
   Those removals are reported with pull action `"ignored"` -- distinct from
   `"removed"`, which means the config was genuinely deleted on the remote.
-  *(since vNEXT)* A dev-branch record a promote push made (`sync push --branch
+  *(since 1.0.0rc4)* A dev-branch record a promote push made (`sync push --branch
   <dev>` from `main/`) is kept untouched instead, so un-ignoring the component
   does not make the next promote create a duplicate dev config.
 - **Diff/push never see ignored configs**, on either side of the comparison:
   a stale local directory for an ignored component is filtered out too, so it
   can never be classified as `DELETED` and pushed as a remote deletion.
-- **Local work survives ignoring** *(since vNEXT, #927)*. The cleanup deletes
+- **Local work survives ignoring** *(since 1.0.0rc4, #927)*. The cleanup deletes
   only a directory pull can prove unchanged since the last pull. One that is
   edited, or has no baseline to compare with (an adopted config, a row of
   unknown base), is kept with its manifest entry and reported `skipped`

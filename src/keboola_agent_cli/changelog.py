@@ -28,6 +28,47 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "1.0.0rc4": [
+        "Note: this is the fourth release candidate of kbagent 1.0.0. It adds the `sync` "
+        "fixes found by the new bookkeeping tests to 1.0.0rc3; the command line is the same. "
+        "On 1.0.0rc1 to 1.0.0rc3, run `kbagent update --beta`. On kbagent 0.100.0 or later, "
+        "run `kbagent update --beta --major`. PyPI and the native packages do not get "
+        "pre-releases. Migration guide: "
+        "https://github.com/keboola/cli/blob/main/docs/migrate-to-1.0.md",
+        "Fixed (#929, #930): `sync push --branch DEV` from a tree that has only `main/` no "
+        "longer loses, duplicates or misroutes work. Configs and rows it creates on the dev "
+        "branch are tracked for that branch, dev ids are never written into `main/`, and a "
+        "flow or transformation link that could not be repaired stays pending and is retried "
+        "by the next push instead of pointing at the wrong config.",
+        "Fixed (#931): a config's code and package files and its new rows are pushed and "
+        "tracked as one set, so a new row or an edited `pyproject.toml` no longer reads as "
+        "changed forever or is dropped. `sync pull` never deletes a row directory with local "
+        "work in it. A push that cannot read a config's package list now fails with "
+        "`COMPANION_UNREADABLE` instead of guessing.",
+        "Fixed (#933): a local delete is now three-way. A config or row deleted locally and "
+        "edited on the remote since the last pull is a conflict, which `sync push --force` "
+        "never overrides; push lists it under `refused_deletions`. Deleting a config also "
+        "deletes its rows with one call, so a successful delete no longer reports row errors. "
+        "`sync diff` lists remote rows that are not on disk under `remote_only_rows`. Adding a "
+        "component to `ignoredComponents` keeps its local directories.",
+        "Fixed (#935): deleting `is_disabled: true` from a pulled `_config.yml` now re-enables "
+        "the config or row on `sync push`. Before, push reported `updated` and the config "
+        "stayed disabled with a clean diff. On a tree pulled with an older version, run "
+        "`sync pull` once first; `is_disabled: false` works on every version.",
+        "Fixed (#935): `sync push` and `sync clone` refresh `[project] name` and "
+        "`[tool.keboola] config_id` in `pyproject.toml` the way `sync pull` writes them, and "
+        "change nothing else in the file. A file they cannot edit safely stays as it is, with "
+        "a `pyproject_not_refreshed` warning.",
+        "Fixed (#936): a config directory moved by hand (`mv`, `git mv`) keeps its config id. "
+        "Before, push created a duplicate and `push --force` deleted the original. Two "
+        "directories claiming one id, swapped directories or a symlink to another config's "
+        "directory are held as a conflict: nothing is created, updated or deleted for them, "
+        "also with `--force` or `--theirs`. `config rename --directory` renames the directory "
+        "of the branch it renames on. New `--json` keys: `moves`, `ambiguous_moves`, "
+        "`identity_conflicts`, `summary.moved`.",
+        "Internal (#925): differential and random-walk tests compare every sync write path "
+        "with a fresh pull and run on every PR.",
+    ],
     "1.0.0rc3": [
         "Note: this is the third release candidate of kbagent 1.0.0, which changes the "
         "command-line interface. It follows 1.0.0rc2 and removes every form and JSON key that "

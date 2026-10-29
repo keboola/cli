@@ -323,7 +323,7 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   `is_disabled: true` = disabled (absent = enabled); `never_fetched` on
   diff/push = `sync pull` first; non-zero `summary.orphaned` (0.89.0+, #649) =
   manifest targets another branch's tree: `sync pull` to re-target, never
-  push -- but `orphaned[].reason` `promoted_from_this_tree` (vNEXT) is a
+  push -- but `orphaned[].reason` `promoted_from_this_tree` (1.0.0rc4) is a
   harmless promote record. 0.96.1+ (#792): push deletes only with `--force`
   (else `skipped_deletions`); `- REMOTE DELETED` = deleted remotely, never
   re-created: `sync pull`, or `config restore` to keep it. 0.99.0+: `CONFLICT`
@@ -332,10 +332,10 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   `ENCRYPTION_FAILED` push wrote
   nothing: fix, push again. `sync status` is local-only; audit with `sync
   diff`. `SYNC_LEGACY_BOUNDARY` = tree pulled by <= 0.90.1 (#686): pull first.
-- **`sync push --branch <dev>` from `main/`** (vNEXT, #929): production `sync
+- **`sync push --branch <dev>` from `main/`** (1.0.0rc4, #929): production `sync
   diff` still shows the edit as local; a promoted config gets its own dev
   entry; flow/schedule/variables/shared-code refs map to dev ids. gotchas.md.
-- **Sync rows/deletes/companions** (vNEXT, #931/#933): `push --force` never
+- **Sync rows/deletes/companions** (1.0.0rc4, #931/#933): `push --force` never
   deletes a remotely changed (or baseline-less) config/row -- read
   `refused_deletions[]`; UI-added rows are in `remote_only_rows[]`; ignoring a
   component keeps local work; `_description.md`/`pyproject.toml` are a tracked

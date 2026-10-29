@@ -2227,7 +2227,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
     --job-limit controls max recent jobs per config (default 5). For large projects,
     automatically falls back to per-config job fetching to ensure all configs get job history.
     Auto-detects renamed configs and renames local directories to match (uses git mv in git repos).
-    A config dir moved by hand keeps its id (since vNEXT, #792): diff lists moves[]
+    A config dir moved by hand keeps its id (since 1.0.0rc4, #792): diff lists moves[]
     (moved_from/moved_to), push creates and deletes nothing for it and saves the new path;
     a missing dir whose id 2+ dirs carry is an ambiguous move (conflict, nothing pushed).
     A swap/rotation/symlink (a tracked dir carrying another tracked config's id) is held as
@@ -2283,7 +2283,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
 
   sync push
     Push local changes. Auto-encrypts secrets. Skips conflicts (pull first).
-    Deletes are 3-way (since vNEXT): --force never deletes a config or row changed remotely
+    Deletes are 3-way (since 1.0.0rc4): --force never deletes a config or row changed remotely
     (a config's rows included) or one without a trustworthy baseline -- it is a CONFLICT,
     listed with its next step in refused_deletions[]. sync diff lists rows added in the UI
     under remote_only_rows[] (push never creates or deletes them).

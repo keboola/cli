@@ -81,7 +81,7 @@ These lists keep `error`, because their entries are not failed items with an err
 
 ## Deleting `is_disabled: true` re-enables a config on `sync push`
 
-*(since vNEXT)*
+*(since 1.0.0rc4)*
 
 - **Re-enable by deleting the line.** `sync pull` writes `is_disabled: true` into the
   `_config.yml` of a disabled config or row and writes no key for an enabled one. Delete
@@ -109,7 +109,7 @@ These lists keep `error`, because their entries are not failed items with an err
 
 ## Sync treats a config's companion files as one set; a new config's rows go up with it
 
-*(since vNEXT)*
+*(since 1.0.0rc4)*
 
 - **A companion file the remote no longer has is removed by `sync pull`.** When the
   description or the package list is cleared remotely (in the UI), pull now deletes
@@ -256,7 +256,7 @@ These lists keep `error`, because their entries are not failed items with an err
 
 ## `sync push --force` never deletes a remote change; rows added in the UI are reported
 
-*(since vNEXT)*
+*(since 1.0.0rc4)*
 
 - **A local delete is three-way.** A config or row folder you deleted is `deleted` only
   while the remote still equals the baseline of the last pull of that branch. Edited,
@@ -336,7 +336,7 @@ These lists keep `error`, because their entries are not failed items with an err
 
 ## `sync push --branch <dev>` from `main/` no longer changes what production sees
 
-*(since vNEXT)*
+*(since 1.0.0rc4)*
 
 - **The promote push** (`sync push --branch <dev>` with no `<dev>/` folder, so kbagent
   reads `main/`) now records what it wrote under the dev branch only. A dev branch made
@@ -397,7 +397,7 @@ These lists keep `error`, because their entries are not failed items with an err
   `sync diff` lists the record under `orphaned` with reason `promoted_from_this_tree`
   (nothing to do). Human output folds these records into one "nothing to do" line,
   but `--json` of diff and push keeps each one in `orphaned[]`, and `sync diff`
-  counts it in `summary.orphaned` (since vNEXT); its `reason` tells it apart from a config of
+  counts it in `summary.orphaned` (since 1.0.0rc4); its `reason` tells it apart from a config of
   another branch's tree, which needs a `sync pull`. A pull of any branch keeps the dev-branch record of a component you
   add to `ignoredComponents` as it is (diff and push skip it while it is ignored), so
   after you remove the ignore and pull, the next promote updates that dev config again.
@@ -5429,7 +5429,7 @@ Four related sync-engine behaviors landed together (issues #466 / #467 / #472 / 
   disabled in production no longer looks "in sync"), and push sends the state:
   an explicit `is_disabled:` key in the local YAML updates the remote; an
   absent key leaves the remote state untouched. Same semantics for rows.
-  *(updated vNEXT)* An absent key re-enables when the last pulled or pushed file
+  *(updated 1.0.0rc4)* An absent key re-enables when the last pulled or pushed file
   had `is_disabled: true` (you deleted the line); see "Deleting
   `is_disabled: true` re-enables a config on `sync push`".
 - **Never-fetched guard.** A manifest entry with an EMPTY `pull_hash` and no
@@ -6803,7 +6803,7 @@ whose manifest was lost or written again, a `main/` file that
 
 ## A config directory moved by hand keeps its config id (#792)
 
-*(since vNEXT)* Before, a hand move (`mv`, `git mv`) of a tracked config
+*(since 1.0.0rc4)* Before, a hand move (`mv`, `git mv`) of a tracked config
 directory read as a deleted config plus a new one: `sync push` created a copy
 with a new id, and `sync push --force` also deleted the original (job history,
 schedules and flow references were lost). Now a tracked config whose directory
