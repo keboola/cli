@@ -796,6 +796,14 @@ kbagent storage describe-table [--project NAME] --table-id ID [--text STR | --fi
 kbagent storage describe-column [--project NAME] --table-id ID --column NAME=DESC [--column ...] [--branch ID]
 kbagent storage describe-batch [--project NAME] --from-file YAML [--branch ID]
 kbagent storage describe-migrate [--project ALIAS] [--table-id ID ...] [--bucket-id ID] [--prune-orphans] [--dry-run] [--yes] [--branch ID]
+# Table descriptions and column types (since vNEXT, DMD-2439): describe-table (and describe-batch `tables:`)
+#   write `definition.description` through the same definition PUT as describe-column, with
+#   isDescriptionSystemManaged=false and no KBC.description row; resending the stored text is a no-op
+#   (result null). table-detail reads the table description from `definition.description` only, column
+#   descriptions from `definition.columns[]` then the legacy flat key (columnMetadata KBC.description is
+#   not read), and the column types of a typed table (isTyped) from `definition.columns[]` + `basetype`;
+#   a non-typed table keeps KBC.datatype.*. Bucket descriptions stay on bucket metadata. Version gate in
+#   gotchas.md.
 # Column descriptions (0.88.0+, #624): describe-column/describe-batch write through the native
 #   `PUT .../tables/{id}/definition` endpoint (async job) with `isDescriptionSystemManaged: false`
 #   (stops the next Output Mapping run from overwriting the text). The backend mirrors the value into

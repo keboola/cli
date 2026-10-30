@@ -33,21 +33,26 @@ table's native definition *(since v0.88.0)*. All of them round-trip via
 
 ## Storage model (what actually gets written)
 
-Bucket and table descriptions are metadata entries on the object; column
-descriptions are a native field on the table definition:
+Bucket descriptions are a metadata entry on the bucket; table and column
+descriptions are native fields on the table definition:
 
 - **Bucket description** -- `KBC.description` (provider=user) on bucket metadata
-- **Table description** -- `KBC.description` (provider=user) on table metadata
+- **Table description** *(since vNEXT)* -- `definition.description`, written
+  through the same `PUT .../tables/{table_id}/definition` call as column
+  descriptions, with `isDescriptionSystemManaged: false`. No `KBC.description`
+  metadata row is created. Sending the stored text again succeeds (Storage
+  answers HTTP 400 "No table definition changes were provided", which is
+  treated as a no-op and returns `result: null`). Before vNEXT the table
+  description was a `KBC.description` (provider=user) metadata row, which
+  outranked later UI edits (DMD-2434).
 - **Column description** *(since v0.88.0)* -- written through
   `PUT /v2/storage/branch/{branch}/tables/{table_id}/definition`, the same
   endpoint the Keboola web UI uses. The call is asynchronous (a
   `tableDefinitionUpdate` storage job; kbagent polls it to completion) and always
   carries `isDescriptionSystemManaged: false`, which is what prevents the next
   component run's Output Mapping from overwriting a hand-authored description.
-  The backend mirrors the value into `columnMetadata[{column}]`
-  `KBC.description` for typed AND untyped tables, so a single write is visible
-  to the UI, to the MCP server, and in the Snowflake `COMMENT` / BigQuery column
-  description. Read them back via `storage table-detail`
+  The value is visible to the UI, to the MCP server, and in the Snowflake
+  `COMMENT` / BigQuery column description. Read them back via `storage table-detail`
   (`column_details[].description`).
 
 Descriptions are `upsert`: calling `describe-*` with a new text replaces
@@ -72,13 +77,25 @@ read fallback resurrecting the old value.
 
 ### Read precedence (`storage table-detail`)
 
+The table description is `definition.description`. `KBC.description` metadata
+and the top-level `description` are not read *(since vNEXT)*.
+
 For each column, the description is resolved in this order:
 
-1. the native `definition.columns[].definition.description` field
-2. `columnMetadata[{column}]` entry with key `KBC.description` (for an alias
-   table, the source table's `columnMetadata` is consulted when the alias itself
-   has none -- parity with the MCP server)
-3. the legacy flat `KBC.column.{column}.description` table-metadata entry
+1. the native `definition.columns[].definition.description` field (an alias
+   table without a definition of its own reads the source table's)
+2. the legacy flat `KBC.column.{column}.description` table-metadata entry
+
+`columnMetadata` `KBC.description` is not read *(since vNEXT)*; a description
+that exists only there no longer appears.
+
+### Column types (`storage table-detail`)
+
+*(since vNEXT)* For a typed table (`isTyped: true`) `column_details[]` takes
+`type` (the basetype), `native_type`, `length`, `nullable` and `default` from
+`definition.columns[]` and never reads `KBC.datatype.*`; after a table swap the
+types therefore match `definition`. A non-typed table has no types in its
+definition, so its types stay on the `KBC.datatype.*` rows of `columnMetadata`.
 
 `table-detail` always returns `legacy_column_descriptions` (the columns still
 backed by convention 3; an empty list when there are none) and prints a warning
@@ -347,25 +364,24 @@ kbagent --json storage table-detail --project ALIAS --table-id in.c-sales.orders
 
 ## Precedence vs the native description field (buckets and tables)
 
-Columns follow their own chain -- see "Read precedence" above; this section is
-about the bucket-level and table-level description only.
+Columns and tables follow the chain in "Read precedence" above; this section
+is about the bucket-level description only.
 
-The Storage API has a native `description` field on buckets and tables, but
-it is only settable at creation time. Anything you set with `describe-*`
-lives on the metadata endpoint. When both are present, `storage bucket-detail`
-/ `storage table-detail` surface the metadata value (the one you wrote with
-`describe-*`). The native field is the fallback for legacy objects where
-no metadata entry exists. System-provided `KBC.description` entries (e.g.
-those auto-stamped by components) are filtered out on read-back -- only
-entries with `provider="user"` are considered the canonical description.
+A bucket has no native description write, so anything you set with
+`describe-bucket` lives on the bucket metadata endpoint. `storage
+bucket-detail` surfaces the metadata value (the one you wrote); the native
+field is the fallback for legacy buckets where no metadata entry exists.
+System-provided `KBC.description` entries (e.g. those auto-stamped by
+components) are filtered out on read-back -- only entries with
+`provider="user"` are considered the canonical description.
 
 ## Key behaviors
 
 - `describe-*` is **upsert** -- no append mode; re-running replaces the value.
-- Column descriptions go through the native `.../tables/{id}/definition`
-  endpoint *(since v0.88.0)* with `isDescriptionSystemManaged: false`; the
-  backend mirrors them into `columnMetadata` `KBC.description`, so the UI, the
-  MCP server and the warehouse all see them. Legacy flat
+- Table descriptions *(since vNEXT)* and column descriptions *(since v0.88.0)*
+  go through the native `.../tables/{id}/definition` endpoint with
+  `isDescriptionSystemManaged: false`, so the UI, the MCP server and the
+  warehouse all see them. Legacy flat
   `KBC.column.{name}.description` keys are read as a last-resort fallback,
   reported in `legacy_column_descriptions`, and converted by
   `storage describe-migrate`.
@@ -377,5 +393,5 @@ entries with `provider="user"` are considered the canonical description.
 - Read back via `storage bucket-detail` / `storage table-detail` -- the
   `metadata` field on those responses contains the raw metadata array if
   you need to inspect timestamps or providers.
-- Non-user (`system`) `KBC.description` entries are ignored on read-back;
-  they do not override the native `description` field.
+- Non-user (`system`) `KBC.description` entries on a bucket are ignored on
+  read-back; they do not override the native `description` field.

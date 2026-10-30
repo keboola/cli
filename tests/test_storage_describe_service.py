@@ -117,13 +117,16 @@ class TestDescribeBucketService:
         mock_client.close.assert_called_once()
 
 
+_JOB_RESPONSE = {"id": 123, "status": "success", "operationName": "tableDefinitionUpdate"}
+
+
 class TestDescribeTableService:
     """Tests for StorageService.describe_table()."""
 
     def test_success(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
         mock_client = MagicMock()
-        mock_client.set_table_metadata.return_value = _META_RESPONSE
+        mock_client.update_table_definition.return_value = _JOB_RESPONSE
         service = _make_service(store, mock_client)
 
         result = service.describe_table(
@@ -135,18 +138,21 @@ class TestDescribeTableService:
         assert result["project_alias"] == "prod"
         assert result["table_id"] == "in.c-sales.orders"
         assert result["description"] == "All sales orders"
-        assert result["result"] == _META_RESPONSE
-        mock_client.set_table_metadata.assert_called_once_with(
+        assert result["result"] == _JOB_RESPONSE
+        mock_client.update_table_definition.assert_called_once_with(
             table_id="in.c-sales.orders",
-            entries=[("KBC.description", "All sales orders")],
+            description="All sales orders",
+            description_set=True,
+            is_description_system_managed=False,
             branch_id=None,
         )
+        mock_client.set_table_metadata.assert_not_called()
         mock_client.close.assert_called_once()
 
     def test_with_branch(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
         mock_client = MagicMock()
-        mock_client.set_table_metadata.return_value = _META_RESPONSE
+        mock_client.update_table_definition.return_value = _JOB_RESPONSE
         service = _make_service(store, mock_client)
 
         service.describe_table(
@@ -156,16 +162,51 @@ class TestDescribeTableService:
             branch_id=99,
         )
 
-        mock_client.set_table_metadata.assert_called_once_with(
+        mock_client.update_table_definition.assert_called_once_with(
             table_id="in.c-sales.orders",
-            entries=[("KBC.description", "desc")],
+            description="desc",
+            description_set=True,
+            is_description_system_managed=False,
             branch_id=99,
         )
+
+    def test_unchanged_description_is_a_no_op(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.update_table_definition.side_effect = KeboolaApiError(
+            message="No table definition changes were provided",
+            status_code=400,
+            error_code="storage.tables.validation",
+            retryable=False,
+        )
+        service = _make_service(store, mock_client)
+
+        result = service.describe_table(
+            alias="prod", table_id="in.c-sales.orders", description="same"
+        )
+
+        assert result["result"] is None
+        assert result["description"] == "same"
+        mock_client.close.assert_called_once()
+
+    def test_other_bad_request_propagates(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.update_table_definition.side_effect = KeboolaApiError(
+            message="Table definition is not supported",
+            status_code=400,
+            error_code="storage.tables.validation",
+            retryable=False,
+        )
+        service = _make_service(store, mock_client)
+
+        with pytest.raises(KeboolaApiError, match="not supported"):
+            service.describe_table(alias="prod", table_id="in.c-sales.orders", description="x")
 
     def test_api_error_propagates(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
         mock_client = MagicMock()
-        mock_client.set_table_metadata.side_effect = KeboolaApiError(
+        mock_client.update_table_definition.side_effect = KeboolaApiError(
             message="Table not found",
             status_code=404,
             error_code="TABLE_NOT_FOUND",
@@ -326,7 +367,7 @@ class TestDescribeColumnsService:
         mock_client.get_table_detail.return_value = _table_detail(
             columns=["c1", "c2"],
             metadata=[_legacy_entry(7, "c2", "old")],
-            column_metadata={"c2": [{"key": "KBC.description", "value": "newer"}]},
+            definition={"columns": [{"name": "c2", "definition": {"description": "newer"}}]},
         )
         mock_client.update_table_definition.return_value = _JOB_OK
         service = _make_service(store, mock_client)
@@ -352,7 +393,7 @@ class TestDescribeColumnsService:
         mock_client.get_table_detail.return_value = _table_detail(
             columns=["c1", "c2"],
             metadata=[_legacy_entry(7, "c2", "same")],
-            column_metadata={"c2": [{"key": "KBC.description", "value": "same"}]},
+            definition={"columns": [{"name": "c2", "definition": {"description": "same"}}]},
         )
         mock_client.update_table_definition.return_value = _JOB_OK
         service = _make_service(store, mock_client)
@@ -477,12 +518,11 @@ class TestDescribeBatchService:
         assert "bucket" in applied_types
         assert "table" in applied_types
         assert "columns" in applied_types
-        # Bucket metadata called once (for the bucket); the table description
-        # still goes through table metadata, column descriptions now go through
-        # the native definition endpoint.
+        # Bucket metadata called once (for the bucket); table and column
+        # descriptions go through the native definition endpoint, one job each.
         assert mock_client.set_bucket_metadata.call_count == 1
-        assert mock_client.set_table_metadata.call_count == 1
-        assert mock_client.update_table_definition.call_count == 1
+        mock_client.set_table_metadata.assert_not_called()
+        assert mock_client.update_table_definition.call_count == 2
 
     def test_file_not_found(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
@@ -1109,14 +1149,8 @@ class TestGetTableDetailDescriptionExtraction:
             "primaryKey": ["order_id"],
             "rowsCount": 42,
             "columnMetadata": {},
+            "definition": {"description": "Sales orders fact table", "columns": []},
             "metadata": [
-                {
-                    "id": "1",
-                    "key": "KBC.description",
-                    "value": "Sales orders fact table",
-                    "provider": "user",
-                    "timestamp": "2026-04-22T10:00:00Z",
-                },
                 {
                     "id": "2",
                     "key": "KBC.column.order_id.description",
@@ -1146,7 +1180,7 @@ class TestGetTableDetailDescriptionExtraction:
 
         # raw_metadata must be exposed as the 'metadata' field
         assert isinstance(result["metadata"], list)
-        assert len(result["metadata"]) == 3
+        assert len(result["metadata"]) == 2
 
     def test_surfaces_bucket_backend(self, tmp_path: Path) -> None:
         """The owning bucket's storage backend is exposed on the response.
@@ -1515,7 +1549,7 @@ class TestDescribeMigrateService:
 
 
 class TestGetTableDetailDescriptionPrecedence:
-    """Read path: native definition -> columnMetadata KBC.description -> legacy flat key."""
+    """Read path: native definition -> legacy flat key; KBC.description metadata is not read."""
 
     def test_table_detail_native_definition_wins(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
@@ -1535,7 +1569,7 @@ class TestGetTableDetailDescriptionPrecedence:
         # The stale flat key is still present on the table -> flagged for migration.
         assert result["legacy_column_descriptions"] == ["c1"]
 
-    def test_table_detail_column_metadata_fallback(self, tmp_path: Path) -> None:
+    def test_table_detail_ignores_column_metadata_description(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
         mock_client = MagicMock()
         mock_client.get_table_detail.return_value = _table_detail(
@@ -1547,7 +1581,7 @@ class TestGetTableDetailDescriptionPrecedence:
         result = service.get_table_detail(alias="prod", table_id="in.c-sales.orders")
 
         col_map = {c["name"]: c for c in result["column_details"]}
-        assert col_map["c1"]["description"] == "meta"
+        assert "description" not in col_map["c1"]
         assert result["legacy_column_descriptions"] == []
 
     def test_table_detail_legacy_fallback_and_warning_key(self, tmp_path: Path) -> None:
@@ -1565,8 +1599,8 @@ class TestGetTableDetailDescriptionPrecedence:
         assert col_map["c1"]["description"] == "legacy only"
         assert result["legacy_column_descriptions"] == ["c1"]
 
-    def test_table_detail_alias_source_metadata(self, tmp_path: Path) -> None:
-        """Alias tables inherit the source table's columnMetadata (MCP-server parity)."""
+    def test_table_detail_alias_ignores_source_column_metadata(self, tmp_path: Path) -> None:
+        """The source table's columnMetadata KBC.description is not read for an alias."""
         store = _make_store(tmp_path)
         mock_client = MagicMock()
         mock_client.get_table_detail.return_value = _table_detail(
@@ -1582,8 +1616,41 @@ class TestGetTableDetailDescriptionPrecedence:
         result = service.get_table_detail(alias="prod", table_id="in.c-sales.orders")
 
         col_map = {c["name"]: c for c in result["column_details"]}
-        assert col_map["c1"]["description"] == "from source"
+        assert "description" not in col_map["c1"]
         assert result["legacy_column_descriptions"] == []
+
+    def test_table_detail_table_description_is_native(self, tmp_path: Path) -> None:
+        """The table description is definition.description; metadata and `description` are ignored."""
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_table_detail.return_value = _table_detail(
+            columns=["c1"],
+            description="top level",
+            metadata=[
+                {"key": "KBC.description", "value": "stale user row", "provider": "user"},
+            ],
+            definition={"description": "native text", "columns": []},
+        )
+        service = _make_service(store, mock_client)
+
+        result = service.get_table_detail(alias="prod", table_id="in.c-sales.orders")
+
+        assert result["description"] == "native text"
+
+    def test_table_detail_without_definition_description_is_empty(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_table_detail.return_value = _table_detail(
+            columns=["c1"],
+            description="top level",
+            metadata=[{"key": "KBC.description", "value": "stale", "provider": "user"}],
+            definition=[],
+        )
+        service = _make_service(store, mock_client)
+
+        result = service.get_table_detail(alias="prod", table_id="in.c-sales.orders")
+
+        assert result["description"] == ""
 
     def test_table_detail_alias_source_definition(self, tmp_path: Path) -> None:
         """Alias tables without their own definition read the source table's."""
@@ -1617,3 +1684,114 @@ class TestGetTableDetailDescriptionPrecedence:
 
         assert result["legacy_column_descriptions"] == []
         assert "description" not in result["column_details"][0]
+
+
+class TestGetTableDetailColumnTypes:
+    """Typed tables read column types from `definition`; non-typed keep KBC.datatype.*."""
+
+    def test_typed_table_types_come_from_definition(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_table_detail.return_value = _table_detail(
+            columns=["id", "name", "ratio"],
+            isTyped=True,
+            definition={
+                "columns": [
+                    {
+                        "name": "id",
+                        "basetype": "INTEGER",
+                        "definition": {"type": "NUMBER", "length": "38,0", "nullable": False},
+                    },
+                    {
+                        "name": "name",
+                        "basetype": "STRING",
+                        "definition": {"type": "VARCHAR", "length": "255", "default": "n/a"},
+                    },
+                    {"name": "ratio", "basetype": "NUMERIC", "definition": []},
+                ]
+            },
+            # Types of the table before a swap: must not be read for a typed table.
+            column_metadata={
+                "id": [
+                    {"key": "KBC.datatype.basetype", "value": "STRING"},
+                    {"key": "KBC.datatype.type", "value": "VARCHAR"},
+                    {"key": "KBC.datatype.length", "value": "10"},
+                    {"key": "KBC.datatype.nullable", "value": "1"},
+                ],
+                "ratio": [{"key": "KBC.datatype.type", "value": "FLOAT"}],
+            },
+        )
+        service = _make_service(store, mock_client)
+
+        result = service.get_table_detail(alias="prod", table_id="in.c-sales.orders")
+
+        col_map = {c["name"]: c for c in result["column_details"]}
+        assert col_map["id"] == {
+            "name": "id",
+            "type": "INTEGER",
+            "native_type": "NUMBER",
+            "length": "38,0",
+            "nullable": False,
+        }
+        assert col_map["name"] == {
+            "name": "name",
+            "type": "STRING",
+            "native_type": "VARCHAR",
+            "length": "255",
+            "default": "n/a",
+        }
+        assert col_map["ratio"] == {"name": "ratio", "type": "NUMERIC"}
+
+    def test_non_typed_table_types_come_from_column_metadata(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_table_detail.return_value = _table_detail(
+            columns=["a", "b"],
+            isTyped=False,
+            definition={
+                "columns": [
+                    {"name": "a", "definition": {"description": "first"}},
+                    {"name": "b", "definition": []},
+                ]
+            },
+            column_metadata={
+                "a": [
+                    {"key": "KBC.datatype.basetype", "value": "STRING"},
+                    {"key": "KBC.datatype.type", "value": "VARCHAR"},
+                    {"key": "KBC.datatype.length", "value": "40"},
+                    {"key": "KBC.datatype.nullable", "value": "1"},
+                    {"key": "KBC.datatype.default", "value": "x"},
+                ],
+            },
+        )
+        service = _make_service(store, mock_client)
+
+        result = service.get_table_detail(alias="prod", table_id="in.c-sales.orders")
+
+        col_map = {c["name"]: c for c in result["column_details"]}
+        assert col_map["a"] == {
+            "name": "a",
+            "type": "STRING",
+            "native_type": "VARCHAR",
+            "length": "40",
+            "nullable": True,
+            "default": "x",
+            "description": "first",
+        }
+        assert col_map["b"] == {"name": "b"}
+
+    def test_typed_table_without_definition_reports_no_types(self, tmp_path: Path) -> None:
+        """A typed table never falls back to KBC.datatype.* rows."""
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_table_detail.return_value = _table_detail(
+            columns=["a"],
+            isTyped=True,
+            definition=[],
+            column_metadata={"a": [{"key": "KBC.datatype.basetype", "value": "STRING"}]},
+        )
+        service = _make_service(store, mock_client)
+
+        result = service.get_table_detail(alias="prod", table_id="in.c-sales.orders")
+
+        assert result["column_details"] == [{"name": "a"}]
