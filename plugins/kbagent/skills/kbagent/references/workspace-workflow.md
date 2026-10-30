@@ -105,6 +105,21 @@ kbagent --json workspace query \
   --sql "SELECT * FROM \"table1\" LIMIT 10"
 ```
 
+## Governed workspace
+
+*(since vNEXT)*
+
+A workspace with no credentials that only Query Service reads, with the project's row- and column-level policies:
+
+```bash
+kbagent --json workspace create --project ALIAS --name "governed-ws" --governed   # Snowflake only
+kbagent --json workspace detail --project ALIAS --workspace-id WS_ID              # login_type: governed
+```
+
+There is no password or key to save. `workspace password` and a direct login are refused; load tables with
+`workspace load` as usual and read them through Query Service (`workspace list --qs-compatible` does not list it yet). See gotchas.md
+"`workspace create --governed`".
+
 ## Load types: clone / copy / view
 
 *(since 0.91.0, #687)* **Cheapest first**: skip the load entirely if you can
