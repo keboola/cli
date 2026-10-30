@@ -1062,6 +1062,22 @@ class TestAzureKeyVaultCiphertext:
 
 
 class TestDataAppDeploy:
+    def test_deploy_without_wait_reports_the_requested_deployment(self, tmp_path: Path) -> None:
+        """`state` is still production's; the message says the new deployment is pending."""
+        store = _make_store(tmp_path)
+        service, ds_mock, _storage, _enc = _make_service(store)
+        ds_mock.get_app.return_value = {"configId": "ulid", **_serving("dep-0")}
+        ds_mock.create_deployment.return_value = {"id": "dep-1"}
+
+        result = service.deploy_data_app(alias="prod", app_id="42", config_version="3")
+
+        assert result["state"] == "running"
+        assert result["deployment_id"] == "dep-1"
+        assert result["config_version"] == "3"
+        assert "deployment dep-1 requested" in result["message"]
+        assert "until the new one serves" in result["message"]
+        ds_mock.get_deployment.assert_not_called()
+
     def test_deploy_reads_latest_storage_version(self, tmp_path: Path) -> None:
         """Deploy pins the latest Storage version."""
         store = _make_store(tmp_path)
@@ -1462,6 +1478,38 @@ class TestDataAppStartStop:
         ds_mock.get_app.assert_not_called()
         assert result["state"] == "suspended"
 
+    @pytest.mark.parametrize(("action", "call"), [("start", "resume_app"), ("stop", "suspend_app")])
+    def test_409_asks_for_a_deploy_first(self, tmp_path: Path, action: str, call: str) -> None:
+        """No deployment serves production: never deployed, or still on a /v1 start."""
+        store = _make_store(tmp_path)
+        service, ds_mock, _storage, _enc = _make_service(store)
+        getattr(ds_mock, call).side_effect = KeboolaApiError(
+            message='App "42" has no App CRD — deploy it first.',
+            status_code=409,
+            error_code=ErrorCode.API_ERROR,
+            retryable=False,
+        )
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            getattr(service, f"{action}_data_app")(alias="prod", app_id="42")
+
+        assert excinfo.value.status_code == 409
+        assert f"Cannot {action} data app 42" in excinfo.value.message
+        assert "kbagent data-app deploy" in excinfo.value.message
+
+    def test_other_errors_pass_through(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, _storage, _enc = _make_service(store)
+        error = KeboolaApiError(
+            message="Not Found", status_code=404, error_code=ErrorCode.NOT_FOUND, retryable=False
+        )
+        ds_mock.resume_app.side_effect = error
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.start_data_app(alias="prod", app_id="42")
+
+        assert excinfo.value is error
+
 
 # ---------------------------------------------------------------------------
 # Poll loop -- writeup §8 pitfall #1
@@ -1520,6 +1568,70 @@ class TestDataAppPoll:
             )
         assert excinfo.value.error_code == ErrorCode.DATA_APP_BUILD_FAILED
         assert "dep-1" in excinfo.value.message
+
+    def test_replaced_deployment_raises(self, tmp_path: Path) -> None:
+        """A newer deploy took over production's desired slot; ours will never serve."""
+        store = _make_store(tmp_path)
+        service, ds_mock, _storage, _enc = _make_service(store)
+        app = _serving("dep-0")
+        app["production"] |= {
+            "desiredDeploymentId": "dep-2",
+            "desiredCreatedAt": "2026-10-30T10:05:00+00:00",
+        }
+        ds_mock.get_app.return_value = app
+        ds_mock.get_deployment.return_value = {
+            "id": "dep-1",
+            "createdAt": "2026-10-30T10:00:00+00:00",
+            "buildState": "ready",
+            "runState": "neverRun",
+            "archived": False,
+        }
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service._poll_until_terminal(ds_mock, "42", deployment_id="dep-1", timeout_seconds=60.0)
+        assert excinfo.value.error_code == ErrorCode.DATA_APP_BUILD_FAILED
+        assert "a newer deployment dep-2 replaced it" in excinfo.value.message
+        ds_mock.list_app_runs.assert_not_called()
+
+    def test_archived_deployment_raises(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, _storage, _enc = _make_service(store)
+        ds_mock.get_app.return_value = _serving("dep-0")
+        ds_mock.get_deployment.return_value = {
+            "id": "dep-1",
+            "buildState": "ready",
+            "runState": "stopped",
+            "archived": True,
+        }
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service._poll_until_terminal(ds_mock, "42", deployment_id="dep-1", timeout_seconds=60.0)
+        assert "deleted (archived)" in excinfo.value.message
+
+    def test_older_desired_deployment_keeps_waiting(self, tmp_path: Path) -> None:
+        """Production still names the previous rollout: ours is not replaced, only pending."""
+        store = _make_store(tmp_path)
+        service, ds_mock, _storage, _enc = _make_service(store)
+        pending = _serving("dep-0")
+        pending["production"] |= {
+            "desiredDeploymentId": "dep-0",
+            "desiredCreatedAt": "2026-10-30T09:00:00+00:00",
+        }
+        ds_mock.get_app.side_effect = [pending, _serving("dep-1")]
+        ds_mock.get_deployment.return_value = {
+            "id": "dep-1",
+            "createdAt": "2026-10-30T10:00:00+00:00",
+            "buildState": "ready",
+            "runState": "starting",
+            "archived": False,
+        }
+
+        with patch("keboola_agent_cli.services.data_app_service.time.sleep", lambda _: None):
+            result = service._poll_until_terminal(
+                ds_mock, "42", deployment_id="dep-1", timeout_seconds=60.0
+            )
+        assert result["production"]["actualDeploymentId"] == "dep-1"
+        assert ds_mock.get_app.call_count == 2
 
     def test_disabled_app_raises_on_start(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)

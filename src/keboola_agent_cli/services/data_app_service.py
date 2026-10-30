@@ -48,6 +48,7 @@ from ._data_app_bodies import (
     git_backfill_warning,
     resolve_effective_version,
 )
+from ._data_app_lifecycle import raise_if_deployment_cannot_serve, suspend_or_resume
 from ._data_app_password import (
     DataAppPassword,
     app_branch_id,
@@ -607,6 +608,14 @@ class DataAppService(BaseService):
                 config_version=effective_version,
                 deployment_id=deployment_id,
             )
+            if not wait:
+                # `state` is still the deployment production served before this deploy.
+                result["message"] = (
+                    f"Data app {app_id} deployment {deployment_id} requested in project "
+                    f"'{alias}'. Production keeps state={result['state']} on its current "
+                    "deployment until the new one serves; `data-app detail` shows "
+                    f"deployment_id={deployment_id} once it does."
+                )
             if backfilled_branch is not None:
                 result["git_backfilled"] = True
                 result["git_branch"] = backfilled_branch
@@ -664,13 +673,13 @@ class DataAppService(BaseService):
         """Wake a suspended or disabled app at the deployment production already serves.
 
         Distinct from :meth:`deploy_data_app`: ``start`` does NOT bump the
-        deployed version. ``409`` for an app that was never deployed.
+        deployed version.
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
         ds_client = self._ds_client_factory(project.stack_url, project.token)
         try:
-            app = ds_client.resume_app(app_id)
+            app = suspend_or_resume(ds_client.resume_app, app_id, "start")
             if wait:
                 app = self._poll_until_terminal(
                     ds_client,
@@ -699,7 +708,7 @@ class DataAppService(BaseService):
         project = projects[alias]
         ds_client = self._ds_client_factory(project.stack_url, project.token)
         try:
-            app = ds_client.suspend_app(app_id)
+            app = suspend_or_resume(ds_client.suspend_app, app_id, "stop")
             return self._format_lifecycle_result(alias=alias, app_id=app_id, action="stop", app=app)
         finally:
             ds_client.close()
@@ -1905,6 +1914,8 @@ class DataAppService(BaseService):
           deployment serves production, not the one it replaces
         - failure: the deployment's ``buildState`` or ``runState`` is
           ``failed``, or (without ``deployment_id``) the app is ``disabled``
+        - failure: the deployment was deleted (``archived``), or a newer deploy
+          replaced it as production's desired deployment, so it will never serve
         """
         deadline = time.monotonic() + timeout_seconds
         while True:
@@ -1913,6 +1924,7 @@ class DataAppService(BaseService):
             serving = _serving_deployment_id(app)
             if deployment_id:
                 deployment = ds_client.get_deployment(app_id, deployment_id)
+                raise_if_deployment_cannot_serve(app_id, deployment_id, app, deployment)
                 failed = FAILED_DEPLOYMENT_STATE in (
                     deployment.get("buildState"),
                     deployment.get("runState"),

@@ -3523,12 +3523,17 @@ delete. Pass `--yes` to all of them in scripts.
 - `data-app deploy --wait` (and `create --wait`) ends only when
   `production.actualDeploymentId` names the new deployment and the app is
   `running`. It fails with `DATA_APP_BUILD_FAILED` as soon as that
-  deployment's `buildState` or `runState` is `failed`, and with
-  `DATA_APP_DEPLOY_TIMEOUT` after `--timeout`.
+  deployment's `buildState` or `runState` is `failed`, or once a newer
+  deploy (UI, MCP, another kbagent run) replaced it or it was deleted, and
+  with `DATA_APP_DEPLOY_TIMEOUT` after `--timeout`.
 - `suspended` is normal for an idle app: the next request to its URL wakes
   it (30-60s cold boot), as does `kbagent data-app start`. `data-app stop`
   suspends too. `disabled` means a failure stopped it; only `data-app start`
   clears it.
+- `data-app start` / `stop` fail with HTTP 409 when no deployment serves
+  production: the app was never deployed, or it still runs on a start made
+  through `/v1` (the old CLI, UI or MCP server). Run `data-app deploy` once;
+  start and stop work from then on.
 - Before vNEXT kbagent used `/v1`, where the initial deploy passes a
   transient `state == stopped`, and the `--wait` loop skipped it while
   `desiredState == running`.
