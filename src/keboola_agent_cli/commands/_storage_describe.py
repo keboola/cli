@@ -131,8 +131,10 @@ def register(app: typer.Typer) -> None:
     ) -> None:
         """Set the description on a storage table.
 
-        Stores the description as KBC.description in table metadata (upsert).
-        Provide the text via --description or --description-file (exactly one).
+        Writes the native table description (the one the web UI shows) through
+        the table-definition endpoint and marks it user-authored, so the next
+        Output Mapping run keeps it. Provide the text via --description or
+        --description-file (exactly one).
         """
         formatter = get_formatter(ctx)
         service = get_service(ctx, "storage_service")
