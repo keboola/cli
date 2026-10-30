@@ -1795,3 +1795,48 @@ class TestGetTableDetailColumnTypes:
         result = service.get_table_detail(alias="prod", table_id="in.c-sales.orders")
 
         assert result["column_details"] == [{"name": "a"}]
+
+    def test_typed_alias_reads_types_from_source_definition(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_table_detail.return_value = _table_detail(
+            columns=["id"],
+            isTyped=True,
+            isAlias=True,
+            definition=[],
+            sourceTable={
+                "id": "in.c-src.orders",
+                "definition": {
+                    "columns": [
+                        {
+                            "name": "id",
+                            "basetype": "INTEGER",
+                            "definition": {"type": "NUMBER", "nullable": False},
+                        }
+                    ]
+                },
+            },
+        )
+        service = _make_service(store, mock_client)
+
+        result = service.get_table_detail(alias="prod", table_id="in.c-sales.orders")
+
+        assert result["column_details"] == [
+            {"name": "id", "type": "INTEGER", "native_type": "NUMBER", "nullable": False}
+        ]
+
+    def test_odd_payload_shapes_do_not_crash(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_table_detail.return_value = _table_detail(
+            columns=["a"],
+            isTyped=True,
+            definition={"columns": ["not-a-dict", {"name": "a", "definition": None}]},
+            columnMetadata=[],
+        )
+        service = _make_service(store, mock_client)
+
+        result = service.get_table_detail(alias="prod", table_id="in.c-sales.orders")
+
+        assert result["column_details"] == [{"name": "a"}]
+        assert result["description"] == ""

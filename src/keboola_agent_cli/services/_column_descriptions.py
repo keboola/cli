@@ -96,8 +96,8 @@ def plan_column_migration(
 
     Rules (#624):
     - orphan (column no longer on the table)  -> skip, reason "orphan", entry NOT deleted
-    - target already has a description (native definition or columnMetadata
-      KBC.description) that differs                 -> skip, reason "conflict", NOT deleted
+    - target already has a native description that differs
+                                                    -> skip, reason "conflict", NOT deleted
     - target has the IDENTICAL description          -> nothing to write, entry IS deleted
     - otherwise                                     -> migrate, entry deleted after the write
     """

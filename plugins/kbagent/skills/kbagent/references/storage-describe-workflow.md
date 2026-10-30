@@ -42,7 +42,9 @@ descriptions are native fields on the table definition:
   descriptions, with `isDescriptionSystemManaged: false`. No `KBC.description`
   metadata row is created. Sending the stored text again succeeds (Storage
   answers HTTP 400 "No table definition changes were provided", which is
-  treated as a no-op and returns `result: null`). Before vNEXT the table
+  treated as a no-op and returns `result: null`). The definition endpoint
+  supports Snowflake and BigQuery only, so `describe-table` fails on tables of
+  other backends. Before vNEXT the table
   description was a `KBC.description` (provider=user) metadata row, which
   outranked later UI edits (DMD-2434).
 - **Column description** *(since v0.88.0)* -- written through
