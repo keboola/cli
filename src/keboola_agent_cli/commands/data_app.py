@@ -2,8 +2,8 @@
 
 Thin CLI layer that delegates to :class:`DataAppService`. The underlying
 Keboola Data Science API is not idempotent and has several footguns
-(redeploy contract, cross-project KMS, transient stopped during initial
-deploy); the service encodes them. The command layer's job is argument
+(version pinning, cross-project KMS, rollout state); the service encodes
+them. The command layer's job is argument
 parsing, mutual-exclusion validation, dual JSON / human output, and
 exit-code mapping.
 """
@@ -568,7 +568,7 @@ def data_app_deploy(
     copy: CopyOption = False,
     reveal: RevealOption = False,
 ) -> None:
-    """Deploy the latest Storage config (the §9 redeploy contract).
+    """Deploy the latest Storage config version as a new production deployment.
 
     With --wait on a password-auth app, the password is delivered once the app
     runs, as in `data-app password`: a c-to-copy prompt in a terminal (the
@@ -656,7 +656,7 @@ def data_app_delete(
         help="Skip the confirmation prompt.",
     ),
 ) -> None:
-    """Delete the deployment AND the Storage config (cascade, irreversible)."""
+    """Delete the app: stop its deployments and move the Storage config to the trash."""
     formatter = get_formatter(ctx)
     service = get_service(ctx, "data_app_service")
 
@@ -818,8 +818,8 @@ def data_app_runs(
     never-started / failed apps and surfaces the ``failure_reason`` +
     ``startup_logs`` the platform records for each attempt -- including
     setup-phase failures (e.g. a git-clone error during ``app_setup``) that
-    produce no container logs. This is the way to find out *why* a deploy
-    reverted to ``stopped`` without the app ever serving.
+    produce no container logs. This is the way to find out *why* a deployment
+    failed without the app ever serving.
 
     Auth: project Storage token only.
     """

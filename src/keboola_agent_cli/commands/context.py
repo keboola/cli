@@ -649,8 +649,8 @@ GROUP_NOTES: dict[str, str] = {
 Lifecycle for `keboola.data-apps`. New apps default to `--type python-js`
 (Python, Node, or both), the recommended runtime. Combines the Storage API (config body --
 git block, slug, runtime size, encrypted secrets) with the Data Science API
-(/apps -- deployment record, state, URL, configVersion). Encapsulates the
-§9 redeploy contract so callers cannot pin to the empty-shell v2.
+(/v2/apps -- app record, deployments, state, URL). Every deploy pins an
+explicit Storage config version, never the empty shell the create writes.
 
   data-app list
     List data apps across one or many projects. Merges Data Science /apps
@@ -785,7 +785,7 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     startup_logs, including setup-phase failures (e.g. git-clone errors)
     that produce no container logs. Works on never-started/failed apps
     where 'data-app logs' returns HTTP 400 -- the canonical way to find
-    WHY a deploy reverted to stopped. Project storage token only.
+    WHY a deployment failed. Project storage token only.
 
   data-app secrets-set
     Encrypt and write '#'-prefixed secrets into parameters.dataApp.secrets.

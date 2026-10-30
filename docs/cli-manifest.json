@@ -929,7 +929,7 @@
       "kind": "command",
       "hidden": false,
       "category": "destructive",
-      "help": "Delete the deployment AND the Storage config (cascade, irreversible).",
+      "help": "Delete the app: stop its deployments and move the Storage config to the trash.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "app_id", "opts": ["--app-id"], "type": "text", "required": true, "default": null, "help": "Data Science numeric app id"},
@@ -941,7 +941,7 @@
       "kind": "command",
       "hidden": false,
       "category": "write",
-      "help": "Deploy the latest Storage config (the §9 redeploy contract).\n\nWith --wait on a password-auth app, the password is delivered once the app\nruns, as in `data-app password`: a c-to-copy prompt in a terminal (the\ncommand then ends after Enter or 120 s), --copy / --reveal elsewhere.",
+      "help": "Deploy the latest Storage config version as a new production deployment.\n\nWith --wait on a password-auth app, the password is delivered once the app\nruns, as in `data-app password`: a c-to-copy prompt in a terminal (the\ncommand then ends after Enter or 120 s), --copy / --reveal elsewhere.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "app_id", "opts": ["--app-id"], "type": "text", "required": true, "default": null, "help": "Data Science numeric app id"},
@@ -1049,7 +1049,7 @@
       "kind": "command",
       "hidden": false,
       "category": "read",
-      "help": "List a data app's recent deployment attempts (runs), newest first.\n\nUnlike ``data-app logs`` (which needs a running container), ``runs`` works on\nnever-started / failed apps and surfaces the ``failure_reason`` +\n``startup_logs`` the platform records for each attempt -- including\nsetup-phase failures (e.g. a git-clone error during ``app_setup``) that\nproduce no container logs. This is the way to find out *why* a deploy\nreverted to ``stopped`` without the app ever serving.\n\nAuth: project Storage token only.",
+      "help": "List a data app's recent deployment attempts (runs), newest first.\n\nUnlike ``data-app logs`` (which needs a running container), ``runs`` works on\nnever-started / failed apps and surfaces the ``failure_reason`` +\n``startup_logs`` the platform records for each attempt -- including\nsetup-phase failures (e.g. a git-clone error during ``app_setup``) that\nproduce no container logs. This is the way to find out *why* a deployment\nfailed without the app ever serving.\n\nAuth: project Storage token only.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "app_id", "opts": ["--app-id"], "type": "text", "required": true, "default": null, "help": "Data Science numeric app id"},
