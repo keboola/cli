@@ -1107,7 +1107,7 @@ kbagent workspace from-transformation [--project ALIAS] --component-id ID --conf
 
 kbagent data-app list [--project NAME ... | --all-projects] [--branch ID]
 kbagent data-app detail [--project NAME] --app-id ID [--branch ID]
-kbagent data-app create [--project ALIAS] --name NAME --slug SLUG (--git-repo URL | --use-managed-git-repo) [--description STR | --description-file PATH] [--git-branch main] [--git-public/--no-git-public] [--git-username USER] [--git-pat-env VAR | --git-pat-file PATH | --git-pat-encrypted KBC::Project...] [--auth password|public] [--size tiny|small|medium|large] [--auto-suspend SECONDS] [--type python-js|python|streamlit|r|...] [--workspace/--no-workspace] [--branch ID] [--no-deploy] [--wait] [--timeout SECONDS] [--keep-on-failure] [--dry-run] [--copy] [--reveal]
+kbagent data-app create [--project ALIAS] --name NAME --slug SLUG (--git-repo URL | --use-managed-git-repo) [--description STR | --description-file PATH] [--git-branch main] [--git-public/--no-git-public] [--git-username USER] [--git-pat-env VAR | --git-pat-file PATH | --git-pat-encrypted KBC::Project...] [--auth password|public] [--size tiny|small|medium|large] [--auto-suspend SECONDS] [--type python-js|streamlit] [--workspace/--no-workspace] [--branch ID] [--no-deploy] [--wait] [--timeout SECONDS] [--keep-on-failure] [--dry-run] [--copy] [--reveal]
 # --workspace / --no-workspace (0.87.0+): DEFAULT ON. Writes runtime.workspace.enabled=true --
 #   the ONLY switch that makes the platform provision the ephemeral workspace and inject WORKSPACE_ID,
 #   QUERY_SERVICE_URL and KBC_WORKSPACE_MANIFEST_PATH. Every app that reads Storage needs it. Before
@@ -1136,7 +1136,10 @@ kbagent data-app create [--project ALIAS] --name NAME --slug SLUG (--git-repo UR
 #   with runs (branch unknown: pass `--git-branch` with the branch the code is on). It has no effect
 #   on a deploy that does not backfill. Push the managed repo's code to that branch.
 #   Version gate lives in gotchas.md (no `(since vNEXT)` on `# ` lines). Use `data-app runs`
-#   to debug a deploy that reverts to stopped (setup-phase failures produce no container logs).
+#   to debug a failed deploy (setup-phase failures produce no container logs).
+# data-app calls go to the Data Science /v2 App Deployments API: deploy = POST /v2/apps/{id}/deployments
+#   (pinned configVersion, --wait until it serves production), start = /resume, stop = /suspend
+#   (wakes on the next request). Output has no desired_state / last_start_timestamp.
 kbagent data-app deploy [--project NAME] --app-id ID [--config-version N] [--wait] [--timeout SECONDS] [--branch ID] [--git-branch BRANCH] [--copy] [--reveal]
 kbagent data-app start [--project NAME] --app-id ID [--wait] [--timeout SECONDS]
 kbagent data-app stop [--project NAME] --app-id ID [--wait] [--timeout SECONDS]
@@ -1168,7 +1171,7 @@ kbagent data-app validate-repo --git-repo URL [--git-branch BRANCH] [--git-publi
 kbagent data-app git-repo [--project NAME] --app-id ID
 kbagent data-app git-credentials [--project NAME] --app-id ID
 kbagent data-app git-credentials-create [--project NAME] --app-id ID --type ssh_key|http_token --permissions readOnly|readWrite [--public-key KEY | --public-key-file PATH] [--name LABEL] [--yes]
-# git-repo introspects the deployed-from git repo (sandboxes-service /apps/{id}/git-repo); it returns 409 "no Git repository configured" until the app has been DEPLOYED at least once (git config syncs Storage->DS record at deploy). git-credentials* manage credentials for a MANAGED repo only; apps from `data-app create --git-repo` are external => git-credentials-create returns 409. http_token mints a ONE-TIME secret (shown once); credentials endpoints need an admin storage token.
+# git-repo introspects the deployed-from git repo (sandboxes-service /v2/apps/{id}/git-repo); it returns 409 "no Git repository configured" until the app has been DEPLOYED at least once (git config syncs Storage->DS record at deploy). git-credentials* manage credentials for a MANAGED repo only; apps from `data-app create --git-repo` are external => git-credentials-create returns 409. http_token mints a ONE-TIME secret (shown once); credentials endpoints need an admin storage token.
 
 kbagent component list [--project NAME | --all-projects] [--type TYPE] [--query QUERY]
 kbagent component detail --component-id ID [--project NAME]

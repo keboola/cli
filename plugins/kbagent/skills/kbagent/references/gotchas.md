@@ -2971,7 +2971,7 @@ response. Now:
   is also unchanged.
 - The Data Science API on every Keboola stack we've probed (europe-west3.gcp,
   us-east4.gcp; 2026-05-12) serves camelCase keys on the wire (`id`,
-  `configId`, `desiredState`, `configVersion`, ...). kbagent reads those
+  `configId`, `production`, `actualConfigVersion`, ...). kbagent reads those
   camelCase keys directly and emits its own snake_case-ish output keys.
   If a future API shape change introduces snake_case wire keys, this
   helper will need a defensive alias pass -- not yet warranted.
@@ -3334,14 +3334,16 @@ delete. Pass `--yes` to all of them in scripts.
   itself, and the top-level `runtime`/`authorization`/`storage`) is
   preserved bit-identical.
 - **`data-app list` hides workspace/sandbox deployments.**
-  The Data Science `GET /apps` collection returns EVERY deployment in the
+  The Data Science `/v1` `GET /apps` collection (kbagent before vNEXT) returns EVERY deployment in the
   project, not just data apps -- interactive Snowflake/BigQuery
   workspaces (`componentId=keboola.sandboxes`, `type=snowflake`/`bigquery`,
   no name, a `*.snowflakecomputing.com` URL) live in the same collection.
   Before 0.43.9 they showed up as phantom unnamed `(snowflake)` rows that
   do NOT appear in the Apps UI. The command now keeps only
   `componentId == keboola.data-apps` (items missing `componentId` are kept
-  defensively); the JSON envelope carries `component_id` per app.
+  defensively); the JSON envelope carries `component_id` per app. Since
+  vNEXT kbagent reads `/v2/apps`, which takes no filters; the same
+  `componentId` check stays as a guard.
 - **`data-app list` pages through the whole `GET /apps` collection
   *(since 0.96.1, #798)*.** The endpoint is paginated (default page = 100
   items) and the workspace/data-app mix is filtered CLIENT-side. Before
@@ -3478,19 +3480,17 @@ delete. Pass `--yes` to all of them in scripts.
 
 - `kbagent config update --project P --component-id keboola.data-apps ...` bumps the
   Storage config version; the deployed container keeps running at the
-  OLD version. The Data Science deployment record's `configVersion`
-  field is a *pinned pointer* that does not auto-advance when Storage
-  advances.
+  OLD version. A deployment's `configVersion` is a *pinned pointer* that
+  does not auto-advance when Storage advances.
 - To roll out the new config, run `kbagent data-app deploy --project P
   --app-id N` (optionally with `--wait`). The CLI reads the latest
-  Storage version and `PATCH`es the deployment with the §9 trio
-  `{desiredState=running, configVersion, restartIfRunning=true}`.
-- **Do NOT** call `PATCH /apps/{id} {desiredState:running}` directly --
-  the API silently pins to whatever `configVersion` the deployment
-  already had (often the empty shell from `POST /apps`), and the runner
-  errors `dataApp.git.repository is required in /data/config.json` with
-  no top-level error surfaced. The CLI's `data-app deploy` always sends
-  the trio together; sending only `configVersion` returns HTTP 422.
+  Storage version and *(since vNEXT)* creates a `/v2` deployment pinned to
+  it (`POST /v2/apps/{id}/deployments {configVersion}`), promoted to
+  production once healthy. Before vNEXT it sent the `/v1` trio
+  `PATCH /apps/{id} {desiredState=running, configVersion, restartIfRunning=true}`.
+- **Do NOT** deploy the initial config version that `POST /v2/apps` wrote --
+  it is empty, and the runner errors `dataApp.git.repository is required
+  in /data/config.json` with no top-level error surfaced.
 - Same goes for `kbagent data-app start`: it WAKES an auto-suspended app
   at the currently-pinned version. It does NOT roll out new code or
   config -- use `data-app deploy` for that.
@@ -3512,23 +3512,31 @@ delete. Pass `--yes` to all of them in scripts.
 - Practical implication: you cannot copy-paste a `KBC::Project*` value
   from one project's `keboola.data-apps` config into another's.
 
-## Transient `state == stopped` during initial data-app deploy is not a failure
+## `state == running` during a redeploy is not "the new deploy is live"
 
-- After `data-app create` (or any `data-app deploy --wait`), polling
-  may observe `state == stopped` once for ~5-15s before the container
-  reaches `running`. This is normal: the platform transitions
-  `created → stopped → starting → running` while spinning up the
-  runtime. A naive poll that exits on `stopped` would falsely report
-  a failure.
-- The CLI's `--wait` flag refuses to treat `stopped` as terminal while
-  `desiredState == running`. Only `state == running` (success) and
-  `state == error` (build failure) and `--timeout` exhaustion are
-  terminal in that mode.
-- A LATER `state == stopped` (after the app has been running a while)
-  is a different beast: it means the platform auto-suspended the
-  container after `autoSuspendAfterSeconds` of inactivity. Hit the URL
-  to wake it (auto-restart triggers a 30-60s cold boot) or run
-  `kbagent data-app start --project P --app-id N`.
+*(since vNEXT)*
+
+- The `/v2` app `state` is one of `notDeployed`, `starting`, `running`,
+  `suspended` and `disabled`. It says whether production serves, not which
+  deployment does: during a rollout the app stays `running` on the
+  deployment being replaced.
+- `data-app deploy --wait` (and `create --wait`) ends only when
+  `production.actualDeploymentId` names the new deployment and the app is
+  `running`. It fails with `DATA_APP_BUILD_FAILED` as soon as that
+  deployment's `buildState` or `runState` is `failed`, or once a newer
+  deploy (UI, MCP, another kbagent run) replaced it or it was deleted, and
+  with `DATA_APP_DEPLOY_TIMEOUT` after `--timeout`.
+- `suspended` is normal for an idle app: the next request to its URL wakes
+  it (30-60s cold boot), as does `kbagent data-app start`. `data-app stop`
+  suspends too. `disabled` means a failure stopped it; only `data-app start`
+  clears it.
+- `data-app start` / `stop` fail with HTTP 409 when no deployment serves
+  production: the app was never deployed, or it still runs on a start made
+  through `/v1` (the old CLI, UI or MCP server). Run `data-app deploy` once;
+  start and stop work from then on.
+- Before vNEXT kbagent used `/v1`, where the initial deploy passes a
+  transient `state == stopped`, and the `--wait` loop skipped it while
+  `desiredState == running`.
 ## `project invite` "already invited / already member" returns HTTP 400, not 422
 
 - Re-inviting a user the project already knows about returns HTTP **400** with

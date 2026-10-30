@@ -318,12 +318,13 @@ Keboola data-app lifecycle (create, deploy, manage)
     Create a Keboola data app end-to-end (POST + encrypt + PUT + deploy).
 
   kbagent data-app delete [--project PROJECT] --app-id ID [--yes]
-    Delete the deployment AND the Storage config (cascade, irreversible).
+    Delete the app: stop its deployments and move the Storage config to the
+    trash.
 
   kbagent data-app deploy [--project PROJECT] --app-id ID
       [--config-version VERSION] [--wait] [--timeout N] [--branch N]
       [--git-branch BRANCH] [--copy] [--reveal]
-    Deploy the latest Storage config (the §9 redeploy contract).
+    Deploy the latest Storage config version as a new production deployment.
 
   kbagent data-app detail [--project PROJECT] --app-id ID [--branch N]
     Show merged Data Science + Storage detail for one data app.
@@ -374,10 +375,11 @@ Keboola data-app lifecycle (create, deploy, manage)
 
   kbagent data-app start [--project PROJECT] --app-id ID [--wait]
       [--timeout N]
-    Wake an auto-suspended data app at its currently-pinned configVersion.
+    Wake a suspended or disabled data app at the deployment production serves.
 
   kbagent data-app stop [--project PROJECT] --app-id ID [--wait] [--timeout N]
-    Stop a running data app (preserves the URL and Storage config).
+    Suspend a data app; the next request to its URL wakes it (URL and config
+    kept).
 
   kbagent data-app validate-repo --git-repo REPO [--git-branch BRANCH]
       [--git-public/--no-git-public] [--git-pat-env ENV] [--git-pat-file PATH]

@@ -1,8 +1,8 @@
-"""Keboola Data Science API client (data-app deployment records).
+"""Keboola Data Science API client -- the ``/v2`` App Deployments API.
 
-The Data Science API owns the *deployment* side of a data app — id, state,
-desiredState, url, configVersion. The Storage API
-(``keboola.data-apps`` configs) owns the *configuration* side — git block,
+The Data Science API owns the *deployment* side of a data app -- id, state,
+url, the deployments and which of them serves production. The Storage API
+(``keboola.data-apps`` configs) owns the *configuration* side -- git block,
 encrypted secrets, slug, runtime size. Both must stay in sync; see
 ``services/data_app_service.py`` for the orchestration.
 
@@ -10,28 +10,34 @@ URL derivation: ``https://data-science.<stack-suffix>`` from the project's
 connection URL via ``BaseHttpClient._derive_service_url``. Auth: same
 ``X-StorageApi-Token`` as the Storage API (or, for a browser-login session,
 ``Authorization: Bearer`` + ``X-KBC-ProjectId`` through ``http_auth``). Every
-endpoint below, ``GET /apps/{id}/password`` included, needs only a token of
+endpoint below, ``GET /v2/apps/{id}/password`` included, needs only a token of
 the app's own project.
 
-Verified shapes (writeup §2 / §6 / §9, replayed in this PR's live
-validation):
+Endpoints (contract: sandboxes-service ``/v2`` OpenAPI):
 
-    POST   /apps                          -> 201, {id, configId, ...}
-    GET    /apps?limit=N&offset=M         -> 200, [{id, configId, state, desiredState, url}, ...]
-                                              (paginated; default page = 100)
-    GET    /apps/{id}                     -> 200, full deployment record
-    PATCH  /apps/{id}                     -> 200, deployment record (only
-                                              desiredState / configVersion /
-                                              restartIfRunning persist;
-                                              ``config:{...}`` is silently
-                                              dropped)
-    DELETE /apps/{id}                     -> 202, cascades to Storage config
-    GET    /apps/{id}/password            -> 200, {password: "<20 hex>" | null}
-                                              (null = no password yet)
-    GET    /apps/{id}/logs/tail           -> 200, text/plain container log
-                                              tail. ``lines=N`` and
-                                              ``since=ISO8601`` are mutually
-                                              exclusive on the server.
+    POST   /v2/apps                         -> 201, App {id, configId, state, production, ...}
+    GET    /v2/apps?limit=N&offset=M        -> 200, [App, ...] (no filters; paginated)
+    GET    /v2/apps/{id}                    -> 200, App
+    DELETE /v2/apps/{id}                    -> 202, stops every deployment and moves
+                                                the Storage config to the trash
+    POST   /v2/apps/{id}/deployments        -> 202, Deployment {id, configVersion,
+                                                buildState, runState, ...}; promoted
+                                                to production by default
+    GET    /v2/apps/{id}/deployments/{dep}  -> 200, Deployment
+    POST   /v2/apps/{id}/suspend            -> 200, App (state=suspended; wakes on
+                                                the next request)
+    POST   /v2/apps/{id}/resume             -> 200, App (state=starting -> running)
+    GET    /v2/apps/{id}/password           -> 200, {password: str | null}
+    GET    /v2/apps/{id}/runs               -> 200, [Run, ...], newest first
+    GET    /v2/apps/{id}/logs/tail          -> 200, text/plain container log tail.
+                                                ``lines=N`` and ``since=ISO8601`` are
+                                                mutually exclusive on the server.
+
+App ``state`` is one of ``notDeployed``, ``starting``, ``running``,
+``suspended`` (wakes on the next request) and ``disabled`` (stopped by a
+failure; only an explicit start clears it). ``production`` carries
+``desiredDeploymentId`` / ``actualDeploymentId`` and their config versions:
+they differ while a rollout is in flight.
 """
 
 from __future__ import annotations
@@ -53,8 +59,12 @@ from .http_base import BaseHttpClient
 logger = logging.getLogger(__name__)
 
 
+def _app_path(app_id: str) -> str:
+    return f"/v2/apps/{quote(str(app_id), safe='')}"
+
+
 class DataScienceClient(BaseHttpClient):
-    """HTTP client for the Keboola Data Science API (``/apps``).
+    """HTTP client for the Keboola Data Science ``/v2`` App Deployments API.
 
     Inherits retry / backoff / token-masking from ``BaseHttpClient``.
     """
@@ -73,6 +83,15 @@ class DataScienceClient(BaseHttpClient):
             http_auth=http_auth,
         )
 
+    def _post_json(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
+        response = self._do_request(
+            "POST",
+            path,
+            content=json.dumps(body).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+        return response.json()
+
     def __enter__(self) -> Self:
         return self
 
@@ -80,29 +99,18 @@ class DataScienceClient(BaseHttpClient):
         self.close()
 
     def list_apps(self) -> list[dict[str, Any]]:
-        """Return the thin index of ALL deployments in the project (no body filter).
+        """Return every data app of the token's project.
 
-        The Data Science API scopes responses by the token's project. The list
-        endpoint also accepts ``componentId``, ``type`` and ``branchId``
-        filters; this method sends none of them.
-
-        ``GET /apps`` is paginated: without ``limit``/``offset`` it returns
-        only a default first page (100 items) that mixes workspace
-        deployments (``keboola.sandboxes``) with data apps
-        (``keboola.data-apps``). Callers filter client-side, so a project with
-        many workspaces could have every data app beyond that first page and
-        ``data-app list`` reported "No data apps found." (#798). We therefore
-        page with ``limit``/``offset`` until a short (or empty) page.
+        ``GET /v2/apps`` takes no filters and is paginated, so this pages with
+        ``limit``/``offset`` until a short (or empty) page.
         """
         apps: list[dict[str, Any]] = []
         page_size = DATA_SCIENCE_APPS_PAGE_SIZE
         for page in range(DATA_SCIENCE_APPS_MAX_PAGES):
             response = self._do_request(
-                "GET", "/apps", params={"limit": page_size, "offset": page * page_size}
+                "GET", "/v2/apps", params={"limit": page_size, "offset": page * page_size}
             )
-            body = response.json()
-            # Some stacks wrap the list in {"data": [...]}; fall back gracefully.
-            items = (body.get("data") or body.get("apps") or []) if isinstance(body, dict) else body
+            items = response.json()
             if not isinstance(items, list):
                 break
             apps.extend(items)
@@ -112,15 +120,15 @@ class DataScienceClient(BaseHttpClient):
             # Guard against a server that ignores ``offset`` and keeps
             # returning full pages -- never loop forever, but say so.
             logger.warning(
-                "GET /apps: stopped after %d pages of %d; the listing may be incomplete",
+                "GET /v2/apps: stopped after %d pages of %d; the listing may be incomplete",
                 DATA_SCIENCE_APPS_MAX_PAGES,
                 page_size,
             )
         return apps
 
     def get_app(self, app_id: str) -> dict[str, Any]:
-        """Fetch a single deployment record by numeric app id."""
-        response = self._do_request("GET", f"/apps/{quote(str(app_id), safe='')}")
+        """Fetch a single app record by numeric app id."""
+        response = self._do_request("GET", _app_path(app_id))
         return response.json()
 
     def list_app_runs(
@@ -131,17 +139,17 @@ class DataScienceClient(BaseHttpClient):
         Each run carries ``state`` (starting/running/finished/failed) plus a
         ``failureReason`` and ``startupLogs`` for unsuccessful attempts --
         including setup-phase failures (e.g. a clone/build error) that never
-        produce container logs and so are invisible to ``/apps/{id}/logs/tail``.
-        This is the canonical way to find out *why* a deploy reverted to
-        ``stopped`` without the app ever serving.
+        produce container logs and so are invisible to ``/v2/apps/{id}/logs/tail``.
+        This is the canonical way to find out *why* a deployment failed
+        without the app ever serving.
         """
         response = self._do_request(
             "GET",
-            f"/apps/{quote(str(app_id), safe='')}/runs",
+            f"{_app_path(app_id)}/runs",
             params={"limit": limit, "offset": offset},
         )
         payload = response.json()
-        return payload if isinstance(payload, list) else payload.get("runs", [])
+        return payload if isinstance(payload, list) else []
 
     def create_app(
         self,
@@ -153,27 +161,19 @@ class DataScienceClient(BaseHttpClient):
         branch_id: int | None = None,
         use_managed_git_repo: bool = False,
     ) -> dict[str, Any]:
-        """Create the deployment shell + linked Storage config in one call.
+        """Create the app + its linked Storage config in one call.
 
-        Server-generated identifiers: ``id`` (numeric) and ``configId``
-        (ULID). The ``configId`` field in the request body is silently
-        ignored (writeup §5) -- callers must accept whatever ULID the
-        server assigns and round-trip it on subsequent updates.
-
-        ``config`` carries the *initial* Storage configuration body. The
-        full config (git block, encrypted secrets, etc.) is added via
-        ``KeboolaClient.update_config`` after creation; sending it here is
-        possible but the encryption step depends on knowing
-        ``config_id`` first, so the canonical flow is:
-        ``create_app`` -> encrypt secrets -> ``update_config``.
-
-        ``use_managed_git_repo`` -> POST ``useManagedGitRepo: true`` so the
-        sandboxes-service provisions a *managed* git repository on the Git
-        Service and links it to the app (``managedGitRepoId``). The repo
-        starts empty -- the caller mints a credential
-        (``create_git_credential``), pushes code, then deploys. Repo
-        creation failure aborts app creation server-side; the repo is
-        deleted when the app is deleted.
+        - Server-generated identifiers: ``id`` (numeric) and ``configId`` (ULID).
+        - Production starts empty (``state=notDeployed``): the URL is reserved
+          and 404s until a deployment is promoted.
+        - ``type_`` is ``streamlit`` or ``python-js`` -- the only types ``/v2``
+          creates.
+        - ``config`` carries the *initial* Storage configuration body; the
+          canonical flow is ``create_app`` -> encrypt secrets -> ``update_config``
+          (encryption needs ``config_id`` first).
+        - ``use_managed_git_repo`` provisions an empty *managed* git repository
+          on the Git Service (``hasManagedGitRepo``); repo creation failure aborts
+          app creation, and the repo is deleted with the app.
         """
         payload: dict[str, Any] = {
             # null is production; 0 (`--branch 0`) is production too. A dev
@@ -184,63 +184,53 @@ class DataScienceClient(BaseHttpClient):
             "name": name,
             "description": description,
             "config": config,
+            "useManagedGitRepo": use_managed_git_repo,
         }
-        if use_managed_git_repo:
-            payload["useManagedGitRepo"] = True
+        return self._post_json("/v2/apps", payload)
+
+    def create_deployment(self, app_id: str, *, config_version: str) -> dict[str, Any]:
+        """Deploy the app at a pinned Storage config version and promote it to production.
+
+        - The deployment starts right away and replaces production once healthy;
+          ``production.actualDeploymentId`` names it from then on.
+        - Returns the Deployment (``id``, ``configVersion``, ``buildState``,
+          ``runState``); ``runState=failed`` means its runs carry the cause.
+        """
+        return self._post_json(
+            f"{_app_path(app_id)}/deployments", {"configVersion": config_version}
+        )
+
+    def get_deployment(self, app_id: str, deployment_id: str) -> dict[str, Any]:
+        """Fetch one deployment of the app."""
         response = self._do_request(
-            "POST",
-            "/apps",
-            content=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            "GET", f"{_app_path(app_id)}/deployments/{quote(str(deployment_id), safe='')}"
         )
         return response.json()
 
-    def patch_app(
-        self,
-        app_id: str,
-        *,
-        desired_state: str | None = None,
-        config_version: str | None = None,
-        restart_if_running: bool | None = None,
-    ) -> dict[str, Any]:
-        """Update the deployment record (state / pinned config version).
+    def suspend_app(self, app_id: str) -> dict[str, Any]:
+        """Sleep the app's serving member now; the next request to its URL wakes it.
 
-        IMPORTANT: never sends a ``config`` block — that surface is owned
-        by the Storage API (writeup §2.1, §8 pitfall row 3). Updating
-        size / autoSuspend / git settings goes through ``update_config``
-        on the Storage API.
-
-        The §9 redeploy contract requires
-        ``desired_state="running"`` + ``config_version=<N>``
-        + ``restart_if_running=True`` together when bumping the deployed
-        config version; sending ``config_version`` alone yields HTTP 422.
-
-        ``config_version=None`` omits the field -- payload
-        ``{desiredState, restartIfRunning}``. ``DataAppService.deploy_data_app``
-        no longer takes this path for a pure managed repo: it backfills
-        ``parameters.dataApp.git`` and pins the resulting version (CLI-15).
+        Returns the App, already ``state=suspended``. ``409`` when the app has
+        no serving member (never deployed).
         """
-        payload: dict[str, Any] = {}
-        if desired_state is not None:
-            payload["desiredState"] = desired_state
-        if config_version is not None:
-            payload["configVersion"] = config_version
-        if restart_if_running is not None:
-            payload["restartIfRunning"] = restart_if_running
-        response = self._do_request(
-            "PATCH",
-            f"/apps/{quote(str(app_id), safe='')}",
-            content=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-        )
+        response = self._do_request("POST", f"{_app_path(app_id)}/suspend")
+        return response.json()
+
+    def resume_app(self, app_id: str) -> dict[str, Any]:
+        """Wake the app's serving member now, at the deployment production already serves.
+
+        Returns the App, ``state=starting`` until the member is confirmed
+        serving. ``409`` when the app has no serving member (never deployed).
+        """
+        response = self._do_request("POST", f"{_app_path(app_id)}/resume")
         return response.json()
 
     def delete_app(self, app_id: str) -> None:
-        """Delete the deployment AND the linked Storage config (cascade).
+        """Delete the app: stop every deployment and move its Storage config to the trash.
 
         Returns HTTP 202 on success; the body is empty.
         """
-        self._do_request("DELETE", f"/apps/{quote(str(app_id), safe='')}")
+        self._do_request("DELETE", _app_path(app_id))
 
     def get_app_password(self, app_id: str) -> dict[str, Any]:
         """Return ``{"password": str | None}`` for a password-protected app.
@@ -251,7 +241,7 @@ class DataScienceClient(BaseHttpClient):
         Keboola UI makes. ``password`` is ``None`` while the app has no
         password yet.
         """
-        response = self._do_request("GET", f"/apps/{quote(str(app_id), safe='')}/password")
+        response = self._do_request("GET", f"{_app_path(app_id)}/password")
         return response.json()
 
     def tail_app_logs(
@@ -261,7 +251,7 @@ class DataScienceClient(BaseHttpClient):
         lines: int | None = None,
         since: str | None = None,
     ) -> str:
-        """Fetch the container log tail from ``/apps/{id}/logs/tail``.
+        """Fetch the container log tail from ``/v2/apps/{id}/logs/tail``.
 
         Returns the response body verbatim as plain text (``text/plain``)
         -- one log line per ``\\n``, trailing newline preserved as the
@@ -279,7 +269,7 @@ class DataScienceClient(BaseHttpClient):
         ``+00:00``); naive datetimes and date-only values are rejected
         by the server with a 400.
         """
-        path = f"/apps/{quote(str(app_id), safe='')}/logs/tail"
+        path = f"{_app_path(app_id)}/logs/tail"
         params: dict[str, Any] = {}
         if lines is not None:
             params["lines"] = lines
@@ -291,7 +281,7 @@ class DataScienceClient(BaseHttpClient):
         return response.text
 
     # ------------------------------------------------------------------
-    # Git repository (sandboxes-service /apps/{id}/git-repo/*)
+    # Git repository (sandboxes-service /v2/apps/{id}/git-repo/*)
     #
     # These endpoints introspect and manage the git repository a data app
     # is deployed from. Ground truth: keboola/sandboxes-service server
@@ -321,7 +311,7 @@ class DataScienceClient(BaseHttpClient):
         ``None``) and embedded credentials are stripped. ``409`` if the
         app has no git repository configured.
         """
-        response = self._do_request("GET", f"/apps/{quote(str(app_id), safe='')}/git-repo")
+        response = self._do_request("GET", f"{_app_path(app_id)}/git-repo")
         body = response.json()
         return body if isinstance(body, dict) else {}
 
@@ -333,9 +323,7 @@ class DataScienceClient(BaseHttpClient):
         here. ``409`` if the app has no managed git repository; requires an
         admin storage token.
         """
-        response = self._do_request(
-            "GET", f"/apps/{quote(str(app_id), safe='')}/git-repo/credentials"
-        )
+        response = self._do_request("GET", f"{_app_path(app_id)}/git-repo/credentials")
         body = response.json()
         return body if isinstance(body, dict) else {}
 
@@ -365,10 +353,4 @@ class DataScienceClient(BaseHttpClient):
             payload["publicKey"] = public_key
         if name is not None:
             payload["name"] = name
-        response = self._do_request(
-            "POST",
-            f"/apps/{quote(str(app_id), safe='')}/git-repo/credentials",
-            content=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-        )
-        return response.json()
+        return self._post_json(f"{_app_path(app_id)}/git-repo/credentials", payload)

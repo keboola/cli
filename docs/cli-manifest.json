@@ -915,10 +915,10 @@
         {"kind": "option", "name": "type_", "opts": ["--type", "-t"], "type": "text", "default": "python-js", "help": "Runtime type. Default 'python-js' covers Python AND Node apps."},
         {"kind": "option", "name": "workspace", "opts": ["--workspace"], "secondary_opts": ["--no-workspace"], "type": "boolean", "is_flag": true, "default": true, "help": "Grant the app Storage access by writing runtime.workspace.enabled=true (default). This is what makes the platform inject WORKSPACE_ID / QUERY_SERVICE_URL / KBC_WORKSPACE_MANIFEST_PATH -- without it an app that reads Storage deploys and reports running while serving no data. Pass --no-workspace only for an app that never touches Storage."},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Keboola dev branch ID (defaults to production)."},
-        {"kind": "option", "name": "no_deploy", "opts": ["--no-deploy"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip the deploy step; create the shell + Storage config only."},
-        {"kind": "option", "name": "wait", "opts": ["--wait"], "type": "boolean", "is_flag": true, "default": false, "help": "Block until state == running (or error). Respects pitfall #1: stopped is not terminal. Default: no wait."},
+        {"kind": "option", "name": "no_deploy", "opts": ["--no-deploy"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip the deploy step; create the app + Storage config only."},
+        {"kind": "option", "name": "wait", "opts": ["--wait"], "type": "boolean", "is_flag": true, "default": false, "help": "Block until the deployment serves production (or fails). Default: no wait."},
         {"kind": "option", "name": "timeout", "opts": ["--timeout"], "type": "float", "default": 300.0, "help": "Maximum seconds to wait for state == running, with --wait. Default: 300."},
-        {"kind": "option", "name": "keep_on_failure", "opts": ["--keep-on-failure"], "type": "boolean", "is_flag": true, "default": false, "help": "Keep the orphan deployment shell if PUT or initial deploy fails (forensics)."},
+        {"kind": "option", "name": "keep_on_failure", "opts": ["--keep-on-failure"], "type": "boolean", "is_flag": true, "default": false, "help": "Keep the orphan app if PUT or initial deploy fails (forensics)."},
         {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Print the three request bodies without making any API call."},
         {"kind": "option", "name": "copy", "opts": ["--copy"], "type": "boolean", "is_flag": true, "default": false, "help": "Copy the data-app password to the clipboard at once, without the terminal prompt. The only way to copy it when there is no terminal (an AI agent, CI) or with --json. On create / deploy it needs --wait."},
         {"kind": "option", "name": "reveal", "opts": ["--reveal"], "type": "boolean", "is_flag": true, "default": false, "help": "Print the data-app password (human and --json output). For scripts and CI; in an AI agent session the password then goes into the chat history. On create / deploy it needs --wait."}
@@ -929,7 +929,7 @@
       "kind": "command",
       "hidden": false,
       "category": "destructive",
-      "help": "Delete the deployment AND the Storage config (cascade, irreversible).",
+      "help": "Delete the app: stop its deployments and move the Storage config to the trash.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "app_id", "opts": ["--app-id"], "type": "text", "required": true, "default": null, "help": "Data Science numeric app id"},
@@ -941,7 +941,7 @@
       "kind": "command",
       "hidden": false,
       "category": "write",
-      "help": "Deploy the latest Storage config (the §9 redeploy contract).\n\nWith --wait on a password-auth app, the password is delivered once the app\nruns, as in `data-app password`: a c-to-copy prompt in a terminal (the\ncommand then ends after Enter or 120 s), --copy / --reveal elsewhere.",
+      "help": "Deploy the latest Storage config version as a new production deployment.\n\nWith --wait on a password-auth app, the password is delivered once the app\nruns, as in `data-app password`: a c-to-copy prompt in a terminal (the\ncommand then ends after Enter or 120 s), --copy / --reveal elsewhere.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "app_id", "opts": ["--app-id"], "type": "text", "required": true, "default": null, "help": "Data Science numeric app id"},
@@ -1049,7 +1049,7 @@
       "kind": "command",
       "hidden": false,
       "category": "read",
-      "help": "List a data app's recent deployment attempts (runs), newest first.\n\nUnlike ``data-app logs`` (which needs a running container), ``runs`` works on\nnever-started / failed apps and surfaces the ``failure_reason`` +\n``startup_logs`` the platform records for each attempt -- including\nsetup-phase failures (e.g. a git-clone error during ``app_setup``) that\nproduce no container logs. This is the way to find out *why* a deploy\nreverted to ``stopped`` without the app ever serving.\n\nAuth: project Storage token only.",
+      "help": "List a data app's recent deployment attempts (runs), newest first.\n\nUnlike ``data-app logs`` (which needs a running container), ``runs`` works on\nnever-started / failed apps and surfaces the ``failure_reason`` +\n``startup_logs`` the platform records for each attempt -- including\nsetup-phase failures (e.g. a git-clone error during ``app_setup``) that\nproduce no container logs. This is the way to find out *why* a deployment\nfailed without the app ever serving.\n\nAuth: project Storage token only.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "app_id", "opts": ["--app-id"], "type": "text", "required": true, "default": null, "help": "Data Science numeric app id"},
@@ -1119,7 +1119,7 @@
       "kind": "command",
       "hidden": false,
       "category": "write",
-      "help": "Wake an auto-suspended data app at its currently-pinned configVersion.",
+      "help": "Wake a suspended or disabled data app at the deployment production serves.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "app_id", "opts": ["--app-id"], "type": "text", "required": true, "default": null, "help": "Data Science numeric app id"},
@@ -1132,11 +1132,11 @@
       "kind": "command",
       "hidden": false,
       "category": "write",
-      "help": "Stop a running data app (preserves the URL and Storage config).",
+      "help": "Suspend a data app; the next request to its URL wakes it (URL and config kept).",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "app_id", "opts": ["--app-id"], "type": "text", "required": true, "default": null, "help": "Data Science numeric app id"},
-        {"kind": "option", "name": "wait", "opts": ["--wait"], "type": "boolean", "is_flag": true, "default": false, "help": "Block until stopped. Default: no wait."},
+        {"kind": "option", "name": "wait", "opts": ["--wait"], "type": "boolean", "is_flag": true, "default": false, "help": "No effect: the app is suspended when the call returns."},
         {"kind": "option", "name": "timeout", "opts": ["--timeout"], "type": "float", "default": 300.0, "help": "Max seconds to wait, with --wait. Default: 300."}
       ]
     },

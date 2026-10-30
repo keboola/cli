@@ -1,15 +1,13 @@
-"""Data-app service — Keboola Data Science API + ``keboola.data-apps``.
+"""Data-app service — Keboola Data Science ``/v2`` API + ``keboola.data-apps``.
 
 Owns the orchestration that the underlying APIs do *not* provide:
 
-- the §9 redeploy contract (read latest Storage version, then PATCH with
-  ``{desiredState=running, configVersion, restartIfRunning=true}`` together)
+- the redeploy contract (read the latest Storage version, then
+  ``POST /v2/apps/{id}/deployments`` pinned to it)
 - per-project KMS encryption of git PATs via :class:`EncryptService`
 - cleanup-in-finally on initial-deploy failure so a failed
-  ``data-app create`` does not leak an empty deployment shell
-- a poll loop that refuses to treat ``state == stopped`` as terminal while
-  ``desiredState == running`` (writeup §8 pitfall row 1 — the transient
-  ``stopped`` between the initial container teardown and runtime spin-up)
+  ``data-app create`` does not leak an empty app
+- a poll loop that waits for a deploy to serve production, not just to run
 
 Naming convention: callers pass an integer-like ``app_id``; we coerce to
 str so paths build cleanly regardless of input type.
@@ -50,6 +48,7 @@ from ._data_app_bodies import (
     git_backfill_warning,
     resolve_effective_version,
 )
+from ._data_app_lifecycle import raise_if_deployment_cannot_serve, suspend_or_resume
 from ._data_app_password import (
     DataAppPassword,
     app_branch_id,
@@ -66,6 +65,26 @@ logger = logging.getLogger(__name__)
 DataScienceClientFactory = Callable[[str, str], DataScienceClient]
 
 
+def _production_config_version(app: dict[str, Any]) -> str:
+    """The Storage config version the app's production serves; ``""`` when never deployed."""
+    return str((app.get("production") or {}).get("actualConfigVersion") or "")
+
+
+def _serving_deployment_id(app: dict[str, Any]) -> str:
+    """The deployment serving the app's production; ``""`` when none does."""
+    return str((app.get("production") or {}).get("actualDeploymentId") or "")
+
+
+def _configured_size(configuration: dict[str, Any]) -> str:
+    """The backend size a data-app Storage config names."""
+    backend = (configuration.get("runtime") or {}).get("backend") or {}
+    return str(backend.get("size") or (configuration.get("parameters") or {}).get("size") or "")
+
+
+def _configured_auto_suspend(configuration: dict[str, Any]) -> Any:
+    return (configuration.get("parameters") or {}).get("autoSuspendAfterSeconds")
+
+
 def make_default_ds_client_factory(config_store: Any) -> DataScienceClientFactory:
     """Session-aware default DS client factory, shared by DataAppService and
     SyncService so both reach browser-login projects the same way."""
@@ -76,15 +95,8 @@ def make_default_ds_client_factory(config_store: Any) -> DataScienceClientFactor
 # Constants encoded from the writeup
 # ---------------------------------------------------------------------------
 
-VALID_TYPES: tuple[str, ...] = (
-    "python-js",
-    "python",
-    "streamlit",
-    "r",
-    "python-databricks",
-    "python-snowpark",
-    "python-mlflow",
-)
+# The types ``POST /v2/apps`` creates.
+VALID_TYPES: tuple[str, ...] = ("python-js", "streamlit")
 DEFAULT_TYPE = "python-js"
 
 VALID_SIZES: tuple[str, ...] = ("tiny", "small", "medium", "large")
@@ -106,9 +118,10 @@ MAX_GIT_BRANCH_LENGTH = 255
 MAX_GIT_USERNAME_LENGTH = 255
 
 POLL_INTERVAL_SECONDS = 5.0
-TERMINAL_ERROR_STATE = "error"
 RUNNING_STATE = "running"
-STOPPED_STATE = "stopped"
+# Stopped by a failure; only an explicit start clears it.
+DISABLED_STATE = "disabled"
+FAILED_DEPLOYMENT_STATE = "failed"
 
 
 # URL schemes accepted for ``--git-repo``. Anything else (file://, gopher://,
@@ -188,37 +201,30 @@ class DataAppService(BaseService):
                 ds_client = self._ds_client_factory(project.stack_url, project.token)
                 storage_client = self._client_factory(project.stack_url, project.token)
                 apps = ds_client.list_apps()
-                config_names = self._fetch_data_app_config_names(storage_client, branch_id)
+                configs = self._fetch_data_app_configs(storage_client, branch_id)
                 merged: list[dict[str, Any]] = []
                 for app in apps:
-                    # The Data Science ``/apps`` collection returns EVERY
-                    # deployment in the project, not just data apps -- that
-                    # includes workspace/sandbox deployments
-                    # (``componentId=keboola.sandboxes``, ``type=snowflake`` /
-                    # ``bigquery``, no name, Snowflake URL). The Apps UI filters
-                    # to ``keboola.data-apps``; mirror that so ``data-app list``
-                    # does not leak sandboxes. Defensive: an item that omits
-                    # ``componentId`` (older API shape) is kept rather than
-                    # hidden -- we never drop a row we cannot classify.
+                    # Data apps only: an item of another component (or one that
+                    # omits ``componentId``) is kept only when it is unclassifiable.
                     component_id = str(app.get("componentId") or "")
                     if component_id and component_id != DATA_APP_COMPONENT_ID:
                         continue
                     config_id = str(app.get("configId") or "")
+                    config = configs.get(config_id, {})
+                    configuration = _coerce_config_dict(config.get("configuration"))
                     merged.append(
                         {
                             "project_alias": alias,
                             "app_id": str(app.get("id", "")),
                             "config_id": config_id,
                             "component_id": component_id,
-                            "name": config_names.get(config_id, app.get("name", "")),
+                            "name": config.get("name", ""),
                             "type": app.get("type", ""),
                             "state": app.get("state", ""),
-                            "desired_state": app.get("desiredState", ""),
-                            "config_version": str(app.get("configVersion", "") or ""),
+                            "config_version": _production_config_version(app),
                             "url": app.get("url", ""),
-                            "size": app.get("size", ""),
-                            "auto_suspend_after_seconds": app.get("autoSuspendAfterSeconds"),
-                            "last_start_timestamp": app.get("lastStartTimestamp"),
+                            "size": _configured_size(configuration),
+                            "auto_suspend_after_seconds": _configured_auto_suspend(configuration),
                         }
                     )
                 # Per-project sort dropped: the global sort below
@@ -272,13 +278,8 @@ class DataAppService(BaseService):
             ds_client.close()
             storage_client.close()
 
-        configuration = storage_config.get("configuration") or {}
-        if isinstance(configuration, str):
-            try:
-                configuration = json.loads(configuration)
-            except (ValueError, TypeError):
-                configuration = {}
-        parameters = configuration.get("parameters", {}) if isinstance(configuration, dict) else {}
+        configuration = _coerce_config_dict(storage_config.get("configuration"))
+        parameters = configuration.get("parameters", {})
         data_app_block = parameters.get("dataApp", {}) if isinstance(parameters, dict) else {}
         git_block = data_app_block.get("git", {}) if isinstance(data_app_block, dict) else {}
 
@@ -287,24 +288,15 @@ class DataAppService(BaseService):
             "app_id": str(app.get("id", "")),
             "config_id": config_id,
             "config_version_storage": str(storage_config.get("version", "") or ""),
-            "config_version_deployed": str(app.get("configVersion", "") or ""),
-            "name": storage_config.get("name", app.get("name", "")),
+            "config_version_deployed": _production_config_version(app),
+            "deployment_id": _serving_deployment_id(app),
+            "name": storage_config.get("name", ""),
             "description": storage_config.get("description", ""),
             "type": app.get("type", ""),
             "state": app.get("state", ""),
-            "desired_state": app.get("desiredState", ""),
             "url": app.get("url", ""),
-            "size": app.get("size", "")
-            or (
-                configuration.get("runtime", {}).get("backend", {}).get("size", "")
-                if isinstance(configuration, dict)
-                else ""
-            ),
-            "auto_suspend_after_seconds": app.get(
-                "autoSuspendAfterSeconds",
-                parameters.get("autoSuspendAfterSeconds"),
-            ),
-            "last_start_timestamp": app.get("lastStartTimestamp"),
+            "size": _configured_size(configuration),
+            "auto_suspend_after_seconds": _configured_auto_suspend(configuration),
             "slug": data_app_block.get("slug", ""),
             "git": _redact_git_block(git_block) if git_block else {},
             "raw": {
@@ -344,7 +336,7 @@ class DataAppService(BaseService):
         Steps in order:
 
         1. Validate inputs (slug, size, type, git auth combination).
-        2. POST a minimal shell to ``/apps`` to mint id + configId.
+        2. POST a minimal app to ``/v2/apps`` to mint id + configId.
         3. If the repo is private, encrypt the PAT under THIS project's KMS
            via :class:`EncryptService`.
         4. PUT the full Storage config body, including the auto-injected
@@ -352,10 +344,11 @@ class DataAppService(BaseService):
            ``workspace=False``, ``runtime.workspace.enabled: true`` -- the
            switch that grants the app Storage access (see
            :func:`_build_runtime_block`).
-        5. If ``deploy``: read the latest Storage version, PATCH the
-           deployment record with the §9 trio.
-        6. If ``wait``: poll until terminal (running / error / timeout).
-        7. On failure between (2) and (5), DELETE the orphan shell unless
+        5. If ``deploy``: create a deployment pinned to the Storage version
+           step 4 wrote.
+        6. If ``wait``: poll until the deployment serves production (or fails
+           / times out).
+        7. On failure between (2) and (5), DELETE the orphan app unless
            ``keep_on_failure`` is set.
         """
         self._validate_create_inputs(
@@ -406,12 +399,12 @@ class DataAppService(BaseService):
         ds_client = self._ds_client_factory(project.stack_url, project.token)
         storage_client = self._client_factory(project.stack_url, project.token)
 
-        shell: dict[str, Any] | None = None
+        created: dict[str, Any] | None = None
         app_id: str | None = None
         config_id: str | None = None
 
         try:
-            # Step 2: create the shell. Smallest body the API will accept.
+            # Step 2: create the app. Smallest body the API will accept.
             initial_config = {
                 "parameters": {
                     "size": size,
@@ -421,7 +414,7 @@ class DataAppService(BaseService):
             }
             initial_config["authorization"] = _auth_block_for(auth)
 
-            shell = ds_client.create_app(
+            created = ds_client.create_app(
                 type_=type_,
                 name=name,
                 description="",  # full description goes onto the Storage config below
@@ -429,11 +422,11 @@ class DataAppService(BaseService):
                 branch_id=branch_id,
                 use_managed_git_repo=use_managed_git_repo,
             )
-            app_id = str(shell.get("id", ""))
-            config_id = str(shell.get("configId", ""))
+            app_id = str(created.get("id", ""))
+            config_id = str(created.get("configId", ""))
             if not app_id or not config_id:
                 raise KeboolaApiError(
-                    message="POST /apps response missing id or configId",
+                    message="POST /v2/apps response missing id or configId",
                     status_code=500,
                     error_code=ErrorCode.API_ERROR,
                     retryable=False,
@@ -478,11 +471,11 @@ class DataAppService(BaseService):
             )
             storage_version = str(storage_response.get("version", "") or "")
 
-            deployed_record: dict[str, Any] | None = None
+            deployment: dict[str, Any] | None = None
             poll_result: dict[str, Any] | None = None
 
             if deploy:
-                # Step 5: §9 redeploy contract.
+                # Step 5: deploy the version step 4 wrote.
                 if not storage_version:
                     raise KeboolaApiError(
                         message=(
@@ -493,29 +486,17 @@ class DataAppService(BaseService):
                         error_code=ErrorCode.API_ERROR,
                         retryable=False,
                     )
-                deployed_record = ds_client.patch_app(
-                    app_id,
-                    desired_state=RUNNING_STATE,
-                    config_version=storage_version,
-                    restart_if_running=True,
-                )
+                deployment = ds_client.create_deployment(app_id, config_version=storage_version)
 
                 if wait:
                     poll_result = self._poll_until_terminal(
                         ds_client,
                         app_id,
-                        target_desired_state=RUNNING_STATE,
+                        deployment_id=str(deployment.get("id", "")),
                         timeout_seconds=timeout_seconds,
                     )
 
-            url_record = deployed_record or shell
-            state_record = poll_result or deployed_record or shell
-            # The Git Service provisions the managed repo asynchronously on
-            # POST /apps; the id surfaces on the shell record (managedGitRepoId
-            # / id of the linked repo). Surface whatever the response carries.
-            managed_git_repo_id = (
-                str(shell.get("managedGitRepoId") or "") if use_managed_git_repo else ""
-            )
+            state_record = poll_result or created
             return {
                 "project_alias": alias,
                 "app_id": app_id,
@@ -529,17 +510,13 @@ class DataAppService(BaseService):
                 "workspace": bool(workspace),
                 "git": _redact_git_block(git_block) if git_block else {},
                 "use_managed_git_repo": use_managed_git_repo,
-                "managed_git_repo_id": managed_git_repo_id,
                 "branch_id": branch_id,
                 "config_version": storage_version,
                 "deployed": bool(deploy),
+                "deployment_id": str((deployment or {}).get("id", "")),
                 "wait": bool(wait),
-                "url": url_record.get("url", ""),
+                "url": state_record.get("url", ""),
                 "state": state_record.get("state", ""),
-                "desired_state": state_record.get("desiredState", ""),
-                "last_start_timestamp": (poll_result or deployed_record or {}).get(
-                    "lastStartTimestamp"
-                ),
                 "message": self._format_create_message(
                     name=name,
                     auth=auth,
@@ -550,14 +527,14 @@ class DataAppService(BaseService):
                 ),
             }
         except Exception:
-            # Step 7: clean up the orphan shell unless caller asked us to
+            # Step 7: clean up the orphan app unless caller asked us to
             # preserve it for forensics.
             if app_id and not keep_on_failure:
                 try:
                     ds_client.delete_app(app_id)
-                    logger.info("Cleaned up orphan data-app shell %s after failure", app_id)
+                    logger.info("Cleaned up orphan data app %s after failure", app_id)
                 except Exception:
-                    logger.exception("Failed to clean up orphan data-app shell %s", app_id)
+                    logger.exception("Failed to clean up orphan data app %s", app_id)
             raise
         finally:
             ds_client.close()
@@ -573,12 +550,10 @@ class DataAppService(BaseService):
         branch_id: int | None = None,
         git_branch: str | None = None,
     ) -> dict[str, Any]:
-        """Encapsulate the §9 redeploy contract.
+        """Deploy the app at a pinned Storage config version and promote it to production.
 
         Default reads the latest Storage version and pins to it; pass
-        ``config_version`` to deploy an older version. ALWAYS sends
-        ``restartIfRunning=true`` together with ``configVersion`` -- the
-        server returns HTTP 422 for any other shape.
+        ``config_version`` to deploy an older version.
 
         ``git_branch`` is the branch written into ``parameters.dataApp.git``
         when deploy backfills a pure managed repo; it has no effect otherwise.
@@ -605,9 +580,10 @@ class DataAppService(BaseService):
 
             # An explicit --config-version always wins as an escape hatch; see
             # resolve_effective_version's docstring for the resolution rules.
-            effective_version: str | None = config_version
             backfilled_branch: str | None = None
-            if config_version is None:
+            if config_version is not None:
+                effective_version = config_version
+            else:
                 storage_client = self._client_factory(project.stack_url, project.token)
                 resolved = resolve_effective_version(
                     ds_client, storage_client, app, app_id, config_id, branch_id, git_branch
@@ -615,28 +591,31 @@ class DataAppService(BaseService):
                 # git_branch is None unless the backfill wrote the git block.
                 effective_version, backfilled_branch = resolved.version, resolved.git_branch
 
-            deployed = ds_client.patch_app(
-                app_id,
-                desired_state=RUNNING_STATE,
-                config_version=effective_version,
-                restart_if_running=True,
-            )
-            poll_result: dict[str, Any] | None = None
+            deployment = ds_client.create_deployment(app_id, config_version=effective_version)
+            deployment_id = str(deployment.get("id", ""))
             if wait:
-                poll_result = self._poll_until_terminal(
+                app = self._poll_until_terminal(
                     ds_client,
                     app_id,
-                    target_desired_state=RUNNING_STATE,
+                    deployment_id=deployment_id,
                     timeout_seconds=timeout_seconds,
                 )
             result = self._format_lifecycle_result(
                 alias=alias,
                 app_id=app_id,
                 action="deploy",
-                deployed=deployed,
-                poll_result=poll_result,
-                config_version=effective_version or "",
+                app=app,
+                config_version=effective_version,
+                deployment_id=deployment_id,
             )
+            if not wait:
+                # `state` is still the deployment production served before this deploy.
+                result["message"] = (
+                    f"Data app {app_id} deployment {deployment_id} requested in project "
+                    f"'{alias}'. Production keeps state={result['state']} on its current "
+                    "deployment until the new one serves; `data-app detail` shows "
+                    f"deployment_id={deployment_id} once it does."
+                )
             if backfilled_branch is not None:
                 result["git_backfilled"] = True
                 result["git_branch"] = backfilled_branch
@@ -654,8 +633,8 @@ class DataAppService(BaseService):
         ``failure_reason`` and ``startup_logs`` -- including setup-phase failures
         (e.g. a git-clone error during ``app_setup``) that never produce
         container logs and so are invisible to ``data-app logs``. This is the
-        canonical way to find out *why* a deploy reverted to ``stopped`` without
-        the app ever serving.
+        canonical way to find out *why* a deployment failed without the app ever
+        serving.
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
@@ -691,35 +670,24 @@ class DataAppService(BaseService):
         wait: bool = False,
         timeout_seconds: float = DEFAULT_JOB_RUN_TIMEOUT,
     ) -> dict[str, Any]:
-        """Wake an auto-suspended app at its currently-pinned configVersion.
+        """Wake a suspended or disabled app at the deployment production already serves.
 
         Distinct from :meth:`deploy_data_app`: ``start`` does NOT bump the
-        deployed version. This is the cheap restart path for the
-        auto-suspend wake (writeup §8 pitfall row 2).
+        deployed version.
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
         ds_client = self._ds_client_factory(project.stack_url, project.token)
         try:
-            deployed = ds_client.patch_app(
-                app_id,
-                desired_state=RUNNING_STATE,
-                restart_if_running=True,
-            )
-            poll_result: dict[str, Any] | None = None
+            app = suspend_or_resume(ds_client.resume_app, app_id, "start")
             if wait:
-                poll_result = self._poll_until_terminal(
+                app = self._poll_until_terminal(
                     ds_client,
                     app_id,
-                    target_desired_state=RUNNING_STATE,
                     timeout_seconds=timeout_seconds,
                 )
             return self._format_lifecycle_result(
-                alias=alias,
-                app_id=app_id,
-                action="start",
-                deployed=deployed,
-                poll_result=poll_result,
+                alias=alias, app_id=app_id, action="start", app=app
             )
         finally:
             ds_client.close()
@@ -731,31 +699,22 @@ class DataAppService(BaseService):
         wait: bool = False,
         timeout_seconds: float = DEFAULT_JOB_RUN_TIMEOUT,
     ) -> dict[str, Any]:
+        """Suspend the app now; the next request to its URL wakes it again.
+
+        ``/v2`` answers ``state=suspended`` at once, so ``wait`` has nothing
+        to wait for.
+        """
         projects = self.resolve_projects([alias])
         project = projects[alias]
         ds_client = self._ds_client_factory(project.stack_url, project.token)
         try:
-            deployed = ds_client.patch_app(app_id, desired_state=STOPPED_STATE)
-            poll_result: dict[str, Any] | None = None
-            if wait:
-                poll_result = self._poll_until_terminal(
-                    ds_client,
-                    app_id,
-                    target_desired_state=STOPPED_STATE,
-                    timeout_seconds=timeout_seconds,
-                )
-            return self._format_lifecycle_result(
-                alias=alias,
-                app_id=app_id,
-                action="stop",
-                deployed=deployed,
-                poll_result=poll_result,
-            )
+            app = suspend_or_resume(ds_client.suspend_app, app_id, "stop")
+            return self._format_lifecycle_result(alias=alias, app_id=app_id, action="stop", app=app)
         finally:
             ds_client.close()
 
     def delete_data_app(self, alias: str, app_id: str) -> dict[str, Any]:
-        """Delete the deployment AND the Storage config (cascade)."""
+        """Delete the app: stop its deployments and move the Storage config to the trash."""
         projects = self.resolve_projects([alias])
         project = projects[alias]
         ds_client = self._ds_client_factory(project.stack_url, project.token)
@@ -769,7 +728,7 @@ class DataAppService(BaseService):
             "deleted": True,
             "message": (
                 f"Data app {app_id} deleted from project '{alias}'. "
-                "Both the deployment record and the Storage config are gone; "
+                "Its deployments are stopped and the Storage config is in the trash; "
                 "the URL is permanently retired."
             ),
         }
@@ -1814,11 +1773,10 @@ class DataAppService(BaseService):
             },
         }
         post_body["config"]["authorization"] = _auth_block_for(auth)
-        if use_managed_git_repo:
-            # The managed-repo flag lives on the POST /apps body, NOT in the
-            # Storage config -- the Git Service provisions the repo and links
-            # it to the app, so the PUT below carries no git block.
-            post_body["useManagedGitRepo"] = True
+        # The managed-repo flag lives on the POST /v2/apps body, NOT in the
+        # Storage config -- the Git Service provisions the repo and links
+        # it to the app, so the PUT below carries no git block.
+        post_body["useManagedGitRepo"] = use_managed_git_repo
 
         # The Storage config's dataApp block carries the git pointer only for
         # external repos. Managed repos omit it (parameters.dataApp.git absent).
@@ -1850,13 +1808,9 @@ class DataAppService(BaseService):
         }
         put_body["authorization"] = _auth_block_for(auth)
 
-        patch_body: dict[str, Any] = {}
+        deployment_body: dict[str, Any] = {}
         if kwargs["deploy"]:
-            patch_body = {
-                "desiredState": "running",
-                "configVersion": "<latest after PUT>",
-                "restartIfRunning": True,
-            }
+            deployment_body = {"configVersion": "<latest after PUT>"}
 
         if use_managed_git_repo:
             message = (
@@ -1878,28 +1832,30 @@ class DataAppService(BaseService):
             "requests": {
                 "post_apps": post_body,
                 "put_storage_config": put_body,
-                "patch_apps": patch_body,
+                "post_deployments": deployment_body,
             },
             "message": message,
         }
 
-    def _fetch_data_app_config_names(
+    def _fetch_data_app_configs(
         self,
         storage_client: Any,
         branch_id: int | None,
-    ) -> dict[str, str]:
-        """Map ``configId -> name`` for ``keboola.data-apps`` configs.
+    ) -> dict[str, dict[str, Any]]:
+        """Map ``configId -> Storage config`` for ``keboola.data-apps`` configs.
 
-        Used by ``list_data_apps`` to enrich the thin Data Science index
-        with the human-readable names that live on the Storage config.
+        - ``list_data_apps`` reads the name, size and auto-suspend from them:
+          the ``/v2`` app record carries none of these.
+        - Empty when the listing fails, so the apps still list.
         """
         try:
             configs = storage_client.list_component_configs(
                 DATA_APP_COMPONENT_ID, branch_id=branch_id
             )
-            return {str(cfg.get("id", "")): cfg.get("name", "") for cfg in configs}
         except Exception:
+            logger.warning("Failed to list data-app configs", exc_info=True)
             return {}
+        return {str(cfg.get("id", "")): cfg for cfg in configs}
 
     def _deploy_failure_diagnostic(
         self,
@@ -1946,34 +1902,44 @@ class DataAppService(BaseService):
         ds_client: DataScienceClient,
         app_id: str,
         *,
-        target_desired_state: str,
         timeout_seconds: float,
+        deployment_id: str | None = None,
     ) -> dict[str, Any]:
-        """Poll ``GET /apps/{id}`` until terminal.
+        """Poll ``GET /v2/apps/{id}`` until terminal; returns the last app record.
 
         Terminal definition:
 
-        - ``state == target_desired_state`` (the deploy succeeded), OR
-        - ``state == "error"`` (the build / runtime failed).
-
-        IMPORTANT: while ``desiredState == "running"``, observing
-        ``state == "stopped"`` is NOT terminal -- the platform transitions
-        ``created -> stopped -> starting -> running`` during initial
-        deploy, and a naive poll exits prematurely (writeup §8 pitfall 1).
+        - success: ``state == running`` and, with ``deployment_id``,
+          ``production.actualDeploymentId == deployment_id`` -- the new
+          deployment serves production, not the one it replaces
+        - failure: the deployment's ``buildState`` or ``runState`` is
+          ``failed``, or (without ``deployment_id``) the app is ``disabled``
+        - failure: the deployment was deleted (``archived``), or a newer deploy
+          replaced it as production's desired deployment, so it will never serve
         """
         deadline = time.monotonic() + timeout_seconds
-        last_record: dict[str, Any] = {}
         while True:
-            last_record = ds_client.get_app(app_id)
-            state = str(last_record.get("state", ""))
-            if state == TERMINAL_ERROR_STATE:
+            app = ds_client.get_app(app_id)
+            state = str(app.get("state", ""))
+            serving = _serving_deployment_id(app)
+            if deployment_id:
+                deployment = ds_client.get_deployment(app_id, deployment_id)
+                raise_if_deployment_cannot_serve(app_id, deployment_id, app, deployment)
+                failed = FAILED_DEPLOYMENT_STATE in (
+                    deployment.get("buildState"),
+                    deployment.get("runState"),
+                )
+            else:
+                failed = state == DISABLED_STATE
+            if failed:
                 suffix, details = self._deploy_failure_diagnostic(ds_client, app_id)
+                subject = f"deployment {deployment_id}" if deployment_id else f"state={state}"
                 raise KeboolaApiError(
                     message=(
-                        f"Data app {app_id} reached state=error during deploy.{suffix}"
+                        f"Data app {app_id} failed ({subject}).{suffix}"
                         if suffix
                         else (
-                            f"Data app {app_id} reached state=error during deploy. "
+                            f"Data app {app_id} failed ({subject}). "
                             "Run `kbagent data-app runs` for the failure reason, or see "
                             "the app's Terminal Log in the Keboola UI."
                         )
@@ -1983,15 +1949,15 @@ class DataAppService(BaseService):
                     retryable=False,
                     details=details or None,
                 )
-            if state == target_desired_state:
-                return last_record
+            if state == RUNNING_STATE and (not deployment_id or serving == deployment_id):
+                return app
             if time.monotonic() >= deadline:
                 suffix, details = self._deploy_failure_diagnostic(ds_client, app_id)
                 raise KeboolaApiError(
                     message=(
                         f"Timed out after {timeout_seconds:.0f}s waiting for data app "
-                        f"{app_id} to reach state={target_desired_state} "
-                        f"(last observed: state={state}, desired={last_record.get('desiredState')})."
+                        f"{app_id} to reach state={RUNNING_STATE} "
+                        f"(last observed: state={state}, serving deployment={serving or 'none'})."
                         f"{suffix}"
                     ),
                     status_code=0,
@@ -2007,26 +1973,23 @@ class DataAppService(BaseService):
         alias: str,
         app_id: str,
         action: str,
-        deployed: dict[str, Any],
-        poll_result: dict[str, Any] | None,
+        app: dict[str, Any],
         config_version: str | None = None,
+        deployment_id: str | None = None,
     ) -> dict[str, Any]:
-        record = poll_result or deployed
-        return {
+        state = app.get("state", "")
+        result = {
             "project_alias": alias,
             "app_id": str(app_id),
             "action": action,
-            "state": record.get("state", ""),
-            "desired_state": record.get("desiredState", ""),
-            "config_version": str(record.get("configVersion", "") or "") or (config_version or ""),
-            "url": record.get("url", ""),
-            "last_start_timestamp": record.get("lastStartTimestamp"),
-            "message": (
-                f"Data app {app_id} {action} requested in project '{alias}'. "
-                f"state={record.get('state', '?')}, "
-                f"desiredState={record.get('desiredState', '?')}."
-            ),
+            "state": state,
+            "config_version": config_version or _production_config_version(app),
+            "url": app.get("url", ""),
+            "message": f"Data app {app_id} {action} requested in project '{alias}'. state={state}.",
         }
+        if deployment_id is not None:
+            result["deployment_id"] = deployment_id
+        return result
 
     def _format_create_message(
         self,

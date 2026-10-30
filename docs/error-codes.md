@@ -179,7 +179,7 @@ A command that fails with an error code exits with the code's `Exit` value below
 
 | Code | Exit | Type | Description |
 |---|---|---|---|
-| `DATA_APP_BUILD_FAILED` | 1 | `api` | Data app deploy/start poll loop ended in a failed build or setup state |
+| `DATA_APP_BUILD_FAILED` | 1 | `api` | Data app deploy/start poll loop ended in a failed build or setup state, or a newer deploy replaced the deployment |
 | `DATA_APP_DEPLOY_TIMEOUT` | 1 | `api` | Polling timed out waiting for a data app deploy or start |
 | `DATA_APP_INVALID_GIT` | 1 | `api` | Data app git repository configuration is invalid or inaccessible |
 | `DATA_APP_INVALID_SECRET` | 2 | `api` | Data app secret key or value failed validation |

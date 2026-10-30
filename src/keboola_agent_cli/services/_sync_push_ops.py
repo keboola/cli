@@ -40,7 +40,7 @@ from ._encryption import (
 )
 from ._sync_baseline import apply_row_stamp, row_baseline
 from ._sync_companions import require_decided_packages
-from ._sync_data_app import create_synced_data_app
+from ._sync_data_app import create_synced_data_app, require_creatable_data_app_type
 from ._sync_deletes import fold_covered_rows
 from ._sync_disabled import (
     baseline_entry,
@@ -229,11 +229,16 @@ def create_refusals(
 ) -> list[dict[str, str]]:
     """The config creates a real push would refuse, as push ``errors`` records (dry run).
 
-    The same check :func:`push_create` makes before its POST: a new config
-    whose ``pyproject.toml`` states no package list and whose ``_config.yml``
-    has none inline has no remote to take them from (``COMPANION_UNREADABLE``,
-    T1). ``push --dry-run`` and ``clone --dry-run`` report it instead of
-    showing a create the real run refuses.
+    The same checks :func:`push_create` makes before its POST:
+
+    - a new config whose ``pyproject.toml`` states no package list and whose
+      ``_config.yml`` has none inline has no remote to take them from
+      (``COMPANION_UNREADABLE``, T1)
+    - a new data app records a runtime type ``POST /v2/apps`` does not create
+      (``VALIDATION_ERROR``)
+
+    ``push --dry-run`` and ``clone --dry-run`` report them instead of showing a
+    create the real run refuses.
     """
     refusals: list[dict[str, str]] = []
     creates = [c for c in changes if c["change_type"] == "added" and not c.get("is_row")]
@@ -256,6 +261,9 @@ def create_refusals(
                 branch_id=None,
                 local_data=local_data,
                 config_path=change.get("path", ""),
+            )
+            require_creatable_data_app_type(
+                change["component_id"], local_data, change.get("path", "")
             )
         except KeboolaApiError as exc:
             refusals.append(
@@ -867,6 +875,7 @@ def push_create(
         local_data=local_data,
         config_path=config_path_str,
     )
+    require_creatable_data_app_type(component_id, local_data, config_path_str)
 
     name, description, configuration = local_config_to_api(local_data)
     folder = manifest_folder(manifest, component_id, branch_id, config_path_str)
