@@ -22,25 +22,27 @@ from typing import Any
 
 from ._column_descriptions import (
     collect_legacy_column_entries,
-    description_from_column_meta,
+    column_definition,
+    effective_definition,
     native_column_descriptions,
 )
 
 
 @dataclass(frozen=True)
 class Descriptions:
-    """The user-authored descriptions carried in a table's metadata list."""
+    """The table description and the legacy column descriptions of a table resource."""
 
     table: str = ""
     # Column name -> value of its LEGACY flat `KBC.column.*.description` key.
-    # Only the legacy tier lives in the table's metadata list; the two tiers
-    # that outrank it are read per column in `_column_details`.
+    # Only the legacy tier lives in the table's metadata list; the native tier
+    # is read per column in `_column_details`.
     columns: dict[str, str] = field(default_factory=dict)
 
 
-def _split_descriptions(raw_metadata: list[dict[str, Any]]) -> Descriptions:
-    """Pull the user table description and legacy column descriptions out of metadata.
+def _split_descriptions(table: dict[str, Any]) -> Descriptions:
+    """Read the native table description and the legacy column descriptions.
 
+    The table description is `definition.description`, the value the UI shows.
     Before 0.88.0 kbagent stored column descriptions as
     `KBC.column.{name}.description` rows in the *table's* metadata list, on the
     belief that Keboola had no user-writable column-level endpoint. It does --
@@ -48,60 +50,89 @@ def _split_descriptions(raw_metadata: list[dict[str, Any]]) -> Descriptions:
     is legacy: nothing but this CLI ever read it. It is still parsed here as the
     last-resort tier so already-documented projects keep rendering.
     """
-    table_description = ""
-    for entry in raw_metadata:
-        if entry.get("key") == "KBC.description" and entry.get("provider") == "user":
-            table_description = entry.get("value", "") or ""
-    legacy = collect_legacy_column_entries(raw_metadata)
+    legacy = collect_legacy_column_entries(table.get("metadata") or [])
     return Descriptions(
-        table=table_description,
+        table=effective_definition(table).get("description") or "",
         columns={col: (entry.get("value") or "") for col, entry in legacy.items()},
     )
 
 
-def _column_details(
-    columns: list[str],
-    column_metadata: dict[str, list[dict[str, Any]]],
-    legacy_descriptions: dict[str, str],
-    native_descriptions: dict[str, str],
-    source_column_metadata: dict[str, list[dict[str, Any]]],
-) -> list[dict[str, Any]]:
-    """Build the per-column view from `columnMetadata`'s KBC.datatype.* rows.
+def _native_types(table: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Map column name -> its native type fields for a typed table.
 
-    Types are read from `columnMetadata`, never from `definition` -- the latter
-    has really been served as `[]` (see tests/test_storage_empty_definition.py).
-
-    Descriptions resolve in three tiers (#624): the native `definition` field
-    the Keboola UI writes and shows, then `KBC.description` in `columnMetadata`
-    (where the backend mirrors that write, and the only place the MCP server
-    looks), then the legacy flat key. An alias carries no `columnMetadata` of
-    its own, so it falls back to the source table's -- the same lookup the MCP
-    server performs.
+    `type`, `length`, `nullable` and `default` come from
+    `definition.columns[].definition`, `basetype` from `definition.columns[]`.
     """
+    out: dict[str, dict[str, Any]] = {}
+    for col in effective_definition(table).get("columns") or []:
+        name = col.get("name") if isinstance(col, dict) else None
+        if not name:
+            continue
+        inner = column_definition(col)
+        info: dict[str, Any] = {}
+        if col.get("basetype"):
+            info["type"] = col["basetype"]
+        if inner.get("type"):
+            info["native_type"] = inner["type"]
+        if inner.get("length"):
+            info["length"] = str(inner["length"])
+        if isinstance(inner.get("nullable"), bool):
+            info["nullable"] = inner["nullable"]
+        if inner.get("default") is not None:
+            info["default"] = str(inner["default"])
+        out[name] = info
+    return out
+
+
+def _metadata_types(entries: list[dict[str, Any]]) -> dict[str, Any]:
+    """Read one column's type fields from its `KBC.datatype.*` metadata rows."""
+    info: dict[str, Any] = {}
+    for entry in entries:
+        key = entry.get("key", "")
+        value = entry.get("value", "")
+        if key == "KBC.datatype.basetype":
+            info["type"] = value
+        elif key == "KBC.datatype.type":
+            # Native backend type (e.g. "VARCHAR", "NUMBER", "TIMESTAMP_TZ")
+            # -- distinct from the Keboola basetype it maps to.
+            info["native_type"] = value
+        elif key == "KBC.datatype.length":
+            # Length as stored: "40", "18,2", "255", ...
+            info["length"] = value
+        elif key == "KBC.datatype.nullable":
+            info["nullable"] = value == "1"
+        elif key == "KBC.datatype.default":
+            info["default"] = value
+    return info
+
+
+def _column_details(
+    table: dict[str, Any],
+    legacy_descriptions: dict[str, str],
+) -> list[dict[str, Any]]:
+    """Build the per-column view of a table resource.
+
+    Types of a typed table (`isTyped`) come from the native `definition`; they
+    are never read from `columnMetadata`, which survives a table swap with the
+    types of the previous table. A non-typed table has no types in `definition`
+    (Storage has served `[]` there, see tests/test_storage_empty_definition.py),
+    so its types stay on the `KBC.datatype.*` rows of `columnMetadata`.
+
+    Descriptions resolve from the native `definition`, then the legacy flat
+    key (#624). An alias inherits the source table's definition.
+    """
+    typed = bool(table.get("isTyped"))
+    native_types = _native_types(table) if typed else {}
+    native_descriptions = native_column_descriptions(table)
+    column_metadata: dict[str, list[dict[str, Any]]] = table.get("columnMetadata") or {}
     details: list[dict[str, Any]] = []
-    for col in columns:
+    for col in table.get("columns", []):
         col_info: dict[str, Any] = {"name": col}
-        entries = column_metadata.get(col, [])
-        for entry in entries:
-            key = entry.get("key", "")
-            value = entry.get("value", "")
-            if key == "KBC.datatype.basetype":
-                col_info["type"] = value
-            elif key == "KBC.datatype.type":
-                # Native backend type (e.g. "VARCHAR", "NUMBER", "TIMESTAMP_TZ")
-                # -- distinct from the Keboola basetype it maps to.
-                col_info["native_type"] = value
-            elif key == "KBC.datatype.length":
-                # Length as stored: "40", "18,2", "255", ...
-                col_info["length"] = value
-            elif key == "KBC.datatype.nullable":
-                col_info["nullable"] = value == "1"
-            elif key == "KBC.datatype.default":
-                col_info["default"] = value
-        meta_desc = description_from_column_meta(entries)
-        if meta_desc is None:
-            meta_desc = description_from_column_meta(source_column_metadata.get(col, []))
-        description = native_descriptions.get(col) or meta_desc or legacy_descriptions.get(col)
+        if typed:
+            col_info.update(native_types.get(col, {}))
+        else:
+            col_info.update(_metadata_types(column_metadata.get(col, [])))
+        description = native_descriptions.get(col) or legacy_descriptions.get(col)
         if description:
             col_info["description"] = description
         details.append(col_info)
@@ -153,10 +184,7 @@ def build_table_detail(alias: str, table_id: str, table: dict[str, Any]) -> dict
     """
     columns = table.get("columns", [])
     raw_metadata: list[dict[str, Any]] = table.get("metadata", [])
-    descriptions = _split_descriptions(raw_metadata)
-    source_column_metadata: dict[str, list[dict[str, Any]]] = (
-        (table.get("sourceTable") or {}).get("columnMetadata") or {} if table.get("isAlias") else {}
-    )
+    descriptions = _split_descriptions(table)
     bucket = table.get("bucket") or {}
     backend_path = [str(segment) for segment in bucket.get("backendPath") or []]
 
@@ -184,13 +212,7 @@ def build_table_detail(alias: str, table_id: str, table: dict[str, Any]) -> dict
         ),
         "description": descriptions.table,
         "columns": columns,
-        "column_details": _column_details(
-            columns,
-            table.get("columnMetadata", {}),
-            descriptions.columns,
-            native_column_descriptions(table),
-            source_column_metadata,
-        ),
+        "column_details": _column_details(table, descriptions.columns),
         "primary_key": table.get("primaryKey", []),
         # API may return null on empty tables; coerce to 0.
         "rows_count": table.get("rowsCount") or 0,

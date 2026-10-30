@@ -4552,16 +4552,35 @@ write descriptive metadata onto storage objects. Three behaviors are easy to mis
   `--prune-orphans`. **Migrated flat entries are DELETED** -- that is deliberate:
   leaving them would let the read fallback resurrect an old description after
   someone clears the column's text. `table-detail` reads with the precedence
-  native definition -> `columnMetadata` `KBC.description` -> legacy flat key,
-  always returns `legacy_column_descriptions`, and warns in human mode when
+  native definition -> legacy flat key (since vNEXT; 0.88.0 to the release
+  before also consulted `columnMetadata` `KBC.description`), always returns `legacy_column_descriptions`, and warns in human mode when
   legacy keys remain (it never writes -- safe under a read-only token or
   `--deny-writes`). Its human-mode Columns table shows a `Description`
   column *(since v0.89.0)*. On 0.88.0 it did NOT -- there the descriptions were
   readable only through `--json` `column_details[].description`, so a
   blank-looking terminal table on that version does not mean the write failed.
   Unknown column names now fail fast BEFORE any write; the old
-  flat write accepted typos silently. Table and bucket descriptions are
-  unaffected: still `KBC.description` (provider=user) on the object's metadata.
+  flat write accepted typos silently. Bucket descriptions are unaffected:
+  still `KBC.description` (provider=user) on the bucket's metadata. Table
+  descriptions are native too (see the next bullet).
+- **Table descriptions are native** *(since vNEXT)*. `describe-table` (and the
+  `tables:` section of `describe-batch`) write `definition.description` through
+  `PUT .../tables/{id}/definition` with `isDescriptionSystemManaged: false` and
+  create no `KBC.description` metadata row; a re-send of the stored text is a
+  no-op (`result: null`). `storage table-detail` reads the table description
+  from `definition.description` only -- not from `KBC.description` metadata, not
+  from the top-level `description`, and with no `provider == "user"`
+  preference -- so it shows what the UI shows. A description that exists only
+  as a stale `KBC.description` row no longer appears; set it again with
+  `describe-table`. On 0.99.x and older `describe-table` wrote the metadata row,
+  which outranked later UI edits (DMD-2434).
+- **Column types of a typed table come from `definition`** *(since vNEXT)*.
+  `storage table-detail` `column_details[]` of a table with `isTyped: true`
+  takes `type` (basetype), `native_type`, `length`, `nullable` and `default`
+  from `definition.columns[]` and ignores `KBC.datatype.*`, so after a table
+  swap it matches `definition` (on older versions it showed the pre-swap
+  types). A non-typed table keeps `KBC.datatype.*` from `columnMetadata`. A
+  typed table whose definition lacks a column reports no type for it.
 - **`describe-batch` is partial-failure-tolerant.** Item-level errors are
   collected into `result.errors[]` but the batch keeps processing the remaining
   items. The CLI exits non-zero only if `error_count > 0`, so in scripts always
@@ -4577,14 +4596,14 @@ write descriptive metadata onto storage objects. Three behaviors are easy to mis
   actual type. Nothing is half-applied. On 0.88.0 and earlier the same input
   raised an `AttributeError` traceback partway through, after some items had
   already been applied.
-- **Description-field precedence: metadata wins.** When both the native Storage
+- **Bucket description precedence: metadata wins.** When both the native Storage
   API `description` field and a user-provided `KBC.description` (provider=user)
-  metadata entry are present, `storage bucket-detail` / `storage table-detail`
-  surface the **metadata value**. The native field is only settable at object
-  creation time via the Storage API; all user updates flow through the metadata
-  endpoint, so the metadata entry is the authoritative source. `KBC.description`
-  entries whose provider is not `user` (e.g. `system`) are ignored during
-  read-back and the native field is used as fallback.
+  metadata entry are present, `storage bucket-detail` surfaces the **metadata
+  value**: a bucket has no native description write, so all user updates flow
+  through the metadata endpoint. `KBC.description` entries whose provider is not
+  `user` (e.g. `system`) are ignored during read-back and the native field is
+  used as fallback. (`storage table-detail` does not follow this since vNEXT;
+  see "Table descriptions are native".)
 - **`storage bucket-detail` is dialect-aware** **. Output adapts
   to the bucket's backend:
   - **Snowflake**: `snowflake_database` / `snowflake_schema` and per-table

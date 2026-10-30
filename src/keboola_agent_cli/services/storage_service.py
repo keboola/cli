@@ -10,7 +10,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from ..constants import STORAGE_BRANCHES_FEATURE, TABLE_DATA_JOB_MAX_WAIT
+from ..constants import NO_DEFINITION_CHANGES, STORAGE_BRANCHES_FEATURE, TABLE_DATA_JOB_MAX_WAIT
 from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..models import ProjectConfig
@@ -2400,9 +2400,14 @@ class StorageService(ColumnDescriptionsMixin):
         description: str,
         branch_id: int | None = None,
     ) -> dict[str, Any]:
-        """Set the KBC.description metadata on a storage table.
+        """Set the native description of a storage table.
 
-        Idempotent upsert: re-running with a different value overwrites.
+        Writes ``description`` through ``PUT .../tables/{id}/definition`` (an
+        asynchronous Storage job, waited for) with
+        ``isDescriptionSystemManaged=false``, so the next Output Mapping run
+        does not overwrite the text. Sending the stored value again succeeds:
+        Storage answers it with HTTP 400 "No table definition changes were
+        provided", which is a no-op here.
 
         Args:
             alias: Project alias.
@@ -2411,18 +2416,27 @@ class StorageService(ColumnDescriptionsMixin):
             branch_id: If set, target a specific dev branch.
 
         Returns:
-            Dict with project_alias, table_id, description, result, message.
+            Dict with project_alias, table_id, description, result (the
+            completed storage job, None for an unchanged description), message.
         """
         branch_id = resolve_branch(self._config_store, alias, branch_id)
         projects = self.resolve_projects([alias])
         project = projects[alias]
         client = self._client_factory(project.stack_url, project.token)
+        result: dict[str, Any] | None
         try:
-            result = client.set_table_metadata(
-                table_id=table_id,
-                entries=[("KBC.description", description)],
-                branch_id=branch_id,
-            )
+            try:
+                result = client.update_table_definition(
+                    table_id=table_id,
+                    description=description,
+                    description_set=True,
+                    is_description_system_managed=False,
+                    branch_id=branch_id,
+                )
+            except KeboolaApiError as exc:
+                if exc.status_code != 400 or NO_DEFINITION_CHANGES not in exc.message:
+                    raise
+                result = None
         finally:
             client.close()
         return {
