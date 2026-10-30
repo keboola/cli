@@ -195,6 +195,11 @@ A command that fails with an error code exits with the code's `Exit` value below
 | `DP_APP_NOT_FOUND` | 1 | `not_found` | Developer Portal app not found under the vendor |
 | `DP_PUBLISH_REQUIREMENTS_MISSING` | 1 | `validation` | App is missing required fields for publishing (fix via `dev-portal patch` first) |
 | `DP_ICON_UPLOAD_FAILED` | 1 | `api` | Uploading the app icon to the Developer Portal failed |
+| `OAUTH_IDENTITY_MISSING` | 5 | `configuration` | `kbagent oauth`: no token is stored in the keychain for the stack, or the keychain item cannot be read. Run `kbagent oauth identity add --stack HOST` (since vNEXT) |
+| `OAUTH_TOKEN_TOO_BROAD` | 6 | `authorization` | `kbagent oauth`: the Manage token is not an application token whose only scope is `oauth:manage` (or it is expired or disabled). kbagent refuses it; there is no override (since vNEXT) |
+| `OAUTH_KEYCHAIN_UNPROTECTED` | 6 | `authorization` | `kbagent oauth`: the keychain item trusts an application, so macOS no longer asks before releasing the token (someone clicked "Always Allow"). Store the token again with `kbagent oauth identity add` (since vNEXT) |
+| `OAUTH_PREFLIGHT_FAILED` | 2 | `validation` | `kbagent oauth rotate-azure-secret`: a read-only check failed before any write (wrong app for the component, app not readable in the signed-in tenant, `az` or `op` not signed in). Nothing was changed (since vNEXT) |
+| `OAUTH_ROTATION_INCOMPLETE` | 1 | `api` | `kbagent oauth rotate-azure-secret`: a write failed after the new secret was created. `details` names the stage and the new key ID; the message says what to clean up. The old secret stays valid (since vNEXT) |
 
 ### Programmatic Auth (browser login)
 

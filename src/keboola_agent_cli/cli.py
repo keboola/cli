@@ -30,6 +30,7 @@ from .commands.kai import kai_app
 from .commands.lineage import lineage_app
 from .commands.merge_request import merge_request_app
 from .commands.notification import notification_app
+from .commands.oauth import oauth_app
 from .commands.org import org_app
 from .commands.permissions import permissions_app
 from .commands.project import project_app
@@ -169,6 +170,7 @@ app.add_typer(semantic_layer_app, name="sl", rich_help_panel=_DEV, hidden=True)
 app.add_typer(http_app, name="http", rich_help_panel=_DEV)
 app.add_typer(agent_app, name="agent", rich_help_panel=_DEV)
 app.add_typer(dev_portal_app, name="dev-portal", rich_help_panel=_DEV)
+app.add_typer(oauth_app, name="oauth", rich_help_panel=_DEV)
 
 
 def _version_callback(value: bool) -> None:

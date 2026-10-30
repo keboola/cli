@@ -2133,6 +2133,70 @@
       ]
     },
     {
+      "path": "oauth",
+      "kind": "group",
+      "hidden": false,
+      "help": "OAuth broker maintenance: stored oauth:manage identities, consumer reads, Entra secret rotation. Writes need a typed code at a terminal; no --yes."
+    },
+    {
+      "path": "oauth consumer",
+      "kind": "group",
+      "hidden": false,
+      "help": "Read OAuth broker consumers (secrets are never shown)."
+    },
+    {
+      "path": "oauth consumer get",
+      "kind": "command",
+      "hidden": false,
+      "category": "read",
+      "help": "Show one broker consumer. appSecret and appSecretDocker show as <encrypted>.",
+      "params": [
+        {"kind": "option", "name": "stack", "opts": ["--stack"], "type": "text", "required": true, "default": null, "help": "Stack host: connection.<stack>, oauth.<stack> or a URL of either"},
+        {"kind": "option", "name": "component", "opts": ["--component"], "type": "text", "required": true, "default": null, "help": "Component ID, e.g. keboola.ex-foo"}
+      ]
+    },
+    {
+      "path": "oauth identity",
+      "kind": "group",
+      "hidden": false,
+      "help": "Manage the oauth:manage token stored in the macOS keychain."
+    },
+    {
+      "path": "oauth identity add",
+      "kind": "command",
+      "hidden": false,
+      "category": "write",
+      "help": "Store an oauth:manage application token for a stack in the macOS keychain.\n\nPrompts for the token without echo (a terminal is required; no pipe, option\nor env var). Refuses any token that is not an application token whose only\nscope is oauth:manage, and checks that the stack's OAuth broker accepts it.",
+      "params": [
+        {"kind": "option", "name": "stack", "opts": ["--stack"], "type": "text", "required": true, "default": null, "help": "Stack host: connection.<stack>, oauth.<stack> or a URL of either"}
+      ]
+    },
+    {
+      "path": "oauth identity verify",
+      "kind": "command",
+      "hidden": false,
+      "category": "read",
+      "help": "Check the stored token again: keychain protection, scopes, broker access.\n\nmacOS asks for the login password to release the token.",
+      "params": [
+        {"kind": "option", "name": "stack", "opts": ["--stack"], "type": "text", "required": true, "default": null, "help": "Stack host: connection.<stack>, oauth.<stack> or a URL of either"}
+      ]
+    },
+    {
+      "path": "oauth rotate-azure-secret",
+      "kind": "command",
+      "hidden": false,
+      "category": "write",
+      "help": "Rotate an Entra client secret behind one broker consumer.\n\nAdds a new secret to the app (named after the component), saves it in a new\n1Password item, PATCHes the broker consumer, then checks the broker and an\nEntra sign-in with the new secret. The old secret is NOT removed. One typed\ncode confirms all writes. Needs `az` signed in with a role that may change\nthe app's secrets, and `op` signed in.",
+      "params": [
+        {"kind": "option", "name": "stack", "opts": ["--stack"], "type": "text", "required": true, "default": null, "help": "Stack host: connection.<stack>, oauth.<stack> or a URL of either"},
+        {"kind": "option", "name": "component", "opts": ["--component"], "type": "text", "required": true, "default": null, "help": "Broker consumer (component ID)"},
+        {"kind": "option", "name": "app_id", "opts": ["--app-id"], "type": "text", "required": true, "default": null, "help": "Entra application (client) ID"},
+        {"kind": "option", "name": "op_vault", "opts": ["--op-vault"], "type": "text", "required": true, "default": null, "help": "1Password vault name or ID"},
+        {"kind": "option", "name": "expires_in_days", "opts": ["--expires-in-days"], "type": "integer", "default": 730, "help": "Lifetime of the new secret in days"},
+        {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Run every read-only check and show the plan; write nothing"}
+      ]
+    },
+    {
       "path": "org",
       "kind": "group",
       "hidden": false,

@@ -93,11 +93,12 @@ src/keboola_agent_cli/
   data_science_client.py # Data Science API            (data apps)
   metastore_client.py   # Metastore API                (semantic layer)
   dev_portal_client.py  # Developer Portal API
+  oauth_broker_client.py # OAuth broker consumer API (oauth.<stack>/manage, X-KBC-ManageApiToken)
   stream_client.py      # Stream / Data Streams API    (OTLP/HTTP sources)
 
   commands/             # LAYER 1 -- thin Typer commands, one file per group (31 modules):
                         #   project config job storage flow branch workspace data_app
-                        #   sync semantic_layer agent stream feature dev_portal kai
+                        #   sync semantic_layer agent stream feature dev_portal oauth kai
                         #   sharing lineage schedule search org component encrypt
                         #   permissions serve http_client repl init doctor version
                         #   changelog context
@@ -139,6 +140,7 @@ Seven clients, all inheriting `BaseHttpClient` (`http_base.py`) which provides s
 - **DataScienceClient** (`data_science_client.py`): Data Science API (data apps)
 - **MetastoreClient** (`metastore_client.py`): Metastore API (semantic layer)
 - **DeveloperPortalClient** (`dev_portal_client.py`): Developer Portal API (component publishing)
+- **OAuthBrokerClient** (`oauth_broker_client.py`): OAuth broker consumer API (`oauth.<stack>/manage`), auth via `X-KBC-ManageApiToken` with an `oauth:manage` application token
 - **StreamClient** (`stream_client.py`): Stream / Data Streams API (OTLP/HTTP sources)
 
 ### No MCP passthrough (removed in 0.85.0)
@@ -1313,6 +1315,20 @@ kbagent dev-portal deprecate --app VENDOR.APP_ID [--identity A] [--dry-run]
 # Since v0.51.1: --role-hint is validated (vendor/admin) and load-bearing -- admin identities route
 # `patch` to PATCH /admin/apps/{app} (permissive schema). Vendor + admin-only field => fail-fast preflight.
 # --password-stdin works on TTY (hidden prompt) AND on a pipe (reads to EOF).
+
+kbagent oauth identity add --stack HOST
+kbagent oauth identity verify --stack HOST
+kbagent oauth consumer get --stack HOST --component ID
+kbagent oauth rotate-azure-secret --stack HOST --component ID --app-id APP --op-vault VAULT [--expires-in-days N] [--dry-run]
+# oauth: OAuth broker (oauth.<stack>/manage) maintenance, macOS only, no serve route. The Manage token must
+#   be an APPLICATION token whose scopes are exactly ["oauth:manage"] -- refused otherwise on add AND on
+#   every use (OAUTH_TOKEN_TOO_BROAD, exit 6). It is stored only in the macOS keychain (service kbagent-oauth,
+#   account = oauth host) in an item with an empty trusted-app list, so every read raises a login-password
+#   dialog; an item someone "Always Allow"-ed is refused (OAUTH_KEYCHAIN_UNPROTECTED). identity add needs a
+#   terminal (hidden prompt; no option/pipe/env). rotate-azure-secret: az ad app credential reset --append
+#   (displayName = component) -> new 1Password item (JSON template on stdin) -> broker PATCH appSecret ->
+#   verify (ciphertext changed + Entra client-credentials sign-in). One random-code TTY confirm, no --yes; the
+#   old secret is never removed. Version gate lives in gotchas.md.
 
 kbagent encrypt values [--project ALIAS] --component-id ID --input JSON|@file|- [--output-file PATH]
 

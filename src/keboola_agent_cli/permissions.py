@@ -223,6 +223,14 @@ OPERATION_REGISTRY: dict[str, str] = {
     "dev-portal.upload-icon": "write",
     "dev-portal.publish": "admin",
     "dev-portal.deprecate": "destructive",
+    # OAuth broker maintenance (since vNEXT). Sub-app parents are reads so the
+    # policy can descend into them; the leaves below carry the real class.
+    "oauth.identity": "read",
+    "oauth.consumer": "read",
+    "oauth.rotate-azure-secret": "write",
+    "oauth.identity.add": "write",
+    "oauth.identity.verify": "read",
+    "oauth.consumer.get": "read",
     # Data apps (Data Science API + keboola.data-apps Storage component)
     "data-app.list": "read",
     "data-app.detail": "read",

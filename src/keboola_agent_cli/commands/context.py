@@ -850,6 +850,26 @@ explicit Storage config version, never the empty shell the create writes.
     are EXTERNAL (not managed) -> 409 "no managed Git repository".
     Confirmation prompt unless --yes or --json.
 """,
+    "oauth": """\
+#### OAuth broker maintenance
+
+  `kbagent oauth` reads OAuth broker consumers and rotates the Entra client
+  secret behind one (macOS only, terminal-only). The Manage token must be an
+  application token whose ONLY scope is oauth:manage; anything else is
+  refused (OAUTH_TOKEN_TOO_BROAD, exit 6), also on every later use.
+
+  The token is stored once by a HUMAN (`oauth identity add`, hidden prompt,
+  no option/pipe/env) in a keychain item that trusts no app: every command
+  makes macOS ask for the login password. Tell the human the dialog comes;
+  never suggest "Always Allow" (OAUTH_KEYCHAIN_UNPROTECTED).
+
+  Agent-safe: `consumer get` (appSecret shows as <encrypted>), `identity
+  verify`, `rotate-azure-secret --dry-run`. The real rotation needs a random
+  code typed at a terminal (no --yes; exits 6 from an agent shell): give the
+  human the exact command. It adds a secret named after the component, saves
+  it in a new 1Password item, PATCHes the broker, then verifies. The old
+  secret is never removed. Workflow: references/oauth-broker-workflow.md.
+""",
     "dev-portal": """\
 #### Developer Portal
 

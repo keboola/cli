@@ -751,6 +751,7 @@ VERDICT_EXITS = {
     "auth.py:auth_status": "session missing or expired",
     "data_app.py:data_app_validate_repo": "the repository check found a blocking problem",
     "flow.py:flow_validate": "the flow definition is not valid",
+    "oauth.py:rotate_azure_secret": "the writes ran, but the new secret could not be verified",
     "permissions.py:permissions_check": "the operation is denied",
 }
 
