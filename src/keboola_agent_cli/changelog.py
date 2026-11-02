@@ -170,7 +170,7 @@ CHANGELOG: dict[str, list[str]] = {
         "output changed. `desired_state` and `last_start_timestamp` are removed from `list`, "
         "`detail`, `create`, `deploy`, `start` and `stop`, and `managed_git_repo_id` from "
         "`create`. `state` has the /v2 values `notDeployed`, `starting`, `running`, `suspended` "
-        "and `disabled`. `deploy` and `create` add `deployment_id`. `--type` accepts only "
+        "and `disabled`. `detail`, `deploy` and `create` add `deployment_id`. `--type` accepts only "
         "`python-js` and `streamlit`. Migration: read `state` and `deployment_id`.",
         "BREAKING (#937): `data-app stop` suspends the app, and the next request to its URL "
         "wakes it. /v2 has no stopped state that stays stopped. `stop --wait` and `--timeout` "
@@ -213,7 +213,7 @@ CHANGELOG: dict[str, list[str]] = {
         "warning. On `__env__`, `branch use` is refused before any API call, and `branch "
         "reset` does nothing. Migration: give `--branch` on the later commands.",
         "New (#902): every option of a long name now has the same short flag, for example `-p` "
-        "for `--project` on all 228 commands (before 24). The others are `-n` for `--name`, `-t` "
+        "for `--project` on all 225 commands (before 24). The others are `-n` for `--name`, `-t` "
         "for `--type`, `-L` for `--limit`, `-o` for `--output` and `-e` for `--email`. On 0.x, "
         "use the long names.",
         "New (#874): `--json`, `--deny-writes` and `--deny-destructive` now also work after the "

@@ -455,8 +455,8 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   never below). Use `kbagent project list` or `auth register-projects` to
   find/register the real alias; it never overwrites an existing registration.
 - **Session auth covers almost every command**: read the static-token-only
-  list from `session_unsupported_features` in `auth login --json` / `auth
-  register-projects --json` -- never from memory, never refuse pre-emptively.
+  list from `session_unsupported_features` in `kbagent --json auth login` /
+  `auth register-projects` -- never from memory, never refuse pre-emptively.
   Over `serve`, a session expiring at runtime answers HTTP 401
   `SESSION_EXPIRED`. Only a human on the host can re-login.
 - **Read `auth_mode` to tell the modes apart; never parse the token**:

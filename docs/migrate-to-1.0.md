@@ -72,7 +72,7 @@ When the check for a new version fails (offline, proxy error, HTTP 403 or 429), 
 
 ### Pre-releases
 
-1.x pre-releases are published from 22 October 2026 (1.0.0rc1) on. A client older than 0.100.0 that runs `kbagent version --beta` or `kbagent update --beta` can still install a 1.x pre-release. Update to 0.100.0 or later first; it never crosses a major version with `--beta` alone.
+1.x pre-releases are published from 21 October 2026 (1.0.0b2) on. A client older than 0.100.0 that runs `kbagent version --beta` or `kbagent update --beta` can still install a 1.x pre-release. Update to 0.100.0 or later first; it never crosses a major version with `--beta` alone.
 
 ## Move to 1.0 early
 

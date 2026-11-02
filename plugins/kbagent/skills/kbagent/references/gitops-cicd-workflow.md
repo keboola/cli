@@ -28,9 +28,8 @@ A pipeline must not change kbagent under its own feet.
   update itself in the middle of a pipeline -- after the 1.0.0 migration date also
   to the next major version.
 - **Pre-releases are not on PyPI.** A `1.0.0rcN` build is published only as a
-  GitHub Release asset. Install it by URL:
-  `uv tool install https://github.com/keboola/cli/releases/download/v1.0.0rc4/keboola_cli-1.0.0rc4-py3-none-any.whl`.
-  `keboola-cli<1` / `==X.Y.Z` from PyPI never picks one up.
+  GitHub Release asset, and `keboola-cli<1` / `==X.Y.Z` from PyPI never picks
+  one up. 1.0.0 is on PyPI: `uv tool install 'keboola-cli==1.0.0'`.
 - **Check what runs** with `kbagent --json version` and read
   `data.kbagent.version` (also `latest_version`, `up_to_date`,
   `upgrade_command`). `kbagent --json --version` prints plain text
@@ -131,8 +130,8 @@ pitfall 2.2.
 ## 5. Pitfalls
 
 Version notes: "<= 0.100.4" is the stable line the customer used. 1.0.0rc4 is
-the pre-release cut from `main`. *(since 1.0.0)* marks a fix that ships in the
-next release; each entry says whether it is already in 1.0.0rc4.
+the pre-release that was tested. *(since 1.0.0)* marks a fix in 1.0.0; each
+entry says whether it was already in 1.0.0rc4.
 
 ### 1. A transformation job is `success` but did not run the SQL (platform)
 

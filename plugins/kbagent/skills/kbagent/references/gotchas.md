@@ -40,6 +40,7 @@ From the release of kbagent 1.0.0 until its migration date (28 days later), the 
 - `lineage show --column`: `column_filter` is removed. Read `column`.
 - `permissions show`: the top-level `mode`, `allow` and `deny` are removed. Read `persisted.mode`, `persisted.allow` and `persisted.deny`. `GET /permissions/show` does not change.
 - `config set-folder` and `POST /configs/{project}/{component_id}/{config_id}/folder`: `key`, `value` and `result` are removed. Read `folder` (`""` when cleared) and `configuration` (`{id, name, folder}`).
+- `data-app` commands and the `/data-apps` routes: `desired_state` and `last_start_timestamp` are removed, and `data-app create` has no `managed_git_repo_id`. Read `state` and `deployment_id` (1.x only).
 - A failed item or project in `failed[]`, `errors[]` or a similar list (`cascade.failures`, `cascaded_constraints`, `type_resolution_errors`, `bucket_errors`, `projects_failed`, the `projects` map of `sync push --all-projects`): `error` and `reason` with the error text are removed. Read `message`, with `error_code` and `retryable`. The `message` of an unexpected error is truncated. A `reason` that names a category stays (`skipped[]` of `storage describe` and `storage describe-migrate`: `orphan`, `conflict`, `delete_failed`).
 - `project use` and `project current`: `source: "pin"` is `source: "active_project"`, the name that `resolved_source` and `targets[].project_source` use. `pinned` does not change.
 
@@ -49,7 +50,7 @@ These lists keep `error`, because their entries are not failed items with an err
 
 *(since 1.0.0)* (#791, spec A2)
 
-- **Every option with a long name in the short-flag table has its short flag**: `-p` `--project` (on all 228, before on 24), `-n` `--name`, `-t` `--type`, `-L` `--limit`, `-o` `--output`, `-e` `--email`, `-d` `--directory`, `-y` `--yes` and the others in `docs/cli-interface-spec.md` A2. A long name that is not in the table has no short flag.
+- **Every option with a long name in the short-flag table has its short flag**: `-p` `--project` (on all 225, before on 24 of 228), `-n` `--name`, `-t` `--type`, `-L` `--limit`, `-o` `--output`, `-e` `--email`, `-d` `--directory`, `-y` `--yes` and the others in `docs/cli-interface-spec.md` A2. A long name that is not in the table has no short flag.
 - **Removed short flags** (a usage error, exit 2): `-c` (`permissions list --category`, `lineage show --column`), `-r` (`search` and `config search --regex`, `project invite` and `project member-set-role --role`), `-d` on `http post/patch --body`, `permissions set --deny` and `token create --description`, `-f` on `lineage show --format`, `-l` on `search --limit` and `-n` on `changelog` and `kai history --limit` (use `-L`), `-m` on `permissions set --mode`, and `-v` on `changelog --full` (`-v` is the global `--verbose`).
 - **In documents and agent commands, use the long names.** They work on 0.x and 1.x.
 
@@ -1068,7 +1069,7 @@ These lists keep `error`, because their entries are not failed items with an err
   `config.json`'s `token` field becomes the literal string
   `kbc-session://{project_id}` for a session-registered project alias --
   `config.json`'s schema and `CURRENT_CONFIG_VERSION` are UNCHANGED (still 1).
-  Seeing that string in `project list --json` or a raw `config.json` read is
+  Seeing that string in `kbagent --json project list` or a raw `config.json` read is
   expected, not a corrupted token. An existing alias already pointing at the
   same project+stack is left untouched (`status: "exists"`). A *suggested*
   alias never collides in the first place -- it is computed against every
@@ -3101,7 +3102,7 @@ delete. Pass `--yes` to all of them in scripts.
 - **Do not re-issue the command on a timeout.** Follow the job with
   `kbagent storage job-detail --project P --job-id ID --wait` (the error
   message gives the full command), then check the physical result with
-  `storage table-detail --json` -> `.definition`. Re-running a swap that
+  `kbagent --json storage table-detail` -> `.definition`. Re-running a swap that
   succeeded swaps the tables *back*; re-running a `--source-table-id` create
   starts a second copy.
 
