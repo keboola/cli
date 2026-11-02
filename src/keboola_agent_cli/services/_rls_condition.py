@@ -4,10 +4,10 @@ Pure functions: no HTTP, no ``ConfigStore`` -- trivially unit-testable,
 mirroring ``flow_validation.py``'s split for the same reason.
 
 The condition/rules shape mirrored here is the one defined in
-``keboola-mcp-server``'s RFC (``feature_spec/rls_query_tool/RFC.md``, "Rule
-storage" section) -- kbagent never invents its own shape, it authors exactly
-what the enforcement engine (that repo's ``rls.py::_compile_primitive``,
-sqlglot-based) expects to read back from the metastore. The checks follow the policy
+the Query Service RFC (go-monorepo ``docs/rfc/query-service-rls-cls``) -- kbagent never
+invents its own shape, it authors exactly what the enforcement engine (go-monorepo
+``services/query/policy-engine``, ``rls.py::_compile_primitive``, sqlglot-based)
+expects to read back from the metastore. The checks follow the policy
 schema 1.2.0 (go-monorepo ``rls-policy_schema_1.2.0.json``): a rule selects identities by
 ``subjects`` (``<idp>|<sub>``) or IdP ``groups``, never by email (AJDA-3680; the legacy 1.0.0/1.1.0
 ``principal`` / ``principals`` still exist in stored policies and are read, not authored); within a policy every rule matching one identity
@@ -16,7 +16,8 @@ applies (the conditions combine with OR; policies on one table combine with AND)
 
 ``compile_condition_preview`` below is a **preview** for ``--dry-run`` /
 confirmation display, not the enforcement engine -- that lives in
-``keboola-mcp-server`` (sqlglot-based, a different repo). It follows the
+the Query Service policy engine (go-monorepo ``services/query/policy-engine``,
+sqlglot-based, a different repo). It follows the
 enforcement's rendering where an admin could be misled otherwise: columns
 quoted per dialect (the enforcement matches them case-exactly), booleans as
 ``TRUE``/``FALSE``. ``null`` comparisons never reach it: the enforcement would

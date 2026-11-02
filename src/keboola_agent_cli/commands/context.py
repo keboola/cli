@@ -433,11 +433,9 @@ that reader's result; masking is not supported). Rules select by
 `subjects` (`<idp>|<sub>`) or `groups`, never by email; within a policy an identity several rules
 match sees the union of their columns, several policies intersect; there is
 no `default`. Sibling of RLS -- same scope default, permissions, checks,
-partial update and enforcement paths (Query Service on a governed workspace,
-or `keboola-mcp-server`'s `query_data`, which composes RLS and CLS); no
-`setup` wizard. A reader with no rule for a governed table is refused. A
-`cls-policy` alone never grants rows: in a governed workspace the table also
-needs an `rls-policy`.
+partial update and enforcement path (the Query Service policy engine on a governed
+workspace, which composes RLS and CLS); no `setup` wizard. A column policy
+never grants rows by itself: in a governed workspace the table also needs an `rls-policy`.
 
   cls create
     --rules is a JSON array of {subjects|groups,
@@ -1591,17 +1589,19 @@ organization (destructive-class, organization-admin only) -- use it only
 when the user asks for org-wide. There is NO project scope. A project admin
 may write `targeted` policies of its own project without grants; grants and
 organization scope need the organization-admin role (403 otherwise).
-Writes refuse a dialect other than the project backend (the enforcement
-would refuse every read of that table). A stack whose metastore predates the
+A new policy carries no dialect unless --dialect is passed (optional from schema
+1.1.0, the engine does not read it); a --dialect other than the project backend is
+refused. A stack whose metastore predates the
 `rls-policy`/`cls-policy` schemas answers `rls schema` with a classified
 NOT_FOUND schema-fetch error -- expected there, not a kbagent bug.
 **Enforcement** (the actual SQL rewrite) is never done by kbagent, which only
-authors policies. Two readers apply them: Query Service on a governed
+authors policies. Query Service enforces them (its policy-engine sidecar) on a governed
 workspace (`workspace create --governed`, then `workspace load` and
-`workspace query`; Query Service always enforces a governed workspace), and
-`keboola-mcp-server`'s `query_data`, which enforces only where the project has
-the `row-level-security` feature and needs an engine that reads schema 1.1.0
-(since vNEXT). The identity that queries needs a matching rule.
+`workspace query`); it always enforces a governed workspace, whatever the project.
+The MCP server creates such a workspace for its `query_data` tool. An ordinary reader
+who may not read a table (no policy on it, or no rule selects them) gets an empty result;
+an administrator behind a Storage token gets the refusal `Row-level security does not
+allow this query`. The identity that queries needs a matching rule.
 
   rls list
     Policies visible to -- and applied in -- a project (id, table, dialect,

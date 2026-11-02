@@ -1,9 +1,12 @@
 """Policy bindings -- business logic for ``kbagent rls bind|unbind|bindings|bindings-sweep``.
 
-A ``policy-binding`` metastore object restricts one governed workspace (or data app) to a subset of
+A ``policy-binding`` metastore object restricts one governed workspace to a subset of
 the project's ``rls-policy`` / ``cls-policy`` objects. It is named by the canonical KID of the
 workspace, ``KID:<stack>:project-<id>:workspace-<id>``, and holds ``kid`` plus ``rlsPolicyUUIDs``
-and/or ``clsPolicyUUIDs``. Query Service reads it on every governed query:
+and/or ``clsPolicyUUIDs``. These commands bind workspaces only: a Data App gets its policies from
+its own configuration (``runtime.workspace.rlsPolicies``), from which the platform creates the app's
+governed workspace together with its binding, so kbagent never writes an app KID (it only lists
+and leaves alone the ones it finds). Query Service reads a binding on every governed query:
 
 - a KID with no binding gets EVERY policy of the project;
 - a KID with a binding gets only the listed policies -- a binding narrows, it never grants.

@@ -16,8 +16,8 @@ email is not a selector): the listed
 columns are the only ones the selected readers can read (allowlist projection;
 masking is not supported). As with ``rls``, every write is authored at
 ``targeted`` scope unless ``--scope organization`` is passed -- never
-``project``. Enforcement happens in Query Service on a governed workspace
-or in ``keboola-mcp-server``'s ``query_data``; kbagent only authors policies.
+``project``. Enforcement happens in the Query Service policy engine on a governed workspace
+(the MCP server only creates such a workspace); kbagent only authors policies.
 
 ``list``/``detail``/``schema`` are read-only and safe under ``--deny-writes``;
 ``create``/``update`` are gated as ``admin``, ``delete`` and ``--scope
@@ -70,7 +70,9 @@ def _cls_permission_check(ctx: typer.Context) -> None:
 @cls_app.command("list")
 def cls_list(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(
+        None, "--project", "-p", help="Project alias (default: the active project)"
+    ),
 ) -> None:
     """List column-level security policies visible to a project."""
     list_policies(ctx, CLS, project)
@@ -79,7 +81,9 @@ def cls_list(
 @cls_app.command("detail")
 def cls_detail(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(
+        None, "--project", "-p", help="Project alias (default: the active project)"
+    ),
     policy_id: str = typer.Option(..., "--policy-id", help="CLS policy ID"),
 ) -> None:
     """Show one CLS policy's full rule set."""
@@ -90,7 +94,10 @@ def cls_detail(
 def cls_schema(
     ctx: typer.Context,
     project: str = typer.Option(
-        ..., "--project", "-p", help="Project alias -- fetch the live schema from this stack"
+        None,
+        "--project",
+        "-p",
+        help="Project alias -- fetch the live schema from this stack (default: the active project)",
     ),
 ) -> None:
     """Print the live ``cls-policy`` JSON Schema fetched from the metastore.
@@ -106,7 +113,10 @@ def cls_schema(
 def cls_create(
     ctx: typer.Context,
     project: str = typer.Option(
-        ..., "--project", "-p", help="Project alias -- the project that owns the policy"
+        None,
+        "--project",
+        "-p",
+        help="Project alias -- the project that owns the policy (default: the active project)",
     ),
     table_id: str = typer.Option(..., "--table-id", help=TABLE_HELP),
     rules: str = typer.Option(
@@ -141,7 +151,9 @@ def cls_create(
 @cls_app.command("update")
 def cls_update(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(
+        None, "--project", "-p", help="Project alias (default: the active project)"
+    ),
     policy_id: str = typer.Option(..., "--policy-id", help="CLS policy ID"),
     table_id: str | None = typer.Option(None, "--table-id", help="New table (unset = unchanged)"),
     dialect: Dialect | None = typer.Option(
@@ -184,7 +196,9 @@ def cls_update(
 @cls_app.command("delete")
 def cls_delete(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(
+        None, "--project", "-p", help="Project alias (default: the active project)"
+    ),
     policy_id: str = typer.Option(..., "--policy-id", help="CLS policy ID"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show the policy without deleting it"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),

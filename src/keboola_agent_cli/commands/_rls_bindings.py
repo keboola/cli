@@ -67,7 +67,9 @@ def register(app: typer.Typer) -> None:
     @app.command("bind")
     def rls_bind(
         ctx: typer.Context,
-        project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+        project: str = typer.Option(
+            None, "--project", "-p", help="Project alias (default: the active project)"
+        ),
         workspace_id: int = typer.Option(..., "--workspace-id", help="Governed workspace ID"),
         rls_policy: list[str] | None = typer.Option(
             None,
@@ -117,7 +119,9 @@ def register(app: typer.Typer) -> None:
     @app.command("unbind")
     def rls_unbind(
         ctx: typer.Context,
-        project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+        project: str = typer.Option(
+            None, "--project", "-p", help="Project alias (default: the active project)"
+        ),
         workspace_id: int = typer.Option(..., "--workspace-id", help="Workspace ID"),
         stack_id: str | None = typer.Option(
             None, "--stack-id", envvar=ENV_STACK_ID, help=STACK_ID_HELP
@@ -160,7 +164,9 @@ def register(app: typer.Typer) -> None:
     @app.command("bindings")
     def rls_bindings(
         ctx: typer.Context,
-        project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+        project: str = typer.Option(
+            None, "--project", "-p", help="Project alias (default: the active project)"
+        ),
         workspace_id: int | None = typer.Option(
             None, "--workspace-id", help="Only the binding of this workspace"
         ),
@@ -182,7 +188,9 @@ def register(app: typer.Typer) -> None:
     @app.command("bindings-sweep")
     def rls_bindings_sweep(
         ctx: typer.Context,
-        project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+        project: str = typer.Option(
+            None, "--project", "-p", help="Project alias (default: the active project)"
+        ),
         older_than: int = typer.Option(
             30,
             "--older-than",

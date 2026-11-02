@@ -375,7 +375,7 @@ OPENAPI_TAGS: list[dict[str, str]] = [
         "description": (
             "**Development.** "
             "Column-level security policies (metastore-backed `cls-policy` "
-            "objects: a per-principal `visible_columns` allowlist), authored "
+            "objects: a per-reader `visible_columns` allowlist), authored "
             "at `targeted` scope unless `organization` is asked for -- never "
             "`project` scope. Mirrors `kbagent cls list|detail|schema|create|update|"
             "delete`."

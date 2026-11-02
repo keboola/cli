@@ -25,9 +25,10 @@ Policy schema 1.2.0 (the metastore default where it is deployed): a rule selects
 matching one identity applies and the conditions combine with OR (so one
 identity in several rules is fine); several policies on one table combine
 with AND, so an added policy can only narrow access; an RLS ``default``
-covers an identified reader no rule matches (absent = the read is refused). A dialect other than the project
-backend makes the enforcement refuse reads of that table, so it is refused
-here before any write.
+covers an identified reader no rule matches (absent = an ordinary reader gets no rows). A dialect other than the project
+backend is refused here before any write; ``dialect`` is optional from schema 1.1.0 on and is
+left out unless ``--dialect`` is passed, so a policy (an ``organization`` one above all) does not
+pin its table to one backend (the engine compiles for the workspace's own).
 
 On a stack whose metastore predates the ``rls-policy`` schema, a real project
 answers with a schema-fetch/list/get/post failure (see ``fetch_schema`` and the
@@ -80,6 +81,11 @@ class PolicyScope(StrEnum):
 
     TARGETED = "targeted"
     ORGANIZATION = "organization"
+
+
+def _schema_requires_dialect(schema: dict[str, Any] | None) -> bool:
+    """Whether a policy must carry ``dialect``: the schema says so (1.0.0) or is unknown."""
+    return schema is None or "dialect" in (schema.get("required") or [])
 
 
 @dataclass(frozen=True)
@@ -215,32 +221,31 @@ class RlsService(BaseService):
 
     def _validate_policy(
         self,
-        client: MetastoreClient,
+        fetch: RlsSchemaFetch,
         *,
         policy: dict[str, Any],
         backend: str,
     ) -> PolicyValidation:
         """Run every check this module can on the WHOLE policy, local checks first.
 
-        Local (schema-independent) checks always run: the dialect matches the project backend, and
-        the rules (and an RLS ``default``) are well-formed. Structural (Draft7, against the live schema) checks run when the
+        Local (schema-independent) checks always run: a dialect that is given matches the project
+        backend, and the rules (and an RLS ``default``) are well-formed. Structural (Draft7, against the live schema) checks run when the
         fetch succeeds -- when it doesn't, the caller gets a warning, not a block (see
         :class:`RlsSchemaFetch`). The whole policy is validated even for a partial update, because the
         metastore's PATCH validates only the keys it receives.
         """
-        dialect = policy["dialect"]
+        dialect = policy.get("dialect")
         errors: list[str] = []
-        if dialect != backend:
+        if dialect is not None and dialect != backend:
             errors.append(
                 f"dialect {dialect!r} does not match the project backend {backend!r} "
-                "(the enforcement would refuse every read of this table)"
+                "(a policy is written for the backend of its project; omit --dialect to leave it out)"
             )
         errors.extend(self._local_rule_errors(policy["rules"]))
         errors.extend(self._default_errors(policy.get("default")))
         if errors:
             return PolicyValidation(errors, [])
 
-        fetch = self._fetch_schema(client)
         if not fetch.schema:
             return PolicyValidation([], [f"Live schema validation was skipped: {fetch.reason}"])
         errors = draft7_errors(policy, fetch.schema)
@@ -291,14 +296,16 @@ class RlsService(BaseService):
             for rule in rules
         ]
 
-    def _preview(self, policy: dict[str, Any]) -> dict[str, Any]:
-        """The ``preview`` (and, for RLS, ``default_preview``) keys of a write/dry-run result."""
-        preview: dict[str, Any] = {
-            "preview": self._preview_rules(policy["rules"], policy["dialect"])
-        }
+    def _preview(self, policy: dict[str, Any], backend: str) -> dict[str, Any]:
+        """The ``preview`` (and, for RLS, ``default_preview``) keys of a write/dry-run result.
+
+        Rendered for the policy's ``dialect``, or the project backend when it has none.
+        """
+        dialect = policy.get("dialect") or backend
+        preview: dict[str, Any] = {"preview": self._preview_rules(policy["rules"], dialect)}
         if policy.get("default") is not None:
             preview["default_preview"] = _rls_condition.compile_condition_preview(
-                policy["default"], policy["dialect"]
+                policy["default"], dialect
             )
         return preview
 
@@ -376,7 +383,10 @@ class RlsService(BaseService):
     ) -> dict[str, Any]:
         """Create one policy -- at ``targeted`` scope (default) or, explicitly, ``organization``.
 
-        ``dialect`` defaults to the project backend and must equal it. ``default`` (RLS only) is the
+        ``dialect`` is left out of the policy unless given (it is optional from schema 1.1.0 on and
+        the engine compiles for the workspace's own backend); given, it must equal the project
+        backend. A metastore whose schema still requires it (1.0.0), or whose schema could not be
+        read, gets the project backend. ``default`` (RLS only) is the
         condition for identities no rule matches; omitted, their reads are refused. ``target_projects`` (aliases or
         project IDs) only with ``targeted``; they go in the create request itself, which stores the
         grants in the same transaction (and needs the organization-admin role). ``dry_run=True``
@@ -390,15 +400,18 @@ class RlsService(BaseService):
         target_ids = self._resolve_targets(alias, target_projects)
         project = self._resolve_one_project(alias)
         backend = self._project_dialect(project)
-        policy: dict[str, Any] = {"table": table, "dialect": dialect or backend, "rules": rules}
+        policy: dict[str, Any] = {"table": table, "rules": rules}
         if default is not None:
             policy["default"] = default
 
         with self._new_metastore_client(project) as client:
-            check = self._validate_policy(client, policy=policy, backend=backend)
+            fetch = self._fetch_schema(client)
+            if dialect is not None or _schema_requires_dialect(fetch.schema):
+                policy["dialect"] = dialect or backend
+            check = self._validate_policy(fetch, policy=policy, backend=backend)
             if check.errors:
                 self._raise_invalid(check.errors)
-            preview = self._preview(policy)
+            preview = self._preview(policy, backend)
             if dry_run:
                 return self._with_warnings(
                     {
@@ -440,7 +453,8 @@ class RlsService(BaseService):
         keys -- unknown keys and concurrent changes to other keys survive.
 
         ``target_projects``: ``None`` keeps the grants, a list replaces them, ``[]`` revokes them all.
-        Grants change first (an organization-admin-only call): when that is refused, nothing is written.
+        Grants change first (an organization-admin-only call): when that is refused, nothing is written;
+        when the rules PATCH then fails, the old grants are put back (and the error says whether that worked).
         The result is re-read after the write, so it shows the grants as they now are. ``default``
         replaces the RLS default condition; a PATCH cannot remove it (recreate the policy for that).
         """
@@ -487,10 +501,12 @@ class RlsService(BaseService):
                 **({"default": attrs["default"]} if attrs.get("default") is not None else {}),
                 **changes,
             }
-            check = self._validate_policy(client, policy=policy, backend=backend)
+            check = self._validate_policy(
+                self._fetch_schema(client), policy=policy, backend=backend
+            )
             if check.errors:
                 self._raise_invalid(check.errors)
-            preview = self._preview(policy)
+            preview = self._preview(policy, backend)
             if dry_run:
                 return self._with_warnings(
                     {
@@ -508,18 +524,57 @@ class RlsService(BaseService):
                     },
                     check.warnings,
                 )
+            previous_ids = meta.get("targetProjectIds") or []
             if target_ids is not None:
                 client.put_target_projects(self.item_type, policy_id, target_ids)
             if changes:
-                client.patch_item(
-                    self.item_type,
-                    policy_id,
-                    name=table,
-                    data=changes,
-                    conflict_hint=self._conflict_hint,
-                )
+                try:
+                    client.patch_item(
+                        self.item_type,
+                        policy_id,
+                        name=table,
+                        data=changes,
+                        conflict_hint=self._conflict_hint,
+                    )
+                except KeboolaApiError as exc:
+                    if target_ids is None:
+                        raise
+                    raise self._grants_after_failed_patch(
+                        client, policy_id, previous_ids, exc
+                    ) from exc
             row = self._detail_row(client.get_item(self.item_type, policy_id))
         return self._with_warnings({**row, **preview}, check.warnings)
+
+    def _grants_after_failed_patch(
+        self,
+        client: MetastoreClient,
+        policy_id: str,
+        previous_ids: list[int],
+        failure: KeboolaApiError,
+    ) -> KeboolaApiError:
+        """Put the target projects back after the rules PATCH failed, and say what state is left.
+
+        The grants are written before the rules (an organization-admin-only call, so a refusal writes
+        nothing), which leaves the NEW grants on the OLD rules when the PATCH fails: the new target
+        projects would read the old rules. The old grants are restored; the returned error carries the
+        original failure and tells whether that worked.
+        """
+        try:
+            client.put_target_projects(self.item_type, policy_id, previous_ids)
+            note = "The target projects were put back as they were; nothing was changed."
+        except KeboolaApiError as restore:
+            note = (
+                "The target projects had already been changed and could not be put back "
+                f"({restore.message}); they were {sorted(previous_ids)} before. Set them again with "
+                "`--target-project`."
+            )
+        return KeboolaApiError(
+            message=f"{failure.message} {note}",
+            status_code=failure.status_code,
+            error_code=failure.error_code,
+            retryable=failure.retryable,
+            details=failure.details,
+        )
 
     def delete_policy(self, alias: str, policy_id: str, *, dry_run: bool = False) -> dict[str, Any]:
         """Delete one policy by id; ``dry_run`` shows what would be deleted (one read, no write)."""

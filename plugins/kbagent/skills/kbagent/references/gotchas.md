@@ -6814,9 +6814,9 @@ The package was named `keboola-agent-cli` up to 0.62.0 and is named `keboola-cli
 *(since vNEXT)*
 
 `kbagent rls` authors metastore `rls-policy` objects -- one per protected table. It never
-enforces anything itself: the actual SQL rewrite happens in Query Service on a governed workspace
-(`workspace create --governed`) or in `keboola-mcp-server`'s `query_data` tool, a separate
-repo/runtime. See [rls-workflow.md](rls-workflow.md) for full recipes, including the end-to-end
+enforces anything itself: the actual SQL rewrite happens in the Query Service policy engine on a governed workspace
+(`workspace create --governed`; the MCP server's `query_data` tool reaches it through a
+governed workspace of its own). See [rls-workflow.md](rls-workflow.md) for full recipes, including the end-to-end
 governed-workspace flow.
 
 - **Availability depends on the stack's metastore.** The `rls-policy` and `cls-policy` object types are
@@ -6832,11 +6832,13 @@ governed-workspace flow.
 - **Who may write.** A project admin (master token, admin role) may create/update/delete `targeted`
   policies of its own project without grants. Grants (`--target-project`, `--clear-target-projects`) and
   `--scope organization` need the organization-admin role -- a master token alone gets a 403
-  (`ACCESS_DENIED`). A project admin reads only the policies its project owns. On the MCP `query_data` path
-  policies are enforced only where the consuming project has the `row-level-security` feature; on a
+  (`ACCESS_DENIED`). A project admin reads only the policies its project owns. On a
   governed workspace Query Service always enforces (every project, no switch), and the identity running
-  `workspace query` needs a matching rule (default deny). The MCP server's own workspace is created governed in
-  a project with the feature; it gets every policy unless bound (see `rls-workflow.md`, "The MCP server's workspace").
+  `workspace query` needs a matching rule (default deny: an ordinary reader who may not read a table gets an
+  empty result, an administrator behind a Storage token the 403 `Row-level security does not allow this
+  query`). The MCP server's own workspace is created governed in a project with the
+  `row-level-security` feature; it gets every policy unless bound (see `rls-workflow.md`, "The MCP server's
+  workspace"). A Data App is bound by its configuration `runtime.workspace.rlsPolicies`, not by `rls bind`.
 - **Rules select readers by `subjects` or `groups`, never by email (since vNEXT, schema 1.2.0).** A new
   `rls-policy` / `cls-policy` rule has exactly one of `subjects` (`<idp>|<sub>` entries, matched exactly)
   or `groups` (exact strings, any listed group matches); `["*"]` as the sole entry is every identified
@@ -6855,18 +6857,22 @@ governed-workspace flow.
   united -- so one identity in several rules is no longer an error. Several policies on one table combine
   with AND (CLS: intersection), so an added policy can only narrow access; a reader with no identity is
   always refused. RLS `--default` is the condition for
-  identities no rule matches (absent = refused; `{"false": true}` = no rows); an `update` cannot remove a
+  identities no rule matches (absent = an ordinary reader gets no rows; `{"false": true}` = no rows); an `update` cannot remove a
   default (recreate the policy). `value: {"$identity": "email"}` and `values: {"$identity": "groups"}` are
-  resolved per reader by the enforcement. `dialect` is optional in the schema; kbagent still sends the
-  project backend and refuses another one (`INVALID_RLS_POLICY` / `INVALID_CLS_POLICY`), because the
-  enforcement refuses every read of a table whose policy names another dialect. An `organization`
-  policy also reaches projects on the OTHER backend -- prefer `targeted` in a mixed-backend organization.
+  resolved per reader by the enforcement. `dialect` is optional in the schema and the Query Service
+  engine does not read it (it compiles for the workspace's own backend), so kbagent leaves it out of a new
+  policy unless `--dialect` is passed, refuses a `--dialect` other than the project backend
+  (`INVALID_RLS_POLICY` / `INVALID_CLS_POLICY`), and sends the project backend only to a schema that
+  requires it (1.0.0) or one it could not read. `rls|cls update` with a changed `--target-project` writes the
+  grants first; when the rules PATCH then fails the old grants are put back and the error says whether that
+  worked.
 - **Wildcard `"*"` and default deny (since vNEXT).** `principal: "*"`, `principals: ["*"]` or `groups: ["*"]`
   (schema 1.1.0) matches every identified reader (never a reader with no identity); it must be the only entry
   of its list (`INVALID_RLS_POLICY` / `INVALID_CLS_POLICY` otherwise) and is refused against a metastore
   whose schema is older than 1.1.0, where `"*"` is a literal that matches nobody. In a governed workspace
-  the platform denies by default: a table with no `rls-policy` is refused (a `cls-policy` alone grants no
-  rows), admins included, so a table is opened to everyone only by an explicit wildcard policy with
+  the platform denies by default: a table with no `rls-policy` is not readable (a `cls-policy` alone grants
+  no rows; an ordinary reader gets an empty result, an administrator the 403 refusal), so a table is
+  opened to everyone only by an explicit wildcard policy with
   `{"true": true}`. Workflow: `rls-workflow.md` > "Default deny and the wildcard".
 - **One `rls-policy` object per protected table**, never one blob per project, named by its table: a
   second policy on the same table in the same project answers `ALREADY_EXISTS` (update or delete the

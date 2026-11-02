@@ -16,8 +16,8 @@ Thin CLI layer over :class:`RlsService`. Seven subcommands:
 default: the owning project plus the ``--target-project`` grants) or, only
 when asked for with ``--scope organization``, at ``organization`` scope**
 (every project in the organization). ``--scope`` offers no ``project``: the
-metastore schema does not support it for policies (see the RFC in
-``keboola-mcp-server``'s ``feature_spec/rls_query_tool/RFC.md``).
+metastore schema does not support it for policies (see the Query Service RFC,
+go-monorepo ``docs/rfc/query-service-rls-cls``).
 
 On a stack whose metastore predates the ``rls-policy`` schema every command here
 answers with a clean, classified error -- see ``gotchas.md``'s RLS/CLS entry.
@@ -65,7 +65,9 @@ rls_app = typer.Typer(
 )
 
 
-DIALECT_HELP = "Workspace SQL dialect; must match the project backend (default: the backend)"
+DIALECT_HELP = (
+    "Workspace SQL dialect; must match the project backend (default: left out of the policy)"
+)
 SCOPE_HELP = (
     "targeted (default): the owning project plus --target-project grants. organization: "
     "EVERY project of the organization -- an explicit, "
@@ -416,7 +418,9 @@ def delete_policy(
 @rls_app.command("list")
 def rls_list(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(
+        None, "--project", "-p", help="Project alias (default: the active project)"
+    ),
 ) -> None:
     """List row-level security policies visible to a project."""
     list_policies(ctx, RLS, project)
@@ -425,7 +429,9 @@ def rls_list(
 @rls_app.command("detail")
 def rls_detail(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(
+        None, "--project", "-p", help="Project alias (default: the active project)"
+    ),
     policy_id: str = typer.Option(..., "--policy-id", help="RLS policy ID"),
 ) -> None:
     """Show one RLS policy's full rule set."""
@@ -436,7 +442,10 @@ def rls_detail(
 def rls_schema(
     ctx: typer.Context,
     project: str = typer.Option(
-        ..., "--project", "-p", help="Project alias -- fetch the live schema from this stack"
+        None,
+        "--project",
+        "-p",
+        help="Project alias -- fetch the live schema from this stack (default: the active project)",
     ),
 ) -> None:
     """Print the live ``rls-policy`` JSON Schema fetched from the metastore.
@@ -452,7 +461,10 @@ def rls_schema(
 def rls_create(
     ctx: typer.Context,
     project: str = typer.Option(
-        ..., "--project", "-p", help="Project alias -- the project that owns the policy"
+        None,
+        "--project",
+        "-p",
+        help="Project alias -- the project that owns the policy (default: the active project)",
     ),
     table_id: str = typer.Option(..., "--table-id", help=TABLE_HELP),
     rules: str = typer.Option(
@@ -493,7 +505,9 @@ def rls_create(
 @rls_app.command("update")
 def rls_update(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(
+        None, "--project", "-p", help="Project alias (default: the active project)"
+    ),
     policy_id: str = typer.Option(..., "--policy-id", help="RLS policy ID"),
     table_id: str | None = typer.Option(None, "--table-id", help="New table (unset = unchanged)"),
     dialect: Dialect | None = typer.Option(
@@ -544,7 +558,9 @@ def rls_update(
 @rls_app.command("delete")
 def rls_delete(
     ctx: typer.Context,
-    project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    project: str = typer.Option(
+        None, "--project", "-p", help="Project alias (default: the active project)"
+    ),
     policy_id: str = typer.Option(..., "--policy-id", help="RLS policy ID"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show the policy without deleting it"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
@@ -663,7 +679,10 @@ def _build_rules_interactively(formatter: Any) -> list[dict[str, Any]]:
 def rls_setup(
     ctx: typer.Context,
     project: str = typer.Option(
-        ..., "--project", "-p", help="Project alias whose tables you're protecting"
+        None,
+        "--project",
+        "-p",
+        help="Project alias whose tables you're protecting (default: the active project)",
     ),
     dialect: Dialect | None = typer.Option(None, "--dialect", help=DIALECT_HELP),
     rules: str | None = typer.Option(

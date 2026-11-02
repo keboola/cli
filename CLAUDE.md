@@ -1424,9 +1424,13 @@ kbagent rls bindings-sweep --project P [--older-than DAYS] [--dry-run | --yes]
 #   so a change applies to the next query. `bind` is an idempotent upsert (PUT replaces both lists),
 #   validates first (>=1 policy, every UUID readable as an rls/cls policy of the project, the workspace
 #   exists in production or a dev branch; a non-governed login type is only a warning) and prints the
-#   KID. --stack-id (env KBAGENT_STACK_ID) is REQUIRED: no API exposes the stack segment, it must equal
+#   KID. --stack-id (env KBAGENT_STACK_ID) is REQUIRED: no API exposes the stack segment (it is the
+#   Helm `keboolaStack` of Query Service, not derivable from the stack URL), it must equal
 #   Query Service's QUERY_RLS_STACK_ID (AWS dev: dev-keboola-aws-eu-west-1); a wrong one writes a
-#   binding nothing reads, so the workspace silently keeps every policy. `unbind` is destructive-class
+#   binding nothing reads, so the workspace silently keeps every policy. A Data App is NOT bound
+#   here: its policies are the app configuration `runtime.workspace.rlsPolicies` (1-100 policy
+#   UUIDs; an app without it is not governed; a changed list needs a redeploy), set with
+#   `config update --merge` and `data-app deploy`; `bind` never writes an app KID. `unbind` is destructive-class
 #   (looks the binding up, then confirms). `bindings-sweep` only reports unless --yes (destructive via
 #   FLAG_ESCALATIONS): orphaned = a workspace KID of this project whose workspace 404s in production
 #   and every dev branch AND last updated more than --older-than days (default 30) ago; any other
@@ -1442,27 +1446,30 @@ kbagent rls bindings-sweep --project P [--older-than DAYS] [--dry-run | --yes]
 #   table in EVERY project of the org (the enforcement applies every listed policy) and is
 #   destructive-class (FLAG_ESCALATIONS); there is no project scope. WHO: a project admin may
 #   write `targeted` policies of its own project without grants; grants and organization scope
-#   need the organization-admin role (403 otherwise). Enforced by Query Service on a governed
-#   workspace (`workspace create --governed`; Query Service always enforces a governed workspace), or by
-#   keboola-mcp-server `query_data` where the project has the `row-level-security` feature. Policy schema 1.2.0 (the metastore default where deployed; AJDA-3680): a rule selects
+#   need the organization-admin role (403 otherwise). Enforced by the Query Service policy engine on a
+#   governed workspace (`workspace create --governed`; Query Service always enforces a governed
+#   workspace, in every project; the MCP server creates its own governed workspace). Policy schema 1.2.0 (the metastore default where deployed; AJDA-3680): a rule selects
 #   readers by `subjects` (`<idp>|<sub>`; an administrator behind a Storage token is `keboola|<user id>`) or IdP `groups`,
 #   never by email (`principal`/`principals` are refused with INVALID_ARGUMENT, exit 2; stored 1.0.0/1.1.0 policies still show them, flagged legacy); within a policy every rule matching one
 #   identity applies and the conditions combine with OR; several policies on one table combine
 #   with AND (an added policy only narrows); a reader with no identity is always refused;
 #   the wildcard `"*"` (sole entry of `subjects`/`groups`) matches every identified reader and is how a table is opened to everyone under default deny; in a governed workspace
-#   (the platform denies by default, admins never exempt) a table with no rls-policy is refused;
-#   `--default` is the condition for an identified reader no rule matches (absent = refused;
-#   {"false": true} = no rows; to remove a default, recreate the policy). Needs an MCP engine
-#   that reads 1.1.0 (keboola/mcp-server#709). Writes refuse a --dialect other than the project backend (it defaults to the
-#   backend; the enforcement would refuse every read of that table). --rules is a JSON array of
+#   a table with no rls-policy is not readable (an ordinary reader gets an empty result, an
+#   administrator behind a Storage token the 403 refusal);
+#   `--default` is the condition for an identified reader no rule matches (absent = no rows;
+#   {"false": true} = no rows; to remove a default, recreate the policy). `dialect` is left out of a
+#   new policy unless --dialect is passed (optional from schema 1.1.0; the engine does not read it);
+#   a --dialect other than the project backend is refused; a schema that requires it (1.0.0) or
+#   could not be read gets the project backend. --rules is a JSON array of
 #   {subjects|groups, condition}; condition is a declarative primitive tree
 #   (column/op/value comparisons, in/not_in, is_null/is_not_null, and/or nesting, {"true": true}
 #   or {"false": true}) -- never a free-text predicate; a null comparison is refused (use
 #   is_null); `value: {"$identity": "email"}` / `values: {"$identity": "groups"}` are resolved
 #   per reader by the enforcement. `update` reads the policy, validates the MERGED result, then PATCHes
-#   only the changed keys (grants first); the result is re-read. `delete` is destructive-class.
-#   `--dry-run` previews with columns quoted like the enforcement (keboola-mcp-server
-#   `query_data`), but it is not the enforcement. `rls setup` is interactive-terminal-only
+#   only the changed keys (grants first; when the PATCH then fails the old grants are put back and
+#   the error says whether that worked); the result is re-read. `delete` is destructive-class.
+#   `--dry-run` previews with columns quoted like the enforcement (the Query Service policy
+#   engine), but it is not the enforcement. `rls setup` is interactive-terminal-only
 #   (under --json / no TTY: INVALID_ARGUMENT, exit 2) and has no REST route. REST: POST
 #   /rls/{project}, PATCH /rls/{project}/{policy_id}, DELETE ...?dry_run=; body field
 #   `target_projects` (alias or ID). A stack whose metastore predates the schemas answers

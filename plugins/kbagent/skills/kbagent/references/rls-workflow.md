@@ -4,9 +4,11 @@ Row-level security in Keboola is authored as metastore `rls-policy` objects
 -- one object per protected table, holding a list of per-reader condition
 primitives (never a hand-written SQL predicate). `kbagent` only **authors**
 these objects; enforcement (the actual SQL rewrite on a query) happens
-outside kbagent, in one of two readers: Query Service on a governed workspace
-(see [End-to-end](#end-to-end----governed-workspace-policies-query-service);
-since vNEXT) or `keboola-mcp-server`'s `query_data` tool. `kbagent rls` never
+outside kbagent, in the Query Service policy engine (a sidecar of Query Service,
+go-monorepo `services/query/policy-engine`), which rewrites every query of a
+governed workspace (see [End-to-end](#end-to-end----governed-workspace-policies-query-service);
+since vNEXT). The MCP server's `query_data` tool reaches it through a governed
+workspace the MCP server creates itself. `kbagent rls` never
 decides whether a real query gets filtered -- it only creates, reads, updates
 and deletes the policy objects the enforcement reads.
 
@@ -32,13 +34,14 @@ and deletes the policy objects the enforcement reads.
 | `--scope organization` | no (403) | yes |
 | Read (`list` / `detail`) | only the policies its project owns | everything visible to the project |
 
-**Enforcement prerequisite.** On the MCP path (`query_data`) in an ordinary
-workspace, policies do nothing until the consuming project has the
-`row-level-security` project feature (it gates CLS too); without it, queries are
-unfiltered -- not an error. On a governed workspace, Query Service always
-enforces, in every project and with no per-project switch, and a table no
-`rls-policy` applies to is refused (since vNEXT). The project feature is read
-only by the MCP server, to decide that its own workspace is created governed
+**Enforcement prerequisite.** Policies are enforced only on a governed
+workspace. Query Service always enforces a governed workspace, in every project
+and with no per-project switch (since vNEXT); an ordinary workspace is not
+filtered at all. A table no `rls-policy` applies to is not readable: an ordinary
+reader gets an empty result (HTTP 200, no rows), an administrator behind a Storage
+token gets the refusal `Row-level security does not allow this query` (HTTP 403).
+The `row-level-security` project feature is read only by the MCP server, to decide
+that its own workspace is created governed
 (see [The MCP server's workspace](#the-mcp-servers-workspace)).
 
 **Who a rule selects (policy schema 1.2.0; since vNEXT).** A rule selects readers
@@ -68,14 +71,14 @@ read. Several policies on one table combine with AND (CLS: intersection), so an
 added policy can only narrow access, never widen it. A reader with no identity
 is always refused. Each stored policy is read by the rules of its own schema version.
 
-**Dialect.** A policy whose `dialect` differs from the reading workspace makes
-the enforcement refuse every read of that table. `--dialect` defaults to the
-project backend, and kbagent refuses any other value (`INVALID_RLS_POLICY`).
-
-An `organization` policy is loaded by every project in the organization,
-whatever their backend -- in an organization with both Snowflake and BigQuery
-projects, an organization policy blocks the queries of every project on the
-other backend. Prefer `targeted` there.
+**Dialect.** `dialect` is optional from schema 1.1.0 on, and the Query Service engine does
+not read it: it compiles every condition for the workspace's own backend. So kbagent
+**leaves `dialect` out** of a new policy unless `--dialect` is passed (an `organization`
+policy then works in Snowflake and BigQuery projects alike), and a `--dialect` that
+differs from the project backend is refused (`INVALID_RLS_POLICY`). A metastore that
+still serves schema 1.0.0 (or whose schema kbagent could not read) requires the field:
+the project backend is sent then, and in a mixed Snowflake/BigQuery organization an
+`organization` policy should be `targeted` instead.
 
 Same metastore requirements as [semantic-layer-workflow.md](semantic-layer-workflow.md):
 a MASTER (project admin) Storage token (`kbagent --json project info
@@ -139,9 +142,10 @@ Name a table as `"<bucket id>"."<table>"` (`"in.c-crm"."invoices"`). A bare
 `"invoices"` is refused with the same 403 as an unprotected table.
 
 Expected (illustrative): for `eu-analyst@example.com` only the `region = 'EU'`
-rows, and only the columns `id`, `region`, `amount`. An identity with no
-matching rule is refused, not handed an empty result; a reader with no identity
-is always refused.
+rows, and only the columns `id`, `region`, `amount`. An ordinary reader no rule
+selects gets an empty result (and a table without any `rls-policy` reads the same
+way); an administrator behind a Storage token gets the 403 refusal; a reader with no
+identity (a token that is not a user's) is refused with the same 403.
 
 - `workspace password` is refused on a governed workspace, and so is any direct
   warehouse login: Query Service is the only reader.
@@ -179,6 +183,21 @@ kbagent --json rls bindings-sweep --project prod --older-than 30 --yes   # delet
   already bound. A non-governed workspace is only a warning.
 - A wrong `--stack-id` writes a binding nothing reads: the workspace silently
   keeps every policy. Check with a `workspace query` as the bound identity.
+- **A Data App is not bound this way.** `rls bind` writes a `policy-binding` for a
+  *workspace* KID (`KID:<stack>:project-<n>:workspace-<id>`); kbagent does not create
+  an app KID, and a workspace id does not survive a redeploy of the app. A Data App
+  gets its policies from its own configuration, `runtime.workspace.rlsPolicies`
+  (1-100 policy UUIDs, `[]` is refused; the platform checks it, kbagent does not):
+  the platform creates the app's governed workspace with a binding for exactly the
+  listed policies, an app without `rlsPolicies` is **not governed** and reads every
+  row, and a changed list takes effect at the next deploy.
+  It also needs single sign-on (the platform refuses a password or public-path app
+  with `rlsPolicies`), and the app must forward the end user's token to Query Service.
+  ```bash
+  kbagent --json config update --project prod --component-id keboola.data-apps --config-id CFG \
+    --merge --configuration '{"runtime": {"workspace": {"rlsPolicies": ["POLICY_ID"]}}}'
+  kbagent --json data-app deploy --project prod --app-id APP_ID --wait   # pins the new config version
+  ```
 - A policy listed in a binding cannot be deleted until it is unbound.
 - The workspace is governed: a table that none of the bound policies covers is
   refused, so narrowing a binding closes tables, it never opens them. A table
@@ -209,15 +228,21 @@ kbagent --json rls bind --project prod --workspace-id MCP_WS_ID --rls-policy ID 
   does not follow it and the new workspace starts with every policy again. Bind
   again after `workspace list` shows the new id; `rls bindings-sweep` removes
   what the old ones left behind.
-- **Deny by default.** A table with no applicable `rls-policy` is refused for
-  the MCP workspace (the opposite of an ordinary workspace, where it is
-  unfiltered); a `"*"` rule opens a table to every identified reader.
-- **Identity.** Query Service filters by the email of the project administrator
-  behind the Storage token of the request: a kbagent session, a programmatic
-  token (also the one the MCP server forwards) and an administrator's master
-  Storage token all resolve to that administrator. An integration, data app or
-  other non-administrator token has no identity and reads nothing from a
-  governed table.
+- **Deny by default.** A table with no applicable `rls-policy` is not readable
+  from the MCP workspace (the opposite of an ordinary workspace, where it is
+  unfiltered): an ordinary reader gets an empty result, an administrator the 403
+  refusal. A `"*"` rule opens a table to every identified reader.
+- **Identity.** Since go-monorepo #668 every reader has a *subject*, which is what
+  `subjects` rules are matched against (exactly, case-sensitive): an administrator
+  behind a Storage token (a kbagent session, a programmatic token -- also the one the
+  MCP server forwards -- or an administrator's master Storage token) is
+  `keboola|<user id>`, an app user is `<idp>|<sub>`. An email is never matched by a
+  1.2.0 policy; only stored 1.0.0 / 1.1.0 policies still match by email. **Write your
+  own subject into the first policy** (`keboola|<your user id>`, the member `id` of
+  `kbagent project member-list`, which needs a Manage token), or a group or `["*"]`
+  rule that covers you; otherwise you cannot read the table you protected. An
+  integration, data app or other non-administrator token has no identity and is
+  refused.
 - **Stack id.** `--stack-id` must equal Query Service's `QUERY_RLS_STACK_ID`
   (for example `dev-keboola-aws-eu-west-1`); no API exposes it.
 
@@ -252,7 +277,7 @@ kbagent rls setup --project prod --rules @rls_rules.json
 # 4. It prints a compiled-condition preview per selected table, then a
 #    single confirm (skip with --yes) before creating one `rls-policy`
 #    object per table -- via the exact same write path `rls create` uses.
-#    The dialect is the project backend unless --dialect says otherwise.
+#    No dialect is written unless --dialect is passed (it must be the project backend).
 ```
 
 ## Workflow 2 -- Scripted / non-interactive policy creation
@@ -277,7 +302,7 @@ cat > rls_rules.json <<'EOF'
 ]
 EOF
 
-# 2. ALWAYS preview first -- --dry-run runs every validation (dialect vs
+# 2. ALWAYS preview first -- --dry-run runs every validation (a given dialect vs
 #    backend, rule and default shape, live schema check when
 #    available) and compiles a condition preview, but writes nothing.
 kbagent --json rls create \
@@ -297,10 +322,11 @@ kbagent --json rls create \
 kbagent --json rls create --project prod --table-id in.c-crm.invoices --rules @rls_rules.json
 ```
 
-A caller with no rule on a governed table is refused, not silently returned
-empty -- fail-closed is the enforcement engine's whole design point (see the
-RFC in `keboola-mcp-server`). Before protecting a table, make sure every
-reader who legitimately needs access has a matching rule, including
+A reader with no rule on a governed table reads nothing -- fail-closed is the
+enforcement engine's whole design point (see the Query Service RFC in go-monorepo,
+`docs/rfc/query-service-rls-cls`): an ordinary reader gets an empty result, an
+administrator behind a Storage token the 403 refusal. Before protecting a table, make
+sure every reader who legitimately needs access has a matching rule, including
 yourself if you plan to verify the result (`query_data` or a governed workspace): your own
 subject is `keboola|<your user id>`, matched exactly (case-sensitive, the issuer's trailing `/` aside).
 
@@ -366,8 +392,8 @@ live, authoritative JSON Schema; this is the quick-reference version.
 `rls create --dry-run` (or `rls setup`'s preview step) renders a condition
 as a `WHERE`-clause-shaped string. It follows the enforcement's rendering
 (quoted columns, `TRUE`/`FALSE`), but it is kbagent's own renderer -- the
-engine that decides what a query returns lives in `keboola-mcp-server`'s
-`rls.py` (sqlglot-based). Treat the preview as "does this look like what I
+engine that decides what a query returns is the Query Service policy engine
+(go-monorepo `services/query/policy-engine`, `rls.py`, sqlglot-based). Treat the preview as "does this look like what I
 meant," not as proof of what will be enforced.
 
 ## Workflow 4b -- Groups, a default and identity placeholders (schema 1.1.0)
@@ -506,7 +532,7 @@ kbagent --json rls schema --project prod
   `project edit --project P --token ...` with a master token.
 - **`ACCESS_DENIED` (403)** on `--target-project`, `--clear-target-projects` or
   `--scope organization` -- the token's user is not an organization admin.
-- **`INVALID_RLS_POLICY`** -- the policy failed validation: a dialect other than
+- **`INVALID_RLS_POLICY`** -- the policy failed validation: a `--dialect` other than
   the project backend, a malformed rule or default, a null comparison, or the
   live JSON-Schema check. The message lists every
   violation; nothing was written.
@@ -533,8 +559,8 @@ kbagent --json rls schema --project prod
 - Every policy a project can list applies to it -- an `organization` policy
   governs the table in every project of the organization.
 - `--scope project` does not exist anywhere in this command group. This is
-  intentional, not a missing feature -- see the RFC in
-  `keboola-mcp-server`'s `feature_spec/rls_query_tool/RFC.md`.
+  intentional, not a missing feature -- see the Query Service RFC (go-monorepo,
+  `docs/rfc/query-service-rls-cls`).
 - `rls setup` has no REST route (`kbagent serve`) -- it is genuinely
   terminal-only, same carve-out as `auth register-projects`'s picker.
 
@@ -548,9 +574,9 @@ kbagent --json rls schema --project prod
 It mirrors `rls` (`list`, `detail`, `schema`, `create`, `update`, `delete`) with the same
 scope rule and default, the same write permissions, dialect check, `--dry-run`/`--yes`
 flags and partial `update`; there is no `cls setup` wizard and no `default`.
-Enforcement and RLS+CLS composition happen in the same two readers as RLS: Query
-Service on a governed workspace, or `keboola-mcp-server`'s `query_data` (gated by
-the `row-level-security` feature).
+Enforcement and RLS+CLS composition happen in the same place as for RLS: the Query
+Service policy engine on a governed workspace. A column policy never grants rows by
+itself: the table also needs an `rls-policy`.
 
 ```bash
 kbagent --json cls schema --project prod            # live shape

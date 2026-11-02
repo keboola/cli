@@ -271,8 +271,52 @@ class TestCreatePolicy:
         kwargs = mock.post_item.call_args.kwargs
         assert kwargs["scope"] == "targeted"
         assert kwargs["target_project_ids"] is None
-        assert kwargs["data"]["dialect"] == "snowflake"  # defaulted from the project backend
+        # The schema could not be read, so it is not known to make `dialect` optional: the backend is sent.
+        assert kwargs["data"]["dialect"] == "snowflake"
         mock.put_target_projects.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("required", "given", "sent"),
+        [
+            (
+                ["table", "dialect", "rules"],
+                None,
+                "snowflake",
+            ),  # schema 1.0.0: the field is required
+            (
+                ["table", "rules"],
+                None,
+                None,
+            ),  # schema 1.1.0+: left out, the engine uses the workspace backend
+            (["table", "rules"], "snowflake", "snowflake"),  # asked for with --dialect
+        ],
+    )
+    def test_dialect_is_left_out_unless_the_schema_requires_it_or_it_is_given(
+        self, tmp_path: Path, required: list[str], given: str | None, sent: str | None
+    ) -> None:
+        """A policy that names no dialect does not pin an organization-wide table to one backend."""
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.get_schema.return_value = {"type": "object", "required": required}
+        mock.post_item.return_value = _policy_item(scope="targeted")
+
+        service.create_policy("prod", table="in.c-crm.invoices", dialect=given, rules=_RULES)
+
+        data = mock.post_item.call_args.kwargs["data"]
+        assert data.get("dialect") == sent
+        assert ("dialect" in data) is (sent is not None)
+
+    def test_the_preview_renders_for_the_backend_when_no_dialect_is_sent(
+        self, tmp_path: Path
+    ) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.get_schema.return_value = {"type": "object", "required": ["table", "rules"]}
+
+        result = service.create_policy(
+            "prod", table="in.c-crm.invoices", rules=_RULES, dry_run=True
+        )
+
+        assert "dialect" not in result
+        assert result["preview"][0]["condition"] == "\"region\" = 'EU'"
 
     def test_organization_scope_only_when_asked_for(self, tmp_path: Path) -> None:
         service, mock = _make_service(_make_store(tmp_path))
@@ -575,6 +619,56 @@ class TestUpdatePolicy:
             service.update_policy("prod", "p-1", rules=_RULES, target_projects=["8"])
 
         mock.patch_item.assert_not_called()
+
+    def test_a_failed_patch_puts_the_old_grants_back(self, tmp_path: Path) -> None:
+        """New grants on the old rules would let the new target projects read the old rules."""
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.get_schema.side_effect = KeboolaApiError(message="n/a", status_code=404)
+        mock.get_item.return_value = _policy_item(scope="targeted", target_project_ids=[7])
+        mock.patch_item.side_effect = KeboolaApiError(
+            message="metastore refused the rules", status_code=400, error_code=ErrorCode.API_ERROR
+        )
+
+        with pytest.raises(KeboolaApiError, match="metastore refused the rules") as excinfo:
+            service.update_policy("prod", "p-1", rules=_RULES, target_projects=["8"])
+
+        assert [c.args for c in mock.put_target_projects.call_args_list] == [
+            ("rls-policy", "p-1", [8]),
+            ("rls-policy", "p-1", [7]),
+        ]
+        assert "put back as they were" in excinfo.value.message
+        assert excinfo.value.status_code == 400
+        assert excinfo.value.error_code == ErrorCode.API_ERROR
+
+    def test_a_failed_patch_says_so_when_the_grants_cannot_be_put_back(
+        self, tmp_path: Path
+    ) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.get_schema.side_effect = KeboolaApiError(message="n/a", status_code=404)
+        mock.get_item.return_value = _policy_item(scope="targeted", target_project_ids=[7, 9])
+        mock.patch_item.side_effect = KeboolaApiError(message="conflict", status_code=409)
+        mock.put_target_projects.side_effect = [
+            None,
+            KeboolaApiError(message="metastore down", status_code=503),
+        ]
+
+        with pytest.raises(KeboolaApiError, match="conflict") as excinfo:
+            service.update_policy("prod", "p-1", rules=_RULES, target_projects=["8"])
+
+        assert "could not be put back (metastore down)" in excinfo.value.message
+        assert "[7, 9]" in excinfo.value.message
+
+    def test_a_failed_patch_without_grants_changes_nothing_else(self, tmp_path: Path) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.get_schema.side_effect = KeboolaApiError(message="n/a", status_code=404)
+        mock.get_item.return_value = _policy_item(scope="targeted", target_project_ids=[7])
+        mock.patch_item.side_effect = KeboolaApiError(message="boom", status_code=500)
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.update_policy("prod", "p-1", rules=_RULES)
+
+        assert excinfo.value.message == "boom"
+        mock.put_target_projects.assert_not_called()
 
     def test_an_organization_policy_cannot_be_narrowed_to_target_projects(
         self, tmp_path: Path
