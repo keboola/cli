@@ -88,6 +88,9 @@ def _fail(formatter: OutputFormatter, exc: Exception) -> NoReturn:
 def identity_add(
     ctx: typer.Context,
     stack: str = typer.Option(..., "--stack", help=STACK_HELP),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Check the token against Manage and the broker; store nothing"
+    ),
 ) -> None:
     """Store an oauth:manage application token for a stack in the macOS keychain.
 
@@ -102,15 +105,16 @@ def identity_add(
     except KeboolaApiError as exc:
         _fail(formatter, exc)
     # The agent may have chosen --stack: show the human where the token will go.
+    where = "not stored (--dry-run)" if dry_run else "then stored in the macOS keychain"
     formatter.err_console.print(
-        f"The token will be checked at {escape(hosts.connection_url)} and "
-        f"{escape(hosts.oauth_url)}, then stored in the macOS keychain."
+        f"The token is checked at {escape(hosts.connection_url)} and at "
+        f"{escape(hosts.oauth_url)} -- {where}."
     )
     token = getpass.getpass(f"oauth:manage application token for {hosts.connection_url}: ").strip()
     if not token:
         raise typer.BadParameter("No token entered.", param_hint="--stack")
     try:
-        result = _service().add_identity(stack, token)
+        result = _service().add_identity(stack, token, dry_run=dry_run)
     except (ConfigError, KeboolaApiError) as exc:
         _fail(formatter, exc)
     formatter.output(result, _render_identity)

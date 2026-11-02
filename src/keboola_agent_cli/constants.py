@@ -130,6 +130,27 @@ MAX_API_ERROR_PARAMS_LIST_ITEMS: int = 20
 # wire it in here and add a per-identity `mfa_challenge` field.
 DP_MFA_CHALLENGE_TYPE: str = "SOFTWARE_TOKEN_MFA"
 
+# --- OAuth broker maintenance (`kbagent oauth`) ---
+# Domains a `--stack` may name. `identity add` sends the Manage token there,
+# so an agent-chosen host outside Keboola is refused.
+OAUTH_STACK_DOMAINS: tuple[str, ...] = ("keboola.com", "keboola.cloud", "keboola.dev")
+# Longest lifetime `rotate-azure-secret` gives a new Entra client secret (days).
+OAUTH_SECRET_MAX_DAYS: int = 730
+# `/usr/bin/security` calls; a token read waits for a human at the dialog.
+OAUTH_KEYCHAIN_TIMEOUT_SECONDS: int = 60
+OAUTH_KEYCHAIN_DIALOG_TIMEOUT_SECONDS: int = 300
+# `security dump-keychain` can miss an item written a moment ago.
+OAUTH_KEYCHAIN_DUMP_ATTEMPTS: int = 3
+OAUTH_KEYCHAIN_DUMP_RETRY_SECONDS: float = 1.0
+# `az` / `op` subprocess calls, and how much of their stderr an error keeps.
+OAUTH_TOOL_TIMEOUT_SECONDS: int = 120
+OAUTH_TOOL_STDERR_LIMIT: int = 300
+# A new Entra secret can take a while to work everywhere: the sign-in check
+# retries with growing delays until this budget is spent.
+OAUTH_ENTRA_CHECK_WAIT_SECONDS: int = 120
+OAUTH_ENTRA_CHECK_FIRST_DELAY_SECONDS: int = 5
+OAUTH_ENTRA_CHECK_MAX_DELAY_SECONDS: int = 30
+
 # --- UNEXPECTED_ERROR truncation ---
 # Unhandled ``Exception`` messages surfaced to per-project error envelopes are
 # truncated to this many characters before being returned. Exceptions can

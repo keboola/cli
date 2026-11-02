@@ -17,13 +17,17 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-import httpx
-
+from ..constants import (
+    OAUTH_ENTRA_CHECK_FIRST_DELAY_SECONDS,
+    OAUTH_ENTRA_CHECK_MAX_DELAY_SECONDS,
+    OAUTH_ENTRA_CHECK_WAIT_SECONDS,
+    OAUTH_TOOL_STDERR_LIMIT,
+    OAUTH_TOOL_TIMEOUT_SECONDS,
+)
+from ..entra_client import EntraClient, EntraTokenAttempt
 from ..errors import ErrorCode, KeboolaApiError
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
-_TIMEOUT_SECONDS = 120
-_STDERR_LIMIT = 300
 
 
 class ToolError(KeboolaApiError):
@@ -41,7 +45,7 @@ def _run_json(run: Runner, tool: str, args: list[str], stdin: str | None = None)
             input=stdin,
             capture_output=True,
             text=True,
-            timeout=_TIMEOUT_SECONDS,
+            timeout=OAUTH_TOOL_TIMEOUT_SECONDS,
         )
     except FileNotFoundError:
         raise ToolError(tool, f"`{tool}` is not installed or not on PATH.") from None
@@ -50,7 +54,9 @@ def _run_json(run: Runner, tool: str, args: list[str], stdin: str | None = None)
     except subprocess.TimeoutExpired:
         raise ToolError(tool, f"`{tool} {args[0]}` timed out.") from None
     if result.returncode != 0:
-        raise ToolError(tool, result.stderr.strip()[:_STDERR_LIMIT] or f"exit {result.returncode}")
+        raise ToolError(
+            tool, result.stderr.strip()[:OAUTH_TOOL_STDERR_LIMIT] or f"exit {result.returncode}"
+        )
     try:
         return json.loads(result.stdout) if result.stdout.strip() else None
     except json.JSONDecodeError:
@@ -149,13 +155,18 @@ class SecretCheck:
     detail: str
 
 
+def _attempt_with_entra(tenant_id: str, app_id: str, secret: str) -> EntraTokenAttempt:
+    with EntraClient() as client:
+        return client.client_credentials(tenant_id, app_id, secret)
+
+
 def check_client_secret(
     tenant_id: str,
     app_id: str,
     secret: str,
     *,
-    wait_seconds: int = 120,
-    post: Callable[..., httpx.Response] = httpx.post,
+    wait_seconds: int = OAUTH_ENTRA_CHECK_WAIT_SECONDS,
+    attempt: Callable[[str, str, str], EntraTokenAttempt] = _attempt_with_entra,
     sleep: Callable[[float], None] = time.sleep,
 ) -> SecretCheck:
     """Request a client-credentials token with the new secret.
@@ -163,32 +174,19 @@ def check_client_secret(
     A new secret can take a short while to work everywhere in Entra, so a
     rejected secret is retried until ``wait_seconds`` have passed.
     """
-    url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
-    form = {
-        "grant_type": "client_credentials",
-        "client_id": app_id,
-        "client_secret": secret,
-        "scope": "https://graph.microsoft.com/.default",
-    }
     waited = 0
-    delay = 5
-    detail = ""
+    delay = OAUTH_ENTRA_CHECK_FIRST_DELAY_SECONDS
     while True:
-        try:
-            response = post(url, data=form, timeout=30)
-        except httpx.HTTPError as exc:
-            detail = f"network error: {type(exc).__name__}"
-        else:
-            if response.status_code == 200:
-                return SecretCheck(ok=True, detail="Entra issued a token with the new secret.")
-            try:
-                body = response.json()
-            except ValueError:
-                body = {}
-            error = body.get("error", "") if isinstance(body, dict) else ""
-            detail = f"HTTP {response.status_code} {error}".strip()
+        result = attempt(tenant_id, app_id, secret)
+        if result.status_code == 200:
+            return SecretCheck(ok=True, detail="Entra issued a token with the new secret.")
+        detail = (
+            f"HTTP {result.status_code} {result.error}".strip()
+            if result.status_code
+            else result.error
+        )
         if waited >= wait_seconds:
             return SecretCheck(ok=False, detail=detail)
         sleep(delay)
         waited += delay
-        delay = min(delay * 2, 30)
+        delay = min(delay * 2, OAUTH_ENTRA_CHECK_MAX_DELAY_SECONDS)

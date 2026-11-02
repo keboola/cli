@@ -730,7 +730,7 @@ Entra secret rotation. Writes need a typed code at a terminal; no --yes.
     Show one broker consumer. appSecret and appSecretDocker show as
     <encrypted>.
 
-  kbagent oauth identity add --stack STACK
+  kbagent oauth identity add --stack STACK [--dry-run]
     Store an oauth:manage application token for a stack in the macOS keychain.
 
   kbagent oauth identity verify --stack STACK

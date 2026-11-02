@@ -28,6 +28,7 @@ Not the same thing as [oauth-workflow.md](oauth-workflow.md): that one authorize
 - **Secrets are never printed.** `appSecret` / `appSecretDocker` show as `<encrypted>` (the broker
   only returns ciphertext anyway). The new Entra secret goes `az` -> 1Password -> broker inside one
   process.
+- **`--stack` must be a Keboola host** (`keboola.com`, `keboola.cloud`, `keboola.dev`); `identity add` prints where the token goes before it asks for it. `identity add --dry-run` runs every check and stores nothing.
 - **macOS only** for now. Terminal-only: no `kbagent serve` route.
 
 ## Steps: rotate an expiring Entra secret
@@ -47,7 +48,8 @@ Not the same thing as [oauth-workflow.md](oauth-workflow.md): that one authorize
    writes), and types the code.
 6. Read the result:
    - `status: rotated` -- the broker ciphertext changed, `appKey` is unchanged, and Entra issued a
-     token with the new secret.
+     token with the new secret. The ciphertext check proves the broker took *a* new value, not
+     which one (kbagent cannot decrypt it); a concurrent edit of the consumer would also change it.
    - `status: rotated_unverified` (exit 1) -- the writes ran but a check failed; see
      `entra_secret_check.detail` and `broker_secret_changed`. Do not remove the old secret.
    - `OAUTH_ROTATION_INCOMPLETE` (exit 1) -- `error.details.stage` says where it stopped

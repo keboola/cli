@@ -26,6 +26,12 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from ..constants import (
+    OAUTH_KEYCHAIN_DIALOG_TIMEOUT_SECONDS,
+    OAUTH_KEYCHAIN_DUMP_ATTEMPTS,
+    OAUTH_KEYCHAIN_DUMP_RETRY_SECONDS,
+    OAUTH_KEYCHAIN_TIMEOUT_SECONDS,
+)
 from ..errors import ConfigError, ErrorCode
 
 KEYCHAIN_SERVICE = "kbagent-oauth"
@@ -38,10 +44,6 @@ _TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 _HOST_RE = re.compile(r"^[a-z0-9-]+(\.[a-z0-9-]+)+$")
 _COMMENT_UNSAFE = re.compile(r"[^A-Za-z0-9 .,:()_+-]")
 # Generous: the read waits for a human to type the login password.
-_READ_TIMEOUT_SECONDS = 300
-_TIMEOUT_SECONDS = 60
-_DUMP_ATTEMPTS = 3
-_DUMP_RETRY_SECONDS = 1.0
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 
@@ -85,7 +87,11 @@ class OAuthKeychain:
             )
 
     def _run(
-        self, args: list[str], *, stdin: str | None = None, timeout: int = _TIMEOUT_SECONDS
+        self,
+        args: list[str],
+        *,
+        stdin: str | None = None,
+        timeout: int = OAUTH_KEYCHAIN_TIMEOUT_SECONDS,
     ) -> subprocess.CompletedProcess[str]:
         self.require_supported()
         try:
@@ -148,9 +154,9 @@ class OAuthKeychain:
         """
         # A dump taken right after a write can miss the new item; look again
         # before reporting it unreadable (a parse failure is final).
-        for attempt in range(_DUMP_ATTEMPTS):
+        for attempt in range(OAUTH_KEYCHAIN_DUMP_ATTEMPTS):
             if attempt:
-                self._sleep(_DUMP_RETRY_SECONDS)
+                self._sleep(OAUTH_KEYCHAIN_DUMP_RETRY_SECONDS)
             result = self._run(["dump-keychain", "-a"])
             if result.returncode != 0:
                 return None
@@ -166,7 +172,7 @@ class OAuthKeychain:
         """Return the token. macOS asks for the login password first."""
         result = self._run(
             ["find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", host, "-w"],
-            timeout=_READ_TIMEOUT_SECONDS,
+            timeout=OAUTH_KEYCHAIN_DIALOG_TIMEOUT_SECONDS,
         )
         if result.returncode == _ITEM_NOT_FOUND:
             raise KeychainError(

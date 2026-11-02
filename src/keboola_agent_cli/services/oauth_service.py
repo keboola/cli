@@ -27,6 +27,7 @@ from datetime import date, timedelta
 from typing import Any
 from urllib.parse import urlparse
 
+from ..constants import OAUTH_SECRET_MAX_DAYS, OAUTH_STACK_DOMAINS
 from ..errors import ErrorCode, KeboolaApiError
 from ..manage_client import ManageClient
 from ..oauth_broker_client import OAuthBrokerClient
@@ -45,8 +46,7 @@ APPLICATION_TOKEN_TYPE = "super"
 SECRET_FIELDS = ("appSecret", "appSecretDocker")
 REDACTED = "<encrypted>"
 UNKNOWN_KEY_ID = "unknown"
-MAX_SECRET_DAYS = 730
-STACK_DOMAINS = ("keboola.com", "keboola.cloud", "keboola.dev")
+MAX_SECRET_DAYS = OAUTH_SECRET_MAX_DAYS
 _HOST_RE = re.compile(r"^[a-z0-9-]+(\.[a-z0-9-]+)+$")
 
 ManageClientFactory = Callable[[str, str], ManageClient]
@@ -69,7 +69,7 @@ def stack_hosts(stack: str) -> StackHosts:
     ``keboola.com`` all give ``oauth.keboola.com``. Works for
     ``*.keboola.cloud`` single-tenant stacks, Azure and GCP alike.
 
-    The host must end in a Keboola domain (``STACK_DOMAINS``): ``identity add``
+    The host must end in a Keboola domain (``OAUTH_STACK_DOMAINS``): ``identity add``
     sends the token to it, so an agent-chosen ``--stack`` must not be able to
     point the human's token at another host.
     """
@@ -80,11 +80,11 @@ def stack_hosts(stack: str) -> StackHosts:
         if host.startswith(prefix):
             host = host[len(prefix) :]
             break
-    on_keboola = any(host == d or host.endswith(f".{d}") for d in STACK_DOMAINS)
+    on_keboola = any(host == d or host.endswith(f".{d}") for d in OAUTH_STACK_DOMAINS)
     if not _HOST_RE.match(host) or not on_keboola:
         raise KeboolaApiError(
             f"'{stack}' is not a Keboola stack host (expected e.g. connection.keboola.com or "
-            f"connection.<name>.keboola.cloud; allowed domains: {', '.join(STACK_DOMAINS)}).",
+            f"connection.<name>.keboola.cloud; allowed domains: {', '.join(OAUTH_STACK_DOMAINS)}).",
             error_code=ErrorCode.INVALID_ARGUMENT,
         )
     return StackHosts(
@@ -215,13 +215,18 @@ class OAuthService:
 
     # ----- identities -----
 
-    def add_identity(self, stack: str, token: str) -> dict[str, Any]:
-        """Check the token (scope + broker probe), then store it in the keychain."""
+    def add_identity(self, stack: str, token: str, *, dry_run: bool = False) -> dict[str, Any]:
+        """Check the token (scope + broker probe), then store it in the keychain.
+
+        ``dry_run`` runs every check and stores nothing.
+        """
         self._keychain.require_supported()
         hosts = stack_hosts(stack)
         info = self._verify_token(hosts, token)
         with self._broker(hosts.oauth_url, token) as broker:
             consumers = broker.list_consumers()
+        if dry_run:
+            return {"status": "dry_run", "stack": hosts.key, **info, "consumers": len(consumers)}
         comment = f"token {info['token_id']} ({info['description']}), expires {info['expires']}"
         self._keychain.store(hosts.key, token, comment)
         return {"status": "stored", "stack": hosts.key, **info, "consumers": len(consumers)}

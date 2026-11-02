@@ -1304,7 +1304,7 @@ kbagent dev-portal deprecate --app VENDOR.APP_ID [--identity A] [--dry-run]
 # `patch` to PATCH /admin/apps/{app} (permissive schema). Vendor + admin-only field => fail-fast preflight.
 # --password-stdin works on TTY (hidden prompt) AND on a pipe (reads to EOF).
 
-kbagent oauth identity add --stack HOST
+kbagent oauth identity add --stack HOST [--dry-run]
 kbagent oauth identity verify --stack HOST
 kbagent oauth consumer get --stack HOST --component ID
 kbagent oauth rotate-azure-secret --stack HOST --component ID --app-id APP --op-vault VAULT [--expires-in-days N] [--dry-run]

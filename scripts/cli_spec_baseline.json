@@ -407,7 +407,6 @@
       "merge-request update",
       "notification create",
       "notification replace-recipient",
-      "oauth identity add",
       "project description-set",
       "project use",
       "semantic-layer add constraint",

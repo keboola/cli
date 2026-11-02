@@ -9,6 +9,7 @@ from typing import Any, Self, cast
 
 import pytest
 
+from keboola_agent_cli.entra_client import EntraTokenAttempt
 from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 from keboola_agent_cli.services._oauth_keychain import (
     KeychainError,
@@ -501,12 +502,8 @@ def test_op_create_item_sends_secret_on_stdin() -> None:
     assert json.loads(stdin)["fields"][0]["value"] == SECRET
 
 
-class _Response:
-    def __init__(self, status: int) -> None:
-        self.status_code = status
-
-    def json(self) -> dict[str, str]:
-        return {"error": "invalid_client"}
+def _attempt(status: int) -> EntraTokenAttempt:
+    return EntraTokenAttempt(status_code=status, error="" if status == 200 else "invalid_client")
 
 
 def test_check_client_secret_retries_until_entra_accepts() -> None:
@@ -515,7 +512,7 @@ def test_check_client_secret_retries_until_entra_accepts() -> None:
         "t",
         APP_ID,
         SECRET,
-        post=cast(Any, lambda *a, **k: _Response(next(statuses))),
+        attempt=lambda *a: _attempt(next(statuses)),
         sleep=lambda s: None,
     )
     assert result.ok
@@ -527,7 +524,7 @@ def test_check_client_secret_gives_up() -> None:
         APP_ID,
         SECRET,
         wait_seconds=10,
-        post=cast(Any, lambda *a, **k: _Response(401)),
+        attempt=lambda *a: _attempt(401),
         sleep=lambda s: None,
     )
     assert not result.ok and "401" in result.detail
@@ -716,3 +713,37 @@ def test_unknown_key_id_gives_a_list_hint_not_a_bogus_command() -> None:
         service.apply_rotation(plan)
     assert "--key-id unknown" not in err.value.message
     assert "newest secret" in err.value.message
+
+
+def test_add_identity_dry_run_stores_nothing() -> None:
+    keychain = FakeKeychain(token=None)
+    result = _service(keychain=keychain).add_identity("keboola.com", TOKEN, dry_run=True)
+    assert result["status"] == "dry_run"
+    assert keychain.stored == {}
+
+
+def test_entra_client_reports_status_and_error(httpx_mock: Any) -> None:
+    from keboola_agent_cli.entra_client import EntraClient
+
+    httpx_mock.add_response(
+        url="https://login.microsoftonline.com/tenant-1/oauth2/v2.0/token",
+        status_code=401,
+        json={"error": "invalid_client", "error_description": "AADSTS7000215"},
+    )
+    with EntraClient() as client:
+        result = client.client_credentials("tenant-1", APP_ID, SECRET)
+    assert result.status_code == 401 and result.error == "invalid_client"
+    request = httpx_mock.get_request()
+    assert request.method == "POST" and SECRET in request.content.decode()
+    assert SECRET not in json.dumps(result.__dict__)
+
+
+def test_entra_client_network_error_is_status_0(httpx_mock: Any) -> None:
+    import httpx
+
+    from keboola_agent_cli.entra_client import EntraClient
+
+    httpx_mock.add_exception(httpx.ConnectError("boom"))
+    with EntraClient() as client:
+        result = client.client_credentials("tenant-1", APP_ID, SECRET)
+    assert result.status_code == 0 and "ConnectError" in result.error

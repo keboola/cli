@@ -2168,7 +2168,8 @@
       "category": "write",
       "help": "Store an oauth:manage application token for a stack in the macOS keychain.\n\nPrompts for the token without echo (a terminal is required; no pipe, option\nor env var). Refuses any token that is not an application token whose only\nscope is oauth:manage, and checks that the stack's OAuth broker accepts it.",
       "params": [
-        {"kind": "option", "name": "stack", "opts": ["--stack"], "type": "text", "required": true, "default": null, "help": "Stack host: connection.<stack>, oauth.<stack> or a URL of either"}
+        {"kind": "option", "name": "stack", "opts": ["--stack"], "type": "text", "required": true, "default": null, "help": "Stack host: connection.<stack>, oauth.<stack> or a URL of either"},
+        {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Check the token against Manage and the broker; store nothing"}
       ]
     },
     {
