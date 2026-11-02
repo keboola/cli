@@ -9,7 +9,7 @@ auth, and the concepts behind these routes live in
 [`web-server.md`](web-server.md); a running server serves the same spec
 interactively at `/docs` (Swagger) and `/openapi.json`.
 
-**257 operations** across **221 paths** and **32 routers**.
+**259 operations** across **223 paths** and **33 routers**.
 
 Paths are shown as the server registers them. Reaching them through the
 Node BFF (or single-process `--ui` mode) prefixes every path with `/api`.
@@ -487,6 +487,15 @@ Developer Portal app discovery -- list a vendor's apps, get one app's full entry
 |---|---|---|
 | `GET` | `/dev-portal/apps` | List Developer Portal apps for a vendor |
 | `GET` | `/dev-portal/apps/{app}` | Get one Developer Portal app |
+
+### `oauth` (2 operations)
+
+OAuth broker -- check the stored oauth:manage token of a stack, get one consumer with its secrets redacted. Mirrors `kbagent oauth identity verify|consumer get`. The host asks for the login password first. Adding a token and rotating secrets are CLI-only.
+
+| Method | Path | Summary |
+|---|---|---|
+| `GET` | `/oauth/identity` | Check the stored oauth:manage token of a stack |
+| `GET` | `/oauth/consumers/{component_id}` | Get one broker consumer, secrets redacted |
 
 ## System
 

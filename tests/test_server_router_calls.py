@@ -785,6 +785,53 @@ def test_dev_portal_list_no_identity_no_default_is_400(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# oauth.py  GET /oauth/identity  and  GET /oauth/consumers/{component_id}
+# Service: oauth.verify_identity(stack) / get_consumer(stack, component_id)
+# ---------------------------------------------------------------------------
+
+
+def test_oauth_identity_passes_stack(tmp_path: Path) -> None:
+    """GET /oauth/identity must call verify_identity with the stack host."""
+    oauth_svc = MagicMock()
+    oauth_svc.verify_identity.return_value = {"status": "ok"}
+    registry = _mock_registry(oauth=oauth_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.get("/oauth/identity?stack=connection.keboola.com", headers=AUTH)
+
+    assert res.status_code == 200, res.text
+    oauth_svc.verify_identity.assert_called_once_with("connection.keboola.com")
+
+
+def test_oauth_consumer_get_passes_stack_and_component(tmp_path: Path) -> None:
+    """GET /oauth/consumers/{component_id} must pass the stack, then the component."""
+    oauth_svc = MagicMock()
+    oauth_svc.get_consumer.return_value = {"consumer": {"appSecret": "<encrypted>"}}
+    registry = _mock_registry(oauth=oauth_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.get(f"/oauth/consumers/{COMPONENT}?stack=connection.keboola.com", headers=AUTH)
+
+    assert res.status_code == 200, res.text
+    oauth_svc.get_consumer.assert_called_once_with("connection.keboola.com", COMPONENT)
+
+
+def test_oauth_consumer_get_requires_stack(tmp_path: Path) -> None:
+    """No ?stack= is a validation error, not a service call."""
+    oauth_svc = MagicMock()
+    registry = _mock_registry(oauth=oauth_svc)
+    app = _make_app_with_registry(tmp_path, registry)
+
+    with TestClient(app) as client:
+        res = client.get(f"/oauth/consumers/{COMPONENT}", headers=AUTH)
+
+    assert res.status_code == 422, res.text
+    oauth_svc.get_consumer.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # semantic_layer.py  reference-data routes -> SemanticLayerService parity
 # ---------------------------------------------------------------------------
 

@@ -25,6 +25,7 @@ from ..dev_portal_client import DeveloperPortalClient
 from ..errors import PermissionDeniedError
 from ..permissions import PermissionEngine
 from ..project_ref import is_project_id, resolve_project_ref
+from ..services._oauth_keychain import OAuthKeychain
 from ..services.auth_service import AuthService
 from ..services.billing_service import BillingService
 from ..services.branch_service import BranchService
@@ -45,6 +46,7 @@ from ..services.lineage_service import LineageService
 from ..services.member_service import MemberService
 from ..services.merge_request_service import MergeRequestService
 from ..services.notification_service import NotificationService
+from ..services.oauth_service import OAuthService
 from ..services.org_service import OrgService
 from ..services.project_service import ProjectService
 from ..services.repo_validate_service import RepoValidateService
@@ -124,6 +126,7 @@ class ServiceRegistry:
     data_app: DataAppService = field(init=False)
     data_app_git: DataAppGitService = field(init=False)
     dev_portal: DeveloperPortalService = field(init=False)
+    oauth: OAuthService = field(init=False)
     semantic_layer: SemanticLayerService = field(init=False)
     repo_validate: RepoValidateService = field(init=False)
     kai: KaiService = field(init=False)
@@ -167,6 +170,7 @@ class ServiceRegistry:
             config_store=cs,
             client_factory=lambda identity: DeveloperPortalClient(identity),
         )
+        self.oauth = OAuthService(keychain=OAuthKeychain())
         # SemanticLayerService takes both a storage client_factory (for
         # validate --deep + add dataset --deep-fields + build) and an
         # optional metastore_client_factory; the defaults work for both.

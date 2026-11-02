@@ -849,7 +849,7 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
 #### OAuth broker maintenance
 
   `kbagent oauth` reads OAuth broker consumers and rotates the Entra client
-  secret behind one (macOS only, terminal-only). The Manage token must be an
+  secret behind one (macOS only). The Manage token must be an
   application token whose ONLY scope is oauth:manage; anything else is
   refused (OAUTH_TOKEN_TOO_BROAD, exit 6), also on every later use.
 

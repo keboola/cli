@@ -57,7 +57,7 @@ These lists keep `error`, because their entries are not failed items with an err
 
 *(since vNEXT)*
 
-- **New group `kbagent oauth`** (macOS only, no `serve` route): `identity add|verify`, `consumer get`, `rotate-azure-secret`. Workflow: [oauth-broker-workflow.md](oauth-broker-workflow.md).
+- **New group `kbagent oauth`** (macOS only; `serve` has the two reads): `identity add|verify`, `consumer get`, `rotate-azure-secret`. Workflow: [oauth-broker-workflow.md](oauth-broker-workflow.md).
 - **Only an application token whose scopes are exactly `["oauth:manage"]` is accepted**, on `identity add` and on every use (`OAUTH_TOKEN_TOO_BROAD`, exit 6). The broker itself accepts any token that *includes* `oauth:manage`; kbagent is stricter on purpose.
 - **The token is in the macOS keychain, not `config.json`**, in an item that trusts no app. Every command raises a login-password dialog. An item someone allowed with "Always Allow" is refused (`OAUTH_KEYCHAIN_UNPROTECTED`, exit 6).
 - **`rotate-azure-secret` writes need a random code at a terminal**; there is no `--yes`. `--dry-run` is the agent-safe preview. The old Entra secret is never removed by the rotation.

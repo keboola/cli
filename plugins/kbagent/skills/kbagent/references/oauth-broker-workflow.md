@@ -29,7 +29,9 @@ Not the same thing as [oauth-workflow.md](oauth-workflow.md): that one authorize
   only returns ciphertext anyway). The new Entra secret goes `az` -> 1Password -> broker inside one
   process.
 - **`--stack` must be a Keboola host** (`keboola.com`, `keboola.cloud`, `keboola.dev`); `identity add` prints where the token goes before it asks for it. `identity add --dry-run` runs every check and stores nothing.
-- **macOS only** for now. Terminal-only: no `kbagent serve` route.
+- **macOS only** for now. `kbagent serve` has the two reads (`GET /oauth/identity`,
+  `GET /oauth/consumers/{component_id}`, both with `?stack=`); the host still shows the keychain
+  dialog. `identity add` and `rotate-azure-secret` are terminal-only.
 
 ## Steps: rotate an expiring Entra secret
 

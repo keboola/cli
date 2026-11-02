@@ -322,6 +322,9 @@ ROUTE_OPERATIONS: dict[tuple[str, str], str] = {
     # ── developer portal ─────────────────────────────────────────────
     ("GET", "/dev-portal/apps"): "dev-portal.list",
     ("GET", "/dev-portal/apps/{app}"): "dev-portal.get",
+    # ── OAuth broker ─────────────────────────────────────────────────
+    ("GET", "/oauth/identity"): "oauth.identity.verify",
+    ("GET", "/oauth/consumers/{component_id}"): "oauth.consumer.get",
     # ── Kai / local AI ───────────────────────────────────────────────
     ("GET", "/kai/ping"): "kai.ping",
     ("GET", "/kai/preflight"): "kai.preflight",

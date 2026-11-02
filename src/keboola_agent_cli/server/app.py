@@ -76,6 +76,7 @@ from .routers import (
     members,
     merge_requests,
     notifications,
+    oauth,
     org,
     projects,
     schedules,
@@ -303,6 +304,16 @@ OPENAPI_TAGS: list[dict[str, str]] = [
             "Developer Portal app discovery -- list a vendor's apps, get one "
             "app's full entry. Mirrors `kbagent dev-portal list|get`. Writes "
             "and identity management are CLI-only (TTY-confirmed)."
+        ),
+    },
+    {
+        "name": "oauth",
+        "description": (
+            "**Read-only.** "
+            "OAuth broker -- check the stored oauth:manage token of a stack, get "
+            "one consumer with its secrets redacted. Mirrors `kbagent oauth "
+            "identity verify|consumer get`. The host asks for the login password "
+            "first. Adding a token and rotating secrets are CLI-only."
         ),
     },
     {
@@ -1018,6 +1029,7 @@ def create_app(
     app.include_router(sharing.router)
     app.include_router(data_apps.router)
     app.include_router(dev_portal.router)
+    app.include_router(oauth.router)
     app.include_router(kai.router)
     app.include_router(ai_chat.router)
     app.include_router(encrypt.router)
