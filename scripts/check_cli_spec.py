@@ -358,9 +358,12 @@ def type_name(p: Any) -> str:
 
 
 def shape(p: Any) -> str:
+    # A1: a Choice is text with fixed values; the multiplicity of --project follows T2.
     if getattr(p, "is_flag", False):
         return "flag"
-    return f"{type_name(p)}{'[]' if getattr(p, 'multiple', False) else ''}"
+    kind = "text" if type_name(p) == "choice" else type_name(p)
+    many = getattr(p, "multiple", False) and label(p) != "--project"
+    return f"{kind}{'[]' if many else ''}"
 
 
 # --------------------------------------------------------------------------- #

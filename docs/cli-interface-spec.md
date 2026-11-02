@@ -237,7 +237,7 @@ What stays as it is:
 <a id="A1"></a><a id="args.global-option-one-shape"></a><a id="args.long-option-one-shape"></a>
 **A1 · MUST · now.** A global option name has one meaning and one shape in the whole tree. The global names are listed in the reviewed registry `GLOBAL_OPTIONS` (`--project`, `--branch`, `--all-projects`, `--yes`, `--force`, `--dry-run`, `--limit`, `--wait`, `--timeout`, `--json`, …). Every other long name has one meaning and one shape inside its command group. The shape is the multiplicity and the value kind (text, identifier, integer, JSON, path, flag). A `click.Choice` is text with fixed values, so it fits a text option of the same name. The multiplicity of `--project` follows T2, not this rule. `--scope`, `--target-project`, `--type` and `--job-id` keep their names and their meanings per group.
 
-- Checked by: `args.global-option-one-shape` (deferred: the `GLOBAL_OPTIONS` registry is not reviewed yet); `args.long-option-one-shape` (report only).
+- Checked by: `args.global-option-one-shape` (deferred: the `GLOBAL_OPTIONS` registry is not reviewed yet); `args.long-option-one-shape`.
 
 <a id="A2"></a><a id="args.short-flag-one-meaning"></a><a id="args.short-flag-on-every-option"></a><a id="args.no-global-option-shadow"></a>
 **A2 · MUST · now.** One short flag maps to one long option, and every option with that long name has the short flag. The map is the `SHORT_FLAGS` registry in `scripts/check_cli_spec.py`. A new short flag needs an entry there, and the same pull request adds it to every option of its long name. A new option whose long name is in the registry declares its short flag. A long name that is not in the registry has no short flag. A command option does not reuse the name of a global option.
@@ -269,7 +269,7 @@ Before 1.0.0, `-p` was on 24 of the 228 `--project` options, and seven short fla
 <a id="A3"></a><a id="args.no-positional-arguments"></a><a id="args.no-bare-id-option"></a>
 **A3 · MUST for new commands · now.** An identifier is an option `--<noun>-id`, with one name per identifier: `--config-id` for any configuration, `--component-id`, `--project`, `--identity`. Existing positional identifiers stay accepted.
 
-- Checked by: `args.no-positional-arguments`, `args.no-bare-id-option` (both report only).
+- Checked by: `args.no-positional-arguments`, `args.no-bare-id-option`.
 
 <a id="A4"></a><a id="args.list-option-repeatable"></a>
 **A4 · MUST · now for new options; 1.0.0 for existing ones.** A list-valued option is repeatable. An option whose values are IDs or fixed values (project IDs, table IDs, types) also accepts a comma list in one occurrence. An option with free-form values (JSON, `KEY=VALUE`, `PATH=VALUE`, SQL, text; for example `transformation edit --op`, `config update --set`, `config variables-set --var`) is repeat-only, because a comma can be part of the value. `split_multi()` in `commands/_helpers.py` flattens the values of an ID or fixed-value option. From 1.0.0 this covers the nine options that took one comma string before (`org setup --project-ids`, `sharing share --target-project-ids` and `--target-users`, and six `semantic-layer` options); in 0.x they take one comma string.
@@ -303,7 +303,7 @@ Before 1.0.0, `-p` was on 24 of the 228 `--project` options, and seven short fla
 **I2 · MUST · now.** An option named `--file`, `--*-file` or `--from-file` that carries text or data takes a path or `-`, and never treats a mistyped path as content. Listed legacy: `flow new/update/validate --file` and `agent create/test --from-file` also accept inline content. A new file option is named `--<field>-file`, or `--file` when the file is the main input of the command. `--from-file` is not used for new options.
 
 - Why: an inline fallback would store or upload a mistyped path as content.
-- Checked by: `input.file-option-vocabulary` (report only).
+- Checked by: `input.file-option-vocabulary`.
 
 <a id="I3"></a><a id="input.content-option-refuses-at-file"></a>
 **I3 · MUST · 1.0.0.** A free-text content option refuses a value that is `@` followed by the path of an existing file (a relative path is relative to the current directory), with exit 2 and a hint that names the file option. The hint also says how to store text that starts with `@`: write it to a file and pass that file with the file option. The option declares `callback=RefuseAtFile("--file").callback` (`commands/_helpers.py`); `@` followed by anything that is not a file stays text. In 1.0.0 this covers only five options: `--text` of the four commands that use `resolve_text_input` and `transformation create --sql` (`transformation edit` has no `--sql`). The other free-text options follow after 1.0.0 and store `@<file>` as text until then. In 0.x, such a value is stored as text. A free-text content option is an option of a write, destructive or admin command whose name is in `CONTENT_OPTIONS` in `scripts/check_cli_spec.py`.
@@ -562,7 +562,7 @@ The message names the fix (E7). A refusal that uses another code today keeps it,
 
 A flag that raises the class is in `FLAG_ESCALATIONS` and is checked where the flag is read (`sync.push --force`, the `--scope organization` entries, `config.variables-set --replace`). `token.refresh` and `workspace.password` are `destructive`. Declared deviation: the full load of `storage upload-table` and `storage load-file` replaces data and stays `write`; the help and the `--dry-run` output say that it replaces data. Categories and deny policies describe effects on Keboola, not on local files: `sync pull --theirs` stays `read`, its help names the effect, and `--dry-run` shows it.
 
-- Checked by: review; `safety.destructive-verb-category` (report only).
+- Checked by: review; `safety.destructive-verb-category`.
 
 <a id="S2"></a><a id="safety.destructive-has-dry-run"></a><a id="safety.destructive-has-yes"></a><a id="safety.write-has-dry-run"></a>
 **S2 · MUST · now.** A `destructive` command has `--dry-run` and `--yes`. Recorded exceptions, each with its reason in the baseline: `config delete` (soft delete; `config restore` undoes it), `dev-portal deprecate` (a random code on a terminal), `http delete` (raw client; the `http` permission check applies), and the merge-request transitions (an explicit target under `--json`). `branch delete` and `workspace delete` get `--yes`, a read-only `--dry-run` and a confirmation in 1.0.0. `safety.write-has-dry-run` (report only) counts `write` commands without `--dry-run`; it measures, and no rule requires it.
@@ -650,7 +650,7 @@ A flag that raises the class is in `FLAG_ESCALATIONS` and is checked where the f
 <a id="L5"></a><a id="lists.list-has-limit"></a>
 **L5 · SHOULD · now.** Sort options are `--sort-by` and `--sort-order`. A list command backed by an API has `--limit` with a documented default.
 
-- Checked by: `lists.list-has-limit` (report only).
+- Checked by: `lists.list-has-limit`.
 
 <a id="L6"></a>
 **L6 · SHOULD for new options · now.** A filter option is named after the field it matches (`--component-id`, `--config-id`, `--status`, `--type`). A free-text match is `--query`, with a `--regex` flag when a pattern is allowed. Several filters combine with AND. A filter takes one value, unless the API accepts several; then it follows A4.

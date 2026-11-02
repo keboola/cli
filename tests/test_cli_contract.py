@@ -657,7 +657,7 @@ CONFIRMING_COMMANDS: dict[str, str] = {
     "semantic-layer edit glossary": "semantic-layer edit glossary --project p --term a --new-term b",
     "semantic-layer model delete": "semantic-layer model delete --project p --model m",
     "semantic-layer promote": "semantic-layer promote --from-project a --to-project b",
-    "semantic-layer reference-data delete": "semantic-layer reference-data delete --project p --id x",
+    "semantic-layer reference-data delete": "semantic-layer reference-data delete --project p --reference-data-id x",
     "semantic-layer scope set": (
         "semantic-layer scope set --project p --type model --context-id x --scope organization"
     ),

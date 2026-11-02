@@ -160,22 +160,24 @@ def reference_data_list(
 def reference_data_get(
     ctx: typer.Context,
     project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
-    id_: str | None = typer.Option(None, "--id", help="Record UUID"),
+    reference_data_id: str | None = typer.Option(None, "--reference-data-id", help="Record UUID"),
     dimension: str | None = typer.Option(
-        None, "--dimension", help="Dimension name (project-unique; instead of --id)"
+        None,
+        "--dimension",
+        help="Dimension name (project-unique; instead of --reference-data-id)",
     ),
 ) -> None:
-    """Fetch one record (all members) by ``--id`` or by ``--dimension``."""
+    """Fetch one record (all members) by ``--reference-data-id`` or by ``--dimension``."""
     formatter = get_formatter(ctx)
-    if id_ is not None and dimension is not None:
+    if reference_data_id is not None and dimension is not None:
         formatter.error(
-            message="Pass --id or --dimension, not both.",
+            message="Pass --reference-data-id or --dimension, not both.",
             error_code=ErrorCode.VALIDATION_ERROR,
         )
         raise typer.Exit(code=2)
-    if id_ is None and dimension is None:
+    if reference_data_id is None and dimension is None:
         formatter.error(
-            message="Provide --id or --dimension.",
+            message="Provide --reference-data-id or --dimension.",
             error_code=ErrorCode.VALIDATION_ERROR,
         )
         raise typer.Exit(code=2)
@@ -184,7 +186,7 @@ def reference_data_get(
         ctx,
         service.get_reference_data,
         alias=project,
-        record_id=id_,
+        record_id=reference_data_id,
         dimension=dimension,
     )
     formatter.output(result, _print_reference_data_detail)
@@ -233,7 +235,7 @@ def reference_data_set(
 def reference_data_delete(
     ctx: typer.Context,
     project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
-    id_: str = typer.Option(..., "--id", help="Record UUID"),
+    reference_data_id: str = typer.Option(..., "--reference-data-id", help="Record UUID"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirm prompt"),
 ) -> None:
     """Delete a reference-data record by UUID (server-side soft-delete)."""
@@ -242,10 +244,15 @@ def reference_data_delete(
     # --json without a terminal still refuses: here --json is no consent.
     if not yes and formatter.json_mode and not _is_stdin_tty():
         formatter.error(
-            message=f"Refusing to delete reference-data {id_!r} non-interactively without --yes.",
+            message=(
+                f"Refusing to delete reference-data {reference_data_id!r} "
+                "non-interactively without --yes."
+            ),
             error_code=ErrorCode.VALIDATION_ERROR,
         )
         raise typer.Exit(code=2)
-    _confirm_or_abort(formatter, yes, f"Delete reference-data record '{id_}'?")
-    result = _handle_service_call(ctx, service.delete_reference_data, alias=project, record_id=id_)
+    _confirm_or_abort(formatter, yes, f"Delete reference-data record '{reference_data_id}'?")
+    result = _handle_service_call(
+        ctx, service.delete_reference_data, alias=project, record_id=reference_data_id
+    )
     formatter.output(result, _print_reference_data_delete_result)

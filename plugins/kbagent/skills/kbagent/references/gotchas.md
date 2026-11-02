@@ -27,7 +27,7 @@ From the release of kbagent 1.0.0 until its migration date (28 days later), the 
 - **Removed keys**: read the error text of a failed item from `message` and fall back to `error` (0.x has only `error` or `reason`). Treat `source` `"pin"` (0.x) and `"active_project"` (1.x) of `project current` as the same. The other removed keys are in "Keys removed from `--json` output in 1.0.0" below.
 - **REST** (`kbagent http`, `kbagent serve`): send `project=` or `all_projects=true` on list routes, and `branch_id` on the routes that use the active branch on 1.x. The 4 partial-update routes have no form that works on both: 0.x has only `PUT` there, and 1.x has only `PATCH` (*(updated vNEXT)* its `PUT` answers HTTP 405). Check `kbagent --version` first. `PUT .../variables` with `replace: true` (the full replace) works on both.
 - **Project alias and all projects**: `project add --alias A`, `project create --alias A` and `project refresh --all-projects` work on 0.100.3 and later and on 1.x. *(updated vNEXT)* 1.x removes the old names `--project` / `-p` and `--all`. On 0.100.0 to 0.100.2, ask the user to update to the newest 0.x release (`kbagent update`) first.
-- **Removed forms** *(updated vNEXT)*: never use `stream delete --force`, `semantic-layer import --yes`, `--id` on `merge-request` or `agent` commands, or `branch merge`. See "1.0.0 removes the deprecated forms" below.
+- **Removed forms** *(updated vNEXT)*: never use `stream delete --force`, `semantic-layer import --yes`, `--id` on `merge-request` or `agent` commands, or `branch merge`. `semantic-layer reference-data get` and `delete` have no form that works on both: 0.x takes only `--id`, and 1.x takes only `--reference-data-id`. Check `kbagent --version` first. See "1.0.0 removes the deprecated forms" below.
 - **Updates**: `kbagent update` stays on the running major. Ask the user before `kbagent update --major`.
 
 ## Keys removed from `--json` output in 1.0.0
@@ -611,6 +611,7 @@ These lists keep `error`, because their entries are not failed items with an err
   - `semantic-layer import --yes` / `-y`: it had no effect. Omit it.
   - `--id` on the 10 `merge-request` commands that take a merge request: use `--merge-request-id`.
   - `--id` on the 7 `agent` commands that take a task: use `--task-id` or the positional `TASK_ID`.
+  - `--id` on `semantic-layer reference-data get` and `delete`: use `--reference-data-id`. On 0.x only `--id` exists, so check `kbagent --version` first.
 - **`branch merge` is removed.** It only printed the merge URL of the Keboola UI and reset the active branch. Use `kbagent merge-request` (a project with the `branches-merge-requests` feature), or merge in the Keboola UI. Over `kbagent serve`, `GET /branches/{project}/merge-url` is removed too.
 - **REST:** `PUT` on `/semantic-layer/items/{kind}/{name}`, `/merge-requests/{project}/{merge_request_id}` and `/data-apps/{project}/{app_id}/secrets` answers HTTP 405, and the error message names `PATCH`. `PUT .../variables` without `replace: true` answers HTTP 405 too (use `PATCH` to merge). The body field `refresh_all` of `POST /org/refresh` answers HTTP 422 naming `all_projects`.
 - **Forms that work on 0.x and 1.x:** `--alias` and `--all-projects` (0.100.3 and later), `stream delete --yes`, `semantic-layer import` without `--yes`, `--merge-request-id` and `--task-id`.
@@ -1979,8 +1980,8 @@ record per member. Consequences an agent must internalize:
   regardless of which `--model` you pass (the resolved model is just stored
   on the record) — it does NOT POST and collide with `ALREADY_EXISTS`. For
   the same reason `get --dimension` needs no `--model` (one dimension name
-  per project for this type). `get` rejects passing both `--id` and
-  `--dimension` (exit 2).
+  per project for this type). `get` rejects passing both
+  `--reference-data-id` (`--id` before vNEXT) and `--dimension` (exit 2).
 - **Member field names mirror the `DIM_COA` columns 1:1 (snake_case):**
   `account_code` (required key), `account_name`, `parent_code`, `is_leaf`
   (integer 0/1, not bool), `level_1_code`, `cf_category`, … The metastore

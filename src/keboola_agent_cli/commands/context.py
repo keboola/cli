@@ -1679,14 +1679,16 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
     dimension holding the full member list in a members[] array (e.g. a
     Chart of Accounts). Deliberately OUTSIDE build/export/diff/cascade.
     list --project P [--model M] -> dimension summaries (id, dimension,
-    member_count). get --project P (--id ID | --dimension D) ->
-    one record + all members (dimension is project-unique, so no model
+    member_count). get --project P (--reference-data-id ID | --dimension D)
+    -> one record + all members (dimension is project-unique, so no model
     needed). set --project P [--model M] --dimension D
     --members-file PATH ('-' = stdin) [--dataset-id T] [--description X] ->
     create-or-replace, idempotent on dimension (project-wide lookup): an
     existing record is replaced in place via PUT (revision++), else POST.
-    delete --project P --id ID [--yes]. Member keys mirror the DIM_COA
-    columns (account_code, account_name, parent_code, is_leaf, ...).
+    delete --project P --reference-data-id ID [--yes]. Member keys mirror
+    the DIM_COA columns (account_code, account_name, parent_code, is_leaf,
+    ...). Since vNEXT `--id` is removed (usage error, exit 2); use
+    `--reference-data-id`.
 
   semantic-layer add metric|dataset|relationship|constraint|glossary ...
     Add one entity. Dataset `fqn` is the table's warehouse location read from

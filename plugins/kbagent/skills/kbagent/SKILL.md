@@ -320,9 +320,9 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Remove a relationship. | `kbagent semantic-layer remove relationship --project PROJECT --name NAME` |
 | Remove a glossary term. | `kbagent semantic-layer remove glossary --project PROJECT --term TERM` |
 | List reference-data records (dimension summaries; use ``get`` for members) | `kbagent semantic-layer reference-data list --project PROJECT` |
-| Fetch one record (all members) by ``--id`` or by ``--dimension`` | `kbagent semantic-layer reference-data get --project PROJECT` |
+| Fetch one record (all members) by ``--reference-data-id`` or by ``--dimension`` | `kbagent semantic-layer reference-data get --project PROJECT` |
 | Create or replace a reference-data record (keyed by dimension) | `kbagent semantic-layer reference-data set --project PROJECT --dimension DIMENSION --members-file MEMBERS-FILE` |
-| Delete a reference-data record by UUID (server-side soft-delete) | `kbagent semantic-layer reference-data delete --project PROJECT --id ID-` |
+| Delete a reference-data record by UUID (server-side soft-delete) | `kbagent semantic-layer reference-data delete --project PROJECT --reference-data-id REFERENCE-DATA-ID` |
 | Show an item's current scope, target-project grants, and pending elevation | `kbagent semantic-layer scope get --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
 | Add target projects to a targeted-scope item (merges with the current grants) | `kbagent semantic-layer scope add --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
 | Remove target projects from a targeted-scope item (merges with the current grants) | `kbagent semantic-layer scope remove --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
@@ -360,9 +360,9 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Remove a relationship. | `kbagent sl remove relationship --project PROJECT --name NAME` |
 | Remove a glossary term. | `kbagent sl remove glossary --project PROJECT --term TERM` |
 | List reference-data records (dimension summaries; use ``get`` for members) | `kbagent sl reference-data list --project PROJECT` |
-| Fetch one record (all members) by ``--id`` or by ``--dimension`` | `kbagent sl reference-data get --project PROJECT` |
+| Fetch one record (all members) by ``--reference-data-id`` or by ``--dimension`` | `kbagent sl reference-data get --project PROJECT` |
 | Create or replace a reference-data record (keyed by dimension) | `kbagent sl reference-data set --project PROJECT --dimension DIMENSION --members-file MEMBERS-FILE` |
-| Delete a reference-data record by UUID (server-side soft-delete) | `kbagent sl reference-data delete --project PROJECT --id ID-` |
+| Delete a reference-data record by UUID (server-side soft-delete) | `kbagent sl reference-data delete --project PROJECT --reference-data-id REFERENCE-DATA-ID` |
 | Show an item's current scope, target-project grants, and pending elevation | `kbagent sl scope get --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
 | Add target projects to a targeted-scope item (merges with the current grants) | `kbagent sl scope add --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
 | Remove target projects from a targeted-scope item (merges with the current grants) | `kbagent sl scope remove --project PROJECT --type TYPE- --context-id CONTEXT-ID` |

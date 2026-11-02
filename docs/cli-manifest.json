@@ -2844,7 +2844,7 @@
       "help": "Delete a reference-data record by UUID (server-side soft-delete).",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
-        {"kind": "option", "name": "id_", "opts": ["--id"], "type": "text", "required": true, "default": null, "help": "Record UUID"},
+        {"kind": "option", "name": "reference_data_id", "opts": ["--reference-data-id"], "type": "text", "required": true, "default": null, "help": "Record UUID"},
         {"kind": "option", "name": "yes", "opts": ["--yes", "-y"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip the confirm prompt"}
       ]
     },
@@ -2853,11 +2853,11 @@
       "kind": "command",
       "hidden": false,
       "category": "read",
-      "help": "Fetch one record (all members) by ``--id`` or by ``--dimension``.",
+      "help": "Fetch one record (all members) by ``--reference-data-id`` or by ``--dimension``.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
-        {"kind": "option", "name": "id_", "opts": ["--id"], "type": "text", "default": null, "help": "Record UUID"},
-        {"kind": "option", "name": "dimension", "opts": ["--dimension"], "type": "text", "default": null, "help": "Dimension name (project-unique; instead of --id)"}
+        {"kind": "option", "name": "reference_data_id", "opts": ["--reference-data-id"], "type": "text", "default": null, "help": "Record UUID"},
+        {"kind": "option", "name": "dimension", "opts": ["--dimension"], "type": "text", "default": null, "help": "Dimension name (project-unique; instead of --reference-data-id)"}
       ]
     },
     {
