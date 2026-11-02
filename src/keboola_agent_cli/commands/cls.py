@@ -14,7 +14,8 @@ rule is just a selector plus a column allowlist, so ``create`` covers it):
 Each rule is ``{subjects|groups, visible_columns: [...]}`` (``subjects`` are ``<idp>|<sub>``, an
 email is not a selector): the listed
 columns are the only ones the selected readers can read (allowlist projection;
-masking is not supported). As with ``rls``, every write is authored at
+masking is not supported). A ``cls-policy`` alone opens the table for the readers it names (every row, only its
+columns); with an ``rls-policy`` too, rows come from the ``rls-policy``. As with ``rls``, every write is authored at
 ``targeted`` scope unless ``--scope organization`` is passed -- never
 ``project``. Enforcement happens in the Query Service policy engine on a governed workspace
 (the MCP server only creates such a workspace); kbagent only authors policies.

@@ -5,7 +5,8 @@ The ``cls-policy`` metastore object is the column-level sibling of
 where each rule selects identities (``subjects`` (``<idp>|<sub>``) or IdP
 ``groups``) and the columns they may see (``visible_columns`` -- an allowlist
 projection; masking is not supported). Under schema 1.1.0 an identity several
-rules match sees the union of their columns; there is no ``default``.
+rules match sees the union of their columns; there is no ``default``. A ``cls-policy`` alone opens the table
+for the readers it names (every row, only its columns); it does not need an ``rls-policy`` for the table.
 
 Everything except the rule shape is identical to :class:`RlsService` (never
 ``project`` scope, partial (PATCH) update, live-schema validation that

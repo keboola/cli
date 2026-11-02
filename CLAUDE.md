@@ -1428,8 +1428,9 @@ kbagent rls bindings-sweep --project P [--older-than DAYS] [--dry-run | --yes]
 #   Helm `keboolaStack` of Query Service, not derivable from the stack URL), it must equal
 #   Query Service's QUERY_RLS_STACK_ID (AWS dev: dev-keboola-aws-eu-west-1); a wrong one writes a
 #   binding nothing reads, so the workspace silently keeps every policy. A Data App is NOT bound
-#   here: its policies are the app configuration `runtime.workspace.rlsPolicies` (1-100 policy
-#   UUIDs; an app without it is not governed; a changed list needs a redeploy), set with
+#   here: its policies are the app configuration `runtime.workspace.rlsPolicies` and
+#   `runtime.workspace.clsPolicies` (independent lists of 1-100 policy UUIDs each; an app with neither is not
+#   governed; a changed list needs a redeploy), set with
 #   `config update --merge` and `data-app deploy`; `bind` never writes an app KID. `unbind` is destructive-class
 #   (looks the binding up, then confirms). `bindings-sweep` only reports unless --yes (destructive via
 #   FLAG_ESCALATIONS): orphaned = a workspace KID of this project whose workspace 404s in production

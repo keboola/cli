@@ -435,7 +435,8 @@ match sees the union of their columns, several policies intersect; there is
 no `default`. Sibling of RLS -- same scope default, permissions, checks,
 partial update and enforcement path (the Query Service policy engine on a governed
 workspace, which composes RLS and CLS); no `setup` wizard. A column policy
-never grants rows by itself: in a governed workspace the table also needs an `rls-policy`.
+alone opens the table for the readers it names (every row, only its columns); a reader it
+does not name is refused. With an `rls-policy` too, rows come from the `rls-policy` and columns from the `cls-policy`.
 
   cls create
     --rules is a JSON array of {subjects|groups,
@@ -1580,7 +1581,7 @@ policy only narrows); a reader with no identity is always refused; the
 wildcard `"*"` (sole entry of `subjects`/`groups`) matches every
 identified reader and is how a table is opened to everyone under default deny.
 In a governed workspace (the platform denies by default, admins never exempt)
-a table with no rls-policy is refused. An optional policy `default` covers an
+a table with no policy (rls or cls) is refused. An optional policy `default` covers an
 identified reader no rule matches (absent = refused). Same metastore/master-token
 requirements as Semantic Layer.
 **Scope**: `targeted` by default (the owning project plus --target-project

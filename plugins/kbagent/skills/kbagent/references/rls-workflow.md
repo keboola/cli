@@ -123,7 +123,7 @@ Workspace details and gotchas: [workspace-workflow.md](workspace-workflow.md#gov
 kbagent --json workspace create --project prod --name "governed-ws" --governed
 
 # 2. Policies on the Storage table (preview with --dry-run first, see Workflow 2).
-#    Under default deny a table with no rls-policy is refused, so give every
+#    Under default deny a table with no policy is refused, so give every
 #    reader a rule -- including the identity you will query with in step 4.
 kbagent --json rls create --project prod --table-id in.c-crm.invoices \
   --rules '[{"groups": ["eu-analysts"],
@@ -186,22 +186,25 @@ kbagent --json rls bindings-sweep --project prod --older-than 30 --yes   # delet
 - **A Data App is not bound this way.** `rls bind` writes a `policy-binding` for a
   *workspace* KID (`KID:<stack>:project-<n>:workspace-<id>`); kbagent does not create
   an app KID, and a workspace id does not survive a redeploy of the app. A Data App
-  gets its policies from its own configuration, `runtime.workspace.rlsPolicies`
-  (1-100 policy UUIDs, `[]` is refused; the platform checks it, kbagent does not):
-  the platform creates the app's governed workspace with a binding for exactly the
-  listed policies, an app without `rlsPolicies` is **not governed** and reads every
-  row, and a changed list takes effect at the next deploy.
+  gets its policies from its own configuration, `runtime.workspace.rlsPolicies` for
+  row policies and `runtime.workspace.clsPolicies` for column policies (each 1-100 unique
+  policy UUIDs, `[]` is refused; the platform checks them, kbagent does not). The two lists
+  are independent: the platform creates the app's governed workspace with a binding for
+  exactly the listed policies, an app with neither list is **not governed** and reads every
+  row and column, and a changed list takes effect at the next deploy. List a `cls-policy` UUID
+  in `clsPolicies` and an `rls-policy` UUID in `rlsPolicies`.
   It also needs single sign-on (the platform refuses a password or public-path app
-  with `rlsPolicies`), and the app must forward the end user's token to Query Service.
+  with either list), and the app must forward the end user's token to Query Service.
   ```bash
   kbagent --json config update --project prod --component-id keboola.data-apps --config-id CFG \
-    --merge --configuration '{"runtime": {"workspace": {"rlsPolicies": ["POLICY_ID"]}}}'
+    --merge --configuration '{"runtime": {"workspace": {"rlsPolicies": ["POLICY_ID"], "clsPolicies": ["CLS_POLICY_ID"]}}}'
   kbagent --json data-app deploy --project prod --app-id APP_ID --wait   # pins the new config version
   ```
 - A policy listed in a binding cannot be deleted until it is unbound.
 - The workspace is governed: a table that none of the bound policies covers is
   refused, so narrowing a binding closes tables, it never opens them. A table
-  needs an RLS policy in the binding: binding only `--cls-policy` refuses every table.
+  needs a policy in the binding: binding only `--cls-policy` opens just the tables of those
+  cls-policies for the readers they name (every row, their columns) and refuses every other table.
 - The sweep deletes only a binding whose workspace is gone (404 in production
   and every dev branch) and that is older than `--older-than` days; app KIDs are
   never swept. References to a binding cannot be checked first; the metastore
@@ -438,7 +441,8 @@ row; anyone else sees no rows (the `default`), instead of an error.
 In a **governed workspace** (`workspace create --governed`, or a workspace the
 platform creates governed once RLS/CLS is switched on for the organization or
 project) nothing is readable
-until a policy says so: a table with **no** `rls-policy` is refused, and so is a
+until a policy says so: a table with **no** policy (rls or cls) is refused (an
+ordinary reader gets an empty result, an administrator the 403), and so is a
 table whose policies match the reader in no rule. Admins and organization admins
 are not exempt. An admin who sees no data has not authored the policies yet --
 author them before switching RLS/CLS on.
@@ -459,8 +463,9 @@ kbagent --json rls create --project prod --table-id in.c-ref.countries \
   `subjects`: on a 1.0.0 schema `"*"` is a literal that matches nobody, so kbagent refuses it.
 - A debug or "see everything" user is a normal rule (for example
   `{"groups": ["debug"], "condition": {"true": true}}`), not a bypass flag.
-- A `cls-policy` alone never grants rows: a table needs an `rls-policy` (the
-  wildcard one if everyone may read all rows) before its columns matter.
+- A `cls-policy` alone opens the table for the readers it names, with every row and only its
+  columns; a reader it does not name is refused. Rows are limited only by an `rls-policy`: author
+  both to limit rows and columns.
 
 ## Workflow 5 -- Share a policy with sibling projects (targeted grants)
 
@@ -575,8 +580,9 @@ It mirrors `rls` (`list`, `detail`, `schema`, `create`, `update`, `delete`) with
 scope rule and default, the same write permissions, dialect check, `--dry-run`/`--yes`
 flags and partial `update`; there is no `cls setup` wizard and no `default`.
 Enforcement and RLS+CLS composition happen in the same place as for RLS: the Query
-Service policy engine on a governed workspace. A column policy never grants rows by
-itself: the table also needs an `rls-policy`.
+Service policy engine on a governed workspace. A column policy alone opens the
+table for the readers it names (every row, only its columns); with an `rls-policy` too, rows come from the
+`rls-policy` and columns from the `cls-policy`.
 
 ```bash
 kbagent --json cls schema --project prod            # live shape
@@ -592,7 +598,8 @@ kbagent --json cls update --project prod --policy-id <id> --rules @cls_rules_v2.
 kbagent cls delete --project prod --policy-id <id> --yes
 ```
 
-- A table can carry both an `rls-policy` and a `cls-policy`; author them separately.
+- A table can carry both an `rls-policy` and a `cls-policy`; author them separately. Rows come from the
+  `rls-policy`, columns from the `cls-policy`; either one alone also opens the table for the readers it names.
 - `INVALID_CLS_POLICY` -- the policy failed validation (exactly one of `subjects`/
   `groups` per rule, non-empty `visible_columns` of `[A-Za-z0-9_]+` names, the dialect check,
   no `default`, plus the live JSON Schema). Nothing was written.

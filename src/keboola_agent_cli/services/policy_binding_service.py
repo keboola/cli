@@ -4,7 +4,7 @@ A ``policy-binding`` metastore object restricts one governed workspace to a subs
 the project's ``rls-policy`` / ``cls-policy`` objects. It is named by the canonical KID of the
 workspace, ``KID:<stack>:project-<id>:workspace-<id>``, and holds ``kid`` plus ``rlsPolicyUUIDs``
 and/or ``clsPolicyUUIDs``. These commands bind workspaces only: a Data App gets its policies from
-its own configuration (``runtime.workspace.rlsPolicies``), from which the platform creates the app's
+its own configuration (``runtime.workspace.rlsPolicies`` and ``runtime.workspace.clsPolicies``), from which the platform creates the app's
 governed workspace together with its binding, so kbagent never writes an app KID (it only lists
 and leaves alone the ones it finds). Query Service reads a binding on every governed query:
 

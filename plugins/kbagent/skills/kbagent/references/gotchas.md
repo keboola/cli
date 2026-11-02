@@ -6838,7 +6838,7 @@ governed-workspace flow.
   empty result, an administrator behind a Storage token the 403 `Row-level security does not allow this
   query`). The MCP server's own workspace is created governed in a project with the
   `row-level-security` feature; it gets every policy unless bound (see `rls-workflow.md`, "The MCP server's
-  workspace"). A Data App is bound by its configuration `runtime.workspace.rlsPolicies`, not by `rls bind`.
+  workspace"). A Data App is bound by its configuration `runtime.workspace.rlsPolicies` / `clsPolicies`, not by `rls bind`.
 - **Rules select readers by `subjects` or `groups`, never by email (since vNEXT, schema 1.2.0).** A new
   `rls-policy` / `cls-policy` rule has exactly one of `subjects` (`<idp>|<sub>` entries, matched exactly)
   or `groups` (exact strings, any listed group matches); `["*"]` as the sole entry is every identified
@@ -6870,8 +6870,9 @@ governed-workspace flow.
   (schema 1.1.0) matches every identified reader (never a reader with no identity); it must be the only entry
   of its list (`INVALID_RLS_POLICY` / `INVALID_CLS_POLICY` otherwise) and is refused against a metastore
   whose schema is older than 1.1.0, where `"*"` is a literal that matches nobody. In a governed workspace
-  the platform denies by default: a table with no `rls-policy` is not readable (a `cls-policy` alone grants
-  no rows; an ordinary reader gets an empty result, an administrator the 403 refusal), so a table is
+  the platform denies by default: a table with no policy (rls or cls) is not readable (an ordinary reader gets
+  an empty result, an administrator the 403 refusal; a `cls-policy` alone opens the table for the readers it
+  names with every row and only its columns, and refuses one it does not name), so a table is
   opened to everyone only by an explicit wildcard policy with
   `{"true": true}`. Workflow: `rls-workflow.md` > "Default deny and the wildcard".
 - **One `rls-policy` object per protected table**, never one blob per project, named by its table: a
@@ -6890,8 +6891,9 @@ governed-workspace flow.
   `rls.py::_compile_primitive` (sqlglot).
 - **`rls update` sends a partial update (`PATCH`) of only the changed keys.** It still reads the policy
   first: the metastore's PATCH validates only the keys it receives, so kbagent validates the MERGED
-  policy (and builds the `--dry-run` preview from it). Unknown keys and concurrent changes to other keys
-  survive. Grants change before the rules, so a refused grant writes nothing, and the result is re-read
+  policy (and builds the `--dry-run` preview from it). A stored key the update does not name and concurrent
+  changes to other keys survive; a key the schema does not know is refused (metastore v0.15.2, before it the key
+  was saved into the policy) and `null` removes a key. Grants change before the rules, so a refused grant writes nothing, and the result is re-read
   after the write. An `update` with nothing to change is `INVALID_ARGUMENT` (exit 2).
 - **`--target-project` takes an alias or a project ID**, repeatable or comma-separated, de-duplicated
   (the metastore requires unique, positive IDs). An alias must be on the owner's stack. On `create` the

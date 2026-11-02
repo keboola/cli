@@ -456,11 +456,13 @@ class MetastoreClient(BaseHttpClient):
         The server merges ``data`` into the stored record one TOP-LEVEL key at
         a time (go-monorepo ``simpleJSONMerge``): a key in ``data`` replaces the
         stored value wholesale, every key it does not name is kept, all inside
-        one transaction under a row lock. So unknown keys survive and a
-        concurrent change to another key is not overwritten -- unlike
-        :meth:`put_item`. Caveat: the server validates only the patched keys,
-        never the merged record, so the caller must validate the merged result
-        itself. Never sends ``scope`` (a scope step-up cannot be combined with
+        one transaction under a row lock. So a stored key that ``data`` does not
+        name survives and a concurrent change to another key is not overwritten --
+        unlike :meth:`put_item`. A ``null`` value removes its key and a patched key
+        that the schema of a closed object does not know is refused (metastore
+        v0.15.2; before it the key was saved, and ``null`` was stored as ``null``).
+        Caveat: the server validates only the patched keys, never the merged
+        record, so the caller must validate the merged result itself. Never sends ``scope`` (a scope step-up cannot be combined with
         name/data -- :meth:`elevate_to_organization`).
 
         Raises ``NOT_FOUND`` on 404 and ``ALREADY_EXISTS`` on 409 (a rename to
