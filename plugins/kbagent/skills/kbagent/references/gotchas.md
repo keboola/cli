@@ -13,7 +13,7 @@ Versioning convention:
 
 ## The option names of kbagent 1.x are accepted on 0.x
 
-*(since vNEXT)* (#791)
+*(since 0.100.5)* (#791)
 
 kbagent 1.0.0 renames many options and removes the old names. This version accepts the 1.x names too, so one command works on this version and on 1.x. The old names keep working on 0.x with the same behavior.
 

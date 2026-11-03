@@ -26,6 +26,16 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.100.5": [
+        "New (#949): kbagent 0.100.5 also takes the option names of kbagent 1.0.0, so one "
+        "command works on 0.100.5 and on 1.x. Examples: `flow new --definition-file f.yaml`, "
+        "`config update --configuration-file cfg.json`, `storage describe-table "
+        "--description-file notes.md`, `org setup --project-id 1 --project-id 2` and `stream "
+        "delete --source-id S`. A `--X-file` option reads stdin when the path is `-`. The 0.x "
+        "forms keep working. `gotchas.md` lists every new name.",
+        "New (#949): `sharing unlink` takes `--dry-run`, which checks that the bucket is a "
+        "linked bucket and deletes nothing, and `--yes`, which changes nothing on 0.x.",
+    ],
     "0.100.4": [
         "Fix (#919, backport of #917): `sync push` now sends an edit to `transform.sql` or another code file "
         "of a config that a push created. Before, it found no change in such a file "
