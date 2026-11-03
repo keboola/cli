@@ -21,7 +21,8 @@ and deletes the policy objects the enforcement reads.
   organization** where it is enforced (see the prerequisite below). The
   enforcement applies every policy the metastore lists for a project -- it does
   not re-check the owning project -- so an organization policy is never "only
-  for my project". It is gated as `destructive` (`rls.create --scope
+  for my project" (only a workspace binding or a Data App's policy lists can leave
+  it out, see [bindings](#restrict-one-workspace-to-some-policies-bindings)). It is gated as `destructive` (`rls.create --scope
   organization` in `FLAG_ESCALATIONS`), so `--deny-destructive` blocks it.
 - There is no `--scope project`: the schema does not support it for policies.
 
@@ -37,8 +38,8 @@ and deletes the policy objects the enforcement reads.
 **Enforcement prerequisite.** Policies are enforced only on a governed
 workspace. Query Service always enforces a governed workspace, in every project
 and with no per-project switch (since vNEXT); an ordinary workspace is not
-filtered at all. A table no `rls-policy` applies to is not readable: an ordinary
-reader gets an empty result (HTTP 200, no rows), an administrator behind a Storage
+filtered at all. A table that no `rls-policy` and no `cls-policy` applies to is not
+readable: an ordinary reader gets an empty result (HTTP 200, no rows), an administrator behind a Storage
 token gets the refusal `Row-level security does not allow this query` (HTTP 403).
 The `row-level-security` project feature is read only by the MCP server, to decide
 that its own workspace is created governed
@@ -67,8 +68,9 @@ with `subjects`/`groups`.
 policy, every rule that matches the reader applies: RLS conditions combine with
 OR, CLS `visible_columns` are united. An RLS policy may set a `default` condition
 for an identified reader no rule matches; without one, the policy refuses the
-read. Several policies on one table combine with AND (CLS: intersection), so an
-added policy can only narrow access, never widen it. A reader with no identity
+read. Several policies on one table combine with AND (CLS: intersection), so a
+policy added to a table that is already readable narrows access; a workspace binding
+that leaves a policy out loosens it again (see [bindings](#restrict-one-workspace-to-some-policies-bindings)). A reader with no identity
 is always refused. Each stored policy is read by the rules of its own schema version.
 
 **Dialect.** `dialect` is optional from schema 1.1.0 on, and the Query Service engine does
@@ -123,13 +125,19 @@ Workspace details and gotchas: [workspace-workflow.md](workspace-workflow.md#gov
 kbagent --json workspace create --project prod --name "governed-ws" --governed
 
 # 2. Policies on the Storage table (preview with --dry-run first, see Workflow 2).
-#    Under default deny a table with no policy is refused, so give every
-#    reader a rule -- including the identity you will query with in step 4.
+#    Under default deny a table no policy covers is refused, so give every
+#    reader a rule -- including the identity you query with in step 3. An
+#    administrator behind a Storage token is `keboola|<user id>` (the member `id` of
+#    `kbagent project member-list`) and has no groups, so it needs a `subjects` rule.
 kbagent --json rls create --project prod --table-id in.c-crm.invoices \
   --rules '[{"groups": ["eu-analysts"],
+             "condition": {"column": "region", "op": "eq", "value": "EU"}},
+            {"subjects": ["keboola|1234"],
              "condition": {"column": "region", "op": "eq", "value": "EU"}}]'
 kbagent --json cls create --project prod --table-id in.c-crm.invoices \
   --rules '[{"groups": ["eu-analysts"],
+             "visible_columns": ["id", "region", "amount"]},
+            {"subjects": ["keboola|1234"],
              "visible_columns": ["id", "region", "amount"]}]'
 
 # 3. Read it through Query Service -- the only way into a governed workspace.
@@ -141,11 +149,13 @@ kbagent --json workspace query --project prod --workspace-id WS_ID \
 Name a table as `"<bucket id>"."<table>"` (`"in.c-crm"."invoices"`). A bare
 `"invoices"` is refused with the same 403 as an unprotected table.
 
-Expected (illustrative): for `eu-analyst@example.com` only the `region = 'EU'`
-rows, and only the columns `id`, `region`, `amount`. An ordinary reader no rule
-selects gets an empty result (and a table without any `rls-policy` reads the same
-way); an administrator behind a Storage token gets the 403 refusal; a reader with no
-identity (a token that is not a user's) is refused with the same 403.
+Expected (illustrative): step 3 runs as `keboola|1234`, so it gets only the
+`region = 'EU'` rows and only the columns `id`, `region`, `amount`, as a reader in
+`eu-analysts` would. A reader no rule selects is refused with the 403, because the
+`cls-policy` does not name them (with only an `rls-policy`, an ordinary reader would get
+an empty result and an administrator the 403; a table that no `rls-policy` and no
+`cls-policy` applies to reads the same way). A reader with no identity (a token that
+is not a user's) is refused with the same 403.
 
 - `workspace password` is refused on a governed workspace, and so is any direct
   warehouse login: Query Service is the only reader.
@@ -157,9 +167,11 @@ identity (a token that is not a user's) is refused with the same 403.
 
 ### Restrict one workspace to some policies (bindings)
 
-Without a binding a workspace gets **every** policy of the project. A binding
-names the policies one workspace gets; it only narrows, never grants, and
-Query Service re-reads it on every query, so a change applies to the next query.
+Without a binding a workspace gets **every** policy of the project. A binding is
+an allowlist: it names the policies one workspace gets and every other policy,
+organization ones included, stops applying to it. It never opens a table that none of
+its policies covers, but leaving a policy out can loosen access (see the last
+bullets). Query Service re-reads it on every query, so a change applies to the next query.
 
 ```bash
 # Policy ids come from `rls list` / `cls list`. --stack-id (or KBAGENT_STACK_ID)
@@ -202,9 +214,11 @@ kbagent --json rls bindings-sweep --project prod --older-than 30 --yes   # delet
   ```
 - A policy listed in a binding cannot be deleted until it is unbound.
 - The workspace is governed: a table that none of the bound policies covers is
-  refused, so narrowing a binding closes tables, it never opens them. A table
-  needs a policy in the binding: binding only `--cls-policy` opens just the tables of those
-  cls-policies for the readers they name (every row, their columns) and refuses every other table.
+  refused, so a binding never opens such a table. It can still loosen a covered one,
+  because a policy left out stops applying: binding only `--cls-policy` drops every
+  `rls-policy`, so the readers a cls-policy names get every row of its tables (their
+  columns) and every other table is refused; binding only `--rls-policy` drops every
+  `cls-policy`, so those readers get every column. List each policy you want enforced.
 - The sweep deletes only a binding whose workspace is gone (404 in production
   and every dev branch) and that is older than `--older-than` days; app KIDs are
   never swept. References to a binding cannot be checked first; the metastore
@@ -212,8 +226,8 @@ kbagent --json rls bindings-sweep --project prod --older-than 30 --yes   # delet
 
 ### The MCP server's workspace
 
-In a Snowflake project with the `row-level-security` feature, `keboola-mcp-server`
-creates its own workspace governed (config `mcp-workspace-<hex>` of the
+In a Snowflake or BigQuery project with the `row-level-security` feature,
+`keboola-mcp-server` creates its own workspace governed (config `mcp-workspace-<hex>` of the
 `keboola.mcp-server-tool` component), so Query Service enforces the policies on
 `query_data`. kbagent sets everything up for it with the commands above:
 
@@ -231,8 +245,8 @@ kbagent --json rls bind --project prod --workspace-id MCP_WS_ID --rls-policy ID 
   does not follow it and the new workspace starts with every policy again. Bind
   again after `workspace list` shows the new id; `rls bindings-sweep` removes
   what the old ones left behind.
-- **Deny by default.** A table with no applicable `rls-policy` is not readable
-  from the MCP workspace (the opposite of an ordinary workspace, where it is
+- **Deny by default.** A table that no `rls-policy` and no `cls-policy` applies to is
+  not readable from the MCP workspace (the opposite of an ordinary workspace, where it is
   unfiltered): an ordinary reader gets an empty result, an administrator the 403
   refusal. A `"*"` rule opens a table to every identified reader.
 - **Identity.** Since go-monorepo #668 every reader has a *subject*, which is what
@@ -431,21 +445,23 @@ row; anyone else sees no rows (the `default`), instead of an error.
 - `{"false": true}` matches no row -- useful as a `default` or a rule.
 - A default cannot be removed by `rls update` (the metastore's partial update
   cannot delete a key); recreate the policy instead.
-- MCP OAuth users have an email but no IdP groups, so `groups` rules only
-  match readers whose identity carries a groups claim.
+- An administrator behind a Storage token (kbagent, the MCP server) has no groups
+  (unknown), so a `groups` rule never matches it, and an email is not a selector: give
+  it a `subjects` rule (`keboola|<user id>`). `groups` rules match readers whose
+  identity carries a groups claim, such as an app user.
 
 ## Workflow 4c -- Default deny and the wildcard (governed workspaces)
 
 *(since vNEXT)*
 
-In a **governed workspace** (`workspace create --governed`, or a workspace the
-platform creates governed once RLS/CLS is switched on for the organization or
-project) nothing is readable
+In a **governed workspace** (`workspace create --governed`, or the workspace the
+MCP server creates governed in a project with the `row-level-security` feature)
+nothing is readable
 until a policy says so: a table with **no** policy (rls or cls) is refused (an
 ordinary reader gets an empty result, an administrator the 403), and so is a
 table whose policies match the reader in no rule. Admins and organization admins
 are not exempt. An admin who sees no data has not authored the policies yet --
-author them before switching RLS/CLS on.
+author them before reading through a governed workspace.
 
 To open a table to every identified reader, use the wildcard selector `"*"`
 (`subjects` or `groups`, schema 1.2.0; `groups` from 1.1.0) with an explicit condition:
@@ -458,7 +474,7 @@ kbagent --json rls create --project prod --table-id in.c-ref.countries \
 - `"*"` must be the **only** entry of a `subjects` / `groups` list
   (`["*", "keboola|1234"]` is refused locally); it never matches a reader with
   no identity; it cannot widen a stricter policy on the same table (policies
-  AND together).
+  AND together), unless a workspace binding leaves that policy out.
 - It needs a metastore whose `rls-policy` schema is 1.1.0 or later for `groups` and 1.2.0 for
   `subjects`: on a 1.0.0 schema `"*"` is a literal that matches nobody, so kbagent refuses it.
 - A debug or "see everything" user is a normal rule (for example
@@ -554,6 +570,21 @@ kbagent --json rls schema --project prod
   one) covers the table (`rls list`) and a rule matches your identity or `"*"`;
   the token is an administrator's (see Identity above); the workspace binding,
   if any, lists that policy (`rls bindings`).
+- **The same 403 for a statement the engine refuses whatever the policies say**
+  *(since vNEXT)* -- one generic message for every refusal, an ordinary reader included
+  (no empty result). Refused anywhere in the statement: `IDENTIFIER()` / `TABLE()`
+  outside FROM, the `AI_*` / `AI.*` functions (and `Generate*`, `PREDICT`,
+  `VECTOR_SEARCH`), `TO_FILE`, `READ_CSV` / `READ_PARQUET`, `SECRET`, the
+  session-context functions (`CURRENT_USER()`, `CURRENT_ROLE()`, ...), `<sequence>.NEXTVAL`,
+  `$x` / `$1` and `@@x`, a control character (other than tab, line feed, carriage
+  return), an unquoted name with `$$` or a non-ASCII character, and a statement over
+  32 KiB, 200 CTEs or 300 table references. `CURRENT_DATE` / `CURRENT_TIME` /
+  `CURRENT_TIMESTAMP` stay allowed. Rewrite the query (quote the name, drop the
+  function); the refusal does not say which rule it hit (go-monorepo #687, AJDA-3729).
+- **`workspace query` on a governed workspace: `503` "Row-level security could not
+  be applied to this workspace"** *(since vNEXT)* -- the enforcement itself failed
+  (engine or policy store unavailable, an engine failure). Retryable: repeat the
+  query; it is not a policy decision and nothing was run unfiltered.
 
 ---
 
@@ -562,7 +593,8 @@ kbagent --json rls schema --project prod
 - [gotchas.md](gotchas.md) -- search "rls" for the full list, version-tagged.
 - One `rls-policy` object per protected table, never one blob per project.
 - Every policy a project can list applies to it -- an `organization` policy
-  governs the table in every project of the organization.
+  governs the table in every project of the organization, except where a workspace
+  binding or a Data App's policy lists leave it out.
 - `--scope project` does not exist anywhere in this command group. This is
   intentional, not a missing feature -- see the Query Service RFC (go-monorepo,
   `docs/rfc/query-service-rls-cls`).

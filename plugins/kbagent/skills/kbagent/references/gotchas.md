@@ -2155,7 +2155,7 @@ project feature and no step-up, but the stack's Connection must accept the type 
 validation error naming the allowed `loginType` values): try it, do not assume. `--governed` with `--ui` and
 `--governed` on BigQuery are `INVALID_ARGUMENT` (exit 2); nothing is created in either case. A stack whose Connection ignores the type and answers a workspace with a login fails with `API_ERROR`: the workspace is deleted and the sandbox config trashed (`details.workspace_id`, `details.workspace_rolled_back`), so a credentialed workspace is never reported as governed. The REST
 route `POST /workspaces/{project}` takes `governed: true`. `workspace list` shows the workspace with login type
-`governed` and `qs_compatible` true: Query Service reads it.
+`governed` and `qs_compatible` true: Query Service reads it. `workspace list --qs-compatible` also requires `read_only` true (the API's `readOnlyStorageAccess`), so it lists a governed workspace only when the API reports that.
 
 ## `workspace create --ui` cannot produce a UI-visible SQL workspace; a failed create no longer leaves a sandbox config behind
 
@@ -7414,7 +7414,7 @@ governed-workspace flow.
 - **Scope is `targeted` unless you pass `--scope organization`; there is no `project` scope.** `targeted`
   (the metastore schema's own default) governs the owning project plus the `--target-project` grants.
   `organization` governs the table in EVERY project of the organization where it is enforced: the enforcement applies every policy the metastore lists for a project and does not re-check
-  the owner, so an organization policy is never "only where it matches". Every listed policy applies to
+  the owner, so an organization policy is never "only where it matches" (only a workspace binding or a Data App's `rlsPolicies` / `clsPolicies` can leave it out). Every listed policy applies to
   the listing project. `--scope organization` is destructive-class (`rls.create --scope organization` /
   `cls.create --scope organization` in `FLAG_ESCALATIONS`).
 - **Who may write.** A project admin (master token, admin role) may create/update/delete `targeted`
@@ -7443,7 +7443,8 @@ governed-workspace flow.
   `principal`, `principals` or IdP `groups` (exact strings, any listed group matches). Within a policy,
   every rule matching one identity applies: RLS conditions combine with OR, CLS `visible_columns` are
   united -- so one identity in several rules is no longer an error. Several policies on one table combine
-  with AND (CLS: intersection), so an added policy can only narrow access; a reader with no identity is
+  with AND (CLS: intersection), so a policy added to a table that is already readable narrows access (a
+  workspace binding that leaves a policy out loosens it again); a reader with no identity is
   always refused. RLS `--default` is the condition for
   identities no rule matches (absent = an ordinary reader gets no rows; `{"false": true}` = no rows); an `update` cannot remove a
   default (recreate the policy). `value: {"$identity": "email"}` and `values: {"$identity": "groups"}` are
@@ -7475,8 +7476,8 @@ governed-workspace flow.
 - **The `--dry-run` preview follows the enforcement's rendering but is not the enforcement.** Columns
   are quoted per dialect (`"col"` / `` `col` ``, so matching is case-exact), booleans render
   `TRUE`/`FALSE`, `$identity` placeholders `<identity.email>` / `(<identity.groups>)`, a default as
-  `default_preview`. The compiler that decides what a query returns is `keboola-mcp-server`'s
-  `rls.py::_compile_primitive` (sqlglot).
+  `default_preview`. The compiler that decides what a query returns is the Query Service policy engine's
+  `services/query/policy-engine/keboola_sql_policy/rls.py::_compile_primitive` in go-monorepo (sqlglot).
 - **`rls update` sends a partial update (`PATCH`) of only the changed keys.** It still reads the policy
   first: the metastore's PATCH validates only the keys it receives, so kbagent validates the MERGED
   policy (and builds the `--dry-run` preview from it). A stored key the update does not name and concurrent
@@ -7515,8 +7516,8 @@ governed-workspace flow.
 
 - A `policy-binding` restricts one governed workspace to some of the project's rls/cls policies. It is
   named by the workspace KID `KID:<stack>:project-<id>:workspace-<id>` (no branch segment). **No binding =
-  the workspace gets every policy of the project**; a binding only narrows, it never grants (a governed
-  workspace is deny-by-default anyway). Query Service re-reads it on every governed query, so `bind` /
+  the workspace gets every policy of the project**; a binding is an allowlist: it never opens a table that none of its policies covers (a governed
+  workspace is deny-by-default), but a policy it leaves out stops applying, also an `organization` one, so it can loosen access. Binding only `--cls-policy` drops every `rls-policy` (the readers a cls-policy names get every row of its tables); binding only `--rls-policy` drops every `cls-policy` (every column). Query Service re-reads it on every governed query, so `bind` /
   `unbind` apply to the next query.
 - **`--stack-id` (env `KBAGENT_STACK_ID`) is required and kbagent cannot check it.** No Storage, Manage or
   Connection API exposes the stack segment; it must equal Query Service's `QUERY_RLS_STACK_ID` (AWS dev:

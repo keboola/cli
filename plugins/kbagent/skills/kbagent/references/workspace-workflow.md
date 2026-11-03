@@ -117,7 +117,9 @@ kbagent --json workspace detail --project ALIAS --workspace-id WS_ID            
 ```
 
 There is no password or key to save. `workspace password` and a direct login are refused; read tables through
-Query Service (`workspace list --qs-compatible` lists it when it has read-only storage access). See gotchas.md
+Query Service. It is `qs_compatible` in `workspace list` / `workspace detail`; `workspace list --qs-compatible`
+additionally requires `read_only` (read-only storage access, as the API reports it), so check `read_only` if the filter does not
+list it. See gotchas.md
 "`workspace create --governed`".
 
 ## Load types: clone / copy / view

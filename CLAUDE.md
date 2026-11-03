@@ -1434,7 +1434,9 @@ kbagent rls bindings-sweep --project P [--older-than DAYS] [--dry-run | --yes]
 # rls bind/unbind/bindings/bindings-sweep: a `policy-binding` metastore object restricts ONE governed
 #   workspace to some of the project's rls/cls policies; named by the workspace KID
 #   `KID:<stack>:project-<id>:workspace-<id>`. No binding = the workspace gets EVERY policy of the
-#   project; a binding only narrows, never grants; Query Service re-reads it on every governed query,
+#   project; a binding is an allowlist: it never opens a table none of its policies covers, but a policy it
+#   leaves out (an organization one too) stops applying, so it can loosen access (a cls-only binding drops
+#   every rls-policy: all rows for the readers a cls-policy names); Query Service re-reads it on every governed query,
 #   so a change applies to the next query. `bind` is an idempotent upsert (PUT replaces both lists),
 #   validates first (>=1 policy, every UUID readable as an rls/cls policy of the project, the workspace
 #   exists in production or a dev branch; a non-governed login type is only a warning) and prints the
@@ -1458,7 +1460,8 @@ kbagent rls bindings-sweep --project P [--older-than DAYS] [--dry-run | --yes]
 # rls: row-level security policy authoring, metastore-backed (`rls-policy` object type,
 #   one object per protected table, named by it). SCOPE: `targeted` by default (the schema's own
 #   default: the owning project plus --target-project grants); `--scope organization` governs the
-#   table in EVERY project of the org (the enforcement applies every listed policy) and is
+#   table in EVERY project of the org (the enforcement applies every listed policy; only a workspace
+#   binding or a Data App's policy lists can leave it out) and is
 #   destructive-class (FLAG_ESCALATIONS); there is no project scope. WHO: a project admin may
 #   write `targeted` policies of its own project without grants; grants and organization scope
 #   need the organization-admin role (403 otherwise). Enforced by the Query Service policy engine on a
@@ -1467,10 +1470,11 @@ kbagent rls bindings-sweep --project P [--older-than DAYS] [--dry-run | --yes]
 #   readers by `subjects` (`<idp>|<sub>`; an administrator behind a Storage token is `keboola|<user id>`) or IdP `groups`,
 #   never by email (`principal`/`principals` are refused with INVALID_ARGUMENT, exit 2; stored 1.0.0/1.1.0 policies still show them, flagged legacy); within a policy every rule matching one
 #   identity applies and the conditions combine with OR; several policies on one table combine
-#   with AND (an added policy only narrows); a reader with no identity is always refused;
+#   with AND (a policy added to an already readable table narrows it; a binding that leaves one out loosens it again); a reader with no identity is always refused;
 #   the wildcard `"*"` (sole entry of `subjects`/`groups`) matches every identified reader and is how a table is opened to everyone under default deny; in a governed workspace
-#   a table with no rls-policy is not readable (an ordinary reader gets an empty result, an
-#   administrator behind a Storage token the 403 refusal);
+#   a table with no rls-policy and no cls-policy is not readable (an ordinary reader gets an empty result, an
+#   administrator behind a Storage token the 403 refusal; a cls-policy alone opens the table for the readers it
+#   names: all rows, its columns);
 #   `--default` is the condition for an identified reader no rule matches (absent = no rows;
 #   {"false": true} = no rows; to remove a default, recreate the policy). `dialect` is left out of a
 #   new policy unless --dialect is passed (optional from schema 1.1.0; the engine does not read it);

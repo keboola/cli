@@ -9,7 +9,8 @@ governed workspace together with its binding, so kbagent never writes an app KID
 and leaves alone the ones it finds). Query Service reads a binding on every governed query:
 
 - a KID with no binding gets EVERY policy of the project;
-- a KID with a binding gets only the listed policies -- a binding narrows, it never grants.
+- a KID with a binding gets only the listed policies: an allowlist that never opens a table no listed
+  policy covers, but a policy it leaves out stops applying, so it can loosen access.
 
 The stack segment is not exposed by any API kbagent can call (Query Service takes it from its own
 configuration), so the caller passes it. The metastore exposes no reverse-reference lookup: whether

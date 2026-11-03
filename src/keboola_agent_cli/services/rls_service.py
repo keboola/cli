@@ -24,7 +24,7 @@ Policy schema 1.2.0 (the metastore default where it is deployed): a rule selects
 ``principal`` / ``principals`` of stored policies are read, not authored; within a policy every rule
 matching one identity applies and the conditions combine with OR (so one
 identity in several rules is fine); several policies on one table combine
-with AND, so an added policy can only narrow access; an RLS ``default``
+with AND, so a policy added to an already readable table narrows access; an RLS ``default``
 covers an identified reader no rule matches (absent = an ordinary reader gets no rows). A dialect other than the project
 backend is refused here before any write; ``dialect`` is optional from schema 1.1.0 on and is
 left out unless ``--dialect`` is passed, so a policy (an ``organization`` one above all) does not

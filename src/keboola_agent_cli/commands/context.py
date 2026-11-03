@@ -1582,17 +1582,20 @@ Author `rls-policy` metastore objects: one object per protected table, a
 declarative condition primitive per rule (never free-text SQL). Policy schema
 1.2.0: a rule selects readers by `subjects` (`<idp>|<sub>`; an administrator behind a Storage token is `keboola|<user id>`) or IdP `groups`, never by email (principal/principals are refused, exit 2; stored legacy policies are still shown);
 within a policy every rule matching one identity applies and the conditions
-combine with OR; several policies on one table combine with AND (an added
-policy only narrows); a reader with no identity is always refused; the
+combine with OR; several policies on one table combine with AND (a policy added
+to an already readable table narrows it; a workspace binding that leaves one out
+loosens it again); a reader with no identity is always refused; the
 wildcard `"*"` (sole entry of `subjects`/`groups`) matches every
 identified reader and is how a table is opened to everyone under default deny.
 In a governed workspace (the platform denies by default, admins never exempt)
-a table with no policy (rls or cls) is refused. An optional policy `default` covers an
+a table with no policy (rls or cls) is refused, while a cls-policy alone opens
+the table for the readers it names (all rows, its columns). An optional policy `default` covers an
 identified reader no rule matches (absent = refused). Same metastore/master-token
 requirements as Semantic Layer.
 **Scope**: `targeted` by default (the owning project plus --target-project
 grants); `--scope organization` governs the table in EVERY project of the
-organization (destructive-class, organization-admin only) -- use it only
+organization (a workspace binding or a Data App's policy lists can leave it out;
+destructive-class, organization-admin only) -- use it only
 when the user asks for org-wide. There is NO project scope. A project admin
 may write `targeted` policies of its own project without grants; grants and
 organization scope need the organization-admin role (403 otherwise).
@@ -1605,7 +1608,8 @@ NOT_FOUND schema-fetch error -- expected there, not a kbagent bug.
 authors policies. Query Service enforces them (its policy-engine sidecar) on a governed
 workspace (`workspace create --governed`, then `workspace load` and
 `workspace query`); it always enforces a governed workspace, whatever the project.
-The MCP server creates such a workspace for its `query_data` tool. An ordinary reader
+In a project with the `row-level-security` feature the MCP server creates such a
+workspace for its `query_data` tool. An ordinary reader
 who may not read a table (no policy on it, or no rule selects them) gets an empty result;
 an administrator behind a Storage token gets the refusal `Row-level security does not
 allow this query`. The identity that queries needs a matching rule.
@@ -1642,8 +1646,9 @@ allow this query`. The identity that queries needs a matching rule.
   rls bind
     Restricts ONE governed workspace to the listed policies (a `policy-binding`
     named by the KID `KID:<stack>:project-<id>:workspace-<id>`, printed). No
-    binding = the workspace gets every policy of the project; a binding only
-    narrows; Query Service re-reads it on every query (since vNEXT). Upsert:
+    binding = the workspace gets every policy of the project; a binding is an
+    allowlist (a policy it leaves out stops applying, so it can loosen access; a
+    cls-only binding drops every rls-policy); Query Service re-reads it on every query (since vNEXT). Upsert:
     replaces both lists. --stack-id (env KBAGENT_STACK_ID) is required -- no
     API exposes it; it must equal Query Service's QUERY_RLS_STACK_ID (AWS dev:
     dev-keboola-aws-eu-west-1), or nothing reads the binding and the workspace
