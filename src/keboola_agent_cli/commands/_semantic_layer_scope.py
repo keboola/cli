@@ -7,7 +7,7 @@ resolution and metastore calls live in
 
 Verbs follow the CLI spec (#791): ``get`` reads one attribute, ``add`` /
 ``remove`` attach / detach a target project, ``set`` writes the scope,
-``request-create`` / ``request-delete`` / ``request-list`` manage the
+``request-create`` / ``request-cancel`` / ``request-list`` manage the
 elevation request.
 """
 
@@ -49,7 +49,7 @@ _CONTEXT_ID = typer.Option(..., "--context-id", help="Item UUID")
 _TARGET_PROJECT = typer.Option(
     [],
     "--target-project",
-    help="Project alias or ID (repeatable, or comma-separated).",
+    help="Project alias or ID (repeat for more projects).",
 )
 
 
@@ -237,8 +237,8 @@ def scope_request_create(
     formatter.output(result, _print_scope_status)
 
 
-@scope_app.command("request-delete")
-def scope_request_delete(
+@scope_app.command("request-cancel")
+def scope_request_cancel(
     ctx: typer.Context,
     project: str = _PROJECT,
     type_: ItemType = _TYPE,

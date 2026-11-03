@@ -2,7 +2,7 @@
 
 Several commands keep going when one item fails: ``sync push`` collects a
 failed config into ``result["errors"]``, ``org setup`` into
-``projects_failed``, ``project invite --from-csv`` into ``failed``. That
+``projects_failed``, ``project invite --file`` into ``failed``. That
 resilience is deliberate -- one bad item must not abort the batch -- but the
 command layer then printed a fixed green "Success" line and exited 0 anyway.
 A run where EVERY item failed was indistinguishable, by exit code, from a
@@ -638,7 +638,7 @@ class TestOrgSetup:
 
 
 class TestProjectInviteBulk:
-    """``project invite --from-csv`` reported ``failed=N`` and exited 0."""
+    """``project invite --file`` reported ``failed=N`` and exited 0."""
 
     def _invoke(self, tmp_path: Path, failed: int, dry_run: bool = False) -> Any:
         store = _store(tmp_path / "config")
@@ -673,7 +673,7 @@ class TestProjectInviteBulk:
                     str(tmp_path / "config"),
                     "project",
                     "invite",
-                    "--from-csv",
+                    "--file",
                     str(csv_path),
                     *(["--dry-run"] if dry_run else []),
                 ],
@@ -1009,7 +1009,8 @@ class TestSemanticLayerBuild:
     def _invoke(self, tmp_path: Path, result: dict[str, Any], extra: list[str]) -> Any:
         mock = MagicMock()
         mock.build_model.return_value = result
-        args = ["semantic-layer", "build", "--project", "prod", "--tables", "in.c-a.t1,in.c-a.t2"]
+        args = ["semantic-layer", "build", "--project", "prod", "--table-id", "in.c-a.t1"]
+        args += ["--table-id", "in.c-a.t2"]
         return _invoke_with(tmp_path, "SemanticLayerService", mock, [*args, *extra])
 
     def test_table_left_out_exits_1_and_is_listed(self, tmp_path: Path) -> None:
@@ -1087,7 +1088,7 @@ class TestStorageDescribeBatchAndMigrate:
             "errors": errors,
             "error_count": len(errors),
         }
-        args = ["storage", "describe-batch", "--project", "prod", "--from-file", str(batch_file)]
+        args = ["storage", "describe-batch", "--project", "prod", "--file", str(batch_file)]
         return _invoke_with(
             tmp_path, "StorageService", mock, [*(["--json"] if json_mode else []), *args]
         )

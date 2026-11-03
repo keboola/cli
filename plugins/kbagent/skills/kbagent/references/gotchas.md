@@ -13,21 +13,24 @@ Versioning convention:
 
 ## Forms that work on 0.x and 1.x
 
-From the release of kbagent 1.0.0 until its migration date (28 days later), the user can run 0.x (0.100.0 and later) or 1.x. Write every command so it works on both. `kbagent --version` tells which one runs. The migration page is `docs/migrate-to-1.0.md` in the repository.
+From the release of kbagent 1.0.0 until its migration date (28 days later), the user can run 0.x or 1.x. Write every command so it works on both. `kbagent --version` tells which one runs. The migration page is `docs/migrate-to-1.0.md` in the repository.
 
+- **Option and command names: use the 1.x names.** They work on 0.100.5 and later and on 1.x. When `kbagent --version` shows a 0.x release older than 0.100.5, ask the user to run `kbagent update` first: it stays on 0.x and installs 0.100.5 or a later 0.x release. The items below that name a difference still apply on 0.100.5.
+- **`dev-portal create/patch`**: give the payload with `--data-file PATH`. Inline JSON in `--data` is 1.x only (on 0.x `--data` is a path).
+- **`sharing share --target-project`**: give numeric project IDs. A registered alias is 1.x only.
+- **List options**: repeat the option once per value (`--target-project 11 --target-project 22`). This works on both; 1.x refuses a comma in a value. Write the long name: `semantic-layer import/promote --type` has no `-t` on 0.x.
+- **File input**: never give `@path` or a bare `-` to an inline option (`--configuration @f.json`, `--body -`). Use the `--X-file` option (`--configuration-file`, `--body-file`, `--definition-file`, ...); `-` as its path reads stdin. 1.x refuses `@path` and `-` inline with an error that names `--X-file`.
 - **Fan-out reads** (`search`, `billing credits`, `component list`, `config list`, `config search`, `data-app list`, `job list`, `storage buckets`, `storage tables`, `sharing list`, `sharing edges`, `flow list`, `schedule list`, `schedule find`, `notification list`, `branch list`, `workspace list`, `project status`): always give `--project P`, or `--all-projects` for every project. An omitted `--project` reads all projects on 0.x and only the active project on 1.x.
 - **Every command that uses a project gets `--project P`**, reads and writes alike. On 0.x most commands require it, and on 1.x a command without it silently uses the active project, which another terminal or agent conversation can change. This rule stays after the migration date too.
 - **Root flags** (`--json`, `--deny-writes`, `--deny-destructive`) go before the subcommand: `kbagent --json config list --project P`. 0.x refuses them after it.
 - **Help**: `--help`, not `-h`. Never run a bare group (`kbagent storage`): 0.x exits 0 with no output, 1.x exits 2.
-- **Options**: never give a single-value option twice (1.x refuses it on write, destructive and admin commands). A list option such as `sharing share --target-project-ids` gets one comma list (`11,22`): 0.x keeps only the last of repeated values.
-- **Confirmations**: run a destructive command under `--json` (consent on both), or with `--yes` where 0.x has it. `branch delete` and `workspace delete` have `--yes` and `--dry-run` only on 1.x: use `kbagent --json branch delete --project P --branch ID`. Never pipe `y` into a prompt: 1.x refuses without a terminal.
-- **Text from a file**: `--file` / `--sql-file`, never `--text @file` (1.x refuses it when the file exists, 0.x stores the literal text).
+- **Single-value options**: never give one twice (1.x refuses it on write, destructive and admin commands).
+- **Confirmations**: run a destructive command under `--json` (consent on both), or with `--yes` where 0.x has it. `branch delete` and `workspace delete` have `--yes` and `--dry-run` only on 1.x: use `kbagent --json branch delete --project P --branch ID`. `sharing unlink` takes `--yes` and `--dry-run` on both; *(updated vNEXT)* only 1.x asks for confirmation. Never pipe `y` into a prompt: 1.x refuses without a terminal.
 - **Long option names**: write `--project`, `--limit`, `--column`, not short flags. On 0.x most commands have no `-p`, and 1.x removes the short flags listed in "One short flag per long option" below.
 - **Results**: read failed items and the outcome from `--json` (`errors[]`, `failed[]`, `exit_code`, `error.code`), not from human output or the exit code alone. The `Error:` lines, the headline and several exit codes differ between the majors (migration page, rows 15, 21 and 31).
 - **Removed keys**: read the error text of a failed item from `message` and fall back to `error` (0.x has only `error` or `reason`). Treat `source` `"pin"` (0.x) and `"active_project"` (1.x) of `project current` as the same. The other removed keys are in "Keys removed from `--json` output in 1.0.0" below.
-- **REST** (`kbagent http`, `kbagent serve`): send `project=` or `all_projects=true` on list routes, and `branch_id` on the routes that use the active branch on 1.x. The 4 partial-update routes have no form that works on both: 0.x has only `PUT` there, and 1.x has only `PATCH` (*(updated vNEXT)* its `PUT` answers HTTP 405). Check `kbagent --version` first. `PUT .../variables` with `replace: true` (the full replace) works on both.
-- **Project alias and all projects**: `project add --alias A`, `project create --alias A` and `project refresh --all-projects` work on 0.100.3 and later and on 1.x. *(updated vNEXT)* 1.x removes the old names `--project` / `-p` and `--all`. On 0.100.0 to 0.100.2, ask the user to update to the newest 0.x release (`kbagent update`) first.
-- **Removed forms** *(updated vNEXT)*: never use `stream delete --force`, `semantic-layer import --yes`, `--id` on `merge-request` or `agent` commands, or `branch merge`. `semantic-layer reference-data get` and `delete` have no form that works on both: 0.x takes only `--id`, and 1.x takes only `--reference-data-id`. Check `kbagent --version` first. See "1.0.0 removes the deprecated forms" below.
+- **REST** (`kbagent http`, `kbagent serve`): send `project=` or `all_projects=true` on list routes, and `branch_id` on the routes that use the active branch on 1.x. The 4 partial-update routes have no form that works on both: 0.x has only `PUT` there, and 1.x has only `PATCH` (*(updated vNEXT)* its `PUT` answers HTTP 405). Check `kbagent --version` first. `PUT .../variables` with `replace: true` (the full replace) works on both. The REST route of `sharing unlink` has no `dry_run` on 0.x.
+- **Removed forms** *(updated vNEXT)*: 1.x refuses the old names, so never use them. This includes `stream delete --force` (use `--yes`), `semantic-layer import --yes` (omit it), `--id` on `merge-request`, `agent` and `semantic-layer reference-data` commands, the positional `TASK_ID` / `RUN_ID` of `agent` commands and `SOURCE_ID` of `stream detail/delete`, `branch merge`, and `semantic-layer scope request-delete` (use `request-cancel`). See "1.0.0 removes the deprecated forms" below.
 - **Updates**: `kbagent update` stays on the running major. Ask the user before `kbagent update --major`.
 
 ## Keys removed from `--json` output in 1.0.0
@@ -556,7 +559,7 @@ These lists keep `error`, because their entries are not failed items with an err
 
 - **`auth login` prints its notices on stderr in every mode.** The device-login panel (verification URL and user code), the wait and fallback notices, the `auth register-projects` hint and the picker question go to stderr. The login result stays on stdout. Before, human mode printed the notices on stdout. Capture `2>&1` when you relay the URL and code.
 - **`auth login --no-open`** uses the device-code flow and opens nothing; the result has `method: "device"` and `fallback_reason: "--no-open is set."`. Without it, `auth login` opens the browser as before, also under `--json` and without a terminal (an exception to the rule that a command opens no browser there). A foreground `--json auth login` blocks until the user approves in the browser (or on the device page with `--no-open`), so run it in a background shell and check `kbagent --json auth status`.
-- **A command that processes several items ends its human output with one headline** on stdout, after the result (notices, hints and panels go to stderr): `Success: ...` or `Failed: N of M <noun>. ...` (the bulk `storage` deletes, `storage file-tag`, `storage describe-batch` and `describe-migrate`, `job terminate`, `sync push`/`clone` and the `--all-projects` runs, `org setup`, `project refresh`, `project invite --from-csv`, `workspace gc`, `flow schedule-remove`, `semantic-layer build`/`import`/`promote`/`edit metric`, `auth register-projects`, `token list --with-last-used`, `config detail` with several `--project`, and the 18 fan-out reads such as `config list` and `job list`). One form: `Success: 2 table(s) deleted.`, `Failed: 1 of 3 projects. 2 project(s) read.` A failed item is one `Error: <item>: <message>` line on stdout, before the headline (before: `Failed: <item>: ...` in the bulk `storage` commands, and a `Warning:` line on stderr in the fan-out reads, `config detail` with several `--project`, `sync push`/`clone` and `flow schedule-remove`). stderr holds only notices. Read failed projects from `--json` (`errors[]`), not from human output. `config detail` with several `--project` and `token list --with-last-used` now exit 1 when a project or a last-used lookup failed. The exit code and the `--json` output do not change. Do not parse human output: use `--json` and `exit_code`.
+- **A command that processes several items ends its human output with one headline** on stdout, after the result (notices, hints and panels go to stderr): `Success: ...` or `Failed: N of M <noun>. ...` (the bulk `storage` deletes, `storage file-tag`, `storage describe-batch` and `describe-migrate`, `job terminate`, `sync push`/`clone` and the `--all-projects` runs, `org setup`, `project refresh`, bulk `project invite`, `workspace gc`, `flow schedule-remove`, `semantic-layer build`/`import`/`promote`/`edit metric`, `auth register-projects`, `token list --with-last-used`, `config detail` with several `--project`, and the 18 fan-out reads such as `config list` and `job list`). One form: `Success: 2 table(s) deleted.`, `Failed: 1 of 3 projects. 2 project(s) read.` A failed item is one `Error: <item>: <message>` line on stdout, before the headline (before: `Failed: <item>: ...` in the bulk `storage` commands, and a `Warning:` line on stderr in the fan-out reads, `config detail` with several `--project`, `sync push`/`clone` and `flow schedule-remove`). stderr holds only notices. Read failed projects from `--json` (`errors[]`), not from human output. `config detail` with several `--project` and `token list --with-last-used` now exit 1 when a project or a last-used lookup failed. The exit code and the `--json` output do not change. Do not parse human output: use `--json` and `exit_code`.
 - **`--help` names the environment variable of an option** (`[env var: KBAGENT_CONFIG_DIR]` on `--config-dir`, `KBAGENT_CONVERSATION_ID` on `--conversation-id`). It never shows the value. The command reference of a release lists every variable that kbagent reads.
 - **The help of every command with `--wait` states the default** ("Default: no wait." or "Default: wait.") and the default `--timeout` in seconds. The defaults did not change: 300 for `job run` and the `data-app` waits, 600 for the Storage import waits.
 
@@ -610,11 +613,19 @@ These lists keep `error`, because their entries are not failed items with an err
   - `stream delete --force`: use `--yes`.
   - `semantic-layer import --yes` / `-y`: it had no effect. Omit it.
   - `--id` on the 10 `merge-request` commands that take a merge request: use `--merge-request-id`.
-  - `--id` on the 7 `agent` commands that take a task: use `--task-id` or the positional `TASK_ID`.
-  - `--id` on `semantic-layer reference-data get` and `delete`: use `--reference-data-id`. On 0.x only `--id` exists, so check `kbagent --version` first.
+  - `--id` on the 7 `agent` commands that take a task: use `--task-id`.
+  - The positional `TASK_ID` of `agent show`, `update`, `delete`, `run` and `runs`, and the positional `TASK_ID` / `RUN_ID` of `agent run-detail` and `run-events`: use `--task-id` / `--run-id`.
+  - `--id` on `semantic-layer reference-data get` and `delete`: use `--reference-data-id`.
+  - The positional `SOURCE_ID` of `stream detail` and `stream delete`: use `--source-id`. `stream detail --name` also matches a source id.
+  - `storage describe-batch --from-file` and `project invite --from-csv`: use `--file`.
+  - The file-input options (spec I1, I2): `lineage show/info/server --load` / `-l` use `--file`; `project description-set`, `storage describe-bucket` and `describe-table` `--text` / `--file` / `--stdin` use `--description` / `--description-file`; `branch metadata-set` `--text` / `--file` / `--stdin` use `--value` / `--value-file`; `workspace query --file` uses `--sql-file`; `agent create/test --from-file` uses `--definition` / `--definition-file`; `flow new/update/validate --file` uses `--definition` / `--definition-file`; `encrypt values --input` uses `--values` / `--values-file`; `data-app secrets-set --secrets-file` uses `--secret-file`; `dev-portal create/patch --data FILE` uses `--data-file FILE` (`--data` is now inline JSON). `-` reads stdin in every `--X-file` option; there is no `--stdin` flag.
+  - `@file` and `-` inline in `config update/new --configuration`, `config row-create/row-update --configuration`, `config state-set --state`, `component sync-action --config-data`, `http post/patch --body`, `merge-request resolve --resolved`, `transformation edit --storage` and `agent run --runtime-input`: use the sibling `--configuration-file`, `--state-file`, `--config-data-file`, `--body-file`, `--resolved-file`, `--storage-file`, `--runtime-input-file`.
+  - `storage create-table --not-null`: use `--not-null-column` (repeatable). `storage add-column --not-null` (a flag) does not change.
+  - The plural list options (spec A4: a list option has a singular name and is repeated once per value): `org setup --project-ids` (use `--project-id`), `sharing share --target-project-ids` (use `--target-project`, which also takes a registered alias) and `--target-users` (use `--target-user`), `semantic-layer add constraint --metrics` (use `--metric`), `semantic-layer edit constraint --new-metrics` (use `--new-metric`), `semantic-layer build --tables` and `workspace load --tables` (use `--table-id`), `semantic-layer import --types` and `promote --types` (use `--type` / `-t`), and `--columns` of `storage download-table`, `storage unload-table` and `token list` (use `--column`).
+- **`semantic-layer scope request-delete` is renamed to `semantic-layer scope request-cancel`.** The command cancels a pending scope-elevation request; it deletes no Keboola object. The old name is a usage error that names the new one. The permission key is `semantic-layer.scope.request-cancel`: a persisted policy that names `semantic-layer.scope.request-delete` matches nothing on 1.x. The REST route `DELETE /semantic-layer/scope/{context_id}/elevation-request` does not change.
 - **`branch merge` is removed.** It only printed the merge URL of the Keboola UI and reset the active branch. Use `kbagent merge-request` (a project with the `branches-merge-requests` feature), or merge in the Keboola UI. Over `kbagent serve`, `GET /branches/{project}/merge-url` is removed too.
 - **REST:** `PUT` on `/semantic-layer/items/{kind}/{name}`, `/merge-requests/{project}/{merge_request_id}` and `/data-apps/{project}/{app_id}/secrets` answers HTTP 405, and the error message names `PATCH`. `PUT .../variables` without `replace: true` answers HTTP 405 too (use `PATCH` to merge). The body field `refresh_all` of `POST /org/refresh` answers HTTP 422 naming `all_projects`.
-- **Forms that work on 0.x and 1.x:** `--alias` and `--all-projects` (0.100.3 and later), `stream delete --yes`, `semantic-layer import` without `--yes`, `--merge-request-id` and `--task-id`.
+- **Every replacement above also works on 0.100.5 and later.** On an older 0.x, ask the user to run `kbagent update` first. The exceptions are in "Forms that work on 0.x and 1.x" at the top of this file.
 
 ## `--branch 0` is production in `job terminate`, `swap-tables`, `clone-table` and `create-table --source-branch-id`
 
@@ -626,14 +637,26 @@ These lists keep `error`, because their entries are not failed items with an err
 - **`storage create-table --source-branch-id 0` reads the source table from production.** In a production request kbagent leaves `source.branchId` out (the API then uses the request branch, which is production). In a dev-branch request (`--branch ID` or an active branch) it sends the default branch ID. Before, it sent `source.branchId: 0`. Both cases rely on an omitted `source.branchId` meaning the request branch, as kbagent's create-table code already assumed; the dev-branch case is not verified against a live BigQuery project. The `Source:` line and the `source` record in `targets` now name production.
 - A project that reports no default branch fails `job terminate --branch 0`, `swap-tables --branch 0` and a dev-branch `create-table --source-branch-id 0` with `CONFIG_ERROR` (exit 5, HTTP 400 over `kbagent serve`) that names `kbagent branch list`.
 
-## List options repeat, `@<file>` in free text is refused, a bad input value is `INVALID_ARGUMENT`
+## List options take one value per occurrence, `@<file>` in free text is refused, a bad input value is `INVALID_ARGUMENT`
 
 *(since vNEXT)* (CLI-48, #791)
 
-- **Nine list options are repeatable and still take a comma list:** `org setup --project-ids`, `sharing share --target-project-ids` and `--target-users`, `semantic-layer add constraint --metrics`, `edit constraint --new-metrics`, `build --tables`, `import --types`, `promote --types` and `schema --type`. `--target-project-ids 11 --target-project-ids 22,33` shares with 11, 22 and 33. Before, the option kept only its last value (22,33). A value given twice is used once. `sharing share` adds `target_project_ids` or `target_users` to `data`.
-- **`--text` of `project description-set`, `storage describe-bucket`, `storage describe-table` and `branch metadata-set`, and `transformation create --sql`, refuse `@` followed by the path of an existing file** (a relative path is relative to the current directory): `INVALID_ARGUMENT`, exit 2, and the message names the file option (`--file`, `--sql-file`). Before, kbagent stored the text `@notes.md`. Pass the file with the file option. To store text that starts with `@` while a file of that name exists, write the text to a file and pass that file with the file option. `@` followed by anything that is not a file is still stored as text. Only these 5 options refuse `@<file>`; every other free-text option (`--description`, `--change-description`, `--prompt`, ...) still stores it as text.
-- **A bad input value is `INVALID_ARGUMENT`, exit 2, and the message names the option, never a traceback:** a non-integer in `org setup --project-ids` or `sharing share --target-project-ids` (before: a traceback with exit 1, or a usage error without `--json` output), a missing or bad `http post/patch --body` file, a binary or unreadable file in `--file`, `--sql-file`, `--configuration-file`, `workspace query --file`, `data-app git-credentials-create --public-key-file`, `lineage server --load` (a missing `--load` file stays `FILE_NOT_FOUND`), `dev-portal patch --value-file`, and a bad `dev-portal create/patch --data` file. A JSON option that already failed with exit 2 keeps its error code (`--configuration`, `--state`, `--config-data`: `VALIDATION_ERROR`; `encrypt values --input`: `INPUT_ERROR`; `agent --from-file` / `--runtime-input`: `INVALID_FORMAT`) and no longer crashes on a binary or unreadable file; so do `data-app create --description-file` (`READ_ERROR`, exit 1), `data-app secrets-set --secrets-file` (`DATA_APP_INVALID_SECRET`) and `semantic-layer reference-data set --members-file` (`VALIDATION_ERROR`).
+- **A list option is repeated once per value, and a comma in a value is refused:** `--target-project 11 --target-project 22` shares with 11 and 22. A value with a comma in an option of IDs or fixed values (`org setup --project-id`, `sharing share --target-project` and `--target-user`, the semantic-layer `--metric`, `--new-metric`, `--table-id`, `--type` and `--target-project`, `workspace load --table-id`, `--column` of `storage download-table`, `storage unload-table` and `token list`) is `INVALID_ARGUMENT`, exit 2, and the message names the option and says to repeat it once per value. Before, nine of these options took one comma string and kept only the last of repeated values. A value given twice is used once. `sharing share --target-project` takes a registered alias or a numeric project ID, like the semantic-layer `--target-project`. `sharing share` adds `target_project_ids` or `target_users` to `data`. Free-form options (`--set`, `--var`, `--op`, `--secret`, JSON, SQL, text) are not checked for a comma.
+- **`--description` of `project description-set`, `storage describe-bucket` and `storage describe-table`, `--value` of `branch metadata-set`, and `transformation create --sql`, refuse `@` followed by the path of an existing file** (a relative path is relative to the current directory): `INVALID_ARGUMENT`, exit 2, and the message names the file option (`--description-file`, `--value-file`, `--sql-file`). On 0.x kbagent stores the text `@notes.md`. Pass the file with the file option. To store text that starts with `@` while a file of that name exists, write the text to a file and pass that file with the file option. `@` followed by anything that is not a file is still stored as text. Only these 5 options refuse `@<file>`; every other free-text option (`--change-description`, `--prompt`, ...) still stores it as text. (JSON and YAML options refuse `@file` and `-` for another reason: see "Input from files" below.)
+- **A bad input value is `INVALID_ARGUMENT`, exit 2, and the message names the option, never a traceback:** a non-integer in `org setup --project-id`, or a value of `sharing share --target-project` that is neither a registered alias nor a numeric project ID (before: a traceback with exit 1, or a usage error without `--json` output), a missing or bad `http post/patch --body` file, a binary or unreadable file in `--file`, `--sql-file`, `--configuration-file`, `workspace query --sql-file`, `data-app git-credentials-create --public-key-file`, `lineage server --file` (a missing `--file` stays `FILE_NOT_FOUND`), `dev-portal patch --value-file`, and a bad `dev-portal create/patch --data-file` file. A JSON option that already failed with exit 2 keeps its error code (`--configuration`, `--state`, `--config-data`: `VALIDATION_ERROR`; `encrypt values --values`: `INPUT_ERROR`; `agent --definition` / `--runtime-input`: `INVALID_FORMAT`) and no longer crashes on a binary or unreadable file; so do `data-app create --description-file` (`READ_ERROR`, exit 1), `data-app secrets-set --secret-file` (`DATA_APP_INVALID_SECRET`) and `semantic-layer reference-data set --members` / `--members-file` (`VALIDATION_ERROR`).
 - **`config update/new --configuration` and `--configuration-file`, `config row-create/row-update --configuration`, `config state-set --state` and `component sync-action --config-data` refuse JSON that is not an object** (for example `[1]`): `VALIDATION_ERROR`, exit 2. Before, the value went to the API.
+
+## Input from files: `--file`, or `--<field>` inline plus `--<field>-file`
+
+*(since vNEXT)* (#791)
+
+- **One rule, like `git commit -m TEXT` / `-F FILE`.** The main input file of a command is `--file PATH`. A JSON, YAML or text value is `--X` inline, and its sibling `--X-file PATH` reads a file. `-` as the path reads stdin. There is no `--stdin` flag; the secret options `--token-stdin`, `--password-stdin`, `--token-file`, `--token-env`, `--git-pat-file` and `--git-pat-env` do not change.
+- **`--X` and `--X-file` exclude each other.** Passing both is a usage error (exit 2) that names both options.
+- **`@` never reads a file.** An inline value `@path` or `-` is refused: `USAGE_ERROR` / `INVALID_ARGUMENT`, exit 2, and the message names `--X-file`. The error code of a bad value stays per command (`VALIDATION_ERROR`, `INPUT_ERROR`, `INVALID_FORMAT`).
+- **Renamed options:** `lineage show/info/server --load` / `-l` is `--file`. `--text` / `--file` / `--stdin` of `project description-set`, `storage describe-bucket` and `storage describe-table` is `--description` / `--description-file`. The same options of `branch metadata-set` are `--value` / `--value-file`. `workspace query --file` is `--sql-file`. `agent create/test --from-file` is `--definition` / `--definition-file`. `flow new/update/validate --file` is `--definition` / `--definition-file`. `encrypt values --input` is `--values` / `--values-file`. `data-app secrets-set --secrets-file` is `--secret-file`. `dev-portal create/patch --data` was a path and is now inline JSON, with `--data-file PATH` for a file.
+- **New file siblings of an inline option:** `config row-create/row-update --configuration-file`, `config state-set --state-file`, `component sync-action --config-data-file`, `http post/patch --body-file`, `merge-request resolve --resolved-file` (hand `merge-request diff --output FILE` back with `resolve --resolved-file FILE`), `transformation edit --storage-file`, `agent run --runtime-input-file`, and an inline `semantic-layer reference-data set --members JSON` next to `--members-file`. `--configuration-file` of `config update/new`, `--op-file`, `--sql-file` of `transformation create`, `data-app create --description-file` and `dev-portal patch --value-file` also take `-` now.
+- **Unchanged:** `storage upload-table --file`, `storage file-upload --file`, `dev-portal upload-icon --file`, `sync clone --bucket-map` / `--variable-values` / `--instance-rename`, `semantic-layer diff --file-a` / `--file-b`, the `--output*` options and the REST bodies of `kbagent serve`.
+- **On 0.x** (0.100.5 and later) the new names work too, and `@file` / `-` inline still work. Never use `@file` or `-` inline: 1.x refuses them. See "Forms that work on 0.x and 1.x" at the top of this file.
 
 ## The updater stays on the running major version; `kbagent update --major`
 
@@ -854,7 +877,7 @@ These lists keep `error`, because their entries are not failed items with an err
   the new alias. *(updated vNEXT)* The option is `--alias` (also on 0.100.3
   and later), and 1.0.0 removes `--project` of these two commands.
   `lineage show --project` filters the aliases inside an offline graph file.
-- **`project invite --from-csv` changed:** a `project` column value now
+- **`project invite --file` changed:** a `project` column value now
   follows the same rules -- an alias wins over a project ID, and an ID
   registered more than once fails that row with the list of aliases. Before,
   an all-digit value was always taken as an ID, and the first project with
@@ -897,7 +920,7 @@ These lists keep `error`, because their entries are not failed items with an err
   warning whose detail names the expected location. Repair: `semantic-layer
   export`, replace each dataset's `fqn` -- and the same string inside every
   metric `sql` -- with that table's `storage table-detail` `sql_path`, then
-  `semantic-layer import --file ... --types datasets,metrics --overwrite`.
+  `semantic-layer import --file ... --type datasets --type metrics --overwrite`.
   Do not just swap the database name: linked-bucket datasets need the schema
   changed too.
 
@@ -1376,19 +1399,19 @@ These lists keep `error`, because their entries are not failed items with an err
   1. `kbagent --json doctor` -> `checks[].details.tasks[]` for the affected
      task ids.
   2. Read that task's `action.params.input` from `<config_dir>/agents.json`
-     (or `kbagent --json agent show <id>`) -- those are the values to carry over.
+     (or `kbagent --json agent show --task-id <id>`) -- those are the values to carry over.
   3. Look the tool up in `docs/mcp-migration.md`, then
      `kbagent <native command> --help` -> map each input key to its flag. This
      is the step no tooling does for you; the naming differs per tool.
   4. `kbagent agent create --name ... --cron ... --type cli_command --argv ...`
-     with the result, verify it once with `kbagent agent run <new-id>`, then
-     `kbagent agent delete <old-id>`.
+     with the result, verify it once with `kbagent agent run --task-id <new-id>`, then
+     `kbagent agent delete --task-id <old-id>`.
 - **`agent update` CANNOT change a task's action** -- it patches name, cron,
   enabled/manual and the trigger only, so `--type` / `--argv` are not options
   there and exit 2. Migration therefore means create-new + delete-old, which
   has one trap: **the task id changes**. `Trigger.task_id` chains tasks by id,
   so if any OTHER task has `--trigger-task-id <old-id>`, repoint it with
-  `kbagent agent update <that-task> --trigger-task-id <new-id>` BEFORE deleting
+  `kbagent agent update --task-id <that-task> --trigger-task-id <new-id>` BEFORE deleting
   the old one, or the chain breaks silently. Check with
   `kbagent --json agent list` and grep the `trigger` blocks for the old id.
 - **`tool:read` / `tool:write` / `tool:destructive` permission patterns are
@@ -2513,7 +2536,7 @@ events and emits a final `done` SSE frame mirroring the same record.
   atomicity would require side-staging every cascade item, which is
   disproportionate for a rename. Recovery recipe: `kbagent
   semantic-layer validate` to surface the dangling refs, then
-  re-run each failed cascade via `edit constraint --new-metrics ...`.
+  re-run each failed cascade via `edit constraint --new-metric ...`.
 
 ## Removing a metric corrupts `DIM_METRIC_THRESHOLD` downstream
 
@@ -2543,7 +2566,7 @@ events and emits a final `done` SSE frame mirroring the same record.
   `get_component_detail` and `suggest_components` as of v0.41.0 --
   no arbitrary-JSON endpoint. So `kbagent semantic-layer build`
   falls back to a DETERMINISTIC heuristic builder that synthesises:
-  one dataset per `--tables` entry (FQN auto-derived from
+  one dataset per `--table-id` value (FQN auto-derived from
   `tableId`; `fields[]` role-classified via the same PK_/FK_/*_DATE/
   *_DT/numeric-amount-name heuristics as `add dataset --deep-fields`),
   one `COUNT(*)` metric per dataset, one glossary entry per table.
@@ -3546,7 +3569,7 @@ delete. Pass `--yes` to all of them in scripts.
   - `"This user is already a member of this project."` (active member)
 - `MemberService.invite()` translates both cases to `status="noop"` with
   `note="already_invited"` / `"already_member"` -- they are *not* exit-1
-  failures. Bulk runs (`--from-csv`) count them as `noop` in the summary, not
+  failures. Bulk runs (`--file`, `--from-csv` before vNEXT) count them as `noop` in the summary, not
   `failed`.
 - The 422 heuristic in pre-v0.29.0 orchestrator scripts (`invite_participants.py:25`)
   is **wrong** for this API. If you write a parallel implementation, key off
@@ -3560,7 +3583,9 @@ delete. Pass `--yes` to all of them in scripts.
 - The kbagent `ManageClient.update_project_member_role` method emits PATCH;
   any custom code re-implementing the call must do the same.
 
-## `project invite --from-csv` order is not deterministic
+## `project invite --file` order is not deterministic
+
+Before vNEXT the bulk option is `--from-csv`.
 
 - Bulk invitation parallelises via `ThreadPoolExecutor` (default 8 workers).
   The `rows[]` array in the result is in completion order, not CSV order.
@@ -3829,7 +3854,7 @@ Every error code has exactly one exit code and one `error.error_type` (since vNE
   succeeds; `--default flag=FALSE` fails with
   `storage.tables.definitionValidation`. The value is normalised to
   uppercase in storage but the input requires lowercase.
-- **`--not-null` / `--default` must reference a defined column.**
+- **`--not-null-column` (`--not-null` before vNEXT) / `--default` must reference a defined column.**
   Typos exit 2 (`INVALID_ARGUMENT`) before any API call.
 - **Dev-branch `create-table` auto-materializes the bucket** when the
   target bucket has not been written to in the branch yet (mirrors the
@@ -3890,7 +3915,7 @@ type inventory and examples.
   key). This is the supported way to repartition a populated BigQuery table; promote it
   with `storage swap-tables`. Mirrors keboola/connection#7697.
 - **`--column` and `--source-table-id` are mutually exclusive.** Supplying both, or
-  neither, exits 2 (`INVALID_ARGUMENT`) before any API call. `--not-null` / `--default`
+  neither, exits 2 (`INVALID_ARGUMENT`) before any API call. `--not-null-column` / `--default`
   attach to `--column` definitions, so they are also rejected in source mode.
 - **Partition/clustering flags also work on a plain `--column` create** (BigQuery only):
   `--time-partitioning-type` (DAY/HOUR/MONTH/YEAR; required when any `--time-partitioning-*`
@@ -4119,7 +4144,7 @@ that says `path: "parameters.tables"` would double-nest if copied verbatim.)
 
 - `--merge` deep-merges and preserves sibling keys; `--set` implies merge.
 - `--dry-run` shows the diff without applying.
-- Input can be inline JSON, `@file.json`, or stdin (`-`).
+- Input is inline JSON (`--configuration`), or a file or stdin (`-`) with `--configuration-file`. *(since vNEXT)* `--configuration @file` and `--configuration -` are refused.
 - There is no `str_replace` / `list_append` operation on `config update`. For
   SQL transformation bodies use `transformation edit` (9 ops incl.
   `str_replace`), which is the native replacement for the old
@@ -4570,7 +4595,7 @@ write descriptive metadata onto storage objects. Three behaviors are easy to mis
   the exit code. *(since 0.98.0)* `--json` also exits 1 when `error_count > 0`;
   on 0.97.0 and older it exited 0 even then, so there never trust a zero-exit
   as "everything applied." That tolerance covers **API** failures only: a
-  `--from-file` whose shape is wrong (a `tables:` / `buckets:` / `columns:`
+  `--file` whose shape is wrong (a `tables:` / `buckets:` / `columns:`
   section that is a list instead of a mapping of ID to description, a column
   entry that is not a mapping, a document that is not a mapping at all) is a
   usage error *(since v0.89.0)* — the whole file is rejected before the first
@@ -4693,7 +4718,7 @@ CLI hides via its four-bucket response, but they matter when interpreting result
   transition. Tasks are typed (`job`/`notification`/`variable`).
 - **`INVALID_FLOW_DAG` was renamed to `INVALID_FLOW_DEFINITION`.**
   Update any code/string matching on the old error code.
-- **Validation:** `kbagent flow validate --file @flow.yaml [--project ALIAS]`.
+- **Validation:** `kbagent flow validate --definition-file flow.yaml [--project ALIAS]`.
   With `--project` it fetches the **live** JSON Schema from the stack and runs
   full structural + semantic checks; without `--project` it runs semantic-only
   and adds a note that structural validation was skipped (no schema source).
@@ -4892,13 +4917,13 @@ serve instance picks up the file on its next minute-tick.
 
 - **Symptom**: `kbagent agent create --cron "*/5 * * * *" --type ...` returns
   the persisted task with `next_run_at` populated, but the task never
-  actually runs. `agent runs <id>` stays empty hour after hour.
+  actually runs. `agent runs --task-id <id>` stays empty hour after hour.
 - **Cause**: no `kbagent serve` process is running, so the cron loop never
   ticks. The task is correctly persisted; the scheduler just isn't alive.
 - **Fix**: start `kbagent serve` (with or without `--ui`) on the machine that
   owns the config directory. The scheduler picks up the new task on the
   next tick and fires it on the cron's schedule.
-- **Diagnostic**: `kbagent agent run <id>` works offline (it dispatches via
+- **Diagnostic**: `kbagent agent run --task-id <id>` works offline (it dispatches via
   the in-process runner without consulting cron). If that runs the action
   successfully but cron-driven runs never happen, the scheduler is offline.
 
@@ -5034,7 +5059,7 @@ The ingest secret is **in the URL path**. `stream detail` / `create-source` mask
 it by default in every surface (the `endpoint`, all three per-signal endpoints,
 and the raw `source` object echoed in `--json`). Pass `--reveal` to print the
 real secret — e.g. to wire `OTEL_EXPORTER_OTLP_ENDPOINT` for a daemon:
-`kbagent --json stream detail SRC --project P --reveal`.
+`kbagent --json stream detail --name SRC --project P --reveal`.
 
 Creating an OTLP source **via the raw Stream API** creates only the bare source
 — no sinks, no tables. So `kbagent stream create-source --project P --type otlp` (matching
@@ -5068,7 +5093,7 @@ to `PATCH /admin/apps/{app}` instead:
 kbagent dev-portal identity add --alias admin-keboola \
     --username admin@keboola.com --role-hint admin --password-stdin
 kbagent dev-portal patch --app keboola.ex-foo \
-    --data /tmp/patch.json --identity admin-keboola
+    --data-file /tmp/patch.json --identity admin-keboola
 ```
 
 With `role_hint: vendor` (the default), kbagent now pre-flights the
@@ -5255,14 +5280,14 @@ These are Keboola-platform behaviors, not kbagent features, so they carry no
 `since` tag -- they hold on every kbagent version. The `keboola-expert` agent
 prompt keeps only a one-line trigger for each and links here for the full prose.
 
-### `flow update --file` is a full replace of phases + tasks
+### `flow update --definition-file` is a full replace of phases + tasks
 
 `kbagent flow update` preserves the body on metadata-only updates (rename,
-description). BUT `--file` is a **full-replace** of `phases` + `tasks` -- if your
+description). BUT the definition (`--definition` / `--definition-file`) is a **full-replace** of `phases` + `tasks` -- if your
 YAML omits a phase, task, transition, or per-task `retry` that existed before, it
 is silently dropped. For structural edits, always fetch via
 `kbagent --json flow detail` first, merge your diff locally, run
-`kbagent flow validate --file @merged.yaml --project ALIAS`, then push via `--file`.
+`kbagent flow validate --definition-file merged.yaml --project ALIAS`, then push via `--definition-file`.
 
 ### Primary keys on new output tables crash the first run
 
@@ -5863,7 +5888,7 @@ even shaped like a real state document.
   row-update --is-disabled/--is-enabled` (the config-level flag is simply not
   settable via `--set`); anything else -> "not settable via --set". If a
   component genuinely has a `configuration.<prefix>` key with one of these
-  names, pass the full body via `--configuration JSON|@file|-` instead of
+  names, pass the full body via `--configuration JSON` or `--configuration-file PATH` instead of
   `--set`.
 - **A plain `--set 'parameters.x=y'` is unaffected** -- only paths whose
   *first* segment collides with a sibling field are rejected; the guard does
@@ -6178,20 +6203,22 @@ only purpose is finding a `--token-id`.
 - SDK parity: `Client.list_tokens(with_last_used=True)`; the fields land on
   `TokenListEntryResult` as `last_used`, `last_used_event`, `last_used_status`.
 
-## `token list --columns` is human-output only (since v0.88.0)
+## `token list --column` is human-output only (since v0.88.0)
 
-`--columns` (repeatable, e.g. `--columns description --columns last_used`)
+*(updated vNEXT)* 1.0.0 removes the old name `--columns`. Use `--column`.
+
+`--column` (repeatable, e.g. `--column description --column last_used`)
 selects *and orders* the Rich table. `Refreshed` is now part of the default
 column set -- `--json` always returned it, the fixed table just had no way to
 show it.
 
 - **`--json` is deliberately unaffected.** The machine contract stays whole no
-  matter what the human view is narrowed to, so never use `--columns` to shape
+  matter what the human view is narrowed to, so never use `--column` to shape
   data you are about to parse.
 - Valid names: `id`, `description`, `created`, `refreshed`, `expires`, `master`,
   `created_by`, `last_used`, `last_used_event`. An unknown name exits 2 and
   prints the valid list.
-- An explicit `--columns` is taken literally -- combining it with
+- An explicit `--column` is taken literally -- combining it with
   `--with-last-used` does *not* silently append the derived columns. Name
   `last_used` yourself if you want it.
 - **`last_used` / `last_used_event` REQUIRE `--with-last-used`** and exit 2
@@ -6262,7 +6289,7 @@ sits under `_configuration_extra:` in `_config.yml`, not at the top level.
 `processors` from the top level (everything else rides along from
 `_configuration_extra`). A `phases:` / `tasks:` block added by hand at the top
 level is therefore **silently dropped** on push -- no error, no diff entry, a
-flow that pushes empty. This is the opposite of the `flow new --file` body
+flow that pushes empty. This is the opposite of the `flow new --definition` body
 shape, where `phases` / `tasks` ARE top-level; the two formats are not
 interchangeable.
 
@@ -7017,6 +7044,7 @@ authorization failure:
 *(since 0.97.0)* `model create` / `add <kind>` gained `--scope
 project|organization|targeted` + `--target-project ALIAS|ID ...`, and a new
 `semantic-layer scope <get|add|remove|set|request-create|request-delete|request-list>`
+(*(updated vNEXT)* 1.x renames `request-delete` to `request-cancel`)
 sub-app (also `GET/PUT /semantic-layer/scope/...` over `kbagent serve`). See
 [metastore-scope-workflow.md](metastore-scope-workflow.md) for worked
 examples. Surprises worth knowing before you touch this:
@@ -7064,8 +7092,8 @@ examples. Surprises worth knowing before you touch this:
 - **`add glossary` needs `--definition` (since 0.98.0).** Every
   `semantic-glossary` schema requires `definition`. Without it the metastore
   answered a bare 422 "Validation failed"; now it is a usage error (exit 2).
-- **`--target-project` takes an alias or a numeric project ID** (repeatable or
-  comma-separated), so the target need not be registered in kbagent. An alias
+- **`--target-project` takes an alias or a numeric project ID** (repeated
+  once per project), so the target need not be registered in kbagent. An alias
   must be on the owner project's stack (a project ID only means the same
   project on its own stack; a bare ID cannot be checked and is trusted).
   `--target-project` without `--scope targeted`, an unknown alias, or a bad
@@ -7156,7 +7184,7 @@ Now, when at least one item failed:
   `flow schedule-remove`) now print `Failed:` and the failed count instead, for
   example `Failed: Pushed: 3 created, 0 updated, 0 deleted, 1 failed`. The
   other commands keep their output: `org setup`, `project refresh`,
-  `project invite --from-csv`, `workspace gc` and the `semantic-layer`
+  `project invite --from-csv` (`--file` since vNEXT), `workspace gc` and the `semantic-layer`
   commands list the failed items in a table or in summary lines, and the
   `--all-projects` sync variants state the failed count in their summary line;
 - `--json` output keeps its keys and is emitted before the exit. New keys:
@@ -7179,7 +7207,7 @@ Commands whose exit code changes from 0 to 1 (the key that holds the failures):
   `projects_refresh_failed`: entries keyed by `alias`, fix them with
   `project refresh`);
 - `project refresh` (`projects_failed`);
-- `project invite --from-csv` (`failed`);
+- `project invite --from-csv` (`--file` since vNEXT) (`failed`);
 - `workspace gc` (`errors[]`: a workspace that was not deleted, or a project
   that could not be listed);
 - `semantic-layer import` / `semantic-layer promote` (`failed[]` of each type);

@@ -48,19 +48,15 @@ def register(app: typer.Typer) -> None:
         ),
         text: str | None = typer.Option(
             None,
-            "--text",
+            "--description",
             help="Description text (inline)",
-            callback=RefuseAtFile("--file").callback,
+            callback=RefuseAtFile("--description-file").callback,
         ),
         file: Path | None = typer.Option(
             None,
-            "--file",
-            help="Path to a file containing the description",
-        ),
-        stdin: bool = typer.Option(
-            False,
-            "--stdin",
-            help="Read description from standard input",
+            "--description-file",
+            help="Read the description from a file (- for stdin)",
+            allow_dash=True,
         ),
         branch: int | None = typer.Option(
             None,
@@ -71,7 +67,7 @@ def register(app: typer.Typer) -> None:
         """Set the description on a storage bucket.
 
         Stores the description as KBC.description in bucket metadata (upsert).
-        Provide the text via --text, --file, or --stdin (exactly one required).
+        Provide the text via --description or --description-file (exactly one).
         """
         formatter = get_formatter(ctx)
         service = get_service(ctx, "storage_service")
@@ -81,7 +77,7 @@ def register(app: typer.Typer) -> None:
         from ._metadata_input import resolve_text_input
 
         try:
-            description = resolve_text_input(text=text, file=file, stdin=stdin)
+            description = resolve_text_input(value=text, file=file, option="--description")
         except ConfigError as exc:
             formatter.error(message=exc.message, error_code=ErrorCode.INVALID_ARGUMENT)
             raise typer.Exit(code=2) from None
@@ -117,19 +113,15 @@ def register(app: typer.Typer) -> None:
         ),
         text: str | None = typer.Option(
             None,
-            "--text",
+            "--description",
             help="Description text (inline)",
-            callback=RefuseAtFile("--file").callback,
+            callback=RefuseAtFile("--description-file").callback,
         ),
         file: Path | None = typer.Option(
             None,
-            "--file",
-            help="Path to a file containing the description",
-        ),
-        stdin: bool = typer.Option(
-            False,
-            "--stdin",
-            help="Read description from standard input",
+            "--description-file",
+            help="Read the description from a file (- for stdin)",
+            allow_dash=True,
         ),
         branch: int | None = typer.Option(
             None,
@@ -140,7 +132,7 @@ def register(app: typer.Typer) -> None:
         """Set the description on a storage table.
 
         Stores the description as KBC.description in table metadata (upsert).
-        Provide the text via --text, --file, or --stdin (exactly one required).
+        Provide the text via --description or --description-file (exactly one).
         """
         formatter = get_formatter(ctx)
         service = get_service(ctx, "storage_service")
@@ -150,7 +142,7 @@ def register(app: typer.Typer) -> None:
         from ._metadata_input import resolve_text_input
 
         try:
-            description = resolve_text_input(text=text, file=file, stdin=stdin)
+            description = resolve_text_input(value=text, file=file, option="--description")
         except ConfigError as exc:
             formatter.error(message=exc.message, error_code=ErrorCode.INVALID_ARGUMENT)
             raise typer.Exit(code=2) from None
@@ -280,9 +272,9 @@ def register(app: typer.Typer) -> None:
     def storage_describe_batch(
         ctx: typer.Context,
         project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
-        from_file: Path = typer.Option(
+        file: Path = typer.Option(
             ...,
-            "--from-file",
+            "--file",
             help="Path to a YAML file with bucket/table/column descriptions",
         ),
         branch: int | None = typer.Option(
@@ -368,7 +360,7 @@ def register(app: typer.Typer) -> None:
                 progress_task = progress_cm.add_task("Applying descriptions...", total=None)
             result = service.describe_batch(
                 alias=project,
-                from_file=from_file,
+                from_file=file,
                 branch_id=effective_branch,
                 progress_callback=progress_callback,
             )

@@ -136,7 +136,9 @@ class TestDetail:
             "signal_endpoints": {},
             "destination": {},
         }
-        result = _invoke(config_dir, svc, ["--json", "stream", "detail", "s1", "--project", ALIAS])
+        result = _invoke(
+            config_dir, svc, ["--json", "stream", "detail", "--source-id", "s1", "--project", ALIAS]
+        )
         assert result.exit_code == 0, result.output
         svc.get_source_detail.assert_called_once_with(
             alias=ALIAS, source_id="s1", name=None, branch_id=None, reveal=False
@@ -172,7 +174,7 @@ class TestDelete:
         result = _invoke(
             config_dir,
             svc,
-            ["--json", "stream", "delete", "s1", "--project", ALIAS, "--dry-run"],
+            ["--json", "stream", "delete", "--source-id", "s1", "--project", ALIAS, "--dry-run"],
         )
         assert result.exit_code == 0, result.output
         assert json.loads(result.output)["data"]["status"] == "dry_run"
@@ -184,7 +186,10 @@ class TestDelete:
         _seed(config_dir)
         svc = MagicMock()
         result = _invoke(
-            config_dir, svc, ["stream", "delete", "s1", "--project", ALIAS], input_text="n\n"
+            config_dir,
+            svc,
+            ["stream", "delete", "--source-id", "s1", "--project", ALIAS],
+            input_text="n\n",
         )
         assert result.exit_code == 0
         assert "Aborted" in result.output
@@ -200,7 +205,9 @@ class TestDelete:
             "source_id": "s1",
             "branch_id": "default",
         }
-        result = _invoke(config_dir, svc, ["stream", "delete", "s1", "--project", ALIAS, "--yes"])
+        result = _invoke(
+            config_dir, svc, ["stream", "delete", "--source-id", "s1", "--project", ALIAS, "--yes"]
+        )
         assert result.exit_code == 0
         svc.delete_source.assert_called_once_with(
             alias=ALIAS, source_id="s1", branch_id=None, dry_run=False

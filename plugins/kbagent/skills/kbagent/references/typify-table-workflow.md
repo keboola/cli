@@ -105,7 +105,7 @@ kbagent --json workspace create --project ALIAS --name "typify-<table-slug>"
 kbagent --json workspace load \
   --project ALIAS \
   --workspace-id W_ID \
-  --tables in.c-foo.data
+  --table-id in.c-foo.data
 # Loaded as "in.c-foo.data" inside the workspace schema.
 
 # 2c. Profile each column. Run ONE query per column-set you want to
@@ -181,8 +181,8 @@ kbagent --json storage create-table \
   --column "created_at:TIMESTAMP_NTZ" \
   --column "is_paid:BOOLEAN" \
   --primary-key id \
-  --not-null id \
-  --not-null amount \
+  --not-null-column id \
+  --not-null-column amount \
   --default amount=0
 # auto_created_bucket: false (bucket already exists in branch from Phase 2)
 # legacy_branch_storage: false (assuming the project has the storage-branches feature)

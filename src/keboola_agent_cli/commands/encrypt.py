@@ -17,7 +17,7 @@ from ._helpers import (
     get_formatter,
     get_service,
     map_error_to_exit_code,
-    parse_json_arg,
+    structured_input,
 )
 from ._project_ref import PROJECT_HELP
 
@@ -40,10 +40,16 @@ def encrypt_values(
         "--component-id",
         help="Keboola component ID (e.g. keboola.python-transformation-v2)",
     ),
-    input_data: str = typer.Option(
-        ...,
-        "--input",
-        help="JSON to encrypt: inline JSON, @file.json, or - for stdin",
+    values: str | None = typer.Option(
+        None,
+        "--values",
+        help="JSON object to encrypt, inline",
+    ),
+    values_file: Path | None = typer.Option(
+        None,
+        "--values-file",
+        help="Read the JSON object to encrypt from a file (- for stdin)",
+        allow_dash=True,
     ),
     output_file: Path | None = typer.Option(
         None,
@@ -60,19 +66,25 @@ def encrypt_values(
     Encrypted values can only be used by Keboola components at runtime.
 
     Examples:
-        kbagent encrypt values --project my-proj --component-id keboola.ex-db-snowflake --input '{"#password": "secret"}'
-        echo '{"#token": "abc"}' | kbagent encrypt values --project my-proj --component-id keboola.ex-db-snowflake --input -
-        kbagent encrypt values --project my-proj --component-id keboola.ex-db-snowflake --input @secrets.json --output-file encrypted.json
+        kbagent encrypt values --project my-proj --component-id keboola.ex-db-snowflake --values '{"#password": "secret"}'
+        echo '{"#token": "abc"}' | kbagent encrypt values --project my-proj --component-id keboola.ex-db-snowflake --values-file -
+        kbagent encrypt values --project my-proj --component-id keboola.ex-db-snowflake --values-file secrets.json --output-file encrypted.json
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "encrypt_service")
 
     # Parse input
     try:
-        parsed = parse_json_arg(input_data, label="--input")
+        parsed = structured_input(values, values_file, label="--values")
     except ValueError as exc:
         formatter.error(message=str(exc), error_code=ErrorCode.INPUT_ERROR)
         raise typer.Exit(code=2) from None
+    if parsed is None:
+        formatter.error(
+            message="Pass the JSON object with --values JSON or --values-file PATH.",
+            error_code=ErrorCode.USAGE_ERROR,
+        )
+        raise typer.Exit(code=2)
 
     if not isinstance(parsed, dict):
         formatter.error(

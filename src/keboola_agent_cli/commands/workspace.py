@@ -39,6 +39,7 @@ from ._helpers import (
     map_error_to_exit_code,
     read_text_arg,
     resolve_project_alias,
+    split_multi,
 )
 from ._project_ref import PROJECT_DEFAULT, PROJECT_HELP
 
@@ -390,8 +391,8 @@ def workspace_load(
     ),
     tables: list[str] = typer.Option(
         ...,
-        "--tables",
-        help="Table ID to load (can be repeated, e.g. in.c-bucket.table-name)",
+        "--table-id",
+        help="Table ID to load (repeat for more tables, e.g. in.c-bucket.table-name)",
     ),
     preserve: bool = typer.Option(
         False,
@@ -427,6 +428,7 @@ def workspace_load(
     Waits for the async load job to complete.
     """
     formatter = get_formatter(ctx)
+    tables = split_multi(tables, label="--table-id")
     service = get_service(ctx, "workspace_service")
 
     if load_type is not None and load_type.strip().lower() not in WORKSPACE_LOAD_TYPES:
@@ -499,10 +501,11 @@ def workspace_query(
     ),
     file: Path | None = typer.Option(
         None,
-        "--file",
-        help="Path to a .sql file to execute",
+        "--sql-file",
+        help="Path to a .sql file to execute (- for stdin)",
         exists=True,
         readable=True,
+        allow_dash=True,
     ),
     transactional: bool = typer.Option(
         False,
@@ -525,7 +528,7 @@ def workspace_query(
 ) -> None:
     """Execute SQL query in a workspace via Query Service.
 
-    Provide SQL via --sql or --file (exactly one required).
+    Provide SQL via --sql or --sql-file (exactly one required).
 
     By default kbagent reads results inline (fast). For a result set larger than
     --limit, pass --full to export the complete CSV instead.
@@ -533,16 +536,16 @@ def workspace_query(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "workspace_service")
 
-    # Validate: exactly one of --sql or --file
+    # Validate: exactly one of --sql or --sql-file
     if sql and file:
         formatter.error(
-            message="Specify either --sql or --file, not both.",
+            message="Specify either --sql or --sql-file, not both.",
             error_code=ErrorCode.USAGE_ERROR,
         )
         raise typer.Exit(code=2)
     if not sql and not file:
         formatter.error(
-            message="Specify either --sql or --file.",
+            message="Specify either --sql or --sql-file.",
             error_code=ErrorCode.USAGE_ERROR,
         )
         raise typer.Exit(code=2)
@@ -553,7 +556,7 @@ def workspace_query(
         effective_sql = sql
     else:
         assert file is not None  # guaranteed: guard above exits if both sql and file absent
-        effective_sql = read_text_arg(formatter, file, label="--file")
+        effective_sql = read_text_arg(formatter, file, label="--sql-file")
 
     try:
         result = service.execute_query(

@@ -538,8 +538,8 @@ class TestComponentSyncActionCli:
                 COMPONENT_ID,
                 "--project",
                 "prod",
-                "--config-data",
-                f"@{payload_file}",
+                "--config-data-file",
+                str(payload_file),
             ],
         )
 

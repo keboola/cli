@@ -971,7 +971,7 @@ class DataAppService(BaseService):
                     message=(
                         f"Secret '{key}' value starts with 'KBC::', which suggests an "
                         "already-encrypted ciphertext. The --secret flag expects "
-                        "plaintext; pass pre-encrypted values via --secrets-file or "
+                        "plaintext; pass pre-encrypted values via --secret-file or "
                         "re-encrypt under THIS project's KMS via "
                         "`kbagent encrypt values --component-id keboola.data-apps`."
                     ),

@@ -97,7 +97,6 @@ SHORT_FLAGS: dict[str, str] = {
     "-f": "--feature",
     "-i": "--ignore-case",
     "-j": "--json",
-    "-l": "--load",
     "-m": "--message",
     "-n": "--name",
     "-o": "--output",
@@ -121,6 +120,15 @@ FORCE_MEANINGS: dict[str, str] = {
     "sync pull": "legacy meaning: pull again, keep local changes, abort on a conflict",
     "sync push": "the guard that holds back remote deletions of configs and rows",
     "workspace load": "the size guard that asks before a COPY larger than 1 GB",
+}
+
+# S1: commands that change only local files, not a Keboola object. The
+# categories describe effects on Keboola, so safety.destructive-verb-category
+# skips these delete-like verbs. Reviewed list: one reason per command.
+LOCAL_ONLY_COMMANDS: dict[str, str] = {
+    "dev-portal identity remove": "removes a local Developer Portal identity from the config "
+    "directory",
+    "sync branch-unlink": "removes the local git-branch mapping from the sync manifest",
 }
 
 # N4: hidden alias path -> canonical path. No hidden leaf exists yet.
@@ -155,16 +163,33 @@ CONTENT_OPTIONS: frozenset[str] = frozenset(
         "--reason",
         "--runtime-prompt",
         "--sql",
-        "--text",
         "--title",
         "--value",
     }
 )
-# I1/I3: the functions that may read an `@` value: the parser and the refusal.
+# I3: options whose name is in CONTENT_OPTIONS but that take JSON or YAML (I1),
+# not free text. parse_json_arg refuses an `@` value with a hint that names
+# the `--<field>-file` option, so they need no RefuseAtFile callback.
+STRUCTURED_OPTIONS: frozenset[str] = frozenset(
+    {
+        "agent create --definition",
+        "agent test --definition",
+        "flow new --definition",
+        "flow update --definition",
+        "flow validate --definition",
+    }
+)
+# I1/I3: the functions that may look at an `@` value: the parser (to refuse it
+# with a hint for --<field>-file) and the I3 refusal.
 _AT_VALUE_READERS = ("parse_json_arg", "RefuseAtFile.callback")
+# I1/I6: the functions that may read stdin: `-` as the value of a file option,
+# and a secret `--*-stdin` flag.
+_STDIN_READERS = ("read_input_file", "read_password_stdin")
 
-# I-rules: file input is `--file` or `--<field>-file` next to `--<field>`.
-_INPUT_EXTRA = frozenset({"--from-file", "--stdin", "--from-csv", "--input"})
+# I2: file input is `--file` or `--<field>-file` next to `--<field>`; a secret
+# file option sits next to `--<field>-env` or `--<field>-stdin` instead.
+_INPUT_EXTRA = frozenset({"--from-file", "--stdin", "--from-csv", "--input", "--load"})
+_SECRET_SIBLINGS = ("-env", "-stdin")
 # S1: leaf verbs that delete; such a leaf is `destructive` or `admin`.
 _DESTRUCTIVE_VERBS = (
     "delete",
@@ -358,12 +383,11 @@ def type_name(p: Any) -> str:
 
 
 def shape(p: Any) -> str:
-    # A1: a Choice is text with fixed values; the multiplicity of --project follows T2.
+    # A1: the shape is the value kind. A Choice is text with fixed values. The
+    # number of values (one, or a repeated option) is not part of the shape.
     if getattr(p, "is_flag", False):
         return "flag"
-    kind = "text" if type_name(p) == "choice" else type_name(p)
-    many = getattr(p, "multiple", False) and label(p) != "--project"
-    return f"{kind}{'[]' if many else ''}"
+    return "text" if type_name(p) == "choice" else type_name(p)
 
 
 # --------------------------------------------------------------------------- #
@@ -690,6 +714,8 @@ def r_yes_short_y(c: Context) -> Violations:
 def r_verb_category(c: Context) -> Violations:
     found = {}
     for lf in c.tree.leaves:
+        if lf.name in LOCAL_ONLY_COMMANDS:
+            continue
         hit = [v for v in _DESTRUCTIVE_VERBS if re.search(rf"(^|-){v}($|-)", lf.path[-1])]
         if hit and lf.category not in ("destructive", "admin"):
             found[lf.name] = f"verb '{hit[0]}' but category {lf.category}"
@@ -706,8 +732,14 @@ def r_file_vocabulary(c: Context) -> Violations:
                 continue
             if o in _INPUT_EXTRA:
                 found[f"{lf.name} {o}"] = "input option outside the file-input vocabulary"
-            elif o.endswith("-file") and o != "--file" and o[: -len("-file")] not in names:
-                found[f"{lf.name} {o}"] = f"{o} has no inline option {o[: -len('-file')]}"
+            elif o.endswith("-file") and o != "--file":
+                field_name = o[: -len("-file")]
+                siblings = (field_name, *(field_name + s for s in _SECRET_SIBLINGS))
+                if not any(sibling in names for sibling in siblings):
+                    found[f"{lf.name} {o}"] = (
+                        f"{o} has no inline option {field_name} (or {field_name}-env / "
+                        f"{field_name}-stdin for a secret)"
+                    )
     return found
 
 
@@ -720,12 +752,19 @@ def r_no_bare_id(c: Context) -> Violations:
 
 
 def r_no_positional(c: Context) -> Violations:
-    return {
-        f"{lf.name} {label(p)}": "positional argument"
-        for lf in c.tree.leaves
-        for p in lf.params
-        if is_argument(p)
-    }
+    # A3: one required positional argument is allowed for the main input of a
+    # command when that input is not an identifier (a path, a query, an alias).
+    found = {}
+    for lf in c.tree.leaves:
+        arguments = [p for p in lf.params if is_argument(p)]
+        for p in arguments:
+            if label(p).endswith("_ID"):
+                found[f"{lf.name} {label(p)}"] = "positional identifier; use --<noun>-id"
+            elif not p.required:
+                found[f"{lf.name} {label(p)}"] = "optional positional argument"
+            elif len(arguments) > 1:
+                found[f"{lf.name} {label(p)}"] = "more than one positional argument"
+    return found
 
 
 def r_list_limit(c: Context) -> Violations:
@@ -749,14 +788,21 @@ def r_write_dry_run(c: Context) -> Violations:
 
 
 def r_list_option_repeatable(c: Context) -> Violations:
-    return {
-        f"{lf.name} {label(p)}": "list option that takes one comma-separated string"
-        for lf in c.tree.leaves
-        for p in filter(is_option, lf.params)
-        if not getattr(p, "multiple", False)
-        and not getattr(p, "is_flag", False)
-        and _COMMA_LIST.search(getattr(p, "help", None) or "")
-    }
+    # A4: a list option is repeatable and takes one value per occurrence, so no
+    # option help offers a comma list.
+    found = {}
+    for lf in c.tree.leaves:
+        for p in filter(is_option, lf.params):
+            if getattr(p, "is_flag", False) or not _COMMA_LIST.search(
+                getattr(p, "help", None) or ""
+            ):
+                continue
+            found[f"{lf.name} {label(p)}"] = (
+                "repeatable option whose help offers a comma list"
+                if getattr(p, "multiple", False)
+                else "list option that takes one comma-separated string"
+            )
+    return found
 
 
 def r_boolean_flag_shape(c: Context) -> Violations:
@@ -834,16 +880,31 @@ def r_dead_parameter(c: Context) -> Violations:
 
 
 def r_single_parser(c: Context) -> Violations:
-    return {
-        site.subject: 'parses "@" values outside parse_json_arg'
-        for site in c.package_calls
-        if isinstance(site.call.func, ast.Attribute)
-        and site.call.func.attr == "startswith"
-        and site.call.args
-        and isinstance(site.call.args[0], ast.Constant)
-        and site.call.args[0].value == "@"
-        and not site.function.endswith(_AT_VALUE_READERS)
-    }
+    # I1: no `@path` reading anywhere; stdin only through `-` of a file option
+    # (read_input_file) or a secret `--*-stdin` flag (I6).
+    found = {}
+    for site in c.package_calls:
+        func = site.call.func
+        if (
+            isinstance(func, ast.Attribute)
+            and func.attr == "startswith"
+            and site.call.args
+            and isinstance(site.call.args[0], ast.Constant)
+            and site.call.args[0].value == "@"
+            and not site.function.endswith(_AT_VALUE_READERS)
+        ):
+            found[site.subject] = 'looks at "@" values outside parse_json_arg'
+        elif dotted(func) == "sys.stdin.read" and not site.function.endswith(_STDIN_READERS):
+            found[site.subject] = "reads stdin outside read_input_file (use - of a file option)"
+        elif (
+            dotted(func).endswith("parse_json_arg")
+            and site.call.args
+            and isinstance(site.call.args[0], ast.JoinedStr)
+        ):
+            found[site.subject] = (
+                "builds an @path value for parse_json_arg; use parse_json_file_arg"
+            )
+    return found
 
 
 def r_content_refuses_at_file(c: Context) -> Violations:
@@ -854,6 +915,7 @@ def r_content_refuses_at_file(c: Context) -> Violations:
         for p in filter(is_option, lf.params)
         if not getattr(p, "is_flag", False)
         and label(p) in CONTENT_OPTIONS
+        and f"{lf.name} {label(p)}" not in STRUCTURED_OPTIONS
         and not _refuses_at_file(p)
     }
 
@@ -1408,7 +1470,12 @@ RULES: tuple[Rule, ...] = (
         r_long_one_shape,
     ),
     Rule("args.no-bare-id-option", "tree", "no generic --id", r_no_bare_id),
-    Rule("args.no-positional-arguments", "tree", "identifiers are options", r_no_positional),
+    Rule(
+        "args.no-positional-arguments",
+        "tree",
+        "identifiers are options; one required non-identifier main input may be positional",
+        r_no_positional,
+    ),
     Rule(
         "args.no-dead-parameter",
         "ast",
@@ -1418,7 +1485,7 @@ RULES: tuple[Rule, ...] = (
     Rule(
         "args.list-option-repeatable",
         "tree",
-        "no list option that takes only one comma string",
+        "a list option is repeatable, one value per occurrence; no help offers a comma list",
         r_list_option_repeatable,
     ),
     Rule(
@@ -1430,13 +1497,14 @@ RULES: tuple[Rule, ...] = (
     Rule(
         "input.file-option-vocabulary",
         "tree",
-        "file input is --file or --<field>-file; flags are skipped",
+        "file input is --file or --<field>-file next to --<field> (a secret: --<field>-env "
+        "or --<field>-stdin); flags are skipped",
         r_file_vocabulary,
     ),
     Rule(
         "input.single-parser",
         "ast",
-        'no startswith("@") value parsing outside parse_json_arg',
+        "no @path reading; stdin only as - of a file option or a secret --*-stdin flag",
         r_single_parser,
     ),
     Rule(
@@ -1521,7 +1589,7 @@ RULES: tuple[Rule, ...] = (
     Rule(
         "safety.destructive-verb-category",
         "tree",
-        "a delete-like verb is destructive or admin",
+        "a delete-like verb on a Keboola object is destructive or admin",
         r_verb_category,
     ),
     Rule(

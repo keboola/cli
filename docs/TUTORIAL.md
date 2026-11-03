@@ -109,21 +109,21 @@ session.
 
 When you know exactly which project IDs you want -- but your token is a
 *Manage API token* (org admin) or a *Personal Access Token* (any member) --
-use `org setup --project-ids`. kbagent creates a Storage API token in
+use `org setup --project-id` (repeat it once per project). kbagent creates a Storage API token in
 each listed project and registers them all locally, in parallel.
 
 ```bash
 # Interactive (default since v0.29.0): kbagent prompts for the Manage API
 # token on stdin. No env var, no shell history.
 kbagent org setup \
-  --project-ids 901,9621,10539 \
+  --project-id 901 --project-id 9621 --project-id 10539 \
   --url https://connection.keboola.com \
   --dry-run                           # always dry-run first
 
 # CI / non-interactive: opt in to env-var resolution.
 export KBC_MANAGE_API_TOKEN=YOUR_MANAGE_OR_PAT_TOKEN
 kbagent --allow-env-manage-token org setup \
-  --project-ids 901,9621,10539 \
+  --project-id 901 --project-id 9621 --project-id 10539 \
   --url https://connection.keboola.com \
   --dry-run
 ```
@@ -134,7 +134,7 @@ without `--dry-run` or add `--yes`:
 
 ```bash
 kbagent org setup \
-  --project-ids 901,9621,10539 \
+  --project-id 901 --project-id 9621 --project-id 10539 \
   --url https://connection.keboola.com \
   --yes
 ```
@@ -189,7 +189,7 @@ kbagent org setup --org-id 123 --url https://connection.keboola.com --yes
 ```
 
 Supports the same `--token-description`, `--token-expires-in`, and
-`--refresh` flags as `--project-ids`.
+`--refresh` flags as `--project-id`.
 
 ### Re-running later
 
@@ -656,7 +656,7 @@ Three consequences:
    prod deploy.
 
 Test this once on a throwaway project (e.g. `kbagent org setup
---project-ids`). The only way to understand the safety boundary is
+--project-id`). The only way to understand the safety boundary is
 to hit it:
 
 ```bash
@@ -709,11 +709,12 @@ in the branch first, mirroring the official Keboola Go CLI's
 
 Attribute flags (repeatable):
 
-- `--not-null COL` -- marks a defined column `nullable: false`
+- `--not-null-column COL` -- marks a defined column `nullable: false`
+  (`--not-null` before 1.0.0)
 - `--default NAME=VALUE` -- sets a `DEFAULT` expression. Booleans must be
   lowercase (`--default flag=false`); uppercase is rejected by the API.
 
-Unknown names passed to `--not-null` or `--default` exit 2
+Unknown names passed to `--not-null-column` or `--default` exit 2
 (`INVALID_ARGUMENT`) before any API call -- typos fail fast.
 
 ### 8.2 Retyping after profiling -- a real use case
@@ -740,7 +741,7 @@ kbagent --json storage create-table \
   --column 'ch_name:VARCHAR(80)' \
   --column 'is_admin:BOOLEAN' \
   --primary-key pkey \
-  --not-null pkey --not-null ts \
+  --not-null-column pkey --not-null-column ts \
   --default num_members=0 --default is_admin=false
 ```
 
@@ -1032,7 +1033,7 @@ shapes, see
 | Plugin version != CLI version | In Claude Code: `/plugin update kbagent`. |
 | `org setup` exits 2 with `Warning: KBC_MANAGE_API_TOKEN found in environment but ignored` | Default-deny since v0.29.0 -- pass `--allow-env-manage-token` (top-level flag) to opt in to env resolution, or run interactively to use the prompt. |
 | `org setup` fails with `401 Unauthorized` | Your manage token is wrong for this stack or role. Manage tokens are stack-specific and require the right scope. |
-| `org setup --org-id` fails with `403` | You are not an org admin. Use `--project-ids` with a Personal Access Token instead (works for any project member). |
+| `org setup --org-id` fails with `403` | You are not an org admin. Use `--project-id` with a Personal Access Token instead (works for any project member). |
 | Changes from `kbagent config update` do not show in UI | You are on a dev branch. Run `kbagent branch list` and `kbagent project current` to verify the active branch; changes in a dev branch reach production only through a merge (`kbagent merge-request`, or the Keboola UI). |
 | The specialist subagent does not spawn when I type `/keboola X` | Plugin is not installed or is outdated. Run `kbagent doctor` and follow the reported commands. |
 

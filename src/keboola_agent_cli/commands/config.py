@@ -49,9 +49,8 @@ from ._helpers import (
     get_formatter,
     get_service,
     map_error_to_exit_code,
-    parse_json_arg,
-    read_text_arg,
     resolve_project_alias,
+    structured_input,
 )
 from ._project_ref import PROJECT_DEFAULT, PROJECT_HELP
 
@@ -549,27 +548,19 @@ def config_search(
     finish_fanout(formatter, result, result.get("errors", []), render)
 
 
-def _parse_json_input(raw: str, *, label: str) -> dict:
-    """Parse a JSON object from inline text, ``@file`` or ``-`` (stdin).
+def _parse_json_input(inline: str | None, file: Path | None, *, label: str) -> dict | None:
+    """The JSON object of ``label`` (inline) or ``<label>-file`` (a path, ``-`` = stdin).
+
+    Returns ``None`` when neither is given (spec rule I1).
 
     Raises:
-        ValueError: On bad input or a value that is not a JSON object; the
-            message names ``label``.
+        ValueError: When both are given, on bad input, or on a value that is
+            not a JSON object; the message names the option.
     """
-    parsed = parse_json_arg(raw, label=label)
-    if not isinstance(parsed, dict):
+    parsed = structured_input(inline, file, label=label)
+    if parsed is not None and not isinstance(parsed, dict):
         raise ValueError(f"{label} must be a JSON object, got {type(parsed).__name__}")
     return parsed
-
-
-def _require_json_object(formatter: Any, value: object, *, label: str) -> None:
-    """Exit 2 (``VALIDATION_ERROR``) when a configuration body is not a JSON object."""
-    if not isinstance(value, dict):
-        formatter.error(
-            message=f"{label} must contain a JSON object, got {type(value).__name__}",
-            error_code=ErrorCode.VALIDATION_ERROR,
-        )
-        raise typer.Exit(code=2)
 
 
 def _parse_set_value(raw: str) -> object:
@@ -635,14 +626,13 @@ def config_update(
     configuration: str | None = typer.Option(
         None,
         "--configuration",
-        help="Configuration JSON: inline, @file.json, or - for stdin",
+        help="Configuration JSON, inline",
     ),
     configuration_file: Path | None = typer.Option(
         None,
         "--configuration-file",
-        help="Path to a JSON file with configuration content",
-        exists=True,
-        readable=True,
+        help="Read the configuration JSON from a file (- for stdin)",
+        allow_dash=True,
     ),
     set_values: list[str] | None = typer.Option(
         None,
@@ -713,33 +703,11 @@ def config_update(
     service = get_service(ctx, "config_service")
 
     # --- Parse configuration content ------------------------------------------
-    config_dict: dict | None = None
-    if configuration and configuration_file:
-        formatter.error(
-            message="Cannot use both --configuration and --configuration-file.",
-            error_code=ErrorCode.VALIDATION_ERROR,
-        )
+    try:
+        config_dict = _parse_json_input(configuration, configuration_file, label="--configuration")
+    except ValueError as exc:
+        formatter.error(message=str(exc), error_code=ErrorCode.VALIDATION_ERROR)
         raise typer.Exit(code=2) from None
-
-    if configuration:
-        try:
-            config_dict = _parse_json_input(configuration, label="--configuration")
-        except ValueError as exc:
-            formatter.error(message=str(exc), error_code=ErrorCode.VALIDATION_ERROR)
-            raise typer.Exit(code=2) from None
-
-    if configuration_file:
-        try:
-            config_dict = json.loads(
-                read_text_arg(formatter, configuration_file, label="--configuration-file")
-            )
-        except json.JSONDecodeError as exc:
-            formatter.error(
-                message=f"Invalid JSON in {configuration_file}: {exc}",
-                error_code=ErrorCode.VALIDATION_ERROR,
-            )
-            raise typer.Exit(code=2) from None
-        _require_json_object(formatter, config_dict, label="--configuration-file")
 
     # --- Parse --set values ---------------------------------------------------
     parsed_sets: list[tuple[str, object]] | None = None
@@ -1196,14 +1164,13 @@ def config_new(
     configuration: str | None = typer.Option(
         None,
         "--configuration",
-        help="Override the configuration body to POST (used with --push): JSON inline, @file, or - for stdin",
+        help="Override the configuration body to POST (used with --push): JSON, inline",
     ),
     configuration_file: Path | None = typer.Option(
         None,
         "--configuration-file",
-        help="Override the configuration body from a JSON file (used with --push)",
-        exists=True,
-        readable=True,
+        help="Override the configuration body from a JSON file, - for stdin (used with --push)",
+        allow_dash=True,
     ),
     no_validate: bool = typer.Option(
         False,
@@ -1308,24 +1275,13 @@ def config_new(
     # ── Parse the optional body override (used only with --push) ─────────────
     config_body: dict[str, Any] | None = None
     if push:
-        if configuration is not None:
-            try:
-                config_body = _parse_json_input(configuration, label="--configuration")
-            except ValueError as exc:
-                formatter.error(message=str(exc), error_code=ErrorCode.VALIDATION_ERROR)
-                raise typer.Exit(code=2) from None
-        elif configuration_file is not None:
-            try:
-                config_body = json.loads(
-                    read_text_arg(formatter, configuration_file, label="--configuration-file")
-                )
-            except json.JSONDecodeError as exc:
-                formatter.error(
-                    message=f"Invalid JSON in --configuration-file {configuration_file}: {exc}",
-                    error_code=ErrorCode.VALIDATION_ERROR,
-                )
-                raise typer.Exit(code=2) from None
-            _require_json_object(formatter, config_body, label="--configuration-file")
+        try:
+            config_body = _parse_json_input(
+                configuration, configuration_file, label="--configuration"
+            )
+        except ValueError as exc:
+            formatter.error(message=str(exc), error_code=ErrorCode.VALIDATION_ERROR)
+            raise typer.Exit(code=2) from None
 
     # ── Scaffold step (runs in scaffold-only mode and in push+files modes) ───
     scaffold: dict[str, Any] | None = None
@@ -2034,7 +1990,13 @@ def config_row_create(
     configuration: str | None = typer.Option(
         None,
         "--configuration",
-        help="Row configuration JSON: inline, @file.json, or - for stdin",
+        help="Row configuration JSON, inline",
+    ),
+    configuration_file: Path | None = typer.Option(
+        None,
+        "--configuration-file",
+        help="Read the row configuration JSON from a file (- for stdin)",
+        allow_dash=True,
     ),
     is_disabled: bool = typer.Option(
         False,
@@ -2065,7 +2027,7 @@ def config_row_create(
 
       # Create from a JSON file
       kbagent config row-create --project P --component-id C --config-id ID \\
-        --name "Row 1" --configuration @row.json
+        --name "Row 1" --configuration-file row.json
 
       # Create a disabled row
       kbagent config row-create --project P --component-id C --config-id ID \\
@@ -2074,13 +2036,13 @@ def config_row_create(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "config_service")
 
-    config_dict: dict | None = None
-    if configuration:
-        try:
-            config_dict = _parse_json_input(configuration, label="--configuration")
-        except ValueError as exc:
-            formatter.error(message=str(exc), error_code=ErrorCode.VALIDATION_ERROR)
-            raise typer.Exit(code=2) from None
+    try:
+        config_dict = _parse_json_input(
+            configuration or None, configuration_file, label="--configuration"
+        )
+    except ValueError as exc:
+        formatter.error(message=str(exc), error_code=ErrorCode.VALIDATION_ERROR)
+        raise typer.Exit(code=2) from None
 
     try:
         result = service.create_config_row(
@@ -2148,7 +2110,13 @@ def config_row_update(
     configuration: str | None = typer.Option(
         None,
         "--configuration",
-        help="Row configuration JSON: inline, @file.json, or - for stdin",
+        help="Row configuration JSON, inline",
+    ),
+    configuration_file: Path | None = typer.Option(
+        None,
+        "--configuration-file",
+        help="Read the row configuration JSON from a file (- for stdin)",
+        allow_dash=True,
     ),
     set_values: list[str] | None = typer.Option(
         None,
@@ -2195,7 +2163,7 @@ def config_row_update(
 
     \b
     Content options modify the row configuration JSON:
-      --configuration : provide a full JSON blob (inline, @file, or -)
+      --configuration / --configuration-file : a full JSON blob (inline, or a file; - for stdin)
       --set PATH=VALUE : set a single nested key (repeatable)
       --merge : deep-merge into existing row config (preserves sibling keys)
       --dry-run : preview changes without applying
@@ -2207,7 +2175,7 @@ def config_row_update(
 
       # Replace row configuration from a file
       kbagent config row-update --project P --component-id C --config-id ID --row-id R \\
-        --configuration @row.json
+        --configuration-file row.json
 
       # Set a single nested value (merge implied)
       kbagent config row-update --project P --component-id C --config-id ID --row-id R \\
@@ -2241,13 +2209,13 @@ def config_row_update(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "config_service")
 
-    config_dict: dict | None = None
-    if configuration:
-        try:
-            config_dict = _parse_json_input(configuration, label="--configuration")
-        except ValueError as exc:
-            formatter.error(message=str(exc), error_code=ErrorCode.VALIDATION_ERROR)
-            raise typer.Exit(code=2) from None
+    try:
+        config_dict = _parse_json_input(
+            configuration or None, configuration_file, label="--configuration"
+        )
+    except ValueError as exc:
+        formatter.error(message=str(exc), error_code=ErrorCode.VALIDATION_ERROR)
+        raise typer.Exit(code=2) from None
 
     parsed_sets: list[tuple[str, object]] | None = None
     if set_values:

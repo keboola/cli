@@ -64,7 +64,7 @@ and ask.
 | Replace the whole target-project list in one call | `scope set --target-project X --target-project Y` |
 | Revoke every grant (item becomes owner-only again) | `scope set --clear` |
 | Ask an org-admin to make an item org-wide | `scope request-create` (owner-only) |
-| Cancel a pending elevation request | `scope request-delete` (owner-only) |
+| Cancel a pending elevation request | `scope request-cancel` (owner-only) |
 | Actually make an item org-wide (org-admin token) | `scope set --scope organization --yes` (preview with `--dry-run`) |
 | Find items awaiting an elevation decision | `scope request-list --type T` (org-admin token) |
 
@@ -77,10 +77,10 @@ and ask.
 kbagent --json semantic-layer add metric \
   --project prod --model core_model \
   --name gross_margin --sql "SUM(revenue) - SUM(cogs)" --dataset out.c-fin.fact_pnl \
-  --scope targeted --target-project analytics-prod,5678
+  --scope targeted --target-project analytics-prod --target-project 5678
 ```
 
-`--target-project` is repeatable or comma-separated and takes a registered
+`--target-project` is repeated once per project and takes a registered
 project **alias** or a numeric project **ID** (so the target need not be
 registered). An alias must be on the owner project's stack. Omitting
 `--target-project` with `--scope targeted`:
@@ -110,7 +110,7 @@ kbagent semantic-layer scope remove --project prod --type metric --context-id <u
 
 # Replace the whole set in one round trip (the API's native semantics)
 kbagent semantic-layer scope set --project prod --type metric --context-id <uuid> \
-  --target-project analytics-prod,5678
+  --target-project analytics-prod --target-project 5678
 
 # Revoke every grant -- item becomes owner-only again
 kbagent semantic-layer scope set --project prod --type metric --context-id <uuid> --clear
@@ -145,7 +145,7 @@ kbagent semantic-layer scope set --project prod --type dataset --context-id <uui
 A caller who already holds the organization-admin role can run step 3
 directly (skipping step 1) -- `request-create` exists for the common case
 where the owner and the admin are different people/tokens.
-`scope request-delete` cancels a pending request before an admin acts on it.
+`scope request-cancel` cancels a pending request before an admin acts on it.
 
 `--scope organization` is gated as **destructive** by the permission engine
 (`--deny-destructive` blocks it, here and on `model create` / `add <kind>`);

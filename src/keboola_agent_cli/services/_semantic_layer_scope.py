@@ -28,12 +28,24 @@ DEFAULT_REQUEST_LIST_LIMIT = 50
 
 
 def parse_target_projects(values: list[str] | None) -> list[str]:
-    """Flatten repeatable and comma-separated ``--target-project`` values, de-duplicated."""
+    """The ``--target-project`` values, one per occurrence, de-duplicated in first-seen order.
+
+    A value with a comma is ``INVALID_ARGUMENT`` (spec A4): the option is
+    repeated once per project.
+    """
     seen: dict[str, None] = {}
     for value in values or []:
-        for part in value.split(","):
-            if part.strip():
-                seen.setdefault(part.strip())
+        if "," in value:
+            raise KeboolaApiError(
+                message=(
+                    f"--target-project takes one value per occurrence, got {value.strip()!r}. "
+                    "Repeat --target-project once per value: --target-project A "
+                    "--target-project B."
+                ),
+                error_code=ErrorCode.INVALID_ARGUMENT,
+            )
+        if value.strip():
+            seen.setdefault(value.strip())
     return list(seen)
 
 
