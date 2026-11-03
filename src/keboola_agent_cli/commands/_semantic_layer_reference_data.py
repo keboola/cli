@@ -108,8 +108,28 @@ def _print_reference_data_delete_result(console: Console, data: dict) -> None:
     )
 
 
-def _load_members(formatter: Any, members_file: str) -> list[dict]:
-    """Read a JSON array of member objects from a file or ``-`` (stdin)."""
+def _load_members(formatter: Any, members: str | None, members_file: str | None) -> list[dict]:
+    """The JSON array of member objects of ``--members`` (inline) or ``--members-file``.
+
+    ``--members-file`` is a path or ``-`` (stdin). Exactly one is required.
+    """
+    if (members is None) == (members_file is None):
+        formatter.error(
+            message="Pass exactly one of --members JSON or --members-file PATH.",
+            error_code=ErrorCode.USAGE_ERROR,
+        )
+        raise typer.Exit(code=2)
+    if members is not None:
+        try:
+            parsed = json.loads(members)
+        except json.JSONDecodeError as exc:
+            formatter.error(
+                message=f"--members is not valid JSON: {exc}",
+                error_code=ErrorCode.VALIDATION_ERROR,
+            )
+            raise typer.Exit(code=2) from exc
+        return _require_member_list(formatter, parsed)
+    assert members_file is not None  # guaranteed by the exactly-one check above
     try:
         raw = (
             sys.stdin.read()
@@ -130,6 +150,11 @@ def _load_members(formatter: Any, members_file: str) -> list[dict]:
             error_code=ErrorCode.VALIDATION_ERROR,
         )
         raise typer.Exit(code=2) from exc
+    return _require_member_list(formatter, parsed)
+
+
+def _require_member_list(formatter: Any, parsed: Any) -> list[dict]:
+    """Exit 2 when the members value is not a JSON array."""
     if not isinstance(parsed, list):
         formatter.error(
             message="Members file must contain a JSON array of member objects.",
@@ -158,7 +183,7 @@ def reference_data_list(
 def reference_data_get(
     ctx: typer.Context,
     project: str = typer.Option(..., "--project", help="Project alias"),
-    id_: str | None = typer.Option(None, "--id", help="Record UUID"),
+    id_: str | None = typer.Option(None, "--id", "--reference-data-id", help="Record UUID"),
     dimension: str | None = typer.Option(
         None, "--dimension", help="Dimension name (project-unique; instead of --id)"
     ),
@@ -196,10 +221,13 @@ def reference_data_set(
     dimension: str = typer.Option(
         ..., "--dimension", help="Dimension name, e.g. 'chart_of_accounts'"
     ),
-    members_file: str = typer.Option(
-        ...,
+    members_file: str | None = typer.Option(
+        None,
         "--members-file",
         help="Path to a JSON array of member objects ('-' reads stdin).",
+    ),
+    members: str | None = typer.Option(
+        None, "--members", help="JSON array of member objects, inline (instead of --members-file)."
     ),
     dataset_id: str | None = typer.Option(
         None, "--dataset-id", help="Optional tableId of the descriptive dataset (e.g. DIM_COA)"
@@ -213,14 +241,14 @@ def reference_data_set(
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
-    members = _load_members(formatter, members_file)
+    member_list = _load_members(formatter, members, members_file)
     result = _handle_service_call(
         ctx,
         service.set_reference_data,
         alias=project,
         model_name_or_uuid=model,
         dimension=dimension,
-        members=members,
+        members=member_list,
         dataset_id=dataset_id,
         description=description,
     )
@@ -231,7 +259,7 @@ def reference_data_set(
 def reference_data_delete(
     ctx: typer.Context,
     project: str = typer.Option(..., "--project", help="Project alias"),
-    id_: str = typer.Option(..., "--id", help="Record UUID"),
+    id_: str = typer.Option(..., "--id", "--reference-data-id", help="Record UUID"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirm prompt"),
 ) -> None:
     """Delete a reference-data record by UUID (server-side soft-delete)."""

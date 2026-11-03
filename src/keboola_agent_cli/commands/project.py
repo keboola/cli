@@ -773,11 +773,14 @@ def project_description_set(
         "--project",
         help="Project alias to update",
     ),
-    text: str | None = typer.Option(None, "--text", help="Inline description string"),
+    text: str | None = typer.Option(
+        None, "--text", "--description", help="Inline description string"
+    ),
     file: Path | None = typer.Option(
         None,
         "--file",
-        help="Read description from a UTF-8 markdown file",
+        "--description-file",
+        help="Read description from a UTF-8 markdown file (- for stdin)",
     ),
     stdin: bool = typer.Option(
         False,
@@ -1022,6 +1025,7 @@ def project_invite(
     from_csv: Path | None = typer.Option(
         None,
         "--from-csv",
+        "--file",
         help="CSV file with columns email, project (alias or numeric ID), role[, reason]",
     ),
     default_role: ProjectRole | None = typer.Option(

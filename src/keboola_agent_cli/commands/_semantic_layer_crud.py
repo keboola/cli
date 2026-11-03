@@ -237,10 +237,16 @@ def add_constraint(
         "--rule",
         help='Rule expression STRING (e.g. "value >= 0"). NOT an object.',
     ),
-    metrics: str = typer.Option(
-        ...,
+    metrics: str | None = typer.Option(
+        None,
         "--metrics",
         help="Comma-separated list of metric names this constraint applies to.",
+    ),
+    metric: list[str] | None = typer.Option(
+        None,
+        "--metric",
+        help="Metric name this constraint applies to (repeat for more metrics); "
+        "merged with --metrics.",
     ),
     severity: str = typer.Option(
         "warning", "--severity", help="One of: error|warning|info (the 3-level API enum)."
@@ -251,7 +257,11 @@ def add_constraint(
     """Add a constraint."""
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
-    metrics_list = [m.strip() for m in metrics.split(",") if m.strip()]
+    if metrics is None and not metric:
+        raise typer.BadParameter("Missing option '--metrics' (or --metric).")
+    # --metric (the 1.x name) adds to the --metrics list
+    metrics_list = [m.strip() for m in (metrics or "").split(",") if m.strip()]
+    metrics_list += [m.strip() for m in metric or [] if m.strip()]
     if not metrics_list:
         formatter.error(
             message="--metrics must contain at least one metric name.",
@@ -463,6 +473,11 @@ def edit_constraint(
     new_metrics: str | None = typer.Option(
         None, "--new-metrics", help="Comma-separated list of metric names"
     ),
+    new_metric: list[str] | None = typer.Option(
+        None,
+        "--new-metric",
+        help="Replace the metric names (repeat for more metrics); merged with --new-metrics",
+    ),
 ) -> None:
     """Edit a constraint (in-place update, with local validators)."""
     formatter = get_formatter(ctx)
@@ -472,6 +487,8 @@ def edit_constraint(
         if new_metrics is not None
         else None
     )
+    if new_metric:  # --new-metric (the 1.x name) adds to the --new-metrics list
+        metrics_list = [*(metrics_list or []), *(m.strip() for m in new_metric if m.strip())]
     result = _handle_service_call(
         ctx,
         service.edit_constraint,

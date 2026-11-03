@@ -18,6 +18,7 @@ from ._helpers import (
     get_formatter,
     get_service,
     map_error_to_exit_code,
+    read_file_arg,
 )
 
 encrypt_app = typer.Typer(
@@ -43,10 +44,16 @@ def encrypt_values(
         "--component-id",
         help="Keboola component ID (e.g. keboola.python-transformation-v2)",
     ),
-    input_data: str = typer.Option(
-        ...,
+    input_data: str | None = typer.Option(
+        None,
         "--input",
+        "--values",
         help="JSON to encrypt: inline JSON, @file.json, or - for stdin",
+    ),
+    values_file: Path | None = typer.Option(
+        None,
+        "--values-file",
+        help="Read the JSON object to encrypt from a file (- for stdin)",
     ),
     output_file: Path | None = typer.Option(
         None,
@@ -70,9 +77,20 @@ def encrypt_values(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "encrypt_service")
 
+    if (input_data is None) == (values_file is None):
+        formatter.error(
+            message="Pass exactly one of --input/--values JSON or --values-file PATH.",
+            error_code=ErrorCode.USAGE_ERROR,
+        )
+        raise typer.Exit(code=2)
+
     # Parse input
     try:
-        parsed = _parse_input(input_data)
+        parsed = (
+            read_file_arg(values_file, label="--values-file", loads=json.loads)
+            if values_file is not None
+            else _parse_input(input_data or "")
+        )
     except (json.JSONDecodeError, FileNotFoundError, ValueError) as exc:
         formatter.error(message=str(exc), error_code=ErrorCode.INPUT_ERROR)
         raise typer.Exit(code=2) from None

@@ -16,18 +16,20 @@ of :mod:`keboola_agent_cli.services.http_forwarder_service`.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 import typer
 
 from ..constants import HTTP_DEFAULT_TIMEOUT
+from ..errors import ErrorCode
 from ..output import write_machine_output
 from ..services.http_forwarder_service import (
     ForwardedResponse,
     ForwarderError,
     HttpForwarderService,
 )
-from ._helpers import check_cli_permission, get_formatter
+from ._helpers import check_cli_permission, get_formatter, read_file_arg
 
 http_app = typer.Typer(
     help=(
@@ -78,16 +80,34 @@ def _resolve_service(ctx: typer.Context) -> HttpForwarderService:
     return svc if isinstance(svc, HttpForwarderService) else HttpForwarderService()
 
 
+def _body_from_file(formatter: Any, body: str | None, body_file: Path) -> str:
+    """The ``--body-file`` JSON (a path, ``-`` = stdin), re-serialized for the service."""
+    if body:
+        formatter.error(
+            message="--body and --body-file are mutually exclusive; pass one of them.",
+            error_code=ErrorCode.USAGE_ERROR,
+        )
+        raise typer.Exit(code=2)
+    try:
+        return json.dumps(read_file_arg(body_file, label="--body-file", loads=json.loads))
+    except ValueError as exc:
+        formatter.error(message=str(exc), error_code=ErrorCode.CONFIG_ERROR)
+        raise typer.Exit(code=2) from None
+
+
 def _do_request(
     ctx: typer.Context,
     method: str,
     path: str,
     body: str | None,
     timeout: float,
+    body_file: Path | None = None,
 ) -> None:
     """Shared dispatch for get/post/patch/delete -- thin wrapper layer."""
     formatter = get_formatter(ctx)
     service = _resolve_service(ctx)
+    if body_file is not None:
+        body = _body_from_file(formatter, body, body_file)
     try:
         result: ForwardedResponse = service.request(
             method,
@@ -129,12 +149,15 @@ def http_post(
         "-d",
         help="JSON body: inline JSON, @file.json, or - for stdin",
     ),
+    body_file: Path | None = typer.Option(
+        None, "--body-file", help="Read the JSON body from a file (- for stdin)"
+    ),
     timeout: float = typer.Option(
         HTTP_DEFAULT_TIMEOUT, "--timeout", help="Request timeout (seconds)"
     ),
 ) -> None:
     """POST to an endpoint on the running kbagent serve."""
-    _do_request(ctx, "POST", path, body=body, timeout=timeout)
+    _do_request(ctx, "POST", path, body=body, timeout=timeout, body_file=body_file)
 
 
 @http_app.command("patch")
@@ -147,12 +170,15 @@ def http_patch(
         "-d",
         help="JSON body: inline JSON, @file.json, or - for stdin",
     ),
+    body_file: Path | None = typer.Option(
+        None, "--body-file", help="Read the JSON body from a file (- for stdin)"
+    ),
     timeout: float = typer.Option(
         HTTP_DEFAULT_TIMEOUT, "--timeout", help="Request timeout (seconds)"
     ),
 ) -> None:
     """PATCH an endpoint on the running kbagent serve."""
-    _do_request(ctx, "PATCH", path, body=body, timeout=timeout)
+    _do_request(ctx, "PATCH", path, body=body, timeout=timeout, body_file=body_file)
 
 
 @http_app.command("delete")

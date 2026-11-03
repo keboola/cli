@@ -238,13 +238,20 @@ class SharingService(BaseService):
         self,
         alias: str,
         bucket_id: str,
+        dry_run: bool = False,
     ) -> dict[str, Any]:
         """Delete a linked bucket from the target project.
 
         Uses the regular project token.
 
+        Args:
+            alias: Project alias.
+            bucket_id: Linked bucket ID.
+            dry_run: Read the bucket (one GET), check that it is a linked
+                bucket, and delete nothing.
+
         Returns:
-            Dict with operation result.
+            Dict with operation result, or the preview with ``dry_run: true``.
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
@@ -261,10 +268,19 @@ class SharingService(BaseService):
                     error_code=ErrorCode.NOT_LINKED_BUCKET,
                     retryable=False,
                 )
-            client.delete_bucket(bucket_id=bucket_id, force=True)
+            if not dry_run:
+                client.delete_bucket(bucket_id=bucket_id, force=True)
         finally:
             client.close()
 
+        if dry_run:
+            return {
+                "project_alias": alias,
+                "bucket_id": bucket_id,
+                "source_bucket_id": bucket["sourceBucket"].get("id"),
+                "dry_run": True,
+                "message": f"Would delete linked bucket '{bucket_id}' from project '{alias}'.",
+            }
         return {
             "project_alias": alias,
             "bucket_id": bucket_id,

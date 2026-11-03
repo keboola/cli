@@ -11,6 +11,22 @@ Versioning convention:
   behavior; the inline `(updated vX.Y.Z)` records when the refinement landed.
 -->
 
+## The option names of kbagent 1.x are accepted on 0.x
+
+*(since vNEXT)* (#791)
+
+kbagent 1.0.0 renames many options and removes the old names. This version accepts the 1.x names too, so one command works on this version and on 1.x. The old names keep working on 0.x with the same behavior.
+
+- **Second names of an existing option** (same value, same behavior): `semantic-layer reference-data get/delete --reference-data-id` (`--id`), `storage describe-batch --file` (`--from-file`), `project invite --file` (`--from-csv`), `storage create-table --not-null-column` (`--not-null`), `storage download-table/unload-table` and `token list --column` (`--columns`), `workspace load --table-id` (`--tables`), `lineage show/info/server --file` (`--load`), `workspace query --sql-file` (`--file`), `data-app secrets-set --secret-file` (`--secrets-file`), `dev-portal create/patch --data-file` (`--data`, a path).
+- **Text input**: `storage describe-bucket`, `storage describe-table` and `project description-set` take `--description` (`--text`) and `--description-file` (`--file`); `branch metadata-set` takes `--value` (`--text`) and `--value-file` (`--file`).
+- **JSON or YAML input**: `--X` inline and `--X-file PATH`. `agent create/test --definition` (`--from-file`) and `--definition-file`; `flow new/update/validate --definition` (`--file`) and `--definition-file`; `encrypt values --values` (`--input`) and `--values-file`; `semantic-layer reference-data set --members` (inline JSON, next to `--members-file`). New file options: `config row-create/row-update --configuration-file`, `config state-set --state-file`, `component sync-action --config-data-file`, `http post/patch --body-file`, `merge-request resolve --resolved-file`, `transformation edit --storage-file`, `agent run --runtime-input-file`. An inline option and its `--X-file` together are a usage error (exit 2).
+- **`-` reads stdin** in every `--X-file` option above, and also in `config update/new --configuration-file`, `transformation edit --op-file`, `transformation create --sql-file`, `data-app create --description-file`, `dev-portal patch --value-file`, and in the old names that are the same option as a new `--X-file` (`--file` of the text-input commands and of `workspace query`, `--secrets-file`). On 0.x the inline options keep `@path` and `-`; on 1.x they take inline text only.
+- **List options, one value per occurrence**: `org setup --project-id`, `sharing share --target-project` (project IDs) and `--target-user`, `semantic-layer add constraint --metric`, `edit constraint --new-metric`, `semantic-layer build --table-id`, `semantic-layer import/promote --type`. The values are added to the values of the old comma-separated option when both are given.
+- **`stream detail/delete --source-id ID`** next to the positional `SOURCE_ID`. Both together are a usage error (exit 2).
+- **`semantic-layer scope request-cancel`** is a second name of `scope request-delete` (also under `sl`). Over `kbagent serve` the route is unchanged.
+- **`sharing unlink --dry-run`** reads the bucket, checks that it is a linked bucket and deletes nothing; `--json` returns `dry_run: true`, `source_bucket_id` and the message. `--yes` / `-y` is accepted and changes nothing: on 0.x `sharing unlink` does not ask for confirmation (on 1.x it does). The REST route has no `dry_run` on 0.x.
+- **Not accepted on 0.x**: `dev-portal --data` with inline JSON (on 0.x `--data` is a path; use `--data-file PATH` on both versions), and the short `-t` of `semantic-layer import/promote --type`.
+
 ## A code edit after `sync push` created the config is pushed
 
 *(since 0.100.4)*

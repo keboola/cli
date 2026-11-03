@@ -32,7 +32,7 @@ from ..server.agents_store import (
     annotate_removed_action,
 )
 from ..services.agent_service import AgentService
-from ._helpers import check_cli_permission, get_formatter, get_service
+from ._helpers import check_cli_permission, get_formatter, get_service, read_file_arg
 
 agent_app = typer.Typer(help="Scheduled agent tasks (cron / manual / chained)")
 
@@ -66,6 +66,33 @@ def _read_payload(value: str, formatter: OutputFormatter) -> str:
     return value
 
 
+def _inline_or_file(
+    formatter: OutputFormatter,
+    inline: str | None,
+    file: Path | None,
+    *,
+    label: str,
+    file_label: str,
+) -> str | None:
+    """The raw text of ``label`` (inline, ``@path`` or ``-``) or of ``file_label`` (a path, ``-``).
+
+    ``file_label`` is the 1.x ``--X-file`` form. Both given is a usage error.
+    """
+    if inline is not None and file is not None:
+        formatter.error(
+            message=f"{label} and {file_label} are mutually exclusive; pass one of them.",
+            error_code=ErrorCode.USAGE_ERROR,
+        )
+        raise typer.Exit(code=2) from None
+    if file is None:
+        return None if inline is None else _read_payload(inline, formatter)
+    try:
+        return read_file_arg(file, label=file_label)
+    except ValueError as exc:
+        formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
+        raise typer.Exit(code=2) from None
+
+
 def _parse_json(value: str, formatter: OutputFormatter, *, label: str) -> dict[str, Any]:
     """Decode a JSON string into a dict, exiting cleanly on bad JSON."""
     try:
@@ -90,6 +117,7 @@ def _action_from_flags(
     *,
     action_type: str | None,
     from_file: str | None,
+    definition_file: Path | None,
     cli: str | None,
     prompt: str | None,
     extra_arg: list[str],
@@ -106,8 +134,10 @@ def _action_from_flags(
     Action types listed in ``REMOVED_ACTION_TYPES`` are refused on both
     paths (exit 2) -- they no longer execute anywhere.
     """
-    if from_file is not None:
-        raw = _read_payload(from_file, formatter)
+    raw = _inline_or_file(
+        formatter, from_file, definition_file, label="--from-file", file_label="--definition-file"
+    )
+    if raw is not None:
         payload = _parse_json(raw, formatter, label="--from-file")
         try:
             action = AgentAction.model_validate(payload)
@@ -552,7 +582,13 @@ def agent_create(
     from_file: str | None = typer.Option(
         None,
         "--from-file",
+        "--definition",
         help='Full action JSON ({"type": "...", "params": {...}}): inline, @path, or - for stdin.',
+    ),
+    definition_file: Path | None = typer.Option(
+        None,
+        "--definition-file",
+        help="Read the full action JSON from a file (- for stdin).",
     ),
     cli: str | None = typer.Option(None, "--cli", help="ai_agent: claude|codex|gemini"),
     prompt: str | None = typer.Option(None, "--prompt", help="ai_agent: prompt body"),
@@ -589,6 +625,7 @@ def agent_create(
         formatter,
         action_type=action_type,
         from_file=from_file,
+        definition_file=definition_file,
         cli=cli,
         prompt=prompt,
         extra_arg=list(extra_arg),
@@ -724,6 +761,11 @@ def agent_run(
         "--runtime-input",
         help="JSON input merged into the action params for this run only. Inline, @path, or -.",
     ),
+    runtime_input_file: Path | None = typer.Option(
+        None,
+        "--runtime-input-file",
+        help="Read the runtime input JSON from a file (- for stdin).",
+    ),
 ) -> None:
     """Trigger a task immediately (does not wait for the next cron firing).
 
@@ -739,8 +781,14 @@ def agent_run(
     service: AgentService = get_service(ctx, "agent_service")
     task_id = _resolve_id(formatter, task_id, task_id_opt, label="Task ID", flag="--id/--task-id")
     runtime: dict[str, Any] | None = None
-    if runtime_input:
-        raw = _read_payload(runtime_input, formatter)
+    raw = _inline_or_file(
+        formatter,
+        runtime_input or None,
+        runtime_input_file,
+        label="--runtime-input",
+        file_label="--runtime-input-file",
+    )
+    if raw is not None:
         runtime = _parse_json(raw, formatter, label="--runtime-input")
     if runtime_prompt:
         runtime = dict(runtime or {})
@@ -856,7 +904,12 @@ def agent_test(
         False, "--stream", help="Stream events live instead of returning the final run record."
     ),
     action_type: str | None = typer.Option(None, "--type", help="ai_agent|cli_command"),
-    from_file: str | None = typer.Option(None, "--from-file", help="Action JSON (or @path / -)."),
+    from_file: str | None = typer.Option(
+        None, "--from-file", "--definition", help="Action JSON (or @path / -)."
+    ),
+    definition_file: Path | None = typer.Option(
+        None, "--definition-file", help="Read the action JSON from a file (- for stdin)."
+    ),
     cli: str | None = typer.Option(None, "--cli"),
     prompt: str | None = typer.Option(None, "--prompt"),
     extra_arg: list[str] = typer.Option([], "--extra-arg"),
@@ -874,6 +927,7 @@ def agent_test(
         formatter,
         action_type=action_type,
         from_file=from_file,
+        definition_file=definition_file,
         cli=cli,
         prompt=prompt,
         extra_arg=list(extra_arg),

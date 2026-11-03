@@ -235,6 +235,10 @@ def scope_request_delete(
     formatter.output(result, _print_scope_status)
 
 
+# `request-cancel` is the kbagent 1.x name of `request-delete`: the same command.
+scope_app.command("request-cancel")(scope_request_delete)
+
+
 @scope_app.command("request-list")
 def scope_request_list(
     ctx: typer.Context,

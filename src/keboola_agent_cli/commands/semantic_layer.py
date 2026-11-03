@@ -478,6 +478,11 @@ def semantic_layer_build(
         "--tables",
         help="Comma-separated tableIds to base the model on (required).",
     ),
+    table_id: list[str] | None = typer.Option(
+        None,
+        "--table-id",
+        help="Table ID to base the model on (repeat for more tables); merged with --tables.",
+    ),
     name: str | None = typer.Option(
         None, "--name", help="Model name when creating (default: kbagent_build_model)."
     ),
@@ -527,13 +532,15 @@ def semantic_layer_build(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
 
-    if not tables:
+    if not tables and not table_id:
         formatter.error(
             message="--tables is required (comma-separated tableIds).",
             error_code=ErrorCode.MISSING_PARAMETER,
         )
         raise typer.Exit(code=2)
-    table_ids = [t.strip() for t in tables.split(",") if t.strip()]
+    # --table-id (the 1.x name) adds to the --tables list
+    table_ids = [t.strip() for t in (tables or "").split(",") if t.strip()]
+    table_ids += [t.strip() for t in table_id or [] if t.strip()]
     if not table_ids:
         formatter.error(
             message="--tables contained no tableIds.",
@@ -580,6 +587,11 @@ def semantic_layer_promote(
         "--types",
         help="Comma-separated subset (datasets,metrics,relationships,glossary,constraints)",
     ),
+    type_: list[str] | None = typer.Option(
+        None,
+        "--type",
+        help="Item type to copy (repeat for more types); merged with --types.",
+    ),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Classify NEW/IDENTICAL/CHANGED without writing"
     ),
@@ -600,6 +612,8 @@ def semantic_layer_promote(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
     type_list = [t.strip() for t in types.split(",") if t.strip()] if types else None
+    if type_:  # --type (the 1.x name) adds to the --types list
+        type_list = [*(type_list or []), *(t.strip() for t in type_ if t.strip())]
 
     if (
         not yes
@@ -657,6 +671,11 @@ def semantic_layer_import(
             "Comma-separated subset to import: datasets,metrics,relationships,glossary,constraints"
         ),
     ),
+    type_: list[str] | None = typer.Option(
+        None,
+        "--type",
+        help="Item type to import (repeat for more types); merged with --types.",
+    ),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Plan the import without calling any write API"
     ),
@@ -678,6 +697,8 @@ def semantic_layer_import(
     # still opt into destructive overwrite via --overwrite.
     _ = yes  # explicit (no behavioural effect when --overwrite is False)
     type_list = [t.strip() for t in types.split(",") if t.strip()] if types else None
+    if type_:  # --type (the 1.x name) adds to the --types list
+        type_list = [*(type_list or []), *(t.strip() for t in type_ if t.strip())]
     target_projects = resolve_scope_targets(
         ctx,
         operation="semantic-layer.import",

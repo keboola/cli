@@ -173,6 +173,11 @@ def org_setup(
         "--project-ids",
         help="Comma-separated project IDs (works with Personal Access Token)",
     ),
+    project_id: list[int] | None = typer.Option(
+        None,
+        "--project-id",
+        help="Project ID (repeat for more projects); merged with --project-ids",
+    ),
     url: str = typer.Option(
         ...,
         "--url",
@@ -228,6 +233,8 @@ def org_setup(
 
     # Validate: need at least one of --org-id or --project-ids
     project_ids = _parse_project_ids(project_ids_raw)
+    if project_id:  # --project-id (the 1.x name) adds to the --project-ids list
+        project_ids = [*(project_ids or []), *project_id]
     if not org_id and not project_ids:
         formatter.error(
             message="Provide --org-id (org admin) or --project-ids (project member)",
