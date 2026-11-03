@@ -6,7 +6,10 @@ Enable data sharing between Keboola projects:
 - list: browse available shared buckets
 """
 
+from typing import Any
+
 import typer
+from rich.console import Console
 
 from ..constants import BUCKET_STAGES, DEFAULT_LINK_STAGE
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
@@ -17,12 +20,12 @@ from ._all_projects import (
     finish_fanout,
 )
 from ._helpers import (
+    _confirm_or_abort,
     check_cli_permission,
     emit_api_error,
     get_formatter,
     get_service,
     map_error_to_exit_code,
-    split_int_multi,
     split_multi,
 )
 from ._project_ref import PROJECT_DEFAULT
@@ -120,19 +123,22 @@ def sharing_share(
         help=(
             "Sharing type: 'organization' (all org members), "
             "'organization-project' (all project members in org), "
-            "'selected-projects' (specific projects, use --target-project-ids), "
-            "'selected-users' (specific users, use --target-users)."
+            "'selected-projects' (specific projects, use --target-project), "
+            "'selected-users' (specific users, use --target-user)."
         ),
     ),
-    target_project_ids: list[str] | None = typer.Option(
+    target_project: list[str] | None = typer.Option(
         None,
-        "--target-project-ids",
-        help="Project ID (repeatable or comma-separated; required for --type selected-projects).",
+        "--target-project",
+        help=(
+            "Project alias or ID to share with (repeat for more projects; required for "
+            "--type selected-projects)."
+        ),
     ),
-    target_users: list[str] | None = typer.Option(
+    target_user: list[str] | None = typer.Option(
         None,
-        "--target-users",
-        help="Email address (repeatable or comma-separated; required for --type selected-users).",
+        "--target-user",
+        help="Email address (repeat for more users; required for --type selected-users).",
     ),
 ) -> None:
     """Enable sharing on a bucket.
@@ -148,27 +154,23 @@ def sharing_share(
     service = get_service(ctx, "sharing_service")
 
     # Parse target lists
-    parsed_project_ids: list[int] | None = None
+    parsed_projects: list[str] | None = None
     parsed_users: list[str] | None = None
 
     if sharing_type == "selected-projects":
-        try:
-            parsed_project_ids = split_int_multi(target_project_ids, label="--target-project-ids")
-        except ValueError as exc:
-            formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
-            raise typer.Exit(code=2) from None
-        if not parsed_project_ids:
+        parsed_projects = split_multi(target_project, label="--target-project")
+        if not parsed_projects:
             formatter.error(
-                message="--target-project-ids is required for --type selected-projects",
+                message="--target-project is required for --type selected-projects",
                 error_code=ErrorCode.USAGE_ERROR,
             )
             raise typer.Exit(code=2)
 
     if sharing_type == "selected-users":
-        parsed_users = split_multi(target_users)
+        parsed_users = split_multi(target_user, label="--target-user")
         if not parsed_users:
             formatter.error(
-                message="--target-users is required for --type selected-users",
+                message="--target-user is required for --type selected-users",
                 error_code=ErrorCode.USAGE_ERROR,
             )
             raise typer.Exit(code=2)
@@ -178,7 +180,7 @@ def sharing_share(
             alias=project,
             bucket_id=bucket_id,
             sharing_type=sharing_type,
-            target_project_ids=parsed_project_ids,
+            target_projects=parsed_projects,
             target_users=parsed_users,
         )
     except ConfigError as exc:
@@ -307,6 +309,16 @@ def sharing_link(
         formatter.success(result["message"])
 
 
+def _print_unlink_result(console: Console, data: dict[str, Any]) -> None:
+    """Human output of `sharing unlink`, also for `--dry-run`."""
+    label = (
+        "[bold blue]Dry run:[/bold blue]"
+        if data.get("dry_run")
+        else "[bold green]Success:[/bold green]"
+    )
+    console.print(f"{label} {data['message']}")
+
+
 @sharing_app.command("unlink")
 def sharing_unlink(
     ctx: typer.Context,
@@ -321,17 +333,30 @@ def sharing_unlink(
         "--bucket-id",
         help="Linked bucket ID to remove (e.g. in.c-shared-data).",
     ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Check that the bucket is a linked bucket and show what would be deleted",
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
 ) -> None:
-    """Remove a linked bucket from a project.
+    """Remove a linked bucket from a project (destructive).
 
-    Deletes the linked bucket. Does not affect the source bucket or
-    other projects that have linked it. Uses the regular project token.
+    Deletes the linked bucket and the tables it shows in this project. Does
+    not affect the source bucket or other projects that have linked it.
+    Uses the regular project token.
     """
     formatter = get_formatter(ctx)
+    if not dry_run:
+        _confirm_or_abort(
+            formatter,
+            yes,
+            f"Delete linked bucket '{bucket_id}' from project {project}?",
+        )
     service = get_service(ctx, "sharing_service")
 
     try:
-        result = service.unlink(alias=project, bucket_id=bucket_id)
+        result = service.unlink(alias=project, bucket_id=bucket_id, dry_run=dry_run)
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
@@ -339,10 +364,7 @@ def sharing_unlink(
         emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
-    if formatter.json_mode:
-        formatter.output(result)
-    else:
-        formatter.success(result["message"])
+    formatter.output(result, _print_unlink_result)
 
 
 @sharing_app.command("edges")

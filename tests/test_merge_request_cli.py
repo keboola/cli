@@ -1221,8 +1221,8 @@ class TestResolve:
             [
                 "--json",
                 *_RESOLVE,
-                "--resolved",
-                f"@{path}",
+                "--resolved-file",
+                str(path),
                 "--change-description",
                 "merged by hand",
             ],
@@ -1268,7 +1268,7 @@ class TestResolve:
     ) -> None:
         # OSError from the file read is a usage error.
         result = _run(
-            ["--json", *_RESOLVE, "--resolved", f"@{tmp_path}"], _store(tmp_path), service
+            ["--json", *_RESOLVE, "--resolved-file", str(tmp_path)], _store(tmp_path), service
         )
         assert result.exit_code == 2, result.output
         service.resolve_conflict.assert_not_called()

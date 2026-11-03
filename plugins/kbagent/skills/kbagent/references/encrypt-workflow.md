@@ -45,7 +45,7 @@ it.)
 kbagent --json encrypt values \
   --project my-proj \
   --component-id keboola.ex-db-snowflake \
-  --input '{"#password": "my-secret-password"}'
+  --values '{"#password": "my-secret-password"}'
 
 # Output: {"#password": "KBC::ProjectSecure::...encrypted..."}
 ```
@@ -59,7 +59,7 @@ The primary use case -- encrypt, then pass the ciphertext to a write:
 CIPHER=$(kbagent --json encrypt values \
   --project my-proj \
   --component-id keboola.python-transformation-v2 \
-  --input '{"#api_token": "rotated-value"}' \
+  --values '{"#api_token": "rotated-value"}' \
   | jq -r '.data["#api_token"]')
 
 # Step 2: Write it
@@ -75,7 +75,7 @@ Or encrypt from a file:
 kbagent --json encrypt values \
   --project prod \
   --component-id keboola.ex-db-snowflake \
-  --input @secrets.json \
+  --values-file secrets.json \
   --output-file encrypted.json
 ```
 
@@ -83,9 +83,9 @@ kbagent --json encrypt values \
 
 | Format | Example | When to use |
 |--------|---------|-------------|
-| Inline JSON | `--input '{"#key": "val"}'` | Quick single-value encryption |
-| File | `--input @secrets.json` | Multiple values, avoid shell escaping |
-| Stdin | `--input -` | Pipe from another command, scripting |
+| Inline JSON | `--values '{"#key": "val"}'` | Quick single-value encryption |
+| File | `--values-file secrets.json` | Multiple values, avoid shell escaping |
+| Stdin | `--values-file -` | Pipe from another command, scripting |
 | Output file | `--output-file enc.json` | Save encrypted values (0600 permissions) |
 
 ## Rules

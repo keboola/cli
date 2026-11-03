@@ -67,8 +67,7 @@ They are passed verbatim to the AI CLI and can disable its safety rails, so
 ### Create + inspect + run
 
 The convenience flags cover the typical single-action case. For complex
-payloads, use `--from-file @path` (or `-` for stdin) with the full JSON envelope.
-A bare path is read as inline JSON and fails.
+payloads, use `--definition-file PATH` (or `-` for stdin) with the full JSON envelope, or `--definition JSON` inline.
 
 ```bash
 # (1) Scheduled cli_command -- daily 06:00 health check
@@ -92,65 +91,65 @@ kbagent agent create \
 kbagent agent create \
   --name "Weekly Triage" \
   --cron "0 8 * * 1" \
-  --from-file @task.action.json
+  --definition-file task.action.json
 
 # List + show what was registered
 kbagent agent list
-kbagent agent show <task_id>
+kbagent agent show --task-id <task_id>
 ```
 
-> **ID forms:** every subcommand that takes a task/run ID
-> accepts it positionally (`agent show <task_id>`) or via a named flag
-> (`--task-id`, plus `--run-id` for `run-detail` / `run-events`) --
-> matching the rest of the CLI (`--job-id`, `--config-id`, ...). Examples
-> below use the positional form for brevity.
+> **ID forms:** name a task with `--task-id` and a run with `--run-id`
+> (`run-detail` / `run-events`), like `--job-id` and `--config-id` in the
+> rest of the CLI. These options work on 0.x and 1.x. *(since vNEXT)* 1.x
+> removes the positional `TASK_ID` / `RUN_ID`; the usage error names the
+> option.
 
 ### Run-on-demand (blocking + streaming)
 
 ```bash
 # Blocking: print the AgentRun record once the action finishes.
-kbagent agent run <task_id>
+kbagent agent run --task-id <task_id>
 
 # Live event stream (one line per event in human mode, NDJSON in --json).
-kbagent agent run <task_id> --stream
+kbagent agent run --task-id <task_id> --stream
 
 # Manual tasks accept ad-hoc runtime input merged with the persisted prompt.
-kbagent agent run <task_id> --runtime-prompt "Focus only on prod-snowflake-etl."
+kbagent agent run --task-id <task_id> --runtime-prompt "Focus only on prod-snowflake-etl."
 
 # Or full JSON merge (cli_command also supported).
-kbagent agent run <task_id> --runtime-input '{"prompt": "Today only."}'
+kbagent agent run --task-id <task_id> --runtime-input '{"prompt": "Today only."}'
 ```
 
 ### Update + disable + delete
 
 ```bash
 # Toggle enabled/disabled (cron loop respects --enabled, --disabled).
-kbagent agent update <task_id> --disabled
+kbagent agent update --task-id <task_id> --disabled
 
 # Flip a cron task to manual (preserves cron for later re-enable).
-kbagent agent update <task_id> --manual
+kbagent agent update --task-id <task_id> --manual
 
 # Change the cron expression (next_run_at is recomputed automatically).
-kbagent agent update <task_id> --cron "0 5 * * 1-5"
+kbagent agent update --task-id <task_id> --cron "0 5 * * 1-5"
 
 # Remove a chained downstream trigger.
-kbagent agent update <task_id> --clear-trigger
+kbagent agent update --task-id <task_id> --clear-trigger
 
 # Permanent deletion (run history on disk is preserved).
-kbagent agent delete <task_id> --yes
+kbagent agent delete --task-id <task_id> --yes
 ```
 
 ### Run history
 
 ```bash
 # Most-recent first, default limit 50.
-kbagent agent runs <task_id>
+kbagent agent runs --task-id <task_id>
 
 # A single run record (status, summary, output, error).
-kbagent agent run-detail <task_id> <run_id>
+kbagent agent run-detail --task-id <task_id> --run-id <run_id>
 
 # Per-event timeline -- only ai_agent runs from v0.10+ carry one.
-kbagent agent run-events <task_id> <run_id>
+kbagent agent run-events --task-id <task_id> --run-id <run_id>
 ```
 
 ### Test an action before saving

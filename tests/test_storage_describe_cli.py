@@ -82,7 +82,7 @@ class TestStorageDescribeBucket:
                     "prod",
                     "--bucket-id",
                     "in.c-my-bucket",
-                    "--text",
+                    "--description",
                     "My bucket description",
                 ],
             )
@@ -176,7 +176,7 @@ class TestStorageDescribeBucket:
                     "prod",
                     "--bucket-id",
                     "in.c-missing",
-                    "--text",
+                    "--description",
                     "desc",
                 ],
             )
@@ -228,7 +228,7 @@ class TestStorageDescribeTable:
                     "prod",
                     "--table-id",
                     "in.c-bucket.orders",
-                    "--text",
+                    "--description",
                     "All orders",
                 ],
             )
@@ -325,7 +325,7 @@ class TestStorageDescribeTable:
                     "prod",
                     "--table-id",
                     "in.c-bucket.orders",
-                    "--file",
+                    "--description-file",
                     str(desc_file),
                 ],
             )
@@ -595,7 +595,7 @@ class TestStorageDescribeBatch:
                     "describe-batch",
                     "--project",
                     "prod",
-                    "--from-file",
+                    "--file",
                     str(batch_file),
                 ],
             )
@@ -647,7 +647,7 @@ class TestStorageDescribeBatch:
                     "describe-batch",
                     "--project",
                     "prod",
-                    "--from-file",
+                    "--file",
                     str(missing_file),
                 ],
             )
@@ -701,7 +701,7 @@ class TestStorageDescribeBatch:
                     "describe-batch",
                     "--project",
                     "prod",
-                    "--from-file",
+                    "--file",
                     str(batch_file),
                 ],
             )
@@ -752,7 +752,7 @@ class TestStorageDescribeBatch:
                     "describe-batch",
                     "--project",
                     "prod",
-                    "--from-file",
+                    "--file",
                     str(batch_file),
                 ],
             )
@@ -806,7 +806,7 @@ class TestStorageDescribeBatch:
                     "describe-batch",
                     "--project",
                     "prod",
-                    "--from-file",
+                    "--file",
                     str(batch_file),
                 ],
             )

@@ -57,7 +57,7 @@ kbagent transformation edit --project prod --config-id 123456 \
   element added mid-batch has no id until the next `show`; removed elements
   invalidate later positional references only on the NEXT invocation.
 - Unknown block/code ids fail with the list of currently valid ids.
-- `--storage @storage.json` REPLACES `configuration.storage` wholesale --
+- `--storage JSON` / `--storage-file storage.json` REPLACES `configuration.storage` wholesale --
   include EVERY input/output mapping you want to keep, not just the new ones.
 - `--dry-run` previews the resulting tree + op summary without any PUT.
 

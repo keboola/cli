@@ -346,7 +346,7 @@ class TestCliSchema:
         assert body["data"]["schemas"][0]["schema"]["title"] == "semantic-metric"
         mock.get_schema.assert_called_once_with(alias="prod", types=["metric"])
 
-    def test_multi_type_comma_separated(self, store: ConfigStore) -> None:
+    def test_multi_type_repeated(self, store: ConfigStore) -> None:
         mock = MagicMock()
         mock.get_schema.return_value = {
             "project": "prod",
@@ -363,13 +363,15 @@ class TestCliSchema:
                 "--project",
                 "prod",
                 "--type",
-                "metric, dataset",
+                "metric",
+                "--type",
+                " dataset ",
             ],
             store=store,
             sl_mock=mock,
         )
         assert result.exit_code == 0, result.output
-        # Whitespace around commas is stripped.
+        # Whitespace around a value is stripped.
         mock.get_schema.assert_called_once_with(alias="prod", types=["metric", "dataset"])
 
     def test_all_fetches_every_known_type(self, store: ConfigStore) -> None:
@@ -422,7 +424,7 @@ class TestCliSchema:
     def test_empty_type_list_exit_2(self, store: ConfigStore) -> None:
         mock = MagicMock()
         result = _invoke(
-            ["--json", "semantic-layer", "schema", "--project", "prod", "--type", " , "],
+            ["--json", "semantic-layer", "schema", "--project", "prod", "--type", " "],
             store=store,
             sl_mock=mock,
         )
@@ -472,7 +474,7 @@ class TestCliSchema:
             ],
         }
         result = _invoke(
-            ["semantic-layer", "schema", "--project", "prod", "--type", "metric,dataset"],
+            ["semantic-layer", "schema", "--project", "prod", "--type", "metric", "-t", "dataset"],
             store=store,
             sl_mock=mock,
         )

@@ -1,52 +1,36 @@
-"""Helper for resolving text input from --text, --file, or --stdin.
+"""Helper for resolving text input from ``--<field>`` or ``--<field>-file``.
 
-Shared by `branch metadata-set` and `project description-set`. Enforces
-mutual exclusivity so the CLI fails fast with a clear error instead of
-silently picking one source.
+Shared by `branch metadata-set`, `project description-set` and `storage
+describe-bucket/describe-table`. Enforces mutual exclusivity so the CLI fails
+fast with a clear error instead of silently picking one source (spec rule I2).
 """
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 from ..errors import ConfigError
+from ._helpers import text_input
 
 
-def resolve_text_input(
-    *,
-    text: str | None,
-    file: Path | None,
-    stdin: bool,
-) -> str:
-    """Resolve a single string value from exactly one of three sources.
+def resolve_text_input(*, value: str | None, file: Path | None, option: str) -> str:
+    """Resolve a single string value from exactly one of ``option`` and ``<option>-file``.
 
     Args:
-        text: Inline string value, or None.
-        file: Path to a file to read UTF-8 text from, or None.
-        stdin: If True, read the value from standard input.
+        value: Inline string value, or None.
+        file: Path to a file to read UTF-8 text from (``-`` reads stdin), or None.
+        option: The inline option name, e.g. ``--description``.
 
     Returns:
         The resolved string.
 
     Raises:
-        ConfigError: If zero or more than one source is provided, or if
-            the given file cannot be read.
+        ConfigError: If neither or both sources are provided, or if the given
+            file cannot be read.
     """
-    sources = [text is not None, file is not None, stdin]
-    provided = sum(sources)
-    if provided == 0:
-        raise ConfigError("Specify exactly one of --text, --file, or --stdin.")
-    if provided > 1:
-        raise ConfigError("--text, --file, and --stdin are mutually exclusive.")
-
-    if text is not None:
-        return text
-    if file is not None:
-        try:
-            if not file.is_file():
-                raise ConfigError(f"--file: file not found: {file}")
-            return file.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError) as exc:
-            raise ConfigError(f"--file: cannot read file {file}: {exc}") from None
-    return sys.stdin.read()
+    if value is None and file is None:
+        raise ConfigError(f"Specify exactly one of {option} or {option}-file.")
+    try:
+        return text_input(value, file, label=option) or ""
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from None

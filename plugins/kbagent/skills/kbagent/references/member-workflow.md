@@ -67,7 +67,7 @@ chen@example.com,5725,share,Shared bucket consumer
 ```
 
 ```bash
-kbagent project invite --from-csv participants.csv --default-role guest --workers 8
+kbagent project invite --file participants.csv --default-role guest --workers 8
 ```
 
 Result schema:

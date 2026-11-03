@@ -376,7 +376,7 @@ ROUTE_OPERATIONS: dict[tuple[str, str], str] = {
     (
         "DELETE",
         "/semantic-layer/scope/{context_id}/elevation-request",
-    ): "semantic-layer.scope.request-delete",
+    ): "semantic-layer.scope.request-cancel",
     # ── transformations ──────────────────────────────────────────────
     ("POST", "/transformations/{project}"): "transformation.create",
     ("GET", "/transformations/{project}/{config_id}"): "transformation.show",

@@ -88,11 +88,11 @@ GROUP_NOTES: dict[str, str] = {
   cron loop inside `kbagent serve` consumes. CLI CRUD + ad-hoc `run`
   work offline; cron firing still requires the live server.
 
-  Every subcommand below that takes TASK_ID / RUN_ID accepts it either
-  positionally (`agent show TASK_ID`) or via flag (`--task-id`, plus
-  `--run-id` for run-detail / run-events) -- the flag form matches the
-  rest of the CLI (`--job-id`, `--config-id`, ...). Since vNEXT `--id` is
-  removed (usage error, exit 2).
+  A task is named with `--task-id`, a run with `--run-id` (run-detail /
+  run-events), like `--job-id` and `--config-id` in the rest of the CLI.
+  Since vNEXT the positional TASK_ID / RUN_ID and `--id` are removed
+  (usage error, exit 2, naming the option). 0.x takes the positional form
+  and `--task-id` / `--run-id`, so the options work on both.
 
   agent list
     List all registered tasks (id, name, cron, type, state, last/next run).
@@ -102,8 +102,8 @@ GROUP_NOTES: dict[str, str] = {
 
   agent create
     Persist a new scheduled task. --manual skips the cron loop. Use
-    --from-file for the full {"type":..., "params":...} JSON envelope
-    when prompts/args grow large. --extra-arg on an ai_agent task is
+    --definition JSON or --definition-file PATH for the full
+    {"type":..., "params":...} JSON envelope when prompts/args grow large. --extra-arg on an ai_agent task is
     honored only when the kbagent process (serve, or this `agent` run)
     has a truthy KBAGENT_ALLOW_AI_EXTRA_ARGS env;
     otherwise the args are dropped with a warning.
@@ -604,7 +604,7 @@ GROUP_NOTES: dict[str, str] = {
     `folder_not_supported` entry to warnings[].
 
   config row-create
-    Create a new configuration row. Returns the new row ID. Optional --configuration accepts JSON inline, @file, or stdin. #-prefixed secrets auto-encrypt before write (fail-closed; since 0.54.0).
+    Create a new configuration row. Returns the new row ID. Optional --configuration takes inline JSON; --configuration-file reads a file (- for stdin). #-prefixed secrets auto-encrypt before write (fail-closed; since 0.54.0).
 
   config row-update
     Update an existing configuration row. Pass only the fields you want to change. #-prefixed secrets auto-encrypt before write (fail-closed; since 0.54.0).
@@ -941,7 +941,7 @@ explicit Storage config version, never the empty shell the create writes.
     (GCP), ::ProjectSecureKV:: (Azure) -- match the family, never one literal.
     Use when ciphertext must exist before a `config update` / `config new` /
     `config clone` write.
-    --input accepts: inline JSON, @file.json (from file), or - (from stdin).
+    --values takes inline JSON; --values-file reads a file (- for stdin). `@` reads no file.
     Already-encrypted values (KBC:: prefix) pass through unchanged.
 """,
     "feature": """\
@@ -997,7 +997,8 @@ explicit Storage config version, never the empty shell the create writes.
     source). Exit 0 valid, exit 2 on errors. --json adds {valid, errors, warnings, notes}.
 
   flow new
-    Create a new conditional flow. --file accepts YAML with 'phases' and 'tasks' keys.
+    Create a new conditional flow. --definition (inline) or --definition-file PATH (- for
+    stdin) takes YAML/JSON with 'phases' and 'tasks' keys.
     Validated against the LIVE conditional-flow schema fetched from the stack
     (INVALID_FLOW_DEFINITION on failure). A schema-fetch failure does NOT block the write:
     structural check skipped, semantic checks still run, a warning is surfaced.
@@ -1005,7 +1006,8 @@ explicit Storage config version, never the empty shell the create writes.
     (job/notification/variable). Execute with: job run --component-id keboola.flow --config-id ID.
 
   flow update
-    Update a flow's name, description, or phases/tasks. --file replaces both phases and tasks.
+    Update a flow's name, description, or phases/tasks. --definition / --definition-file
+    replaces both phases and tasks.
     Omitting --file leaves the flow body unchanged. Validated against the live conditional-flow
     schema on write (merge-aware; INVALID_FLOW_DEFINITION on failure; schema-fetch failure ->
     semantic-only + warning).
@@ -1043,7 +1045,7 @@ explicit Storage config version, never the empty shell the create writes.
     subprocesses by the scheduler). Example:
       kbagent http get /openapi.json     # browse server's OpenAPI schema
       kbagent http get /projects         # list projects via HTTP
-      kbagent http post /agents/test --body @task.json
+      kbagent http post /agents/test --body-file task.json
     Prefer this over forking `kbagent` CLI inside scheduled-agent tasks --
     `kbagent http` calls the serve directly so you always see the same config
     the operator configured (not the global ~/.config one). Outside a serve
@@ -1242,7 +1244,7 @@ explicit Storage config version, never the empty shell the create writes.
   merge-request diff
     Per-path classification: both changed / only you / only production. A side deleted
     wholesale is reported with the --take to pick. --output writes resolution_candidate
-    (your content, all five keys) to edit and hand back with `resolve --resolved @PATH`.
+    (your content, all five keys) to edit and hand back with `resolve --resolved-file PATH`.
 
   merge-request resolve
     DESTRUCTIVE (removes a blocker the merge waits on). Rebase one conflicting config onto
@@ -1333,9 +1335,9 @@ explicit Storage config version, never the empty shell the create writes.
     --refresh skips browser-login (session) projects with an explicit reason
     instead of minting a static token over their sentinel.
 
-  kbagent org setup --project-ids 901,9621,10539 --url URL [--dry-run] [--yes] [--refresh]
+  kbagent org setup --project-id 901 --project-id 9621 --url URL [--dry-run] [--yes] [--refresh]
     Non-admin mode: onboard specific projects by ID. Works with Personal Access Token (PAT).
-    Use --org-id OR --project-ids (at least one required).
+    Use --org-id OR --project-id (at least one required; repeat --project-id per project).
     Token via interactive hidden prompt by default; pass top-level
     --allow-env-manage-token to read KBC_MANAGE_API_TOKEN from env (CI/CD).
     Default-deny since 0.29.0 -- closes the AI-exfiltration risk where
@@ -1498,8 +1500,8 @@ explicit Storage config version, never the empty shell the create writes.
     an empty string if no description has been set.
 
   project description-set
-    Set the dashboard project description. Pass exactly one of --text,
-    --file, or --stdin. Writes KBC.projectDescription to the default branch.
+    Set the dashboard project description. Pass exactly one of --description or
+    --description-file (- for stdin). Writes KBC.projectDescription to the default branch.
 
   project use
     Set ALIAS as the active project. Persists to config.json. A registered
@@ -1533,8 +1535,9 @@ explicit Storage config version, never the empty shell the create writes.
     (HTTP 400 from the Manage API; the service returns status="noop" with note
     "already_invited" / "already_member").
 
-  kbagent project invite --from-csv FILE [--default-role ROLE] [--workers N] [--dry-run]
-    Bulk invite. CSV must have a header row with columns: email, project (alias or
+  kbagent project invite --file FILE [--default-role ROLE] [--workers N] [--dry-run]
+    Bulk invite (--from-csv before vNEXT; the old name is a usage error, exit 2).
+    CSV must have a header row with columns: email, project (alias or
     numeric ID -- an alias wins, see Tips 3; since 0.96.1) or project_id (ID only),
     role (optional if --default-role is given), reason (optional).
     Parallelised with ThreadPoolExecutor (default 8 workers). Per-row results in
@@ -1619,8 +1622,8 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
   semantic-layer model create
     Create a new model (default sql-dialect: Snowflake). --scope omitted =
     "project" (owner-only). "targeted" = owner + explicit --target-project
-    grants (alias or numeric project ID; repeatable or comma-separated; an
-    alias must be on the owner's stack; a project-admin token is needed).
+    grants (alias or numeric project ID; repeat --target-project per project;
+    an alias must be on the owner's stack; a project-admin token is needed).
     "organization" = visible to every project in the org from creation -- the
     schema's ACL requires the organization-admin ROLE to create directly at
     this scope (a normal project token gets 403 ACCESS_DENIED); an ordinary
@@ -1717,7 +1720,7 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
     one or more dependent constraints fail to repoint, the response sets
     `partial_state: true` at the top level + `recovery_hint: "<text>"`
     pointing at `semantic-layer validate` + manual `edit constraint
-    --new-metrics ...`. Human-mode CLI prints a red `PARTIAL STATE` banner
+    --new-metric ...`. Human-mode CLI prints a red `PARTIAL STATE` banner
     above the per-entry list. `edit_simple` (no-cascade variants) carries
     `partial_state: false, recovery_hint: null` for envelope uniformity.
     Edits update the item in place (PUT): it keeps its id, scope,
@@ -1769,7 +1772,7 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
   semantic-layer scope add
   semantic-layer scope remove
     Attach / detach target projects of a --scope targeted item (alias or
-    numeric ID; repeatable or comma-separated). A client-side merge (read the
+    numeric ID; repeat --target-project per project). A client-side merge (read the
     grants, apply the delta, PUT) -- NOT atomic against a concurrent grant
     change. Refused (exit 2) from a project that does not own the item: the
     server hides the grants from a non-owner, so a merge would overwrite them
@@ -1792,7 +1795,7 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
     admin's step-up decision (`scope set --scope organization`). Idempotent --
     calling again just refreshes the timestamp.
 
-  semantic-layer scope request-delete
+  semantic-layer scope request-cancel
     Owner-only. Clears a pending elevation request. Idempotent no-op if
     none is pending.
 
@@ -1878,7 +1881,9 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
     Link a shared bucket into a project (read-only). Uses regular token.
 
   sharing unlink
-    Remove a linked bucket from a project. Uses regular token.
+    Remove a linked bucket from a project. Uses regular token. Destructive since vNEXT:
+    it asks for confirmation (--yes skips it), and --dry-run checks that the bucket is a
+    linked bucket and deletes nothing.
 
   sharing edges
     Show cross-project data flow edges via bucket sharing. --project repeatable.
@@ -1966,11 +1971,12 @@ remain branch-aware because modifying a dev branch is the expected intent.
     - Base types: STRING, INTEGER, NUMERIC, FLOAT, BOOLEAN, DATE, TIMESTAMP. Type defaults to STRING if omitted.
     - Native backend types with length pass through to the Storage API: VARCHAR(40), NUMBER(18,2), CHAR(10), TIMESTAMP_TZ, TIMESTAMP_NTZ, VARIANT, OBJECT, ARRAY, etc.
       The API validates type/length per backend; e.g. INTEGER(10) is rejected with "'10' is not valid length for INTEGER".
-    - --not-null COL marks a column NOT NULL (nullable=false). Must match a defined --column name.
+    - --not-null-column COL marks a column NOT NULL (nullable=false). Must match a defined --column
+      name. Repeatable. Before vNEXT it was --not-null (now a usage error, exit 2).
     - --default NAME=VALUE sets a DEFAULT expression. Booleans must be lowercase (true/false).
     - --source-table-id (since 0.66.0, BigQuery only): create the table by COPYING an existing
       table's data into the requested partition/clustering layout instead of from --column specs.
-      The schema is derived from the source, so --column (and --not-null/--default) must NOT be used;
+      The schema is derived from the source, so --column (and --not-null-column/--default) must NOT be used;
       the two are mutually exclusive. --source-branch-id resolves the source in another branch.
       This is the supported way to repartition a populated BigQuery table -- then promote it with
       `storage swap-tables`. Aliases and linked-bucket tables are valid sources.
@@ -1992,7 +1998,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
       metadata stamp still happen but the runner will not use them -- it creates a
       parallel `out.c-<branch_id>-*` bucket in the default branch at job time.
     Branch-aware. Examples:
-      --column pk:VARCHAR(40) --column amount:NUMERIC(18,2) --not-null pk --default amount=0
+      --column pk:VARCHAR(40) --column amount:NUMERIC(18,2) --not-null-column pk --default amount=0
       --column ts:TIMESTAMP_TZ --column meta:VARIANT
       # BigQuery repartition: copy a populated table into a new layout, then swap it in place
       --name events_repart --source-table-id in.c-main.events --time-partitioning-type DAY \\
@@ -2025,7 +2031,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
   storage download-table
     Export table data to a local CSV file. Async export with streaming download.
     --where-column + --where-value (repeatable) + --where-operator eq|neq filter rows; --changed-since/--changed-until (unix ts or strtotime) filter by import time.
-    Default filename: TABLE_NAME.csv. Use --columns to select columns (see table-detail for names).
+    Default filename: TABLE_NAME.csv. Use --column (repeatable) to select columns (see table-detail for names).
     Use --limit to cap row count. Handles sliced files and gzip decompression transparently. Branch-aware.
   storage add-column
     Add a single column to an existing table. Same name:TYPE(length) grammar as create-table --column.
@@ -2113,7 +2119,8 @@ remain branch-aware because modifying a dev branch is the expected intent.
     human table-detail Columns table, which grows a Description column when any column has one.
 
   storage describe-batch
-    Apply bucket/table/column descriptions from a YAML file. Sections: buckets, tables, columns (all optional;
+    Apply bucket/table/column descriptions from a YAML file (--file; --from-file before vNEXT,
+    now a usage error, exit 2). Sections: buckets, tables, columns (all optional;
     absent or empty sections are skipped). Columns go through the same native write as describe-column.
     File shape is validated BEFORE any write: a section that is not a mapping of ID to description, a null
     description, a non-mapping columns entry, or two keys colliding after str() coercion (1 vs "1") aborts
@@ -2185,10 +2192,12 @@ remain branch-aware because modifying a dev branch is the expected intent.
     lands in Storage (idempotent; --no-sinks for a bare source).
     --if-not-exists returns an existing same-named source as status=skipped.
   stream detail
+    Takes --source-id ID or --name NAME (the positional SOURCE_ID is removed since vNEXT).
     Show base + per-signal endpoints (/v1/logs|/v1/traces|/v1/metrics), protocol http/protobuf,
     and destination bucket/tables (from sinks). The secret embedded in the OTLP URL is MASKED
     by default; pass --reveal to print it (e.g. to wire OTEL_EXPORTER_OTLP_ENDPOINT).
   stream delete
+    Takes --source-id ID. Since vNEXT the positional SOURCE_ID is removed (usage error, exit 2).
     Delete a source (destructive, async task polled to completion). Use --yes to
     skip the confirmation. Since vNEXT its old name --force is removed (usage
     error, exit 2).
@@ -2395,7 +2404,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
     CAVEAT: activity inside a DEVELOPMENT BRANCH is invisible to this feed (the endpoint always
     resolves to the default branch), so a branch-only token reads as dormant. Check `branch list`
     before revoking on a project that uses branches.
-    --columns (repeatable, human output only -- --json is unaffected) selects and orders the table.
+    --column (repeatable, human output only -- --json is unaffected) selects and orders the table.
     Names: id, description, created, refreshed, expires, master, created_by, last_used,
     last_used_event. An unknown name exits 2 and lists the valid ones. last_used /
     last_used_event REQUIRE --with-last-used (exit 2 otherwise) -- they are derived, so without
@@ -2627,7 +2636,7 @@ _FOOTER = """\
    applies to KBAGENT_PROJECT, `project use`, `config clone --target-project`,
    `sync clone --target`, `semantic-layer promote --from-project/--to-project`,
    `semantic-layer diff --project-a/--project-b`, `auth * --stack`, the
-   `project` column of `project invite --from-csv`, and the `kbagent serve`
+   `project` column of `project invite --file`, and the `kbagent serve`
    {project} / {alias} path and ?project= / ?alias= / ?stack= query
    parameters. serve translates path and query parameters only: a project in
    a request body still needs the alias. Output names the resolved alias
@@ -2719,16 +2728,31 @@ _FOOTER = """\
      - CSV concat logic is never used for parquet; slices have their own footers.
 
 11. Input values (since vNEXT):
-   - A list option is repeatable, and an option of IDs or fixed values also
-     takes a comma list: `--target-project-ids 11 --target-project-ids 22,33`
-     gives 11, 22 and 33. This now also holds for org setup --project-ids,
-     sharing share --target-project-ids/--target-users and the semantic-layer
-     options --metrics, --new-metrics, --tables, --types and schema --type.
-   - `--text @notes.md` (project description-set, storage
-     describe-bucket/describe-table, branch metadata-set) and `transformation
-     create --sql @q.sql` exit 2 with INVALID_ARGUMENT when the file exists
-     (relative to the current directory); use --file / --sql-file. Only these
-     5 options refuse it: other free-text options still store `@file` as text.
+   - A list option is repeatable and takes one value per occurrence:
+     `--target-project 11 --target-project 22`. A comma in a value of an ID or
+     fixed-value option exits 2 with INVALID_ARGUMENT naming the option. The
+     list options have singular names: org setup --project-id, sharing share
+     --target-project/--target-user, semantic-layer --metric, --new-metric,
+     --table-id (build) and --type (import/promote), workspace load --table-id,
+     storage download-table/unload-table and token list --column. The old
+     plural names are usage errors that name the new option.
+   - Input from files: the main input file is --file PATH; a JSON/YAML or
+     text value is --<field> inline plus --<field>-file PATH, and `-` as the
+     PATH reads stdin. `@` never reads a file: an inline `@path` or `-` on a
+     JSON option exits 2 naming --<field>-file. Renamed: lineage --load ->
+     --file; --text/--file/--stdin -> --description/--description-file
+     (project description-set, storage describe-bucket/describe-table) and
+     --value/--value-file (branch metadata-set); workspace query --file ->
+     --sql-file; agent/flow --from-file/--file -> --definition/--definition-file;
+     encrypt values --input -> --values/--values-file; data-app secrets-set
+     --secrets-file -> --secret-file; dev-portal --data is inline JSON, the file
+     is --data-file.
+   - `--description @notes.md` (project description-set, storage
+     describe-bucket/describe-table), `branch metadata-set --value @v.txt` and
+     `transformation create --sql @q.sql` exit 2 with INVALID_ARGUMENT when the
+     file exists (relative to the current directory); use --description-file /
+     --value-file / --sql-file. Only these 5 options refuse it: other free-text
+     options still store `@file` as text.
    - A bad input value (not an integer, bad JSON, a missing or unreadable
      file) is an error that names the option, never a traceback. Most are
      INVALID_ARGUMENT (exit 2); some JSON and file options keep an older code
@@ -2756,7 +2780,7 @@ https://github.com/keboola/cli/blob/main/docs/error-codes.md
 Exit 1 also covers a PARTIAL failure (#745). Commands that keep going after one
 item fails exit 1 when at least one item failed: sync push, sync
 push/pull/diff --all-projects, sync clone, org setup, project refresh,
-project invite --from-csv, workspace gc, semantic-layer
+project invite --file, workspace gc, semantic-layer
 import/promote/build/edit metric, storage describe-batch, flow
 schedule-remove. Since vNEXT every command that processes several items (these,
 the bulk storage commands, job terminate, auth register-projects, token list

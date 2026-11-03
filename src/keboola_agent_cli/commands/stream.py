@@ -214,8 +214,8 @@ def stream_create_source(
 @stream_app.command("detail")
 def stream_detail(
     ctx: typer.Context,
-    source_id: str | None = typer.Argument(None, help="Source id (or use --name)"),
     project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
+    source_id: str | None = typer.Option(None, "--source-id", help="Source id (or use --name)"),
     name: str | None = typer.Option(None, "--name", "-n", help="Look up the source by name"),
     branch: str | None = typer.Option(
         None, "--branch", help="Branch ref (default branch if unset)"
@@ -242,8 +242,8 @@ def stream_detail(
 @stream_app.command("delete")
 def stream_delete(
     ctx: typer.Context,
-    source_id: str = typer.Argument(..., help="Source id to delete"),
     project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
+    source_id: str = typer.Option(..., "--source-id", help="Source id to delete"),
     branch: str | None = typer.Option(
         None, "--branch", help="Branch ref (default branch if unset)"
     ),

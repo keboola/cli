@@ -14,8 +14,6 @@ verbs in :class:`SemanticLayerService`.
 
 from __future__ import annotations
 
-import json
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +27,7 @@ from ._helpers import (
     check_cli_permission,
     get_formatter,
     get_service,
+    structured_input,
 )
 from ._project_ref import PROJECT_HELP
 from ._semantic_layer_helpers import _handle_service_call, _is_stdin_tty
@@ -110,31 +109,22 @@ def _print_reference_data_delete_result(console: Console, data: dict) -> None:
     )
 
 
-def _load_members(formatter: Any, members_file: str) -> list[dict]:
-    """Read a JSON array of member objects from a file or ``-`` (stdin)."""
+def _load_members(formatter: Any, members: str | None, members_file: Path | None) -> list[dict]:
+    """The JSON array of member objects of ``--members`` or ``--members-file`` (``-`` = stdin)."""
     try:
-        raw = (
-            sys.stdin.read()
-            if members_file == "-"
-            else Path(members_file).read_text(encoding="utf-8")
-        )
-    except (OSError, UnicodeDecodeError) as exc:
+        parsed = structured_input(members, members_file, label="--members")
+    except ValueError as exc:
+        formatter.error(message=str(exc), error_code=ErrorCode.VALIDATION_ERROR)
+        raise typer.Exit(code=2) from None
+    if parsed is None:
         formatter.error(
-            message=f"Could not read members file {members_file!r}: {exc}",
-            error_code=ErrorCode.VALIDATION_ERROR,
+            message="Pass the members with --members JSON or --members-file PATH.",
+            error_code=ErrorCode.USAGE_ERROR,
         )
-        raise typer.Exit(code=2) from exc
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        formatter.error(
-            message=f"Members file is not valid JSON: {exc}",
-            error_code=ErrorCode.VALIDATION_ERROR,
-        )
-        raise typer.Exit(code=2) from exc
+        raise typer.Exit(code=2)
     if not isinstance(parsed, list):
         formatter.error(
-            message="Members file must contain a JSON array of member objects.",
+            message="--members must be a JSON array of member objects.",
             error_code=ErrorCode.VALIDATION_ERROR,
         )
         raise typer.Exit(code=2)
@@ -200,10 +190,14 @@ def reference_data_set(
     dimension: str = typer.Option(
         ..., "--dimension", help="Dimension name, e.g. 'chart_of_accounts'"
     ),
-    members_file: str = typer.Option(
-        ...,
+    members: str | None = typer.Option(
+        None, "--members", help="JSON array of member objects, inline."
+    ),
+    members_file: Path | None = typer.Option(
+        None,
         "--members-file",
-        help="Path to a JSON array of member objects ('-' reads stdin).",
+        help="Read the JSON array of member objects from a file (- for stdin).",
+        allow_dash=True,
     ),
     dataset_id: str | None = typer.Option(
         None, "--dataset-id", help="Optional tableId of the descriptive dataset (e.g. DIM_COA)"
@@ -217,14 +211,14 @@ def reference_data_set(
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
-    members = _load_members(formatter, members_file)
+    member_list = _load_members(formatter, members, members_file)
     result = _handle_service_call(
         ctx,
         service.set_reference_data,
         alias=project,
         model_name_or_uuid=model,
         dimension=dimension,
-        members=members,
+        members=member_list,
         dataset_id=dataset_id,
         description=description,
     )

@@ -158,7 +158,7 @@ def _service(tmp_path: Path) -> DeepLineageService:
 
 def _show(tmp_path: Path, graph: LineageGraph, *args: str, json_mode: bool = False):
     cache = _cache(tmp_path, graph)
-    argv = (["--json"] if json_mode else []) + ["lineage", "show", "-l", str(cache), *args]
+    argv = (["--json"] if json_mode else []) + ["lineage", "show", "--file", str(cache), *args]
     return runner.invoke(app, argv)
 
 

@@ -35,8 +35,7 @@ _SCOPE_HELP = (
     "'targeted' (owner + --target-project grants). Default: the model's own scope."
 )
 _TARGET_PROJECT_HELP = (
-    "Project alias or ID to grant visibility to (repeatable or comma-separated; "
-    "--scope targeted only)."
+    "Project alias or ID to grant visibility to (repeat for more projects; --scope targeted only)."
 )
 
 # ---------------------------------------------------------------------------
@@ -244,8 +243,8 @@ def add_constraint(
     ),
     metrics: list[str] = typer.Option(
         ...,
-        "--metrics",
-        help="Metric name this constraint applies to (repeatable or comma-separated).",
+        "--metric",
+        help="Metric name this constraint applies to (repeat for more metrics).",
     ),
     severity: str = typer.Option(
         "warning", "--severity", help="One of: error|warning|info (the 3-level API enum)."
@@ -256,10 +255,10 @@ def add_constraint(
     """Add a constraint."""
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
-    metrics_list = split_multi(metrics)
+    metrics_list = split_multi(metrics, label="--metric")
     if not metrics_list:
         formatter.error(
-            message="--metrics must contain at least one metric name.",
+            message="--metric must contain at least one metric name.",
             error_code=ErrorCode.VALIDATION_ERROR,
         )
         raise typer.Exit(code=2)
@@ -474,13 +473,13 @@ def edit_constraint(
         None, "--new-severity", help="Replace severity (error|warning|info)"
     ),
     new_metrics: list[str] | None = typer.Option(
-        None, "--new-metrics", help="Replace metric names (repeatable or comma-separated)"
+        None, "--new-metric", help="Replace the metric names (repeat for more metrics)"
     ),
 ) -> None:
     """Edit a constraint (in-place update, with local validators)."""
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
-    metrics_list = split_multi(new_metrics) if new_metrics else None
+    metrics_list = split_multi(new_metrics, label="--new-metric") if new_metrics else None
     result = _handle_service_call(
         ctx,
         service.edit_constraint,
