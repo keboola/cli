@@ -312,7 +312,7 @@ Keboola data-app lifecycle (create, deploy, manage)
       [--description DESCRIPTION] [--description-file PATH] --slug SLUG
       [--git-repo REPO] [--use-managed-git-repo] [--git-branch BRANCH]
       [--git-public/--no-git-public] [--git-username USERNAME]
-      [--git-pat-env ENV] [--git-pat-file PATH]
+      [--git-auth AUTH] [--git-pat-env ENV] [--git-pat-file PATH]
       [--git-pat-encrypted ENCRYPTED] [--auth AUTH] [--size SIZE]
       [--auto-suspend N] [--type TYPE] [--workspace/--no-workspace]
       [--branch N] [--no-deploy] [--wait] [--timeout N] [--keep-on-failure]
@@ -330,6 +330,11 @@ Keboola data-app lifecycle (create, deploy, manage)
 
   kbagent data-app detail [--project PROJECT] --app-id ID [--branch N]
     Show merged Data Science + Storage detail for one data app.
+
+  kbagent data-app git-auth-set [--project PROJECT] --app-id ID
+      --git-auth AUTH [--git-repo REPO] [--git-branch BRANCH] [--branch N]
+      [--dry-run]
+    Switch a data app's external GitHub repo to organization auth.
 
   kbagent data-app git-credentials [--project PROJECT] --app-id ID
     List the credentials of a data app's MANAGED git repository.

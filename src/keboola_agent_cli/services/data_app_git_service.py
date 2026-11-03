@@ -16,6 +16,9 @@ response-shape gotchas. Two functional groups:
   repo (``app.managedGitRepoId`` set); apps created via
   ``data-app create --git-repo <url>`` are external, so these return 409. Needs
   an admin storage token.
+* Git auth switch (``git-auth-set``) -- moves an *external* repo's
+  ``parameters.dataApp.git`` to organization auth in one Storage write (see
+  ``_data_app_git_source``).
 """
 
 from __future__ import annotations
@@ -24,6 +27,18 @@ from typing import Any
 
 from ..data_science_client import DataScienceClient
 from ..errors import ErrorCode, KeboolaApiError
+from ._data_app_bodies import (
+    DATA_APP_COMPONENT_ID,
+    _coerce_config_dict,
+    _redact_git_block,
+    _redact_storage_config,
+)
+from ._data_app_git_source import (
+    VALID_GIT_AUTH_TYPES,
+    GitAuthSwitch,
+    describe_git_auth,
+    plan_organization_switch,
+)
 from .base import BaseService, ClientFactory, make_session_aware_client_factory
 
 DataScienceClientFactory = Any  # Callable[[str, str], DataScienceClient]
@@ -156,6 +171,126 @@ class DataAppGitService(BaseService):
             "app_id": str(app_id),
             "credential": credential,
             "message": message,
+        }
+
+    def set_data_app_git_auth(
+        self,
+        *,
+        alias: str,
+        app_id: str,
+        git_auth: str,
+        git_repo: str | None = None,
+        git_branch: str | None = None,
+        branch_id: int | None = None,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Switch an external-repo data app to organization GitHub auth.
+
+        Read-modify-write of the linked Storage config: ``authType`` is set
+        and ``username`` / ``#password`` / ``#sshKey`` are removed in the SAME
+        write -- the backend rejects a config that carries both, so a
+        ``config update --merge`` (which can only add keys) cannot do it. An
+        app already on organization auth with the same repo and branch is
+        left untouched (``status: unchanged``, no write). Never deploys: the
+        running container keeps the old config until ``data-app deploy``.
+        """
+        if git_auth not in VALID_GIT_AUTH_TYPES:
+            raise KeboolaApiError(
+                message=(
+                    f"Invalid --git-auth '{git_auth}'. Valid values: "
+                    f"{', '.join(VALID_GIT_AUTH_TYPES)}."
+                ),
+                status_code=0,
+                error_code=ErrorCode.INVALID_ARGUMENT,
+                retryable=False,
+            )
+        project = self.resolve_projects([alias])[alias]
+        ds_client = self._ds_client_factory(project.stack_url, project.token)
+        storage_client = self._client_factory(project.stack_url, project.token)
+        try:
+            config_id, envelope = self._load_external_app_config(
+                ds_client, storage_client, str(app_id), branch_id
+            )
+            body = _coerce_config_dict(envelope.get("configuration"))
+            switch = plan_organization_switch(body, repo=git_repo, branch=git_branch)
+            result = self._git_auth_result(alias, str(app_id), config_id, switch)
+            if not switch.changed:
+                return result | {"status": "unchanged", "deploy_required": False}
+            if dry_run:
+                return result | {
+                    "status": "dry_run",
+                    "dry_run": True,
+                    "put_storage_config_preview": _redact_storage_config(
+                        {"configuration": switch.body}
+                    ),
+                    "message": "Dry run -- no write. Inspect the Storage PUT body above.",
+                }
+            response = storage_client.update_config(
+                component_id=DATA_APP_COMPONENT_ID,
+                config_id=config_id,
+                configuration=switch.body,
+                change_description="Switch git auth to organization via kbagent data-app git-auth-set",
+                branch_id=branch_id,
+            )
+        finally:
+            ds_client.close()
+            storage_client.close()
+        return result | {
+            "status": "switched",
+            "config_version_before": str(envelope.get("version", "") or ""),
+            "config_version_after": str(response.get("version", "") or ""),
+        }
+
+    @staticmethod
+    def _load_external_app_config(
+        ds_client: Any, storage_client: Any, app_id: str, branch_id: int | None
+    ) -> tuple[str, dict[str, Any]]:
+        """Return ``(config_id, storage_envelope)`` of an app that clones an external repo."""
+        app = ds_client.get_app(app_id)
+        if app.get("hasManagedGitRepo"):
+            raise KeboolaApiError(
+                message=(
+                    f"Data app {app_id} uses a Keboola-managed git repository; "
+                    "organization GitHub auth applies only to an external GitHub repo."
+                ),
+                status_code=0,
+                error_code=ErrorCode.VALIDATION_ERROR,
+                retryable=False,
+            )
+        config_id = str(app.get("configId") or "")
+        if not config_id:
+            raise KeboolaApiError(
+                message=f"Data app {app_id} has no associated configId",
+                status_code=500,
+                error_code=ErrorCode.API_ERROR,
+                retryable=False,
+            )
+        envelope = storage_client.get_config_detail(
+            DATA_APP_COMPONENT_ID, config_id, branch_id=branch_id
+        )
+        return config_id, envelope if isinstance(envelope, dict) else {}
+
+    @staticmethod
+    def _git_auth_result(
+        alias: str, app_id: str, config_id: str, switch: GitAuthSwitch
+    ) -> dict[str, Any]:
+        next_step = f"kbagent data-app deploy --project {alias} --app-id {app_id} --wait"
+        return {
+            "project_alias": alias,
+            "app_id": app_id,
+            "config_id": config_id,
+            "git_auth_before": describe_git_auth(switch.before),
+            "git_auth": describe_git_auth(switch.after),
+            "removed_credentials": switch.removed_credentials,
+            "git": _redact_git_block(switch.after),
+            "deploy_required": True,
+            "next_step": next_step,
+            "message": (
+                "No change: the app already clones through organization GitHub auth."
+                if not switch.changed
+                else "Git auth set to organization; the stored credentials are removed. "
+                "The running container keeps the old config until you redeploy."
+            ),
         }
 
     @staticmethod

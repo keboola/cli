@@ -149,6 +149,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Tail the container logs for a deployed data app | `kbagent data-app logs --project PROJECT --app-id APP-ID` |
 | List a data app's recent deployment attempts (runs), newest first | `kbagent data-app runs --project PROJECT --app-id APP-ID` |
 | Pre-flight check that a git repo follows the Keboola data-app Golden Rule | `kbagent data-app validate-repo --git-repo GIT-REPO` |
+| Switch a data app's external GitHub repo to organization auth | `kbagent data-app git-auth-set --project PROJECT --app-id APP-ID --git-auth GIT-AUTH` |
 | Show the clone URLs of a data app's configured git repository | `kbagent data-app git-repo --project PROJECT --app-id APP-ID` |
 | List the credentials of a data app's MANAGED git repository | `kbagent data-app git-credentials --project PROJECT --app-id APP-ID` |
 | Create a git credential (SSH key or HTTP token) for a MANAGED repo | `kbagent data-app git-credentials-create --project PROJECT --app-id APP-ID --type CRED-TYPE --permissions PERMISSIONS` |

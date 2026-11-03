@@ -10,7 +10,8 @@ bottom of ``data_app.py`` -- so they still surface as
 ``git-repo`` needs only the project storage token; the credential pair
 (git-credentials / git-credentials-create) needs an admin storage token and
 targets *managed* git repos only. See ``references/gotchas.md`` for the
-deploy-once precondition.
+deploy-once precondition. ``git-auth-set`` switches an *external* repo to
+organization GitHub auth (a Storage config write, no sandboxes call).
 """
 
 from __future__ import annotations
@@ -20,7 +21,8 @@ from pathlib import Path
 import typer
 from rich.console import Console
 
-from ..errors import ConfigError, ErrorCode, KeboolaApiError
+from ..effective_branch import resolve_branch
+from ..errors import ConfigError, ErrorCode, KeboolaApiError, exit_code_for
 from ._helpers import (
     _confirm_or_abort,
     emit_api_error,
@@ -34,10 +36,93 @@ from ._project_ref import PROJECT_HELP
 # sandboxes-service git-repo credential enums (API contract literals).
 _GIT_CRED_TYPES = ("ssh_key", "http_token")
 _GIT_CRED_PERMISSIONS = ("readOnly", "readWrite")
+_GIT_AUTH_TYPES = ("organization",)
+
+
+def data_app_git_auth_set(
+    ctx: typer.Context,
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
+    app_id: str = typer.Option(..., "--app-id", help="Data Science numeric app id"),
+    git_auth: str = typer.Option(
+        ...,
+        "--git-auth",
+        help="How the app clones its repo. Only 'organization' for now.",
+    ),
+    git_repo: str | None = typer.Option(
+        None,
+        "--git-repo",
+        help=(
+            "Replace the stored repository URL (an ssh:// or git@ URL must "
+            "become https://HOST/OWNER/REPO for organization auth)."
+        ),
+    ),
+    git_branch: str | None = typer.Option(
+        None, "--git-branch", help="Replace the stored git branch (default: keep it)."
+    ),
+    branch: int | None = typer.Option(
+        None,
+        "--branch",
+        help="Storage branch ID for the linked config (defaults to production).",
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Show the Storage PUT body without writing it."
+    ),
+) -> None:
+    """Switch a data app's external GitHub repo to organization auth.
+
+    Sets parameters.dataApp.git.authType=organization and removes username /
+    #password / #sshKey in ONE write -- the backend rejects a config with both,
+    which is why `config update --merge` cannot do this. Nothing is deployed:
+    run `kbagent data-app deploy --wait` afterwards. A Keboola-managed repo is
+    refused (it needs no credential).
+    """
+    formatter = get_formatter(ctx)
+    if git_auth not in _GIT_AUTH_TYPES:
+        raise typer.BadParameter(
+            f"--git-auth must be one of {', '.join(_GIT_AUTH_TYPES)} (got {git_auth!r}).",
+            param_hint="--git-auth",
+        )
+    branch = resolve_branch(ctx.obj["config_store"], project, branch, ignore_active_branch=True)
+    service = get_service(ctx, "data_app_git_service")
+    try:
+        result = service.set_data_app_git_auth(
+            alias=project,
+            app_id=app_id,
+            git_auth=git_auth,
+            git_repo=git_repo,
+            git_branch=git_branch,
+            branch_id=branch,
+            dry_run=dry_run,
+        )
+    except KeboolaApiError as exc:
+        emit_api_error(formatter, exc)
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+    except ConfigError as exc:
+        error_code = getattr(exc, "error_code", ErrorCode.CONFIG_ERROR)
+        formatter.error(message=exc.message, error_code=error_code)
+        raise typer.Exit(code=exit_code_for(error_code)) from None
+    formatter.output(result, _print_git_auth_result)
+
+
+def _print_git_auth_result(console: Console, result: dict) -> None:
+    if result.get("dry_run"):
+        console.print("[bold]DRY RUN -- nothing was written.[/bold]")
+        console.print(result.get("put_storage_config_preview", {}))
+    else:
+        console.print(f"[bold green]Success:[/bold green] {result['message']}")
+    console.print(f"  [bold]Git auth:[/bold] {result['git_auth_before']} -> {result['git_auth']}")
+    console.print(f"  [bold]Repository:[/bold] {result['git'].get('repository', '')}")
+    if result.get("removed_credentials"):
+        removed = ", ".join(result["removed_credentials"])
+        console.print(f"  [bold]Removed:[/bold] {removed}")
+    if result.get("deploy_required") and not result.get("dry_run"):
+        console.print(f"  [bold]Next:[/bold] {result['next_step']}")
 
 
 def register_git_commands(app: typer.Typer) -> None:
     """Attach the ``data-app git-*`` commands to the data-app sub-app."""
+
+    app.command("git-auth-set")(data_app_git_auth_set)
 
     @app.command("git-repo")
     def data_app_git_repo(

@@ -9,7 +9,7 @@ auth, and the concepts behind these routes live in
 [`web-server.md`](web-server.md); a running server serves the same spec
 interactively at `/docs` (Swagger) and `/openapi.json`.
 
-**257 operations** across **221 paths** and **32 routers**.
+**258 operations** across **222 paths** and **32 routers**.
 
 Paths are shown as the server registers them. Reaching them through the
 Node BFF (or single-process `--ui` mode) prefixes every path with `/api`.
@@ -294,7 +294,7 @@ Flow Notifications-tab recipients (Notification Service subscriptions) -- audit 
 | `POST` | `/notifications/{project}` | Create a notification subscription |
 | `POST` | `/notifications/{project}/{subscription_id}/replace-recipient` | Replace a subscription's recipient |
 
-### `data-apps` (18 operations)
+### `data-apps` (19 operations)
 
 Python/JS (default), Streamlit and R data apps -- create, deploy, start/stop, manage secrets. Mirrors `kbagent data-app *`.
 
@@ -317,6 +317,7 @@ Python/JS (default), Streamlit and R data apps -- create, deploy, start/stop, ma
 | `GET` | `/data-apps/{project}/{app_id}/git-repo` | Get a data app's git repository |
 | `GET` | `/data-apps/{project}/{app_id}/git-repo/credentials` | List managed git credentials |
 | `POST` | `/data-apps/{project}/{app_id}/git-repo/credentials` | Create a managed git credential |
+| `PATCH` | `/data-apps/{project}/{app_id}/git-auth` | Switch a data app to organization git auth |
 | `GET` | `/data-apps/{project}/{app_id}/runs` | List a data app's deployment attempts |
 
 ### `workspaces` (10 operations)

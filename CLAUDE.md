@@ -1142,7 +1142,15 @@ kbagent workspace from-transformation [--project ALIAS] --component-id ID --conf
 
 kbagent data-app list [--project NAME ... | --all-projects] [--branch ID]
 kbagent data-app detail [--project NAME] --app-id ID [--branch ID]
-kbagent data-app create [--project ALIAS] --name NAME --slug SLUG (--git-repo URL | --use-managed-git-repo) [--description STR | --description-file PATH] [--git-branch main] [--git-public/--no-git-public] [--git-username USER] [--git-pat-env VAR | --git-pat-file PATH | --git-pat-encrypted KBC::Project...] [--auth password|public] [--size tiny|small|medium|large] [--auto-suspend SECONDS] [--type python-js|streamlit] [--workspace/--no-workspace] [--branch ID] [--no-deploy] [--wait] [--timeout SECONDS] [--keep-on-failure] [--dry-run] [--copy] [--reveal]
+kbagent data-app create [--project ALIAS] --name NAME --slug SLUG (--git-repo URL | --use-managed-git-repo) [--description STR | --description-file PATH] [--git-branch main] [--git-public/--no-git-public] [--git-username USER] [--git-pat-env VAR | --git-pat-file PATH | --git-pat-encrypted KBC::Project...] [--git-auth organization] [--auth password|public] [--size tiny|small|medium|large] [--auto-suspend SECONDS] [--type python-js|streamlit] [--workspace/--no-workspace] [--branch ID] [--no-deploy] [--wait] [--timeout SECONDS] [--keep-on-failure] [--dry-run] [--copy] [--reveal]
+# --git-auth organization: a private GitHub repo cloned through the Keboola organization's GitHub
+#   App connection; the git block is {repository, branch, authType: organization, private: true}
+#   with NO credential (sandboxes-service mints a read-only token at deploy). Needs an
+#   https://HOST/OWNER/REPO URL (shape checked in services/_data_app_git_source.py; the host --
+#   github.com or a GHE host -- is stack config, checked by the backend at deploy). Mutually
+#   exclusive with --git-public / --git-username / --git-pat-* / --use-managed-git-repo
+#   (VALIDATION_ERROR, exit 2). serve: `auth_type` on POST /data-apps/{project}. Version gate in
+#   gotchas.md.
 # --workspace / --no-workspace (0.87.0+): DEFAULT ON. Writes runtime.workspace.enabled=true --
 #   the ONLY switch that makes the platform provision the ephemeral workspace and inject WORKSPACE_ID,
 #   QUERY_SERVICE_URL and KBC_WORKSPACE_MANIFEST_PATH. Every app that reads Storage needs it. Before
@@ -1206,6 +1214,11 @@ kbagent data-app validate-repo --git-repo URL [--git-branch BRANCH] [--git-publi
 kbagent data-app git-repo [--project NAME] --app-id ID
 kbagent data-app git-credentials [--project NAME] --app-id ID
 kbagent data-app git-credentials-create [--project NAME] --app-id ID --type ssh_key|http_token --permissions readOnly|readWrite [--public-key KEY | --public-key-file PATH] [--name LABEL] [--yes]
+kbagent data-app git-auth-set [--project NAME] --app-id ID --git-auth organization [--git-repo URL] [--git-branch BRANCH] [--branch ID] [--dry-run]
+# git-auth-set: switches an EXTERNAL repo to organization auth in ONE Storage write -- sets authType +
+#   private: true and removes username / #password / #sshKey (a `config update --merge` cannot delete
+#   keys, and the backend rejects authType beside a credential). status switched|unchanged|dry_run;
+#   never deploys; refuses a managed repo. serve: PATCH /data-apps/{project}/{app_id}/git-auth.
 # git-repo introspects the deployed-from git repo (sandboxes-service /v2/apps/{id}/git-repo); it returns 409 "no Git repository configured" until the app has been DEPLOYED at least once (git config syncs Storage->DS record at deploy). git-credentials* manage credentials for a MANAGED repo only; apps from `data-app create --git-repo` are external => git-credentials-create returns 409. http_token mints a ONE-TIME secret (shown once); credentials endpoints need an admin storage token.
 
 kbagent component list [--project NAME | --all-projects] [--type TYPE] [--query QUERY]

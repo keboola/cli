@@ -256,6 +256,51 @@ kbagent data-app deploy --project prod --app-id 12345678 \
 (rollback). Subsequent deploys without the flag will jump back to the
 latest.
 
+### Private GitHub repo through the organization connection (no PAT)
+
+*(since vNEXT)* When the Keboola organization has a GitHub App connection,
+a private GitHub repo needs no PAT at all:
+
+```bash
+kbagent --json data-app create \
+  --project prod \
+  --name "Internal Dashboard" \
+  --slug internal-dashboard \
+  --git-repo https://github.com/myorg/dashboard \
+  --git-auth organization \
+  --wait
+```
+
+The git block written is `{repository, branch, authType: "organization",
+private: true}` -- no `username`, `#password` or `#sshKey`. At deploy the
+platform mints a short-lived, single-repository, read-only token from the
+organization's GitHub App installation. Rules:
+
+- The URL must be `https://HOST/OWNER/REPO` (no port, query, fragment or
+  embedded credentials). `HOST` is `github.com` or a GitHub Enterprise host
+  the stack is configured for. kbagent checks the URL shape; the stack
+  checks the host and whether the GitHub App covers the repo, so those
+  errors appear at DEPLOY time (`data-app runs` shows them), not at create.
+- `--git-auth organization` cannot be combined with `--git-public`,
+  `--git-username`, the `--git-pat-*` flags or `--use-managed-git-repo`.
+- Not supported for dev-mode apps (the backend refuses them).
+
+Switch an existing PAT or SSH-key app over -- one write that also removes
+the stored credentials (a `config update --merge` cannot remove keys, and
+the backend rejects a git block with both `authType` and a credential):
+
+```bash
+kbagent --json data-app git-auth-set --project prod --app-id <ID> \
+  --git-auth organization --dry-run          # inspect the PUT body
+kbagent --json data-app git-auth-set --project prod --app-id <ID> \
+  --git-auth organization                    # status: switched
+kbagent --json data-app deploy --project prod --app-id <ID> --wait
+```
+
+An app with an `ssh://` URL needs `--git-repo https://github.com/OWNER/REPO`
+too. Running it again on a switched app reports `status: unchanged` and
+writes nothing.
+
 ### Pre-flight repo validation
 
 ```bash
@@ -277,7 +322,9 @@ no longer trips it -- and, in the other direction, a commented-out
 `data-app create` so you don't burn a deploy cycle on a misconfigured
 repo. Public repos: drop `--git-pat-env` and use `--git-public`. Total
 GitHub call budget per run is ≤5 (1 tree + ≤4 contents) regardless of repo size, so the
-60/hour unauth limit rarely fires; pass a PAT for CI loops.
+60/hour unauth limit rarely fires; pass a PAT for CI loops. `validate-repo`
+never uses organization GitHub auth: validate a repo that an app clones via
+`--git-auth organization` with a PAT that can read it.
 
 ### Inspect the deployed-from git repo
 

@@ -597,7 +597,10 @@ class RepoValidateService(BaseService):
                             f"GitHub returned 404 for {locator.owner}/{locator.repo}@"
                             f"{locator.ref}. If this is a private repo, pass "
                             "--git-pat-env / --git-pat-file with a PAT that has "
-                            "`repo` scope."
+                            "`repo` scope. validate-repo reads the repo with YOUR "
+                            "PAT only: an app that clones it through organization "
+                            "GitHub auth (`--git-auth organization`) is not "
+                            "checked here, so validate with a PAT that can read it."
                         ),
                         status_code=404,
                         error_code=ErrorCode.VALIDATION_ERROR,
