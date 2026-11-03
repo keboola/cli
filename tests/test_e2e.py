@@ -12154,14 +12154,14 @@ class TestE2ESemanticLayerLifecycle:
             )["data"]
             assert dimension in {r["dimension_name"] for r in listed["reference_data"]}
 
-            _step(4, "reference-data get --id (members intact)")
+            _step(4, "reference-data get --reference-data-id (members intact)")
             got = self._run_ok(
                 "semantic-layer",
                 "reference-data",
                 "get",
                 "--project",
                 self.alias,
-                "--id",
+                "--reference-data-id",
                 record_id,
             )["data"]
             assert {m["account_code"] for m in got["members"]} == {"4011", "ISR99999"}
@@ -12194,7 +12194,7 @@ class TestE2ESemanticLayerLifecycle:
                 "delete",
                 "--project",
                 self.alias,
-                "--id",
+                "--reference-data-id",
                 record_id,
                 "--yes",
             )["data"]

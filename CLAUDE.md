@@ -418,9 +418,10 @@ plugins/kbagent/
 #   `deprecated_option()` with a `DEPRECATIONS` entry. They add a DEPRECATED warning (`replacement`,
 #   `remove_after`). None exists now. 1.0.0 removed every old form (#791): `stream delete --force` (use
 #   --yes), `semantic-layer import --yes`/-y (no effect), `project add/create --project`/-p (use --alias),
-#   `project refresh --all` (use --all-projects), `--id` on merge-request and agent commands, and
-#   `branch merge`. Each keeps a `DEPRECATIONS` entry with removed_in="1.0.0". `removed_form()` looks it
-#   up, and LeafCommand/CommandGroup in root_command.py put its message into the USAGE_ERROR (exit 2),
+#   `project refresh --all` (use --all-projects), `--id` on merge-request, agent and
+#   semantic-layer reference-data get/delete commands, and `branch merge`. Each keeps a
+#   `DEPRECATIONS` entry with removed_in="1.0.0". `removed_form()` looks it up, and
+#   LeafCommand/CommandGroup in root_command.py put its message into the USAGE_ERROR (exit 2),
 #   so the error names the replacement. Version gate lives in gotchas.md.
 # --conversation-id ID (#716): sets the X-Conversation-ID observability header for the
 #   invocation; equivalent to KBAGENT_CONVERSATION_ID and takes precedence over it. Exists because an
@@ -1396,9 +1397,9 @@ kbagent semantic-layer scope request-list [--project P] --type T [--limit N] [--
 #   .../target-projects, PUT/DELETE .../elevation-request, GET /semantic-layer/scope/elevation-requests;
 #   POST /semantic-layer/models and /items/{kind} take `scope` + `target_projects`.
 kbagent semantic-layer reference-data list [--project P] [--model M]
-kbagent semantic-layer reference-data get [--project P] (--id ID | --dimension D)
+kbagent semantic-layer reference-data get [--project P] (--reference-data-id ID | --dimension D)
 kbagent semantic-layer reference-data set [--project P] [--model M] --dimension D --members-file PATH [--dataset-id T] [--description X]
-kbagent semantic-layer reference-data delete [--project P] --id ID [--yes]
+kbagent semantic-layer reference-data delete [--project P] --reference-data-id ID [--yes]
 # Alias: `kbagent sl ...` (hidden) is equivalent to `kbagent semantic-layer ...`.
 # semantic-layer READS work with any valid, non-disabled, non-expired Storage token
 #   (0.97.0, PSGO-282): the Metastore no longer requires a master token for GET/List. WRITES

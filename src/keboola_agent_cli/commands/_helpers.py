@@ -869,6 +869,18 @@ DEPRECATIONS: dict[str, Deprecation] = {
         replacement="--task-id",
         removed_in="1.0.0",
     ),
+    "semantic-layer reference-data get --id": Deprecation(
+        message="--id was removed in 1.0.0. Use --reference-data-id.",
+        hint="--reference-data-id",
+        replacement="--reference-data-id",
+        removed_in="1.0.0",
+    ),
+    "semantic-layer reference-data delete --id": Deprecation(
+        message="--id was removed in 1.0.0. Use --reference-data-id.",
+        hint="--reference-data-id",
+        replacement="--reference-data-id",
+        removed_in="1.0.0",
+    ),
     "branch merge": Deprecation(
         message="branch merge was removed in 1.0.0. It only printed the merge URL of the "
         "Keboola UI. Merge a dev branch with `kbagent merge-request`, or in the Keboola UI.",

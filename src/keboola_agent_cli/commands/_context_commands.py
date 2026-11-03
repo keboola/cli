@@ -956,13 +956,14 @@ relationships, constraints, and glossary terms.
     Promote a model from one project to another (NEW + overwrite CHANGED;
     never deletes).
 
-  kbagent semantic-layer reference-data delete [--project PROJECT] --id ID
-      [--yes]
+  kbagent semantic-layer reference-data delete [--project PROJECT]
+      --reference-data-id ID [--yes]
     Delete a reference-data record by UUID (server-side soft-delete).
 
-  kbagent semantic-layer reference-data get [--project PROJECT] [--id ID]
-      [--dimension DIMENSION]
-    Fetch one record (all members) by ``--id`` or by ``--dimension``.
+  kbagent semantic-layer reference-data get [--project PROJECT]
+      [--reference-data-id ID] [--dimension DIMENSION]
+    Fetch one record (all members) by ``--reference-data-id`` or by
+    ``--dimension``.
 
   kbagent semantic-layer reference-data list [--project PROJECT]
       [--model MODEL]

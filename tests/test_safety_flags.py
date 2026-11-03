@@ -362,6 +362,8 @@ REMOVED_CLI_FORMS = [
     (["merge-request", "detail", "--id", "7"], "Use --merge-request-id"),
     (["mr", "approve", "--id", "7"], "Use --merge-request-id"),
     (["agent", "show", "--id", "abc"], "Use --task-id"),
+    (["semantic-layer", "reference-data", "get", "--id", "r1"], "Use --reference-data-id"),
+    (["sl", "reference-data", "delete", "--id", "r1", "--yes"], "Use --reference-data-id"),
     (["branch", "merge", "--branch", "1"], "kbagent merge-request"),
 ]
 
