@@ -25,6 +25,7 @@ from ._helpers import (
     get_dev_portal_service,
     get_formatter,
     map_error_to_exit_code,
+    read_file_arg,
     read_password_stdin,
     resolve_identity_alias,
 )
@@ -363,7 +364,9 @@ def _pending_as_json(pending: PendingWrite) -> dict[str, Any]:
 def create_cmd(
     ctx: typer.Context,
     vendor: str = typer.Option(..., "--vendor"),
-    data: str = typer.Option(..., "--data", help="Path to JSON payload, or '-' for stdin"),
+    data: str = typer.Option(
+        ..., "--data", "--data-file", help="Path to JSON payload, or '-' for stdin"
+    ),
     identity: str | None = typer.Option(None, "--identity"),
     dry_run: bool = typer.Option(False, "--dry-run"),
 ) -> None:
@@ -397,7 +400,7 @@ def create_cmd(
 def patch_cmd(
     ctx: typer.Context,
     app: str = typer.Option(..., "--app"),
-    data: str | None = typer.Option(None, "--data"),
+    data: str | None = typer.Option(None, "--data", "--data-file"),
     property_: str | None = typer.Option(None, "--property"),
     value: str | None = typer.Option(None, "--value"),
     value_file: str | None = typer.Option(None, "--value-file"),
@@ -424,7 +427,11 @@ def patch_cmd(
         payload = _load_payload(data)
     elif property_:
         if value_file:
-            raw = Path(value_file).read_text(encoding="utf-8")
+            raw = (
+                read_file_arg(value_file, label="--value-file")
+                if value_file == "-"
+                else Path(value_file).read_text(encoding="utf-8")
+            )
         elif value is not None:
             raw = value
         else:

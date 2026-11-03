@@ -125,6 +125,18 @@ def sharing_share(
         "--target-users",
         help="Comma-separated email addresses (required for --type selected-users).",
     ),
+    target_project: list[int] | None = typer.Option(
+        None,
+        "--target-project",
+        help=(
+            "Project ID to share with (repeat for more projects); merged with --target-project-ids."
+        ),
+    ),
+    target_user: list[str] | None = typer.Option(
+        None,
+        "--target-user",
+        help="Email address to share with (repeat for more users); merged with --target-users.",
+    ),
 ) -> None:
     """Enable sharing on a bucket.
 
@@ -143,22 +155,33 @@ def sharing_share(
     parsed_users: list[str] | None = None
 
     if sharing_type == "selected-projects":
-        if not target_project_ids:
+        if not target_project_ids and not target_project:
             formatter.error(
                 message="--target-project-ids is required for --type selected-projects",
                 error_code=ErrorCode.USAGE_ERROR,
             )
             raise typer.Exit(code=2)
-        parsed_project_ids = [int(pid.strip()) for pid in target_project_ids.split(",")]
+        # --target-project (the 1.x name) adds to the --target-project-ids list
+        parsed_project_ids = [
+            *(
+                [int(pid.strip()) for pid in target_project_ids.split(",")]
+                if target_project_ids
+                else []
+            ),
+            *(target_project or []),
+        ]
 
     if sharing_type == "selected-users":
-        if not target_users:
+        if not target_users and not target_user:
             formatter.error(
                 message="--target-users is required for --type selected-users",
                 error_code=ErrorCode.USAGE_ERROR,
             )
             raise typer.Exit(code=2)
-        parsed_users = [u.strip() for u in target_users.split(",")]
+        parsed_users = [
+            *([u.strip() for u in target_users.split(",")] if target_users else []),
+            *(target_user or []),
+        ]
 
     try:
         result = service.share(
@@ -304,17 +327,29 @@ def sharing_unlink(
         "--bucket-id",
         help="Linked bucket ID to remove (e.g. in.c-shared-data).",
     ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Check that the bucket is a linked bucket and show what would be deleted",
+    ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Accepted for kbagent 1.x compatibility; this command does not ask for confirmation",
+    ),
 ) -> None:
     """Remove a linked bucket from a project.
 
     Deletes the linked bucket. Does not affect the source bucket or
     other projects that have linked it. Uses the regular project token.
     """
+    del yes  # 1.x asks for confirmation here; 0.x never did, so --yes changes nothing
     formatter = get_formatter(ctx)
     service = get_service(ctx, "sharing_service")
 
     try:
-        result = service.unlink(alias=project, bucket_id=bucket_id)
+        result = service.unlink(alias=project, bucket_id=bucket_id, dry_run=dry_run)
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
@@ -324,6 +359,8 @@ def sharing_unlink(
 
     if formatter.json_mode:
         formatter.output(result)
+    elif dry_run:
+        formatter.console.print(f"[bold blue]Dry run:[/bold blue] {result['message']}")
     else:
         formatter.success(result["message"])
 

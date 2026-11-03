@@ -209,11 +209,24 @@ def stream_create_source(
     formatter.output(result, _format_detail)
 
 
+def _source_id(positional: str | None, option: str | None) -> str | None:
+    """The source id of the SOURCE_ID argument or of ``--source-id`` (the 1.x form)."""
+    if positional is not None and option is not None:
+        raise typer.BadParameter(
+            "Pass the source id as SOURCE_ID or as --source-id, not both.",
+            param_hint="'--source-id'",
+        )
+    return option if option is not None else positional
+
+
 @stream_app.command("detail")
 def stream_detail(
     ctx: typer.Context,
     source_id: str | None = typer.Argument(None, help="Source id (or use --name)"),
     project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    source_id_opt: str | None = typer.Option(
+        None, "--source-id", help="Source id; the same as the SOURCE_ID argument"
+    ),
     name: str | None = typer.Option(None, "--name", "-n", help="Look up the source by name"),
     branch: str | None = typer.Option(
         None, "--branch", help="Branch ref (default branch if unset)"
@@ -221,6 +234,7 @@ def stream_detail(
     reveal: bool = typer.Option(False, "--reveal", help="Print the full endpoint incl. secret"),
 ) -> None:
     """Show a source's endpoints, protocol, and destination tables."""
+    source_id = _source_id(source_id, source_id_opt)
     formatter = get_formatter(ctx)
     report_branch_ref(ctx.obj["config_store"], project, branch)
     service = get_service(ctx, "stream_service")
@@ -240,8 +254,11 @@ def stream_detail(
 @stream_app.command("delete")
 def stream_delete(
     ctx: typer.Context,
-    source_id: str = typer.Argument(..., help="Source id to delete"),
+    source_id: str | None = typer.Argument(None, help="Source id to delete"),
     project: str = typer.Option(..., "--project", "-p", help="Project alias"),
+    source_id_opt: str | None = typer.Option(
+        None, "--source-id", help="Source id to delete; the same as the SOURCE_ID argument"
+    ),
     branch: str | None = typer.Option(
         None, "--branch", help="Branch ref (default branch if unset)"
     ),
@@ -250,6 +267,9 @@ def stream_delete(
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
 ) -> None:
     """Delete a Data Streams source (destructive)."""
+    source_id = _source_id(source_id, source_id_opt)
+    if source_id is None:
+        raise typer.BadParameter("Missing argument 'SOURCE_ID' (or pass --source-id).")
     formatter = get_formatter(ctx)
     report_branch_ref(ctx.obj["config_store"], project, branch)
     if (

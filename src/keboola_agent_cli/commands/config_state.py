@@ -15,6 +15,7 @@ for ``get_config_state`` / ``set_config_state``).
 """
 
 import json
+from pathlib import Path
 from typing import Any
 
 import typer
@@ -24,7 +25,7 @@ from rich.syntax import Syntax
 from ..config_store import ConfigStore
 from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
-from ._helpers import get_formatter, get_service
+from ._helpers import get_formatter, get_service, read_file_arg
 from .config import _handle_config_service_error, _parse_json_input, config_app
 
 
@@ -81,8 +82,11 @@ def config_state_set(
     project: str = typer.Option(..., "--project", help="Project alias"),
     component_id: str = typer.Option(..., "--component-id", help="Component ID"),
     config_id: str = typer.Option(..., "--config-id", help="Configuration ID"),
-    state: str = typer.Option(
-        ..., "--state", help="New state as inline JSON object, @file, or - for stdin"
+    state: str | None = typer.Option(
+        None, "--state", help="New state as inline JSON object, @file, or - for stdin"
+    ),
+    state_file: Path | None = typer.Option(
+        None, "--state-file", help="Read the new state JSON object from a file (- for stdin)"
     ),
     row_id: str | None = typer.Option(
         None, "--row-id", help="Write this row's state instead of the config's root state"
@@ -112,9 +116,19 @@ def config_state_set(
     formatter = get_formatter(ctx)
     config_store: ConfigStore = ctx.obj["config_store"]
 
+    if (state is None) == (state_file is None):
+        formatter.error(
+            message="Pass exactly one of --state JSON or --state-file PATH.",
+            error_code=ErrorCode.USAGE_ERROR,
+        )
+        raise typer.Exit(code=2)
     try:
-        state_value = _parse_json_input(state)
-    except (json.JSONDecodeError, FileNotFoundError) as exc:
+        state_value = (
+            read_file_arg(state_file, label="--state-file", loads=json.loads)
+            if state_file is not None
+            else _parse_json_input(state or "")
+        )
+    except (json.JSONDecodeError, FileNotFoundError, ValueError) as exc:
         formatter.error(
             message=f"Invalid --state input: {exc}", error_code=ErrorCode.VALIDATION_ERROR
         )

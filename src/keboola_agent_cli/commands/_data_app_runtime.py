@@ -22,7 +22,13 @@ import typer
 
 from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
-from ._helpers import emit_api_error, get_formatter, get_service, map_error_to_exit_code
+from ._helpers import (
+    emit_api_error,
+    get_formatter,
+    get_service,
+    map_error_to_exit_code,
+    read_file_arg,
+)
 
 # Canonical Keboola help-doc reference (mirrors data_app.py).
 _REF_STORAGE_ACCESS = "https://help.keboola.com/data-apps/storage-access/"
@@ -49,8 +55,12 @@ def _parse_secret_arg(arg: str) -> tuple[str, str]:
 
 def _read_secrets_file(path: Path) -> dict[str, str]:
     try:
-        text = path.read_text(encoding="utf-8")
-    except OSError as exc:
+        text = (
+            read_file_arg(path, label="--secret-file")
+            if str(path) == "-"
+            else path.read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError) as exc:
         raise typer.BadParameter(
             f"Cannot read secrets file {path}: {exc}",
             param_hint="--secrets-file",
@@ -98,10 +108,12 @@ def data_app_secrets_set(
     secrets_file: Path | None = typer.Option(
         None,
         "--secrets-file",
-        help="Path to a JSON file mapping '#KEY' -> 'plaintext value'.",
+        "--secret-file",
+        help="Path to a JSON file mapping '#KEY' -> 'plaintext value' (- for stdin).",
         exists=True,
         readable=True,
         dir_okay=False,
+        allow_dash=True,
     ),
     branch: int | None = typer.Option(
         None,

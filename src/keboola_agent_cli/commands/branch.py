@@ -337,11 +337,12 @@ def branch_metadata_set(
     ctx: typer.Context,
     project: str = typer.Option(..., "--project", help="Project alias"),
     key: str = typer.Option(..., "--key", help="Metadata key to set"),
-    text: str | None = typer.Option(None, "--text", help="Inline string value"),
+    text: str | None = typer.Option(None, "--text", "--value", help="Inline string value"),
     file: Path | None = typer.Option(
         None,
         "--file",
-        help="Read value from a UTF-8 text file",
+        "--value-file",
+        help="Read value from a UTF-8 text file (- for stdin)",
         exists=False,  # validated in helper with a clearer error message
     ),
     stdin: bool = typer.Option(

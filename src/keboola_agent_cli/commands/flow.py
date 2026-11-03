@@ -35,6 +35,7 @@ from ._helpers import (
     get_service,
     item_failure_exit_code,
     map_error_to_exit_code,
+    read_file_arg,
 )
 
 logger = logging.getLogger(__name__)
@@ -517,14 +518,36 @@ def flow_examples(
 # ---------------------------------------------------------------------------
 
 
+_DEFINITION_FILE = typer.Option(
+    None,
+    "--definition-file",
+    help="Read the YAML/JSON flow definition from a file (- for stdin).",
+)
+
+
+def _check_definition_sources(
+    formatter: Any, file: str | None, definition_file: Path | None
+) -> None:
+    """Exit 2 when both ``--file``/``--definition`` and ``--definition-file`` are given."""
+    if file is not None and definition_file is not None:
+        formatter.error(
+            message="--file/--definition and --definition-file are mutually exclusive; "
+            "pass one of them.",
+            error_code=ErrorCode.USAGE_ERROR,
+        )
+        raise typer.Exit(code=2)
+
+
 @flow_app.command("validate")
 def flow_validate(
     ctx: typer.Context,
-    file: str = typer.Option(
-        ...,
+    file: str | None = typer.Option(
+        None,
         "--file",
+        "--definition",
         help="YAML/JSON flow definition to validate (@file, -, or inline).",
     ),
+    definition_file: Path | None = _DEFINITION_FILE,
     project: str | None = typer.Option(
         None,
         "--project",
@@ -545,9 +568,12 @@ def flow_validate(
     Exit 0 when valid (warnings still printed), exit 2 when there are errors.
     """
     formatter = get_formatter(ctx)
+    _check_definition_sources(formatter, file, definition_file)
+    if file is None and definition_file is None:
+        raise typer.BadParameter("Missing option '--file' (or --definition-file).")
 
     try:
-        flow_def = _load_flow_yaml(file)
+        flow_def = _load_flow_yaml(file, definition_file)
     except (OSError, yaml.YAMLError, ValueError) as exc:
         formatter.error(
             message=f"Cannot load flow definition: {exc}", error_code=ErrorCode.VALIDATION_ERROR
@@ -603,9 +629,13 @@ def flow_validate(
 # ---------------------------------------------------------------------------
 
 
-def _load_flow_yaml(raw: str) -> dict[str, Any]:
-    """Load flow definition from inline JSON, @file, or - (stdin)."""
-    if raw == "-":
+def _load_flow_yaml(raw: str | None, definition_file: Path | None = None) -> dict[str, Any]:
+    """Load flow definition from inline JSON, @file, - (stdin), or ``--definition-file``."""
+    if definition_file is not None:
+        content = read_file_arg(definition_file, label="--definition-file")
+    elif raw is None:
+        return {}
+    elif raw == "-":
         content = sys.stdin.read()
     elif raw.startswith("@"):
         file_path = Path(raw[1:])
@@ -635,9 +665,11 @@ def flow_new(
     file: str | None = typer.Option(
         None,
         "--file",
+        "--definition",
         help="YAML/JSON flow definition (@file, -, or inline). "
         "Run 'kbagent flow schema' to see the expected format.",
     ),
+    definition_file: Path | None = _DEFINITION_FILE,
     branch: int | None = typer.Option(None, "--branch", help="Dev branch ID"),
 ) -> None:
     """Create a new conditional-flow (keboola.flow) configuration.
@@ -656,9 +688,10 @@ def flow_new(
     phases: list[dict[str, Any]] = []
     tasks: list[dict[str, Any]] = []
 
-    if file:
+    _check_definition_sources(formatter, file, definition_file)
+    if file or definition_file is not None:
         try:
-            flow_def = _load_flow_yaml(file)
+            flow_def = _load_flow_yaml(file, definition_file)
         except (OSError, yaml.YAMLError, ValueError) as exc:
             formatter.error(
                 message=f"Cannot load flow definition: {exc}", error_code=ErrorCode.VALIDATION_ERROR
@@ -710,8 +743,10 @@ def flow_update(
     file: str | None = typer.Option(
         None,
         "--file",
+        "--definition",
         help="YAML/JSON flow definition to replace phases + tasks (@file, -, or inline)",
     ),
+    definition_file: Path | None = _DEFINITION_FILE,
     branch: int | None = typer.Option(None, "--branch", help="Dev branch ID"),
 ) -> None:
     """Update a flow's name, description, or phases/tasks.
@@ -730,9 +765,10 @@ def flow_update(
     phases: list[dict[str, Any]] | None = None
     tasks: list[dict[str, Any]] | None = None
 
-    if file:
+    _check_definition_sources(formatter, file, definition_file)
+    if file or definition_file is not None:
         try:
-            flow_def = _load_flow_yaml(file)
+            flow_def = _load_flow_yaml(file, definition_file)
         except (OSError, yaml.YAMLError, ValueError) as exc:
             formatter.error(
                 message=f"Cannot load flow definition: {exc}", error_code=ErrorCode.VALIDATION_ERROR

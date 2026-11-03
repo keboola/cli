@@ -277,6 +277,7 @@ def token_list(
     columns: list[str] | None = typer.Option(
         None,
         "--columns",
+        "--column",
         help=(
             "Table columns to show, in order (repeat for multiple). "
             f"Available: {', '.join(_COLUMNS)}. Human output only -- --json is unaffected."

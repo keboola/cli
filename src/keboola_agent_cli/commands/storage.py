@@ -535,6 +535,7 @@ def storage_create_table(
     not_null: list[str] | None = typer.Option(
         None,
         "--not-null",
+        "--not-null-column",
         help="Column name to mark NOT NULL. Can be repeated. Must match a --column name.",
     ),
     default: list[str] | None = typer.Option(
@@ -891,6 +892,7 @@ def storage_download_table(
     columns: list[str] | None = typer.Option(
         None,
         "--columns",
+        "--column",
         help="Column names to export (repeat for multiple: --columns col1 --columns col2)",
     ),
     limit: int | None = typer.Option(
@@ -2141,6 +2143,7 @@ def storage_unload_table(
     columns: list[str] | None = typer.Option(
         None,
         "--columns",
+        "--column",
         help="Column names to export (repeat for multiple)",
     ),
     limit: int | None = typer.Option(

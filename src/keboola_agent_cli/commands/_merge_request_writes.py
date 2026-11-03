@@ -26,6 +26,8 @@ asks, confirms, and says afterwards. Design record: ``docs/merge-requests-layer1
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
 import typer
@@ -45,6 +47,7 @@ from ._helpers import (
     get_formatter,
     get_service,
     parse_json_arg,
+    read_file_arg,
     resolve_project_alias,
 )
 from ._merge_request_common import (
@@ -573,6 +576,11 @@ def merge_request_resolve(
             "isDisabled, configuration and rows (rebase REPLACES the whole configuration)"
         ),
     ),
+    resolved_file: Path | None = typer.Option(
+        None,
+        "--resolved-file",
+        help="Read the hand-authored resolution JSON from a file (- for stdin)",
+    ),
     change_description: str | None = typer.Option(
         None, "--change-description", help="Version message for the rebased configuration"
     ),
@@ -587,14 +595,20 @@ def merge_request_resolve(
     target must be explicit.
     """
     formatter = get_formatter(ctx)
-    if (take is None) == (resolved is None):
+    if resolved is not None and resolved_file is not None:
+        _usage_error(formatter, "--resolved and --resolved-file are mutually exclusive.")
+    if (take is None) == (resolved is None and resolved_file is None):
         _usage_error(formatter, "Pass exactly one of --take ours|theirs|delete or --resolved.")
     if take is not None and take not in TAKE_MODES:
         _usage_error(formatter, f"Unknown --take value {take!r}: use {', '.join(TAKE_MODES)}.")
     body: dict[str, Any] | None = None
-    if resolved is not None:
+    if resolved is not None or resolved_file is not None:
         try:
-            parsed = parse_json_arg(resolved, label="--resolved")
+            parsed = (
+                read_file_arg(resolved_file, label="--resolved-file", loads=json.loads)
+                if resolved_file is not None
+                else parse_json_arg(resolved or "", label="--resolved")
+            )
         except ValueError as exc:
             _usage_error(formatter, str(exc))
         if not isinstance(parsed, dict):

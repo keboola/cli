@@ -12,10 +12,12 @@ import json
 import os
 import secrets
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import typer
+import yaml
 
 from .. import telemetry
 from ..config_store import ConfigStore
@@ -105,6 +107,36 @@ def parse_json_arg(raw: str, *, label: str) -> Any:
     except OSError as exc:
         # a directory, a permission problem -- a usage error, not a crash
         raise ValueError(f"{label}: cannot read file: {exc}") from exc
+
+
+def read_file_arg(
+    path: str | Path, *, label: str, loads: Callable[[str], Any] | None = None
+) -> Any:
+    """Read the value of a ``--X-file PATH`` option, the 1.x input-file form.
+
+    ``-`` reads stdin. ``loads`` parses the text like the inline ``--X``
+    (``json.loads``, ``yaml.safe_load``); without it the text is returned.
+
+    Raises:
+        ValueError: On a missing or unreadable file or malformed content -- the
+            message names ``label`` (the flag) so the caller can print it at exit 2.
+    """
+    try:
+        if str(path) == "-":
+            text = sys.stdin.read()
+        else:
+            file_path = Path(path)
+            if not file_path.is_file():
+                raise ValueError(f"{label}: file not found: {file_path}")
+            text = file_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise ValueError(f"{label}: cannot read file: {exc}") from exc
+    if loads is None:
+        return text
+    try:
+        return loads(text)
+    except (json.JSONDecodeError, yaml.YAMLError) as exc:
+        raise ValueError(f"{label}: invalid content: {exc}") from exc
 
 
 def read_password_stdin(label: str = "Password: ") -> str:

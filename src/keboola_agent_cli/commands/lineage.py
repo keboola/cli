@@ -159,6 +159,7 @@ def lineage_info(
     load: Path = typer.Option(
         ...,
         "--load",
+        "--file",
         "-l",
         help="Lineage JSON cache file (from `lineage build`).",
     ),
@@ -238,6 +239,7 @@ def lineage_show(
     load: Path = typer.Option(
         ...,
         "--load",
+        "--file",
         "-l",
         help="Lineage JSON cache file (from `lineage build`).",
     ),
@@ -1149,6 +1151,7 @@ def lineage_serve(
     load: Path = typer.Option(
         ...,
         "--load",
+        "--file",
         "-l",
         help="Lineage JSON cache file (from `lineage build`).",
     ),

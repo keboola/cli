@@ -43,6 +43,7 @@ from ._helpers import (
     get_service,
     map_error_to_exit_code,
 )
+from ._metadata_input import configuration_file_text, row_configuration_file
 
 logger = logging.getLogger(__name__)
 
@@ -633,9 +634,10 @@ def config_update(
     configuration_file: Path | None = typer.Option(
         None,
         "--configuration-file",
-        help="Path to a JSON file with configuration content",
+        help="Path to a JSON file with configuration content (- for stdin)",
         exists=True,
         readable=True,
+        allow_dash=True,
     ),
     set_values: list[str] | None = typer.Option(
         None,
@@ -726,7 +728,7 @@ def config_update(
 
     if configuration_file:
         try:
-            config_dict = json.loads(configuration_file.read_text(encoding="utf-8"))
+            config_dict = json.loads(configuration_file_text(configuration_file))
         except json.JSONDecodeError as exc:
             formatter.error(
                 message=f"Invalid JSON in {configuration_file}: {exc}",
@@ -1203,9 +1205,10 @@ def config_new(
     configuration_file: Path | None = typer.Option(
         None,
         "--configuration-file",
-        help="Override the configuration body from a JSON file (used with --push)",
+        help="Override the configuration body from a JSON file, - for stdin (used with --push)",
         exists=True,
         readable=True,
+        allow_dash=True,
     ),
     no_validate: bool = typer.Option(
         False,
@@ -1327,7 +1330,7 @@ def config_new(
                 raise typer.Exit(code=2) from None
         elif configuration_file is not None:
             try:
-                config_body = json.loads(configuration_file.read_text(encoding="utf-8"))
+                config_body = json.loads(configuration_file_text(configuration_file))
             except json.JSONDecodeError as exc:
                 formatter.error(
                     message=f"Invalid JSON in --configuration-file {configuration_file}: {exc}",
@@ -2061,6 +2064,14 @@ def config_row_create(
         "--configuration",
         help="Row configuration JSON: inline, @file.json, or - for stdin",
     ),
+    configuration_file: Path | None = typer.Option(
+        None,
+        "--configuration-file",
+        help="Read the row configuration JSON from a file (- for stdin)",
+        exists=True,
+        readable=True,
+        allow_dash=True,
+    ),
     is_disabled: bool = typer.Option(
         False,
         "--is-disabled",
@@ -2109,6 +2120,8 @@ def config_row_create(
                 error_code=ErrorCode.VALIDATION_ERROR,
             )
             raise typer.Exit(code=2) from None
+    if configuration_file is not None:
+        config_dict = row_configuration_file(formatter, configuration, configuration_file)
 
     try:
         result = service.create_config_row(
@@ -2180,6 +2193,14 @@ def config_row_update(
         None,
         "--configuration",
         help="Row configuration JSON: inline, @file.json, or - for stdin",
+    ),
+    configuration_file: Path | None = typer.Option(
+        None,
+        "--configuration-file",
+        help="Read the row configuration JSON from a file (- for stdin)",
+        exists=True,
+        readable=True,
+        allow_dash=True,
     ),
     set_values: list[str] | None = typer.Option(
         None,
@@ -2282,6 +2303,8 @@ def config_row_update(
                 error_code=ErrorCode.VALIDATION_ERROR,
             )
             raise typer.Exit(code=2) from None
+    if configuration_file is not None:
+        config_dict = row_configuration_file(formatter, configuration, configuration_file)
 
     parsed_sets: list[tuple[str, object]] | None = None
     if set_values:

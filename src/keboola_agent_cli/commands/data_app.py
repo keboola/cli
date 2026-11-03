@@ -42,6 +42,7 @@ from ._helpers import (
     get_formatter,
     get_service,
     map_error_to_exit_code,
+    read_file_arg,
 )
 from ._url_copy import LINK_STYLE
 
@@ -263,9 +264,10 @@ def data_app_create(
     description_file: Path | None = typer.Option(
         None,
         "--description-file",
-        help="Read description from a file. Mutually exclusive with --description.",
+        help="Read description from a file (- for stdin). Mutually exclusive with --description.",
         exists=True,
         readable=True,
+        allow_dash=True,
     ),
     slug: str = typer.Option(
         ..., "--slug", help="URL slug (lowercase alphanumeric, hyphens; 2-64 chars)"
@@ -404,8 +406,12 @@ def data_app_create(
     effective_description = description
     if description_file is not None:
         try:
-            effective_description = description_file.read_text(encoding="utf-8")
-        except OSError as exc:
+            effective_description = (
+                read_file_arg(description_file, label="--description-file")
+                if str(description_file) == "-"
+                else description_file.read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError) as exc:
             formatter.error(
                 message=f"Cannot read --description-file {description_file}: {exc}",
                 error_code=ErrorCode.READ_ERROR,

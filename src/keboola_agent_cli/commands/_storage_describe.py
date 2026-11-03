@@ -49,12 +49,14 @@ def register(app: typer.Typer) -> None:
         text: str | None = typer.Option(
             None,
             "--text",
+            "--description",
             help="Description text (inline)",
         ),
         file: Path | None = typer.Option(
             None,
             "--file",
-            help="Path to a file containing the description",
+            "--description-file",
+            help="Path to a file containing the description (- for stdin)",
         ),
         stdin: bool = typer.Option(
             False,
@@ -121,12 +123,14 @@ def register(app: typer.Typer) -> None:
         text: str | None = typer.Option(
             None,
             "--text",
+            "--description",
             help="Description text (inline)",
         ),
         file: Path | None = typer.Option(
             None,
             "--file",
-            help="Path to a file containing the description",
+            "--description-file",
+            help="Path to a file containing the description (- for stdin)",
         ),
         stdin: bool = typer.Option(
             False,
@@ -293,6 +297,7 @@ def register(app: typer.Typer) -> None:
         from_file: Path = typer.Option(
             ...,
             "--from-file",
+            "--file",
             help="Path to a YAML file with bucket/table/column descriptions",
         ),
         branch: int | None = typer.Option(

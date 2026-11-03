@@ -5,6 +5,7 @@ No business logic belongs here.
 """
 
 import json
+from pathlib import Path
 
 import typer
 from rich.console import Console
@@ -25,6 +26,7 @@ from ._helpers import (
     get_formatter,
     get_service,
     map_error_to_exit_code,
+    read_file_arg,
 )
 from .config import _parse_json_input
 
@@ -295,6 +297,11 @@ def component_sync_action(
         "--config-data",
         help="Explicit configData JSON: inline, @file.json, or - for stdin (skips config fetch)",
     ),
+    config_data_file: Path | None = typer.Option(
+        None,
+        "--config-data-file",
+        help="Read the explicit configData JSON from a file, - for stdin (skips config fetch)",
+    ),
     timeout: int | None = typer.Option(
         None,
         "--timeout",
@@ -330,7 +337,13 @@ def component_sync_action(
     service = get_service(ctx, "component_service")
     config_store: ConfigStore = ctx.obj["config_store"]
 
-    if config_id is None and config_data is None:
+    if config_data is not None and config_data_file is not None:
+        formatter.error(
+            message="--config-data and --config-data-file are mutually exclusive; pass one of them.",
+            error_code=ErrorCode.USAGE_ERROR,
+        )
+        raise typer.Exit(code=2)
+    if config_id is None and config_data is None and config_data_file is None:
         formatter.error(
             message="Either --config-id or --config-data is required.",
             error_code=ErrorCode.MISSING_PARAMETER,
@@ -345,10 +358,14 @@ def component_sync_action(
         raise typer.Exit(code=2)
 
     override: dict | None = None
-    if config_data is not None:
+    if config_data is not None or config_data_file is not None:
         try:
-            override = _parse_json_input(config_data)
-        except (json.JSONDecodeError, FileNotFoundError) as exc:
+            override = (
+                read_file_arg(config_data_file, label="--config-data-file", loads=json.loads)
+                if config_data_file is not None
+                else _parse_json_input(config_data or "")
+            )
+        except (json.JSONDecodeError, FileNotFoundError, ValueError) as exc:
             formatter.error(
                 message=f"Invalid --config-data input: {exc}",
                 error_code=ErrorCode.VALIDATION_ERROR,

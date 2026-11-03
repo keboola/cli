@@ -133,7 +133,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Update an existing configuration row | `kbagent config row-update --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID --row-id ROW-ID` |
 | Delete a configuration row | `kbagent config row-delete --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID --row-id ROW-ID` |
 | Read the runtime ``state`` dict of a configuration or one of its rows | `kbagent config state-get --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
-| Overwrite the runtime ``state`` dict of a configuration or one of its rows | `kbagent config state-set --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID --state STATE` |
+| Overwrite the runtime ``state`` dict of a configuration or one of its rows | `kbagent config state-set --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Duplicate a configuration, whole -- including runtime, storage and authorization | `kbagent config clone --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID --name NAME` |
 | Requires master token. | `kbagent config oauth-url --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Restore a configuration from the trash (undo of 'config delete') | `kbagent config restore --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
@@ -197,7 +197,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | List Data Streams sources in a project | `kbagent stream list --project PROJECT` |
 | Create an OTLP (or HTTP) source and return its endpoint | `kbagent stream create-source --project PROJECT --name NAME` |
 | Show a source's endpoints, protocol, and destination tables | `kbagent stream detail [SOURCE-ID] --project PROJECT` |
-| Delete a Data Streams source (destructive) | `kbagent stream delete <SOURCE-ID> --project PROJECT` |
+| Delete a Data Streams source (destructive) | `kbagent stream delete [SOURCE-ID] --project PROJECT` |
 | List shared buckets available for linking | `kbagent sharing list` |
 | Enable sharing on a bucket | `kbagent sharing share --project PROJECT --bucket-id BUCKET-ID --type SHARING-TYPE` |
 | Disable sharing on a bucket | `kbagent sharing unshare --project PROJECT --bucket-id BUCKET-ID` |
@@ -222,7 +222,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Show detailed conditional-flow information including phases and tasks | `kbagent flow detail --project PROJECT --flow-id FLOW-ID` |
 | Print the conditional-flow YAML template, or --full for the JSON Schema | `kbagent flow schema` |
 | Show bundled example flow configurations (offline, no project needed) | `kbagent flow examples` |
-| Validate a conditional-flow definition (schema + semantic checks) | `kbagent flow validate --file FILE` |
+| Validate a conditional-flow definition (schema + semantic checks) | `kbagent flow validate` |
 | Create a new conditional-flow (keboola.flow) configuration | `kbagent flow new --project PROJECT --name NAME` |
 | Update a flow's name, description, or phases/tasks | `kbagent flow update --project PROJECT --flow-id FLOW-ID` |
 | Delete a conditional-flow (keboola.flow) configuration | `kbagent flow delete --project PROJECT --flow-id FLOW-ID` |
@@ -276,7 +276,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Show workspace details (password NOT included) | `kbagent workspace detail --project PROJECT --workspace-id WORKSPACE-ID` |
 | Delete a workspace | `kbagent workspace delete --project PROJECT --workspace-id WORKSPACE-ID` |
 | Reset workspace password and show the new one | `kbagent workspace password --project PROJECT --workspace-id WORKSPACE-ID` |
-| Load tables into a workspace | `kbagent workspace load --project PROJECT --workspace-id WORKSPACE-ID --tables TABLES` |
+| Load tables into a workspace | `kbagent workspace load --project PROJECT --workspace-id WORKSPACE-ID --table-id TABLES` |
 | Execute SQL query in a workspace via Query Service | `kbagent workspace query --project PROJECT --workspace-id WORKSPACE-ID` |
 | Garbage-collect orphaned workspaces | `kbagent workspace gc` |
 | Create a workspace from a transformation config | `kbagent workspace from-transformation --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
@@ -289,7 +289,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Link the current git branch to a Keboola development branch | `kbagent sync branch-link --project PROJECT` |
 | Remove the branch mapping for the current git branch | `kbagent sync branch-unlink` |
 | Show the branch mapping status for the current git branch | `kbagent sync branch-status` |
-| Encrypt #-prefixed secret values for a Keboola component | `kbagent encrypt values --project PROJECT --component-id COMPONENT-ID --input INPUT-DATA` |
+| Encrypt #-prefixed secret values for a Keboola component | `kbagent encrypt values --project PROJECT --component-id COMPONENT-ID` |
 | Encrypt the project's storage token for transformation `user_properties` | `kbagent semantic-layer token --project PROJECT --component-id COMPONENT-ID` |
 | Build a semantic-layer model from a list of storage tables (non-interactive) | `kbagent semantic-layer build --project PROJECT` |
 | Promote a model from one project to another (NEW + overwrite CHANGED; never deletes) | `kbagent semantic-layer promote --from-project FROM-PROJECT --to-project TO-PROJECT` |
@@ -307,7 +307,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Add a metric to a semantic-layer model | `kbagent semantic-layer add metric --project PROJECT --name NAME --sql SQL --dataset DATASET` |
 | Add a dataset (FQN read from the table's Storage location) | `kbagent semantic-layer add dataset --project PROJECT --name NAME --table-id TABLE-ID` |
 | Add a relationship between two datasets | `kbagent semantic-layer add relationship --project PROJECT --name NAME --from FROM- --to TO --on ON` |
-| Add a constraint | `kbagent semantic-layer add constraint --project PROJECT --name NAME --constraint-type CONSTRAINT-TYPE --rule RULE --metrics METRICS` |
+| Add a constraint | `kbagent semantic-layer add constraint --project PROJECT --name NAME --constraint-type CONSTRAINT-TYPE --rule RULE` |
 | Add a glossary term | `kbagent semantic-layer add glossary --project PROJECT --term TERM --definition DEFINITION` |
 | Edit a metric. | `kbagent semantic-layer edit metric --project PROJECT --name NAME` |
 | Edit a dataset (no cascade — metric.dataset uses tableId, not name) | `kbagent semantic-layer edit dataset --project PROJECT --name NAME` |
@@ -321,14 +321,15 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Remove a glossary term. | `kbagent semantic-layer remove glossary --project PROJECT --term TERM` |
 | List reference-data records (dimension summaries; use ``get`` for members) | `kbagent semantic-layer reference-data list --project PROJECT` |
 | Fetch one record (all members) by ``--id`` or by ``--dimension`` | `kbagent semantic-layer reference-data get --project PROJECT` |
-| Create or replace a reference-data record (keyed by dimension) | `kbagent semantic-layer reference-data set --project PROJECT --dimension DIMENSION --members-file MEMBERS-FILE` |
-| Delete a reference-data record by UUID (server-side soft-delete) | `kbagent semantic-layer reference-data delete --project PROJECT --id ID-` |
+| Create or replace a reference-data record (keyed by dimension) | `kbagent semantic-layer reference-data set --project PROJECT --dimension DIMENSION` |
+| Delete a reference-data record by UUID (server-side soft-delete) | `kbagent semantic-layer reference-data delete --project PROJECT --reference-data-id ID-` |
 | Show an item's current scope, target-project grants, and pending elevation | `kbagent semantic-layer scope get --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
 | Add target projects to a targeted-scope item (merges with the current grants) | `kbagent semantic-layer scope add --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
 | Remove target projects from a targeted-scope item (merges with the current grants) | `kbagent semantic-layer scope remove --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
 | Write an item's scope: elevate to organization, or replace/clear its target projects | `kbagent semantic-layer scope set --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
 | Flag a project-scoped item as awaiting an org-admin's step-up decision | `kbagent semantic-layer scope request-create --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
 | Withdraw a pending scope-elevation request. | `kbagent semantic-layer scope request-delete --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
+| Withdraw a pending scope-elevation request. | `kbagent semantic-layer scope request-cancel --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
 | List items of --type awaiting an org-admin's elevation decision, across the org | `kbagent semantic-layer scope request-list --project PROJECT --type TYPE-` |
 | Encrypt the project's storage token for transformation `user_properties` | `kbagent sl token --project PROJECT --component-id COMPONENT-ID` |
 | Build a semantic-layer model from a list of storage tables (non-interactive) | `kbagent sl build --project PROJECT` |
@@ -347,7 +348,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Add a metric to a semantic-layer model | `kbagent sl add metric --project PROJECT --name NAME --sql SQL --dataset DATASET` |
 | Add a dataset (FQN read from the table's Storage location) | `kbagent sl add dataset --project PROJECT --name NAME --table-id TABLE-ID` |
 | Add a relationship between two datasets | `kbagent sl add relationship --project PROJECT --name NAME --from FROM- --to TO --on ON` |
-| Add a constraint | `kbagent sl add constraint --project PROJECT --name NAME --constraint-type CONSTRAINT-TYPE --rule RULE --metrics METRICS` |
+| Add a constraint | `kbagent sl add constraint --project PROJECT --name NAME --constraint-type CONSTRAINT-TYPE --rule RULE` |
 | Add a glossary term | `kbagent sl add glossary --project PROJECT --term TERM --definition DEFINITION` |
 | Edit a metric. | `kbagent sl edit metric --project PROJECT --name NAME` |
 | Edit a dataset (no cascade — metric.dataset uses tableId, not name) | `kbagent sl edit dataset --project PROJECT --name NAME` |
@@ -361,14 +362,15 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Remove a glossary term. | `kbagent sl remove glossary --project PROJECT --term TERM` |
 | List reference-data records (dimension summaries; use ``get`` for members) | `kbagent sl reference-data list --project PROJECT` |
 | Fetch one record (all members) by ``--id`` or by ``--dimension`` | `kbagent sl reference-data get --project PROJECT` |
-| Create or replace a reference-data record (keyed by dimension) | `kbagent sl reference-data set --project PROJECT --dimension DIMENSION --members-file MEMBERS-FILE` |
-| Delete a reference-data record by UUID (server-side soft-delete) | `kbagent sl reference-data delete --project PROJECT --id ID-` |
+| Create or replace a reference-data record (keyed by dimension) | `kbagent sl reference-data set --project PROJECT --dimension DIMENSION` |
+| Delete a reference-data record by UUID (server-side soft-delete) | `kbagent sl reference-data delete --project PROJECT --reference-data-id ID-` |
 | Show an item's current scope, target-project grants, and pending elevation | `kbagent sl scope get --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
 | Add target projects to a targeted-scope item (merges with the current grants) | `kbagent sl scope add --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
 | Remove target projects from a targeted-scope item (merges with the current grants) | `kbagent sl scope remove --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
 | Write an item's scope: elevate to organization, or replace/clear its target projects | `kbagent sl scope set --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
 | Flag a project-scoped item as awaiting an org-admin's step-up decision | `kbagent sl scope request-create --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
 | Withdraw a pending scope-elevation request. | `kbagent sl scope request-delete --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
+| Withdraw a pending scope-elevation request. | `kbagent sl scope request-cancel --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
 | List items of --type awaiting an org-admin's elevation decision, across the org | `kbagent sl scope request-list --project PROJECT --type TYPE-` |
 | GET an endpoint on the running kbagent serve | `kbagent http get <PATH>` |
 | POST to an endpoint on the running kbagent serve | `kbagent http post <PATH>` |
@@ -388,7 +390,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Polish a plain-English goal into an unattended-agent-ready prompt | `kbagent agent prompt-improve --goal GOAL` |
 | List Developer Portal apps for a vendor | `kbagent dev-portal list --vendor VENDOR` |
 | Show the full Developer Portal entry for one app | `kbagent dev-portal get --app APP` |
-| Create (register) a new app in the Developer Portal. | `kbagent dev-portal create --vendor VENDOR --data DATA` |
+| Create (register) a new app in the Developer Portal. | `kbagent dev-portal create --vendor VENDOR --data-file DATA` |
 | Patch one or more properties of an existing Developer Portal app. | `kbagent dev-portal patch --app APP` |
 | Upload a 128x128 PNG icon for a Developer Portal app. | `kbagent dev-portal upload-icon --app APP --file FILE` |
 | Publish an app in the Developer Portal (requests Keboola review). | `kbagent dev-portal publish --app APP` |
