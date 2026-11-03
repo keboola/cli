@@ -36,6 +36,7 @@ from ._helpers import (
     get_formatter,
     get_service,
     map_error_to_exit_code,
+    split_multi,
 )
 from ._project_ref import PROJECT_HELP
 
@@ -101,7 +102,7 @@ def _last_used_cell(token: dict[str, Any]) -> str:
     A row carrying no status at all renders EMPTY rather than falling through
     to "unknown": that string asserts something about event retention, and
     asserting it for a token nobody looked up would be a confident lie. The
-    command guards the reachable case (``--columns last_used`` without
+    command guards the reachable case (``--column last_used`` without
     ``--with-last-used``); this is the belt to that pair of braces.
     """
     status = token.get("lastUsedStatus")
@@ -117,7 +118,7 @@ def _last_used_cell(token: dict[str, Any]) -> str:
 
 
 # Column name -> (header, cell renderer, Rich column kwargs). The name is what
-# `--columns` accepts; keep it lowercase and stable, it is a user-facing token.
+# `--column` accepts; keep it lowercase and stable, it is a user-facing token.
 _COLUMNS: dict[str, tuple[str, Callable[[dict[str, Any]], str], dict[str, Any]]] = {
     "id": ("ID", lambda t: str(t.get("id", "")), {"style": "bold cyan"}),
     "description": ("Description", lambda t: str(t.get("description", "")), {}),
@@ -158,7 +159,7 @@ def _resolve_columns(selected: list[str] | None, with_last_used: bool) -> list[s
     """Pick the table's columns: explicit selection, else the default set.
 
     ``--with-last-used`` appends the derived columns to the DEFAULT set only.
-    An explicit ``--columns`` is taken literally -- someone who names their
+    An explicit ``--column`` is taken literally -- someone who names their
     columns means those columns, and silently appending to their choice would
     make the flag unpredictable.
     """
@@ -283,9 +284,9 @@ def token_list(
     ),
     columns: list[str] | None = typer.Option(
         None,
-        "--columns",
+        "--column",
         help=(
-            "Table columns to show, in order (repeat for multiple). "
+            "Table column to show, in order (repeat for more columns). "
             f"Available: {', '.join(_COLUMNS)}. Human output only -- --json is unaffected."
         ),
     ),
@@ -306,12 +307,12 @@ def token_list(
     activity reports "unknown" rather than claiming it was never used.
     """
     formatter = get_formatter(ctx)
+    columns = split_multi(columns, label="--column") or None
     unknown = [name for name in columns or [] if name not in _COLUMNS]
     if unknown:
         formatter.error(
             message=(
-                f"Unknown --columns value(s): {', '.join(unknown)}. "
-                f"Available: {', '.join(_COLUMNS)}"
+                f"Unknown --column value(s): {', '.join(unknown)}. Available: {', '.join(_COLUMNS)}"
             ),
             error_code=ErrorCode.INVALID_ARGUMENT,
         )
@@ -322,7 +323,7 @@ def token_list(
     if ungathered:
         formatter.error(
             message=(
-                f"--columns {', '.join(ungathered)} requires --with-last-used; "
+                f"--column {', '.join(ungathered)} requires --with-last-used; "
                 "those values are derived per token and are not fetched otherwise."
             ),
             error_code=ErrorCode.INVALID_ARGUMENT,

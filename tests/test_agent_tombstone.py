@@ -65,7 +65,7 @@ class TestExecutionRefusal:
 class TestRefusalLogging:
     """A designed refusal must not look like a crash in the CLI user's console.
 
-    ``kbagent agent run <id>`` surfaces logger output directly, so
+    ``kbagent agent run --task-id <id>`` surfaces logger output directly, so
     ``logger.exception`` on a tombstone dumped a full Python traceback for
     behaviour the release notes call expected.
     """
@@ -331,8 +331,8 @@ class TestCreationRefusal:
                 "create",
                 "--name",
                 "x",
-                "--from-file",
-                f"@{payload}",
+                "--definition-file",
+                str(payload),
             ],
         )
         assert result.exit_code == 2
@@ -368,7 +368,8 @@ class TestAgentShowDeprecation:
 
         task = AgentStore(config_dir=tmp_config_dir).upsert_task(_mcp_task())
         result = CliRunner().invoke(
-            app, ["--config-dir", str(tmp_config_dir), "--json", "agent", "show", task.id]
+            app,
+            ["--config-dir", str(tmp_config_dir), "--json", "agent", "show", "--task-id", task.id],
         )
         assert result.exit_code == 0, result.output
         assert json.loads(result.output)["data"]["deprecation"] == REMOVED_ACTION_MESSAGE
@@ -384,7 +385,8 @@ class TestAgentShowDeprecation:
             )
         )
         result = CliRunner().invoke(
-            app, ["--config-dir", str(tmp_config_dir), "--json", "agent", "show", task.id]
+            app,
+            ["--config-dir", str(tmp_config_dir), "--json", "agent", "show", "--task-id", task.id],
         )
         assert result.exit_code == 0, result.output
         assert "deprecation" not in json.loads(result.output)["data"]

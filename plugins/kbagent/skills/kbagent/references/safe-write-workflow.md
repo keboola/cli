@@ -139,7 +139,7 @@ once `.kbagent/` exists, you can run from any subdirectory of the repo.
 kbagent config detail ... > /tmp/config.json
 # ... 10 minutes of editing ...
 # meanwhile someone (or you) pushed v106
-kbagent config update --project prod --configuration @/tmp/config.json
+kbagent config update --project prod --configuration-file /tmp/config.json
 # Result: v107 is built from v105 + your edits, silently discarding v106.
 ```
 
@@ -147,7 +147,7 @@ kbagent config update --project prod --configuration @/tmp/config.json
 # GOOD: re-fetch immediately before each push
 kbagent config detail ... > /tmp/config.json   # fresh
 # ... edit ...
-kbagent config update --project prod --configuration @/tmp/config.json --merge --dry-run
+kbagent config update --project prod --configuration-file /tmp/config.json --merge --dry-run
 # preview, confirm, then push without --dry-run
 ```
 

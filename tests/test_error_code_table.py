@@ -134,7 +134,7 @@ class TestCorrectedPaths:
     @pytest.mark.parametrize("command", ["info", "server"])
     def test_lineage_missing_cache_file_exits_2(self, command: str) -> None:
         result = runner.invoke(
-            app, ["--json", "lineage", command, "--load", "/nonexistent/lineage.json"]
+            app, ["--json", "lineage", command, "--file", "/nonexistent/lineage.json"]
         )
         assert result.exit_code == 2, result.output
         error = json.loads(result.output)["error"]

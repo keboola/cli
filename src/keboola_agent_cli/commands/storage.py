@@ -32,6 +32,7 @@ from ._helpers import (
     get_formatter,
     get_service,
     map_error_to_exit_code,
+    split_multi,
 )
 from ._progress import ProgressOption, transfer_progress
 from ._project_ref import PROJECT_HELP
@@ -523,7 +524,7 @@ def storage_create_table(
     ),
     not_null: list[str] | None = typer.Option(
         None,
-        "--not-null",
+        "--not-null-column",
         help="Column name to mark NOT NULL. Can be repeated. Must match a --column name.",
     ),
     default: list[str] | None = typer.Option(
@@ -637,7 +638,7 @@ def storage_create_table(
         kbagent storage create-table --project p --bucket-id in.c-b --name sales \\
             --column pk:VARCHAR(40) --column amount:NUMERIC(18,2) \\
             --column ts:TIMESTAMP_TZ --column is_paid:BOOLEAN \\
-            --primary-key pk --not-null pk --not-null amount \\
+            --primary-key pk --not-null-column pk --not-null-column amount \\
             --default amount=0 --default is_paid=false
 
         # BigQuery: repartition a populated table by copying it into a new
@@ -747,7 +748,7 @@ def storage_upload_table(
         "--table-id",
         help="Target table ID (e.g. 'in.c-my-bucket.my-table')",
     ),
-    file: str = typer.Option(
+    file: Path = typer.Option(
         ...,
         "--file",
         help="Path to the CSV file to upload",
@@ -813,7 +814,7 @@ def storage_upload_table(
             result = service.upload_table(
                 alias=project,
                 table_id=table_id,
-                file_path=file,
+                file_path=str(file),
                 incremental=incremental,
                 delimiter=delimiter,
                 enclosure=enclosure,
@@ -872,8 +873,8 @@ def storage_download_table(
     ),
     columns: list[str] | None = typer.Option(
         None,
-        "--columns",
-        help="Column names to export (repeat for multiple: --columns col1 --columns col2)",
+        "--column",
+        help="Column name to export (repeat for more columns: --column col1 --column col2)",
     ),
     limit: int | None = typer.Option(
         None,
@@ -926,13 +927,14 @@ def storage_download_table(
     """Export a storage table to a local CSV file.
 
     Downloads table data via the async export API. Handles gzip
-    decompression transparently. Use --columns to select specific
+    decompression transparently. Use --column to select specific
     columns and --limit to cap row count.
 
     Use --keep-slices to write the individual slices into a directory
     instead of concatenating them into a single file.
     """
     formatter = get_formatter(ctx)
+    columns = split_multi(columns, label="--column") or None
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
     effective_branch = resolve_branch(config_store, project, branch)
@@ -1731,7 +1733,7 @@ def storage_file_info(
 def storage_file_upload(
     ctx: typer.Context,
     project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
-    file: str = typer.Option(
+    file: Path = typer.Option(
         ...,
         "--file",
         help="Path to the file to upload",
@@ -1784,7 +1786,7 @@ def storage_file_upload(
         ) as on_progress:
             result = service.upload_file(
                 alias=project,
-                file_path=file,
+                file_path=str(file),
                 name=name,
                 tags=tag,
                 is_permanent=permanent,
@@ -2054,8 +2056,8 @@ def storage_unload_table(
     ),
     columns: list[str] | None = typer.Option(
         None,
-        "--columns",
-        help="Column names to export (repeat for multiple)",
+        "--column",
+        help="Column name to export (repeat for more columns)",
     ),
     limit: int | None = typer.Option(
         None,
@@ -2122,6 +2124,7 @@ def storage_unload_table(
         )
         raise typer.Exit(code=2) from None
     formatter = get_formatter(ctx)
+    columns = split_multi(columns, label="--column") or None
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
     effective_branch = resolve_branch(config_store, project, branch)

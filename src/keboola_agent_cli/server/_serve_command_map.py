@@ -32,7 +32,7 @@ SERVE_COMMAND_MAP: dict[tuple[str, str], str] = {
     (
         "DELETE",
         "/semantic-layer/scope/{context_id}/elevation-request",
-    ): "semantic-layer scope request-delete",
+    ): "semantic-layer scope request-cancel",
     ("DELETE", "/semantic-layer/scope/{context_id}/target-projects"): "semantic-layer scope remove",
     ("DELETE", "/semantic-layer/models/{model}"): "semantic-layer model delete",
     (

@@ -25,10 +25,10 @@ from ._helpers import (
     get_dev_portal_service,
     get_formatter,
     map_error_to_exit_code,
-    parse_json_arg,
     read_password_stdin,
     read_text_arg,
     resolve_identity_alias,
+    structured_input,
 )
 
 
@@ -303,13 +303,24 @@ def _assert_tty(action_description: str) -> None:
         raise typer.Exit(code=EXIT_PERMISSION_DENIED)
 
 
-def _load_payload(formatter: OutputFormatter, data: str) -> dict:
-    """Read the ``--data`` JSON object from a file path or ``-`` (stdin)."""
+def _load_payload(
+    formatter: OutputFormatter, data: str | None, data_file: Path | None
+) -> dict | None:
+    """The JSON object of ``--data`` (inline) or ``--data-file`` (a path, ``-`` = stdin).
+
+    ``None`` when neither is given. In 0.x ``--data`` took a path, so an
+    inline value that is not JSON but names a file gets a hint for ``--data-file``.
+    """
     try:
-        payload = parse_json_arg(data if data == "-" else f"@{data}", label="--data")
+        payload = structured_input(data, data_file, label="--data")
     except ValueError as exc:
-        formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
+        message = str(exc)
+        if data is not None and data_file is None and Path(data).is_file():
+            message = f"{message.rstrip('.')}. To read the file, use --data-file {data}."
+        formatter.error(message=message, error_code=ErrorCode.INVALID_ARGUMENT)
         raise typer.Exit(code=2) from None
+    if payload is None:
+        return None
     if not isinstance(payload, dict):
         formatter.error(
             message="--data must be a JSON object", error_code=ErrorCode.INVALID_ARGUMENT
@@ -372,7 +383,10 @@ def _pending_as_json(pending: PendingWrite) -> dict[str, Any]:
 def create_cmd(
     ctx: typer.Context,
     vendor: str = typer.Option(..., "--vendor"),
-    data: str = typer.Option(..., "--data", help="Path to JSON payload, or '-' for stdin"),
+    data: str | None = typer.Option(None, "--data", help="JSON payload, inline"),
+    data_file: Path | None = typer.Option(
+        None, "--data-file", help="Read the JSON payload from a file (- for stdin)", allow_dash=True
+    ),
     identity: str | None = typer.Option(None, "--identity"),
     dry_run: bool = typer.Option(False, "--dry-run"),
 ) -> None:
@@ -381,7 +395,9 @@ def create_cmd(
     formatter = get_formatter(ctx)
     svc = get_dev_portal_service(ctx)
     alias = resolve_identity_alias(ctx, identity)
-    payload = _load_payload(formatter, data)
+    payload = _load_payload(formatter, data, data_file)
+    if payload is None:
+        raise typer.BadParameter("Provide --data or --data-file")
     try:
         pending = svc.prepare_create(alias, vendor, payload)
     except KeboolaApiError as exc:
@@ -407,7 +423,10 @@ def create_cmd(
 def patch_cmd(
     ctx: typer.Context,
     app: str = typer.Option(..., "--app"),
-    data: str | None = typer.Option(None, "--data"),
+    data: str | None = typer.Option(None, "--data", help="JSON payload, inline"),
+    data_file: Path | None = typer.Option(
+        None, "--data-file", help="Read the JSON payload from a file (- for stdin)", allow_dash=True
+    ),
     property_: str | None = typer.Option(None, "--property"),
     value: str | None = typer.Option(None, "--value"),
     value_file: str | None = typer.Option(None, "--value-file"),
@@ -430,8 +449,8 @@ def patch_cmd(
     alias = resolve_identity_alias(ctx, identity)
     vendor, app_id = _split_app(app)
 
-    if data:
-        payload = _load_payload(formatter, data)
+    if data or data_file is not None:
+        payload = _load_payload(formatter, data or None, data_file)
     elif property_:
         if value_file:
             raw = read_text_arg(formatter, Path(value_file), label="--value-file")
@@ -445,7 +464,9 @@ def patch_cmd(
             parsed = raw
         payload = {property_: parsed}
     else:
-        raise typer.BadParameter("Provide --data, or --property with --value/--value-file")
+        raise typer.BadParameter(
+            "Provide --data, --data-file, or --property with --value/--value-file"
+        )
 
     try:
         pending = svc.prepare_patch(alias, vendor, app_id, payload)
@@ -478,7 +499,7 @@ def patch_cmd(
 def upload_icon_cmd(
     ctx: typer.Context,
     app: str = typer.Option(..., "--app"),
-    file: str = typer.Option(..., "--file"),
+    file: Path = typer.Option(..., "--file", help="Path to the 128x128 PNG icon"),
     identity: str | None = typer.Option(None, "--identity"),
     dry_run: bool = typer.Option(False, "--dry-run"),
 ) -> None:

@@ -391,13 +391,13 @@ class TestFlowValidate:
     def test_validate_valid_semantic_only(self, tmp_path: Path) -> None:
         f = tmp_path / "flow.yaml"
         f.write_text(_VALID_FLOW_YAML)
-        result = runner.invoke(app, ["flow", "validate", "--file", f"@{f}"])
+        result = runner.invoke(app, ["flow", "validate", "--definition-file", str(f)])
         assert result.exit_code == 0
 
     def test_validate_no_project_notes_structural_skipped(self, tmp_path: Path) -> None:
         f = tmp_path / "flow.yaml"
         f.write_text(_VALID_FLOW_YAML)
-        result = runner.invoke(app, ["--json", "flow", "validate", "--file", f"@{f}"])
+        result = runner.invoke(app, ["--json", "flow", "validate", "--definition-file", str(f)])
         assert result.exit_code == 0
         payload = json.loads(result.output)
         assert payload["data"]["valid"] is True
@@ -406,7 +406,7 @@ class TestFlowValidate:
     def test_validate_no_project_note_human(self, tmp_path: Path) -> None:
         f = tmp_path / "flow.yaml"
         f.write_text(_VALID_FLOW_YAML)
-        result = runner.invoke(app, ["flow", "validate", "--file", f"@{f}"])
+        result = runner.invoke(app, ["flow", "validate", "--definition-file", str(f)])
         assert result.exit_code == 0
         assert "structural schema validation skipped" in result.output
 
@@ -414,7 +414,7 @@ class TestFlowValidate:
         bad = _VALID_FLOW_YAML.replace('phase: "p1"', 'phase: "ghost"')
         f = tmp_path / "bad.yaml"
         f.write_text(bad)
-        result = runner.invoke(app, ["--json", "flow", "validate", "--file", f"@{f}"])
+        result = runner.invoke(app, ["--json", "flow", "validate", "--definition-file", str(f)])
         assert result.exit_code == 2
         payload = json.loads(result.output)
         assert payload["data"]["valid"] is False
@@ -423,7 +423,7 @@ class TestFlowValidate:
     def test_validate_json_valid_lists_warnings(self, tmp_path: Path) -> None:
         f = tmp_path / "flow.yaml"
         f.write_text(_VALID_FLOW_YAML)
-        result = runner.invoke(app, ["--json", "flow", "validate", "--file", f"@{f}"])
+        result = runner.invoke(app, ["--json", "flow", "validate", "--definition-file", str(f)])
         assert result.exit_code == 0
         payload = json.loads(result.output)
         assert payload["data"]["valid"] is True
@@ -439,7 +439,9 @@ class TestFlowValidate:
         f = tmp_path / "bad.yaml"
         f.write_text(bad)
         result = _invoke(
-            store, mock_flow, ["--json", "flow", "validate", "--file", f"@{f}", "--project", "prod"]
+            store,
+            mock_flow,
+            ["--json", "flow", "validate", "--definition-file", str(f), "--project", "prod"],
         )
         assert result.exit_code == 2
         payload = json.loads(result.output)
@@ -453,7 +455,9 @@ class TestFlowValidate:
         mock_flow.fetch_flow_schema.return_value = FlowSchemaFetch(schema=_LIVE_SCHEMA, reason=None)
         f = tmp_path / "flow.yaml"
         f.write_text(_VALID_FLOW_YAML)
-        result = _invoke(store, mock_flow, ["--json", "flow", "validate", "--file", f"@{f}"])
+        result = _invoke(
+            store, mock_flow, ["--json", "flow", "validate", "--definition-file", str(f)]
+        )
         assert result.exit_code == 0, result.output
         mock_flow.fetch_flow_schema.assert_called_once_with("prod")
 
@@ -467,7 +471,9 @@ class TestFlowValidate:
         f = tmp_path / "flow.yaml"
         f.write_text(_VALID_FLOW_YAML)
         result = _invoke(
-            store, mock_flow, ["--json", "flow", "validate", "--file", f"@{f}", "--project", "prod"]
+            store,
+            mock_flow,
+            ["--json", "flow", "validate", "--definition-file", str(f), "--project", "prod"],
         )
         assert result.exit_code == 0
         payload = json.loads(result.output)
@@ -506,8 +512,8 @@ class TestFlowNew:
                 "prod",
                 "--name",
                 "YAML Flow",
-                "--file",
-                f"@{flow_yaml}",
+                "--definition-file",
+                str(flow_yaml),
             ],
         )
         assert result.exit_code == 0, result.output
@@ -542,8 +548,8 @@ class TestFlowNew:
                 "prod",
                 "--name",
                 "Bad",
-                "--file",
-                f"@{bad_yaml}",
+                "--definition-file",
+                str(bad_yaml),
             ],
         )
         assert result.exit_code == 2

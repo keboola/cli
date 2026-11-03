@@ -426,9 +426,9 @@ class TestListColumns:
                 "list",
                 "--project",
                 ALIAS,
-                "--columns",
+                "--column",
                 "description",
-                "--columns",
+                "--column",
                 "id",
             ],
             env={"COLUMNS": "250"},
@@ -444,7 +444,7 @@ class TestListColumns:
         result = _invoke(
             config_dir,
             self._svc(),
-            ["token", "list", "--project", ALIAS, "--columns", "nonsense"],
+            ["token", "list", "--project", ALIAS, "--column", "nonsense"],
         )
         assert result.exit_code == 2
         # Human-mode errors go to stderr, like every other usage error in the CLI.
@@ -459,7 +459,7 @@ class TestListColumns:
         result = _invoke(
             config_dir,
             self._svc(),
-            ["--json", "token", "list", "--project", ALIAS, "--columns", "id"],
+            ["--json", "token", "list", "--project", ALIAS, "--column", "id"],
         )
         assert result.exit_code == 0
         token = json.loads(result.stdout)["data"]["tokens"][0]
@@ -494,7 +494,7 @@ class TestLastUsedColumnsGuard:
         result = _invoke(
             config_dir,
             self._svc([{"id": "1", "description": "a"}]),
-            ["token", "list", "--project", ALIAS, "--columns", "last_used"],
+            ["token", "list", "--project", ALIAS, "--column", "last_used"],
         )
         assert result.exit_code == 2
         assert "--with-last-used" in result.stderr
@@ -507,7 +507,7 @@ class TestLastUsedColumnsGuard:
         result = _invoke(
             config_dir,
             self._svc([{"id": "1", "description": "a"}]),
-            ["token", "list", "--project", ALIAS, "--columns", "last_used_event"],
+            ["token", "list", "--project", ALIAS, "--column", "last_used_event"],
         )
         assert result.exit_code == 2
         assert "--with-last-used" in result.stderr
@@ -522,7 +522,7 @@ class TestLastUsedColumnsGuard:
         result = _invoke(
             config_dir,
             svc,
-            ["token", "list", "--project", ALIAS, "--columns", "last_used", "--with-last-used"],
+            ["token", "list", "--project", ALIAS, "--column", "last_used", "--with-last-used"],
             env={"COLUMNS": "200"},
         )
         assert result.exit_code == 0

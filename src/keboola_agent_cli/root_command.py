@@ -40,7 +40,7 @@ import typer
 from typer.core import TyperCommand, TyperGroup, TyperOption
 
 from . import telemetry
-from .commands._helpers import removed_form
+from .commands._helpers import removed_argument, removed_form
 from .commands._project_ref import ProjectRefGroup, use_active_project
 from .errors import ErrorCode
 from .output import OutputFormatter
@@ -121,6 +121,7 @@ class LeafCommand(TyperCommand):
             if not args and self.no_args_is_help:
                 raise MissingCommandError("Missing arguments.", ctx)
             _report_repeated_options(self, ctx, args)
+        typed = list(args)  # Click's parser consumes `args`
         try:
             return super().parse_args(ctx, args)
         except NoSuchOption as exc:
@@ -130,6 +131,17 @@ class LeafCommand(TyperCommand):
                 exc.message = f"No such option: {exc.option_name}. {entry.message}"
                 exc.possibilities = None
             raise
+        except UsageError:
+            # C3: a positional value given to a command whose positional
+            # argument was removed gets an error that names the replacement,
+            # also when Click first reports the missing new option.
+            extra = _extra_arguments(self, ctx, typed)
+            entry = removed_argument(_command_names(ctx)) if extra else None
+            if entry is None:
+                raise
+            raise UsageError(
+                f"Got unexpected extra argument ({' '.join(extra)}). {entry.message}", ctx
+            ) from None
 
     def invoke(self, ctx: Any) -> Any:
         # The formatter needs the category for the T12 warning in --json.
@@ -159,6 +171,15 @@ class CommandGroup(TyperGroup):
             if entry is None:
                 raise
             raise UsageError(f"No such command '{args[0]}'. {entry.message}", ctx) from None
+
+
+def _extra_arguments(command: LeafCommand, ctx: Any, args: list[str]) -> list[str]:
+    """The positional values on the command line that no argument of ``command`` takes."""
+    try:
+        _, rest, _ = command.make_parser(ctx).parse_args(args=args)
+    except UsageError:
+        return []
+    return list(rest)
 
 
 def _command_names(ctx: Any) -> list[str]:

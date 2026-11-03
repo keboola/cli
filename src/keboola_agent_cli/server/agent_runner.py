@@ -1163,7 +1163,7 @@ async def run_task_once(
     except Exception as exc:
         if task.action.type in REMOVED_ACTION_TYPES:
             # Designed refusal, not a crash: a traceback here reads as a bug
-            # to whoever ran `kbagent agent run <id>` on a tombstone task.
+            # to whoever ran `kbagent agent run --task-id <id>` on a tombstone task.
             logger.warning(
                 "Agent task %s uses the removed %r action; refusing",
                 task.id,

@@ -41,9 +41,11 @@ irreversible decision.
 | Remove a metric (orphan-check first) | `semantic-layer remove metric` |
 | Restore from a snapshot | `semantic-layer import --file ... --dry-run` then real |
 | Promote dev -> prod | `semantic-layer promote --from-project dev --to-project prod` |
-| Bootstrap a model from storage tables | `semantic-layer build --tables ...` (heuristic) |
+| Bootstrap a model from storage tables | `semantic-layer build --table-id ...` (heuristic) |
 | Encrypt the storage token for a Python container | `semantic-layer token --encrypt` |
 | Share an item with named projects, or make it org-wide | see [metastore-scope-workflow.md](metastore-scope-workflow.md) |
+
+List options: repeat `--metric`, `--new-metric`, `--table-id` (`build`) and `--type` (`import`, `promote`) once per value. *(since 1.0.0)* 1.x refuses a comma in a value (exit 2).
 
 ---
 
@@ -155,7 +157,7 @@ referencing a nonexistent metric is rejected at POST time).
 kbagent --json workspace create --project prod --name sl-sanity
 # -> grab workspace_id
 kbagent --json workspace load --project prod --workspace-id W \
-    --tables out.c-revenue.fact_orders
+    --table-id out.c-revenue.fact_orders
 kbagent --json workspace query --project prod --workspace-id W \
     --sql "SELECT SUM(amount) FROM \"out.c-revenue.fact_orders\""
 # Confirm the SQL works; clean up the workspace
@@ -176,7 +178,7 @@ kbagent semantic-layer add constraint \
     --name revenue_non_negative_warning \
     --constraint-type inequality \
     --rule 'value >= 0' \
-    --metrics revenue \
+    --metric revenue \
     --severity warning
 
 # 4. Add the _critical band as a separate constraint
@@ -185,7 +187,7 @@ kbagent semantic-layer add constraint \
     --name revenue_minimum_critical \
     --constraint-type inequality \
     --rule 'value >= 1000' \
-    --metrics revenue \
+    --metric revenue \
     --severity error
 
 # 5. Validate (the constraint name suffix should match the severity)
@@ -264,7 +266,7 @@ kbagent --json semantic-layer validate --project prod --model core_model
 
 # 2. Re-cascade each failed constraint manually
 kbagent semantic-layer edit constraint --project prod --model core_model \
-    --name revenue_growth_minimum_warning --new-metrics revenue_growth_qoq
+    --name revenue_growth_minimum_warning --new-metric revenue_growth_qoq
 ```
 
 Atomic two-phase commit was rejected as disproportionate: every cascade
@@ -346,7 +348,7 @@ from prod that aren't in dev. To remove items, do that explicitly with
 prevents a partial dev model from wiping prod-only entities (e.g. an
 emergency hotfix metric).
 
-Use `--types datasets,metrics` to scope the promote to specific entity
+Use `--type datasets --type metrics` to scope the promote to specific entity
 types (e.g. promote metric changes without touching constraints).
 
 ---
@@ -361,7 +363,7 @@ kbagent --json storage tables --project prod --bucket-id out.c-revenue \
 # 2. Dry-run the build to inspect the generated JSON
 kbagent --json semantic-layer build \
     --project prod \
-    --tables out.c-revenue.fact_orders,out.c-revenue.dim_customers \
+    --table-id out.c-revenue.fact_orders --table-id out.c-revenue.dim_customers \
     --dry-run \
     --output /tmp/built.json
 # Response carries: fallback_used: "heuristic"
@@ -372,7 +374,7 @@ kbagent --json semantic-layer build \
 #    to create a new model)
 kbagent --json semantic-layer build \
     --project prod \
-    --tables out.c-revenue.fact_orders,out.c-revenue.dim_customers \
+    --table-id out.c-revenue.fact_orders --table-id out.c-revenue.dim_customers \
     --name revenue_model
 
 # 4. Refine with real business logic
@@ -393,7 +395,7 @@ kbagent semantic-layer add relationship \
 the kbagent AI Service client has no JSON-generation endpoint as of
 v0.41.0. The heuristic synthesises:
 
-- One dataset per `--tables` entry, with FQN read from the table's
+- One dataset per `--table-id` value, with FQN read from the table's
   Storage location (bucket `backendPath`) and `fields[]`
   role-classified (PK_/FK_->key, *_DATE/*_DT->timestamp,
   numeric amount/value/rate->measure, else dimension).
@@ -425,7 +427,7 @@ you want to inspect what got POSTed before the failure:
 # Preserve everything on failure for inspection
 kbagent --json semantic-layer build \
     --project prod \
-    --tables out.c-revenue.fact_orders \
+    --table-id out.c-revenue.fact_orders \
     --keep-on-failure \
     --name forensic_test_model
 # On failure: model + N children remain; error.details.rollback shows
@@ -436,7 +438,7 @@ kbagent --json semantic-layer build \
 # Default: rollback runs automatically, no orphans left behind
 kbagent --json semantic-layer build \
     --project prod \
-    --tables out.c-revenue.fact_orders \
+    --table-id out.c-revenue.fact_orders \
     --name production_model
 # On failure: model + every successfully-POSTed child get DELETEd;
 # error.details.rollback shows {"attempted": true, "deleted": 3, ...}

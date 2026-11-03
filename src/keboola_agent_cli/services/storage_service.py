@@ -699,7 +699,7 @@ class StorageService(ColumnDescriptionsMixin):
                 keeps running server-side.
             ValueError: ``timeout`` is zero, negative, NaN or infinite;
                 malformed column spec or ``--default`` assignment;
-                ``--not-null`` / ``--default`` references an unknown column;
+                ``--not-null-column`` / ``--default`` references an unknown column;
                 ``columns`` and ``source`` both/neither given;
                 ``source_branch_id`` given without ``source_table_id``;
                 incomplete or conflicting partitioning flags; or BigQuery-only
@@ -751,7 +751,7 @@ class StorageService(ColumnDescriptionsMixin):
         # meaning when columns are derived from a source table.
         if source is not None and not_null_columns:
             raise ValueError(
-                "--not-null is not valid with --source-table-id (columns are "
+                "--not-null-column is not valid with --source-table-id (columns are "
                 "derived from the source table)."
             )
         if source is not None and defaults:
@@ -767,13 +767,13 @@ class StorageService(ColumnDescriptionsMixin):
         )
 
         # Reject attribute references to columns not actually defined. Without
-        # this check a typo like `--not-null pk --column pkey:VARCHAR(40)`
+        # this check a typo like `--not-null-column pk --column pkey:VARCHAR(40)`
         # silently has no effect -- failing fast surfaces the bug.
         col_names = {c["name"] for c in parsed_columns}
         unknown_not_null = sorted(not_null_set - col_names)
         if unknown_not_null:
             raise ValueError(
-                f"--not-null references unknown column(s): {', '.join(unknown_not_null)}. "
+                f"--not-null-column references unknown column(s): {', '.join(unknown_not_null)}. "
                 f"Defined columns: {', '.join(sorted(col_names))}."
             )
         unknown_defaults = sorted(set(defaults_map.keys()) - col_names)

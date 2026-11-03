@@ -147,13 +147,11 @@ NOT_AN_ALIAS: dict[str, str] = {
     "dev-portal: an identity",
     "--new-alias": "names the NEW alias (project edit) or identity (dev-portal identity edit)",
     "alias": "dev-portal identity use: a developer-portal identity, not a project",
-    "--project-id": "already a project ID (auth register-projects)",
-    "--project-ids": "already project IDs (org setup)",
+    "--project-id": "already a project ID (auth register-projects, org setup)",
     "--source-project-id": "already a project ID (sharing link)",
-    "--target-project-ids": "already project IDs (sharing share)",
     "--target-project": (
-        "semantic-layer: alias OR numeric ID resolved by the service itself (a target need not "
-        "be registered); config clone's --target-project is in ALIAS_OPTIONS"
+        "semantic-layer and sharing share: alias OR numeric ID resolved by the service itself "
+        "(a target need not be registered); config clone's --target-project is in ALIAS_OPTIONS"
     ),
     "--all-projects": "a boolean flag",
     "--register-projects": "a boolean flag",

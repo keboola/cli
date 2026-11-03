@@ -188,7 +188,7 @@ def test_checker_reads_options_after_a_spaced_alternation() -> None:
 # --------------------------------------------------------------------------- #
 
 # Options with which a command chooses its projects itself.
-_PROJECT_CHOICE = {"--project", "-p", "--all-projects", "--from-csv"}
+_PROJECT_CHOICE = {"--project", "-p", "--all-projects"}
 
 
 def _command_and_options(example: str, root: Any) -> tuple[Any, list[str]] | None:
@@ -225,6 +225,8 @@ def _leaves_out_the_project(example: str, root: Any) -> bool:
         return False
     if command.operation == "project.refresh" and "--all" in rest:
         return False  # the deprecated name of --all-projects, the form 0.x knows
+    if command.operation == "project.invite" and {"--file", "--from-csv"} & set(rest):
+        return False  # the projects come from the CSV file (--from-csv on 0.x)
     return not any(token.split("=")[0] in _PROJECT_CHOICE for token in rest)
 
 

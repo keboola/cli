@@ -609,7 +609,16 @@ def test_a_stream_that_fails_stays_ndjson(
     from keboola_agent_cli.services.agent_service import AgentService
 
     monkeypatch.setattr(AgentService, "stream_run", _stream_then(failure))
-    args = ["--config-dir", str(tmp_path), "--json", "agent", "run", "abc123", "--stream"]
+    args = [
+        "--config-dir",
+        str(tmp_path),
+        "--json",
+        "agent",
+        "run",
+        "--task-id",
+        "abc123",
+        "--stream",
+    ]
     result = runner.invoke(app, args)
     assert result.exit_code == exit_code, result.output
     events = [json.loads(line) for line in result.stdout.splitlines()]
@@ -626,7 +635,7 @@ def test_a_stream_that_fails_stays_ndjson(
 # Command lines that reach the safety prompt with an empty config directory and
 # no network: the prompt comes before any read.
 CONFIRMING_COMMANDS: dict[str, str] = {
-    "agent delete": "agent delete t1",
+    "agent delete": "agent delete --task-id t1",
     "auth logout": "auth logout",
     "branch delete": "branch delete --project p --branch 1",
     "branch metadata-delete": "branch metadata-delete --project p --metadata-id 1",
@@ -657,10 +666,11 @@ CONFIRMING_COMMANDS: dict[str, str] = {
     "semantic-layer edit glossary": "semantic-layer edit glossary --project p --term a --new-term b",
     "semantic-layer model delete": "semantic-layer model delete --project p --model m",
     "semantic-layer promote": "semantic-layer promote --from-project a --to-project b",
-    "semantic-layer reference-data delete": "semantic-layer reference-data delete --project p --id x",
+    "semantic-layer reference-data delete": "semantic-layer reference-data delete --project p --reference-data-id x",
     "semantic-layer scope set": (
         "semantic-layer scope set --project p --type model --context-id x --scope organization"
     ),
+    "sharing unlink": "sharing unlink --project p --bucket-id in.c-a",
     "storage delete-bucket": "storage delete-bucket --project p --bucket-id in.c-a",
     "storage delete-column": "storage delete-column --project p --table-id in.c-a.b --column c",
     "storage delete-table": "storage delete-table --project p --table-id in.c-a.b",
@@ -670,7 +680,7 @@ CONFIRMING_COMMANDS: dict[str, str] = {
         "storage swap-tables --project p --table-id in.c-a.b --target-table-id in.c-a.c --branch 1"
     ),
     "storage truncate-table": "storage truncate-table --project p --table-id in.c-a.b",
-    "stream delete": "stream delete s1 --project p",
+    "stream delete": "stream delete --source-id s1 --project p",
     "token delete": "token delete --project p --token-id 1",
     "token refresh": "token refresh --project p --token-id 1",
     "workspace delete": "workspace delete --project p --workspace-id 1",

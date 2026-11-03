@@ -82,7 +82,7 @@ def validate_set_paths(set_paths: list[tuple[str, Any]] | None) -> None:
                 f"top-level API field, not part of 'configuration'. --set "
                 f"only edits configuration.* -- use {hint} instead. If the "
                 f"component genuinely has a 'configuration.{first_segment}' "
-                f"key, pass the full body via --configuration JSON|@file|- "
+                f"key, pass the full body via --configuration JSON or --configuration-file PATH "
                 f"instead."
             ),
         )

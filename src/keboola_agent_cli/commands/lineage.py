@@ -154,8 +154,7 @@ def lineage_info(
     ctx: typer.Context,
     load: Path = typer.Option(
         ...,
-        "--load",
-        "-l",
+        "--file",
         help="Lineage JSON cache file (from `lineage build`).",
     ),
 ) -> None:
@@ -233,8 +232,7 @@ def lineage_show(
     ctx: typer.Context,
     load: Path = typer.Option(
         ...,
-        "--load",
-        "-l",
+        "--file",
         help="Lineage JSON cache file (from `lineage build`).",
     ),
     upstream: str | None = typer.Option(
@@ -1142,8 +1140,7 @@ def lineage_serve(
     ctx: typer.Context,
     load: Path = typer.Option(
         ...,
-        "--load",
-        "-l",
+        "--file",
         help="Lineage JSON cache file (from `lineage build`).",
     ),
     port: int = typer.Option(
@@ -1178,7 +1175,7 @@ def lineage_serve(
         raise typer.Exit(code=2)
 
     try:
-        raw_data = json.loads(read_text_arg(formatter, load, label="--load"))
+        raw_data = json.loads(read_text_arg(formatter, load, label="--file"))
     except json.JSONDecodeError as exc:
         formatter.error(message=f"Cannot read lineage file: {exc}", error_code=ErrorCode.READ_ERROR)
         raise typer.Exit(code=1) from None

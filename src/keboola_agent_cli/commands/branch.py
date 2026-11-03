@@ -121,6 +121,20 @@ def branch_create(
         raise typer.Exit(code=5) from None
 
 
+def _branch_id(value: str) -> int:
+    """The integer branch ID of ``--branch`` on ``branch use`` / ``branch delete``.
+
+    The option is text like ``--branch`` on the other commands of the group
+    (spec rule A1); the value must still be an integer ID.
+    """
+    try:
+        return int(value)
+    except ValueError:
+        raise typer.BadParameter(
+            f"{value!r} is not a valid integer.", param_hint="'--branch'"
+        ) from None
+
+
 @branch_app.command("use")
 def branch_use(
     ctx: typer.Context,
@@ -130,7 +144,7 @@ def branch_use(
         "-p",
         help=f"Project alias or ID to set the active branch for ({PROJECT_DEFAULT})",
     ),
-    branch: int = typer.Option(
+    branch: str = typer.Option(
         ...,
         "--branch",
         help="Branch ID to activate",
@@ -145,7 +159,7 @@ def branch_use(
     service = get_service(ctx, "branch_service")
 
     try:
-        result = service.set_active_branch(alias=project, branch_id=branch)
+        result = service.set_active_branch(alias=project, branch_id=_branch_id(branch))
         formatter.output(
             result,
             lambda c, d: c.print(f"[bold green]Success:[/bold green] {d['message']}"),
@@ -207,7 +221,7 @@ def branch_delete(
         "-p",
         help=f"Project alias or ID to delete the branch from ({PROJECT_DEFAULT})",
     ),
-    branch: int = typer.Option(
+    branch: str = typer.Option(
         ...,
         "--branch",
         help="Branch ID to delete",
@@ -224,16 +238,17 @@ def branch_delete(
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "branch_service")
+    branch_id = _branch_id(branch)
 
     if not dry_run:
         _confirm_or_abort(
             formatter,
             yes,
-            f"Delete branch ID {branch} from project '{project}'? This cannot be undone.",
+            f"Delete branch ID {branch_id} from project '{project}'? This cannot be undone.",
         )
 
     try:
-        result = service.delete_branch(alias=project, branch_id=branch, dry_run=dry_run)
+        result = service.delete_branch(alias=project, branch_id=branch_id, dry_run=dry_run)
         formatter.output(result, _print_delete_result)
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
@@ -323,18 +338,16 @@ def branch_metadata_set(
     project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     key: str = typer.Option(..., "--key", help="Metadata key to set"),
     text: str | None = typer.Option(
-        None, "--text", help="Inline string value", callback=RefuseAtFile("--file").callback
+        None,
+        "--value",
+        help="Inline string value",
+        callback=RefuseAtFile("--value-file").callback,
     ),
     file: Path | None = typer.Option(
         None,
-        "--file",
-        help="Read value from a UTF-8 text file",
-        exists=False,  # validated in helper with a clearer error message
-    ),
-    stdin: bool = typer.Option(
-        False,
-        "--stdin",
-        help="Read value from standard input",
+        "--value-file",
+        help="Read the value from a UTF-8 text file (- for stdin)",
+        allow_dash=True,
     ),
     branch: str = typer.Option(
         "default",
@@ -344,13 +357,13 @@ def branch_metadata_set(
 ) -> None:
     """Set a metadata key/value on a branch.
 
-    The value is taken from exactly one of --text, --file, or --stdin.
+    The value is taken from exactly one of --value or --value-file.
     """
     formatter = get_formatter(ctx)
     report_branch_ref(ctx.obj["config_store"], project, branch)
 
     try:
-        value = resolve_text_input(text=text, file=file, stdin=stdin)
+        value = resolve_text_input(value=text, file=file, option="--value")
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.INVALID_ARGUMENT)
         raise typer.Exit(code=2) from None

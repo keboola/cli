@@ -240,7 +240,7 @@ Decided 2026-08-26: `resolve_conflict` offers four modes, **all via the rebase e
 - `take=theirs` — the diff's theirs side (production content) rebased onto `theirs.version`;
 - `take=ours` — the ours side (dev content) rebased onto `theirs.version`;
 - `delete` — `rebase_config_delete` (the `{}` tombstone);
-- a caller-supplied resolved body (JSON/@file) — pass-through with the conflict-set check,
+- a caller-supplied resolved body (`--resolved` JSON or `--resolved-file`) — pass-through with the conflict-set check,
   the escape hatch for a genuine manual three-way merge.
 
 Edge case: an ours side with `isDeleted` turns `take=ours` into the delete resolution.
@@ -263,7 +263,7 @@ variant (entries as data) and keep the string output as a formatter over it
 table in three sections — *Both changed / Only you changed / Only production changed* —
 with long values elided behind a `--format full`. `--json` carries the entries plus all
 three raw sides. Manual merge stays marker-free: `diff --output resolved.json` writes an
-ours-prefilled candidate, the caller edits it and submits via `resolve --file` — the
+ours-prefilled candidate, the caller edits it and submits via `resolve --resolved-file` — the
 git-mergetool loop with a file as the third pane.
 
 ## ~~`mcp_parity.py` and the canary~~ (obsolete since 0.85.0)

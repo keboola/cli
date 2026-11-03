@@ -58,6 +58,8 @@ kbagent --json workspace delete --project ALIAS --workspace-id WS_ID
 
 Best when you want to explore data or run arbitrary queries:
 
+`workspace load` takes `--table-id` once per table.
+
 ```bash
 # Create empty workspace
 kbagent --json workspace create --project ALIAS --name "debug-ws"
@@ -68,14 +70,14 @@ kbagent --json workspace create --project ALIAS --name "debug-ws"
 kbagent --json workspace load \
   --project ALIAS \
   --workspace-id WS_ID \
-  --tables in.c-bucket.table1 \
-  --tables in.c-bucket.table2
+  --table-id in.c-bucket.table1 \
+  --table-id in.c-bucket.table2
 
 # Or load while keeping existing tables in the workspace
 kbagent --json workspace load \
   --project ALIAS \
   --workspace-id WS_ID \
-  --tables in.c-bucket.table3 \
+  --table-id in.c-bucket.table3 \
   --preserve
 
 # Force clone explicitly -- fails loudly (HTTP 400) instead of silently
@@ -84,7 +86,7 @@ kbagent --json workspace load \
 kbagent --json workspace load \
   --project ALIAS \
   --workspace-id WS_ID \
-  --tables in.c-bucket.table1 \
+  --table-id in.c-bucket.table1 \
   --load-type clone
 
 # Force a real COPY of a table you know is huge and not clone-eligible --
@@ -93,7 +95,7 @@ kbagent --json workspace load \
 kbagent --json workspace load \
   --project ALIAS \
   --workspace-id WS_ID \
-  --tables in.c-bucket.huge_table \
+  --table-id in.c-bucket.huge_table \
   --load-type copy \
   --force \
   --timeout 600
@@ -172,13 +174,13 @@ SQL workspace".
 
 ## SQL from file
 
-For multi-line SQL, use `--file` instead of `--sql`:
+For multi-line SQL, use `--sql-file` instead of `--sql`:
 
 ```bash
 kbagent --json workspace query \
   --project ALIAS \
   --workspace-id WS_ID \
-  --file query.sql
+  --sql-file query.sql
 ```
 
 ## Fast inline results vs `--full` -- mind the result-set volume

@@ -180,7 +180,7 @@ class TestBranchMetadataSet:
                 "prod",
                 "--key",
                 "k",
-                "--text",
+                "--value",
                 "v",
             ],
         )
@@ -213,7 +213,7 @@ class TestBranchMetadataSet:
                 "prod",
                 "--key",
                 "k",
-                "--file",
+                "--value-file",
                 str(payload_file),
             ],
         )
@@ -244,7 +244,8 @@ class TestBranchMetadataSet:
                 "prod",
                 "--key",
                 "k",
-                "--stdin",
+                "--value-file",
+                "-",
             ],
             input_text="stdin-value",
         )
@@ -286,9 +287,10 @@ class TestBranchMetadataSet:
                 "prod",
                 "--key",
                 "k",
-                "--text",
+                "--value",
                 "a",
-                "--stdin",
+                "--value-file",
+                "-",
             ],
         )
         assert result.exit_code == 2
@@ -378,7 +380,7 @@ class TestProjectDescription:
                 "description-set",
                 "--project",
                 "prod",
-                "--text",
+                "--description",
                 "# New",
             ],
         )
@@ -404,7 +406,8 @@ class TestProjectDescription:
                 "description-set",
                 "--project",
                 "prod",
-                "--stdin",
+                "--description-file",
+                "-",
             ],
             input_text="from stdin",
         )
@@ -426,7 +429,7 @@ class TestProjectDescription:
                 "description-set",
                 "--project",
                 "prod",
-                "--text",
+                "--description",
                 "x",
             ],
         )

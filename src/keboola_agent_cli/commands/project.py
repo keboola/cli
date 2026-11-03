@@ -809,28 +809,27 @@ def project_description_set(
         help=f"Project alias or ID to update ({PROJECT_DEFAULT})",
     ),
     text: str | None = typer.Option(
-        None, "--text", help="Inline description string", callback=RefuseAtFile("--file").callback
+        None,
+        "--description",
+        help="Inline description string",
+        callback=RefuseAtFile("--description-file").callback,
     ),
     file: Path | None = typer.Option(
         None,
-        "--file",
-        help="Read description from a UTF-8 markdown file",
-    ),
-    stdin: bool = typer.Option(
-        False,
-        "--stdin",
-        help="Read description from standard input",
+        "--description-file",
+        help="Read the description from a UTF-8 markdown file (- for stdin)",
+        allow_dash=True,
     ),
 ) -> None:
     """Set the Keboola dashboard project description (markdown).
 
     Writes to ``KBC.projectDescription`` on the default branch. Provide the
-    content via exactly one of --text, --file, or --stdin.
+    content via exactly one of --description or --description-file.
     """
     formatter = get_formatter(ctx)
 
     try:
-        description = resolve_text_input(text=text, file=file, stdin=stdin)
+        description = resolve_text_input(value=text, file=file, option="--description")
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.INVALID_ARGUMENT)
         raise typer.Exit(code=2) from None
@@ -1063,22 +1062,22 @@ def project_invite(
     reason: str | None = typer.Option(
         None, "--reason", help="Optional human-readable reason attached to the invitation"
     ),
-    from_csv: Path | None = typer.Option(
+    file: Path | None = typer.Option(
         None,
-        "--from-csv",
+        "--file",
         help="CSV file with columns email, project (alias or numeric ID), role[, reason]",
     ),
     default_role: ProjectRole | None = typer.Option(
         None,
         "--default-role",
-        help="Role to apply when a CSV row has no role column",
+        help="Role for a --file row that has no role column",
     ),
     workers: int = typer.Option(
         DEFAULT_INVITE_WORKERS,
         "--workers",
         min=1,
         max=32,
-        help="Parallel workers for --from-csv (default 8)",
+        help="Parallel workers for --file (default 8)",
     ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview without sending invitations"),
 ) -> None:
@@ -1090,34 +1089,33 @@ def project_invite(
 
     \b
     Bulk (one row per email; CSV header required):
-        kbagent project invite --from-csv participants.csv --default-role guest
+        kbagent project invite --file participants.csv --default-role guest
     """
     formatter = get_formatter(ctx)
 
-    if from_csv and (project or email):
+    if file and (project or email):
         formatter.error(
-            message="--from-csv is mutually exclusive with --project / --email",
+            message="--file is mutually exclusive with --project / --email",
             error_code=ErrorCode.USAGE_ERROR,
         )
         raise typer.Exit(code=2)
-    if not from_csv and not (email and role):
+    if not file and not (email and role):
         formatter.error(
-            message="Provide --email and --role for single-shot invite "
-            "(or use --from-csv for bulk).",
+            message="Provide --email and --role for single-shot invite (or use --file for bulk).",
             error_code=ErrorCode.USAGE_ERROR,
         )
         raise typer.Exit(code=2)
-    if not from_csv:
+    if not file:
         project = resolve_project_alias(ctx, formatter, project)
 
     manage_token = resolve_manage_token(allow_env=ctx.obj["allow_env_manage_token"])
     service = get_service(ctx, "member_service")
 
     try:
-        if from_csv:
+        if file:
             result = service.invite_bulk(
                 manage_token=manage_token,
-                csv_path=from_csv,
+                csv_path=file,
                 default_role=default_role,
                 workers=workers,
                 dry_run=dry_run,

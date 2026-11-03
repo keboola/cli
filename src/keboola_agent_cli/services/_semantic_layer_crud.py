@@ -155,7 +155,7 @@ def edit_metric_with_cascade(
                 f"to '{effective_new_name}'. Run "
                 "`kbagent semantic-layer validate` to surface the dangling "
                 "references, then re-run each failed cascade via "
-                "`kbagent semantic-layer edit constraint --new-metrics ...`."
+                "`kbagent semantic-layer edit constraint --new-metric ...`."
             )
             if partial_state
             else None

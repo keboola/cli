@@ -410,7 +410,7 @@ class TestCreateTableService:
         store = _make_store(tmp_path)
         service = _make_service(store, MagicMock())
 
-        with pytest.raises(ValueError, match="--not-null references unknown column"):
+        with pytest.raises(ValueError, match="--not-null-column references unknown column"):
             service.create_table(
                 alias="test",
                 bucket_id="in.c-b",
@@ -1469,7 +1469,7 @@ class TestCreateTableCLI:
 
     def test_create_table_native_types_and_attributes(self, tmp_path: Path) -> None:
         """End-to-end CLI smoke test covering VARCHAR(40), NUMERIC(18,2),
-        TIMESTAMP_TZ plus --not-null and --default flags."""
+        TIMESTAMP_TZ plus --not-null-column and --default flags."""
         store = _make_store(tmp_path)
         with (
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
@@ -1508,9 +1508,9 @@ class TestCreateTableCLI:
                     "is_paid:BOOLEAN",
                     "--primary-key",
                     "pk",
-                    "--not-null",
+                    "--not-null-column",
                     "pk",
-                    "--not-null",
+                    "--not-null-column",
                     "amount",
                     "--default",
                     "amount=0",
@@ -2384,9 +2384,9 @@ class TestDownloadTableCLI:
                     "in.c-b.events",
                     "--output",
                     "/tmp/events.csv",
-                    "--columns",
+                    "--column",
                     "id",
-                    "--columns",
+                    "--column",
                     "name",
                     "--limit",
                     "50",

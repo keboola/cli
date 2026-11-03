@@ -47,6 +47,7 @@ from ._helpers import (
     get_formatter,
     get_service,
     map_error_to_exit_code,
+    read_input_file,
 )
 from ._project_ref import PROJECT_HELP
 from ._url_copy import LINK_STYLE
@@ -264,9 +265,10 @@ def data_app_create(
     description_file: Path | None = typer.Option(
         None,
         "--description-file",
-        help="Read description from a file. Mutually exclusive with --description.",
+        help="Read description from a file (- for stdin). Mutually exclusive with --description.",
         exists=True,
         readable=True,
+        allow_dash=True,
     ),
     slug: str = typer.Option(
         ..., "--slug", help="URL slug (lowercase alphanumeric, hyphens; 2-64 chars)"
@@ -309,6 +311,7 @@ def data_app_create(
         help="File containing the plaintext PAT.",
         exists=True,
         readable=True,
+        dir_okay=False,
     ),
     git_pat_encrypted: str | None = typer.Option(
         None,
@@ -407,10 +410,10 @@ def data_app_create(
     effective_description = description
     if description_file is not None:
         try:
-            effective_description = description_file.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError) as exc:
+            effective_description = read_input_file(description_file, label="--description-file")
+        except ValueError as exc:
             formatter.error(
-                message=f"Cannot read --description-file {description_file}: {exc}",
+                message=str(exc),
                 error_code=ErrorCode.READ_ERROR,
             )
             raise typer.Exit(code=exit_code_for(ErrorCode.READ_ERROR)) from None

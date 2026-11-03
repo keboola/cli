@@ -93,11 +93,11 @@ EOF
 # 3. Validate; loop until clean. Pass --project to fetch the LIVE schema from the
 #    stack for full structural + semantic validation. Without --project you get
 #    semantic-only checks plus a note that structural validation was skipped.
-kbagent --json flow validate --file @flow.yaml --project prod
+kbagent --json flow validate --definition-file flow.yaml --project prod
 
 # 4. Create. flow new fetches the live schema and validates on write; a
 #    schema-fetch failure degrades to semantic-only + a warning (never blocks).
-kbagent --json flow new --project prod --name "Daily ETL" --file @flow.yaml
+kbagent --json flow new --project prod --name "Daily ETL" --definition-file flow.yaml
 ```
 
 ## Conditions cookbook
@@ -148,7 +148,7 @@ For schedule-centric fleet-wide discovery, see
 
 ## Update a flow
 
-`flow update --file` is a **full replace** of phases+tasks. Fetch the current
+`flow update --definition-file` is a **full replace** of phases+tasks. Fetch the current
 body, merge locally, validate, then push.
 
 ```bash
@@ -158,8 +158,8 @@ kbagent --json flow update --project prod --flow-id 111 --name "New Name"
 # Replace phases/tasks from file (re-validated against the CF schema on write)
 kbagent --json flow detail --project prod --flow-id 111 > current.json
 # ... merge edits into updated.yaml ...
-kbagent --json flow validate --file @updated.yaml --project prod
-kbagent --json flow update --project prod --flow-id 111 --file @updated.yaml
+kbagent --json flow validate --definition-file updated.yaml --project prod
+kbagent --json flow update --project prod --flow-id 111 --definition-file updated.yaml
 ```
 
 ## Run a flow
@@ -197,7 +197,7 @@ timeout is safe. Undo with `config restore --component-id keboola.flow`.
 `flow new` / `flow update` validate the body against the **live** conditional-flow
 JSON Schema (fetched at runtime from the stack) plus semantic checks; failures
 raise `INVALID_FLOW_DEFINITION` with all violation messages joined. Run
-`flow validate --file @flow.yaml --project PROJECT` (with `--project` to fetch the
+`flow validate --definition-file flow.yaml --project PROJECT` (with `--project` to fetch the
 live schema) to see them. Common causes:
 
 - integer ids (ids must be **strings**);

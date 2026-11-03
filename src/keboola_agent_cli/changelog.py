@@ -33,7 +33,8 @@ CHANGELOG: dict[str, list[str]] = {
         "notes below say what to change. An install that updates itself (startup auto-update, "
         "`kbagent update`) moves to 1.x 28 days after this release and shows a notice until "
         "then. To move now, run `kbagent update --major`. New installs and package-manager "
-        "upgrades get 1.0.0 at once. To stay on 0.x, follow the migration guide: "
+        "upgrades get 1.0.0 at once. kbagent 0.100.5 accepts the 1.0 names, so a script can "
+        "switch to them before the move. To stay on 0.x, follow the migration guide: "
         "https://github.com/keboola/cli/blob/main/docs/migrate-to-1.0.md",
         "BREAKING (#881, #882): the 18 commands that read all projects now read only the active "
         "project when you do not give `--project`. Examples are `config list`, `job list`, "
@@ -117,16 +118,17 @@ CHANGELOG: dict[str, list[str]] = {
         "Migration: check your exit codes and error codes against `docs/error-codes.md`.",
         "BREAKING (#877): 9 list options now take repeated values, for example `sharing share "
         "--target-project-ids 11 --target-project-ids 22`. Before, a repeated option kept only "
-        "the last value. A comma list still works. The options are `org setup --project-ids`, "
+        "the last value. The options are `org setup --project-ids`, "
         "`sharing share --target-project-ids` and `--target-users`, and 6 `semantic-layer` "
-        "options. Migration: check scripts that give one of these options more than once.",
-        "BREAKING (#877): `transformation create --sql` and `--text` of 4 commands now refuse "
-        "`@<file>` when the file exists. Before, they stored the literal text. The 4 commands "
+        "options. Migration: check scripts that give one of these options more than once. The "
+        "note on list options below gives their 1.0.0 names.",
+        "BREAKING (#877): `transformation create --sql` and the text option of 4 commands now "
+        "refuse `@<file>` when the file exists. Before, they stored the literal text. The 4 commands "
         "are `project description-set`, `storage describe-bucket`, `storage describe-table` "
         "and `branch metadata-set`. The error is `INVALID_ARGUMENT` (exit 2). A bad input "
         "value, for example an unreadable file, now also gets `INVALID_ARGUMENT` with exit 2. "
         "Before, it could end in a Python traceback. A configuration JSON that is not an object gets `VALIDATION_ERROR`. "
-        "Migration: use `--file` or `--sql-file` for text from a file.",
+        "Migration: use `--description-file`, `--value-file` or `--sql-file` for text from a file.",
         "BREAKING (#879): after an automatic update from 0.x to 1.x, kbagent refuses the first "
         "write or destructive command once. The error is `UPDATED_ACROSS_MAJOR` (exit 6) and "
         "links the migration guide. Reads before it run with a warning. After the refusal, "
@@ -212,6 +214,54 @@ CHANGELOG: dict[str, list[str]] = {
         "second branch. The result has `activated: false` and an `ACTIVE_BRANCH_NOT_STORED` "
         "warning. On `__env__`, `branch use` is refused before any API call, and `branch "
         "reset` does nothing. Migration: give `--branch` on the later commands.",
+        "BREAKING (#946): `semantic-layer reference-data get` and `delete` take "
+        "`--reference-data-id` instead of `--id`. The old name is a usage error (exit 2) whose "
+        "message names the new one. The REST routes do not change. Migration: use "
+        "`--reference-data-id`. It works on 0.100.5 too.",
+        "BREAKING (#950): `agent` commands take the task and the run only as `--task-id` and "
+        "`--run-id`. The positional TASK_ID and RUN_ID are removed. A positional ID is a usage "
+        "error (exit 2) whose message names the option. Migration: use `--task-id` and "
+        "`--run-id`. Both work on 0.x too.",
+        "BREAKING (#950): `stream detail` and `stream delete` take the source as `--source-id`. "
+        "The positional SOURCE_ID is removed. It is a usage error (exit 2) whose message names "
+        "`--source-id`. `stream detail --name` also matches a source id. Migration: use "
+        "`--source-id`. It works on 0.100.5 too.",
+        "BREAKING (#950): a list option takes one value per occurrence and has a singular name. "
+        "Repeat the option for more values. A comma in an ID or fixed value is "
+        "`INVALID_ARGUMENT` (exit 2). The new names are `org setup --project-id`, `sharing share "
+        "--target-project` and `--target-user`, the `semantic-layer` options `--metric`, "
+        "`--new-metric`, `--table-id` and `--type`, `workspace load --table-id`, and `--column` "
+        "of `storage download-table`, `storage unload-table` and `token list`. An old plural "
+        "name is a usage error that names the new one. Migration: use the new names, for "
+        "example `--project-id 1 --project-id 2`. They work on 0.100.5 too.",
+        "BREAKING (#950): `@path` no longer reads a file, and no command has `--stdin`. The main "
+        "input file of a command is `--file PATH`. A JSON, YAML or text value is `--X` inline "
+        "or `--X-file PATH`, and the path `-` reads stdin. An inline `@path` or `-` is refused "
+        "(exit 2), and the message names `--X-file`. Renamed: `lineage --load` to `--file`, "
+        "`--text` / `--file` / `--stdin` to `--description` / `--description-file` or `--value` "
+        "/ `--value-file`, `workspace query --file` to `--sql-file`, `agent` and `flow` "
+        "`--from-file` / `--file` to `--definition` / `--definition-file`, `encrypt values "
+        "--input` to `--values` / `--values-file`, `data-app secrets-set --secrets-file` to "
+        "`--secret-file`, and `storage describe-batch --from-file` and `project invite "
+        "--from-csv` to `--file`. `dev-portal create` and `patch` take inline JSON in `--data` "
+        "and a file in `--data-file`. Migration: use the new names and the `--X-file` options. "
+        "They work on 0.100.5 too, except inline JSON in `dev-portal --data`.",
+        "BREAKING (#950): `storage create-table --not-null` is now `--not-null-column`, because "
+        "`storage add-column --not-null` is a flag. The old name is a usage error that names "
+        "the new one. Migration: use `--not-null-column`, once per column. It works on 0.100.5 "
+        "too.",
+        "BREAKING (#950): `semantic-layer scope request-delete` is now `request-cancel`, because "
+        "it cancels a request and deletes nothing. The old name is a usage error that names the "
+        "new one. The permission key is now `semantic-layer.scope.request-cancel`, so a saved "
+        "policy that names `semantic-layer.scope.request-delete` does not match the command. "
+        "The REST route does not change. Migration: use `request-cancel`, and change the key in "
+        "saved policies. Both work on 0.100.5 too.",
+        "BREAKING (#950): `sharing unlink` is now a destructive command, because it deletes the "
+        "linked bucket. It asks before it unlinks and takes `--yes` and `--dry-run`. "
+        "`--deny-destructive` blocks it. Without a terminal and without `--yes` or `--json`, it "
+        "refuses with `CONFIRMATION_REQUIRED` (exit 2). Over REST, `POST "
+        "/sharing/{project}/unlink/{bucket_id}` takes `dry_run`. Migration: add `--yes` to "
+        "scripts that unlink buckets. It works on 0.100.5 too.",
         "New (#902): every option of a long name now has the same short flag, for example `-p` "
         "for `--project` on all 225 commands (before 24). The others are `-n` for `--name`, `-t` "
         "for `--type`, `-L` for `--limit`, `-o` for `--output` and `-e` for `--email`. On 0.x, "
@@ -293,9 +343,21 @@ CHANGELOG: dict[str, list[str]] = {
         "Plugin docs (#942): the plugin has a new reference for GitOps and CI/CD pipelines. It "
         "covers a pinned version, the headless `__env__` project, `--branch` on every command, "
         "reading exit codes and `errors[]`, and the known pitfalls.",
+        "Note (#946): six rules of the CLI interface spec now fail CI on a new violation, as "
+        "the other blocking rules do. This changes nothing for users.",
         "Note (#872, #873, #880, #890, #891, #893, #894, #900, #903, #906, #913, #916, #921, "
         "#925): housekeeping with no user-facing change. It includes an update of the filelock "
         "package and tests that compare every sync write path with a fresh pull.",
+    ],
+    "0.100.5": [
+        "New (#949): kbagent 0.100.5 also takes the option names of kbagent 1.0.0, so one "
+        "command works on 0.100.5 and on 1.x. Examples: `flow new --definition-file f.yaml`, "
+        "`config update --configuration-file cfg.json`, `storage describe-table "
+        "--description-file notes.md`, `org setup --project-id 1 --project-id 2` and `stream "
+        "delete --source-id S`. A `--X-file` option reads stdin when the path is `-`. The 0.x "
+        "forms keep working. `gotchas.md` lists every new name.",
+        "New (#949): `sharing unlink` takes `--dry-run`, which checks that the bucket is a "
+        "linked bucket and deletes nothing, and `--yes`, which changes nothing on 0.x.",
     ],
     "0.100.4": [
         "Fix (#919, backport of #917): `sync push` now sends an edit to `transform.sql` or another code file "

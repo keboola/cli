@@ -249,7 +249,7 @@ entry says whether it was already in 1.0.0rc4.
   remote `KBC::ProjectSecure...` ciphertext, so the config is `modified` on every
   run, push encrypts it again and the config gets a new version each time.
 - **Workaround:** commit the ciphertext instead of the plaintext. Get it once
-  with `kbagent --json encrypt values --project __env__ --component-id C --input '{"#password": "..."}'`
+  with `kbagent --json encrypt values --project __env__ --component-id C --values '{"#password": "..."}'`
   (see [encrypt-workflow.md](encrypt-workflow.md)), or take it from the
   `_config.yml` that `sync push` rewrites after it encrypts. A value that starts
   with `KBC::` is sent unchanged, and the diff treats any two encrypted values as
