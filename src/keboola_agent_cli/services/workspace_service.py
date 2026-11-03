@@ -65,7 +65,11 @@ def _create_outcome_unknown(exc: KeboolaApiError) -> bool:
     undelivered is definite; a 5xx, a read/write timeout or
     ``RETRY_EXHAUSTED`` is unknown. ``_create_workspace_via_job`` puts
     ``job_id`` into the details of every error raised after the job exists.
+    An ungoverned workspace that ``--governed`` got back is known: it exists
+    until it is deleted, which ``workspace_rolled_back`` says.
     """
+    if "workspace_rolled_back" in exc.details:
+        return not exc.details["workspace_rolled_back"]
     if exc.details.get("job_id") is None:
         return request_outcome_unknown(exc)
     return exc.error_code not in _DEFINITE_JOB_ERRORS
@@ -542,9 +546,9 @@ class WorkspaceService(BaseService):
         )
 
         connection = ws_data.get("connection", {})
-        # What the API answered, not what was asked: a workspace that came back with a login is not governed.
-        governed_created = connection.get("loginType") == GOVERNED_WORKSPACE_LOGIN_TYPE
-        if governed_created:
+        if governed and connection.get("loginType") != GOVERNED_WORKSPACE_LOGIN_TYPE:
+            raise self._ungoverned_workspace_error(client, alias, ws_data, branch_id)
+        if governed:
             message = (
                 f"Governed workspace '{name}' created in project '{alias}'. It has no credentials: "
                 "only Query Service reads it, and the row- and column-level policies of the "
@@ -571,12 +575,45 @@ class WorkspaceService(BaseService):
             "read_only": read_only,
             "ui_mode": False,
             "login_type": connection.get("loginType", ""),
-            "governed": governed_created,
+            "governed": governed,
             "message": message,
         }
         if key_pair is not None:
             result["private_key"] = key_pair.private_pem
         return result
+
+    @staticmethod
+    def _ungoverned_workspace_error(
+        client: Any, alias: str, ws_data: dict[str, Any], branch_id: int
+    ) -> KeboolaApiError:
+        """Delete a workspace that came back with a login although ``--governed`` asked for none.
+
+        Such a workspace has credentials and no policies, so reporting it as a
+        success would let the caller treat its data as protected. The error
+        names the workspace; ``workspace_rolled_back`` says whether it is gone.
+        """
+        workspace_id = ws_data.get("id")
+        login_type = ws_data.get("connection", {}).get("loginType", "")
+        details: dict[str, Any] = {"workspace_id": workspace_id, "login_type": login_type}
+        try:
+            client.delete_workspace(workspace_id, branch_id=branch_id)
+        except KeboolaApiError as cleanup_exc:
+            details["workspace_rolled_back"] = False
+            outcome = (
+                f"It could not be deleted ({cleanup_exc.message}); delete it with "
+                f"'kbagent workspace delete --project {alias} --workspace-id {workspace_id}'."
+            )
+        else:
+            details["workspace_rolled_back"] = True
+            outcome = "It was deleted."
+        return KeboolaApiError(
+            message=(
+                f"--governed was requested, but the API created workspace {workspace_id} with "
+                f"login type '{login_type}', which has credentials and no policies. {outcome}"
+            ),
+            error_code=ErrorCode.API_ERROR,
+            details=details,
+        )
 
     def _create_workspace_via_job(
         self,
