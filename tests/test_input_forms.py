@@ -81,11 +81,20 @@ def _assert_invalid_argument(result: Any, option: str) -> None:
     assert option in error["message"]
 
 
+_ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+_BOX = re.compile(r"[─-╿]")
+
+
+def _plain(text: str) -> str:
+    """Output without color codes, Rich box lines and line wrapping (CI renders the colors)."""
+    return " ".join(_BOX.sub(" ", _ANSI.sub("", text)).split())
+
+
 def _assert_human_usage_error(result: Any, option: str) -> None:
     """In human mode: exit 2, the option in the message, no traceback."""
     assert result.exit_code == 2, result.output
     assert isinstance(result.exception, SystemExit)
-    assert option in result.output
+    assert option in _plain(result.output)
     assert "Traceback" not in result.output
 
 
