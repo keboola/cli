@@ -1679,11 +1679,11 @@ key, an SSO login and Connection's native `/query` are all refused for every cal
 read it through Query Service, which applies the project's row- and column-level policies. Creating one needs no
 project feature and no step-up, but the stack's Connection must accept the type (an older one answers a
 validation error naming the allowed `loginType` values): try it, do not assume. `--governed` with `--ui` and
-`--governed` on a backend other than Snowflake or BigQuery are `INVALID_ARGUMENT` (exit 2); nothing is created in either case.
+`--governed` on a backend other than Snowflake or BigQuery are `INVALID_ARGUMENT` (exit 2); nothing is created in either case. A stack whose Connection ignores the type and answers a workspace with a login fails with `API_ERROR`: the workspace is deleted and the sandbox config trashed (`details.workspace_id`, `details.workspace_rolled_back`), so a credentialed workspace is never reported as governed.
 BigQuery needs a Connection that accepts the type there too (it was refused on BigQuery until keboola/connection#9157): the same try-it rule
 applies, and a BigQuery project is enforced only by a Query Service release that carries the BigQuery enforcement (AJDA-3653). The REST
 route `POST /workspaces/{project}` takes `governed: true`. `workspace list` shows the workspace with login type
-`governed`, `qs_compatible` is false for it until a query against one has been verified on a stack.
+`governed` and `qs_compatible` true: Query Service reads it.
 
 ## `workspace create --ui` cannot produce a UI-visible SQL workspace; a failed create no longer leaves a sandbox config behind
 

@@ -19,7 +19,10 @@ from keboola_agent_cli.errors import ConfigError, ErrorCode, KeboolaApiError
 from keboola_agent_cli.models import ProjectConfig, TokenVerifyResponse
 from keboola_agent_cli.services import workspace_service as workspace_service_module
 from keboola_agent_cli.services._workspace_load_plan import plan_auto_load_type
-from keboola_agent_cli.services.workspace_service import WorkspaceService
+from keboola_agent_cli.services.workspace_service import (
+    WorkspaceService,
+    _classify_qs_compatibility,
+)
 
 SAMPLE_TOKEN_VERIFY = TokenVerifyResponse(
     token_id="12345",
@@ -205,22 +208,44 @@ class TestCreateWorkspace:
         assert "no credentials" in result["message"]
         assert "Save the" not in result["message"]
 
-    def test_create_workspace_governed_reports_what_the_api_answered(
-        self, tmp_config_dir: Path
+    @pytest.mark.parametrize(
+        ("delete_fails", "rolled_back", "config_trashed", "expected"),
+        [
+            (False, True, True, "It was deleted."),
+            (True, False, False, "could not be deleted"),
+        ],
+        ids=["workspace-deleted", "workspace-delete-fails"],
+    )
+    def test_create_workspace_governed_that_comes_back_with_a_login_fails(
+        self,
+        tmp_config_dir: Path,
+        delete_fails: bool,
+        rolled_back: bool,
+        config_trashed: bool,
+        expected: str,
     ) -> None:
-        """A workspace that came back with a login is not reported as governed."""
+        """A workspace with credentials is no governed workspace: delete it, trash the config, fail."""
         mock_client = MagicMock()
         mock_client.list_dev_branches.return_value = [{"id": 123, "isDefault": True}]
         mock_client.create_sandbox_config.return_value = {"id": "cfg-1", "name": "ws"}
         mock_client.create_config_workspace.return_value = SAMPLE_WORKSPACE
+        if delete_fails:
+            mock_client.delete_workspace.side_effect = KeboolaApiError(
+                message="boom", status_code=500, error_code=ErrorCode.API_ERROR
+            )
 
         store = setup_single_project(tmp_config_dir)
         svc = WorkspaceService(config_store=store, client_factory=lambda url, token: mock_client)
 
-        result = svc.create_workspace(alias="prod", name="ws", backend="snowflake", governed=True)
+        with pytest.raises(KeboolaApiError, match=expected) as excinfo:
+            svc.create_workspace(alias="prod", name="ws", backend="snowflake", governed=True)
 
-        assert result["governed"] is False
-        assert "Save the password" in result["message"]
+        assert excinfo.value.error_code == ErrorCode.API_ERROR
+        assert excinfo.value.details["workspace_id"] == 42
+        assert excinfo.value.details["workspace_rolled_back"] is rolled_back
+        mock_client.delete_workspace.assert_called_once_with(42, branch_id=123)
+        # Config is trashed only once the workspace is gone; a workspace that stays keeps its config.
+        assert mock_client.delete_config.called is config_trashed
 
     @pytest.mark.parametrize(
         ("backend", "default_backend", "ui_mode", "expected"),
@@ -2316,6 +2341,20 @@ class TestIssue304WorkspaceListEnrichment:
         # ``default`` is intentionally OFF the whitelist (legacy 2016 ws,
         # confirmed broken with Query Service via "JWT token is invalid")
         assert legacy["qs_compatible"] is False
+
+    @pytest.mark.parametrize(
+        ("login_type", "backend", "expected"),
+        [
+            ("governed", "snowflake", True),
+            ("governed", "Snowflake", True),
+            ("governed", "bigquery", False),
+            ("default", "bigquery", True),
+            ("default", "snowflake", False),
+        ],
+    )
+    def test_classify_qs_compatibility(self, login_type: str, backend: str, expected: bool) -> None:
+        """A governed Snowflake workspace is read through Query Service; the BigQuery set is separate."""
+        assert _classify_qs_compatibility(login_type, backend) is expected
 
     def test_qs_compatible_filter_requires_both_compat_and_ro(self, tmp_config_dir: Path) -> None:
         """`qs_compatible_only=True` drops workspaces that are compat-but-RW or RO-but-unknown."""
