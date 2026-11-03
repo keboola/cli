@@ -15,7 +15,7 @@
 |---------|-------------|----------------|
 | `sharing list` | Regular project token | Already in config |
 | `sharing link` | Regular project token | Already in config |
-| `sharing unlink` | Regular project token | Already in config (destructive-class since vNEXT: asks for confirmation; `--json` or `--yes` is consent, `--dry-run` deletes nothing) |
+| `sharing unlink` | Regular project token | Already in config (destructive-class since 1.0.0: asks for confirmation; `--json` or `--yes` is consent, `--dry-run` deletes nothing) |
 | `sharing share` | **Master token** (org membership) | `KBC_MASTER_TOKEN_{ALIAS}` or `KBC_MASTER_TOKEN` env var |
 | `sharing unshare` | **Master token** (org membership) | Same as above |
 
@@ -77,7 +77,7 @@ KBC_MASTER_TOKEN_PROJ_A="..." kbagent --json sharing share \
   --type selected-users --target-user alice@example.com --target-user bob@example.com
 ```
 
-Repeat `--target-project` and `--target-user` once per value. Give `--target-project` numeric project IDs. *(since vNEXT)* 1.x refuses a comma in a value (exit 2) and also takes a registered alias in `--target-project`.
+Repeat `--target-project` and `--target-user` once per value. Give `--target-project` numeric project IDs. *(since 1.0.0)* 1.x refuses a comma in a value (exit 2) and also takes a registered alias in `--target-project`.
 
 ## Key behaviors
 

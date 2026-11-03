@@ -12,7 +12,13 @@ Two API surfaces own them:
 | Layer | What it owns |
 |---|---|
 | **Storage API** (`keboola.data-apps` config) | git block, encrypted secrets, slug, runtime size, name, description |
-| **Data Science API** (`/v2/apps`, since vNEXT) | app record and its deployments: state, url, which deployment (and config version) serves production |
+| **Data Science API** (`/v2/apps`, since 1.0.0) | app record and its deployments: state, url, which deployment (and config version) serves production |
+
+On 0.x the `data-app` commands use the older Data Science API. There `stop` sets the
+app to stopped until `data-app start`, `deploy --wait` waits until `state` is
+`running`, and the `--json` output has `desired_state` and `last_start_timestamp`
+but no `deployment_id`. Check `kbagent --version` before you rely on the `/v2`
+behavior on this page.
 
 `kbagent data-app` orchestrates both, plus the project's Encryption API for
 git PATs. The CLI encapsulates the documented footguns so callers cannot
@@ -236,7 +242,7 @@ Distinct from `deploy`: `start` (`POST /v2/apps/{id}/resume`) does NOT bump
 the deployed configVersion. It wakes an app the platform parked after
 `autoSuspendAfterSeconds` of inactivity, and it is the only way to clear
 `state=disabled` (stopped by a failure). Hitting the URL of a `suspended` app
-also wakes it (cold-boot ~30-60s). `stop` (`POST /v2/apps/{id}/suspend`) parks
+also wakes it (cold-boot ~30-60s). `stop` (`POST /v2/apps/{id}/suspend`, since 1.0.0) parks
 the app the same way: the next request to its URL wakes it again.
 
 ### Rollback to an older config version
@@ -467,7 +473,7 @@ yours at runtime.
 | Roll out new code already pushed to git | `data-app deploy --app-id N` |
 | Roll out a new Storage config | `config update` (any field) → `data-app deploy` |
 | Wake an auto-suspended app | `data-app start --app-id N` |
-| Pause a running app (wakes on the next request) | `data-app stop --app-id N` |
+| Pause a running app (wakes on the next request; since 1.0.0) | `data-app stop --app-id N` |
 | Give the user the simpleAuth password | `data-app password --app-id N` in the user's terminal (press `c`; `deploy --wait` does the same when a deploy is needed anyway), or `--copy` (since 0.96.1; never printed without `--reveal`) |
 | Set or rotate app-runtime secrets | `data-app secrets-set --app-id N --secret '#KEY=VAL'` then `data-app deploy --wait` |
 | Inspect what's set (secrets + plain env vars) | `data-app secrets-list --app-id N` (metadata only, never decrypts) |
@@ -522,6 +528,6 @@ changed one. `sync push --force` and `config delete` remove only the Storage
 configuration; kbagent does not stop or delete the app there.
 Up to 1.0.0rc4, `data-app create --branch <dev>` -- and a `sync push` / `sync clone`
 that creates a data app in a dev branch -- fails with HTTP 422: create the app in
-the default branch (fixed *(since vNEXT)* by #943). Manage the app with
+the default branch (fixed *(since 1.0.0)* by #943). Manage the app with
 `data-app create` / `deploy` / `delete`. See
 [gitops-cicd-workflow.md](gitops-cicd-workflow.md) pitfalls 4.1 and 4.3.

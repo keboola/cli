@@ -353,7 +353,7 @@ being `null` (above). The CLI tests pin a `theirs_deleted: true, changes: []` fi
 output contains the recommendation and **none** of the three section headings.
 
 `--output PATH` writes the ours-prefilled resolution candidate. Edit, then
-`resolve --resolved-file FILE` (since vNEXT; 0.x: `--resolved @file`): the git-mergetool loop with a file as the third pane.
+`resolve --resolved-file FILE` (since 1.0.0; 0.x: `--resolved @file`): the git-mergetool loop with a file as the third pane.
 
 **The candidate is composed by Layer 2, not Layer 1** (decided 2026-09-03; ships in the same PR
 as the commands). Rebase *replaces* the whole configuration, so after PR #703's blocking review
@@ -396,7 +396,7 @@ blank `name` is a hole. The CLI test suite pins the round trip end to end: the f
 
 A missing key is reported on two different exit paths depending on who is at fault, and the
 renderer must not collapse them: a hole in a `--take` side's envelope is a backend contract
-violation (`VALIDATION_ERROR`, exit 2 since vNEXT, exit 1 before, "author the resolution manually"); a hole in a
+violation (`VALIDATION_ERROR`, exit 2 since 1.0.0, exit 1 before, "author the resolution manually"); a hole in a
 `--resolved` body is the caller's (`ConfigError`, exit 5, naming the missing keys).
 
 **`resolve` has no `--all`.** Rebase *replaces*, so a bulk `--all --take theirs` is a bulk

@@ -100,7 +100,7 @@ kbagent agent show --task-id <task_id>
 
 > **ID forms:** name a task with `--task-id` and a run with `--run-id`
 > (`run-detail` / `run-events`), like `--job-id` and `--config-id` in the
-> rest of the CLI. These options work on 0.x and 1.x. *(since vNEXT)* 1.x
+> rest of the CLI. These options work on 0.x and 1.x. *(since 1.0.0)* 1.x
 > removes the positional `TASK_ID` / `RUN_ID`; the usage error names the
 > option.
 

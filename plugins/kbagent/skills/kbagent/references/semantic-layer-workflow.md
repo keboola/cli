@@ -45,7 +45,7 @@ irreversible decision.
 | Encrypt the storage token for a Python container | `semantic-layer token --encrypt` |
 | Share an item with named projects, or make it org-wide | see [metastore-scope-workflow.md](metastore-scope-workflow.md) |
 
-List options: repeat `--metric`, `--new-metric`, `--table-id` (`build`) and `--type` (`import`, `promote`) once per value. *(since vNEXT)* 1.x refuses a comma in a value (exit 2).
+List options: repeat `--metric`, `--new-metric`, `--table-id` (`build`) and `--type` (`import`, `promote`) once per value. *(since 1.0.0)* 1.x refuses a comma in a value (exit 2).
 
 ---
 
