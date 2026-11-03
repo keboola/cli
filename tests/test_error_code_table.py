@@ -161,9 +161,8 @@ class TestCorrectedPaths:
 class TestItemFailure:
     def test_typed_error_keeps_code_retryable_and_message(self) -> None:
         exc = KeboolaApiError("Bucket busy", error_code=ErrorCode.API_ERROR, retryable=True)
-        assert item_failure(exc, id="in.c-a", error=exc.message) == {
+        assert item_failure(exc, id="in.c-a") == {
             "id": "in.c-a",
-            "error": "Bucket busy",
             "error_code": "API_ERROR",
             "retryable": True,
             "message": "Bucket busy",
@@ -175,15 +174,14 @@ class TestItemFailure:
         assert entry["retryable"] is False
 
     def test_plain_config_error_is_config_error(self) -> None:
-        entry = item_failure(ConfigError("Project 'x' not found."), alias="x", error="e")
+        entry = item_failure(ConfigError("Project 'x' not found."), alias="x")
         assert entry["error_code"] == "CONFIG_ERROR"
         assert entry["message"] == "Project 'x' not found."
-        assert entry["error"] == "e"
 
     def test_unexpected_exception_gets_the_fallback_and_a_short_message(self) -> None:
-        entry = item_failure(RuntimeError("x" * 5000), name="m", reason="kept")
+        entry = item_failure(RuntimeError("x" * 5000), name="m")
         assert entry["error_code"] == "UNEXPECTED_ERROR"
-        assert entry["reason"] == "kept"
+        assert entry["name"] == "m"
         assert len(entry["message"]) < 5000
 
 

@@ -11,7 +11,6 @@ from pydantic import BaseModel, ConfigDict
 
 from ...services.base import resolve_fanout_aliases
 from ..dependencies import ALL_PROJECTS_HELP, ServiceRegistry, get_registry
-from ..response_meta import warn_deprecated
 
 router = APIRouter(prefix="/data-apps", tags=["data-apps"])
 
@@ -337,22 +336,6 @@ def secrets_merge(
 
     Mirrors `kbagent data-app secrets-set`.
     """
-    return _set_secrets(project, app_id, body, registry)
-
-
-@router.put(
-    "/{project}/{app_id}/secrets",
-    summary="Set data app secrets (deprecated: use PATCH)",
-    deprecated=True,
-)
-def secrets_set(
-    project: str,
-    app_id: str,
-    body: SecretsSet,
-    registry: ServiceRegistry = Depends(get_registry),
-) -> dict[str, Any]:
-    """Deprecated form of ``PATCH`` (spec V9): same result, plus a ``DEPRECATED`` warning."""
-    warn_deprecated("PUT /data-apps/{project}/{app_id}/secrets")
     return _set_secrets(project, app_id, body, registry)
 
 

@@ -253,8 +253,8 @@ batch continues:
   "data": {
     "applied": [{"type": "bucket", "id": "in.c-good", ...}],
     "errors": [
-      {"type": "bucket", "id": "in.c-typo", "error": "Bucket in.c-typo not found"},
-      {"type": "table",  "id": "in.c-x.missing", "error": "Table not found"}
+      {"type": "bucket", "id": "in.c-typo", "error_code": "NOT_FOUND", "retryable": false, "message": "Bucket in.c-typo not found"},
+      {"type": "table",  "id": "in.c-x.missing", "error_code": "NOT_FOUND", "retryable": false, "message": "Table not found"}
     ],
     "applied_count": 1,
     "error_count": 2

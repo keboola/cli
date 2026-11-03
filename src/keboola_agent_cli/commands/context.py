@@ -89,9 +89,10 @@ GROUP_NOTES: dict[str, str] = {
   work offline; cron firing still requires the live server.
 
   Every subcommand below that takes TASK_ID / RUN_ID accepts it either
-  positionally (`agent show TASK_ID`) or via flag (`--id` / `--task-id`,
-  plus `--run-id` for run-detail / run-events) -- the flag form matches
-  the rest of the CLI (`--job-id`, `--config-id`, ...).
+  positionally (`agent show TASK_ID`) or via flag (`--task-id`, plus
+  `--run-id` for run-detail / run-events) -- the flag form matches the
+  rest of the CLI (`--job-id`, `--config-id`, ...). Since vNEXT `--id` is
+  removed (usage error, exit 2).
 
   agent list
     List all registered tasks (id, name, cron, type, state, last/next run).
@@ -386,9 +387,14 @@ GROUP_NOTES: dict[str, str] = {
 
   branch create
     Create dev branch and auto-activate it. Async, CLI waits for completion.
+    Exception since vNEXT: on the environment project `__env__`
+    (KBAGENT_PROJECT_FROM_ENV) the branch is created but NOT activated --
+    `activated: false` and a warnings[] entry ACTIVE_BRANCH_NOT_STORED. Pass
+    `--branch <id>` on every later command, or it runs on production.
 
   branch use
-    Set existing branch as active for subsequent commands. Every command that
+    Set existing branch as active for subsequent commands (refused on `__env__`:
+    pass --branch instead; `branch reset` there is a no-op). Every command that
     then picks a branch names it: `Target: project 'P', branch ID 'NAME' (from
     'kbagent branch use')` on stderr, `targets` in --json (see Tips 2).
 
@@ -401,9 +407,9 @@ GROUP_NOTES: dict[str, str] = {
     deletes nothing.
 
   branch merge
-    DEPRECATED (since 0.94.0): builds a KBC UI merge URL (does NOT merge via API) and
-    resets the active branch. On a project with merge requests enabled use
-    `merge-request create` + `merge-request merge` below.
+    Removed since vNEXT (deprecated since 0.94.0): it only built a Keboola UI merge
+    URL. Merge with `merge-request create` + `merge-request merge` below, or in the
+    Keboola UI.
 
   branch metadata-list
     List all metadata entries on a branch (id, key, value, provider, timestamp).
@@ -662,15 +668,15 @@ does not name is refused. With an `rls-policy` too, rows come from the `rls-poli
 Lifecycle for `keboola.data-apps`. New apps default to `--type python-js`
 (Python, Node, or both), the recommended runtime. Combines the Storage API (config body --
 git block, slug, runtime size, encrypted secrets) with the Data Science API
-(/apps -- deployment record, state, URL, configVersion). Encapsulates the
-§9 redeploy contract so callers cannot pin to the empty-shell v2.
+(/v2/apps -- app record, deployments, state, URL). Every deploy pins an
+explicit Storage config version, never the empty shell the create writes.
 
   data-app list
     List data apps across one or many projects. Merges Data Science /apps
     index with Storage config names. Multi-project parallel.
 
   data-app detail
-    Full merged view: state, desiredState, url, deployed configVersion, slug,
+    Full merged view: state, url, deployed configVersion, slug,
     runtime size, git settings (PAT redacted as <encrypted>).
 
   data-app create
@@ -721,23 +727,23 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     before. With a flag, JSON adds only ui_url, password_delivered_to
     (+ password with --reveal); a failed password read or a non-password
     app with --copy is a `warnings[]` entry, exit 0.
-    The §9 redeploy contract. Default reads the latest Storage config version
+    POST /v2/apps/{id}/deployments pinned to a Storage config version and
+    promoted to production. Default reads the latest Storage config version
     and pins to it; --config-version pins an older version (rollback) and
     skips the git-block backfill. --git-branch only sets the branch of
-    that backfill; it has no effect otherwise.
-    Always sends {desiredState=running, configVersion, restartIfRunning=true}
-    together -- HTTP 422 otherwise.
+    that backfill; it has no effect otherwise. --wait blocks until the new
+    deployment serves production.
 
   data-app start
-    Wake an auto-suspended data app at its currently-pinned configVersion.
-    Distinct from deploy: does NOT bump the version.
+    Wake a suspended or disabled data app at the deployment production
+    already serves. Distinct from deploy: does NOT bump the version.
 
   data-app stop
-    Stop a running data app. Preserves URL and Storage config; container is
-    torn down.
+    Suspend a running data app now. Preserves URL and Storage config; the
+    next request to the URL wakes it again.
 
   data-app delete
-    Delete the deployment AND the Storage config (cascade, irreversible).
+    Delete the app: stops its deployments, Storage config to the trash.
     URL is permanently retired. Confirmation prompt unless --yes.
 
   data-app password
@@ -798,7 +804,7 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     startup_logs, including setup-phase failures (e.g. git-clone errors)
     that produce no container logs. Works on never-started/failed apps
     where 'data-app logs' returns HTTP 400 -- the canonical way to find
-    WHY a deploy reverted to stopped. Project storage token only.
+    WHY a deployment failed. Project storage token only.
 
   data-app secrets-set
     Encrypt and write '#'-prefixed secrets into parameters.dataApp.secrets.
@@ -1070,8 +1076,8 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     error fields (code, error_type, message, project, retryable). Its HTTP
     status follows error_type. The four partial updates use PATCH (PUT
     /semantic-layer/items/..., /merge-requests/{project}/{id},
-    /data-apps/.../secrets, the merge of /configs/.../variables). The old PUT
-    adds a DEPRECATED warning in the Kbagent-Warnings header. `kbagent http`
+    /data-apps/.../secrets, the merge of /configs/.../variables). Since vNEXT the
+    old PUT answers HTTP 405, and the message names PATCH. `kbagent http`
     prints only the body, not the Kbagent-Targets / Kbagent-Warnings headers.
 """,
     "init": """\
@@ -1206,7 +1212,7 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
 #### Merge Requests (Branches 2.0, non-SOX)
 
   Merge a dev branch into production with review. Hidden alias: `mr`. Every command
-  except list/create takes [--merge-request-id N | --id N] [--branch B]; omitted, the
+  except list/create takes [--merge-request-id N] [--branch B]; omitted, the
   target is the merge request OF the active branch (`branch use`). A branch has at most
   one merge request, ever. Both flags at once -> exit 2. Status is the DERIVED state the
   web UI shows (in_development|in_review|approved|in_merge|merged|closed|rejected).
@@ -1498,7 +1504,7 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
 
   project refresh
   kbagent project refresh --all-projects [--dry-run] [--force] [--yes] [--token-description ...] [--token-expires-in N]
-    Refresh project tokens via Manage API. --all-projects refreshes all projects (--all is its deprecated name);
+    Refresh project tokens via Manage API. --all-projects refreshes all projects (since vNEXT --all is removed);
     without --project and --all-projects, the active project. --force replaces non-expiring tokens.
     Browser-login (session) projects are reported under "skipped" with the
     reason that there is no static token to replace -- their access token
@@ -1521,8 +1527,8 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
     shell/session. An explicit --project flag overrides both.
 
   project current
-    Print the active project and its source (env / pin / none, where "pin"
-    is the saved active project). Resolution order: --project > KBAGENT_PROJECT >
+    Print the active project and its source (env / active_project / none;
+    "pin" before 1.0.0). Resolution order: --project > KBAGENT_PROJECT >
     active project > sole project. `resolved_alias` / `resolved_source` (env / active_project /
     sole / none) name the project a command without --project would use
     (since 0.100.0).
@@ -1827,8 +1833,8 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
     `remove glossary` identifies the entity by --term, not --name.
 
   semantic-layer import
-    Replay a snapshot. Default: skip on conflict. --yes never had an effect here.
-    Since vNEXT it is hidden and adds a DEPRECATED warning. --overwrite opts into
+    Replay a snapshot. Default: skip on conflict. --yes never had an effect here,
+    and since vNEXT it is removed (usage error, exit 2). --overwrite opts into
     an in-place update (keeps the existing item's scope). Dependency-ordered push (datasets -> metrics -> relationships
     -> glossary -> constraints).
 
@@ -2121,7 +2127,9 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Default filename: TABLE_NAME.csv. Use --columns to select columns (see table-detail for names).
     Use --limit to cap row count. Handles sliced files and gzip decompression transparently. Branch-aware.
   storage add-column
-    Add a single column to an existing table (synchronous). Same name:TYPE(length) grammar as create-table --column.
+    Add a single column to an existing table. Same name:TYPE(length) grammar as create-table --column.
+    Waits for the Storage job, so a following table-detail lists the column. A failed job exits 1 (STORAGE_JOB_FAILED).
+    A wait timeout (exit 4, not retryable) leaves the job running: follow it with storage job-detail --job-id ID --wait; do not add the column again.
 
   storage delete-table
     Delete one or more tables. Batch: repeat --table-id. --force to cascade-delete aliased tables. --dry-run to preview. Branch-aware.
@@ -2280,9 +2288,9 @@ remain branch-aware because modifying a dev branch is the expected intent.
     and destination bucket/tables (from sinks). The secret embedded in the OTLP URL is MASKED
     by default; pass --reveal to print it (e.g. to wire OTEL_EXPORTER_OTLP_ENDPOINT).
   stream delete
-    Delete a source (destructive, async task polled to completion). --force is a
-    hidden deprecated alias of --yes since vNEXT: it still works and adds a
-    DEPRECATED warning. Use --yes.
+    Delete a source (destructive, async task polled to completion). Use --yes to
+    skip the confirmation. Since vNEXT its old name --force is removed (usage
+    error, exit 2).
   Notes: uses the per-project Storage token (no manage token). Control plane = stream.<region>
   derived from connection.<region>. The OTLP ingest host is stream-in.<region>, returned in
   source.otlp.url -- never derived. The raw Stream API does not auto-create sinks, so kbagent
@@ -2327,6 +2335,16 @@ remain branch-aware because modifying a dev branch is the expected intent.
     --job-limit controls max recent jobs per config (default 5). For large projects,
     automatically falls back to per-config job fetching to ensure all configs get job history.
     Auto-detects renamed configs and renames local directories to match (uses git mv in git repos).
+    A config dir moved by hand keeps its id (since vNEXT, #792): diff lists moves[]
+    (moved_from/moved_to), push creates and deletes nothing for it and saves the new path;
+    a missing dir whose id 2+ dirs carry is an ambiguous move (conflict, nothing pushed).
+    A swap/rotation/symlink (a tracked dir carrying another tracked config's id) is held as
+    an identity conflict: nothing pushed, pulled or saved until the dirs are moved back.
+    Strict local files (since vNEXT): a _config.yml (config or row) that is not valid YAML,
+    not a mapping, or has an unknown top-level key is an errors[] entry
+    (SYNC_LOCAL_FILE_INVALID, path) in diff/push: the config is held (never deleted, created
+    or updated) and the command exits 1. Extra configuration keys go under
+    _configuration_extra. A missing description: equals ''.
     --branch: per-invocation dev-branch override. Same semantics as sync push/diff.
     Ignored components (since 0.91.0, #689): keboola.sandboxes + keboola.mcp-server-tool are
     always excluded (except shared SQL workspaces under syncWorkspaces, since 0.96.1),
@@ -2369,7 +2387,8 @@ remain branch-aware because modifying a dev branch is the expected intent.
     one id are both conflicts (since 0.99.0, #792 E). sync pull keeps such a file with
     local changes (skipped, "locally modified, not tracked in the manifest"); --theirs
     overwrites it. Fix a non-zero summary.orphaned with `sync pull`; promote dev-only
-    configs with `branch merge`, never by pushing them to production.
+    configs with a branch merge (merge-request, or the Keboola UI), never by pushing
+    them to production.
     Ignored components (since 0.91.0, #689) are excluded from BOTH sides of the comparison,
     so a stale manifest entry or leftover dir for one of them contributes nothing --
     not added, not deleted, not orphaned. Push builds on this diff, so it plans nothing
@@ -2377,6 +2396,10 @@ remain branch-aware because modifying a dev branch is the expected intent.
 
   sync push
     Push local changes. Auto-encrypts secrets. Skips conflicts (pull first).
+    Deletes are 3-way (since vNEXT): --force never deletes a config or row changed remotely
+    (a config's rows included) or one without a trustworthy baseline -- it is a CONFLICT,
+    listed with its next step in refused_deletions[]. sync diff lists rows added in the UI
+    under remote_only_rows[] (push never creates or deletes them).
     Fails if encryption fails (plaintext secrets never pushed). Use escape hatch flag only if you know what you are doing.
     Every secret is encrypted BEFORE the first write (since 0.99.0, #792 F): an
     ENCRYPTION_FAILED stops the push before anything reaches the remote (message ends
@@ -2645,8 +2668,8 @@ _FOOTER = """\
    that asks for confirmation does not ask under them. In human mode without a
    terminal it refuses with CONFIRMATION_REQUIRED (exit 2) and names --yes. A
    piped "y" does not confirm. Ask the user before you retry with --yes.
-   A DEPRECATED entry in "warnings" names the replacement of an old flag
-   ("replacement"). Its "remove_after" is null until the removal date is known.
+   A removed old flag or command is USAGE_ERROR (exit 2), and its message
+   names the replacement.
 
 2. JSON response format:
      Success: {"status": "ok", "data": ...}
@@ -2711,7 +2734,7 @@ _FOOTER = """\
    (`targets`, `project_alias`). When a digits-only alias is also another
    project's ID, the alias is used and a warning names that project on stderr
    (in --json mode too). `project add` / `project create` take --alias, a
-   NEW alias, never an ID (their --project is the deprecated name of --alias);
+   NEW alias, never an ID (since vNEXT their old name --project is removed);
    `lineage show --project` filters an offline graph and is not translated
    either.
 

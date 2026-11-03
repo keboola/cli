@@ -112,10 +112,10 @@ def _format_setup_result(console: Console, data: dict) -> None:
     # A failed project is one `Error:` line (HO2); token refresh failures are keyed by alias.
     for p in failed:
         item = f"project {p['project_id']} '{p['project_name']}'"
-        console.print(format_item_error(item, p["error"]), soft_wrap=True)
+        console.print(format_item_error(item, p["message"]), soft_wrap=True)
     for p in refresh_failed:
         item = f"project '{p['alias']}' token refresh"
-        console.print(format_item_error(item, p["error"]), soft_wrap=True)
+        console.print(format_item_error(item, p["message"]), soft_wrap=True)
 
     # Summary line
     summary_parts = []

@@ -1,4 +1,4 @@
-# CLAUDE.md - Development Context for Claude Code
+# CLAUDE.md / AGENTS.md - Development Context for AI Coding Agents
 
 > **Contributors**: Read [CONTRIBUTING.md](CONTRIBUTING.md) before submitting a PR.
 > It covers coding style, security principles, Keboola API best practices,
@@ -312,9 +312,8 @@ Full author checklist: see `CONTRIBUTING.md` > "Releasing a beta (pre-release) v
     also takes a project ID; the root command group
     (`commands/_project_ref.py`) translates it to the alias before the command
     runs. A new command gets this without extra code. A new command whose
-    `--project` is not a registry lookup (a NEW alias like `project add`, an
-    offline filter like `lineage show`) must be added to `NO_LOOKUP_COMMANDS`
-    there, and an option with another name that takes an existing alias (like
+    `--project` is not a registry lookup (an offline filter like `lineage
+    show`, the only entry now) must be added to `NO_LOOKUP_COMMANDS` there, and an option with another name that takes an existing alias (like
     `config clone --target-project`) to `ALIAS_OPTIONS`.
     `tests/test_project_ref.py` fails on a new option whose flag contains
     `project`, `alias` or `stack` until it is in `ALIAS_OPTIONS` or in the
@@ -417,8 +416,12 @@ plugins/kbagent/
 #   on a terminal under --json). `branch delete` and `workspace delete` now ask too, and take --yes and a read-only --dry-run
 #   (REST: `dry_run` query parameter, no prompt). Deprecated flags (spec C3) are hidden options from
 #   `deprecated_option()` with a `DEPRECATIONS` entry. They add a DEPRECATED warning (`replacement`,
-#   `remove_after`): `stream delete --force` (use --yes) and `semantic-layer import --yes` (no effect).
-#   Version gate lives in gotchas.md.
+#   `remove_after`). None exists now. 1.0.0 removed every old form (#791): `stream delete --force` (use
+#   --yes), `semantic-layer import --yes`/-y (no effect), `project add/create --project`/-p (use --alias),
+#   `project refresh --all` (use --all-projects), `--id` on merge-request and agent commands, and
+#   `branch merge`. Each keeps a `DEPRECATIONS` entry with removed_in="1.0.0". `removed_form()` looks it
+#   up, and LeafCommand/CommandGroup in root_command.py put its message into the USAGE_ERROR (exit 2),
+#   so the error names the replacement. Version gate lives in gotchas.md.
 # --conversation-id ID (#716): sets the X-Conversation-ID observability header for the
 #   invocation; equivalent to KBAGENT_CONVERSATION_ID and takes precedence over it. Exists because an
 #   agent harness does not persist shell state between tool calls, so the documented one-time `export`
@@ -433,7 +436,7 @@ plugins/kbagent/
 #   session alias. Same for KBAGENT_PROJECT, `project use`, `config clone --target-project`,
 #   `sync clone --target`, the `semantic-layer promote/diff` project options, `auth * --stack`, and
 #   serve's {project} / ?project= / ?stack= (path and query only, not request bodies). Not for
-#   `project add` / `project create` (new alias) or `lineage show` (offline filter). Version gate in
+#   `project add --alias` / `project create --alias` (new alias) or `lineage show` (offline filter). Version gate in
 #   gotchas.md.
 # Headless / token-only (0.50.0+): export KBAGENT_PROJECT_FROM_ENV=1 + KBC_TOKEN + KBC_STORAGE_API_URL to synthesize an in-memory `__env__` project (no `project add`, no config.json on disk; token never persisted). Use `--project __env__`. Same env setup also powers `kbagent serve`.
 
@@ -577,8 +580,8 @@ kbagent project current
 #   --remove-projects`) CLEARS the active project instead of moving it to the next alias; `init --project`
 #   that leaves it out clears it too. Results carry `active_project_cleared` / `active_project_set`
 #   (project use/add, org setup, auth registration, project create). `project current` adds
-#   `resolved_alias` + `resolved_source` (env|active_project|sole|none). Existing keys and the `pin`
-#   source value are unchanged. Version gate lives in gotchas.md.
+#   `resolved_alias` + `resolved_source` (env|active_project|sole|none). In 1.0.0 the `source` value
+#   `pin` of `project use` / `project current` is `active_project`. Version gate lives in gotchas.md.
 kbagent project info [--project NAME]
 kbagent project invite [--project ALIAS] --email EMAIL --role admin|guest|readOnly|share [--reason TEXT] [--dry-run]
 kbagent project invite --from-csv FILE [--default-role ROLE] [--workers N] [--dry-run]
@@ -617,9 +620,9 @@ kbagent config set-folder [--project NAME] --component-id ID --config-id ID --na
 #   --name clears it. kbagent no longer reads or writes the KBC.configuration.folderName metadata key:
 #   `config list` and `sync pull` read `folder` from the listing they already fetch (no extra
 #   search/component-configurations call), `sync push` / `sync clone` send it on the create POST.
-#   The sync manifest still stores the folder under that key name. The set-folder JSON keeps
-#   `key` (frozen), `value` and `result` (still a list: [{key, value}]); the PUT response
-#   subset {id, name, folder} is the new `configuration` key.
+#   The sync manifest still stores the folder under that key name. The set-folder JSON has
+#   `folder` and `configuration` (the PUT response subset {id, name, folder}). The metadata-era
+#   keys `key`, `value` and `result` are removed in 1.0.0.
 #   Needs keboola/connection DMD-2347 on the stack: without it set-folder fails FEATURE_NOT_ENABLED
 #   (exit 5) and push/clone add a `folder_not_supported` warnings[] entry. No metadata fallback.
 #   Version gate in gotchas.md.
@@ -981,17 +984,16 @@ kbagent branch use [--project ALIAS] --branch ID
 #   project_source since CLI-45). Version gate in gotchas.md (#766).
 kbagent branch reset [--project ALIAS]
 kbagent branch delete [--project ALIAS] --branch ID [--dry-run] [--yes]
-kbagent branch merge [--project ALIAS] [--branch ID]
 kbagent branch metadata-list [--project NAME] [--branch ID|default]
 kbagent branch metadata-get [--project NAME] --key KEY [--branch ID|default]
 kbagent branch metadata-set [--project NAME] --key KEY [--text STR | --file PATH | --stdin] [--branch ID|default]
 kbagent branch metadata-delete [--project NAME] --metadata-id ID [--branch ID|default]
-# branch merge is DEPRECATED (since 0.94.0): it only builds a UI URL and resets the active branch. On a
-#   project with `branches-merge-requests` use the merge-request group below; the command keeps working
-#   (it also serves projects without the feature) and now carries `deprecation` in --json.
+# branch merge was removed in 1.0.0 (deprecated since 0.94.0; it only built a UI URL and reset the
+#   active branch), with its REST route GET /branches/{project}/merge-url. Merge with the merge-request
+#   group below, or in the Keboola UI. The usage error names `kbagent merge-request`.
 
 # merge-request (since 0.94.0, DMD-1900): the non-SOX Branches 2.0 lifecycle. Hidden alias `mr`. Every
-#   command except list/create takes `[--merge-request-id N | --id N] [--branch B]`: omitted, the target is
+#   command except list/create takes `[--merge-request-id N] [--branch B]` (1.0.0 removed `--id`): omitted, the target is
 #   the merge request OF the active branch (`branch use`) -- a branch has at most one MR, ever. Both flags at
 #   once -> exit 2. `--project` is single-project (never fans out). Status is the DERIVED state the web UI
 #   shows (in_development|in_review|approved|in_merge|merged|closed|rejected), never the raw one.
@@ -1112,7 +1114,7 @@ kbagent workspace from-transformation [--project ALIAS] --component-id ID --conf
 
 kbagent data-app list [--project NAME ... | --all-projects] [--branch ID]
 kbagent data-app detail [--project NAME] --app-id ID [--branch ID]
-kbagent data-app create [--project ALIAS] --name NAME --slug SLUG (--git-repo URL | --use-managed-git-repo) [--description STR | --description-file PATH] [--git-branch main] [--git-public/--no-git-public] [--git-username USER] [--git-pat-env VAR | --git-pat-file PATH | --git-pat-encrypted KBC::Project...] [--auth password|public] [--size tiny|small|medium|large] [--auto-suspend SECONDS] [--type python-js|python|streamlit|r|...] [--workspace/--no-workspace] [--branch ID] [--no-deploy] [--wait] [--timeout SECONDS] [--keep-on-failure] [--dry-run] [--copy] [--reveal]
+kbagent data-app create [--project ALIAS] --name NAME --slug SLUG (--git-repo URL | --use-managed-git-repo) [--description STR | --description-file PATH] [--git-branch main] [--git-public/--no-git-public] [--git-username USER] [--git-pat-env VAR | --git-pat-file PATH | --git-pat-encrypted KBC::Project...] [--auth password|public] [--size tiny|small|medium|large] [--auto-suspend SECONDS] [--type python-js|streamlit] [--workspace/--no-workspace] [--branch ID] [--no-deploy] [--wait] [--timeout SECONDS] [--keep-on-failure] [--dry-run] [--copy] [--reveal]
 # --workspace / --no-workspace (0.87.0+): DEFAULT ON. Writes runtime.workspace.enabled=true --
 #   the ONLY switch that makes the platform provision the ephemeral workspace and inject WORKSPACE_ID,
 #   QUERY_SERVICE_URL and KBC_WORKSPACE_MANIFEST_PATH. Every app that reads Storage needs it. Before
@@ -1141,7 +1143,10 @@ kbagent data-app create [--project ALIAS] --name NAME --slug SLUG (--git-repo UR
 #   with runs (branch unknown: pass `--git-branch` with the branch the code is on). It has no effect
 #   on a deploy that does not backfill. Push the managed repo's code to that branch.
 #   Version gate lives in gotchas.md (no `(since vNEXT)` on `# ` lines). Use `data-app runs`
-#   to debug a deploy that reverts to stopped (setup-phase failures produce no container logs).
+#   to debug a failed deploy (setup-phase failures produce no container logs).
+# data-app calls go to the Data Science /v2 App Deployments API: deploy = POST /v2/apps/{id}/deployments
+#   (pinned configVersion, --wait until it serves production), start = /resume, stop = /suspend
+#   (wakes on the next request). Output has no desired_state / last_start_timestamp.
 kbagent data-app deploy [--project NAME] --app-id ID [--config-version N] [--wait] [--timeout SECONDS] [--branch ID] [--git-branch BRANCH] [--copy] [--reveal]
 kbagent data-app start [--project NAME] --app-id ID [--wait] [--timeout SECONDS]
 kbagent data-app stop [--project NAME] --app-id ID [--wait] [--timeout SECONDS]
@@ -1173,7 +1178,7 @@ kbagent data-app validate-repo --git-repo URL [--git-branch BRANCH] [--git-publi
 kbagent data-app git-repo [--project NAME] --app-id ID
 kbagent data-app git-credentials [--project NAME] --app-id ID
 kbagent data-app git-credentials-create [--project NAME] --app-id ID --type ssh_key|http_token --permissions readOnly|readWrite [--public-key KEY | --public-key-file PATH] [--name LABEL] [--yes]
-# git-repo introspects the deployed-from git repo (sandboxes-service /apps/{id}/git-repo); it returns 409 "no Git repository configured" until the app has been DEPLOYED at least once (git config syncs Storage->DS record at deploy). git-credentials* manage credentials for a MANAGED repo only; apps from `data-app create --git-repo` are external => git-credentials-create returns 409. http_token mints a ONE-TIME secret (shown once); credentials endpoints need an admin storage token.
+# git-repo introspects the deployed-from git repo (sandboxes-service /v2/apps/{id}/git-repo); it returns 409 "no Git repository configured" until the app has been DEPLOYED at least once (git config syncs Storage->DS record at deploy). git-credentials* manage credentials for a MANAGED repo only; apps from `data-app create --git-repo` are external => git-credentials-create returns 409. http_token mints a ONE-TIME secret (shown once); credentials endpoints need an admin storage token.
 
 kbagent component list [--project NAME | --all-projects] [--type TYPE] [--query QUERY]
 kbagent component detail --component-id ID [--project NAME]
@@ -1225,6 +1230,15 @@ kbagent sync push [--project ALIAS] [--all-projects] [--dry-run] [--force] [--al
 #   under skipped_deletions (+ skipped_deletions_reason), also in --dry-run, whose summary.deleted counts only
 #   what push would delete. A config/row deleted on the remote since the last pull diffs as remote_deleted and
 #   is never re-created (it lands in skipped). Version gate in gotchas.md.
+# sync diff/push strict local files: a _config.yml (config or row) that is not valid YAML, is
+#   empty / not a mapping, or has a top-level key outside version/name/description/is_disabled/
+#   parameters/input/output/processors/_configuration_extra/_keboola is an errors[] entry
+#   (change_type invalid_local_file, SYNC_LOCAL_FILE_INVALID, path). Its config and rows are held
+#   (never created, updated or deleted, also with --force) and diff/push exit 1; before, a broken
+#   tracked file read as deleted and push --force deleted the remote config (#827 item 9). Pull
+#   keeps such a file. A missing description: equals ''; _description.md plus a different inline
+#   description adds a DESCRIPTION_SHADOWED warning. `config new` writes top-level input/output,
+#   not storage:. Version gate in gotchas.md.
 # sync diff/push/pull and adopted files (#792 E): an untracked _config.yml whose _keboola.config_id
 #   exists on the target has no baseline unless it records _keboola.base_config_hash; without one a
 #   difference is a conflict (push skips it), two files with one id are both conflicts, and pull keeps
@@ -1519,8 +1533,9 @@ kbagent agent prompt-improve --goal "..." [--draft "..."] [--cli claude|codex|ge
 # tasks still requires `kbagent serve` running. Two action flavours
 # (ai_agent / cli_command) mirror the /agents REST surface
 # byte-for-byte. Every subcommand taking TASK_ID / RUN_ID accepts it
-# positionally OR via flag (--id / --task-id; --run-id for run-detail /
-# run-events) -- the flag form matches the rest of the CLI (--job-id, ...).
+# positionally OR via flag (--task-id; --run-id for run-detail /
+# run-events; 1.0.0 removed --id) -- the flag form matches the rest of the
+# CLI (--job-id, ...).
 
 kbagent kai ping [--project NAME]
 kbagent kai preflight [--project NAME]
@@ -1719,9 +1734,10 @@ kbagent serve [--host HOST] [--port PORT] [--ui] [--ui-dist PATH] [--reload] [--
 #   error body adds targets, warnings and error_type/project/retryable, and its HTTP status comes from
 #   ERROR_CODE_TABLE (http_status_for). project use / branch use / branch reset add active_project_set /
 #   active_branch_set / active_branch_cleared and an ACTIVE_CHOICE_SHARED warning. PATCH for semantic-layer
-#   items, merge-request update, data-app secrets and the variables merge (extra fields -> 422). The old
-#   PUT is a DEPRECATIONS form (DEPRECATED in Kbagent-Warnings). PUT .../variables with replace: true stays
-#   the full replace. List routes that read several projects take all_projects=true; without it and
+#   items, merge-request update, data-app secrets and the variables merge (extra fields -> 422). 1.0.0
+#   removed the old PUT: it answers HTTP 405, and the message (a DEPRECATIONS entry with removed_in,
+#   removed_route_message / removed_form_error in response_meta.py) names PATCH. PUT .../variables with
+#   replace: true stays the full replace. `refresh_all` in POST /org/refresh answers 422 naming all_projects. List routes that read several projects take all_projects=true; without it and
 #   without project they use services/base.resolve_fanout_aliases (the T1 chain, shared with the CLI
 #   fanout_projects). A destructive or admin route (route class or flag escalation, response_meta.note_operation)
 #   on the active branch adds TARGET_FROM_ACTIVE_CHOICE (hint branch_id=<id>). Version gate in gotchas.md.

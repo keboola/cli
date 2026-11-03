@@ -242,13 +242,6 @@ class TestModelDelete:
                 "failures": [],
                 "parent_deleted": True,
             },
-            "orphaned_children": {
-                "datasets": 0,
-                "metrics": 0,
-                "relationships": 0,
-                "glossary": 0,
-                "constraints": 0,
-            },
         }
         result = _invoke(
             [

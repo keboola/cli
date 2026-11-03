@@ -317,7 +317,6 @@ class TestSnapshotService:
         assert result["failed"] == [
             {
                 "id": "1",
-                "error": "Snapshot 1 not found.",
                 "error_code": "UNKNOWN_ERROR",
                 "retryable": False,
                 "message": "Snapshot 1 not found.",
@@ -574,7 +573,7 @@ class TestSnapshotCLI:
             svc.delete_snapshots.return_value = {
                 "project_alias": "test",
                 "deleted": [],
-                "failed": [{"id": "954", "error": "Snapshot 954 not found."}],
+                "failed": [{"id": "954", "message": "Snapshot 954 not found."}],
                 "dry_run": False,
             }
             result = runner.invoke(

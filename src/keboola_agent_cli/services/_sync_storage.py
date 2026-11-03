@@ -471,14 +471,14 @@ def create_buckets_from_export(
     # be told apart. Creating them empty cannot be undone by a re-clone (the
     # existing bucket is skipped), so create nothing.
     if any(isinstance(r, dict) and "source_bucket" not in r for r in records):
-        result.errors.append({"bucket_id": "", "error": _LEGACY_EXPORT_ERROR})
+        result.errors.append({"bucket_id": "", "message": _LEGACY_EXPORT_ERROR})
         return result
 
     try:
         existing = {str(b.get("id")) for b in storage_client.list_buckets()}
     except KeboolaApiError as exc:
         result.errors.append(
-            item_failure(exc, bucket_id="", error=f"Cannot list buckets: {exc.message}")
+            {**item_failure(exc, bucket_id=""), "message": f"Cannot list buckets: {exc.message}"}
         )
         return result
     for record in records:
@@ -519,7 +519,7 @@ def create_buckets_from_export(
                     backend=record.get("backend") or None,
                 )
         except KeboolaApiError as exc:
-            result.errors.append(item_failure(exc, bucket_id=target_id, error=exc.message))
+            result.errors.append(item_failure(exc, bucket_id=target_id))
             continue
         if link:
             result.linked.append(link)

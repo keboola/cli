@@ -477,7 +477,7 @@ class TestAgentPromptImprove:
 
 
 class TestAgentIdAlias:
-    """Task/run IDs accept both the positional form and --id/--task-id/--run-id.
+    """Task/run IDs accept both the positional form and --task-id/--run-id.
 
     Positional stays for terse interactive use; the flag aliases bring agent
     commands in line with the rest of the CLI (--job-id, --config-id, ...).
@@ -506,11 +506,13 @@ class TestAgentIdAlias:
         assert result.exit_code == 0, result.output
         assert json.loads(result.output)["data"]["id"] == task_id
 
-    def test_show_accepts_id_flag(self, tmp_path: Path) -> None:
+    def test_removed_id_flag_names_task_id(self, tmp_path: Path) -> None:
         task_id = self._create(tmp_path)
         result = _invoke(tmp_path, "agent", "show", "--id", task_id, json_mode=True)
-        assert result.exit_code == 0, result.output
-        assert json.loads(result.output)["data"]["id"] == task_id
+        assert result.exit_code == 2, result.output
+        error = json.loads(result.output)["error"]
+        assert error["code"] == "USAGE_ERROR"
+        assert "--id was removed in 1.0.0. Use --task-id" in error["message"]
 
     def test_show_accepts_task_id_flag(self, tmp_path: Path) -> None:
         task_id = self._create(tmp_path)
@@ -520,13 +522,15 @@ class TestAgentIdAlias:
 
     def test_delete_accepts_id_flag(self, tmp_path: Path) -> None:
         task_id = self._create(tmp_path)
-        result = _invoke(tmp_path, "agent", "delete", "--id", task_id, "--yes", json_mode=True)
+        result = _invoke(tmp_path, "agent", "delete", "--task-id", task_id, "--yes", json_mode=True)
         assert result.exit_code == 0, result.output
         assert json.loads(result.output)["status"] == "ok"
 
     def test_conflicting_positional_and_flag_exits_2(self, tmp_path: Path) -> None:
         task_id = self._create(tmp_path)
-        result = _invoke(tmp_path, "agent", "show", task_id, "--id", "ffffffffffff", json_mode=True)
+        result = _invoke(
+            tmp_path, "agent", "show", task_id, "--task-id", "ffffffffffff", json_mode=True
+        )
         assert result.exit_code == 2
         assert json.loads(result.output)["error"]["code"] == "INVALID_ARGUMENT"
 
@@ -542,7 +546,7 @@ class TestAgentIdAlias:
             tmp_path,
             "agent",
             "run-detail",
-            "--id",
+            "--task-id",
             task_id,
             "--run-id",
             "ffffffffffff",
@@ -553,12 +557,12 @@ class TestAgentIdAlias:
 
     def test_run_accepts_id_flag(self, tmp_path: Path) -> None:
         """run wires --id; a missing task resolves then 404s (avoids a real subprocess)."""
-        result = _invoke(tmp_path, "agent", "run", "--id", "ffffffffffff", json_mode=True)
+        result = _invoke(tmp_path, "agent", "run", "--task-id", "ffffffffffff", json_mode=True)
         assert result.exit_code == 1
         assert json.loads(result.output)["error"]["code"] == "NOT_FOUND"
 
     def test_runs_accepts_id_flag(self, tmp_path: Path) -> None:
         task_id = self._create(tmp_path)
-        result = _invoke(tmp_path, "agent", "runs", "--id", task_id, json_mode=True)
+        result = _invoke(tmp_path, "agent", "runs", "--task-id", task_id, json_mode=True)
         assert result.exit_code == 0, result.output
         assert json.loads(result.output)["data"]["runs"] == []

@@ -13,6 +13,7 @@ from rich.console import Console
 from ..effective_branch import report_branch_ref
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..output import format_branch_metadata_table, format_branches_table
+from ..services.branch_service import active_branch_not_stored_warning
 from ._all_projects import (
     FANOUT_PROJECT_HELP,
     AllProjectsOption,
@@ -32,12 +33,6 @@ from ._metadata_input import resolve_text_input
 from ._project_ref import PROJECT_DEFAULT, PROJECT_HELP
 
 branch_app = typer.Typer(help="Manage development branches")
-
-_MERGE_DEPRECATION = (
-    "`branch merge` is deprecated: it only builds a UI URL (and resets the active branch). "
-    "If this project has merge requests enabled ('branches-merge-requests'), use "
-    "`kbagent merge-request create` + `kbagent merge-request merge` to merge from the CLI."
-)
 
 
 @branch_app.callback(invoke_without_command=True)
@@ -98,13 +93,21 @@ def branch_create(
     """Create a new development branch and auto-activate it.
 
     The created branch becomes the active branch for the project,
-    so subsequent tool calls will automatically use it.
+    so subsequent tool calls will automatically use it. A project from
+    environment variables (__env__) cannot store an active branch: the
+    branch is created, not activated, and a warning names --branch.
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "branch_service")
 
     try:
         result = service.create_branch(alias=project, name=name, description=description)
+        if not result["activated"]:
+            # An environment project cannot store an active branch (the
+            # branch itself was created, so this is not an error).
+            formatter.warning(
+                **active_branch_not_stored_warning(result["project_alias"], result["branch_id"])
+            )
         formatter.output(
             result,
             lambda c, d: c.print(f"[bold green]Success:[/bold green] {d['message']}"),
@@ -236,49 +239,6 @@ def branch_delete(
         exit_code = map_error_to_exit_code(exc)
         emit_api_error(formatter, exc)
         raise typer.Exit(code=exit_code) from None
-    except ConfigError as exc:
-        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
-        raise typer.Exit(code=5) from None
-
-
-@branch_app.command("merge")
-def branch_merge(
-    ctx: typer.Context,
-    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
-    branch: int | None = typer.Option(
-        None,
-        "--branch",
-        help="Branch ID to merge (uses active branch if not set)",
-    ),
-) -> None:
-    """[DEPRECATED] Get the KBC UI merge URL for a development branch.
-
-    Does NOT perform the merge via API -- it builds the URL to the Keboola
-    UI and then resets the active branch to main. Deprecated since 0.94.0:
-    on a project with merge requests enabled ('branches-merge-requests'),
-    use `kbagent merge-request create` and `kbagent merge-request merge`,
-    which merge from the CLI and delete the source branch. This command
-    keeps working unchanged (it also serves projects without that feature).
-    """
-    formatter = get_formatter(ctx)
-    service = get_service(ctx, "branch_service")
-
-    try:
-        result = service.get_merge_url(alias=project, branch_id=branch)
-        # Deprecate-with-pointer (precedent: the #390 tool-group removal):
-        # the pointer is CONDITIONAL because this command is not a 1:1
-        # replacement -- it works on any project, merge-request needs the
-        # feature. Behaviour is unchanged, including the active-branch reset.
-        result["deprecation"] = _MERGE_DEPRECATION
-        if not formatter.json_mode:
-            formatter.warning(_MERGE_DEPRECATION)
-        formatter.output(
-            result,
-            lambda c, d: (
-                c.print(f"\n[bold]Merge URL:[/bold] {d['url']}"),
-                c.print(f"\n{d['message']}"),
-            ),
-        )
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None

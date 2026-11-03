@@ -501,10 +501,8 @@ class TestConfigSetFolder:
             "component_id": COMP_ID,
             "config_id": CFG_ID,
             "branch_id": None,
-            "key": "KBC.configuration.folderName",
-            "value": "My Folder",
             "folder": "My Folder",
-            "result": [{"id": 3, "key": "KBC.configuration.folderName", "value": "My Folder"}],
+            "configuration": {"id": CFG_ID, "name": "Cfg", "folder": "My Folder"},
             "message": "Folder 'My Folder' set on config ...",
         }
         result = _invoke(
@@ -687,24 +685,20 @@ class TestConfigServiceMetadata:
             branch_id=1,
         )
         mock_client.set_config_metadata.assert_not_called()
-        # The keys of the metadata-era result are kept; key is frozen.
         assert result["folder"] == "My Group"
-        assert result["key"] == "KBC.configuration.folderName"
-        assert result["value"] == "My Group"
-        # result stays list-shaped like the metadata POST response it replaced.
-        assert result["result"] == [{"key": "KBC.configuration.folderName", "value": "My Group"}]
+        # The metadata-era keys are removed since 1.0.0.
+        assert not {"key", "value", "result"} & result.keys()
         assert result["configuration"] == {"id": CFG_ID, "name": "Cfg", "folder": "My Group"}
         assert result["branch_id"] == 1
 
     def test_set_config_folder_clear_reports_empty_value(self, tmp_path: Path) -> None:
-        """An empty name clears the folder: the API answers null, value is ''."""
+        """An empty name clears the folder: the API answers null, folder is ''."""
         svc, mock_client = self._make_service(tmp_path)
         mock_client.update_config.return_value = {"id": CFG_ID, "name": "Cfg", "folder": None}
         result = svc.set_config_folder("prod", COMP_ID, CFG_ID, folder_name="")
         assert mock_client.update_config.call_args.kwargs["folder"] == ""
         assert result["folder"] == ""
-        assert result["value"] == ""
-        assert result["result"] == [{"key": "KBC.configuration.folderName", "value": ""}]
+        assert result["configuration"]["folder"] is None
         assert "cleared" in result["message"]
 
     def test_set_config_folder_fails_when_response_has_no_folder(self, tmp_path: Path) -> None:

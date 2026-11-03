@@ -20,7 +20,7 @@ from ..client import KeboolaClient
 from ..data_science_client import DataScienceClient
 from ..errors import ErrorCode, KeboolaApiError
 from .base import find_default_branch_id
-from .data_app_service import DATA_APP_COMPONENT_ID
+from .data_app_service import DATA_APP_COMPONENT_ID, VALID_TYPES
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +87,34 @@ def type_needs_rewrite(component_id: str, da_type: str | None, on_disk_da_type: 
     return component_id == DATA_APP_COMPONENT_ID and da_type != on_disk_da_type
 
 
+def require_creatable_data_app_type(
+    component_id: str, local_data: dict[str, Any], config_path: str
+) -> None:
+    """Refuse a data-app create whose recorded runtime type ``POST /v2/apps`` rejects.
+
+    - a config with no recorded type passes: push creates it as ``python-js``
+
+    Raises:
+        KeboolaApiError: ``VALIDATION_ERROR``, collected as a per-change error.
+    """
+    if component_id != DATA_APP_COMPONENT_ID:
+        return
+    type_ = (local_data.get("_keboola") or {}).get("data_app_type")
+    if not type_ or type_ in VALID_TYPES:
+        return
+    raise KeboolaApiError(
+        message=(
+            f"Refusing to create {component_id} {config_path}: _keboola.data_app_type "
+            f"'{type_}' cannot be created, Data Science creates only "
+            f"{', '.join(VALID_TYPES)}. Set _keboola.data_app_type to the one the app's "
+            "code runs on and push again."
+        ),
+        status_code=0,
+        error_code=ErrorCode.VALIDATION_ERROR,
+        retryable=False,
+    )
+
+
 def push_ds_client(
     ds_client_factory: Callable[[str, str], DataScienceClient],
     project: Any,
@@ -115,7 +143,8 @@ def resolve_ds_branch_id(
     """Map the push branch onto the ``branchId`` Data Science ``POST /apps`` wants.
 
     DS wants ``null`` for the project's default (production) branch and the
-    numeric id for a dev branch. The production check compares against the
+    dev branch id for a dev branch (``create_app`` sends it as a JSON string;
+    a number is HTTP 422). The production check compares against the
     default branch reported by the API, never ``manifest.branches[0]``: after
     ``sync clone --branch <dev>`` that first manifest entry IS the dev branch,
     so equating the two created every data app in production while the rest

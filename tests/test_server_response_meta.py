@@ -648,17 +648,19 @@ def test_patch_updates_without_a_warning(app: Any, path: str, body: dict[str, An
 
 
 @pytest.mark.parametrize(("path", "body"), PARTIAL_UPDATES)
-def test_put_still_works_with_a_deprecated_warning(
+def test_put_partial_update_is_refused_naming_patch(
     app: Any, path: str, body: dict[str, Any]
 ) -> None:
+    """1.0.0 removed the PUT form of a partial update (C3): 405, and the error names PATCH."""
     _mock_partial_update_services(app)
     res = _send(app, "PUT", path, {"json": body})
 
-    assert res.status_code == 200, res.text
-    (entry,) = _warnings(res)
-    assert entry["code"] == "DEPRECATED"
-    assert entry["replacement"].startswith("PATCH ")
-    assert entry["remove_after"] is None
+    assert res.status_code == 405, res.text
+    message = res.json()["error"]["message"]
+    assert "was removed in 1.0.0" in message
+    assert "Use PATCH" in message
+    for name in ("variables", "data_app", "merge_request", "semantic_layer"):
+        assert getattr(app.state.registry, name).method_calls == []
 
 
 @pytest.mark.parametrize(("path", "body"), PARTIAL_UPDATES)
@@ -686,21 +688,33 @@ def test_variables_patch_merges_and_put_with_replace_replaces(app: Any) -> None:
     assert refused.status_code == 422
 
 
-def test_every_rest_deprecation_names_a_live_route(app: Any) -> None:
-    """A deprecated REST form is a method (PUT, replaced by PATCH) or a body field of a live route."""
+def test_every_rest_form_in_the_registry_matches_the_app(app: Any) -> None:
+    """A removed route is gone or keeps another form; a removed body field is not in the schema."""
     spec = app.openapi()
     paths = spec["paths"]
-    rest_forms = [form for form in DEPRECATIONS if form.split()[0].isupper()]
-    assert len(rest_forms) == 5
-    for form in rest_forms:
+    rest_forms = {form: e for form, e in DEPRECATIONS.items() if form.split()[0].isupper()}
+    assert len(rest_forms) == 6
+    for form, entry in rest_forms.items():
         method, path, *field = form.split()
-        assert method.lower() in paths[path], form
+        assert entry.removed_in, form
         if field:
             ref = paths[path][method.lower()]["requestBody"]["content"]["application/json"]
             schema = spec["components"]["schemas"][ref["schema"]["$ref"].rsplit("/", 1)[1]]
-            assert field[0] in schema["properties"], form
-        else:
+            assert field[0] not in schema["properties"], form
+        elif entry.replacement and entry.replacement.startswith("PATCH "):
             assert "patch" in paths[path], form
+        else:
+            assert path not in paths, form
+
+
+def test_removed_route_names_its_replacement(app: Any) -> None:
+    """`GET /branches/{project}/merge-url` was removed with `branch merge` (C3)."""
+    res = _send(app, "GET", "/branches/prod/merge-url", {})
+
+    assert res.status_code in (404, 405), res.text
+    message = res.json()["error"]["message"]
+    assert "was removed in 1.0.0" in message
+    assert "/merge-requests" in message
 
 
 def test_variables_patch_dry_run_writes_nothing(app: Any) -> None:

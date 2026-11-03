@@ -191,8 +191,10 @@ re-running this after a partial setup only fills the gaps.
 
    **3c. Static token -- the last resort.**
    ```bash
-   kbagent --json project add --project '<ALIAS>' --url <STACK_URL>
+   kbagent --json project add --alias '<ALIAS>' --url <STACK_URL>
    ```
+   `--alias` needs kbagent 0.100.3 or later. If step 1 reported an older
+   version, ask the user to run `kbagent update` first.
    Never pass `--token` on the command line. Two safe routes:
    - `KBC_TOKEN` is already exported in the environment -> run it as-is.
    - Otherwise hand the command to the **user** to run in their own

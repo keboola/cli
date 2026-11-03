@@ -114,3 +114,10 @@ Use `--allow-plaintext-on-encrypt-failure` only if you understand the risk:
 # DANGEROUS: secrets may be stored as plaintext in Keboola
 kbagent sync push --project my-proj --allow-plaintext-on-encrypt-failure
 ```
+
+## Secrets kept in source control
+
+A plaintext `#secret` committed to a GitOps repository is encrypted again by
+every `sync push`, so the config gets a new version on each run. Commit the
+ciphertext from `encrypt values` instead. See
+[gitops-cicd-workflow.md](gitops-cicd-workflow.md) pitfall 3.3.

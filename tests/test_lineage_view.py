@@ -395,6 +395,7 @@ class TestColumnTrace:
         assert result.exit_code == 0, result.output
         data = json.loads(result.stdout)["data"]
         assert data["column"] == "CUSTOMER"
+        assert "column_filter" not in data
         assert data["terminals"][0]["reason"] == "column_mapping_unknown"
         assert data["terminals"][0]["node"] == END_CFG
 

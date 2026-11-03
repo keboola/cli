@@ -118,11 +118,13 @@ that used to require the Keboola UI; it is now fully scriptable.
    `lastImportId` (or the equivalent cursor) should have moved past your
    seeded checkpoint to the newest file processed.
 
-6. **Merge when satisfied.** `branch merge` returns a Keboola UI URL for
-   manual review -- it does not merge automatically:
+6. **Merge when satisfied.** Merge the dev branch in the Keboola UI, or with
+   the merge-request group on a project with the `branches-merge-requests`
+   feature (see [merge-request-workflow.md](merge-request-workflow.md)):
 
    ```bash
-   kbagent --json branch merge --project ALIAS
+   kbagent --json merge-request create --project ALIAS --branch <branch_id> --title "New mapping"
+   kbagent --json merge-request merge --project ALIAS --branch <branch_id>
    ```
 
    Branch merge propagates **configs only, not state** -- production's state

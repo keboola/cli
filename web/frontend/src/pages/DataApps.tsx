@@ -37,11 +37,9 @@ interface DataAppDetailPayload {
   description?: string;
   type?: string;
   state?: string;
-  desired_state?: string;
   url?: string;
   size?: string;
   auto_suspend_after_seconds?: number | null;
-  last_start_timestamp?: string | null;
   slug?: string;
   git?: Record<string, unknown>;
   raw?: Record<string, unknown>;
@@ -63,9 +61,9 @@ const LOG_TAIL_LINES = 200;
 const STATE_STYLE: Record<string, string> = {
   running: "nerd-pill-green",
   starting: "nerd-pill-amber",
-  stopping: "nerd-pill-amber",
-  stopped: "nerd-pill",
-  error: "nerd-pill-red",
+  suspended: "nerd-pill",
+  notDeployed: "nerd-pill",
+  disabled: "nerd-pill-red",
 };
 
 function statePill(state: string | undefined): ReactNode {
@@ -307,7 +305,6 @@ function DataAppOverview({
             { label: "App ID", value: detail.app_id || fallback.app_id, mono: true },
             { label: "Type", value: detail.type || fallback.type },
             { label: "State", value: statePill(detail.state || fallback.state) },
-            { label: "Desired state", value: detail.desired_state || fallback.desired_state },
             { label: "Size", value: detail.size || fallback.size },
             {
               label: "Auto-suspend",
@@ -324,7 +321,6 @@ function DataAppOverview({
             },
             { label: "Config version (storage)", value: detail.config_version_storage, mono: true },
             { label: "Slug", value: detail.slug, mono: true },
-            { label: "Last start", value: detail.last_start_timestamp ?? "", mono: true },
           ]}
         />
         {detail.description ? (

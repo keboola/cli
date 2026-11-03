@@ -127,7 +127,7 @@ class TestTargetResolution:
             "conflicts": [],
         }
         result = _run(
-            ["--json", "mr", "conflicts", "--project", ALIAS, "--id", "9"],
+            ["--json", "mr", "conflicts", "--project", ALIAS, "--merge-request-id", "9"],
             _store(tmp_path),
             service,
         )
@@ -236,7 +236,7 @@ class TestTargetResolution:
         # never `branch_from_id: null` beside `branches.branchFromId: 123`.
         service.get_merge_request.return_value = _detail()
         result = _run(
-            ["--json", "merge-request", "detail", "--project", ALIAS, "--id", "7"],
+            ["--json", "merge-request", "detail", "--project", ALIAS, "--merge-request-id", "7"],
             _store(tmp_path),
             service,
         )
@@ -253,7 +253,7 @@ class TestTargetResolution:
             "conflicts": [],
         }
         conflicts = _run(
-            ["--json", "merge-request", "conflicts", "--project", ALIAS, "--id", "7"],
+            ["--json", "merge-request", "conflicts", "--project", ALIAS, "--merge-request-id", "7"],
             _store(tmp_path / "b"),
             service,
         )
@@ -528,7 +528,7 @@ class TestDetail:
                 "detail",
                 "--project",
                 ALIAS,
-                "--id",
+                "--merge-request-id",
                 "7",
                 "--activity-log",
             ],
@@ -544,7 +544,9 @@ class TestDetail:
     def test_human_renders_readiness_viewer_and_next_steps(self, tmp_path, service) -> None:
         service.get_merge_request.return_value = _detail()
         result = _run(
-            ["merge-request", "detail", "--project", ALIAS, "--id", "7"], _store(tmp_path), service
+            ["merge-request", "detail", "--project", ALIAS, "--merge-request-id", "7"],
+            _store(tmp_path),
+            service,
         )
         assert result.exit_code == 0, result.output
         assert "Mergeable" in result.output
@@ -569,7 +571,9 @@ class TestDetail:
             autoMergeStrategy="immediately",
         )
         result = _run(
-            ["merge-request", "detail", "--project", ALIAS, "--id", "7"], _store(tmp_path), service
+            ["merge-request", "detail", "--project", ALIAS, "--merge-request-id", "7"],
+            _store(tmp_path),
+            service,
         )
         assert "Blocked by" in result.output and "conflicts (1)" in result.output
         assert "armed" in result.output and "immediately" in result.output
@@ -580,7 +584,9 @@ class TestDetail:
             viewer={"is_creator": None, "has_approved": None}
         )
         result = _run(
-            ["merge-request", "detail", "--project", ALIAS, "--id", "7"], _store(tmp_path), service
+            ["merge-request", "detail", "--project", ALIAS, "--merge-request-id", "7"],
+            _store(tmp_path),
+            service,
         )
         assert "You:" not in result.output
 
@@ -588,7 +594,9 @@ class TestDetail:
         # a server-serialised vocabulary (DMD-1988) must not make hint-next vanish.
         service.get_merge_request.return_value = _detail(allowed_actions=["requestReview"])
         result = _run(
-            ["merge-request", "detail", "--project", ALIAS, "--id", "7"], _store(tmp_path), service
+            ["merge-request", "detail", "--project", ALIAS, "--merge-request-id", "7"],
+            _store(tmp_path),
+            service,
         )
         assert "requestReview" in result.output
 
@@ -596,7 +604,9 @@ class TestDetail:
         # never recommend a write that cannot succeed.
         service.get_merge_request.return_value = _detail(feature_enabled=False)
         result = _run(
-            ["merge-request", "detail", "--project", ALIAS, "--id", "7"], _store(tmp_path), service
+            ["merge-request", "detail", "--project", ALIAS, "--merge-request-id", "7"],
+            _store(tmp_path),
+            service,
         )
         assert result.exit_code == 0, result.output
         assert "not enabled on this project" in result.output
@@ -605,7 +615,9 @@ class TestDetail:
     def test_detail_hint_unchanged_when_feature_enabled(self, tmp_path, service) -> None:
         service.get_merge_request.return_value = _detail(feature_enabled=True)
         result = _run(
-            ["merge-request", "detail", "--project", ALIAS, "--id", "7"], _store(tmp_path), service
+            ["merge-request", "detail", "--project", ALIAS, "--merge-request-id", "7"],
+            _store(tmp_path),
+            service,
         )
         assert "merge-request merge" in result.output
 
@@ -637,7 +649,7 @@ class TestConflicts:
             ],
         }
         result = _run(
-            ["merge-request", "conflicts", "--project", ALIAS, "--id", "7"],
+            ["merge-request", "conflicts", "--project", ALIAS, "--merge-request-id", "7"],
             _store(tmp_path),
             service,
         )
@@ -655,7 +667,7 @@ class TestConflicts:
             "conflicts": [],
         }
         result = _run(
-            ["merge-request", "conflicts", "--project", ALIAS, "--id", "7"],
+            ["merge-request", "conflicts", "--project", ALIAS, "--merge-request-id", "7"],
             _store(tmp_path),
             service,
         )
@@ -726,7 +738,7 @@ _DIFF_ARGS = [
     "diff",
     "--project",
     ALIAS,
-    "--id",
+    "--merge-request-id",
     "7",
     "--component-id",
     "keboola.ex-db",
@@ -943,7 +955,7 @@ class TestCreate:
 class TestUpdate:
     def test_no_fields_is_exit_2(self, tmp_path, service) -> None:
         result = _run(
-            ["--json", "merge-request", "update", "--project", ALIAS, "--id", "7"],
+            ["--json", "merge-request", "update", "--project", ALIAS, "--merge-request-id", "7"],
             _store(tmp_path),
             service,
         )
@@ -959,7 +971,7 @@ class TestUpdate:
                 "update",
                 "--project",
                 ALIAS,
-                "--id",
+                "--merge-request-id",
                 "7",
                 "--description",
                 "",
@@ -1036,7 +1048,7 @@ class TestMerge:
                 "merge",
                 "--project",
                 ALIAS,
-                "--id",
+                "--merge-request-id",
                 "7",
             ],
             _store(tmp_path),
@@ -1051,7 +1063,7 @@ class TestMerge:
             "warnings": ["Post-merge active-branch reset failed: disk full"],
         }
         result = _run(
-            ["merge-request", "merge", "--project", ALIAS, "--id", "7", "--yes"],
+            ["merge-request", "merge", "--project", ALIAS, "--merge-request-id", "7", "--yes"],
             _store(tmp_path),
             service,
         )
@@ -1066,7 +1078,7 @@ class TestMerge:
             retryable=False,
         )
         result = _run(
-            ["--json", "merge-request", "merge", "--project", ALIAS, "--id", "7"],
+            ["--json", "merge-request", "merge", "--project", ALIAS, "--merge-request-id", "7"],
             _store(tmp_path),
             service,
         )
@@ -1076,7 +1088,7 @@ class TestMerge:
     def test_json_merge_with_explicit_id_does_not_fetch_the_row(self, tmp_path, service) -> None:
         service.merge.return_value = _merged()
         result = _run(
-            ["--json", "merge-request", "merge", "--project", ALIAS, "--id", "7"],
+            ["--json", "merge-request", "merge", "--project", ALIAS, "--merge-request-id", "7"],
             _store(tmp_path),
             service,
         )
@@ -1090,7 +1102,7 @@ class TestMerge:
     ) -> None:
         service.merge.return_value = _merged()
         result = _run(
-            ["merge-request", "merge", "--project", ALIAS, "--id", "7"],
+            ["merge-request", "merge", "--project", ALIAS, "--merge-request-id", "7"],
             _store(tmp_path),
             service,
             input="y\n",
@@ -1113,7 +1125,7 @@ class TestMerge:
             ],
         }
         result = _run(
-            ["merge-request", "merge", "--project", ALIAS, "--id", "7", "--yes"],
+            ["merge-request", "merge", "--project", ALIAS, "--merge-request-id", "7", "--yes"],
             _store(tmp_path),
             service,
         )
@@ -1127,7 +1139,7 @@ class TestMerge:
             "warnings": ["Post-merge cleanup failed: [/x] bad tag"],
         }
         result = _run(
-            ["merge-request", "merge", "--project", ALIAS, "--id", "7", "--yes"],
+            ["merge-request", "merge", "--project", ALIAS, "--merge-request-id", "7", "--yes"],
             _store(tmp_path),
             service,
         )
@@ -1145,7 +1157,7 @@ _RESOLVE = [
     "resolve",
     "--project",
     ALIAS,
-    "--id",
+    "--merge-request-id",
     "7",
     "--component-id",
     "keboola.ex-db",
@@ -1272,7 +1284,7 @@ class TestResolve:
                 "resolve",
                 "--project",
                 ALIAS,
-                "--id",
+                "--merge-request-id",
                 "7",
                 "--component-id",
                 "k",
@@ -1311,7 +1323,7 @@ class TestMergeConflictRender:
     def test_json_carries_details_through(self, tmp_path, service) -> None:
         service.merge.side_effect = self._conflict_error(truncated=True)
         result = _run(
-            ["--json", "merge-request", "merge", "--project", ALIAS, "--id", "7"],
+            ["--json", "merge-request", "merge", "--project", ALIAS, "--merge-request-id", "7"],
             _store(tmp_path),
             service,
         )
@@ -1323,7 +1335,7 @@ class TestMergeConflictRender:
     def test_human_lists_conflicts_and_says_truncated(self, tmp_path, service) -> None:
         service.merge.side_effect = self._conflict_error(truncated=True)
         result = _run(
-            ["merge-request", "merge", "--project", ALIAS, "--id", "7", "--yes"],
+            ["merge-request", "merge", "--project", ALIAS, "--merge-request-id", "7", "--yes"],
             _store(tmp_path),
             service,
         )
@@ -1335,7 +1347,7 @@ class TestMergeConflictRender:
     def test_human_untruncated_has_no_truncation_line(self, tmp_path, service) -> None:
         service.merge.side_effect = self._conflict_error(truncated=False)
         result = _run(
-            ["merge-request", "merge", "--project", ALIAS, "--id", "7", "--yes"],
+            ["merge-request", "merge", "--project", ALIAS, "--merge-request-id", "7", "--yes"],
             _store(tmp_path),
             service,
         )
@@ -1350,14 +1362,14 @@ class TestStaticDestructiveClass:
     @pytest.mark.parametrize(
         "args",
         [
-            ["merge-request", "request-review", "--project", ALIAS, "--id", "7"],
-            ["merge-request", "approve", "--project", ALIAS, "--id", "7"],
+            ["merge-request", "request-review", "--project", ALIAS, "--merge-request-id", "7"],
+            ["merge-request", "approve", "--project", ALIAS, "--merge-request-id", "7"],
             [
                 "merge-request",
                 "resolve",
                 "--project",
                 ALIAS,
-                "--id",
+                "--merge-request-id",
                 "7",
                 "--component-id",
                 "c",
@@ -1366,18 +1378,27 @@ class TestStaticDestructiveClass:
                 "--take",
                 "ours",
             ],
-            ["merge-request", "merge", "--project", ALIAS, "--id", "7"],
+            ["merge-request", "merge", "--project", ALIAS, "--merge-request-id", "7"],
             [
                 "merge-request",
                 "auto-merge",
                 "--project",
                 ALIAS,
-                "--id",
+                "--merge-request-id",
                 "7",
                 "--strategy",
                 "immediately",
             ],
-            ["merge-request", "auto-merge", "--project", ALIAS, "--id", "7", "--strategy", "none"],
+            [
+                "merge-request",
+                "auto-merge",
+                "--project",
+                ALIAS,
+                "--merge-request-id",
+                "7",
+                "--strategy",
+                "none",
+            ],
         ],
         ids=[
             "request-review",
@@ -1398,8 +1419,17 @@ class TestStaticDestructiveClass:
         "args",
         [
             ["merge-request", "create", "--project", ALIAS, "--title", "T", "--branch", "123"],
-            ["merge-request", "update", "--project", ALIAS, "--id", "7", "--title", "T"],
-            ["merge-request", "request-changes", "--project", ALIAS, "--id", "7"],
+            [
+                "merge-request",
+                "update",
+                "--project",
+                ALIAS,
+                "--merge-request-id",
+                "7",
+                "--title",
+                "T",
+            ],
+            ["merge-request", "request-changes", "--project", ALIAS, "--merge-request-id", "7"],
         ],
         ids=["create", "update", "request-changes"],
     )
@@ -1445,7 +1475,15 @@ class TestStaticDestructiveClass:
         # Nothing to decide from the MR's state -> no GET before the write.
         service.request_review.return_value = _row(state="approved", derived_state="approved")
         result = _run(
-            ["--json", "merge-request", "request-review", "--project", ALIAS, "--id", "7"],
+            [
+                "--json",
+                "merge-request",
+                "request-review",
+                "--project",
+                ALIAS,
+                "--merge-request-id",
+                "7",
+            ],
             _store(tmp_path),
             service,
         )
@@ -1461,7 +1499,7 @@ class TestStaticDestructiveClass:
                 "request-changes",
                 "--project",
                 ALIAS,
-                "--id",
+                "--merge-request-id",
                 "7",
                 "--reason",
                 "x" * 1001,
@@ -1482,7 +1520,7 @@ class TestAutoMerge:
             "auto-merge",
             "--project",
             ALIAS,
-            "--id",
+            "--merge-request-id",
             "7",
             "--strategy",
             "immediately",
@@ -1502,7 +1540,16 @@ class TestAutoMerge:
     def test_disarm_does_not_prompt(self, tmp_path, service) -> None:
         service.update_merge_request.return_value = _row(autoMergeStrategy="none")
         result = _run(
-            ["merge-request", "auto-merge", "--project", ALIAS, "--id", "7", "--strategy", "none"],
+            [
+                "merge-request",
+                "auto-merge",
+                "--project",
+                ALIAS,
+                "--merge-request-id",
+                "7",
+                "--strategy",
+                "none",
+            ],
             _store(tmp_path),
             service,
         )
@@ -1518,7 +1565,7 @@ class TestAutoMerge:
                 "auto-merge",
                 "--project",
                 ALIAS,
-                "--id",
+                "--merge-request-id",
                 "7",
                 "--strategy",
                 "immediately",
@@ -1540,7 +1587,16 @@ class TestAutoMerge:
     )
     def test_strategy_and_at_pairing_is_validated(self, tmp_path, service, flags) -> None:
         result = _run(
-            ["--json", "merge-request", "auto-merge", "--project", ALIAS, "--id", "7", *flags],
+            [
+                "--json",
+                "merge-request",
+                "auto-merge",
+                "--project",
+                ALIAS,
+                "--merge-request-id",
+                "7",
+                *flags,
+            ],
             _store(tmp_path),
             service,
         )
@@ -1556,7 +1612,7 @@ class TestAutoMerge:
                 "auto-merge",
                 "--project",
                 ALIAS,
-                "--id",
+                "--merge-request-id",
                 "7",
                 "--strategy",
                 "scheduled",
@@ -1590,7 +1646,7 @@ class TestAutoMerge:
                 "update",
                 "--project",
                 ALIAS,
-                "--id",
+                "--merge-request-id",
                 "7",
                 "--auto-merge-strategy",
                 "immediately",
@@ -1605,7 +1661,7 @@ class TestAutoMerge:
             state="approved", derived_state="approved", autoMergeStrategy="immediately"
         )
         result = _run(
-            ["merge-request", "request-review", "--project", ALIAS, "--id", "7"],
+            ["merge-request", "request-review", "--project", ALIAS, "--merge-request-id", "7"],
             _store(tmp_path),
             service,
         )
@@ -1641,7 +1697,7 @@ class TestFieldCaps:
                 "update",
                 "--project",
                 ALIAS,
-                "--id",
+                "--merge-request-id",
                 "7",
                 "--external-id",
                 "x" * 256,
@@ -1651,7 +1707,7 @@ class TestFieldCaps:
                 "request-changes",
                 "--project",
                 ALIAS,
-                "--id",
+                "--merge-request-id",
                 "7",
                 "--reason",
                 "x" * 1001,

@@ -28,7 +28,7 @@ Scheduled agent tasks (cron / manual / chained)
   kbagent agent cron-preview --cron CRON [--count N]
     Show the next N firings of a cron expression.
 
-  kbagent agent delete [TASK_ID] [--id ID] [--yes]
+  kbagent agent delete [TASK_ID] [--task-id ID] [--yes]
     Remove a task. Run history on disk is preserved.
 
   kbagent agent list
@@ -38,20 +38,20 @@ Scheduled agent tasks (cron / manual / chained)
       [--project PROJECT] [--extra-arg ARG ...] [--stream/--no-stream]
     Polish a plain-English goal into an unattended-agent-ready prompt.
 
-  kbagent agent run [TASK_ID] [--id ID] [--stream] [--runtime-prompt PROMPT]
-      [--runtime-input INPUT]
+  kbagent agent run [TASK_ID] [--task-id ID] [--stream]
+      [--runtime-prompt PROMPT] [--runtime-input INPUT]
     Trigger a task immediately (does not wait for the next cron firing).
 
-  kbagent agent run-detail [TASK_ID] [RUN_ID] [--id ID] [--run-id ID]
+  kbagent agent run-detail [TASK_ID] [RUN_ID] [--task-id ID] [--run-id ID]
     Show a single AgentRun record (status, summary, output, error).
 
-  kbagent agent run-events [TASK_ID] [RUN_ID] [--id ID] [--run-id ID]
+  kbagent agent run-events [TASK_ID] [RUN_ID] [--task-id ID] [--run-id ID]
     Replay the persisted event timeline of an ai_agent run (line-by-line).
 
-  kbagent agent runs [TASK_ID] [--id ID] [--limit N]
+  kbagent agent runs [TASK_ID] [--task-id ID] [--limit N]
     Show the run history of a task (most recent first).
 
-  kbagent agent show [TASK_ID] [--id ID]
+  kbagent agent show [TASK_ID] [--task-id ID]
     Show one task's full configuration.
 
   kbagent agent test [--name NAME] [--stream] [--type TYPE] [--from-file FILE]
@@ -59,7 +59,7 @@ Scheduled agent tasks (cron / manual / chained)
       [--timeout N]
     Execute an action ad-hoc (no persistence, no scheduling).
 
-  kbagent agent update [TASK_ID] [--id ID] [--name NAME]
+  kbagent agent update [TASK_ID] [--task-id ID] [--name NAME]
       [--description DESCRIPTION] [--cron CRON] [--enabled/--disabled]
       [--manual/--auto] [--clear-trigger] [--trigger-task-id ID]
       [--trigger-on ON]
@@ -116,9 +116,6 @@ Manage development branches
   kbagent branch list [--project PROJECT ...] [--all-projects]
     List development branches of the active project, the given projects, or
     all projects.
-
-  kbagent branch merge [--project PROJECT] [--branch N]
-    [DEPRECATED] Get the KBC UI merge URL for a development branch.
 
   kbagent branch metadata-delete [--project PROJECT] --metadata-id N [--yes]
       [--branch BRANCH]
@@ -352,12 +349,13 @@ Keboola data-app lifecycle (create, deploy, manage)
     Create a Keboola data app end-to-end (POST + encrypt + PUT + deploy).
 
   kbagent data-app delete [--project PROJECT] --app-id ID [--yes]
-    Delete the deployment AND the Storage config (cascade, irreversible).
+    Delete the app: stop its deployments and move the Storage config to the
+    trash.
 
   kbagent data-app deploy [--project PROJECT] --app-id ID
       [--config-version VERSION] [--wait] [--timeout N] [--branch N]
       [--git-branch BRANCH] [--copy] [--reveal]
-    Deploy the latest Storage config (the §9 redeploy contract).
+    Deploy the latest Storage config version as a new production deployment.
 
   kbagent data-app detail [--project PROJECT] --app-id ID [--branch N]
     Show merged Data Science + Storage detail for one data app.
@@ -408,10 +406,11 @@ Keboola data-app lifecycle (create, deploy, manage)
 
   kbagent data-app start [--project PROJECT] --app-id ID [--wait]
       [--timeout N]
-    Wake an auto-suspended data app at its currently-pinned configVersion.
+    Wake a suspended or disabled data app at the deployment production serves.
 
   kbagent data-app stop [--project PROJECT] --app-id ID [--wait] [--timeout N]
-    Stop a running data app (preserves the URL and Storage config).
+    Suspend a data app; the next request to its URL wakes it (URL and config
+    kept).
 
   kbagent data-app validate-repo --git-repo REPO [--git-branch BRANCH]
       [--git-public/--no-git-public] [--git-pat-env ENV] [--git-pat-file PATH]
@@ -1182,7 +1181,7 @@ Browse and manage storage buckets, tables, and files
 
   kbagent storage add-column [--project PROJECT] --table-id ID --column COLUMN
       [--not-null] [--default DEFAULT] [--branch N]
-    Add a single column to an existing table (synchronous, typed).
+    Add a single column to an existing table (typed; waits for the job).
 
   kbagent storage bucket-detail [--project PROJECT] --bucket-id ID
       [--branch N]

@@ -240,7 +240,6 @@ class OrgService:
                         project_id=project_id,
                         project_name=project_name,
                         alias=alias,
-                        error=str(exc),
                     )
                 )
             except Exception as exc:
@@ -250,7 +249,6 @@ class OrgService:
                         project_id=project_id,
                         project_name=project_name,
                         alias=alias,
-                        error=str(exc),
                     )
                 )
 
@@ -312,7 +310,7 @@ class OrgService:
                         {
                             "alias": alias,
                             "project_name": "",
-                            "error": f"Project '{alias}' not found in config",
+                            "message": f"Project '{alias}' not found in config",
                         }
                     )
                 else:
@@ -402,7 +400,6 @@ class OrgService:
                         exc,
                         alias=alias,
                         project_name=project.project_name,
-                        error=f"Error checking token: {exc}",
                     )
                 )
                 continue
@@ -450,11 +447,7 @@ class OrgService:
                     }
                 )
             except Exception as exc:
-                failed.append(
-                    item_failure(
-                        exc, alias=alias, project_name=project.project_name, error=str(exc)
-                    )
-                )
+                failed.append(item_failure(exc, alias=alias, project_name=project.project_name))
 
         total_count = len(projects_to_check)
 
@@ -559,7 +552,6 @@ class OrgService:
                         project_id=pid,
                         project_name=f"project-{pid}",
                         alias=f"project-{pid}",
-                        error=str(exc),
                     )
                 )
             except Exception as exc:
@@ -569,7 +561,6 @@ class OrgService:
                         project_id=pid,
                         project_name=f"project-{pid}",
                         alias=f"project-{pid}",
-                        error=str(exc),
                     )
                 )
         return projects, failed

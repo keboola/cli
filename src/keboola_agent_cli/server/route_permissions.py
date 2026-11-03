@@ -240,9 +240,6 @@ ROUTE_OPERATIONS: dict[tuple[str, str], str] = {
     ("POST", "/branches/{project}/use"): "branch.use",
     ("POST", "/branches/{project}/reset"): "branch.reset",
     ("DELETE", "/branches/{project}/{branch_id}"): "branch.delete",
-    # `branch merge` is itself only a URL producer (the merge happens in the
-    # web UI), so the GET mirrors it exactly -- including its `write` class.
-    ("GET", "/branches/{project}/merge-url"): "branch.merge",
     ("GET", "/branches/{project}/metadata"): "branch.metadata-list",
     ("GET", "/branches/{project}/metadata/{key}"): "branch.metadata-get",
     ("PUT", "/branches/{project}/metadata/{key}"): "branch.metadata-set",
@@ -313,7 +310,6 @@ ROUTE_OPERATIONS: dict[tuple[str, str], str] = {
     ("GET", "/data-apps/{project}/{app_id}/runs"): "data-app.runs",
     ("GET", "/data-apps/{project}/{app_id}/secrets"): "data-app.secrets-list",
     ("GET", "/data-apps/{project}/{app_id}/secrets/{key:path}"): "data-app.secrets-get",
-    ("PUT", "/data-apps/{project}/{app_id}/secrets"): "data-app.secrets-set",
     ("PATCH", "/data-apps/{project}/{app_id}/secrets"): "data-app.secrets-set",
     ("POST", "/data-apps/{project}/{app_id}/secrets/remove"): "data-app.secrets-remove",
     ("POST", "/data-apps/validate-repo"): "data-app.validate-repo",
@@ -351,7 +347,6 @@ ROUTE_OPERATIONS: dict[tuple[str, str], str] = {
     ("POST", "/semantic-layer/diff"): "semantic-layer.diff",
     # Parent keys -- the leaf `<key>.<kind>` is checked too, see LEAF_PATH_PARAMS.
     ("POST", "/semantic-layer/items/{kind}"): "semantic-layer.add",
-    ("PUT", "/semantic-layer/items/{kind}/{name}"): "semantic-layer.edit",
     ("PATCH", "/semantic-layer/items/{kind}/{name}"): "semantic-layer.edit",
     ("DELETE", "/semantic-layer/items/{kind}/{name}"): "semantic-layer.remove",
     ("POST", "/semantic-layer/import"): "semantic-layer.import",
@@ -417,7 +412,6 @@ ROUTE_OPERATIONS: dict[tuple[str, str], str] = {
 # first in every case.
 LEAF_PATH_PARAMS: dict[tuple[str, str], str] = {
     ("POST", "/semantic-layer/items/{kind}"): "kind",
-    ("PUT", "/semantic-layer/items/{kind}/{name}"): "kind",
     ("PATCH", "/semantic-layer/items/{kind}/{name}"): "kind",
     ("DELETE", "/semantic-layer/items/{kind}/{name}"): "kind",
 }

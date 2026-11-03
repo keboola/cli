@@ -183,10 +183,9 @@ Returns `NOT_FOUND` (exit 1) when the key is absent -- there is no sentinel
 Each returns `project_alias`, `component_id`, `config_id`, `branch_id`, and a
 human-readable `message`. `set-folder` additionally returns `folder` (the
 folder as stored, `""` when cleared) so callers don't have to re-parse the
-message string. It also keeps `key` (frozen at `"KBC.configuration.folderName"`),
-`value` (same as `folder`) and `result` (still a list, `[{key, value}]`) from
-the time it wrote the metadata key, and adds `configuration` (`{id, name,
-folder}` from the config PUT).
+message string. It also returns `configuration` (`{id, name, folder}` from the
+config PUT). The keys `key`, `value` and `result` from the time it wrote the
+metadata key are removed (since vNEXT). Read `folder` instead.
 
 ## Provider semantics
 
@@ -217,3 +216,11 @@ does:
 
 Metadata and the folder in a dev branch are independent of production; a merge
 request carries them back to production with the rest of the branch. See [branch-workflow.md](branch-workflow.md).
+
+## Key characters and CI traceability
+
+Storage accepts metadata keys made of `a-z`, `A-Z`, `0-9`, `_`, `.` and `-`
+only; any other character (`#`, `[`, `]`, `/`, a space) is an HTTP 400. `sync push`
+writes a fixed change description, so a CI pipeline records the commit with
+`config set-metadata --key ci.commitSha`. See
+[gitops-cicd-workflow.md](gitops-cicd-workflow.md) pitfalls 5.1 and 5.6.

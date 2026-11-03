@@ -393,7 +393,7 @@ class TestSetupOrganization:
         assert len(result["projects_added"]) == 2
         assert len(result["projects_failed"]) == 1
         assert result["projects_failed"][0]["project_id"] == 200
-        assert "Access denied" in result["projects_failed"][0]["error"]
+        assert "Access denied" in result["projects_failed"][0]["message"]
 
     def test_unique_alias_generation(self, tmp_path: Path) -> None:
         """Generates unique aliases when project names collide."""
@@ -718,7 +718,7 @@ class TestSetupWithProjectIds:
         assert len(result["projects_added"]) == 1
         assert len(result["projects_failed"]) == 1
         assert result["projects_failed"][0]["project_id"] == 999
-        assert "Access denied" in result["projects_failed"][0]["error"]
+        assert "Access denied" in result["projects_failed"][0]["message"]
 
     def test_no_org_id_no_project_ids_raises(self, tmp_path: Path) -> None:
         """Raises ValueError when neither org_id nor project_ids is provided."""
@@ -1207,7 +1207,7 @@ class TestRefreshTokens:
         assert result["projects_refreshed"][0]["alias"] == "alpha"
         assert len(result["projects_failed"]) == 1
         assert result["projects_failed"][0]["alias"] == "beta"
-        assert "Access denied" in result["projects_failed"][0]["error"]
+        assert "Access denied" in result["projects_failed"][0]["message"]
 
     def test_refresh_all_valid_no_action(self, tmp_path: Path) -> None:
         """All valid tokens result in no refreshes."""
@@ -1305,7 +1305,7 @@ class TestRefreshTokens:
 
         assert len(result["projects_failed"]) == 1
         assert result["projects_failed"][0]["alias"] == "nonexistent"
-        assert "not found in config" in result["projects_failed"][0]["error"]
+        assert "not found in config" in result["projects_failed"][0]["message"]
         assert result["projects_checked"] == 0
         assert len(result["projects_refreshed"]) == 0
         assert len(result["projects_valid"]) == 0

@@ -147,6 +147,24 @@ _ROW_LOCAL_RESERVED_KEYS: frozenset[str] = frozenset(
 )
 
 
+# Every top-level key of a local ``_config.yml`` that sync reads: exactly what
+# :func:`api_config_to_local` / :func:`api_row_to_local` write. Any other key
+# would be dropped by :func:`local_config_to_api` without a word, so ``sync
+# diff`` / ``sync push`` refuse a file that has one (customer feedback 2.3).
+LOCAL_CONFIG_KEYS: frozenset[str] = _ROW_LOCAL_RESERVED_KEYS
+
+
+def unknown_local_keys(data: dict[str, Any], component_id: str, *, is_row: bool) -> list[str]:
+    """Top-level keys of a local ``_config.yml`` that push would drop, sorted.
+
+    A row of a :data:`ROW_HOIST_COMPONENTS` component keeps its extra keys
+    (``values``, ``code_content``): they are its configuration body.
+    """
+    if is_row and component_id in ROW_HOIST_COMPONENTS:
+        return []
+    return sorted(str(key) for key in data if key not in LOCAL_CONFIG_KEYS)
+
+
 def classify_component_type(api_type: str) -> str:
     """Map an API component type string to its filesystem directory name.
 

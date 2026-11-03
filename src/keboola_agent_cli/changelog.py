@@ -28,6 +28,24 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "0.100.4": [
+        "Fix (#919, backport of #917): `sync push` now sends an edit to `transform.sql` or another code file "
+        "of a config that a push created. Before, it found no change in such a file "
+        "(`transform.sql`, `transform.py`, `code.py`, `pyproject.toml`, `_description.md`): "
+        "`sync diff` said in sync, `sync push` said there was nothing to push, and the job "
+        "kept running the old code. With the same gap, `sync pull --force` could "
+        "replace such an edit with the remote code; it now stops with `SYNC_CONFLICT`. An edit "
+        "to `_config.yml` was always detected. A tree written by an older version is fixed by "
+        "one `sync pull`; copy edited code files aside before it.",
+    ],
+    "0.100.3": [
+        "New (#911): `project add` and `project create` also take the alias of the new project "
+        "as `--alias`, and `project refresh` also takes `--all-projects`. These are the names of "
+        "kbagent 1.0.0, which removes `--project` from these two commands and `--all` from "
+        "`project refresh`. A script with the new names works on 0.100.3 and on 1.x. On 0.x, "
+        "`--project` and `--all` keep working.",
+        "Note (#912): housekeeping with no user-facing change. It updates the filelock package.",
+    ],
     "0.100.2": [
         "Fix (#898): `kbagent update --beta` now allows a pre-release of kbagent itself, not of "
         "the Python packages that kbagent uses. Before, it allowed pre-releases of every package, "

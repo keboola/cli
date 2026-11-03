@@ -19,7 +19,7 @@ from keboola_agent_cli.services.component_service import (
     _generate_from_schema,
     _mask_secrets,
 )
-from keboola_agent_cli.sync.config_format import local_config_to_api
+from keboola_agent_cli.sync.config_format import local_config_to_api, unknown_local_keys
 
 # ---------------------------------------------------------------------------
 # Sample API responses
@@ -828,6 +828,8 @@ class TestGenerateScaffold:
         )
         parsed = yaml.safe_load(content)
         assert parsed["_keboola"]["component_id"] == component_id
+        # Every key is one `sync push` reads (a `storage:` block used to be dropped).
+        assert unknown_local_keys(parsed, component_id, is_row=False) == []
 
     def test_scaffold_with_secrets(self, tmp_config_dir: Path) -> None:
         """Parameters with #password are masked to SECRET_PLACEHOLDER."""
@@ -930,10 +932,16 @@ class TestGenerateScaffold:
         )
 
         config_file = next(f for f in result["files"] if f["path"] == "_config.yml")
-        content = config_file["content"]
-        assert "storage:" in content, "Components with table flags must have storage section"
-        assert "input:" in content
-        assert "output:" in content
+        parsed = yaml.safe_load(config_file["content"])
+
+        # The mappings sit where `sync pull` writes them: top-level input/output.
+        # A top-level `storage:` block was silently dropped by `sync push`.
+        assert "storage" not in parsed
+        _name, _description, configuration = local_config_to_api(parsed)
+        assert configuration["storage"]["input"]["tables"][0]["source"] == "in.c-bucket.table"
+        assert configuration["storage"]["output"]["tables"][0]["destination"] == (
+            "out.c-bucket.table"
+        )
 
 
 # ===========================================================================

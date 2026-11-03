@@ -553,7 +553,7 @@ footer {
 
     <ul class="same" aria-label="What stays the same">
       <li>No command removed or renamed, no long option removed</li>
-      <li>No JSON field removed or renamed</li>
+      <li>No key of the JSON envelope removed or renamed</li>
       <li>No new exit codes (still 0 to 7 and 130)</li>
       <li>Python SDK unchanged</li>
     </ul>
@@ -915,7 +915,7 @@ footer {
       <details class="item" id="json-fields" data-group="new" data-who="scripts agents">
         <summary><span class="title">New fields in the JSON output</span><span class="area">JSON output</span><span class="who-cell hide-narrow">Scripts and CI, AI agents</span></summary>
         <div class="body">
-          <div class="after only"><span class="tag">1.0 adds</span><code>exit_code</code>, <code>schema_version</code>, where the project came from (<code>project_source</code>), a warning when a destructive or admin command uses a project or branch saved with <code>project use</code> or <code>branch use</code>, and the error code of each failed item. Nothing is removed or renamed.</div>
+          <div class="after only"><span class="tag">1.0 adds</span><code>exit_code</code>, <code>schema_version</code>, where the project came from (<code>project_source</code>), a warning when a destructive or admin command uses a project or branch saved with <code>project use</code> or <code>branch use</code>, and the error code of each failed item. A failed item has its error text in <code>message</code>, no longer in <code>error</code> or <code>reason</code>. A few other keys that 0.x kept only for compatibility are removed, and <code>project current</code> reports <code>source: "active_project"</code> instead of <code>"pin"</code>. The migration page lists them (rows 41 to 46).</div>
         </div>
       </details>
       <details class="item" id="serve-headers" data-group="new" data-who="serve">

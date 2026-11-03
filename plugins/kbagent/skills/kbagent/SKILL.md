@@ -79,7 +79,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Show the programmatic-auth session health for a stack | `kbagent auth status` |
 | Revoke and clear the local programmatic-auth session for a stack | `kbagent auth logout` |
 | Register accessible projects from the current session as local aliases | `kbagent auth register-projects` |
-| Add a new Keboola project connection | `kbagent project add --project ALIAS` |
+| Add a new Keboola project connection | `kbagent project add --alias ALIAS` |
 | Create a brand-new Keboola project -- no account, no token needed | `kbagent project create --url URL` |
 | List all connected Keboola projects | `kbagent project list` |
 | Remove a Keboola project connection and its stored token | `kbagent project remove --project ALIAS` |
@@ -142,10 +142,10 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | List data apps across one or more registered projects | `kbagent data-app list --project PROJECT` |
 | Show merged Data Science + Storage detail for one data app | `kbagent data-app detail --project PROJECT --app-id APP-ID` |
 | Create a Keboola data app end-to-end (POST + encrypt + PUT + deploy) | `kbagent data-app create --project PROJECT --name NAME --slug SLUG` |
-| Deploy the latest Storage config (the §9 redeploy contract) | `kbagent data-app deploy --project PROJECT --app-id APP-ID` |
-| Wake an auto-suspended data app at its currently-pinned configVersion | `kbagent data-app start --project PROJECT --app-id APP-ID` |
-| Stop a running data app (preserves the URL and Storage config) | `kbagent data-app stop --project PROJECT --app-id APP-ID` |
-| Delete the deployment AND the Storage config (cascade, irreversible) | `kbagent data-app delete --project PROJECT --app-id APP-ID` |
+| Deploy the latest Storage config version as a new production deployment | `kbagent data-app deploy --project PROJECT --app-id APP-ID` |
+| Wake a suspended or disabled data app at the deployment production serves | `kbagent data-app start --project PROJECT --app-id APP-ID` |
+| Suspend a data app; the next request to its URL wakes it (URL and config kept) | `kbagent data-app stop --project PROJECT --app-id APP-ID` |
+| Delete the app: stop its deployments and move the Storage config to the trash | `kbagent data-app delete --project PROJECT --app-id APP-ID` |
 | Tail the container logs for a deployed data app | `kbagent data-app logs --project PROJECT --app-id APP-ID` |
 | List a data app's recent deployment attempts (runs), newest first | `kbagent data-app runs --project PROJECT --app-id APP-ID` |
 | Pre-flight check that a git repo follows the Keboola data-app Golden Rule | `kbagent data-app validate-repo --git-repo GIT-REPO` |
@@ -171,7 +171,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Export a storage table to a local CSV file | `kbagent storage download-table --project PROJECT --table-id TABLE-ID` |
 | Delete one or more storage tables | `kbagent storage delete-table --project PROJECT --table-id TABLE-ID` |
 | Truncate (delete all rows from) one or more storage tables | `kbagent storage truncate-table --project PROJECT --table-id TABLE-ID` |
-| Add a single column to an existing table (synchronous, typed) | `kbagent storage add-column --project PROJECT --table-id TABLE-ID --column COLUMN` |
+| Add a single column to an existing table (typed; waits for the job) | `kbagent storage add-column --project PROJECT --table-id TABLE-ID --column COLUMN` |
 | Delete one or more columns from a storage table | `kbagent storage delete-column --project PROJECT --table-id TABLE-ID --column COLUMN` |
 | Swap two storage tables (any branch, including the default/production branch) | `kbagent storage swap-tables --project PROJECT --table-id TABLE-ID --target-table-id TARGET-TABLE-ID` |
 | Clone (pull) a production table into a development branch | `kbagent storage clone-table --project PROJECT --table-id TABLE-ID` |
@@ -243,7 +243,6 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Set an existing development branch as active | `kbagent branch use --project PROJECT --branch BRANCH` |
 | Reset the active branch back to main/production | `kbagent branch reset --project PROJECT` |
 | Delete a development branch | `kbagent branch delete --project PROJECT --branch BRANCH` |
-| [DEPRECATED] Get the KBC UI merge URL for a development branch | `kbagent branch merge --project PROJECT` |
 | List all metadata entries on a branch | `kbagent branch metadata-list --project PROJECT` |
 | Read a single metadata value by key | `kbagent branch metadata-get --project PROJECT --key KEY` |
 | Set a metadata key/value on a branch | `kbagent branch metadata-set --project PROJECT --key KEY` |
@@ -477,6 +476,7 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | **Authorizing an OAuth component** (`config oauth-url`; no browser under `--json`, always echo the URL in a fenced block, verify by the config `version` bump) | [oauth-workflow](references/oauth-workflow.md) |
 | Sync & Git-branching (GitOps) | [sync-workflow](references/sync-workflow.md) |
 | Sync row-level internals (manifest v3, hoist, encryption) | [sync-rows-workflow](references/sync-rows-workflow.md) |
+| **GitOps / CI/CD deploy pipeline** (headless `__env__`, `--branch` everywhere, pinned version, reading results, per-version pitfalls and workarounds) | [gitops-cicd-workflow](references/gitops-cicd-workflow.md) |
 | **Promote configs source -> destination project** (from-scratch GitHub Actions pull -> validate -> push pipeline built on `sync`; PR-gated, cross-project dry-run diff) -- a **separate skill**, not a reference doc | [kbagent-promotion-pipeline](../kbagent-promotion-pipeline/SKILL.md) |
 | **Migrating a `kbc` (keboola-as-code) GitHub CI/CD pipeline to kbagent sync** | [kbagent-cicd-migration](../kbagent-cicd-migration/SKILL.md) (sibling skill) |
 | **Variables (attach to any config)** | [variables-workflow](references/variables-workflow.md) |
@@ -587,7 +587,7 @@ credentials:
 ```bash
 # Single project. The token goes in on stdin, never as a --token value (that lands in the
 # shell history). The person runs it and types the token at the hidden prompt; a script pipes it in:
-printf '%s' "$KBC_TOKEN" | kbagent --json project add --project prod --url https://connection.keboola.com --token-stdin
+printf '%s' "$KBC_TOKEN" | kbagent --json project add --alias prod --url https://connection.keboola.com --token-stdin
 
 # Or bulk-onboard from organization (org admin)
 # Manage token: interactive prompt by default; for CI add --allow-env-manage-token

@@ -93,8 +93,9 @@ kbagent workspace query --project P --workspace-id WS --sql 'SELECT "id","dateti
 
 - `create-source` and `delete` are **async**: the API returns a Task and
   kbagent polls it to completion before returning.
-- `delete` is destructive — `--dry-run` previews, `--yes`/`--force` skips the
-  confirm. `--json` mode never prompts.
+- `delete` is destructive — `--dry-run` previews, `--yes` skips the
+  confirm. `--json` mode never prompts. *(since vNEXT)* 1.0.0 removes the old
+  name `--force` (usage error, exit 2).
 - `--branch ID` targets a dev branch; default is the project's default branch.
 - Permission classes: `stream.list` / `stream.detail` = read,
   `stream.create-source` = write, `stream.delete` = destructive.
