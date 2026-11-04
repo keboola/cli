@@ -969,7 +969,7 @@
       "kind": "command",
       "hidden": false,
       "category": "write",
-      "help": "Switch a data app's external GitHub repo to organization auth.\n\nSets parameters.dataApp.git.authType=organization and removes username /\n#password / #sshKey in ONE write -- the backend rejects a config with both,\nwhich is why `config update --merge` cannot do this. Nothing is deployed:\nrun `kbagent data-app deploy --wait` afterwards. A Keboola-managed repo is\nrefused (it needs no credential).",
+      "help": "Switch a data app's external GitHub repo to organization auth.\n\nSets parameters.dataApp.git.authType=organization and removes username /\n#password / #sshKey in ONE write -- the backend rejects a config with both,\nwhich is why `config update --merge` cannot do this. Nothing is deployed:\nrun `kbagent data-app deploy --wait` afterwards. A Keboola-managed repo is\nrefused (it needs no credential), and so is a dev-mode app (the platform\ndoes not support organization auth in dev mode).",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "app_id", "opts": ["--app-id"], "type": "text", "required": true, "default": null, "help": "Data Science numeric app id"},

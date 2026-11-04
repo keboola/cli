@@ -244,10 +244,15 @@ def _pat_body(**git_overrides: Any) -> dict[str, Any]:
 
 
 def _make_switch_service(
-    store: ConfigStore, body: dict[str, Any], *, managed: bool = False
+    store: ConfigStore, body: dict[str, Any], *, managed: bool = False, mode: str = "default"
 ) -> tuple[DataAppGitService, MagicMock]:
     ds_mock = MagicMock()
-    ds_mock.get_app.return_value = {"id": "77", "configId": "c-77", "hasManagedGitRepo": managed}
+    ds_mock.get_app.return_value = {
+        "id": "77",
+        "configId": "c-77",
+        "hasManagedGitRepo": managed,
+        "mode": mode,
+    }
     storage_mock = MagicMock()
     storage_mock.get_config_detail.return_value = {"version": 4, "configuration": body}
     storage_mock.update_config.return_value = {"version": 5}
@@ -324,6 +329,21 @@ class TestGitAuthSetService:
         with pytest.raises(KeboolaApiError) as excinfo:
             service.set_data_app_git_auth(alias="prod", app_id="77", git_auth="organization")
         assert "Keboola-managed" in excinfo.value.message
+
+    @pytest.mark.parametrize("dry_run", [False, True])
+    def test_dev_mode_app_is_refused_before_any_read_or_write(
+        self, tmp_path: Path, dry_run: bool
+    ) -> None:
+        service, storage_mock = _make_switch_service(_make_store(tmp_path), _pat_body(), mode="dev")
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.set_data_app_git_auth(
+                alias="prod", app_id="77", git_auth="organization", dry_run=dry_run
+            )
+        assert excinfo.value.error_code == ErrorCode.VALIDATION_ERROR
+        assert "dev mode" in excinfo.value.message
+        storage_mock.get_config_detail.assert_not_called()
+        storage_mock.update_config.assert_not_called()
 
     def test_config_without_git_block_is_refused(self, tmp_path: Path) -> None:
         body = {"parameters": {"dataApp": {"slug": "dashboard"}}}

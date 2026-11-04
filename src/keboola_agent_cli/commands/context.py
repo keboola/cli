@@ -870,7 +870,7 @@ explicit Storage config version, never the empty shell the create writes.
     (an ssh:// URL must become https://HOST/OWNER/REPO), --git-branch the
     branch. status: switched | unchanged (already on org auth, no write) |
     dry_run. Never deploys: run `data-app deploy --wait` after it. Refuses a
-    Keboola-managed repo (VALIDATION_ERROR).
+    Keboola-managed repo and a dev-mode app (VALIDATION_ERROR, no write).
 """,
     "dev-portal": """\
 #### Developer Portal

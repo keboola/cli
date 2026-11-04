@@ -283,7 +283,8 @@ organization's GitHub App installation. Rules:
   errors appear at DEPLOY time (`data-app runs` shows them), not at create.
 - `--git-auth organization` cannot be combined with `--git-public`,
   `--git-username`, the `--git-pat-*` flags or `--use-managed-git-repo`.
-- Not supported for dev-mode apps (the backend refuses them).
+- Not supported for dev-mode apps: the backend refuses them, and
+  `git-auth-set` refuses a dev-mode app before it writes anything.
 
 Switch an existing PAT or SSH-key app over -- one write that also removes
 the stored credentials (a `config update --merge` cannot remove keys, and

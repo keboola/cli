@@ -247,16 +247,7 @@ class DataAppGitService(BaseService):
     ) -> tuple[str, dict[str, Any]]:
         """Return ``(config_id, storage_envelope)`` of an app that clones an external repo."""
         app = ds_client.get_app(app_id)
-        if app.get("hasManagedGitRepo"):
-            raise KeboolaApiError(
-                message=(
-                    f"Data app {app_id} uses a Keboola-managed git repository; "
-                    "organization GitHub auth applies only to an external GitHub repo."
-                ),
-                status_code=0,
-                error_code=ErrorCode.VALIDATION_ERROR,
-                retryable=False,
-            )
+        DataAppGitService._refuse_organization_auth_for(app, app_id)
         config_id = str(app.get("configId") or "")
         if not config_id:
             raise KeboolaApiError(
@@ -269,6 +260,32 @@ class DataAppGitService(BaseService):
             DATA_APP_COMPONENT_ID, config_id, branch_id=branch_id
         )
         return config_id, envelope if isinstance(envelope, dict) else {}
+
+    @staticmethod
+    def _refuse_organization_auth_for(app: dict[str, Any], app_id: str) -> None:
+        """Refuse an app the backend would not deploy with organization auth.
+
+        Checked before any write: switching such an app would remove its working
+        credential and leave a config the next deploy rejects.
+        """
+        if app.get("hasManagedGitRepo"):
+            reason = (
+                "uses a Keboola-managed git repository; organization GitHub auth "
+                "applies only to an external GitHub repo."
+            )
+        elif app.get("mode") == "dev":
+            reason = (
+                "runs in dev mode, and the platform does not support organization "
+                "GitHub auth in dev mode. Its credentials are left unchanged."
+            )
+        else:
+            return
+        raise KeboolaApiError(
+            message=f"Data app {app_id} {reason}",
+            status_code=0,
+            error_code=ErrorCode.VALIDATION_ERROR,
+            retryable=False,
+        )
 
     @staticmethod
     def _git_auth_result(

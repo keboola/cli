@@ -74,7 +74,8 @@ def data_app_git_auth_set(
     #password / #sshKey in ONE write -- the backend rejects a config with both,
     which is why `config update --merge` cannot do this. Nothing is deployed:
     run `kbagent data-app deploy --wait` afterwards. A Keboola-managed repo is
-    refused (it needs no credential).
+    refused (it needs no credential), and so is a dev-mode app (the platform
+    does not support organization auth in dev mode).
     """
     formatter = get_formatter(ctx)
     if git_auth not in _GIT_AUTH_TYPES:
