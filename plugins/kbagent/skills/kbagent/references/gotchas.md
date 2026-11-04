@@ -59,7 +59,7 @@ These lists keep `error`, because their entries are not failed items with an err
 
 ## Data apps clone a private GitHub repo through the organization connection: `--git-auth organization`, `git-auth-set`
 
-*(since vNEXT)*
+*(since 1.1.0)*
 
 - **`data-app create --git-repo https://github.com/OWNER/REPO --git-auth organization`** writes `parameters.dataApp.git` as `{repository, branch, authType: "organization", private: true}` and stores NO credential: the platform mints a short-lived read-only token from the Keboola organization's GitHub App connection at deploy. Before, a private repo always needed `--git-username` plus a PAT, and kbagent never wrote `authType`. `--dry-run` and `POST /data-apps/{project}` with `git_auth: "organization"` show the same body.
 - **Only an `https://HOST/OWNER/REPO` URL qualifies** (no port, query, fragment or embedded credentials; `DATA_APP_INVALID_GIT` otherwise). kbagent does not check `HOST`: the stack accepts `github.com` and the GitHub Enterprise hosts it is configured for, and it checks that the GitHub App covers the repo. Those errors appear at DEPLOY time (`data-app runs`), not at create. Dev-mode apps are refused by the backend.

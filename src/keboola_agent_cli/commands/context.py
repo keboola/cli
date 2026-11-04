@@ -668,7 +668,7 @@ explicit Storage config version, never the empty shell the create writes.
     the same flags and adds `password_delivery` (prompt|clipboard|stdout).
     PAT input (private repo): env var (recommended) > file > pre-encrypted.
     Pre-encrypted PATs MUST start with KBC::Project (project-scoped KMS).
-    --git-auth organization (vNEXT) replaces the PAT for a private GitHub repo:
+    --git-auth organization (1.1.0) replaces the PAT for a private GitHub repo:
     the git block is {repository, branch, authType: organization, private:
     true} and holds NO credential -- the platform mints a short-lived read-only
     token from the Keboola organization's GitHub App connection at deploy.
@@ -862,7 +862,7 @@ explicit Storage config version, never the empty shell the create writes.
     Confirmation prompt unless --yes or --json.
 
   data-app git-auth-set
-    Switch an EXTERNAL repo to organization GitHub auth (vNEXT): one Storage
+    Switch an EXTERNAL repo to organization GitHub auth (1.1.0): one Storage
     write sets parameters.dataApp.git.authType=organization + private=true and
     REMOVES username / #password / #sshKey. Do not use `config update --merge
     --set` for this -- a merge cannot delete keys, and the backend rejects a

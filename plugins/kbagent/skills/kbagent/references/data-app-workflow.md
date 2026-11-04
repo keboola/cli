@@ -258,7 +258,7 @@ latest.
 
 ### Private GitHub repo through the organization connection (no PAT)
 
-*(since vNEXT)* When the Keboola organization has a GitHub App connection,
+*(since 1.1.0)* When the Keboola organization has a GitHub App connection,
 a private GitHub repo needs no PAT at all:
 
 ```bash

@@ -28,6 +28,25 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "1.1.0": [
+        "New (#948): `data-app create --git-auth organization` deploys a private GitHub repo "
+        "through the organization's GitHub App, with no PAT stored. The git block is "
+        '`{repository, branch, authType: "organization", private: true}`, and the platform '
+        "mints a short-lived read-only token at deploy. It needs an "
+        "`https://HOST/OWNER/REPO` URL; the stack checks the host and the App, so those errors "
+        "appear at deploy, not at create. It cannot be combined with `--git-public`, "
+        "`--git-username`, the `--git-pat-*` flags or `--use-managed-git-repo`.",
+        "New (#948): `data-app git-auth-set --git-auth organization` switches an app on an "
+        "external repo to organization auth. One write sets `authType` and removes `username`, "
+        "`#password` and `#sshKey`, which a `config update --merge` cannot do. It never deploys "
+        "and refuses a Keboola-managed repo or a dev-mode app. In `kbagent serve` it is "
+        "`PATCH /data-apps/{project}/{app_id}/git-auth`, and `POST /data-apps/{project}` takes "
+        "`git_auth`.",
+        "Fix (#948): `data-app detail` and `--json` redact `#sshKey` like `#password`. Before, "
+        "an app with an SSH key showed its ciphertext.",
+        "Note (#948): `data-app validate-repo` never uses organization auth. Validate a repo "
+        "that an app clones with `--git-auth organization` with a PAT that can read it.",
+    ],
     "1.0.1": [
         "Fix (#957): the summary of `install.sh` names the kbagent it just installed. Before, it "
         "ran the first `kbagent` on PATH, so another install there showed its own version and "
