@@ -1149,7 +1149,7 @@ kbagent data-app create [--project ALIAS] --name NAME --slug SLUG (--git-repo UR
 #   https://HOST/OWNER/REPO URL (shape checked in services/_data_app_git_source.py; the host --
 #   github.com or a GHE host -- is stack config, checked by the backend at deploy). Mutually
 #   exclusive with --git-public / --git-username / --git-pat-* / --use-managed-git-repo
-#   (VALIDATION_ERROR, exit 2). serve: `auth_type` on POST /data-apps/{project}. Version gate in
+#   (VALIDATION_ERROR, exit 2). serve: `git_auth` on POST /data-apps/{project}. Version gate in
 #   gotchas.md.
 # --workspace / --no-workspace (0.87.0+): DEFAULT ON. Writes runtime.workspace.enabled=true --
 #   the ONLY switch that makes the platform provision the ephemeral workspace and inject WORKSPACE_ID,

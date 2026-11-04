@@ -563,7 +563,7 @@ def _serve_app(tmp_path: Path, **services: Any) -> Any:
 
 @pytest.mark.skipif(not HAS_FASTAPI, reason="FastAPI not installed")
 class TestServe:
-    def test_create_forwards_auth_type(self, tmp_path: Path) -> None:
+    def test_create_forwards_git_auth(self, tmp_path: Path) -> None:
         from fastapi.testclient import TestClient
 
         data_app = MagicMock()
@@ -572,7 +572,7 @@ class TestServe:
 
         with TestClient(_serve_app(tmp_path, data_app=data_app)) as client:
             res = client.post(
-                "/data-apps/prod", headers=AUTH, json=body | {"auth_type": "organization"}
+                "/data-apps/prod", headers=AUTH, json=body | {"git_auth": "organization"}
             )
 
         assert res.status_code == 200, res.text
@@ -588,7 +588,7 @@ class TestServe:
             res = client.post(
                 "/data-apps/prod",
                 headers=AUTH,
-                json=body | {"auth_type": "organization", "dry_run": True},
+                json=body | {"git_auth": "organization", "dry_run": True},
             )
 
         assert res.status_code == 200, res.text
@@ -605,7 +605,7 @@ class TestServe:
             res = client.patch(
                 "/data-apps/prod/77/git-auth",
                 headers=AUTH,
-                json={"auth_type": "organization", "git_branch": "release", "dry_run": True},
+                json={"git_auth": "organization", "git_branch": "release", "dry_run": True},
             )
 
         assert res.status_code == 200, res.text
@@ -628,7 +628,7 @@ class TestServe:
             res = client.patch(
                 "/data-apps/prod/77/git-auth",
                 headers=AUTH,
-                json={"auth_type": "organization", "username": "bob"},
+                json={"git_auth": "organization", "username": "bob"},
             )
 
         assert res.status_code == 422, res.text

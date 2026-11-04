@@ -51,7 +51,7 @@ class DataAppCreate(BaseModel):
     git_pat_encrypted: str | None = None
     # "organization": clone through the organization's GitHub App connection;
     # no credential is stored (mirrors `--git-auth` on the CLI).
-    auth_type: str | None = None
+    git_auth: str | None = None
     auth: str = "password"
     size: str = "tiny"
     auto_suspend_after_seconds: int = 900
@@ -100,7 +100,7 @@ class GitAuthSet(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    auth_type: str
+    git_auth: str
     git_repo: str | None = None
     git_branch: str | None = None
     branch_id: int | None = None
@@ -172,7 +172,7 @@ def create(
         git_pat_plaintext=body.git_pat_plaintext,
         git_pat_encrypted=body.git_pat_encrypted,
         use_managed_git_repo=body.use_managed_git_repo,
-        git_auth=body.auth_type,
+        git_auth=body.git_auth,
         auth=body.auth,
         size=body.size,
         auto_suspend_after_seconds=body.auto_suspend_after_seconds,
@@ -447,7 +447,7 @@ def git_auth_set(
     return registry.data_app_git.set_data_app_git_auth(
         alias=project,
         app_id=app_id,
-        git_auth=body.auth_type,
+        git_auth=body.git_auth,
         git_repo=body.git_repo,
         git_branch=body.git_branch,
         branch_id=body.branch_id,
