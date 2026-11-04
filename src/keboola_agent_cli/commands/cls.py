@@ -204,11 +204,14 @@ def cls_delete(
     dry_run: bool = typer.Option(False, "--dry-run", help="Show the policy without deleting it"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
 ) -> None:
-    """Delete a CLS policy -- its table's columns become unrestricted."""
+    """Delete a CLS policy -- with an rls-policy left every column shows, with none the table is unreadable."""
     delete_policy(
         ctx,
         CLS,
-        "Its table's columns become unrestricted.",
+        (
+            "With an rls-policy left on the table every column becomes visible; with no other policy "
+            "the table is not readable (an ordinary reader gets no rows, an administrator the 403)."
+        ),
         alias=project,
         policy_id=policy_id,
         dry_run=dry_run,

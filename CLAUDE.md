@@ -1475,8 +1475,8 @@ kbagent rls bindings-sweep --project P [--older-than DAYS] [--dry-run | --yes]
 #   a table with no rls-policy and no cls-policy is not readable (an ordinary reader gets an empty result, an
 #   administrator behind a Storage token the 403 refusal; a cls-policy alone opens the table for the readers it
 #   names: all rows, its columns);
-#   `--default` is the condition for an identified reader no rule matches (absent = no rows;
-#   {"false": true} = no rows; to remove a default, recreate the policy). `dialect` is left out of a
+#   `--default` is the condition for an identified reader no rule matches (absent = no rows for an ordinary reader, the 403 for an administrator;
+#   {"false": true} = no rows for both; to remove a default, recreate the policy). `dialect` is left out of a
 #   new policy unless --dialect is passed (optional from schema 1.1.0; the engine does not read it);
 #   a --dialect other than the project backend is refused; a schema that requires it (1.0.0) or
 #   could not be read gets the project backend. --rules is a JSON array of

@@ -7448,7 +7448,7 @@ governed-workspace flow.
   with AND (CLS: intersection), so a policy added to a table that is already readable narrows access (a
   workspace binding that leaves a policy out loosens it again); a reader with no identity is
   always refused. RLS `--default` is the condition for
-  identities no rule matches (absent = an ordinary reader gets no rows; `{"false": true}` = no rows); an `update` cannot remove a
+  identities no rule matches (absent = an ordinary reader gets no rows and an administrator the 403; `{"false": true}` = no rows for both); an `update` cannot remove a
   default (recreate the policy). `value: {"$identity": "email"}` and `values: {"$identity": "groups"}` are
   resolved per reader by the enforcement. `dialect` is optional in the schema and the Query Service
   engine does not read it (it compiles for the workspace's own backend), so kbagent leaves it out of a new

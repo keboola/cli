@@ -1590,7 +1590,7 @@ identified reader and is how a table is opened to everyone under default deny.
 In a governed workspace (the platform denies by default, admins never exempt)
 a table with no policy (rls or cls) is refused, while a cls-policy alone opens
 the table for the readers it names (all rows, its columns). An optional policy `default` covers an
-identified reader no rule matches (absent = refused). Same metastore/master-token
+identified reader no rule matches (absent = no rows for an ordinary reader, the 403 for an administrator). Same metastore/master-token
 requirements as Semantic Layer.
 **Scope**: `targeted` by default (the owning project plus --target-project
 grants); `--scope organization` governs the table in EVERY project of the
@@ -1606,8 +1606,8 @@ refused. A stack whose metastore predates the
 NOT_FOUND schema-fetch error -- expected there, not a kbagent bug.
 **Enforcement** (the actual SQL rewrite) is never done by kbagent, which only
 authors policies. Query Service enforces them (its policy-engine sidecar) on a governed
-workspace (`workspace create --governed`, then `workspace load` and
-`workspace query`); it always enforces a governed workspace, whatever the project.
+workspace (`workspace create --governed`, then `workspace query` -- no
+`workspace load`: the engine reads the Storage table by its bucket name); it always enforces a governed workspace, whatever the project.
 In a project with the `row-level-security` feature the MCP server creates such a
 workspace for its `query_data` tool. An ordinary reader
 who may not read a table (no policy on it, or no rule selects them) gets an empty result;
@@ -1624,8 +1624,9 @@ allow this query`. The identity that queries needs a matching rule.
     `{"false": true}`), never a raw predicate string; use is_null, never
     value null; `value: {"$identity": "email"}` / `values: {"$identity":
     "groups"}` are resolved per reader. --default (e.g. `{"false": true}` =
-    no rows) covers identities no rule matches. --dialect defaults to the
-    project backend. --target-project (alias or ID, repeatable or
+    no rows) covers identities no rule matches. --dialect is left out of a
+    new policy unless passed (optional from schema 1.1.0; a schema that
+    requires it, 1.0.0, gets the project backend). --target-project (alias or ID, repeatable or
     comma-separated) grants other projects. --dry-run previews the compiled
     condition (columns quoted like the enforcement) without writing.
   rls update
@@ -1633,7 +1634,7 @@ allow this query`. The identity that queries needs a matching rule.
     validated first and the result is re-read after the write. A default
     cannot be removed by an update -- recreate the policy.
   rls delete
-    Un-protects its table (destructive-class).
+    Does not open its table: with no other policy the table is unreadable (destructive-class).
   rls schema
     Live-only: no offline bundled snapshot (unlike `flow schema`).
   rls setup

@@ -375,7 +375,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Print the live ``rls-policy`` JSON Schema fetched from the metastore | `kbagent rls schema --project PROJECT` |
 | Create one RLS policy for one table (``targeted`` scope unless ``--scope organization``) | `kbagent rls create --project PROJECT --table-id TABLE-ID --rules RULES` |
 | Update an existing RLS policy | `kbagent rls update --project PROJECT --policy-id POLICY-ID` |
-| Delete an RLS policy -- its table's rows are no longer filtered | `kbagent rls delete --project PROJECT --policy-id POLICY-ID` |
+| Delete an RLS policy -- the table is NOT opened: with no other policy it is unreadable | `kbagent rls delete --project PROJECT --policy-id POLICY-ID` |
 | Guided RLS setup: pick tables, build a condition, preview, then write | `kbagent rls setup --project PROJECT` |
 | Bind policies to a governed workspace: it then gets only these policies | `kbagent rls bind --project PROJECT --workspace-id WORKSPACE-ID` |
 | Delete the policy binding of a workspace: it then gets every policy of the project | `kbagent rls unbind --project PROJECT --workspace-id WORKSPACE-ID` |
@@ -386,7 +386,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Print the live ``cls-policy`` JSON Schema fetched from the metastore | `kbagent cls schema --project PROJECT` |
 | Create one CLS policy for one table (``targeted`` scope unless ``--scope organization``) | `kbagent cls create --project PROJECT --table-id TABLE-ID --rules RULES` |
 | Update an existing CLS policy | `kbagent cls update --project PROJECT --policy-id POLICY-ID` |
-| Delete a CLS policy -- its table's columns become unrestricted | `kbagent cls delete --project PROJECT --policy-id POLICY-ID` |
+| Delete a CLS policy -- with an rls-policy left every column shows, with none the table is unreadable | `kbagent cls delete --project PROJECT --policy-id POLICY-ID` |
 | GET an endpoint on the running kbagent serve | `kbagent http get <PATH>` |
 | POST to an endpoint on the running kbagent serve | `kbagent http post <PATH>` |
 | PATCH an endpoint on the running kbagent serve | `kbagent http patch <PATH>` |

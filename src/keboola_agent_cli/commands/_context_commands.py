@@ -157,7 +157,8 @@ are gated as admin -- see CONTRIBUTING.md.
     organization``).
 
   kbagent cls delete [--project PROJECT] --policy-id ID [--dry-run] [--yes]
-    Delete a CLS policy -- its table's columns become unrestricted.
+    Delete a CLS policy -- with an rls-policy left every column shows, with
+    none the table is unreadable.
 
   kbagent cls detail [--project PROJECT] --policy-id ID
     Show one CLS policy's full rule set.
@@ -890,7 +891,8 @@ gated as admin -- see CONTRIBUTING.md.
     organization``).
 
   kbagent rls delete [--project PROJECT] --policy-id ID [--dry-run] [--yes]
-    Delete an RLS policy -- its table's rows are no longer filtered.
+    Delete an RLS policy -- the table is NOT opened: with no other policy it
+    is unreadable.
 
   kbagent rls detail [--project PROJECT] --policy-id ID
     Show one RLS policy's full rule set.

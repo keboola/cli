@@ -67,8 +67,9 @@ with `subjects`/`groups`.
 **How rules combine (all schema versions).** Within a
 policy, every rule that matches the reader applies: RLS conditions combine with
 OR, CLS `visible_columns` are united. An RLS policy may set a `default` condition
-for an identified reader no rule matches; without one, the policy refuses the
-read. Several policies on one table combine with AND (CLS: intersection), so a
+for an identified reader no rule matches; without one, an ordinary reader gets no rows and an
+administrator the 403 (`{"false": true}` gives an ordinary reader the same empty result, so it only turns
+the administrator's 403 into no rows). Several policies on one table combine with AND (CLS: intersection), so a
 policy added to a table that is already readable narrows access; a workspace binding
 that leaves a policy out loosens it again (see [bindings](#restrict-one-workspace-to-some-policies-bindings)). A reader with no identity
 is always refused. Each stored policy is read by the rules of its own schema version.
@@ -108,7 +109,7 @@ Non-obvious behaviors and version gates: [gotchas.md](gotchas.md).
 | Share one policy with sibling projects (organization admin) | `rls create`/`rls update ... --target-project ALIAS_OR_ID` |
 | Govern the table in every project of the organization (organization admin) | `rls create ... --scope organization` |
 | Preview the compiled condition before writing anything | any write command + `--dry-run` |
-| Remove a policy (un-protect a table) | `rls delete --project P --policy-id ID` (`--dry-run` shows it first) |
+| Remove a policy (the table is not opened: with no other policy it is unreadable) | `rls delete --project P --policy-id ID` (`--dry-run` shows it first) |
 | Query a table with the policies applied, no MCP server | governed workspace -- see [End-to-end](#end-to-end----governed-workspace-policies-query-service) |
 | Give one workspace only some of the policies | `rls bind --project P --workspace-id WS --rls-policy ID --stack-id S` (`rls unbind`, `rls bindings`, `rls bindings-sweep`) |
 
@@ -327,7 +328,7 @@ kbagent --json rls create \
   --table-id in.c-crm.invoices \
   --rules @rls_rules.json \
   --dry-run
-# -> {"table": "in.c-crm.invoices", "dialect": "snowflake",
+# -> {"table": "in.c-crm.invoices",
 #     "scope": "targeted", "target_project_ids": [], "preview": [
 #       {"groups": ["eu-analysts"], "condition": "\"region\" = 'EU'"},
 #       {"subjects": ["keboola|1234", "https://login.example.com|user-5678"],
@@ -526,7 +527,7 @@ kbagent --json rls update \
 
 kbagent --json rls update --project prod --policy-id <id> --rules @updated_rls_rules.json
 
-# Revoke entirely (un-protects the table). Show it first, then delete:
+# Delete the policy (this does not open the table: with no other policy it is unreadable). Show it first, then delete:
 kbagent --json rls delete --project prod --policy-id <id> --dry-run
 kbagent rls delete --project prod --policy-id <id>
 # --yes to skip the confirmation prompt in a script; --json also skips it.

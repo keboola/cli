@@ -80,7 +80,7 @@ TARGET_HELP = (
 TABLE_HELP = "Storage table ID, e.g. in.c-crm.invoices"
 DEFAULT_HELP = (
     "JSON|@file|- condition for identities no rule matches, e.g. '{\"false\": true}' (no rows); "
-    "omitted, their reads are refused"
+    "omitted, an ordinary reader gets no rows and an administrator the 403"
 )
 
 
@@ -565,11 +565,15 @@ def rls_delete(
     dry_run: bool = typer.Option(False, "--dry-run", help="Show the policy without deleting it"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
 ) -> None:
-    """Delete an RLS policy -- its table's rows are no longer filtered."""
+    """Delete an RLS policy -- the table is NOT opened: with no other policy it is unreadable."""
     delete_policy(
         ctx,
         RLS,
-        "This un-protects its table.",
+        (
+            "It does not open the table: a table no rls-policy or cls-policy covers is not readable "
+            "(an ordinary reader gets no rows, an administrator the 403); a cls-policy left on it "
+            "shows every row."
+        ),
         alias=project,
         policy_id=policy_id,
         dry_run=dry_run,
@@ -613,13 +617,29 @@ def _typed_value(raw: str) -> Any:
     """A prompted value as the JSON scalar it spells (``42``, ``true``), else the text itself.
 
     Without this every value would be stored as a string, and the filter would compare a numeric or
-    boolean column to a string literal. ``null`` is not a value here: it never matches (use option 3).
+    boolean column to a string literal. ``null`` is not a value here: it never matches (use option 3), so
+    it is refused with ``ValueError`` (``--rules`` refuses it the same way) instead of becoming the text
+    ``'null'``.
     """
     try:
         value = json.loads(raw)
     except ValueError:
         return raw
+    if value is None:
+        raise ValueError("null never matches: use the is_null / is_not_null operators (option 3)")
     return value if isinstance(value, str | int | float | bool) else raw
+
+
+def _prompt_typed(formatter: Any, text: str, *, many: bool = False) -> Any:
+    """Prompt until the answer holds no ``null``; ``many`` reads a comma-separated list of values."""
+    while True:
+        raw = typer.prompt(text)
+        try:
+            if many:
+                return [_typed_value(v.strip()) for v in raw.split(",") if v.strip()]
+            return _typed_value(raw)
+        except ValueError as exc:
+            formatter.err_console.print(str(exc), markup=False, highlight=False)
 
 
 def _prompt_condition(formatter: Any) -> dict[str, Any]:
@@ -630,12 +650,13 @@ def _prompt_condition(formatter: Any) -> dict[str, Any]:
     column = typer.prompt("Column name")
     if choice == "1":
         op = _prompt_choice(formatter, "Operator", _COMPARISON_OPS, default="eq")
-        value = _typed_value(typer.prompt(f"Value ({_VALUE_HINT})"))
+        value = _prompt_typed(formatter, f"Value ({_VALUE_HINT})")
         return {"column": column, "op": op, "value": value}
     if choice == "2":
         op = _prompt_choice(formatter, "Operator", ("in", "not_in"), default="in")
-        raw_values = typer.prompt(f"Values (comma-separated; each {_VALUE_HINT})")
-        values = [_typed_value(v.strip()) for v in raw_values.split(",") if v.strip()]
+        values = _prompt_typed(
+            formatter, f"Values (comma-separated; each {_VALUE_HINT})", many=True
+        )
         return {"column": column, "op": op, "values": values}
     op = _prompt_choice(formatter, "Operator", ("is_null", "is_not_null"), default="is_null")
     return {"column": column, "op": op}

@@ -1069,3 +1069,40 @@ class TestSelectors:
 
         assert rls_module._prompt_selector(formatter) == expected
         assert not any("email" in text.lower() and "Selector" not in text for text in asked)
+
+
+class TestWizardTypedValues:
+    """The wizard reads a value as the JSON scalar it spells, and refuses `null` like `--rules` does."""
+
+    def test_scalars_are_typed_and_text_stays_text(self) -> None:
+        from keboola_agent_cli.commands.rls import _typed_value
+
+        assert [_typed_value(v) for v in ("42", "4.5", "true", '"42"', "EU")] == [
+            42,
+            4.5,
+            True,
+            "42",
+            "EU",
+        ]
+
+    def test_null_is_refused_instead_of_becoming_the_text_null(self) -> None:
+        from keboola_agent_cli.commands.rls import _typed_value
+
+        with pytest.raises(ValueError, match="is_null"):
+            _typed_value("null")
+
+    @pytest.mark.parametrize(
+        ("answers", "many", "expected"),
+        [(["null", "EU"], False, "EU"), (["1, null", "1, 2"], True, [1, 2])],
+    )
+    def test_a_null_answer_is_asked_again(
+        self, monkeypatch: pytest.MonkeyPatch, answers: list[str], many: bool, expected: object
+    ) -> None:
+        from keboola_agent_cli.commands import rls as rls_commands
+
+        queue = iter(answers)
+        monkeypatch.setattr(rls_commands.typer, "prompt", lambda _text: next(queue))
+        formatter = MagicMock()
+
+        assert rls_commands._prompt_typed(formatter, "Value", many=many) == expected
+        formatter.err_console.print.assert_called_once()

@@ -436,7 +436,7 @@
       "kind": "command",
       "hidden": false,
       "category": "destructive",
-      "help": "Delete a CLS policy -- its table's columns become unrestricted.",
+      "help": "Delete a CLS policy -- with an rls-policy left every column shows, with none the table is unreadable.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias (default: the active project)"},
         {"kind": "option", "name": "policy_id", "opts": ["--policy-id"], "type": "text", "required": true, "default": null, "help": "CLS policy ID"},
@@ -2586,7 +2586,7 @@
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias -- the project that owns the policy (default: the active project)"},
         {"kind": "option", "name": "table_id", "opts": ["--table-id"], "type": "text", "required": true, "default": null, "help": "Storage table ID, e.g. in.c-crm.invoices"},
         {"kind": "option", "name": "rules", "opts": ["--rules"], "type": "text", "required": true, "default": null, "help": "JSON|@file|- array of {subjects|groups, condition} objects (subjects are '<idp>|<sub>', an administrator behind a Storage token is 'keboola|<user id>'; '[\"*\"]' is every identified reader; an email is not allowed); rules matching one identity combine with OR (see rls-workflow.md for the condition shape)"},
-        {"kind": "option", "name": "default", "opts": ["--default"], "type": "text", "default": null, "help": "JSON|@file|- condition for identities no rule matches, e.g. '{\"false\": true}' (no rows); omitted, their reads are refused"},
+        {"kind": "option", "name": "default", "opts": ["--default"], "type": "text", "default": null, "help": "JSON|@file|- condition for identities no rule matches, e.g. '{\"false\": true}' (no rows); omitted, an ordinary reader gets no rows and an administrator the 403"},
         {"kind": "option", "name": "dialect", "opts": ["--dialect"], "type": "choice", "choices": ["snowflake", "bigquery"], "default": null, "help": "Workspace SQL dialect; must match the project backend (default: left out of the policy)"},
         {"kind": "option", "name": "scope", "opts": ["--scope"], "type": "choice", "choices": ["targeted", "organization"], "default": "targeted", "help": "targeted (default): the owning project plus --target-project grants. organization: EVERY project of the organization -- an explicit, organization-admin-only choice, gated as destructive."},
         {"kind": "option", "name": "target_project", "opts": ["--target-project"], "type": "text", "multiple": true, "default": null, "help": "Project alias or ID the policy also applies to (repeatable or comma-separated; --scope targeted only; granting needs the organization-admin role)"},
@@ -2599,7 +2599,7 @@
       "kind": "command",
       "hidden": false,
       "category": "destructive",
-      "help": "Delete an RLS policy -- its table's rows are no longer filtered.",
+      "help": "Delete an RLS policy -- the table is NOT opened: with no other policy it is unreadable.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias (default: the active project)"},
         {"kind": "option", "name": "policy_id", "opts": ["--policy-id"], "type": "text", "required": true, "default": null, "help": "RLS policy ID"},
