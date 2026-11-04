@@ -4379,7 +4379,7 @@
         {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Cannot be used with --project."},
         {"kind": "option", "name": "orphaned", "opts": ["--orphaned"], "type": "boolean", "is_flag": true, "default": false, "help": "Show only orphaned workspaces (keboola.sandboxes config missing)"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID. Defaults to each project's active branch (`kbagent branch use`), else production. Requires exactly one --project."},
-        {"kind": "option", "name": "qs_compatible", "opts": ["--qs-compatible"], "type": "boolean", "is_flag": true, "default": false, "help": "Show only workspaces whose loginType is known to work with the Query Service AND that are read-only -- the canonical shape for a data-app."}
+        {"kind": "option", "name": "qs_compatible", "opts": ["--qs-compatible"], "type": "boolean", "is_flag": true, "default": false, "help": "Show only workspaces whose loginType is known to work with the Query Service AND that are read-only -- the canonical shape for a data-app. A governed workspace is not listed: a query with a Storage token is refused there."}
       ]
     },
     {

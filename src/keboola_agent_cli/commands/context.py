@@ -2612,7 +2612,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
     List workspaces. Without --branch uses each alias's active branch (`branch use`), else
     production. The Target line names it. Each entry carries login_type, read_only, qs_compatible so callers can pick a
     Query-Service-compatible workspace without firing a probe query. --qs-compatible filters to RO +
-    confirmed-whitelist loginType (canonical data-app shape). --orphaned shows orphaned workspaces.
+    confirmed-whitelist loginType (canonical data-app shape), not governed ones. --orphaned shows orphaned workspaces.
 
   workspace detail
     Workspace connection details (no password). Includes login_type, read_only, qs_compatible.
