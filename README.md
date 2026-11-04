@@ -35,10 +35,10 @@ Pick whichever fits the machine:
 ```powershell
 winget install --id astral-sh.uv -e            # skip if uv is already installed
 $ver = (Invoke-RestMethod "https://pypi.org/pypi/keboola-cli/json").info.version
-uv tool install --force `
+uv tool install --force --compile-bytecode `
   "keboola-cli[server] @ https://github.com/keboola/cli/releases/download/v$ver/keboola_cli-$ver-py3-none-any.whl"
-if ($LASTEXITCODE -ne 0 -and $ver) { uv tool install --force "keboola-cli[server]==$ver" }   # fallback: the same version from PyPI
-if ($LASTEXITCODE -ne 0) { uv tool install --force "keboola-cli[server]" }                    # last fallback: the newest stable version from PyPI
+if ($LASTEXITCODE -ne 0 -and $ver) { uv tool install --force --compile-bytecode "keboola-cli[server]==$ver" }   # fallback: the same version from PyPI
+if ($LASTEXITCODE -ne 0) { uv tool install --force --compile-bytecode "keboola-cli[server]" }                    # last fallback: the newest stable version from PyPI
 uv tool update-shell                            # puts %USERPROFILE%\.local\bin on PATH
 ```
 
@@ -81,7 +81,7 @@ curl -LsSf https://raw.githubusercontent.com/keboola/cli/main/install.sh | sh
 
 On Windows, run the PowerShell install from the Windows section above as the second step. Your configuration is not touched: the configuration folder keeps the name `keboola-agent-cli` on purpose.
 
-If `uv tool list` shows `keboola-cli` next to `keboola-agent-cli`, the update already worked. kbagent runs from `keboola-cli` and the old entry does no harm. Do not remove the old entry on its own: `uv tool uninstall keboola-agent-cli` also deletes the `kbagent` executable that `keboola-cli` uses, and the shell then reports `command not found`. To restore the executable, run `uv tool install --force --reinstall "keboola-cli[server] @ https://github.com/keboola/cli/releases/download/v<version>/keboola_cli-<version>-py3-none-any.whl"` with the newest version number from the [releases page](https://github.com/keboola/cli/releases).
+If `uv tool list` shows `keboola-cli` next to `keboola-agent-cli`, the update already worked. kbagent runs from `keboola-cli` and the old entry does no harm. Do not remove the old entry on its own: `uv tool uninstall keboola-agent-cli` also deletes the `kbagent` executable that `keboola-cli` uses, and the shell then reports `command not found`. To restore the executable, run `uv tool install --force --reinstall --compile-bytecode "keboola-cli[server] @ https://github.com/keboola/cli/releases/download/v<version>/keboola_cli-<version>-py3-none-any.whl"` with the newest version number from the [releases page](https://github.com/keboola/cli/releases).
 
 A failed startup update prints the last line of the uv output as `Cause:` (since 0.99.0), then the recovery command.
 

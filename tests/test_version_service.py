@@ -121,6 +121,7 @@ class TestVersionService:
                 "install",
                 "--force",
                 "--reinstall",
+                "--compile-bytecode",
                 *_uv_link_mode_args(),
                 "keboola-cli @ git+https://github.com/keboola/cli@v9.9.9",
             )
@@ -573,6 +574,7 @@ class TestBuildKbagentWheelInstall:
             "install",
             "--force",
             "--reinstall",
+            "--compile-bytecode",
             f"keboola-cli[server] @ {self.WHEEL}",
         ]
         # The wheel path uses a PEP 508 direct ref -- no git+ source, no --with.
@@ -592,6 +594,7 @@ class TestBuildKbagentWheelInstall:
             "install",
             "--force",
             "--reinstall",
+            "--compile-bytecode",
             f"keboola-cli @ {self.WHEEL}",
         ]
 
@@ -751,6 +754,7 @@ class TestWindowsUvLinkMode:
             "install",
             "--force",
             "--reinstall",
+            "--compile-bytecode",
             f"keboola-cli @ {self.WHEEL}",
         ]
 
@@ -801,14 +805,18 @@ class TestWindowsUvLinkMode:
         assert cmd is not None
         recovery = _recovery_command(tuple(cmd), "1.2.3")
         assert recovery is not None
-        assert recovery.startswith("uv tool install --force --reinstall --link-mode copy ")
+        assert recovery.startswith(
+            "uv tool install --force --reinstall --compile-bytecode --link-mode copy "
+        )
         assert recovery.count("--link-mode") == 1
 
     def test_recovery_from_pip_command_uses_copy_mode(self, windows: None) -> None:
         pip_cmd = ("C:\\py\\pip.exe", "install", "--upgrade", f"keboola-cli @ {self.WHEEL}")
         recovery = _recovery_command(pip_cmd, "1.2.3")
         assert recovery is not None
-        assert recovery.startswith("uv tool install --force --reinstall --link-mode copy ")
+        assert recovery.startswith(
+            "uv tool install --force --reinstall --compile-bytecode --link-mode copy "
+        )
 
     def test_recovery_without_command_uses_copy_mode(self, windows: None) -> None:
         recovery = _recovery_command(None, "1.2.3")
