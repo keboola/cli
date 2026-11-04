@@ -257,7 +257,7 @@ def validate_organization_repository(repo: str) -> None:
         )
     parts = urlsplit(repo)
     _check_org_url_parts(repo, parts)
-    _check_org_repo_path(repo, parts)
+    _check_org_repo_path(parts)
 
 
 def _check_org_url_parts(repo: str, parts: SplitResult) -> None:
@@ -278,14 +278,16 @@ def _check_org_url_parts(repo: str, parts: SplitResult) -> None:
     if not parts.hostname:
         extras.insert(0, "no host")
     if extras:
+        # The URL is never echoed: it may carry a token (a PAT-in-URL app's
+        # stored repository reaches here through git-auth-set).
         raise _invalid(
-            f"--git-repo '{repo}' cannot use --git-auth organization: it has "
+            "The --git-repo URL cannot use --git-auth organization: it has "
             f"{', '.join(extras)}. Expected https://HOST/OWNER/REPO.",
             ErrorCode.DATA_APP_INVALID_GIT,
         )
 
 
-def _check_org_repo_path(repo: str, parts: SplitResult) -> None:
+def _check_org_repo_path(parts: SplitResult) -> None:
     path = parts.path
     match = _ORG_REPO_PATH.match(path)
     if (
@@ -295,7 +297,7 @@ def _check_org_repo_path(repo: str, parts: SplitResult) -> None:
         or match.group("repo") in _ORG_RESERVED_REPO_NAMES
     ):
         raise _invalid(
-            f"--git-repo '{repo}' is not a repository URL organization auth "
+            "The --git-repo URL is not a repository URL organization auth "
             f"accepts. Expected https://{parts.hostname}/OWNER/REPO (ASCII "
             "letters, digits, '-', '_' and '.'; no percent-encoding).",
             ErrorCode.DATA_APP_INVALID_GIT,
@@ -362,8 +364,8 @@ def build_git_block(source: GitSource, encrypt_service: Any, alias: str) -> dict
 def _encrypt_pat(source: GitSource, encrypt_service: Any, alias: str) -> str:
     """Encrypt the PAT under the target project's KMS, failing closed.
 
-    A pre-encrypted ciphertext was prefix-validated in
-    :func:`validate_git_source`; EncryptService passes any ``KBC::`` value
+    A pre-encrypted ciphertext was prefix-validated by :func:`_check_pat_shape`
+    (from :func:`validate_git_credentials`); EncryptService passes any ``KBC::`` value
     through unchanged, so it costs no round-trip. The result is re-checked so
     a misconfigured input can never reach Storage as plaintext.
     """

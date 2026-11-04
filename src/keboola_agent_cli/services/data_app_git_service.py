@@ -6,7 +6,7 @@ its hard ceiling, so this distinct concern (the sandboxes-service
 ``/apps/{id}/git-repo/*`` surface) lives in its own service.
 
 See :class:`~keboola_agent_cli.data_science_client.DataScienceClient` for the
-response-shape gotchas. Two functional groups:
+response-shape gotchas. Three functional groups:
 
 * Repo introspection (git-repo) -- works for any configured repo (managed or
   external); needs only the project storage token. Returns 409 until the app has

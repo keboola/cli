@@ -9750,16 +9750,31 @@ class TestE2EDataAppLifecycle:
         )
         assert result.exit_code == 2, result.output
 
-    @skip_without_data_app_public
+    @skip_without_data_app_private
     def test_data_app_git_auth_set_switches_the_config(self) -> None:
-        """git-auth-set rewrites the stored git block (no deploy: the stack may lack the App)."""
-        _step(1, "Create a public-repo app without deploying")
-        repo = os.environ[ENV_DATA_APP_GIT_REPO_PUBLIC]
+        """git-auth-set removes a stored PAT (no deploy: the stack may lack the App)."""
+        _step(1, "Create a private-repo PAT app without deploying")
+        repo = os.environ[ENV_DATA_APP_GIT_REPO_PRIVATE]
         args = self._create_args("E2E GitAuthSet", "e2e-gas", repo)
         created = _json_ok(
-            _invoke(self.config_dir, [*args, "--git-public", "--auth", "public", "--no-deploy"])
+            _invoke(
+                self.config_dir,
+                [
+                    *args,
+                    "--git-username",
+                    os.environ[ENV_DATA_APP_GIT_USER],
+                    # The PAT goes in through the env var, never argv.
+                    "--git-pat-env",
+                    ENV_DATA_APP_GIT_PAT,
+                    "--auth",
+                    "public",
+                    "--no-deploy",
+                ],
+            )
         )["data"]
         self._created_app_ids.append(created["app_id"])
+        stored = self._git_block_of(created["config_id"])
+        assert {"username", "#password"} <= set(stored), stored.keys()
 
         _step(2, "Switch it to organization auth")
         switch_args = [
@@ -9775,6 +9790,8 @@ class TestE2EDataAppLifecycle:
         ]
         switched = _json_ok(_invoke(self.config_dir, switch_args))["data"]
         assert switched["status"] == "switched"
+        assert switched["git_auth_before"] == "pat"
+        assert switched["removed_credentials"] == ["username", "#password"]
         git = self._git_block_of(created["config_id"])
         assert git["authType"] == "organization"
         assert git["private"] is True

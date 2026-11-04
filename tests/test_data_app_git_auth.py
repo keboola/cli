@@ -214,6 +214,13 @@ class TestOrganizationRepositoryShape:
         with pytest.raises(KeboolaApiError) as excinfo:
             validate_organization_repository(repo)
         assert excinfo.value.error_code == ErrorCode.DATA_APP_INVALID_GIT
+        assert repo not in excinfo.value.message
+
+    def test_embedded_token_is_not_echoed(self) -> None:
+        with pytest.raises(KeboolaApiError) as excinfo:
+            validate_organization_repository("https://bot:ghp_SECRET@github.com/acme/dashboard")
+        assert "embedded credentials" in excinfo.value.message
+        assert "ghp_SECRET" not in excinfo.value.message
 
     def test_preview_block_matches_kbc_ui_shape(self) -> None:
         source = GitSource(repo=REPO, auth_type="organization")
@@ -312,7 +319,9 @@ class TestGitAuthSetService:
         storage_mock.update_config.assert_not_called()
 
     def test_dry_run_writes_nothing_and_redacts(self, tmp_path: Path) -> None:
-        service, storage_mock = _make_switch_service(_make_store(tmp_path), _pat_body())
+        body = _pat_body()
+        body["parameters"]["dataApp"]["secrets"] = {"#API_KEY": "KBC::ProjectSecureKV::xyz"}
+        service, storage_mock = _make_switch_service(_make_store(tmp_path), body)
 
         result = service.set_data_app_git_auth(
             alias="prod", app_id="77", git_auth="organization", dry_run=True
@@ -321,7 +330,28 @@ class TestGitAuthSetService:
         storage_mock.update_config.assert_not_called()
         preview = result["put_storage_config_preview"]["configuration"]
         assert preview["parameters"]["dataApp"]["git"]["authType"] == "organization"
-        assert "#password" not in json.dumps(preview)
+        assert preview["parameters"]["dataApp"]["secrets"]["#API_KEY"] == "<encrypted>"
+        assert "KBC::ProjectSecureKV::xyz" not in json.dumps(preview)
+
+    def test_dev_branch_is_read_and_written(self, tmp_path: Path) -> None:
+        service, storage_mock = _make_switch_service(_make_store(tmp_path), _pat_body())
+
+        service.set_data_app_git_auth(
+            alias="prod", app_id="77", git_auth="organization", branch_id=4242
+        )
+
+        assert storage_mock.get_config_detail.call_args.kwargs["branch_id"] == 4242
+        assert storage_mock.update_config.call_args.kwargs["branch_id"] == 4242
+
+    def test_stored_token_in_url_is_not_echoed(self, tmp_path: Path) -> None:
+        body = _pat_body(repository="https://bot:ghp_SECRET@github.com/acme/dashboard")
+        service, storage_mock = _make_switch_service(_make_store(tmp_path), body)
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.set_data_app_git_auth(alias="prod", app_id="77", git_auth="organization")
+        assert excinfo.value.error_code == ErrorCode.DATA_APP_INVALID_GIT
+        assert "ghp_SECRET" not in excinfo.value.message
+        storage_mock.update_config.assert_not_called()
 
     def test_managed_repo_is_refused(self, tmp_path: Path) -> None:
         service, _ = _make_switch_service(_make_store(tmp_path), _pat_body(), managed=True)
