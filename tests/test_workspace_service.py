@@ -3161,6 +3161,34 @@ class TestCreateWorkspaceOutcomeRule:
         if not rolled_back:
             assert "the outcome of job 7 is unknown" in exc.message
 
+    def test_headless_failed_poll_keeps_config_end_to_end(
+        self, tmp_config_dir: Path, httpx_mock, monkeypatch
+    ) -> None:
+        """Real client: a 404 on the job poll is unknown (job exists), not a refused POST."""
+        monkeypatch.setattr("keboola_agent_cli.client._core.time.sleep", lambda _s: None)
+        base = "https://connection.keboola.com/v2/storage"
+        httpx_mock.add_response(
+            url=f"{base}/branch/123/components/keboola.sandboxes/configs/cfg-1/workspaces?async=true",
+            method="POST",
+            json={"id": 7, "status": "waiting"},
+            status_code=202,
+        )
+        httpx_mock.add_response(
+            url=f"{base}/jobs/7", method="GET", json={"error": "nope"}, status_code=404
+        )
+        real_client = client_module.KeboolaClient(
+            stack_url="https://connection.keboola.com", token="901-x-y"
+        )
+        mock_client = self._client()
+        mock_client.create_config_workspace.side_effect = real_client.create_config_workspace
+
+        exc = self._create(tmp_config_dir, mock_client, ui_mode=False)
+        real_client.close()
+
+        assert exc.details["job_id"] == 7
+        assert exc.details["sandbox_config_rolled_back"] is False
+        mock_client.delete_config.assert_not_called()
+
     def test_transport_error_after_send_keeps_config(self, tmp_config_dir: Path) -> None:
         """A dropped connection mid-POST is not mapped by ``_request``; the config stays."""
         mock_client = self._client()

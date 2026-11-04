@@ -8,7 +8,7 @@ from typing import Any
 from urllib.parse import quote
 
 from ..constants import WORKSPACE_JOB_MAX_WAIT
-from ..errors import ErrorCode, KeboolaApiError
+from ..errors import KeboolaApiError
 from ._core import _CoreClient
 
 
@@ -138,7 +138,8 @@ class _WorkspacesMixin(_CoreClient):
         Raises:
             KeboolaApiError: ``STORAGE_JOB_FAILED`` if the job fails, or
                 ``STORAGE_JOB_TIMEOUT`` (``retryable=False``) if it outlasts the
-                budget; both carry ``job_id`` in ``details``.
+                budget. Every error raised after the job was enqueued
+                (including a failed poll) carries ``job_id`` in ``details``.
         """
         safe_component = quote(component_id, safe="")
         safe_config = quote(config_id, safe="")
@@ -165,9 +166,9 @@ class _WorkspacesMixin(_CoreClient):
                 ),
             )
         except KeboolaApiError as exc:
-            # A failed job raises without a job id; callers classify the outcome by it.
-            if exc.error_code == ErrorCode.STORAGE_JOB_FAILED:
-                exc.details.setdefault("job_id", job.get("id"))
+            # The job exists from here on, so every error (failed job, failed
+            # poll) carries its id: callers classify the create outcome by it.
+            exc.details.setdefault("job_id", job.get("id"))
             raise
         return finished.get("results") or {}
 

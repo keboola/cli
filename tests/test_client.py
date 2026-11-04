@@ -644,6 +644,33 @@ class TestConfigWorkspaces:
         assert exc_info.value.details["job_id"] == 7
         assert "Backend quota exceeded" in exc_info.value.message
 
+    def test_create_config_workspace_failed_poll_carries_job_id(
+        self, httpx_mock, monkeypatch
+    ) -> None:
+        """A poll that fails after the job exists still names the job (outcome unknown)."""
+        monkeypatch.setattr("keboola_agent_cli.client._core.time.sleep", _noop_sleep)
+        httpx_mock.add_response(
+            url=_CONFIG_WORKSPACES_URL,
+            method="POST",
+            json={"id": 7, "status": "waiting"},
+            status_code=202,
+        )
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/jobs/7",
+            method="GET",
+            json={"error": "Job not found"},
+            status_code=404,
+        )
+
+        with (
+            KeboolaClient(stack_url="https://connection.keboola.com", token="901-x-y") as client,
+            pytest.raises(KeboolaApiError) as exc_info,
+        ):
+            self._create(client)
+
+        assert exc_info.value.status_code == 404
+        assert exc_info.value.details["job_id"] == 7
+
     def test_create_config_workspace_timeout_is_not_retryable(self, httpx_mock) -> None:
         """A timed-out create keeps running server-side; a retry would create a second one."""
         httpx_mock.add_response(

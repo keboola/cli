@@ -1007,6 +1007,10 @@ These lists keep `error`, because their entries are not failed items with an err
   `password` is empty and `warnings[]` names the `workspace password`
   command. BigQuery is never reset (its secret is a service-account key under
   `connection.credentials`, which `workspace create` does not return).
+- **BigQuery `user` may now be filled.** When the job result omits the
+  secret, the API keeps `connection.user` (the public part of the
+  service-account JSON); a response that includes the secret drops it, so
+  `user` used to be empty on BigQuery.
 
 ## "No schedules found" never meant "no trigger"
 
