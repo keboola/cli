@@ -28,6 +28,14 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "1.0.1": [
+        "Fix (#957): the summary of `install.sh` names the kbagent it just installed. Before, it "
+        "ran the first `kbagent` on PATH, so another install there showed its own version and "
+        "path. When another kbagent comes first on PATH, `install.sh` now prints a warning with "
+        "its version and path.",
+        "Change (#957): `install.sh` and the self-update compile the Python bytecode during the "
+        "install. The first run of a new version no longer takes about one second longer.",
+    ],
     "1.0.0": [
         "Note: kbagent 1.0.0 makes the command-line interface consistent, and the BREAKING "
         "notes below say what to change. An install that updates itself (startup auto-update, "
