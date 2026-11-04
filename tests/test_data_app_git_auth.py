@@ -251,7 +251,7 @@ def _pat_body(**git_overrides: Any) -> dict[str, Any]:
 
 
 def _make_switch_service(
-    store: ConfigStore, body: dict[str, Any], *, managed: bool = False, mode: str = "default"
+    store: ConfigStore, body: dict[str, Any], *, managed: bool = False, mode: str = "prod"
 ) -> tuple[DataAppGitService, MagicMock]:
     ds_mock = MagicMock()
     ds_mock.get_app.return_value = {
