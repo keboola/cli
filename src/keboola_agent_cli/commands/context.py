@@ -668,6 +668,15 @@ explicit Storage config version, never the empty shell the create writes.
     the same flags and adds `password_delivery` (prompt|clipboard|stdout).
     PAT input (private repo): env var (recommended) > file > pre-encrypted.
     Pre-encrypted PATs MUST start with KBC::Project (project-scoped KMS).
+    --git-auth organization (vNEXT) replaces the PAT for a private GitHub repo:
+    the git block is {repository, branch, authType: organization, private:
+    true} and holds NO credential -- the platform mints a short-lived read-only
+    token from the Keboola organization's GitHub App connection at deploy.
+    Needs an https://HOST/OWNER/REPO URL (github.com or a GitHub Enterprise
+    host the stack is configured for; the stack, not kbagent, checks the host).
+    Mutually exclusive with --git-public, --git-username, --git-pat-* and
+    --use-managed-git-repo. A host or repo the organization's GitHub App does
+    not cover fails at DEPLOY time, not at create.
     Cleanup-in-finally if PUT or initial deploy fails (orphan shell deleted
     by default; --keep-on-failure preserves it for forensics).
     --use-managed-git-repo (0.65.0+) provisions an EMPTY Keboola-hosted repo
@@ -825,7 +834,9 @@ explicit Storage config version, never the empty shell the create writes.
     repo size); each check emits BLOCKING / WARN / OK with a help-doc
     citation. --type currently restricted to python-js; streamlit /
     pure-Python / R / Node-only follow-up. --strict treats WARNs as
-    failures (exit 1).
+    failures (exit 1). Reads the repo anonymously or with YOUR PAT only --
+    organization GitHub auth is never used here, so a repo an app clones via
+    --git-auth organization needs a PAT that can read it to be validated.
 
   data-app git-repo
     Show the clone URLs (ssh_url / https_url) of the app's configured git
@@ -849,6 +860,17 @@ explicit Storage config version, never the empty shell the create writes.
     an admin storage token. Apps created via `data-app create --git-repo`
     are EXTERNAL (not managed) -> 409 "no managed Git repository".
     Confirmation prompt unless --yes or --json.
+
+  data-app git-auth-set
+    Switch an EXTERNAL repo to organization GitHub auth (vNEXT): one Storage
+    write sets parameters.dataApp.git.authType=organization + private=true and
+    REMOVES username / #password / #sshKey. Do not use `config update --merge
+    --set` for this -- a merge cannot delete keys, and the backend rejects a
+    git block with both authType and a credential. --git-repo replaces the URL
+    (an ssh:// URL must become https://HOST/OWNER/REPO), --git-branch the
+    branch. status: switched | unchanged (already on org auth, no write) |
+    dry_run. Never deploys: run `data-app deploy --wait` after it. Refuses a
+    Keboola-managed repo and a dev-mode app (VALIDATION_ERROR, no write).
 """,
     "dev-portal": """\
 #### Developer Portal

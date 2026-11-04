@@ -227,6 +227,8 @@ def _print_create_result(console: Console, result: dict[str, Any]) -> None:
             console.print(
                 "  [bold]Managed git repo:[/bold] yes (`data-app git-repo` shows its URL)"
             )
+        if result.get("git_auth"):
+            console.print(f"  [bold]Git auth:[/bold] {result['git_auth']} (no credential stored)")
         if result.get("workspace"):
             # Report what we WROTE, not what the platform will do with it.
             # kbagent sets the key; whether the runtime honours it is the
@@ -298,7 +300,19 @@ def data_app_create(
         help="Mark the repository as public (no credentials needed).",
     ),
     git_username: str | None = typer.Option(
-        None, "--git-username", help="GitHub username (required for private repos)"
+        None,
+        "--git-username",
+        help="GitHub username (required for a private repo, unless --git-auth organization).",
+    ),
+    git_auth: str | None = typer.Option(
+        None,
+        "--git-auth",
+        help=(
+            "'organization': clone a private GitHub repo through the Keboola "
+            "organization's GitHub App connection; no PAT is stored. Needs an "
+            "https:// GitHub URL. Mutually exclusive with --git-public, "
+            "--git-username, the --git-pat-* flags and --use-managed-git-repo."
+        ),
     ),
     git_pat_env: str | None = typer.Option(
         None,
@@ -386,6 +400,10 @@ def data_app_create(
 ) -> None:
     """Create a Keboola data app end-to-end (POST + encrypt + PUT + deploy).
 
+    A private GitHub repo needs either --git-username plus a PAT, or
+    --git-auth organization (no credential stored; the token is minted from
+    the organization's GitHub App connection at deploy time).
+
     With --wait on a password-auth app, the password is delivered once the app
     runs, as in `data-app password`: a c-to-copy prompt in a terminal,
     --copy / --reveal elsewhere. The password itself is never printed
@@ -468,6 +486,7 @@ def data_app_create(
             git_pat_plaintext=pat_plaintext,
             git_pat_encrypted=git_pat_encrypted,
             use_managed_git_repo=use_managed_git_repo,
+            git_auth=git_auth,
             auth=auth,
             size=size,
             auto_suspend_after_seconds=auto_suspend,
@@ -913,6 +932,10 @@ def data_app_validate_repo(
     'pip install' in setup.sh, requires-python at-or-below the runtime
     pin, etc.). Each check emits BLOCKING / WARN / OK with a citation
     to the help-doc anchor that defines the rule.
+
+    The repo is read anonymously or with YOUR PAT only. Organization GitHub
+    auth (`create --git-auth organization`) is never used here: validate such
+    a repo with a PAT that can read it.
 
     Reference: https://help.keboola.com/data-apps/python-js/
     """

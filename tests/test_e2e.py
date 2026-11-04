@@ -9390,6 +9390,9 @@ ENV_DATA_APP_GIT_REPO_PUBLIC = "E2E_DATA_APP_GIT_REPO_PUBLIC"
 ENV_DATA_APP_GIT_REPO_PRIVATE = "E2E_DATA_APP_GIT_REPO_PRIVATE"
 ENV_DATA_APP_GIT_USER = "E2E_DATA_APP_GIT_USER"
 ENV_DATA_APP_GIT_PAT = "E2E_DATA_APP_GIT_PAT"
+# A private GitHub repo the E2E project's organization reaches through its
+# GitHub App connection (`--git-auth organization`).
+ENV_DATA_APP_ORG_REPO = "E2E_DATA_APP_ORG_REPO"
 ENV_MANAGE_TOKEN = "E2E_MANAGE_TOKEN"
 
 skip_without_data_app_public = pytest.mark.skipif(
@@ -9407,6 +9410,10 @@ skip_without_data_app_private = pytest.mark.skipif(
         f"requires {ENV_TOKEN} + {ENV_DATA_APP_GIT_REPO_PRIVATE} + "
         f"{ENV_DATA_APP_GIT_USER} + {ENV_DATA_APP_GIT_PAT}"
     ),
+)
+skip_without_data_app_org_repo = pytest.mark.skipif(
+    not (HAS_CREDENTIALS and os.environ.get(ENV_DATA_APP_ORG_REPO)),
+    reason=f"requires {ENV_TOKEN} + {ENV_DATA_APP_ORG_REPO}",
 )
 
 
@@ -9684,6 +9691,133 @@ class TestE2EDataAppLifecycle:
         )["data"]
         assert body["workspace"] is True
         assert body["requests"]["put_storage_config"]["runtime"]["workspace"] == {"enabled": True}
+
+    def _git_block_of(self, config_id: str) -> dict[str, Any]:
+        cfg = _json_ok(
+            _invoke(
+                self.config_dir,
+                [
+                    "--json",
+                    "config",
+                    "detail",
+                    "--project",
+                    self.alias,
+                    "--component-id",
+                    "keboola.data-apps",
+                    "--config-id",
+                    config_id,
+                ],
+            )
+        )["data"]
+        record = cfg[0] if isinstance(cfg, list) else cfg
+        return record["configuration"]["parameters"]["dataApp"]["git"]
+
+    def _create_args(self, name: str, slug: str, repo: str) -> list[str]:
+        return [
+            "--json",
+            "data-app",
+            "create",
+            "--project",
+            self.alias,
+            "--name",
+            f"{name} {RUN_ID}",
+            "--slug",
+            f"{slug}-{RUN_ID}"[:60],
+            "--git-repo",
+            repo,
+        ]
+
+    def test_data_app_org_auth_dry_run(self) -> None:
+        """``--git-auth organization`` renders a credential-free git block."""
+        _step(1, "Dry-run create with --git-auth organization")
+        repo = "https://github.com/keboola/does-not-matter-for-dry-run"
+        args = self._create_args("E2E OrgAuth", "e2e-org-dry", repo)
+        body = _json_ok(
+            _invoke(self.config_dir, [*args, "--git-auth", "organization", "--dry-run"])
+        )
+        git = body["data"]["requests"]["put_storage_config"]["parameters"]["dataApp"]["git"]
+        assert git == {
+            "repository": repo,
+            "branch": "main",
+            "authType": "organization",
+            "private": True,
+        }
+
+        _step(2, "A credential beside it is refused before any API call")
+        result = _invoke(
+            self.config_dir,
+            [*args, "--git-auth", "organization", "--git-username", "bob", "--dry-run"],
+        )
+        assert result.exit_code == 2, result.output
+
+    @skip_without_data_app_private
+    def test_data_app_git_auth_set_switches_the_config(self) -> None:
+        """git-auth-set removes a stored PAT (no deploy: the stack may lack the App)."""
+        _step(1, "Create a private-repo PAT app without deploying")
+        repo = os.environ[ENV_DATA_APP_GIT_REPO_PRIVATE]
+        args = self._create_args("E2E GitAuthSet", "e2e-gas", repo)
+        created = _json_ok(
+            _invoke(
+                self.config_dir,
+                [
+                    *args,
+                    "--git-username",
+                    os.environ[ENV_DATA_APP_GIT_USER],
+                    # The PAT goes in through the env var, never argv.
+                    "--git-pat-env",
+                    ENV_DATA_APP_GIT_PAT,
+                    "--auth",
+                    "public",
+                    "--no-deploy",
+                ],
+            )
+        )["data"]
+        self._created_app_ids.append(created["app_id"])
+        stored = self._git_block_of(created["config_id"])
+        assert {"username", "#password"} <= set(stored), stored.keys()
+
+        _step(2, "Switch it to organization auth")
+        switch_args = [
+            "--json",
+            "data-app",
+            "git-auth-set",
+            "--project",
+            self.alias,
+            "--app-id",
+            created["app_id"],
+            "--git-auth",
+            "organization",
+        ]
+        switched = _json_ok(_invoke(self.config_dir, switch_args))["data"]
+        assert switched["status"] == "switched"
+        assert switched["git_auth_before"] == "pat"
+        assert switched["removed_credentials"] == ["username", "#password"]
+        git = self._git_block_of(created["config_id"])
+        assert git["authType"] == "organization"
+        assert git["private"] is True
+        assert not {"username", "#password", "#sshKey"} & set(git)
+
+        _step(3, "A second run changes nothing")
+        again = _json_ok(_invoke(self.config_dir, switch_args))["data"]
+        assert again["status"] == "unchanged"
+
+    @skip_without_data_app_org_repo
+    def test_data_app_org_auth_deploys(self) -> None:
+        """A private repo deploys through the organization's GitHub App connection."""
+        _step(1, "Create + deploy with --git-auth organization")
+        repo = os.environ[ENV_DATA_APP_ORG_REPO]
+        args = self._create_args("E2E OrgAuth", "e2e-org", repo)
+        created = _json_ok(
+            _invoke(
+                self.config_dir,
+                [*args, "--git-auth", "organization", "--auth", "public", "--wait"],
+            )
+        )["data"]
+        self._created_app_ids.append(created["app_id"])
+        assert created["state"] == "running", created
+        git = self._git_block_of(created["config_id"])
+        assert git["authType"] == "organization"
+        assert not {"username", "#password", "#sshKey"} & set(git)
 
     @skip_without_data_app_public
     def test_data_app_git_repo_introspection(self) -> None:

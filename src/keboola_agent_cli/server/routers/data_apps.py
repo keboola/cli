@@ -49,6 +49,9 @@ class DataAppCreate(BaseModel):
     git_username: str | None = None
     git_pat_plaintext: str | None = None
     git_pat_encrypted: str | None = None
+    # "organization": clone through the organization's GitHub App connection;
+    # no credential is stored (mirrors `--git-auth` on the CLI).
+    git_auth: str | None = None
     auth: str = "password"
     size: str = "tiny"
     auto_suspend_after_seconds: int = 900
@@ -90,6 +93,18 @@ class RepoValidate(BaseModel):
     git_pat_file: str | None = None
     type: str = "python-js"
     strict: bool = False
+
+
+class GitAuthSet(BaseModel):
+    """The body of ``PATCH .../git-auth``: undeclared fields are refused (spec V5)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    git_auth: str
+    git_repo: str | None = None
+    git_branch: str | None = None
+    branch_id: int | None = None
+    dry_run: bool = False
 
 
 class GitCredentialCreate(BaseModel):
@@ -157,6 +172,7 @@ def create(
         git_pat_plaintext=body.git_pat_plaintext,
         git_pat_encrypted=body.git_pat_encrypted,
         use_managed_git_repo=body.use_managed_git_repo,
+        git_auth=body.git_auth,
         auth=body.auth,
         size=body.size,
         auto_suspend_after_seconds=body.auto_suspend_after_seconds,
@@ -413,6 +429,29 @@ def git_credentials_create(
         permissions=body.permissions,
         public_key=body.public_key,
         name=body.name,
+    )
+
+
+@router.patch("/{project}/{app_id}/git-auth", summary="Switch a data app to organization git auth")
+def git_auth_set(
+    project: str,
+    app_id: str,
+    body: GitAuthSet,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """Set ``authType: organization`` and drop the stored git credentials in one write.
+
+    Mirrors `kbagent data-app git-auth-set`. Never deploys; run the deploy
+    route afterwards.
+    """
+    return registry.data_app_git.set_data_app_git_auth(
+        alias=project,
+        app_id=app_id,
+        git_auth=body.git_auth,
+        git_repo=body.git_repo,
+        git_branch=body.git_branch,
+        branch_id=body.branch_id,
+        dry_run=body.dry_run,
     )
 
 

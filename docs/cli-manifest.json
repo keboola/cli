@@ -891,7 +891,7 @@
       "kind": "command",
       "hidden": false,
       "category": "write",
-      "help": "Create a Keboola data app end-to-end (POST + encrypt + PUT + deploy).\n\nWith --wait on a password-auth app, the password is delivered once the app\nruns, as in `data-app password`: a c-to-copy prompt in a terminal,\n--copy / --reveal elsewhere. The password itself is never printed\nwithout --reveal.",
+      "help": "Create a Keboola data app end-to-end (POST + encrypt + PUT + deploy).\n\nA private GitHub repo needs either --git-username plus a PAT, or\n--git-auth organization (no credential stored; the token is minted from\nthe organization's GitHub App connection at deploy time).\n\nWith --wait on a password-auth app, the password is delivered once the app\nruns, as in `data-app password`: a c-to-copy prompt in a terminal,\n--copy / --reveal elsewhere. The password itself is never printed\nwithout --reveal.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "name", "opts": ["--name", "-n"], "type": "text", "required": true, "default": null, "help": "Display name shown in the Keboola UI"},
@@ -902,7 +902,8 @@
         {"kind": "option", "name": "use_managed_git_repo", "opts": ["--use-managed-git-repo"], "type": "boolean", "is_flag": true, "default": false, "help": "Provision an empty Keboola-managed git repository for the app instead of cloning an external one. Mints code via `data-app git-credentials-create`, then push + deploy. Mutually exclusive with --git-repo and all --git-* auth flags."},
         {"kind": "option", "name": "git_branch", "opts": ["--git-branch"], "type": "text", "default": "main", "help": "Git branch to clone"},
         {"kind": "option", "name": "git_public", "opts": ["--git-public"], "secondary_opts": ["--no-git-public"], "type": "boolean", "is_flag": true, "default": false, "help": "Mark the repository as public (no credentials needed)."},
-        {"kind": "option", "name": "git_username", "opts": ["--git-username"], "type": "text", "default": null, "help": "GitHub username (required for private repos)"},
+        {"kind": "option", "name": "git_username", "opts": ["--git-username"], "type": "text", "default": null, "help": "GitHub username (required for a private repo, unless --git-auth organization)."},
+        {"kind": "option", "name": "git_auth", "opts": ["--git-auth"], "type": "text", "default": null, "help": "'organization': clone a private GitHub repo through the Keboola organization's GitHub App connection; no PAT is stored. Needs an https:// GitHub URL. Mutually exclusive with --git-public, --git-username, the --git-pat-* flags and --use-managed-git-repo."},
         {"kind": "option", "name": "git_pat_env", "opts": ["--git-pat-env"], "type": "text", "default": null, "help": "Environment variable containing the plaintext PAT (recommended)."},
         {"kind": "option", "name": "git_pat_file", "opts": ["--git-pat-file"], "type": "file", "default": null, "help": "File containing the plaintext PAT."},
         {"kind": "option", "name": "git_pat_encrypted", "opts": ["--git-pat-encrypted"], "type": "text", "default": null, "help": "Pre-encrypted PAT (KBC::Project... ciphertext). Must be encrypted against THIS project's KMS -- ciphertext does not cross projects."},
@@ -961,6 +962,22 @@
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "app_id", "opts": ["--app-id"], "type": "text", "required": true, "default": null, "help": "Data Science numeric app id"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Storage branch ID for the linked config (defaults to production)."}
+      ]
+    },
+    {
+      "path": "data-app git-auth-set",
+      "kind": "command",
+      "hidden": false,
+      "category": "write",
+      "help": "Switch a data app's external GitHub repo to organization auth.\n\nSets parameters.dataApp.git.authType=organization and removes username /\n#password / #sshKey in ONE write -- the backend rejects a config with both,\nwhich is why `config update --merge` cannot do this. Nothing is deployed:\nrun `kbagent data-app deploy --wait` afterwards. A Keboola-managed repo is\nrefused (it needs no credential), and so is a dev-mode app (the platform\ndoes not support organization auth in dev mode).",
+      "params": [
+        {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
+        {"kind": "option", "name": "app_id", "opts": ["--app-id"], "type": "text", "required": true, "default": null, "help": "Data Science numeric app id"},
+        {"kind": "option", "name": "git_auth", "opts": ["--git-auth"], "type": "text", "required": true, "default": null, "help": "How the app clones its repo. Only 'organization' for now."},
+        {"kind": "option", "name": "git_repo", "opts": ["--git-repo"], "type": "text", "default": null, "help": "Replace the stored repository URL (an ssh:// or git@ URL must become https://HOST/OWNER/REPO for organization auth)."},
+        {"kind": "option", "name": "git_branch", "opts": ["--git-branch"], "type": "text", "default": null, "help": "Replace the stored git branch (default: keep it)."},
+        {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Storage branch ID for the linked config (defaults to production)."},
+        {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Show the Storage PUT body without writing it."}
       ]
     },
     {
@@ -1142,7 +1159,7 @@
       "kind": "command",
       "hidden": false,
       "category": "read",
-      "help": "Pre-flight check that a git repo follows the Keboola data-app Golden Rule.\n\nWalks the repo via GitHub Contents + Trees API and validates the\ndocumented structure (keboola-config/ tree, pyproject.toml, no\n'pip install' in setup.sh, requires-python at-or-below the runtime\npin, etc.). Each check emits BLOCKING / WARN / OK with a citation\nto the help-doc anchor that defines the rule.\n\nReference: https://help.keboola.com/data-apps/python-js/",
+      "help": "Pre-flight check that a git repo follows the Keboola data-app Golden Rule.\n\nWalks the repo via GitHub Contents + Trees API and validates the\ndocumented structure (keboola-config/ tree, pyproject.toml, no\n'pip install' in setup.sh, requires-python at-or-below the runtime\npin, etc.). Each check emits BLOCKING / WARN / OK with a citation\nto the help-doc anchor that defines the rule.\n\nThe repo is read anonymously or with YOUR PAT only. Organization GitHub\nauth (`create --git-auth organization`) is never used here: validate such\na repo with a PAT that can read it.\n\nReference: https://help.keboola.com/data-apps/python-js/",
       "params": [
         {"kind": "option", "name": "git_repo", "opts": ["--git-repo"], "type": "text", "required": true, "default": null, "help": "GitHub repo URL (https://github.com/owner/repo)."},
         {"kind": "option", "name": "git_branch", "opts": ["--git-branch"], "type": "text", "default": "main", "help": "Git ref to validate (default: main)."},
