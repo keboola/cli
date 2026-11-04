@@ -52,6 +52,9 @@ logger = logging.getLogger(__name__)
 # poll, a failed workspace lookup after a green job) leaves the outcome unknown.
 _DEFINITE_JOB_ERRORS = frozenset({ErrorCode.QUEUE_JOB_FAILED, ErrorCode.WORKSPACE_NOT_FOUND})
 
+# The exact text of Query Service's 403 for a request that row-level security refuses.
+_RLS_DENIED_MESSAGE = "Row-level security does not allow this query"
+
 
 def _create_outcome_unknown(exc: KeboolaApiError) -> bool:
     """Could a workspace exist (or still appear) after this step-2 error?
@@ -786,7 +789,10 @@ class WorkspaceService(BaseService):
             qs_compatible_only: If True, return only workspaces whose
                 ``login_type`` is in ``QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES``
                 AND that are read-only -- the canonical shape for a Streamlit
-                / Quix data-app reading via the Query Service.
+                / Quix data-app reading via the Query Service. A governed
+                workspace is left out: it stays ``qs_compatible``, but a query
+                with a Storage token is refused unless a policy rule selects
+                the administrator, so it is not one kbagent can read.
 
         Returns:
             Dict with "workspaces" and "errors" lists. Each workspace entry
@@ -846,7 +852,11 @@ class WorkspaceService(BaseService):
                         if _is_orphaned_workspace(entry, config_names):
                             workspaces.append(entry)
                     elif qs_compatible_only:
-                        if entry["qs_compatible"] and entry["read_only"]:
+                        if (
+                            entry["qs_compatible"]
+                            and entry["read_only"]
+                            and login_type != GOVERNED_WORKSPACE_LOGIN_TYPE
+                        ):
                             workspaces.append(entry)
                     else:
                         workspaces.append(entry)
@@ -1379,12 +1389,17 @@ class WorkspaceService(BaseService):
         client = self._client_factory(project.stack_url, project.token)
         try:
             # Submit query
-            query_job = client.submit_query(
-                branch_id=branch_id,
-                workspace_id=workspace_id,
-                statements=[sql],
-                transactional=transactional,
-            )
+            try:
+                query_job = client.submit_query(
+                    branch_id=branch_id,
+                    workspace_id=workspace_id,
+                    statements=[sql],
+                    transactional=transactional,
+                )
+            except KeboolaApiError as exc:
+                if exc.status_code == 403 and _RLS_DENIED_MESSAGE in exc.message:
+                    raise self._rls_refused_error(workspace_id, exc) from exc
+                raise
 
             query_job_id = str(query_job.get("queryJobId", query_job.get("id", "")))
 
@@ -1423,6 +1438,23 @@ class WorkspaceService(BaseService):
             }
         finally:
             client.close()
+
+    @staticmethod
+    def _rls_refused_error(workspace_id: int, exc: KeboolaApiError) -> KeboolaApiError:
+        """Explain a row-level-security refusal of a query sent with a Storage token."""
+        return KeboolaApiError(
+            message=(
+                f"Query Service refused the query on workspace {workspace_id}: "
+                f"{_RLS_DENIED_MESSAGE}. kbagent queries with the Storage token, which Query "
+                "Service treats as the administrator `keboola|<adminId>`. On a governed workspace "
+                "that subject is refused unless a policy rule selects it: query another "
+                "workspace, or add a rule for it."
+            ),
+            status_code=exc.status_code,
+            error_code=ErrorCode.ACCESS_DENIED,
+            retryable=False,
+            details={"workspace_id": workspace_id},
+        )
 
     @staticmethod
     def _attach_statement_results(
