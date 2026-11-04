@@ -55,8 +55,10 @@ RLS_DIALECTS: tuple[str, ...] = tuple(Dialect)
 
 # The legacy (schema 1.0.0/1.1.0) principal pattern: no whitespace or control characters.
 _PRINCIPAL_RE = re.compile(r"^[^\s\x00-\x1f\x7f]+$")
-# A subject is `<idp>|<sub>`: the issuer of the identity provider, a `|`, the user's `sub` (the 1.2.0 schema pattern).
-_SUBJECT_RE = re.compile(r"^[^|\s]+\|\S.*$")
+# A subject is `<idp>|<sub>`: the issuer of the identity provider (no `|`, white space or control character), a
+# `|`, the user's `sub` (printable text). The policy engine's pattern, stricter than the 1.2.0 schema: a control
+# character the schema stores makes the engine refuse the whole policy set of the project (`RULE_INVALID`).
+_SUBJECT_RE = re.compile(r"^[^|\s\x00-\x1f\x7f]+\|[^\x00-\x1f\x7f]+$")
 _SUBJECT_MAX_LENGTH = 1024
 # IdP group names may contain spaces ("Sales EU"); only control characters are refused.
 _GROUP_RE = re.compile(r"^[^\x00-\x1f\x7f]+$")

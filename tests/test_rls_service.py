@@ -762,6 +762,85 @@ class TestGrants:
         mock.post_item.assert_not_called()
 
 
+class TestUpdateOfAStoredPolicy:
+    """An update is judged by the schema the policy is stamped with, and never by a dialect the engine ignores."""
+
+    def test_a_stored_dialect_of_another_backend_does_not_block_an_update(
+        self, tmp_path: Path
+    ) -> None:
+        service, mock = _make_service(_make_store(tmp_path))  # a Snowflake project
+        mock.get_schema.side_effect = KeboolaApiError(message="n/a", status_code=404)
+        mock.get_item.return_value = _policy_item(dialect="bigquery")
+
+        service.update_policy("prod", "p-1", default={"true": True})
+
+        mock.patch_item.assert_called_once()
+
+    def test_a_dialect_that_is_passed_is_still_checked(self, tmp_path: Path) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.get_item.return_value = _policy_item(dialect="snowflake")
+
+        with pytest.raises(KeboolaApiError, match="does not match the project backend"):
+            service.update_policy("prod", "p-1", dialect="bigquery")
+
+        mock.patch_item.assert_not_called()
+
+    def test_a_policy_without_a_dialect_stays_without_one_in_the_dry_run(
+        self, tmp_path: Path
+    ) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.get_schema.return_value = {"type": "object", "version": "1.2.0"}
+        stored = _policy_item()
+        del stored["attributes"]["dialect"]
+        mock.get_item.return_value = stored
+
+        result = service.update_policy("prod", "p-1", default={"true": True}, dry_run=True)
+
+        assert "dialect" not in result
+
+    def test_the_schema_of_the_stored_version_is_used(self, tmp_path: Path) -> None:
+        """The metastore validates a PATCH against the stamped version, so `subjects` on a 1.1.0 policy fails
+        here too (and a 1.1.0 policy's `principal` rules are not judged by 1.2.0)."""
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.get_schema.return_value = {"type": "object", "version": "1.1.0"}
+        stored = _policy_item()
+        stored["meta"]["schemaVersion"] = "1.1.0"
+        mock.get_item.return_value = stored
+
+        with pytest.raises(KeboolaApiError, match=r"stored at 1\.1\.0"):
+            service.update_policy("prod", "p-1", rules=_RULES)
+
+        mock.get_schema.assert_called_once_with("rls-policy", version="1.1.0")
+        mock.patch_item.assert_not_called()
+
+    def test_grants_with_rules_from_a_project_that_does_not_own_the_policy_are_refused(
+        self, tmp_path: Path
+    ) -> None:
+        """Only the owner reads the grants and finds the policy for a PATCH, so a failed PATCH could not put
+        the old grants back."""
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.get_schema.side_effect = KeboolaApiError(message="n/a", status_code=404)
+        stored = _policy_item(scope="targeted", target_project_ids=[])
+        stored["meta"]["projectId"] = 999  # the project of `prod` is 5725
+        mock.get_item.return_value = stored
+
+        with pytest.raises(KeboolaApiError, match="owned by project 999"):
+            service.update_policy("prod", "p-1", rules=_RULES, target_projects=["7"])
+
+        mock.put_target_projects.assert_not_called()
+        mock.patch_item.assert_not_called()
+
+    def test_grants_alone_from_another_project_are_still_allowed(self, tmp_path: Path) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        stored = _policy_item(scope="targeted")
+        stored["meta"]["projectId"] = 999
+        mock.get_item.return_value = stored
+
+        service.update_policy("prod", "p-1", target_projects=["7"])
+
+        mock.put_target_projects.assert_called_once_with("rls-policy", "p-1", [7])
+
+
 # ---------------------------------------------------------------------------
 # Write: delete
 # ---------------------------------------------------------------------------
@@ -963,6 +1042,12 @@ class TestValidateRulesLocal:
             }
         ]
         assert validate_rules_local(rules) == []
+
+    @pytest.mark.parametrize("subject", ["iss|a\tb", "iss|a\nb", "iss\t|x", "iss|\x7f", "|x"])
+    def test_a_subject_the_engine_would_refuse_is_rejected(self, subject: str) -> None:
+        """A control character the schema stores makes the engine refuse the project's whole policy set."""
+        rules = [{"subjects": [subject], "condition": {"true": True}}]
+        assert validate_rules_local(rules)
 
     def test_no_selector_rejected(self) -> None:
         errors = validate_rules_local([{"condition": {"true": True}}])

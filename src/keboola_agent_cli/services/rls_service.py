@@ -144,8 +144,8 @@ class RlsService(BaseService):
         with self._new_metastore_client(project) as client:
             return self._fetch_schema(client)
 
-    def _fetch_schema(self, client: MetastoreClient) -> RlsSchemaFetch:
-        """Fetch the live policy schema, degrading when it is merely *unavailable*.
+    def _fetch_schema(self, client: MetastoreClient, version: str | None = None) -> RlsSchemaFetch:
+        """Fetch the live policy schema (``version``, else the default), degrading when it is merely *unavailable*.
 
         A network error, an empty/malformed schema or a non-auth ``KeboolaApiError`` (most likely: the
         object type isn't registered on the stack's metastore) degrades to ``schema=None`` + ``reason``
@@ -154,7 +154,7 @@ class RlsService(BaseService):
         re-raised instead of being reported as a missing schema.
         """
         try:
-            resolved = fetch_resolved_schema(client, self.item_type)
+            resolved = fetch_resolved_schema(client, self.item_type, version)
             schema = resolved.schema
         except KeboolaApiError as exc:
             if exc.error_code in _AUTH_ERROR_CODES or exc.status_code in (401, 403):
@@ -225,20 +225,24 @@ class RlsService(BaseService):
         *,
         policy: dict[str, Any],
         backend: str,
+        given_dialect: str | None = None,
+        stored_version: str | None = None,
     ) -> PolicyValidation:
         """Run every check this module can on the WHOLE policy, local checks first.
 
-        Local (schema-independent) checks always run: a dialect that is given matches the project
-        backend, and the rules (and an RLS ``default``) are well-formed. Structural (Draft7, against the live schema) checks run when the
-        fetch succeeds -- when it doesn't, the caller gets a warning, not a block (see
-        :class:`RlsSchemaFetch`). The whole policy is validated even for a partial update, because the
-        metastore's PATCH validates only the keys it receives.
+        Local (schema-independent) checks always run: a ``--dialect`` the caller passes (``given_dialect``;
+        a dialect already stored on the policy is never checked, the engine does not read it) matches the
+        project backend, and the rules (and an RLS ``default``) are well-formed. Structural (Draft7, against
+        the live schema) checks run when the fetch succeeds -- when it doesn't, the caller gets a warning,
+        not a block (see :class:`RlsSchemaFetch`). The whole policy is validated even for a partial update,
+        because the metastore's PATCH validates only the keys it receives. ``stored_version`` is the schema
+        version an updated policy is stamped with: the metastore validates a PATCH against that version, not
+        the default one, and the version checks below name it.
         """
-        dialect = policy.get("dialect")
         errors: list[str] = []
-        if dialect is not None and dialect != backend:
+        if given_dialect is not None and given_dialect != backend:
             errors.append(
-                f"dialect {dialect!r} does not match the project backend {backend!r} "
+                f"dialect {given_dialect!r} does not match the project backend {backend!r} "
                 "(a policy is written for the backend of its project; omit --dialect to leave it out)"
             )
         errors.extend(self._local_rule_errors(policy["rules"]))
@@ -255,16 +259,22 @@ class RlsService(BaseService):
             )
         ):
             errors.append(
-                f"'subjects' needs {self.item_type} schema 1.2.0 or later; this metastore serves "
-                f"{old}, which selects by email only (the Query Service release with subject "
-                "rules and the Metastore migration are not deployed on this stack yet)"
+                f"'subjects' needs {self.item_type} schema 1.2.0 or later; "
+                + (
+                    f"this policy is stored at {old} and keeps that version (recreate it to use subjects)"
+                    if stored_version
+                    else f"this metastore serves {old}, which selects by email only (the Query Service "
+                    "release with subject rules and the Metastore migration are not deployed on this "
+                    "stack yet)"
+                )
             )
         if _rls_condition.rules_use_wildcard(policy["rules"]) and (
             old := _rls_condition.schema_lacks_wildcard(fetch.schema)
         ):
             errors.append(
                 f"the wildcard {_rls_condition.WILDCARD!r} needs {self.item_type} schema 1.1.0 or later; "
-                f"this metastore serves {old}, where it is a literal that matches nobody"
+                f"this {'policy is stored at' if stored_version else 'metastore serves'} {old}, "
+                "where it is a literal that matches nobody"
             )
         return PolicyValidation(errors, [])
 
@@ -387,7 +397,7 @@ class RlsService(BaseService):
         the engine compiles for the workspace's own backend); given, it must equal the project
         backend. A metastore whose schema still requires it (1.0.0), or whose schema could not be
         read, gets the project backend. ``default`` (RLS only) is the
-        condition for identities no rule matches; omitted, their reads are refused. ``target_projects`` (aliases or
+        condition for identities no rule matches; omitted, an ordinary reader gets no rows and an administrator the 403. ``target_projects`` (aliases or
         project IDs) only with ``targeted``; they go in the create request itself, which stores the
         grants in the same transaction (and needs the organization-admin role). ``dry_run=True``
         returns the preview without calling the write endpoint.
@@ -408,7 +418,9 @@ class RlsService(BaseService):
             fetch = self._fetch_schema(client)
             if dialect is not None or _schema_requires_dialect(fetch.schema):
                 policy["dialect"] = dialect or backend
-            check = self._validate_policy(fetch, policy=policy, backend=backend)
+            check = self._validate_policy(
+                fetch, policy=policy, backend=backend, given_dialect=dialect
+            )
             if check.errors:
                 self._raise_invalid(check.errors)
             preview = self._preview(policy, backend)
@@ -484,6 +496,17 @@ class RlsService(BaseService):
             attrs = current.get("attributes") or {}
             meta = current.get("meta") or {}
             scope = meta.get("scope", "")
+            owner_id = meta.get("projectId")
+            owned = owner_id is None or project.project_id is None or owner_id == project.project_id
+            if target_ids is not None and changes and not owned:
+                # The grants are readable (and a rules PATCH is found) only through the owning project, so a
+                # failed PATCH could not put the old grants back.
+                self._raise_invalid(
+                    [
+                        f"the policy is owned by project {owner_id}: change its target projects from that "
+                        "project, or in a separate `rls update` without rules (an organization admin)"
+                    ]
+                )
             if target_ids is not None and scope != "targeted":
                 self._raise_invalid(
                     [
@@ -493,16 +516,28 @@ class RlsService(BaseService):
                         )
                     ]
                 )
-            # A 1.1.0 policy may omit `dialect` (the enforcement then uses the workspace backend).
+            # The metastore validates a PATCH against the schema version the policy is stamped with (it never
+            # re-stamps on update), so the merged policy is checked against that version, not the default one.
+            stored_version = meta.get("schemaVersion")
+            fetch = self._fetch_schema(client, stored_version)
             policy = {
                 "table": attrs.get("table", ""),
-                "dialect": attrs.get("dialect") or backend,
                 "rules": attrs.get("rules", []),
                 **({"default": attrs["default"]} if attrs.get("default") is not None else {}),
                 **changes,
             }
+            # A policy of schema 1.1.0 or later may omit `dialect` (the engine does not read it): keep it omitted unless it is
+            # stored, being changed, or the schema requires it.
+            if "dialect" not in policy and (
+                attrs.get("dialect") or _schema_requires_dialect(fetch.schema)
+            ):
+                policy["dialect"] = attrs.get("dialect") or backend
             check = self._validate_policy(
-                self._fetch_schema(client), policy=policy, backend=backend
+                fetch,
+                policy=policy,
+                backend=backend,
+                given_dialect=dialect,
+                stored_version=stored_version,
             )
             if check.errors:
                 self._raise_invalid(check.errors)
@@ -517,7 +552,9 @@ class RlsService(BaseService):
                         "target_project_ids": (
                             target_ids
                             if target_ids is not None
-                            else meta.get("targetProjectIds") or []
+                            else (meta.get("targetProjectIds") or [])
+                            if owned
+                            else None
                         ),
                         **preview,
                         "dry_run": True,

@@ -594,8 +594,10 @@ class ResolvedSchema:
     version: str | None
 
 
-def fetch_resolved_schema(client: MetastoreClient, item_type: SemanticType) -> ResolvedSchema:
-    """Fetch the actual JSON Schema for a type, resolving the default version.
+def fetch_resolved_schema(
+    client: MetastoreClient, item_type: SemanticType, version: str | None = None
+) -> ResolvedSchema:
+    """Fetch the actual JSON Schema for a type: ``version`` when given, else the default version.
 
     Live metastore behavior (2026-07): the bare ``/api/v1/schema/{type}``
     endpoint returns only a ``{"versions": [...]}`` listing (metadata, no
@@ -604,6 +606,8 @@ def fetch_resolved_schema(client: MetastoreClient, item_type: SemanticType) -> R
     document. If the server someday returns the schema directly (no
     ``versions`` key) it is passed through unchanged, with ``version=None``.
     """
+    if version:
+        return ResolvedSchema(schema=client.get_schema(item_type, version=version), version=version)
     body = client.get_schema(item_type)
     versions = body.get("versions")
     if not isinstance(versions, list) or not versions:
