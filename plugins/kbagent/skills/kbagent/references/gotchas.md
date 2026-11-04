@@ -1681,7 +1681,9 @@ project feature and no step-up, but the stack's Connection must accept the type 
 validation error naming the allowed `loginType` values): try it, do not assume. `--governed` with `--ui` and
 `--governed` on BigQuery are `INVALID_ARGUMENT` (exit 2); nothing is created in either case. A stack whose Connection ignores the type and answers a workspace with a login fails with `API_ERROR`: the workspace is deleted and the sandbox config trashed (`details.workspace_id`, `details.workspace_rolled_back`), so a credentialed workspace is never reported as governed. The REST
 route `POST /workspaces/{project}` takes `governed: true`. `workspace list` shows the workspace with login type
-`governed` and `qs_compatible` true: Query Service reads it.
+`governed` and `qs_compatible` true: Query Service reads it. A query with a Storage token (`workspace query`,
+local data-app development) is refused with `ACCESS_DENIED` unless a policy rule selects the administrator
+`keboola|<adminId>`, so `--qs-compatible` leaves governed workspaces out.
 
 ## `workspace create --ui` cannot produce a UI-visible SQL workspace; a failed create no longer leaves a sandbox config behind
 

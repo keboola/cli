@@ -98,7 +98,7 @@ def list_workspaces(
         False,
         description=(
             "Filter to RO + whitelisted-loginType workspaces (the canonical "
-            "data-app shape). See QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES."
+            "data-app shape), without governed ones. See QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES."
         ),
     ),
     all_projects: bool = Query(False, description=ALL_PROJECTS_HELP),

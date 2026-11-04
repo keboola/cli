@@ -1518,6 +1518,38 @@ class TestExecuteQuery:
         # close() called twice: once in _resolve_branch_id, once in execute_query
         assert mock_client.close.call_count == 2
 
+    @pytest.mark.parametrize(
+        ("status", "message", "explained"),
+        [
+            (403, "Row-level security does not allow this query", True),
+            (403, "Access denied for another reason", False),
+            (500, "Row-level security does not allow this query", False),
+        ],
+    )
+    def test_execute_query_explains_a_row_level_security_refusal(
+        self, tmp_config_dir: Path, status: int, message: str, explained: bool
+    ) -> None:
+        """Only Query Service's 403 for row-level security is turned into the governed-workspace error."""
+        mock_client = MagicMock()
+        mock_client.list_dev_branches.return_value = SAMPLE_BRANCHES
+        mock_client.submit_query.side_effect = KeboolaApiError(
+            message=f"Access denied (token: xxx): {message}",
+            status_code=status,
+            error_code=ErrorCode.ACCESS_DENIED,
+        )
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(config_store=store, client_factory=lambda url, token: mock_client)
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            svc.execute_query(alias="prod", workspace_id=42, sql="SELECT 1")
+
+        if explained:
+            assert "keboola|<adminId>" in excinfo.value.message
+            assert excinfo.value.details == {"workspace_id": 42}
+            assert excinfo.value.error_code == ErrorCode.ACCESS_DENIED
+        else:
+            assert "keboola|<adminId>" not in excinfo.value.message
+
     def test_execute_query_full_uses_csv_export(self, tmp_config_dir: Path) -> None:
         """full=True takes the legacy CSV export path (complete result set)."""
         mock_client = MagicMock()
@@ -2391,6 +2423,13 @@ class TestIssue304WorkspaceListEnrichment:
                 },
                 "readOnlyStorageAccess": True,
             },
+            # Miss: governed and RO -- still qs_compatible, but a Storage-token query is refused
+            {
+                "id": 4,
+                "name": "governed",
+                "connection": {"backend": "snowflake", "loginType": "governed"},
+                "readOnlyStorageAccess": True,
+            },
         ]
         mock_client.list_component_configs.return_value = []
 
@@ -2401,9 +2440,11 @@ class TestIssue304WorkspaceListEnrichment:
         )
 
         result = svc.list_workspaces(aliases=["prod"], qs_compatible_only=True)
+        everything = svc.list_workspaces(aliases=["prod"])
 
-        ids = [w["id"] for w in result["workspaces"]]
-        assert ids == [1]
+        assert [w["id"] for w in result["workspaces"]] == [1]
+        governed = next(w for w in everything["workspaces"] if w["id"] == 4)
+        assert governed["qs_compatible"] is True
 
     def test_explicit_branch_id_propagated_to_client(self, tmp_config_dir: Path) -> None:
         """When the command layer passes branch_id, the client call uses it verbatim."""

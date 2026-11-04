@@ -215,7 +215,8 @@ def workspace_list(
         False,
         "--qs-compatible",
         help="Show only workspaces whose loginType is known to work with the Query "
-        "Service AND that are read-only -- the canonical shape for a data-app.",
+        "Service AND that are read-only -- the canonical shape for a data-app. "
+        "A governed workspace is not listed: a query with a Storage token is refused there.",
     ),
 ) -> None:
     """List workspaces of the active project, the given projects, or all projects.
