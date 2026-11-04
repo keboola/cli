@@ -159,7 +159,64 @@ class TestBind:
         assert result["action"] == "created"
         assert result["kid"] == KID
         assert result["binding_id"] == "b-new"
+        # An rls-only binding drops every cls-policy of the project: said in the output, not only in the docs.
+        assert len(result["warnings"]) == 1 and "no cls-policy" in result["warnings"][0]
+
+    def test_both_kinds_bound_has_no_warning(self, tmp_path: Path) -> None:
+        service, _, _ = _make(tmp_path)
+
+        result = service.bind(
+            "prod", 42, stack_id=STACK, rls_policies=[RLS_ID], cls_policies=[CLS_ID]
+        )
+
         assert "warnings" not in result
+
+    def test_cls_only_binding_warns_about_dropped_rls_policies(self, tmp_path: Path) -> None:
+        service, _, _ = _make(tmp_path)
+
+        result = service.bind("prod", 42, stack_id=STACK, cls_policies=[CLS_ID])
+
+        assert len(result["warnings"]) == 1 and "no rls-policy" in result["warnings"][0]
+
+    def test_binding_under_the_branch_kid_is_updated_not_duplicated(self, tmp_path: Path) -> None:
+        """keboola-operator stores the branch spelling; Query Service fails on two bindings of one workspace."""
+        branch_kid = f"KID:{STACK}:branch-9:project-{PROJECT_ID}:workspace-42"
+        service, metastore, _ = _make(tmp_path, bindings=[_binding(kid=branch_kid, rls=[RLS_ID])])
+
+        result = service.bind(
+            "prod", 42, stack_id=STACK, rls_policies=[RLS_ID_2], cls_policies=[CLS_ID]
+        )
+
+        metastore.post_item.assert_not_called()
+        metastore.put_item.assert_called_once_with(
+            BINDING_TYPE,
+            "b-1",
+            name=branch_kid,
+            data={"kid": branch_kid, "rlsPolicyUUIDs": [RLS_ID_2], "clsPolicyUUIDs": [CLS_ID]},
+        )
+        assert result["action"] == "replaced" and result["kid"] == branch_kid
+
+    def test_unbind_and_bindings_see_the_branch_kid(self, tmp_path: Path) -> None:
+        branch_kid = f"KID:{STACK}:branch-9:project-{PROJECT_ID}:workspace-42"
+        service, metastore, _ = _make(tmp_path, bindings=[_binding(kid=branch_kid, rls=[RLS_ID])])
+
+        listed = service.list_bindings("prod", workspace_id=42)
+        removed = service.unbind("prod", 42, stack_id=STACK)
+
+        assert [row["kid"] for row in listed["bindings"]] == [branch_kid]
+        assert listed["bindings"][0]["workspace_id"] == 42
+        assert removed["deleted"] is True
+        metastore.delete_item.assert_called_once_with(BINDING_TYPE, "b-1")
+
+    def test_another_workspace_or_stack_is_not_the_binding(self, tmp_path: Path) -> None:
+        other = [
+            _binding(kid=f"KID:{STACK}:branch-9:project-{PROJECT_ID}:workspace-43"),
+            _binding(kid=f"KID:other-stack:branch-9:project-{PROJECT_ID}:workspace-42"),
+        ]
+        service, metastore, _ = _make(tmp_path, bindings=other)
+
+        assert service.unbind("prod", 42, stack_id=STACK)["bound"] is False
+        metastore.delete_item.assert_not_called()
 
     def test_replaces_both_lists_when_bound(self, tmp_path: Path) -> None:
         service, metastore, _ = _make(tmp_path, bindings=[_binding(rls=[RLS_ID], cls=[CLS_ID])])
@@ -233,16 +290,19 @@ class TestBind:
         assert exc_info.value.error_code == ErrorCode.INVALID_ARGUMENT
         metastore.post_item.assert_not_called()
 
-    def test_unknown_policy_fails_without_writing(self, tmp_path: Path) -> None:
+    def test_unreadable_policy_is_a_warning_the_metastore_decides(self, tmp_path: Path) -> None:
+        """A project admin reads only its own policies; an organization or granted one 404s here, but the
+        metastore accepts it in a binding, so the bind goes ahead and says so."""
         service, metastore, _ = _make(tmp_path)
         metastore.get_item.side_effect = [{"id": RLS_ID}, _api_error(404, ErrorCode.NOT_FOUND)]
 
-        with pytest.raises(KeboolaApiError) as exc_info:
-            service.bind("prod", 42, stack_id=STACK, rls_policies=[RLS_ID], cls_policies=[CLS_ID])
+        result = service.bind(
+            "prod", 42, stack_id=STACK, rls_policies=[RLS_ID], cls_policies=[CLS_ID]
+        )
 
-        assert exc_info.value.error_code == ErrorCode.NOT_FOUND
-        assert f"cls-policy {CLS_ID}" in exc_info.value.message
-        metastore.post_item.assert_not_called()
+        assert result["action"] == "created"
+        assert any(f"cls-policy {CLS_ID}" in w for w in result["warnings"])
+        metastore.post_item.assert_called_once()
 
     def test_missing_workspace_fails(self, tmp_path: Path) -> None:
         service, metastore, storage = _make(

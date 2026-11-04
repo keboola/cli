@@ -12,6 +12,9 @@ and leaves alone the ones it finds). Query Service reads a binding on every gove
 - a KID with a binding gets only the listed policies: an allowlist that never opens a table no listed
   policy covers, but a policy it leaves out stops applying, so it can loosen access.
 
+A workspace may be bound under either spelling of its KID, with or without the ``branch-<n>`` segment
+(keboola-operator writes the branch form): the commands find the binding under both and update it where it is.
+
 The stack segment is not exposed by any API kbagent can call (Query Service takes it from its own
 configuration), so the caller passes it. The metastore exposes no reverse-reference lookup: whether
 something still references a binding is known only when a delete is refused (HTTP 409).
@@ -40,9 +43,11 @@ MAX_POLICIES_PER_LIST = 100  # the schema's maxItems
 _SWEEP_STATUSES = ("orphaned", "deleted", "kept", "failed")
 
 STACK_ID_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+# The optional `branch-<n>` segment is the other spelling of the same workspace: keboola-operator writes it, and
+# Query Service looks a workspace up under both (a workspace id is unique in its project).
 WORKSPACE_KID_RE = re.compile(
-    r"^KID:(?P<stack>[a-z0-9]+(?:-[a-z0-9]+)*):project-(?P<project>0|[1-9][0-9]*)"
-    r":workspace-(?P<workspace>0|[1-9][0-9]*)$"
+    r"^KID:(?P<stack>[a-z0-9]+(?:-[a-z0-9]+)*)(?::branch-(?:0|[1-9][0-9]*))?"
+    r":project-(?P<project>0|[1-9][0-9]*):workspace-(?P<workspace>0|[1-9][0-9]*)$"
 )
 _APP_SEGMENT_RE = re.compile(r":app-[A-Za-z0-9._%-]+")
 
@@ -80,6 +85,7 @@ class ParsedKid:
     kind: KidKind
     project_id: int | None = None
     workspace_id: int | None = None
+    stack: str | None = None
 
 
 @dataclass(frozen=True)
@@ -124,7 +130,10 @@ def parse_kid(kid: str) -> ParsedKid:
     match = WORKSPACE_KID_RE.match(kid)
     if match:
         return ParsedKid(
-            KidKind.WORKSPACE, int(match.group("project")), int(match.group("workspace"))
+            KidKind.WORKSPACE,
+            int(match.group("project")),
+            int(match.group("workspace")),
+            match.group("stack"),
         )
     if _APP_SEGMENT_RE.search(kid):
         return ParsedKid(KidKind.APP)
@@ -212,8 +221,16 @@ class PolicyBindingService(BaseService):
 
     @staticmethod
     def _find_binding(client: MetastoreClient, kid: str) -> dict[str, Any] | None:
+        """The binding of the workspace ``kid`` names, stored under either spelling of its KID."""
+        wanted = parse_kid(kid)
         for item in client.list_items(BINDING_TYPE):
-            if _binding_row(item)["kid"] == kid:
+            found = _binding_row(item)["kid"]
+            if found == kid or (
+                wanted.kind is KidKind.WORKSPACE
+                and (parsed := parse_kid(found)).kind is KidKind.WORKSPACE
+                and (parsed.stack, parsed.project_id, parsed.workspace_id)
+                == (wanted.stack, wanted.project_id, wanted.workspace_id)
+            ):
                 return item
         return None
 
@@ -240,16 +257,19 @@ class PolicyBindingService(BaseService):
         return WorkspaceCheck(WorkspaceState.GONE)
 
     @staticmethod
-    def _missing_policies(client: MetastoreClient, kind: str, ids: list[str]) -> list[str]:
-        missing: list[str] = []
+    def _unreadable_policies(client: MetastoreClient, kind: str, ids: list[str]) -> list[str]:
+        """The policies this project's token cannot read: a wrong id, or an organization or granted policy
+        (a project admin reads only the policies its own project owns, while the metastore accepts the others
+        in a binding), so the caller can only warn."""
+        unreadable: list[str] = []
         for policy_id in ids:
             try:
                 client.get_item(POLICY_TYPES[kind], policy_id)
             except KeboolaApiError as exc:
                 if exc.status_code != 404:
                     raise
-                missing.append(f"{kind}-policy {policy_id}")
-        return missing
+                unreadable.append(f"{kind}-policy {policy_id}")
+        return unreadable
 
     # ------------------------------------------------------------------
     # Commands
@@ -293,26 +313,35 @@ class PolicyBindingService(BaseService):
                 "governed workspace."
             )
 
+        if not cls_ids:
+            warnings.append(
+                "The binding lists no cls-policy, so every cls-policy of the project stops applying to "
+                "this workspace (all columns visible). Add --cls-policy to keep a column restriction."
+            )
+        if not rls_ids:
+            warnings.append(
+                "The binding lists no rls-policy, so every rls-policy of the project stops applying to "
+                "this workspace (all rows visible). Add --rls-policy to keep a row filter."
+            )
         data: dict[str, Any] = {"kid": kid}
         if rls_ids:
             data["rlsPolicyUUIDs"] = rls_ids
         if cls_ids:
             data["clsPolicyUUIDs"] = cls_ids
         with self._metastore_factory(project.stack_url, project.token) as client:
-            missing = self._missing_policies(client, "rls", rls_ids)
-            missing += self._missing_policies(client, "cls", cls_ids)
-            if missing:
-                raise KeboolaApiError(
-                    message=(
-                        f"Not found in project '{alias}': {', '.join(missing)}. A binding lists "
-                        "existing policies only (`rls list` / `cls list`); a project admin reads "
-                        "only the policies its own project owns."
-                    ),
-                    status_code=404,
-                    error_code=ErrorCode.NOT_FOUND,
-                    retryable=False,
+            unreadable = self._unreadable_policies(client, "rls", rls_ids)
+            unreadable += self._unreadable_policies(client, "cls", cls_ids)
+            if unreadable:
+                warnings.append(
+                    f"Could not read {', '.join(unreadable)} with this project's token (a wrong id, or "
+                    "an organization or granted policy, which a project admin cannot read); the "
+                    "metastore checks every listed policy when the binding is written."
                 )
             existing = self._find_binding(client, kid)
+            if existing is not None:
+                # Update the binding where it is stored, under whichever spelling of the KID.
+                kid = _binding_row(existing)["kid"]
+                data["kid"] = kid
             result: dict[str, Any] = {
                 "project": alias,
                 "workspace_id": workspace_id,
@@ -355,7 +384,13 @@ class PolicyBindingService(BaseService):
                 existing = self._find_binding(client, kid)
                 if existing is None:
                     raise
-        return client.put_item(BINDING_TYPE, existing["id"], name=kid, data=data), "replaced"
+        stored_kid = _binding_row(existing)["kid"]
+        return (
+            client.put_item(
+                BINDING_TYPE, existing["id"], name=stored_kid, data={**data, "kid": stored_kid}
+            ),
+            "replaced",
+        )
 
     def unbind(
         self, alias: str, workspace_id: int, *, stack_id: str | None, dry_run: bool = False
