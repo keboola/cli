@@ -7,6 +7,8 @@ import json
 from typing import Any
 from urllib.parse import quote
 
+from ..constants import WORKSPACE_JOB_MAX_WAIT
+from ..errors import ErrorCode, KeboolaApiError
 from ._core import _CoreClient
 
 
@@ -27,10 +29,31 @@ class _WorkspacesMixin(_CoreClient):
         response = self._request("GET", f"{prefix}/workspaces/{workspace_id}")
         return response.json()
 
-    def delete_workspace(self, workspace_id: int, branch_id: int | None = None) -> None:
-        """Delete a workspace (synchronous)."""
+    def delete_workspace(
+        self, workspace_id: int, branch_id: int | None = None, max_wait: float | None = None
+    ) -> None:
+        """Delete a workspace through a ``workspaceDrop`` Storage job and wait for it.
+
+        The API checks that the workspace exists before enqueueing, so a
+        missing workspace is still a 404 on the DELETE itself.
+
+        Args:
+            workspace_id: Workspace ID.
+            branch_id: Branch ID. Required for workspaces on dev branches.
+            max_wait: Seconds to poll the job. ``None`` means ``WORKSPACE_JOB_MAX_WAIT``.
+
+        Raises:
+            KeboolaApiError: ``STORAGE_JOB_FAILED`` if the drop job fails,
+                ``STORAGE_JOB_TIMEOUT`` (details ``job_id``) if it outlasts the budget.
+        """
         prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
-        self._request("DELETE", f"{prefix}/workspaces/{workspace_id}")
+        response = self._request(
+            "DELETE", f"{prefix}/workspaces/{workspace_id}", params={"async": "true"}
+        )
+        self._wait_for_storage_job(
+            response.json(),
+            max_wait=WORKSPACE_JOB_MAX_WAIT if max_wait is None else max_wait,
+        )
 
     def reset_workspace_password(
         self, workspace_id: int, branch_id: int | None = None
@@ -90,8 +113,15 @@ class _WorkspacesMixin(_CoreClient):
         backend: str = "snowflake",
         login_type: str | None = None,
         public_key: str | None = None,
+        max_wait: float | None = None,
     ) -> dict[str, Any]:
-        """Create a workspace tied to a specific configuration.
+        """Create a workspace tied to a configuration through a ``workspaceCreate`` job.
+
+        The job's ``results`` carry the secret (``connection.password``, or
+        ``connection.credentials`` on BigQuery) only when the project is not on
+        Queue v2 or has the ``workspace-create-show-password`` feature. A
+        key-pair workspace needs no secret back: the private key never leaves
+        the caller.
 
         Args:
             branch_id: Branch ID (use main branch ID for production).
@@ -100,9 +130,15 @@ class _WorkspacesMixin(_CoreClient):
             backend: Workspace backend.
             login_type: Optional Storage API loginType. Omitted when None.
             public_key: Optional public key for key-pair workspaces. Omitted when None.
+            max_wait: Seconds to poll the job. ``None`` means ``WORKSPACE_JOB_MAX_WAIT``.
 
         Returns:
-            Workspace dict including connection credentials.
+            Workspace dict (the job's ``results``).
+
+        Raises:
+            KeboolaApiError: ``STORAGE_JOB_FAILED`` if the job fails, or
+                ``STORAGE_JOB_TIMEOUT`` (``retryable=False``) if it outlasts the
+                budget; both carry ``job_id`` in ``details``.
         """
         safe_component = quote(component_id, safe="")
         safe_config = quote(config_id, safe="")
@@ -115,9 +151,25 @@ class _WorkspacesMixin(_CoreClient):
         response = self._request(
             "POST",
             f"/v2/storage/branch/{branch_id}/components/{safe_component}/configs/{safe_config}/workspaces",
+            params={"async": "true"},
             json=payload,
         )
-        return response.json()
+        job = response.json()
+        try:
+            finished = self._wait_keeps_running(
+                job,
+                budget=WORKSPACE_JOB_MAX_WAIT if max_wait is None else max_wait,
+                operation="workspace create",
+                warning=(
+                    " and may still produce a workspace -- check 'workspace list' before retrying."
+                ),
+            )
+        except KeboolaApiError as exc:
+            # A failed job raises without a job id; callers classify the outcome by it.
+            if exc.error_code == ErrorCode.STORAGE_JOB_FAILED:
+                exc.details.setdefault("job_id", job.get("id"))
+            raise
+        return finished.get("results") or {}
 
     def list_config_workspaces(
         self,

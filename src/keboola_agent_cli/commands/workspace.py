@@ -773,6 +773,8 @@ def workspace_from_transformation(
                 ),
             ),
         )
+        for warning in result.get("warnings", []):
+            formatter.warning(warning)
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
         emit_api_error(formatter, exc)
