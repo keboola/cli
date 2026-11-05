@@ -707,6 +707,15 @@ These lists keep `error`, because their entries are not failed items with an err
 - **Standalone binary from a hand-unpacked archive:** `upgrade_hint` now names the releases list (`https://github.com/keboola/cli/releases`), not `/releases/latest`, which names the previous major until the migration date.
 - **For agents:** never install kbagent from git without `@v<version>`.
 
+## The self-update keeps the Python and the tool environment
+
+*(since vNEXT)*
+
+- **`kbagent update` and the startup auto-update run `uv tool install --reinstall --compile-bytecode --python <interpreter of the running kbagent> <spec>`.** Before, they ran `uv tool install --force --reinstall --compile-bytecode <spec>`. `upgrade_command` in `kbagent --json version` and the recovery command after a failed uv update have the same form. When kbagent finds no uv on `PATH`, or was installed with pip, these commands still contain `--force` and no `--python`.
+- **A failed download or build keeps the old version.** Before, a failed update could delete kbagent. With `--force`, uv 0.10.10 and newer builds a new tool environment and deletes it when the install fails. Without `--python`, uv could select a newly installed Python (for example 3.15 on Windows, where PyYAML has no prebuilt wheel and needs a C compiler) and build the environment again on it.
+- **kbagent stays on the Python it was installed with.** To move it to another Python, install it again with `install.sh` or the PowerShell commands in the README.
+- **A kbagent that runs from the legacy `keboola-agent-cli` tool** still uses `--force`: its update installs the new tool `keboola-cli`, which takes over the `kbagent` executable of the old tool.
+
 ## `--all-projects` on the fan-out reads, and a top-level `warnings[]` in `--json`
 
 *(since 0.100.0)* (CLI-36, #791)
@@ -3080,7 +3089,8 @@ response. Now:
   anything is mutated, the reinstall is an exact-version full reinstall
   (`uv tool install --force --reinstall` for uv tools), and it re-executes the
   original command immediately afterwards. A failed or timed-out reinstall
-  prints a copy-paste recovery command (#528/#530, v0.76.2).
+  prints a copy-paste recovery command (#528/#530, v0.76.2). The current
+  command is in "The self-update keeps the Python and the tool environment".
 
 ## `storage delete-bucket --force` keeps shared buckets, and two delete commands ask on a terminal
 

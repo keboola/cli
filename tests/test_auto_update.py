@@ -439,8 +439,7 @@ class TestPerformUpdate:
         assert _perform_update("2.0.0").outcome is UpdateOutcome.SUCCESS
         argv = mock_install.call_args.args[0]
         # The extras live in the primary PEP 508 requirement so the complete
-        # environment is resolved in one forced reinstall.
-        assert "--force" in argv
+        # environment is resolved in one reinstall.
         assert "--reinstall" in argv
         assert any("keboola-cli[server]" in arg for arg in argv)
         assert "--upgrade" not in argv
@@ -454,11 +453,10 @@ class TestPerformUpdate:
     def test_update_without_server_extras_uses_upgrade(
         self, mock_install, mock_which, mock_has_server
     ):
-        """No-extras installs are also a full forced reinstall."""
+        """No-extras installs are also a full reinstall."""
         mock_install.return_value = _finished_install(InstallStatus.SUCCEEDED)
         assert _perform_update("2.0.0").outcome is UpdateOutcome.SUCCESS
         argv = mock_install.call_args.args[0]
-        assert "--force" in argv
         assert "--reinstall" in argv
         assert "keboola-cli[server]" not in argv
 
@@ -483,8 +481,7 @@ class TestPerformUpdateWheel:
         assert _perform_update("2.0.0").outcome is UpdateOutcome.SUCCESS
 
         argv = mock_install.call_args.args[0]
-        # PEP 508 direct ref to the versioned wheel, --force, and no git+ source.
-        assert "--force" in argv
+        # PEP 508 direct ref to the versioned wheel, and no git+ source.
         assert any(part.endswith("keboola_cli-2.0.0-py3-none-any.whl") for part in argv)
         assert all("git+" not in part for part in argv)
 
