@@ -781,9 +781,9 @@ class TestWorkspaceLoad:
                     "prod",
                     "--workspace-id",
                     "42",
-                    "--tables",
+                    "--table-id",
                     "in.c-main.orders",
-                    "--tables",
+                    "--table-id",
                     "in.c-main.customers",
                 ],
             )
@@ -835,7 +835,7 @@ class TestWorkspaceLoad:
                     "prod",
                     "--workspace-id",
                     "42",
-                    "--tables",
+                    "--table-id",
                     "in.c-main.orders",
                     "--preserve",
                 ],
@@ -899,7 +899,7 @@ class TestWorkspaceLoad:
                     "prod",
                     "--workspace-id",
                     "42",
-                    "--tables",
+                    "--table-id",
                     "in.c-main.orders",
                 ],
             )
@@ -938,7 +938,7 @@ class TestWorkspaceLoad:
                     "prod",
                     "--workspace-id",
                     "42",
-                    "--tables",
+                    "--table-id",
                     "in.c-main.orders",
                     "--load-type",
                     "clone",
@@ -975,7 +975,7 @@ class TestWorkspaceLoad:
                     "prod",
                     "--workspace-id",
                     "42",
-                    "--tables",
+                    "--table-id",
                     "in.c-main.orders",
                     "--load-type",
                     "teleport",
@@ -1010,7 +1010,7 @@ class TestWorkspaceLoad:
                     "prod",
                     "--workspace-id",
                     "42",
-                    "--tables",
+                    "--table-id",
                     "in.c-main.orders",
                     "--timeout",
                     bad,
@@ -1041,7 +1041,7 @@ class TestWorkspaceLoad:
                     "prod",
                     "--workspace-id",
                     "42",
-                    "--tables",
+                    "--table-id",
                     "in.c-main.big",
                 ],
                 input="y\n",
@@ -1071,7 +1071,7 @@ class TestWorkspaceLoad:
                     "prod",
                     "--workspace-id",
                     "42",
-                    "--tables",
+                    "--table-id",
                     "in.c-main.big",
                 ],
                 input="n\n",
@@ -1103,7 +1103,7 @@ class TestWorkspaceLoad:
                     "prod",
                     "--workspace-id",
                     "42",
-                    "--tables",
+                    "--table-id",
                     "in.c-main.big",
                 ],
                 input="y\n",
@@ -1138,7 +1138,7 @@ class TestWorkspaceLoad:
                     "prod",
                     "--workspace-id",
                     "42",
-                    "--tables",
+                    "--table-id",
                     "in.c-main.big",
                 ],
             )
@@ -1182,9 +1182,9 @@ class TestWorkspaceLoad:
                     "prod",
                     "--workspace-id",
                     "42",
-                    "--tables",
+                    "--table-id",
                     "in.c-main.orders",
-                    "--tables",
+                    "--table-id",
                     "in.c-ext.events",
                 ],
             )
@@ -1227,7 +1227,7 @@ class TestWorkspaceLoad:
                     "prod",
                     "--workspace-id",
                     "42",
-                    "--tables",
+                    "--table-id",
                     "in.c-main.empty",
                 ],
             )
@@ -1300,7 +1300,7 @@ class TestWorkspaceQuery:
         assert output["data"]["statements"][0]["csv_data"] == "col1,col2\na,b\n"
 
     def test_workspace_query_file_success_json(self, tmp_path: Path) -> None:
-        """workspace query --file --json reads SQL from file."""
+        """workspace query --sql-file --json reads SQL from file."""
         config_dir = tmp_path / "config"
         config_dir.mkdir()
 
@@ -1351,7 +1351,7 @@ class TestWorkspaceQuery:
                     "prod",
                     "--workspace-id",
                     "42",
-                    "--file",
+                    "--sql-file",
                     str(sql_file),
                 ],
             )
@@ -1406,7 +1406,7 @@ class TestWorkspaceQuery:
         output = json.loads(result.output)
         assert output["status"] == "error"
         assert output["error"]["code"] == "USAGE_ERROR"
-        assert "Specify either --sql or --file" in output["error"]["message"]
+        assert "Specify either --sql or --sql-file" in output["error"]["message"]
 
     def test_workspace_query_both_sql_and_file(self, tmp_path: Path) -> None:
         """workspace query with both --sql and --file returns exit code 2."""
@@ -1445,7 +1445,7 @@ class TestWorkspaceQuery:
                     "42",
                     "--sql",
                     "SELECT 1",
-                    "--file",
+                    "--sql-file",
                     str(sql_file),
                 ],
             )

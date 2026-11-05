@@ -97,7 +97,7 @@ class TestHttpPostBody:
         body_file = tmp_path / "body.json"
         body_file.write_text(json.dumps({"foo": "bar"}))
         httpx_mock.add_response(url=f"{SERVE_URL}/x", json={"ok": True}, status_code=200)
-        result = runner.invoke(app, ["http", "post", "/x", "--body", f"@{body_file}"])
+        result = runner.invoke(app, ["http", "post", "/x", "--body-file", str(body_file)])
         assert result.exit_code == 0
         sent = json.loads(httpx_mock.get_requests()[0].read())
         assert sent == {"foo": "bar"}

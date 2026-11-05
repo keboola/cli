@@ -119,7 +119,7 @@ OPERATION_REGISTRY: dict[str, str] = {
     "sharing.share": "write",
     "sharing.unshare": "write",
     "sharing.link": "write",
-    "sharing.unlink": "write",
+    "sharing.unlink": "destructive",
     # Organization
     "org.setup": "admin",
     # Branch lifecycle
@@ -128,7 +128,6 @@ OPERATION_REGISTRY: dict[str, str] = {
     "branch.use": "write",
     "branch.reset": "write",
     "branch.delete": "destructive",
-    "branch.merge": "write",
     "branch.metadata-list": "read",
     "branch.metadata-get": "read",
     "branch.metadata-set": "write",
@@ -245,6 +244,7 @@ OPERATION_REGISTRY: dict[str, str] = {
     "data-app.git-repo": "read",
     "data-app.git-credentials": "read",
     "data-app.git-credentials-create": "write",
+    "data-app.git-auth-set": "write",
     # Developer Portal — identity sub-app leaves (composed by the
     # identity_app callback as "dev-portal.identity.<subcommand>")
     "dev-portal.identity.add": "write",
@@ -372,7 +372,7 @@ OPERATION_REGISTRY: dict[str, str] = {
     "semantic-layer.scope.remove": "write",
     "semantic-layer.scope.set": "write",
     "semantic-layer.scope.request-create": "write",
-    "semantic-layer.scope.request-delete": "write",
+    "semantic-layer.scope.request-cancel": "write",
     # Serve-only AI helpers (since 0.99.0). Neither touches Keboola, but both
     # spawn a local `claude` / `codex` / `gemini` process on the host, exactly
     # like `agent prompt-improve` -- classified `write` for the same reason, so
@@ -500,19 +500,10 @@ SERVE_ONLY_OPERATIONS: frozenset[str] = frozenset(
 )
 
 
-# The operation namespace that disappeared with the MCP passthrough, and the
-# version that removed it. A pattern aimed at it can no longer match anything.
-INERT_PATTERN_PREFIX = "tool:"
-INERT_SINCE_VERSION = "0.85.0"
-
-# Single wording for the "your policy carries dead rules" hint, so `permissions
-# show` and `kbagent doctor` cannot drift apart.
-INERT_PATTERN_HINT = "Rewrite the intent with cli:* categories -- see docs/mcp-migration.md."
-
-# Generic hint for a pattern that matches nothing for a reason other than the
-# retired `tool:` namespace (most commonly a typo). Kept distinct from
-# INERT_PATTERN_HINT so `permissions show` / `doctor` can point at the right
-# fix instead of always mentioning the MCP migration.
+# The hint for a pattern that matches no known operation (a typo, or the
+# `tool:` namespace removed with the MCP passthrough in 0.85.0). One wording,
+# so `permissions show`, `GET /permissions/show` and `kbagent doctor` cannot
+# drift apart.
 UNMATCHED_PATTERN_HINT = (
     "Check for typos against `kbagent permissions list`, or use a cli:* category "
     "(cli:read, cli:write, cli:destructive, cli:admin)."

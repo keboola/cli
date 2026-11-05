@@ -91,7 +91,13 @@ def link(
 
 @router.post("/{project}/unlink/{bucket_id:path}", summary="Unlink a shared bucket")
 def unlink(
-    project: str, bucket_id: str, registry: ServiceRegistry = Depends(get_registry)
+    project: str,
+    bucket_id: str,
+    dry_run: bool = False,
+    registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
-    """Remove a linked shared bucket. Mirrors `kbagent sharing unlink`."""
-    return registry.sharing.unlink(alias=project, bucket_id=bucket_id)
+    """Remove a linked shared bucket. Mirrors `kbagent sharing unlink`.
+
+    No confirmation over REST: the request is the consent, as with `--yes`.
+    """
+    return registry.sharing.unlink(alias=project, bucket_id=bucket_id, dry_run=dry_run)

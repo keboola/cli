@@ -4,14 +4,15 @@
   stderr; without a terminal the command refuses with CONFIRMATION_REQUIRED.
 - `branch delete` and `workspace delete`: --yes, a read-only --dry-run and the
   confirmation; the REST routes pass `dry_run` and never prompt.
-- The hidden deprecated flags `stream delete --force` and
-  `semantic-layer import --yes` keep working and add a DEPRECATED warning.
+- A form that 1.0.0 removed (`stream delete --force`, `project add --project`,
+  `branch merge`, ...) is a usage error whose message names the replacement.
 """
 
 from __future__ import annotations
 
 import importlib.util
 import json
+import re
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -24,7 +25,6 @@ from helpers import TerminalRunner, setup_single_project
 from keboola_agent_cli.cli import app
 from keboola_agent_cli.commands import _helpers
 from keboola_agent_cli.commands._helpers import (
-    DEPRECATED_CODE,
     DEPRECATIONS,
     _confirm_or_abort,
     deprecated_option,
@@ -137,7 +137,7 @@ class TestConfirmOrAbort:
 
 
 # --------------------------------------------------------------------------- #
-# branch delete / workspace delete (S2, S5)
+# branch delete / workspace delete / sharing unlink (S2, S5)
 # --------------------------------------------------------------------------- #
 
 DELETE_COMMANDS: dict[str, tuple[str, str, list[str], dict[str, Any]]] = {
@@ -152,6 +152,12 @@ DELETE_COMMANDS: dict[str, tuple[str, str, list[str], dict[str, Any]]] = {
         "delete_workspace",
         ["workspace", "delete", "--project", ALIAS, "--workspace-id", "7"],
         {"alias": ALIAS, "workspace_id": 7},
+    ),
+    "sharing unlink": (
+        "SharingService",
+        "unlink",
+        ["sharing", "unlink", "--project", ALIAS, "--bucket-id", "in.c-linked"],
+        {"alias": ALIAS, "bucket_id": "in.c-linked"},
     ),
 }
 
@@ -306,14 +312,28 @@ fastapi_missing = importlib.util.find_spec("fastapi") is None
 
 @pytest.mark.skipif(fastapi_missing, reason="FastAPI not installed")
 @pytest.mark.parametrize(
-    ("path", "service_name", "method", "kwargs"),
+    ("verb", "path", "service_name", "method", "kwargs"),
     [
-        ("/branches/prod/5", "branch", "delete_branch", {"alias": ALIAS, "branch_id": 5}),
         (
+            "delete",
+            "/branches/prod/5",
+            "branch",
+            "delete_branch",
+            {"alias": ALIAS, "branch_id": 5},
+        ),
+        (
+            "delete",
             "/workspaces/prod/7",
             "workspace",
             "delete_workspace",
             {"alias": ALIAS, "workspace_id": 7},
+        ),
+        (
+            "post",
+            "/sharing/prod/unlink/in.c-linked",
+            "sharing",
+            "unlink",
+            {"alias": ALIAS, "bucket_id": "in.c-linked"},
         ),
     ],
 )
@@ -321,6 +341,7 @@ fastapi_missing = importlib.util.find_spec("fastapi") is None
 def test_rest_delete_route_passes_dry_run_and_never_prompts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    verb: str,
     path: str,
     service_name: str,
     method: str,
@@ -341,92 +362,175 @@ def test_rest_delete_route_passes_dry_run_and_never_prompts(
     server.dependency_overrides[get_registry] = lambda: registry
 
     query = "?dry_run=true" if dry_run else ""
-    response = TestClient(server).delete(f"{path}{query}", headers={"Authorization": "Bearer t"})
+    client = TestClient(server)
+    response = getattr(client, verb)(f"{path}{query}", headers={"Authorization": "Bearer t"})
 
     assert response.status_code == 200, response.text
     getattr(service, method).assert_called_once_with(**kwargs, dry_run=dry_run)
 
 
 # --------------------------------------------------------------------------- #
-# Deprecated flags (S3, C3)
+# Removed forms (C3): 1.0.0 removed the forms that 0.x kept for compatibility
 # --------------------------------------------------------------------------- #
 
+REMOVED_CLI_FORMS = [
+    (["stream", "delete", "--source-id", "s1", "--force"], "Use --yes"),
+    (["semantic-layer", "import", "--file", "f.json", "--yes"], "omit it"),
+    (["sl", "import", "--file", "f.json", "-y"], "omit it"),
+    (["project", "add", "--project", "new", "--url", "https://x"], "Use --alias"),
+    (["project", "add", "-p", "new", "--url", "https://x"], "Use --alias"),
+    (["project", "create", "--url", "https://x", "--project", "new"], "Use --alias"),
+    (["project", "refresh", "--all"], "Use --all-projects"),
+    (["merge-request", "detail", "--id", "7"], "Use --merge-request-id"),
+    (["mr", "approve", "--id", "7"], "Use --merge-request-id"),
+    (["agent", "show", "--id", "abc"], "Use --task-id"),
+    (["semantic-layer", "reference-data", "get", "--id", "r1"], "Use --reference-data-id"),
+    (["sl", "reference-data", "delete", "--id", "r1", "--yes"], "Use --reference-data-id"),
+    (["branch", "merge", "--branch", "1"], "kbagent merge-request"),
+    (["storage", "describe-batch", "--from-file", "d.yaml"], "Use --file"),
+    (["project", "invite", "--from-csv", "p.csv"], "Use --file"),
+    (
+        ["storage", "create-table", "--bucket-id", "in.c-b", "--name", "t", "--not-null", "id"],
+        "Use --not-null-column",
+    ),
+    (["stream", "detail", "s1"], "Use --source-id"),
+    (["stream", "detail", "s1", "--project", "p", "--reveal"], "Use --source-id"),
+    (["stream", "delete", "s1", "--yes"], "Use --source-id"),
+    (["agent", "show", "t1"], "Use --task-id."),
+    (["agent", "update", "t1", "--disabled"], "Use --task-id."),
+    (["agent", "delete", "t1", "--yes"], "Use --task-id."),
+    (["agent", "run", "t1"], "Use --task-id."),
+    (["agent", "runs", "t1"], "Use --task-id."),
+    (["agent", "run-detail", "t1", "r1"], "Use --task-id and --run-id"),
+    (["agent", "run-events", "--task-id", "t1", "r1"], "Use --task-id and --run-id"),
+    (
+        ["semantic-layer", "scope", "request-delete", "--type", "model", "--context-id", "c1"],
+        "scope request-cancel",
+    ),
+    (["sl", "scope", "request-delete", "--type", "model", "--context-id", "c1"], "request-cancel"),
+    (["org", "setup", "--url", "https://x", "--project-ids", "1"], "Use --project-id"),
+    (
+        [
+            "sharing",
+            "share",
+            "--bucket-id",
+            "out.c-d",
+            "--type",
+            "selected-projects",
+            "--target-project-ids",
+            "1",
+        ],
+        "Use --target-project",
+    ),
+    (
+        [
+            "sharing",
+            "share",
+            "--bucket-id",
+            "out.c-d",
+            "--type",
+            "selected-users",
+            "--target-users",
+            "a@example.com",
+        ],
+        "Use --target-user",
+    ),
+    (
+        [
+            "semantic-layer",
+            "add",
+            "constraint",
+            "--name",
+            "c",
+            "--constraint-type",
+            "range",
+            "--rule",
+            "x > 0",
+            "--metrics",
+            "m1",
+        ],
+        "Use --metric",
+    ),
+    (["sl", "edit", "constraint", "--name", "c", "--new-metrics", "m1"], "Use --new-metric"),
+    (["semantic-layer", "build", "--tables", "in.c-a.t1"], "Use --table-id"),
+    (["semantic-layer", "import", "--file", "f.json", "--types", "metrics"], "Use --type"),
+    (["sl", "promote", "--from-project", "a", "--to-project", "b", "--types", "x"], "Use --type"),
+    (["workspace", "load", "--workspace-id", "7", "--tables", "in.c-a.t1"], "Use --table-id"),
+    (["storage", "download-table", "--table-id", "in.c-a.t1", "--columns", "a"], "Use --column"),
+    (["storage", "unload-table", "--table-id", "in.c-a.t1", "--columns", "a"], "Use --column"),
+    (["token", "list", "--columns", "id"], "Use --column"),
+    (["lineage", "show", "--load", "g.json"], "Use --file"),
+    (["lineage", "info", "-l", "g.json"], "Use --file"),
+    (["lineage", "server", "--load", "g.json"], "Use --file"),
+    (["storage", "describe-bucket", "--bucket-id", "in.c-a", "--text", "x"], "Use --description"),
+    (["storage", "describe-table", "--table-id", "in.c-a.t", "--file", "d.md"], "--description"),
+    (["project", "description-set", "--stdin"], "--description-file"),
+    (["branch", "metadata-set", "--key", "k", "--text", "v"], "Use --value"),
+    (["branch", "metadata-set", "--key", "k", "--file", "v.txt"], "--value-file"),
+    (["branch", "metadata-set", "--key", "k", "--stdin"], "--value-file"),
+    (["workspace", "query", "--workspace-id", "7", "--file", "q.sql"], "Use --sql-file"),
+    (["agent", "create", "--name", "n", "--from-file", "a.json"], "Use --definition"),
+    (["agent", "test", "--from-file", "a.json"], "--definition-file"),
+    (["flow", "new", "--name", "n", "--file", "f.yaml"], "Use --definition"),
+    (["flow", "update", "--flow-id", "1", "--file", "f.yaml"], "--definition-file"),
+    (["flow", "validate", "--file", "f.yaml"], "Use --definition"),
+    (["encrypt", "values", "--component-id", "c", "--input", "{}"], "Use --values"),
+    (["data-app", "secrets-set", "--app-id", "a", "--secrets-file", "s.json"], "--secret-file"),
+]
 
-def _deprecated_entries(stdout: str) -> list[dict[str, Any]]:
-    return [w for w in json.loads(stdout).get("warnings", []) if w["code"] == DEPRECATED_CODE]
+
+@pytest.mark.parametrize(("args", "replacement"), REMOVED_CLI_FORMS)
+def test_removed_form_is_a_usage_error_that_names_the_replacement(
+    tmp_path: Path, args: list[str], replacement: str
+) -> None:
+    result = runner.invoke(app, ["--config-dir", str(tmp_path), "--json", *args])
+
+    assert result.exit_code == 2, result.output
+    error = json.loads(result.stdout)["error"]
+    assert error["code"] == "USAGE_ERROR"
+    assert "removed in 1.0.0" in error["message"]
+    assert replacement in error["message"]
 
 
-class TestStreamDeleteForce:
-    def _service(self) -> MagicMock:
-        service = MagicMock()
-        service.delete_source.return_value = {"status": "deleted", "source_id": "s1"}
-        return service
-
-    def test_force_is_hidden_alias_of_yes_with_warning(self, tmp_path: Path) -> None:
-        service = self._service()
-        result = _invoke(
-            tmp_path,
-            "StreamService",
-            service,
-            ["--json", "stream", "delete", "s1", "--project", ALIAS, "--force"],
-        )
-        assert result.exit_code == 0, result.output
-        service.delete_source.assert_called_once()
-        [entry] = _deprecated_entries(result.stdout)
-        assert entry["replacement"] == "--yes"
-        assert entry["hint"] == "--yes"
-        assert "remove_after" in entry
-
-    def test_force_skips_the_confirmation_without_terminal(self, tmp_path: Path) -> None:
-        service = self._service()
-        result = _invoke(
-            tmp_path,
-            "StreamService",
-            service,
-            ["stream", "delete", "s1", "--project", ALIAS, "--force"],
-        )
-        assert result.exit_code == 0, result.output
-        assert "deprecated" in result.stderr
-        service.delete_source.assert_called_once()
-
-    def test_yes_adds_no_warning(self, tmp_path: Path) -> None:
-        service = self._service()
-        result = _invoke(
-            tmp_path,
-            "StreamService",
-            service,
-            ["--json", "stream", "delete", "s1", "--project", ALIAS, "--yes"],
-        )
-        assert result.exit_code == 0, result.output
-        assert _deprecated_entries(result.stdout) == []
-
-    def test_force_is_not_in_help(self) -> None:
-        result = runner.invoke(app, ["stream", "delete", "--help"])
-        assert result.exit_code == 0
-        assert "--force" not in result.stdout
+_ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+_BOX = re.compile(r"[\u2500-\u257f]")
 
 
-class TestSemanticLayerImportYes:
-    def _run(self, tmp_path: Path, extra: list[str]) -> tuple[Any, MagicMock]:
-        snapshot = tmp_path / "snapshot.json"
-        snapshot.write_text("{}", encoding="utf-8")
-        service = MagicMock()
-        service.import_snapshot.return_value = {"target_project": ALIAS, "imported": {}}
-        args = ["--json", "semantic-layer", "import", "--project", ALIAS, "--file", str(snapshot)]
-        result = _invoke(tmp_path, "SemanticLayerService", service, [*args, *extra])
-        return result, service
+def test_removed_form_in_human_mode_names_the_replacement(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["--config-dir", str(tmp_path), "project", "refresh", "--all"])
 
-    def test_yes_still_works_with_warning(self, tmp_path: Path) -> None:
-        result, service = self._run(tmp_path, ["--yes"])
-        assert result.exit_code == 0, result.output
-        service.import_snapshot.assert_called_once()
-        [entry] = _deprecated_entries(result.stdout)
-        assert entry["replacement"] is None
+    assert result.exit_code == 2
+    # Without color codes, Rich box lines and line wrapping (CI forces color).
+    stderr = " ".join(_BOX.sub(" ", _ANSI.sub("", result.stderr)).split())
+    assert "project refresh --all was removed in 1.0.0. Use --all-projects." in stderr
 
-    def test_without_yes_no_warning(self, tmp_path: Path) -> None:
-        result, _ = self._run(tmp_path, [])
-        assert result.exit_code == 0, result.output
-        assert _deprecated_entries(result.stdout) == []
+
+def test_unknown_option_without_a_removed_form_keeps_the_click_message(tmp_path: Path) -> None:
+    result = runner.invoke(
+        app,
+        [
+            "--config-dir",
+            str(tmp_path),
+            "--json",
+            "stream",
+            "delete",
+            "--source-id",
+            "s1",
+            "--nope",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "was removed" not in json.loads(result.stdout)["error"]["message"]
+
+
+def test_extra_argument_without_a_removed_form_keeps_the_click_message(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["--config-dir", str(tmp_path), "--json", "stream", "list", "s1"])
+
+    assert result.exit_code == 2
+    message = json.loads(result.stdout)["error"]["message"]
+    assert "unexpected extra argument" in message
+    assert "was removed" not in message
 
 
 def test_deprecated_option_needs_a_registry_entry() -> None:
@@ -434,19 +538,45 @@ def test_deprecated_option_needs_a_registry_entry() -> None:
         deprecated_option("stream delete --nope", "--nope")
 
 
-def test_every_deprecation_names_a_hidden_option_of_a_live_command() -> None:
+def test_deprecated_option_refuses_a_removed_form() -> None:
+    with pytest.raises(KeyError):
+        deprecated_option("stream delete --force", "--force")
+
+
+def _leaves(command: Any) -> list[Any]:
+    if hasattr(command, "commands"):
+        return [leaf for sub in command.commands.values() for leaf in _leaves(sub)]
+    return [command]
+
+
+def test_every_cli_form_in_the_registry_names_a_live_command() -> None:
+    """A deprecated form is a hidden option; a removed one is gone from every command it names."""
     import typer.main
 
-    root = typer.main.get_command(app)
+    root: Any = typer.main.get_command(app)
     # A REST form ("PUT /path") is checked in tests/test_server_response_meta.py.
-    for form in (f for f in DEPRECATIONS if not f.split()[0].isupper()):
-        *path, option = form.split()
+    for form, entry in ((f, e) for f, e in DEPRECATIONS.items() if not f.split()[0].isupper()):
+        *path, last = form.split()
         command: Any = root
         for name in path:
             command = command.commands[name]
-        param = next((p for p in command.params if option in getattr(p, "opts", [])), None)
-        assert param is not None, form
-        assert param.hidden, form
+        if last.isupper():
+            # A removed positional argument: the command has no argument of that name.
+            arguments = [
+                p.human_readable_name for p in command.params if p.param_type_name == "argument"
+            ]
+            assert entry.removed_in and last not in arguments, form
+            continue
+        if not last.startswith("-"):
+            assert entry.removed_in and last not in command.commands, form
+            continue
+        names = {last, *entry.other_names}
+        params = [p for leaf in _leaves(command) for p in leaf.params]
+        found = [p for p in params if names & set(getattr(p, "opts", []))]
+        if entry.removed_in:
+            assert found == [], form
+        else:
+            assert found and all(p.hidden for p in found), form
 
 
 # --------------------------------------------------------------------------- #

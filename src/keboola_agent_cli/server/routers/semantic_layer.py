@@ -29,7 +29,7 @@ from ...errors import ErrorCode
 from ...permissions import PermissionEngine
 from ...services.semantic_layer_service import SCHEMA_TYPE_ALIAS
 from ..dependencies import ServiceRegistry, get_permission_engine, get_registry
-from ..response_meta import note_operation, warn_deprecated
+from ..response_meta import note_operation
 
 router = APIRouter(prefix="/semantic-layer", tags=["semantic-layer"])
 
@@ -601,22 +601,6 @@ def patch_item(
         raise HTTPException(
             status_code=422, detail=f"Unknown field(s) for {kind}: {', '.join(unknown)}."
         )
-    return _edit_item(kind, name, body, registry)
-
-
-@router.put(
-    "/items/{kind}/{name}",
-    summary="Edit a model entity (deprecated: use PATCH)",
-    deprecated=True,
-)
-def edit_item(
-    kind: ItemKind,
-    name: str,
-    body: dict[str, Any],
-    registry: ServiceRegistry = Depends(get_registry),
-) -> dict[str, Any]:
-    """Deprecated form of ``PATCH`` (spec V9): same result, plus a ``DEPRECATED`` warning."""
-    warn_deprecated("PUT /semantic-layer/items/{kind}/{name}")
     return _edit_item(kind, name, body, registry)
 
 

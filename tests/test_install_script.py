@@ -47,9 +47,15 @@ case "$url" in
 esac
 """
 
-# uv stub: logs the install spec (the last argument); fails when it contains any of
-# the |-separated substrings in $FAKE_UV_FAIL.
+# uv stub: `uv tool dir --bin` prints $FAKE_UV_BIN_DIR. An install logs its spec
+# (the last argument) and its whole command line; it fails when the spec contains
+# any of the |-separated substrings in $FAKE_UV_FAIL.
 UV_STUB = """#!/bin/sh
+if [ "$1 $2 $3" = "tool dir --bin" ]; then
+  [ -z "$FAKE_UV_DIR_FAIL" ] || exit 2
+  printf '%s\\n' "$FAKE_UV_BIN_DIR"; exit 0
+fi
+printf '%s\\n' "$*" >> "$STUB_LOG_DIR/uv-args.log"
 for arg in "$@"; do spec="$arg"; done
 printf '%s\\n' "$spec" >> "$STUB_LOG_DIR/uv.log"
 old_ifs=$IFS; IFS='|'
@@ -94,6 +100,10 @@ class Run:
         return self._lines("uv.log")
 
     @property
+    def uv_commands(self) -> list[str]:
+        return self._lines("uv-args.log")
+
+    @property
     def curl_calls(self) -> list[str]:
         return self._lines("curl.log")
 
@@ -113,6 +123,8 @@ def run_install(tmp_path: Path):
     log_dir = tmp_path / "logs"
     log_dir.mkdir()
     pypi_file = tmp_path / "pypi.json"
+    bin_dir = tmp_path / "tool-bin"
+    bin_dir.mkdir()
 
     def _run(pypi: str | None, *, wheel_head: str = "ok", uv_fail: str = "", **env: str) -> Run:
         if pypi is None:
@@ -135,12 +147,22 @@ def run_install(tmp_path: Path):
                 "FAKE_PYPI_JSON": str(pypi_file),
                 "FAKE_WHEEL_HEAD": wheel_head,
                 "FAKE_UV_FAIL": uv_fail,
+                "FAKE_UV_BIN_DIR": str(bin_dir),
+                "FAKE_UV_DIR_FAIL": "",
                 **env,
             },
         )
         return Run(proc, log_dir)
 
     return _run
+
+
+def fake_kbagent(directory: Path, version_line: str) -> Path:
+    """A `kbagent` that prints ``version_line`` for `--version`."""
+    exe = directory / "kbagent"
+    exe.write_text(f"#!/bin/sh\necho '{version_line}'\n", encoding="utf-8")
+    exe.chmod(0o755)
+    return exe
 
 
 def wheel(version: str) -> str:
@@ -227,6 +249,67 @@ class TestFallbacks:
 
         assert run.uv_specs == ["keboola-cli[server]"]
         assert not any(".whl" in call for call in run.curl_calls)
+
+
+class TestInstallCommand:
+    def test_every_install_compiles_the_bytecode(self, run_install) -> None:
+        """Without it, Python compiles ~700 modules on the first run of kbagent."""
+        run = run_install(pypi_json("1.0.0"), uv_fail=".whl|==1.0.0")
+
+        assert len(run.uv_commands) == 3, run.output
+        assert all("--compile-bytecode" in command for command in run.uv_commands)
+
+    def test_the_fallback_without_a_version_compiles_the_bytecode(self, run_install) -> None:
+        run = run_install(None)
+
+        assert run.uv_commands == ["tool install --force --compile-bytecode keboola-cli[server]"]
+
+
+class TestSummary:
+    def test_reports_the_installed_executable(self, run_install, tmp_path: Path) -> None:
+        installed = fake_kbagent(tmp_path / "tool-bin", "kbagent v1.0.0")
+        run = run_install(pypi_json("1.0.0"))
+
+        assert run.proc.returncode == 0, run.output
+        assert f"kbagent v1.0.0  ->  {installed}" in run.output.replace("\u2192", "->")
+        assert "warning:" not in run.output
+
+    def test_warns_when_another_kbagent_comes_first_on_path(
+        self, run_install, tmp_path: Path
+    ) -> None:
+        installed = fake_kbagent(tmp_path / "tool-bin", "kbagent v1.0.0")
+        shadow = fake_kbagent(tmp_path / "stubs", "kbagent v0.100.4")
+        run = run_install(pypi_json("1.0.0"))
+
+        assert run.proc.returncode == 0, run.output
+        output = run.output.replace("\u2192", "->")
+        assert f"kbagent v1.0.0  ->  {installed}" in output
+        assert f"warning: kbagent v0.100.4 at {shadow} comes first on PATH" in output
+        assert str(tmp_path / "tool-bin") in output
+
+    def test_a_trailing_slash_in_the_bin_dir_is_the_same_file(
+        self, run_install, tmp_path: Path
+    ) -> None:
+        installed = fake_kbagent(tmp_path / "tool-bin", "kbagent v1.0.0")
+        run = run_install(
+            pypi_json("1.0.0"),
+            FAKE_UV_BIN_DIR=f"{tmp_path / 'tool-bin'}/",
+            PATH=f"{tmp_path / 'tool-bin'}:{tmp_path / 'stubs'}:/usr/bin:/bin",
+        )
+
+        assert run.proc.returncode == 0, run.output
+        assert f"kbagent v1.0.0  ->  {installed}" in run.output.replace("\u2192", "->")
+        assert "warning:" not in run.output
+
+    def test_without_the_uv_bin_dir_it_shows_the_kbagent_on_path(
+        self, run_install, tmp_path: Path
+    ) -> None:
+        on_path = fake_kbagent(tmp_path / "stubs", "kbagent v1.0.0")
+        run = run_install(pypi_json("1.0.0"), FAKE_UV_DIR_FAIL="1")
+
+        assert run.proc.returncode == 0, run.output
+        assert f"kbagent v1.0.0  ->  {on_path}" in run.output.replace("\u2192", "->")
+        assert "warning:" not in run.output
 
 
 def test_install_script_is_valid_posix_sh() -> None:

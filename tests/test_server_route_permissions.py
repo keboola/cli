@@ -604,7 +604,7 @@ class TestVariablesReplaceEscalation:
         assert "config.variables-set --replace" in response.json()["error"]["message"]
         variables.set_variables.assert_not_called()
 
-        response = client.put(path, headers=AUTH, json={"variables": {"k": "v"}})
+        response = client.patch(path, headers=AUTH, json={"variables": {"k": "v"}})
         assert response.status_code == 200, response.text
         variables.set_variables.assert_called_once()
 
@@ -661,7 +661,7 @@ class TestLeafKeysFromPathParam:
             "semantic-layer.add.glossary",
         )
         self._assert_denied(
-            client.put(f"{_SL}/items/metric/x", headers=AUTH, json=edit),
+            client.patch(f"{_SL}/items/metric/x", headers=AUTH, json=edit),
             "semantic-layer.edit.metric",
         )
         self._assert_denied(
@@ -672,7 +672,10 @@ class TestLeafKeysFromPathParam:
         sl.edit_metric.assert_not_called()
         sl.remove_item.assert_not_called()
         # Other kinds of edit and remove stay allowed.
-        assert client.put(f"{_SL}/items/glossary/t", headers=AUTH, json=edit).status_code == 200
+        # PATCH refuses a field the kind does not have (V9): a glossary term has a definition.
+        glossary_edit = {"project": "demo", "new_definition": "x"}
+        response = client.patch(f"{_SL}/items/glossary/t", headers=AUTH, json=glossary_edit)
+        assert response.status_code == 200, response.text
         response = client.delete(
             f"{_SL}/items/glossary/t", headers=AUTH, params={"project": "demo"}
         )
@@ -815,7 +818,8 @@ class TestPermissionsShowEndpoint:
         _persist_policy(tmp_path, PermissionPolicy(mode="allow", deny=["tool:write"]))
         body = _client(tmp_path).get("/permissions/show", headers=AUTH).json()
         assert body["inert_patterns"] == ["tool:write"]
-        assert body["inert_since_version"] == "0.85.0"
+        assert "inert_since_version" not in body
+        assert "kbagent permissions list" in body["inert_hint"]
 
     def test_is_reachable_under_a_total_deny(self, tmp_path: Path) -> None:
         """Discovery must survive the policy it describes, or it is useless."""
@@ -856,9 +860,6 @@ class TestVerbAndRiskClassAgree:
         "POST /lineage/show",
         "POST /semantic-layer/diff",
     }
-    # `branch merge` only ever produces a URL (the merge happens in the web
-    # UI), so mirroring its `write` class on a GET is CLI parity, not a slip.
-    _NON_READ_GETS: ClassVar[set[str]] = {"GET /branches/{project}/merge-url"}
     # DELETE of a grant or a pending request, not of data: it narrows an item's
     # visibility or withdraws an elevation request, and the CLI classifies both
     # `write`. Mirroring that class is CLI parity.
@@ -895,7 +896,6 @@ class TestVerbAndRiskClassAgree:
             for (method, path), op in ROUTE_OPERATIONS.items()
             if method == "GET" and OPERATION_REGISTRY[op] != "read"
         )
-        assert set(offenders) <= self._NON_READ_GETS, (
-            "A GET classified above `read` is blocked by --deny-writes; make sure "
-            f"that is intended: {sorted(set(offenders) - self._NON_READ_GETS)}"
+        assert offenders == [], (
+            f"A GET classified above `read` is blocked by --deny-writes: {offenders}"
         )

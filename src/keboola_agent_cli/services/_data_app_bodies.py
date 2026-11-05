@@ -470,10 +470,11 @@ def _redact_secret(value: Any) -> Any:
 
 
 def _redact_git_block(git: dict[str, Any]) -> dict[str, Any]:
-    """Return a copy of the git block with the encrypted password redacted."""
+    """Return a copy of the git block with the encrypted PAT and SSH key redacted."""
     redacted = dict(git)
-    if "#password" in redacted:
-        redacted["#password"] = _redact_secret(redacted["#password"])
+    for key in ("#password", "#sshKey"):
+        if key in redacted:
+            redacted[key] = _redact_secret(redacted[key])
     return redacted
 
 

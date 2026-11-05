@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any
 
 import typer
@@ -35,7 +36,7 @@ from ._helpers import (
     check_cli_permission,
     get_formatter,
     get_service,
-    parse_json_arg,
+    structured_input,
 )
 
 agent_app = typer.Typer(help="Scheduled agent tasks (cron / manual / chained)")
@@ -54,14 +55,19 @@ def _agent_permission_check(ctx: typer.Context) -> None:
 # ── Shared parsing helpers ────────────────────────────────────────────
 
 
-def _parse_json(value: str, formatter: OutputFormatter, *, label: str) -> dict[str, Any]:
-    """Parse inline JSON, ``@file`` or ``-`` (stdin) into a dict, exiting cleanly on bad input."""
+def _parse_json(
+    inline: str | None, file: Path | None, formatter: OutputFormatter, *, label: str
+) -> dict[str, Any] | None:
+    """The JSON object of ``label`` (inline) or ``<label>-file`` (a path, ``-`` = stdin).
+
+    ``None`` when neither is given; bad input exits 2 with ``INVALID_FORMAT``.
+    """
     try:
-        parsed = parse_json_arg(value, label=label)
+        parsed = structured_input(inline, file, label=label)
     except ValueError as exc:
         formatter.error(message=str(exc), error_code=ErrorCode.INVALID_FORMAT)
         raise typer.Exit(code=2) from None
-    if not isinstance(parsed, dict):
+    if parsed is not None and not isinstance(parsed, dict):
         formatter.error(
             message=f"{label} must be a JSON object",
             error_code=ErrorCode.INVALID_FORMAT,
@@ -74,25 +80,26 @@ def _action_from_flags(
     formatter: OutputFormatter,
     *,
     action_type: str | None,
-    from_file: str | None,
+    definition: str | None,
+    definition_file: Path | None,
     cli: str | None,
     prompt: str | None,
     extra_arg: list[str],
     argv: list[str],
     timeout: int | None,
 ) -> AgentAction:
-    """Build an AgentAction from CLI flags or ``--from-file JSON|@path|-``.
+    """Build an AgentAction from CLI flags or ``--definition`` / ``--definition-file``.
 
-    ``--from-file`` wins outright -- the file is expected to contain the
-    full ``{type, params}`` envelope, mirroring the REST POST body. The
+    A definition wins outright -- it is the full ``{type, params}``
+    envelope, mirroring the REST POST body. The
     convenience flags are for the common "single ai_agent" / "single
     cli_command" cases where typing a JSON file would be overkill.
 
     Action types listed in ``REMOVED_ACTION_TYPES`` are refused on both
     paths (exit 2) -- they no longer execute anywhere.
     """
-    if from_file is not None:
-        payload = _parse_json(from_file, formatter, label="--from-file")
+    payload = _parse_json(definition, definition_file, formatter, label="--definition")
+    if payload is not None:
         try:
             action = AgentAction.model_validate(payload)
         except Exception as exc:
@@ -109,7 +116,7 @@ def _action_from_flags(
     if action_type is None:
         formatter.error(
             message="--type is required (one of: ai_agent, cli_command) "
-            "or pass --from-file JSON|@path|- with a full {type, params} JSON.",
+            "or pass --definition JSON or --definition-file PATH with a full {type, params} JSON.",
             error_code=ErrorCode.MISSING_PARAMETER,
         )
         raise typer.Exit(code=2) from None
@@ -162,40 +169,6 @@ def _trigger_from_flags(
     # ty: trigger_on is a plain str here; Trigger.on is a Literal[success|error|always].
     # The value is constrained to that set by the CLI/REST boundary before reaching here.
     return Trigger(on=trigger_on, task_id=trigger_task_id)  # ty: ignore[invalid-argument-type]
-
-
-def _resolve_id(
-    formatter: OutputFormatter,
-    positional: str | None,
-    option: str | None,
-    *,
-    label: str,
-    flag: str,
-) -> str:
-    """Resolve an ID passed either positionally or via a named flag.
-
-    Every agent subcommand accepts its task/run ID both ways: positionally
-    (``agent show TASK_ID``) for terse interactive use, and via a named flag
-    (``--id`` / ``--task-id`` / ``--run-id``) for consistency with the rest of
-    the CLI, which identifies entities by flag everywhere else (``--job-id``,
-    ``--config-id``, ``--app-id``, ...). Exactly one must be supplied; passing
-    both with conflicting values is a usage error rather than a silent pick.
-    """
-    if positional is not None and option is not None and positional != option:
-        formatter.error(
-            message=f"{label} given both positionally ({positional!r}) and via {flag} "
-            f"({option!r}) -- pass it only one way.",
-            error_code=ErrorCode.INVALID_ARGUMENT,
-        )
-        raise typer.Exit(code=2) from None
-    resolved = positional if positional is not None else option
-    if not resolved:
-        formatter.error(
-            message=f"{label} is required: pass it positionally or via {flag}.",
-            error_code=ErrorCode.MISSING_PARAMETER,
-        )
-        raise typer.Exit(code=2) from None
-    return resolved
 
 
 # ── Output renderers ──────────────────────────────────────────────────
@@ -495,15 +468,11 @@ def agent_list(ctx: typer.Context) -> None:
 @agent_app.command("show")
 def agent_show(
     ctx: typer.Context,
-    task_id: str | None = typer.Argument(None, help="Task ID (12-char hex). Or use --id."),
-    task_id_opt: str | None = typer.Option(
-        None, "--id", "--task-id", help="Task ID (alias for the positional argument)."
-    ),
+    task_id: str = typer.Option(..., "--task-id", help="Task ID (12-char hex)."),
 ) -> None:
     """Show one task's full configuration."""
     formatter = get_formatter(ctx)
     service: AgentService = get_service(ctx, "agent_service")
-    task_id = _resolve_id(formatter, task_id, task_id_opt, label="Task ID", flag="--id/--task-id")
     try:
         task = service.get_task(task_id)
     except ConfigError as exc:
@@ -528,12 +497,18 @@ def agent_create(
         None,
         "--type",
         "-t",
-        help="Action type when not using --from-file: ai_agent|cli_command",
+        help="Action type when not using --definition: ai_agent|cli_command",
     ),
-    from_file: str | None = typer.Option(
+    definition: str | None = typer.Option(
         None,
-        "--from-file",
-        help='Full action JSON ({"type": "...", "params": {...}}): inline, @path, or - for stdin.',
+        "--definition",
+        help='Full action JSON ({"type": "...", "params": {...}}), inline.',
+    ),
+    definition_file: Path | None = typer.Option(
+        None,
+        "--definition-file",
+        help="Read the full action JSON from a file (- for stdin).",
+        allow_dash=True,
     ),
     cli: str | None = typer.Option(None, "--cli", help="ai_agent: claude|codex|gemini"),
     prompt: str | None = typer.Option(None, "--prompt", help="ai_agent: prompt body"),
@@ -560,7 +535,8 @@ def agent_create(
     """Register a new scheduled task.
 
     Two ways to specify the action:
-    1. ``--from-file JSON|@path|-`` with the full {type, params} JSON envelope.
+    1. ``--definition JSON`` or ``--definition-file PATH`` with the full
+       {type, params} JSON envelope.
     2. ``--type TYPE`` plus the type-specific flags (ai_agent: --cli/--prompt,
        cli_command: --argv ...).
     """
@@ -569,7 +545,8 @@ def agent_create(
     action = _action_from_flags(
         formatter,
         action_type=action_type,
-        from_file=from_file,
+        definition=definition,
+        definition_file=definition_file,
         cli=cli,
         prompt=prompt,
         extra_arg=list(extra_arg),
@@ -597,10 +574,7 @@ def agent_create(
 @agent_app.command("update")
 def agent_update(
     ctx: typer.Context,
-    task_id: str | None = typer.Argument(None, help="Task ID to update. Or use --id."),
-    task_id_opt: str | None = typer.Option(
-        None, "--id", "--task-id", help="Task ID (alias for the positional argument)."
-    ),
+    task_id: str = typer.Option(..., "--task-id", help="Task ID to update."),
     name: str | None = typer.Option(None, "--name", "-n"),
     description: str | None = typer.Option(None, "--description"),
     cron: str | None = typer.Option(None, "--cron"),
@@ -625,7 +599,6 @@ def agent_update(
     """Patch one or more fields on a task. Omitted flags leave the field unchanged."""
     formatter = get_formatter(ctx)
     service: AgentService = get_service(ctx, "agent_service")
-    task_id = _resolve_id(formatter, task_id, task_id_opt, label="Task ID", flag="--id/--task-id")
     trigger = _trigger_from_flags(trigger_task_id, trigger_on)
     try:
         task = service.update_task(
@@ -655,10 +628,7 @@ def agent_update(
 @agent_app.command("delete")
 def agent_delete(
     ctx: typer.Context,
-    task_id: str | None = typer.Argument(None, help="Task ID to delete. Or use --id."),
-    task_id_opt: str | None = typer.Option(
-        None, "--id", "--task-id", help="Task ID (alias for the positional argument)."
-    ),
+    task_id: str = typer.Option(..., "--task-id", help="Task ID to delete."),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt."),
 ) -> None:
     """Remove a task. Run history on disk is preserved.
@@ -669,7 +639,6 @@ def agent_delete(
     """
     formatter = get_formatter(ctx)
     service: AgentService = get_service(ctx, "agent_service")
-    task_id = _resolve_id(formatter, task_id, task_id_opt, label="Task ID", flag="--id/--task-id")
     _confirm_or_abort(formatter, yes, f"Delete task '{task_id}'?")
     try:
         service.delete_task(task_id)
@@ -682,10 +651,7 @@ def agent_delete(
 @agent_app.command("run")
 def agent_run(
     ctx: typer.Context,
-    task_id: str | None = typer.Argument(None, help="Task ID to run. Or use --id."),
-    task_id_opt: str | None = typer.Option(
-        None, "--id", "--task-id", help="Task ID (alias for the positional argument)."
-    ),
+    task_id: str = typer.Option(..., "--task-id", help="Task ID to run."),
     stream: bool = typer.Option(
         False,
         "--stream",
@@ -699,7 +665,13 @@ def agent_run(
     runtime_input: str | None = typer.Option(
         None,
         "--runtime-input",
-        help="JSON input merged into the action params for this run only. Inline, @path, or -.",
+        help="JSON input merged into the action params for this run only, inline.",
+    ),
+    runtime_input_file: Path | None = typer.Option(
+        None,
+        "--runtime-input-file",
+        help="Read the runtime input JSON from a file (- for stdin).",
+        allow_dash=True,
     ),
 ) -> None:
     """Trigger a task immediately (does not wait for the next cron firing).
@@ -714,10 +686,9 @@ def agent_run(
     """
     formatter = get_formatter(ctx)
     service: AgentService = get_service(ctx, "agent_service")
-    task_id = _resolve_id(formatter, task_id, task_id_opt, label="Task ID", flag="--id/--task-id")
-    runtime: dict[str, Any] | None = None
-    if runtime_input:
-        runtime = _parse_json(runtime_input, formatter, label="--runtime-input")
+    runtime = _parse_json(
+        runtime_input or None, runtime_input_file, formatter, label="--runtime-input"
+    )
     if runtime_prompt:
         runtime = dict(runtime or {})
         runtime["prompt"] = runtime_prompt
@@ -735,16 +706,12 @@ def agent_run(
 @agent_app.command("runs")
 def agent_runs(
     ctx: typer.Context,
-    task_id: str | None = typer.Argument(None, help="Task ID whose history to show. Or use --id."),
-    task_id_opt: str | None = typer.Option(
-        None, "--id", "--task-id", help="Task ID (alias for the positional argument)."
-    ),
+    task_id: str = typer.Option(..., "--task-id", help="Task ID whose history to show."),
     limit: int = typer.Option(50, "--limit", "-L", help="Max rows to return."),
 ) -> None:
     """Show the run history of a task (most recent first)."""
     formatter = get_formatter(ctx)
     service: AgentService = get_service(ctx, "agent_service")
-    task_id = _resolve_id(formatter, task_id, task_id_opt, label="Task ID", flag="--id/--task-id")
     try:
         runs = service.list_runs(task_id, limit=limit)
     except ConfigError as exc:
@@ -757,20 +724,12 @@ def agent_runs(
 @agent_app.command("run-detail")
 def agent_run_detail(
     ctx: typer.Context,
-    task_id: str | None = typer.Argument(None, help="Task ID. Or use --id/--task-id."),
-    run_id: str | None = typer.Argument(None, help="Run ID (12-char hex). Or use --run-id."),
-    task_id_opt: str | None = typer.Option(
-        None, "--id", "--task-id", help="Task ID (alias for the positional argument)."
-    ),
-    run_id_opt: str | None = typer.Option(
-        None, "--run-id", help="Run ID (alias for the positional argument)."
-    ),
+    task_id: str = typer.Option(..., "--task-id", help="Task ID."),
+    run_id: str = typer.Option(..., "--run-id", help="Run ID (12-char hex)."),
 ) -> None:
     """Show a single AgentRun record (status, summary, output, error)."""
     formatter = get_formatter(ctx)
     service: AgentService = get_service(ctx, "agent_service")
-    task_id = _resolve_id(formatter, task_id, task_id_opt, label="Task ID", flag="--id/--task-id")
-    run_id = _resolve_id(formatter, run_id, run_id_opt, label="Run ID", flag="--run-id")
     try:
         run = service.get_run(task_id, run_id)
     except ConfigError as exc:
@@ -798,20 +757,12 @@ def agent_run_detail(
 @agent_app.command("run-events")
 def agent_run_events(
     ctx: typer.Context,
-    task_id: str | None = typer.Argument(None, help="Task ID. Or use --id/--task-id."),
-    run_id: str | None = typer.Argument(None, help="Run ID. Or use --run-id."),
-    task_id_opt: str | None = typer.Option(
-        None, "--id", "--task-id", help="Task ID (alias for the positional argument)."
-    ),
-    run_id_opt: str | None = typer.Option(
-        None, "--run-id", help="Run ID (alias for the positional argument)."
-    ),
+    task_id: str = typer.Option(..., "--task-id", help="Task ID."),
+    run_id: str = typer.Option(..., "--run-id", help="Run ID (12-char hex)."),
 ) -> None:
     """Replay the persisted event timeline of an ai_agent run (line-by-line)."""
     formatter = get_formatter(ctx)
     service: AgentService = get_service(ctx, "agent_service")
-    task_id = _resolve_id(formatter, task_id, task_id_opt, label="Task ID", flag="--id/--task-id")
-    run_id = _resolve_id(formatter, run_id, run_id_opt, label="Run ID", flag="--run-id")
     try:
         events = service.get_run_events(task_id, run_id)
     except ConfigError as exc:
@@ -832,7 +783,13 @@ def agent_test(
         False, "--stream", help="Stream events live instead of returning the final run record."
     ),
     action_type: str | None = typer.Option(None, "--type", "-t", help="ai_agent|cli_command"),
-    from_file: str | None = typer.Option(None, "--from-file", help="Action JSON (or @path / -)."),
+    definition: str | None = typer.Option(None, "--definition", help="Action JSON, inline."),
+    definition_file: Path | None = typer.Option(
+        None,
+        "--definition-file",
+        help="Read the action JSON from a file (- for stdin).",
+        allow_dash=True,
+    ),
     cli: str | None = typer.Option(None, "--cli"),
     prompt: str | None = typer.Option(None, "--prompt"),
     extra_arg: list[str] = typer.Option([], "--extra-arg"),
@@ -849,7 +806,8 @@ def agent_test(
     action = _action_from_flags(
         formatter,
         action_type=action_type,
-        from_file=from_file,
+        definition=definition,
+        definition_file=definition_file,
         cli=cli,
         prompt=prompt,
         extra_arg=list(extra_arg),

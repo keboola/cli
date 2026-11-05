@@ -235,7 +235,7 @@ class TestCreateTableServiceValidation:
 
     def test_not_null_rejected_in_source_mode(self, tmp_path: Path) -> None:
         service = _make_service(_make_store(tmp_path), MagicMock())
-        with pytest.raises(ValueError, match="--not-null is not valid"):
+        with pytest.raises(ValueError, match="--not-null-column is not valid"):
             service.create_table(
                 alias="test",
                 bucket_id="in.c-main",

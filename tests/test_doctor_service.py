@@ -879,10 +879,8 @@ class TestDoctorServiceCheckInertPermissionPatterns:
         assert result["status"] == "warn"
         assert "tool:read" in result["message"]
         assert "tool:write" in result["message"]
-        assert "docs/mcp-migration.md" in result["message"]
-        assert result["details"]["patterns"] == ["tool:read", "tool:write"]
-        assert result["details"]["inert_since"] == "0.85.0"
-        assert result["details"]["mode"] == "deny"
+        assert "kbagent permissions list" in result["message"]
+        assert result["details"] == {"mode": "deny", "patterns": ["tool:read", "tool:write"]}
 
     def test_warn_lists_generic_dead_patterns_without_tool_prefix(self) -> None:
         """Generalized detection (issue #688): a typo'd pattern is flagged too,
@@ -904,8 +902,8 @@ class TestDoctorServiceCheckInertPermissionPatterns:
         assert "inert_since" not in result["details"]
         assert result["details"]["mode"] == "allow"
 
-    def test_warn_mentions_both_hints_for_a_mixed_policy(self) -> None:
-        """A policy carrying both a `tool:` pattern and a plain typo gets both hints."""
+    def test_warn_has_one_hint_for_a_mixed_policy(self) -> None:
+        """A `tool:` pattern and a plain typo are the same problem: one hint names the fix."""
         config = AppConfig(
             permissions=PermissionPolicy(mode="allow", deny=["tool:write", "cli:reed"])
         )
@@ -913,9 +911,8 @@ class TestDoctorServiceCheckInertPermissionPatterns:
         result = DoctorService._check_inert_permission_patterns(config)
 
         assert result["status"] == "warn"
-        assert "docs/mcp-migration.md" in result["message"]
-        assert "kbagent permissions list" in result["message"]
-        assert result["details"]["inert_since"] == "0.85.0"
+        assert "docs/mcp-migration.md" not in result["message"]
+        assert result["message"].count("kbagent permissions list") == 1
 
     def test_check_is_registered_in_run_checks(self, tmp_config_dir: Path) -> None:
         store = ConfigStore(config_dir=tmp_config_dir)

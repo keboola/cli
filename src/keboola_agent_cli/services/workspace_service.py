@@ -949,7 +949,6 @@ class WorkspaceService(BaseService):
                         exc,
                         workspace_id=ws["id"],
                         project_alias=ws["project_alias"],
-                        error=str(exc),
                     )
                 )
 
@@ -1447,8 +1446,10 @@ class WorkspaceService(BaseService):
                 f"Query Service refused the query on workspace {workspace_id}: "
                 f"{_RLS_DENIED_MESSAGE}. kbagent queries with the Storage token, which Query "
                 "Service treats as the administrator `keboola|<adminId>`. On a governed workspace "
-                "that subject is refused unless a policy rule selects it: query another "
-                "workspace, or add a rule for it."
+                "Query Service refuses the query when no policy rule selects that subject, or when "
+                "the query is not one plain `SELECT` on Storage bucket tables (no writes, "
+                "`FLATTEN`, `INFORMATION_SCHEMA`/`SHOW` or UDFs). Query another workspace, add a "
+                "rule for the subject, or simplify the query."
             ),
             status_code=exc.status_code,
             error_code=ErrorCode.ACCESS_DENIED,

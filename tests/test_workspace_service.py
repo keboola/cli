@@ -1545,6 +1545,7 @@ class TestExecuteQuery:
 
         if explained:
             assert "keboola|<adminId>" in excinfo.value.message
+            assert "not one plain `SELECT`" in excinfo.value.message  # the second cause
             assert excinfo.value.details == {"workspace_id": 42}
             assert excinfo.value.error_code == ErrorCode.ACCESS_DENIED
         else:

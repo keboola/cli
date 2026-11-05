@@ -11,6 +11,7 @@ import typer
 
 from ..constants import SYNC_ORPHAN_PREVIEW_LIMIT
 from ..errors import ConfigError, ErrorCode, KeboolaApiError, SyncConflictError
+from ..sync.branch_scope import REASON_PROMOTED
 from ._all_projects import FANOUT_ONE_PROJECT_HELP
 from ._helpers import (
     BRANCH_ONE_PROJECT_MESSAGE,
@@ -24,8 +25,19 @@ from ._helpers import (
     resolve_project_alias,
 )
 from ._project_ref import PROJECT_HELP
-from ._sync_clone_render import clone_summary, print_clone_result
-from ._sync_push_render import REMOTE_CHANGE_LABELS, print_push_skips, push_skips_one_liner
+from ._sync_clone_render import clone_summary, clone_total, print_clone_result
+from ._sync_diff_render import covered_suffix, has_remote_only, print_moves, print_remote_only_rows
+from ._sync_push_render import (
+    REMOTE_CHANGE_LABELS,
+    dry_run_line,
+    dry_run_one_liner,
+    emit_companion_warnings,
+    print_dry_run_refusals,
+    print_push_skips,
+    push_skips_one_liner,
+    push_summary,
+    push_total,
+)
 
 sync_app = typer.Typer(help="Sync project configurations with local filesystem")
 
@@ -185,7 +197,7 @@ def _format_pull_result(formatter: Any, result: dict) -> None:
     new_cfgs = [d for d in details if d["action"] == "new"]
     updated_cfgs = [d for d in details if d["action"] == "updated"]
     removed_cfgs = [d for d in details if d["action"] == "removed"]
-    renamed_cfgs = [d for d in details if d["action"] == "renamed"]
+    renamed_cfgs = [d for d in details if d["action"] in ("renamed", "moved")]  # #792 I
     skipped_cfgs = [d for d in details if d["action"] == "skipped"]
     ignored_cfgs = [d for d in details if d["action"] == "ignored"]
 
@@ -228,7 +240,7 @@ def _format_pull_result(formatter: Any, result: dict) -> None:
             formatter.console.print(f"  Jobs: {jobs_written} configs with job history")
 
     if renamed_cfgs:
-        formatter.console.print(f"  [magenta]Renamed ({len(renamed_cfgs)}):[/magenta]")
+        formatter.console.print(f"  [magenta]Renamed or moved ({len(renamed_cfgs)}):[/magenta]")
         for d in renamed_cfgs:
             formatter.console.print(
                 f"    > {d.get('old_path', '?')} -> {d['component_id']}/{d['config_name']}"
@@ -286,6 +298,13 @@ def _format_orphaned(formatter: Any, orphaned: list[dict]) -> None:
     project-sized in the case that matters (issue #649) -- print a preview and
     collapse the tail into a count.
     """
+    promoted = [item for item in orphaned if item.get("reason") == REASON_PROMOTED]
+    if promoted:
+        formatter.console.print(
+            f"\n  [dim]{len(promoted)} config dir(s) of this tree are also tracked on the "
+            f"branch they were promoted to with 'sync push --branch'; nothing to do.[/dim]"
+        )
+    orphaned = [item for item in orphaned if item.get("reason") != REASON_PROMOTED]
     if not orphaned:
         return
     formatter.console.print(
@@ -311,8 +330,9 @@ def _format_diff_result(formatter: Any, result: dict) -> None:
     remote_only = result.get("remote_only", [])
     never_fetched = result.get("never_fetched", [])
     orphaned = result.get("orphaned", [])
+    print_moves(formatter, result)
 
-    if not changes and not remote_only:
+    if not changes and not has_remote_only(result):
         if never_fetched or orphaned:
             _format_never_fetched(formatter, never_fetched)
             _format_orphaned(formatter, orphaned)
@@ -343,6 +363,7 @@ def _format_diff_result(formatter: Any, result: dict) -> None:
             formatter.console.print(f"  ! CONFLICT {_change_label(change)}")
     if remote_only:
         formatter.console.print(f"  {len(remote_only)} new remote-only config(s)")
+    print_remote_only_rows(formatter, result)
     _format_never_fetched(formatter, never_fetched)
     _format_orphaned(formatter, orphaned)
 
@@ -367,6 +388,7 @@ def _format_conflict_list(formatter: Any, conflicts: list[dict[str, str]]) -> No
 def _format_push_result(formatter: Any, result: dict) -> None:
     """Format a single-project push result for human output."""
     status = result.get("status", "")
+    print_moves(formatter, result)
     if status == "no_changes":
         formatter.console.print("  No changes to push.")
         print_push_skips(formatter, result)
@@ -374,12 +396,8 @@ def _format_push_result(formatter: Any, result: dict) -> None:
         _format_orphaned(formatter, result.get("orphaned", []))
         return
     if status == "dry_run":
-        summary = result.get("summary", {})
-        formatter.console.print(
-            f"  Would create {summary.get('added', 0)}, "
-            f"update {summary.get('modified', 0)}, "
-            f"delete {summary.get('deleted', 0)}"
-        )
+        formatter.console.print(f"  {dry_run_line(result)}")
+        print_dry_run_refusals(formatter, result)
         print_push_skips(formatter, result)
         _format_never_fetched(formatter, result.get("never_fetched", []))
         _format_orphaned(formatter, result.get("orphaned", []))
@@ -452,10 +470,11 @@ def _diff_one_liner(result: dict) -> str:
     dlt = s.get("deleted", 0)
     rmod = s.get("remote_modified", 0) + s.get("remote_deleted", 0)
     conf = s.get("conflict", 0)
-    ro = s.get("remote_only", 0)
-    if not any([mod, add, dlt, rmod, conf, ro]):
+    ro = s.get("remote_only", 0) + s.get("remote_only_rows", 0)
+    invalid = s.get("invalid", 0)
+    if not any([mod, add, dlt, rmod, conf, ro, invalid]):
         return "[green]in sync[/green]"
-    parts = []
+    parts = [f"[red]{invalid} invalid file(s)[/red]"] if invalid else []
     if add:
         parts.append(f"[green]{add} to create[/green]")
     if mod:
@@ -478,8 +497,7 @@ def _push_one_liner(result: dict) -> str:
     if status == "no_changes":
         return f"[green]nothing to push[/green]{held}"
     if status == "dry_run":
-        s = result.get("summary", {})
-        return f"would: +{s.get('added', 0)} ~{s.get('modified', 0)} -{s.get('deleted', 0)}{held}"
+        return f"{dry_run_one_liner(result)}{held}"
     c = result.get("created", 0)
     u = result.get("updated", 0)
     d = result.get("deleted", 0)
@@ -507,8 +525,11 @@ def _format_all_results(
         proj_result = projects[alias]
         # A push with per-config errors[] is a failed project, not "OK" (#745).
         mark = "[red]x[/red]" if proj_result.get("errors") else "[green]OK[/green]"
-        if "error" in proj_result:
-            formatter.item_error(f"project '{alias}'", proj_result["error"])
+        # A failed push carries `message` (item_failure); pull and diff carry `error`.
+        if "error_code" in proj_result or "error" in proj_result:
+            formatter.item_error(
+                f"project '{alias}'", proj_result.get("message") or proj_result["error"]
+            )
         elif verbose and per_project_formatter:
             formatter.console.print(f"\n[bold]{alias}:[/bold]")
             per_project_formatter(formatter, proj_result)
@@ -525,6 +546,7 @@ def _finish_all_projects(
     formatter: Any, data: dict, per_project_formatter: Any, one_liner: Any, done_as: str
 ) -> None:
     """End an ``--all-projects`` run: per-project lines, then one headline (HO2)."""
+    emit_companion_warnings(formatter, data)
     summary = data["summary"]
     finish_items(
         formatter,
@@ -715,6 +737,7 @@ def sync_pull(
         emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
+    emit_companion_warnings(formatter, result)
     if formatter.json_mode:
         formatter.output(result)
     else:
@@ -754,6 +777,7 @@ def sync_status(
         deleted = result["deleted"]
         unchanged = result["unchanged"]
         secret_warnings = result.get("plaintext_secret_warnings", [])
+        print_moves(formatter, result)  # a pure move is no change, so say it (#792 I)
 
         if not modified and not added and not deleted:
             formatter.console.print(
@@ -878,104 +902,126 @@ def sync_diff(
         emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
-    if formatter.json_mode:
+    emit_companion_warnings(formatter, result)
+    # A config held back by an unusable _config.yml fails the diff: the per-item
+    # exit goes through finish_items, with its headline (HO2, E4).
+    failed = len(result.get("errors", []))
+    if failed:
+
+        def render() -> None:
+            _render_diff_result(formatter, result)
+            print_dry_run_refusals(formatter, result)
+
+        finish_items(
+            formatter,
+            result,
+            failed=failed,
+            total=failed,
+            noun="configs",
+            summary=f"{failed} config(s) held back, the others compared.",
+            render=render,
+        )
+    elif formatter.json_mode:
         formatter.output(result)
     else:
-        changes = result["changes"]
-        summary = result["summary"]
-        remote_only = result.get("remote_only", [])
+        _render_diff_result(formatter, result)
 
-        if not changes and not remote_only:
-            if result.get("never_fetched") or result.get("orphaned"):
-                _format_never_fetched(formatter, result.get("never_fetched", []))
-                _format_orphaned(formatter, result.get("orphaned", []))
-            else:
-                formatter.console.print(
-                    "[green]No differences found.[/green] Local and remote are in sync."
-                )
-            return
 
-        # Categorize changes by direction
-        prefix_map = {
-            "added": "[green]+ ",
-            "modified": "[yellow]~ ",
-            "remote_modified": "[cyan]~ ",
-            "conflict": "[red]! ",
-            "deleted": "[red]- ",
-        }
-        suffix_map = {
-            "added": "[/green]",
-            "modified": "[/yellow]",
-            "remote_modified": "[/cyan]",
-            "conflict": "[/red]",
-            "deleted": "[/red]",
-        }
-        label_map = {
-            "added": "ADDED",
-            "modified": "MODIFIED",
-            "remote_modified": "REMOTE MODIFIED",
-            "conflict": "CONFLICT",
-            "deleted": "DELETED",
-        }
+def _render_diff_result(formatter: Any, result: dict[str, Any]) -> None:
+    """Human-mode rendering for a single-project ``sync diff``."""
+    changes = result["changes"]
+    summary = result["summary"]
+    remote_only = result.get("remote_only", [])
+    print_moves(formatter, result)  # before the clean-state return (#792 I)
 
-        local_changes = [c for c in changes if c["change_type"] in ("added", "modified", "deleted")]
-        remote_changes = [c for c in changes if c["change_type"] in REMOTE_CHANGE_LABELS]
-        conflict_changes = [c for c in changes if c["change_type"] == "conflict"]
+    if not changes and not has_remote_only(result):
+        if result.get("never_fetched") or result.get("orphaned"):
+            _format_never_fetched(formatter, result.get("never_fetched", []))
+            _format_orphaned(formatter, result.get("orphaned", []))
+        elif not result.get("errors"):
+            formatter.console.print(
+                "[green]No differences found.[/green] Local and remote are in sync."
+            )
+        return
 
-        # Local changes (what push would do)
+    # Categorize changes by direction
+    prefix_map = {
+        "added": "[green]+ ",
+        "modified": "[yellow]~ ",
+        "remote_modified": "[cyan]~ ",
+        "conflict": "[red]! ",
+        "deleted": "[red]- ",
+    }
+    suffix_map = {
+        "added": "[/green]",
+        "modified": "[/yellow]",
+        "remote_modified": "[/cyan]",
+        "conflict": "[/red]",
+        "deleted": "[/red]",
+    }
+    label_map = {
+        "added": "ADDED",
+        "modified": "MODIFIED",
+        "remote_modified": "REMOTE MODIFIED",
+        "conflict": "CONFLICT",
+        "deleted": "DELETED",
+    }
+
+    local_changes = [c for c in changes if c["change_type"] in ("added", "modified", "deleted")]
+    remote_changes = [c for c in changes if c["change_type"] in REMOTE_CHANGE_LABELS]
+    conflict_changes = [c for c in changes if c["change_type"] == "conflict"]
+
+    # Local changes (what push would do)
+    if local_changes:
+        formatter.console.print("[bold]Local changes (push would apply):[/bold]")
+        for change in local_changes:
+            ct = change["change_type"]
+            label = _change_label(change)
+            formatter.console.print(f"  {prefix_map[ct]}{label_map[ct]} {label}{suffix_map[ct]}")
+            for detail in change.get("details", []):
+                formatter.console.print(f"    {detail}")
+        formatter.console.print(
+            f"\n{summary['added']} to create, {summary['modified']} to update, "
+            f"{summary['deleted']} to delete (push --force)"
+        )
+
+    # Remote changes (need pull)
+    if remote_changes:
         if local_changes:
-            formatter.console.print("[bold]Local changes (push would apply):[/bold]")
-            for change in local_changes:
-                ct = change["change_type"]
-                label = _change_label(change)
-                formatter.console.print(
-                    f"  {prefix_map[ct]}{label_map[ct]} {label}{suffix_map[ct]}"
-                )
-                for detail in change.get("details", []):
-                    formatter.console.print(f"    {detail}")
-            formatter.console.print(
-                f"\n{summary['added']} to create, {summary['modified']} to update, "
-                f"{summary['deleted']} to delete (push --force)"
-            )
+            formatter.console.print()
+        formatter.console.print("[bold]Remote changes (run 'sync pull' to fetch):[/bold]")
+        for change in remote_changes:
+            label = _change_label(change)
+            kind = REMOTE_CHANGE_LABELS[change["change_type"]]
+            formatter.console.print(f"  [cyan]{kind} {label}[/cyan]")
+            for detail in change.get("details", []):
+                formatter.console.print(f"    {detail}")
 
-        # Remote changes (need pull)
-        if remote_changes:
-            if local_changes:
-                formatter.console.print()
-            formatter.console.print("[bold]Remote changes (run 'sync pull' to fetch):[/bold]")
-            for change in remote_changes:
-                label = _change_label(change)
-                kind = REMOTE_CHANGE_LABELS[change["change_type"]]
-                formatter.console.print(f"  [cyan]{kind} {label}[/cyan]")
-                for detail in change.get("details", []):
-                    formatter.console.print(f"    {detail}")
+    # Conflicts (both sides changed)
+    if conflict_changes:
+        if local_changes or remote_changes:
+            formatter.console.print()
+        formatter.console.print("[bold red]Conflicts (both local and remote changed):[/bold red]")
+        for change in conflict_changes:
+            label = _change_label(change)
+            formatter.console.print(f"  [red]! CONFLICT {label}[/red]")
+            for detail in change.get("details", []):
+                formatter.console.print(f"    {detail}")
 
-        # Conflicts (both sides changed)
-        if conflict_changes:
-            if local_changes or remote_changes:
-                formatter.console.print()
-            formatter.console.print(
-                "[bold red]Conflicts (both local and remote changed):[/bold red]"
-            )
-            for change in conflict_changes:
-                label = _change_label(change)
-                formatter.console.print(f"  [red]! CONFLICT {label}[/red]")
-                for detail in change.get("details", []):
-                    formatter.console.print(f"    {detail}")
+    # Remote-only configs (new on server, not yet pulled)
+    if remote_only:
+        if changes:
+            formatter.console.print()
+        formatter.console.print(
+            f"[bold]Remote only ({len(remote_only)} new, run 'sync pull' to fetch):[/bold]"
+        )
+        for cfg in remote_only:
+            name = cfg.get("config_name", cfg.get("config_id", ""))
+            formatter.console.print(f"  [cyan]+ NEW {cfg['component_id']}/{name}[/cyan]")
 
-        # Remote-only configs (new on server, not yet pulled)
-        if remote_only:
-            if changes:
-                formatter.console.print()
-            formatter.console.print(
-                f"[bold]Remote only ({len(remote_only)} new, run 'sync pull' to fetch):[/bold]"
-            )
-            for cfg in remote_only:
-                name = cfg.get("config_name", cfg.get("config_id", ""))
-                formatter.console.print(f"  [cyan]+ NEW {cfg['component_id']}/{name}[/cyan]")
-
-        _format_never_fetched(formatter, result.get("never_fetched", []))
-        _format_orphaned(formatter, result.get("orphaned", []))
+    print_remote_only_rows(formatter, result)
+    _format_never_fetched(formatter, result.get("never_fetched", []))
+    _format_orphaned(formatter, result.get("orphaned", []))
 
 
 @sync_app.command("push")
@@ -1103,46 +1149,17 @@ def sync_push(
         emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
+    emit_companion_warnings(formatter, result)
     # A per-config failure is collected, not raised -- without this the command
     # reported a green "Pushed" and exit 0 even when every config failed (#745).
     finish_items(
         formatter,
         result,
         failed=len(result.get("errors", [])),
-        total=_push_total(result),
+        total=push_total(result),
         noun="configs",
-        summary=_push_summary(result),
+        summary=push_summary(result),
         render=lambda: _render_push_result(formatter, result),
-    )
-
-
-def _push_total(result: dict[str, Any]) -> int:
-    """Every config change that a single-project ``sync push`` tried or would try."""
-    if result.get("status") == "dry_run":
-        summary = result.get("summary", {})
-        return sum(summary.get(key, 0) for key in ("added", "modified", "deleted"))
-    created = result.get("created", 0) + result.get("updated", 0) + result.get("deleted", 0)
-    return created + len(result.get("errors", []))
-
-
-def _push_summary(result: dict[str, Any]) -> str:
-    """The headline text of a single-project ``sync push``."""
-    status = result.get("status", "")
-    if status == "no_changes":
-        return "0 config(s) pushed, no changes."
-    if status == "dry_run":
-        summary = result.get("summary", {})
-        added, modified = summary.get("added", 0), summary.get("modified", 0)
-        deleted = summary.get("deleted", 0)
-        return (
-            f"{added + modified + deleted} config(s) would be pushed: {added} created, "
-            f"{modified} updated, {deleted} deleted."
-        )
-    created, updated = result.get("created", 0), result.get("updated", 0)
-    deleted = result.get("deleted", 0)
-    return (
-        f"{created + updated + deleted} config(s) pushed: {created} created, "
-        f"{updated} updated, {deleted} deleted."
     )
 
 
@@ -1151,6 +1168,7 @@ def _render_push_result(formatter: Any, result: dict[str, Any]) -> None:
     status = result.get("status", "")
 
     if status == "no_changes":
+        print_dry_run_refusals(formatter, result)  # files held back (SYNC_LOCAL_FILE_INVALID)
         print_push_skips(formatter, result)
         _format_never_fetched(formatter, result.get("never_fetched", []))
         _format_orphaned(formatter, result.get("orphaned", []))
@@ -1160,7 +1178,10 @@ def _render_push_result(formatter: Any, result: dict[str, Any]) -> None:
         formatter.console.print("[yellow]Dry run -- no changes applied:[/yellow]")
         for change in result.get("changes", []):
             label = _change_label(change)
-            formatter.console.print(f"  {change['change_type'].upper()} {label}")
+            formatter.console.print(
+                f"  {change['change_type'].upper()} {label}{covered_suffix(change)}"
+            )
+        print_dry_run_refusals(formatter, result)
         print_push_skips(formatter, result)
         _format_never_fetched(formatter, result.get("never_fetched", []))
         _format_orphaned(formatter, result.get("orphaned", []))
@@ -1174,7 +1195,7 @@ def _render_push_result(formatter: Any, result: dict[str, Any]) -> None:
     for change in result.get("pushed_details", []):
         label = _change_label(change)
         action = change["change_type"].upper()
-        formatter.console.print(f"  {action} {label}")
+        formatter.console.print(f"  {action} {label}{covered_suffix(change)}")
     for err in errors:
         formatter.item_error(
             f"{err['change_type']} {err['component_id']}/{err['config_id']}", err["message"]
@@ -1285,7 +1306,7 @@ def sync_clone(
         formatter,
         result,
         failed=failed,
-        total=result.get("created", 0) + failed,
+        total=clone_total(result, failed),
         noun="items",
         summary=clone_summary(result),
         render=lambda: print_clone_result(formatter, result),

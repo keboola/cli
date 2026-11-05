@@ -58,7 +58,7 @@ Resources are prefixed with `e2e-{timestamp}` and cleaned up via yield fixture e
 | 10 | `storage upload-table` | 5-row CSV uploaded, `imported_rows: 5` |
 | 11 | `storage upload-table --incremental` | 3 more rows appended, download verifies 8 total rows |
 | 12 | `storage tables`, `storage table-detail` | Table in listing, column details match (id, name, value), `definition` passed through (#621) |
-| 13 | `storage download-table` | Full download: 8 rows, correct IDs. With `--columns`/`--limit`: subset verified |
+| 13 | `storage download-table` | Full download: 8 rows, correct IDs. With `--column`/`--limit`: subset verified |
 | 14 | `storage unload-table --download` | Table exported to file storage, file_id > 0, file downloaded |
 | 15 | `storage load-file` | CSV uploaded as file, then loaded into table via `load-file` |
 
@@ -87,7 +87,7 @@ Resources are prefixed with `e2e-{timestamp}` and cleaned up via yield fixture e
 | 22 | `workspace list` | Workspace appears in project listing |
 | 23 | `workspace detail` | Returns backend, host, schema, user |
 | 24 | `workspace password` | New password returned (non-empty) |
-| 25 | `workspace load --tables TABLE_ID` | Test table loaded into workspace |
+| 25 | `workspace load --table-id TABLE_ID` | Test table loaded into workspace |
 | 26 | `workspace query --sql "SELECT COUNT(*)"` | SQL executed successfully |
 | 27 | `workspace delete` | Workspace removed |
 
@@ -119,7 +119,7 @@ Steps 21-27 are wrapped in try/except -- if workspace API is unavailable on the 
 
 | Step | Command | What is verified |
 |-----:|---------|------------------|
-| 35 | `branch list`, `branch create`, `branch use`, `branch reset`, `branch merge`, `branch delete` | Main branch exists, dev branch created (auto-activates), use/reset toggle active branch in project status, merge returns URL, branch deleted and gone from list |
+| 35 | `branch list`, `branch create`, `branch use`, `branch reset`, `branch delete` | Main branch exists, dev branch created (auto-activates), use/reset toggle active branch in project status, branch deleted and gone from list |
 
 ### Phase 11: Permissions
 
@@ -205,7 +205,7 @@ Runs in a temporary git repository (`git init` + initial commit).
 | `sharing link/unlink` | Requires shared bucket from another project |
 | `permissions set/reset` | Interactive random-code confirmation blocks automated testing |
 | `workspace from-transformation` | Requires existing transformation config with input mappings |
-| `workspace query --file` | Equivalent to `--sql`; only the input source differs |
+| `workspace query --sql-file` | Equivalent to `--sql`; only the input source differs |
 | `update` | Would actually update the installed package via PyPI |
 | `repl` | Interactive REPL, not testable via CliRunner |
 | `init --from-global` | Requires global config with projects; tested via unit tests |

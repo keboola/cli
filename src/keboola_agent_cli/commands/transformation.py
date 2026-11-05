@@ -27,8 +27,10 @@ from ._helpers import (
     get_formatter,
     map_error_to_exit_code,
     parse_json_arg,
+    parse_json_file_arg,
     read_text_arg,
     resolve_project_alias,
+    structured_input,
 )
 from ._project_ref import PROJECT_HELP
 
@@ -111,7 +113,8 @@ def transformation_create(
     sql_file: Path | None = typer.Option(
         None,
         "--sql-file",
-        help="Read SQL from a file. Mutually exclusive with --sql.",
+        help="Read SQL from a file (- for stdin). Mutually exclusive with --sql.",
+        allow_dash=True,
     ),
     created_table: list[str] | None = typer.Option(
         None,
@@ -164,7 +167,7 @@ def transformation_create(
         raise typer.Exit(code=2) from None
 
     if sql_file is not None:
-        if not sql_file.is_file():
+        if str(sql_file) != "-" and not sql_file.is_file():
             formatter.error(
                 message=f"SQL file not found: {sql_file}",
                 error_code=ErrorCode.FILE_NOT_FOUND,
@@ -299,16 +302,23 @@ def transformation_edit(
     op_file: Path | None = typer.Option(
         None,
         "--op-file",
-        help="Read operations from a JSON file containing an array of op objects.",
+        help="Read operations from a JSON file containing an array of op objects (- for stdin).",
+        allow_dash=True,
     ),
     storage: str | None = typer.Option(
         None,
         "--storage",
         help=(
-            "FULL REPLACEMENT of configuration.storage (inline JSON, @file, or - "
-            "for stdin). Include every input/output mapping you want to keep -- "
-            "the existing storage block is overwritten wholesale."
+            "FULL REPLACEMENT of configuration.storage (inline JSON). Include every "
+            "input/output mapping you want to keep -- the existing storage block is "
+            "overwritten wholesale."
         ),
+    ),
+    storage_file: Path | None = typer.Option(
+        None,
+        "--storage-file",
+        help="Read the FULL REPLACEMENT of configuration.storage from a JSON file (- for stdin).",
+        allow_dash=True,
     ),
     dry_run: bool = typer.Option(
         False,
@@ -341,18 +351,16 @@ def transformation_edit(
             error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2) from None
-    if not op and op_file is None and storage is None:
+    if not op and op_file is None and storage is None and storage_file is None:
         formatter.error(
-            message="Nothing to do: provide --op/--op-file and/or --storage.",
+            message="Nothing to do: provide --op/--op-file and/or --storage/--storage-file.",
             error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2) from None
 
     try:
         raw_ops = _collect_ops(op, op_file)
-        storage_payload = (
-            parse_json_arg(storage, label="--storage") if storage is not None else None
-        )
+        storage_payload = structured_input(storage, storage_file, label="--storage")
     except ValueError as exc:
         formatter.error(message=str(exc), error_code=ErrorCode.INPUT_ERROR)
         raise typer.Exit(code=2) from None
@@ -412,7 +420,7 @@ def _collect_ops(op: list[str] | None, op_file: Path | None) -> list[dict[str, A
     """
     raw_ops: list[dict[str, Any]] = []
     if op_file is not None:
-        parsed = parse_json_arg(f"@{op_file}", label="--op-file")
+        parsed = parse_json_file_arg(op_file, label="--op-file")
         if not isinstance(parsed, list):
             raise ValueError("--op-file must contain a JSON array of operation objects")
         entries = parsed

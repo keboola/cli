@@ -92,22 +92,22 @@ read-only token or under `--deny-writes`.
 kbagent --json storage describe-bucket \
   --project ALIAS \
   --bucket-id in.c-sales \
-  --text "Daily sales fact data, partitioned by region"
+  --description "Daily sales fact data, partitioned by region"
 
 # From a file (markdown supported)
 kbagent --json storage describe-bucket \
   --project ALIAS \
   --bucket-id in.c-sales \
-  --file ./docs/sales-bucket.md
+  --description-file ./docs/sales-bucket.md
 
 # From stdin (useful in pipelines)
 echo "Generated description" | kbagent --json storage describe-bucket \
   --project ALIAS \
   --bucket-id in.c-sales \
-  --stdin
+  --description-file -
 ```
 
-Exactly one of `--text`, `--file`, `--stdin` must be provided.
+Exactly one of `--description`, `--description-file` must be provided.
 
 Read back:
 
@@ -124,7 +124,7 @@ Identical shape to `describe-bucket`:
 kbagent --json storage describe-table \
   --project ALIAS \
   --table-id in.c-sales.orders \
-  --text "All sales orders, one row per line item"
+  --description "All sales orders, one row per line item"
 ```
 
 Read back:
@@ -215,7 +215,7 @@ Apply it:
 ```bash
 kbagent --json storage describe-batch \
   --project ALIAS \
-  --from-file ./descriptions.yaml
+  --file ./descriptions.yaml
 ```
 
 Response shape:
@@ -253,8 +253,8 @@ batch continues:
   "data": {
     "applied": [{"type": "bucket", "id": "in.c-good", ...}],
     "errors": [
-      {"type": "bucket", "id": "in.c-typo", "error": "Bucket in.c-typo not found"},
-      {"type": "table",  "id": "in.c-x.missing", "error": "Table not found"}
+      {"type": "bucket", "id": "in.c-typo", "error_code": "NOT_FOUND", "retryable": false, "message": "Bucket in.c-typo not found"},
+      {"type": "table",  "id": "in.c-x.missing", "error_code": "NOT_FOUND", "retryable": false, "message": "Table not found"}
     ],
     "applied_count": 1,
     "error_count": 2
@@ -338,7 +338,7 @@ kbagent storage create-table --project ALIAS --bucket-id in.c-sales --name order
 # 2. Apply all descriptions from a tracked YAML file
 kbagent --json storage describe-batch \
   --project ALIAS \
-  --from-file ./docs/keboola/descriptions.yaml
+  --file ./docs/keboola/descriptions.yaml
 
 # 3. Verify by reading back
 kbagent --json storage table-detail --project ALIAS --table-id in.c-sales.orders \

@@ -222,8 +222,8 @@ class TestConfigRowCreateCli:
                     "cfg-001",
                     "--name",
                     "Row",
-                    "--configuration",
-                    f"@{cfg_file}",
+                    "--configuration-file",
+                    str(cfg_file),
                 ],
             )
 

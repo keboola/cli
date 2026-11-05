@@ -161,7 +161,7 @@ class StreamService:
     ) -> dict[str, Any]:
         """Assemble the full picture for one source (endpoints + destination)."""
         if not source_id and not name:
-            raise ConfigError("Provide a source id (positional) or --name.")
+            raise ConfigError("Provide --source-id or --name.")
         creds = self._resolve_project(alias)
         branch = _branch_ref(branch_id)
         client = self._stream_client_factory(creds.stack_url, creds.token)

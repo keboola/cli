@@ -15,6 +15,7 @@ for ``get_config_state`` / ``set_config_state``).
 """
 
 import json
+from pathlib import Path
 from typing import Any
 
 import typer
@@ -86,8 +87,12 @@ def config_state_set(
     project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     component_id: str = typer.Option(..., "--component-id", help="Component ID"),
     config_id: str = typer.Option(..., "--config-id", help="Configuration ID"),
-    state: str = typer.Option(
-        ..., "--state", help="New state as inline JSON object, @file, or - for stdin"
+    state: str | None = typer.Option(None, "--state", help="New state as a JSON object, inline"),
+    state_file: Path | None = typer.Option(
+        None,
+        "--state-file",
+        help="Read the new state JSON object from a file (- for stdin)",
+        allow_dash=True,
     ),
     row_id: str | None = typer.Option(
         None, "--row-id", help="Write this row's state instead of the config's root state"
@@ -110,7 +115,7 @@ def config_state_set(
       kbagent config state-set --project P --component-id C --config-id ID \\
         --state '{"lastId": 123}'
       kbagent config state-set --project P --component-id C --config-id ID \\
-        --row-id ROW --state @state.json
+        --row-id ROW --state-file state.json
       kbagent config state-set --project P --component-id C --config-id ID \\
         --state '{"lastId": 123}' --dry-run
     """
@@ -118,10 +123,16 @@ def config_state_set(
     config_store: ConfigStore = ctx.obj["config_store"]
 
     try:
-        state_value = _parse_json_input(state, label="--state")
+        state_value = _parse_json_input(state, state_file, label="--state")
     except ValueError as exc:
         formatter.error(message=str(exc), error_code=ErrorCode.VALIDATION_ERROR)
         raise typer.Exit(code=2) from None
+    if state_value is None:
+        formatter.error(
+            message="Pass the new state with --state JSON or --state-file PATH.",
+            error_code=ErrorCode.USAGE_ERROR,
+        )
+        raise typer.Exit(code=2)
 
     effective_branch = resolve_branch(config_store, project, branch)
 

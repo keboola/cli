@@ -471,7 +471,7 @@ interface PromoteStats {
   new: string[];
   overwritten: string[];
   identical: string[];
-  failed: { name: string; error: string }[];
+  failed: { name: string; message: string }[];
 }
 
 interface PromoteResponse {
@@ -558,7 +558,7 @@ function PromoteStatsPanel({
         <div className="text-[11px] space-y-0.5">
           {stats.failed.map((f) => (
             <div key={f.name} className="text-red-500">
-              ✗ {f.name}: {f.error}
+              ✗ {f.name}: {f.message}
             </div>
           ))}
         </div>

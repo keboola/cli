@@ -151,7 +151,6 @@ export interface DataApp {
   name: string;
   type: string;
   state: string;
-  desired_state: string;
   url: string;
   size: string;
 }

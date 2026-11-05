@@ -140,7 +140,7 @@ def edit_metric_with_cascade(
             cascaded_item = client.put_item("semantic-constraint", c["id"], cname, cattrs)
             cascaded.append({"constraint": cname, "status": "updated", "id": cascaded_item["id"]})
         except KeboolaApiError as exc:
-            cascaded.append(item_failure(exc, constraint=cname, status="failed", error=exc.message))
+            cascaded.append(item_failure(exc, constraint=cname, status="failed"))
 
     failed_cascades = [entry for entry in cascaded if entry["status"] == "failed"]
     partial_state = bool(failed_cascades)
@@ -155,7 +155,7 @@ def edit_metric_with_cascade(
                 f"to '{effective_new_name}'. Run "
                 "`kbagent semantic-layer validate` to surface the dangling "
                 "references, then re-run each failed cascade via "
-                "`kbagent semantic-layer edit constraint --new-metrics ...`."
+                "`kbagent semantic-layer edit constraint --new-metric ...`."
             )
             if partial_state
             else None

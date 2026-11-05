@@ -158,7 +158,7 @@ def _service(tmp_path: Path) -> DeepLineageService:
 
 def _show(tmp_path: Path, graph: LineageGraph, *args: str, json_mode: bool = False):
     cache = _cache(tmp_path, graph)
-    argv = (["--json"] if json_mode else []) + ["lineage", "show", "-l", str(cache), *args]
+    argv = (["--json"] if json_mode else []) + ["lineage", "show", "--file", str(cache), *args]
     return runner.invoke(app, argv)
 
 
@@ -395,6 +395,7 @@ class TestColumnTrace:
         assert result.exit_code == 0, result.output
         data = json.loads(result.stdout)["data"]
         assert data["column"] == "CUSTOMER"
+        assert "column_filter" not in data
         assert data["terminals"][0]["reason"] == "column_mapping_unknown"
         assert data["terminals"][0]["node"] == END_CFG
 

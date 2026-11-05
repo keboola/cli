@@ -24,13 +24,15 @@ from ..effective_branch import record_branch, resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..json_utils import compute_diff, deep_merge, find_matches_in_json, set_nested_value
 from ..models import ComponentDetail, ProjectConfig
+from ..sync.branch_scope import entry_tree
 from ..sync.code_extraction import normalize_blocks_codes_script
-from ..sync.manifest import Manifest, load_manifest, save_manifest
+from ..sync.manifest import load_manifest, save_manifest
 from ..sync.naming import sanitize_name
 from ._config_clone import clone_config_method
 from ._config_folder import set_config_folder_method
 from ._config_set_guard import validate_set_paths
 from ._encryption import collect_secrets, encrypt_secrets_in_config, find_plaintext_secret_keys
+from ._sync_moves import SKIPPED_OTHER_BRANCH, rename_entries
 from .base import (
     BaseService,
     ClientFactory,
@@ -1318,8 +1320,11 @@ class ConfigService(BaseService):
             component_id=component_id,
             config_id=config_id,
             new_name=name,
+            branch_id=effective_branch_id,
         )
-        if sync_result:
+        if sync_result and "skipped" in sync_result:
+            result["sync_skipped"] = sync_result["skipped"]  # local tree not changed (F3)
+        elif sync_result:
             result["sync"] = sync_result
 
         return result
@@ -1330,8 +1335,13 @@ class ConfigService(BaseService):
         component_id: str,
         config_id: str,
         new_name: str,
+        branch_id: int | None = None,
     ) -> dict[str, str] | None:
         """Rename the local sync directory for a config if a manifest tracks it.
+
+        The entry of *branch_id* is renamed (a dev branch created from
+        production holds the same config ids), together with the promote
+        entries that share its directory (issue #792 I, B8).
 
         Returns a dict with old_path/new_path on success, or None if no
         sync directory was found or rename was not needed.
@@ -1350,15 +1360,15 @@ class ConfigService(BaseService):
         except (FileNotFoundError, ValueError):
             return None
 
-        # Find the config entry in the manifest
-        target_cfg = None
-        for cfg in manifest.configurations:
-            if cfg.component_id == component_id and cfg.id == config_id:
-                target_cfg = cfg
-                break
-
-        if target_cfg is None:
+        # The config's entry on this branch, and the promote entries sharing its dir.
+        renamed = rename_entries(manifest, component_id, config_id, branch_id)
+        if not renamed:
+            if any(
+                (c.component_id, c.id) == (component_id, config_id) for c in manifest.configurations
+            ):
+                return {"skipped": SKIPPED_OTHER_BRANCH}
             return None
+        target_cfg = renamed[0]
 
         # Compute new path using the naming template
         old_path = target_cfg.path
@@ -1376,8 +1386,8 @@ class ConfigService(BaseService):
             new_path = new_basename
 
         # Collision detection: if target already exists, append numeric suffix
-        branch_dir = self._find_sync_branch_dir(manifest, directory)
-        if branch_dir is None:
+        branch_dir = directory / entry_tree(manifest, target_cfg)
+        if not branch_dir.exists():
             return None
 
         target_dir = branch_dir / new_path
@@ -1392,7 +1402,8 @@ class ConfigService(BaseService):
         source_dir = branch_dir / old_path
         if not source_dir.exists():
             # Directory doesn't exist locally, just update manifest
-            target_cfg.path = new_path
+            for cfg in renamed:
+                cfg.path = new_path
             target_cfg.metadata.pop("pull_hash", None)
             target_cfg.metadata.pop("pull_config_hash", None)
             save_manifest(directory, manifest)
@@ -1402,7 +1413,8 @@ class ConfigService(BaseService):
         method = self._move_directory(source_dir, target_dir)
 
         # Update manifest
-        target_cfg.path = new_path
+        for cfg in renamed:
+            cfg.path = new_path
         target_cfg.metadata.pop("pull_hash", None)
         target_cfg.metadata.pop("pull_config_hash", None)
         save_manifest(directory, manifest)
@@ -1436,16 +1448,6 @@ class ConfigService(BaseService):
             pass  # git not installed
         shutil.move(str(source), str(target))
         return "shutil_move"
-
-    @staticmethod
-    def _find_sync_branch_dir(manifest: Manifest, project_root: Path) -> Path | None:
-        """Find the branch directory within a sync project root."""
-        if not manifest.branches:
-            return None
-        # Use the first branch (typically "main")
-        branch_path = manifest.branches[0].path
-        branch_dir = project_root / branch_path
-        return branch_dir if branch_dir.exists() else None
 
     def _metadata_branch_id(self, alias: str, client: Any, branch_id: int | None) -> int:
         """Resolve the branch ID required by the config metadata API.

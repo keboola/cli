@@ -52,6 +52,7 @@ from .response_meta import (
     ResponseMetaMiddleware,
     error_response,
     http_status_for,
+    removed_route_message,
 )
 from .route_permissions import enforce_route_permission
 from .routers import (
@@ -974,8 +975,14 @@ def create_app(
 
     @app.exception_handler(StarletteHTTPException)
     async def _starlette_handler(request: Request, exc: StarletteHTTPException):
+        # C3: a request to a removed route names its replacement.
+        removed = (
+            removed_route_message(request.method, request.url.path)
+            if exc.status_code in (404, 405)
+            else None
+        )
         return error_response(
-            exc.detail or "HTTP error",
+            removed or exc.detail or "HTTP error",
             ErrorCode.HTTP_ERROR,
             http_status=exc.status_code,
             request=request,

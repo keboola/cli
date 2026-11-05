@@ -32,7 +32,7 @@ SERVE_COMMAND_MAP: dict[tuple[str, str], str] = {
     (
         "DELETE",
         "/semantic-layer/scope/{context_id}/elevation-request",
-    ): "semantic-layer scope request-delete",
+    ): "semantic-layer scope request-cancel",
     ("DELETE", "/semantic-layer/scope/{context_id}/target-projects"): "semantic-layer scope remove",
     ("DELETE", "/semantic-layer/models/{model}"): "semantic-layer model delete",
     (
@@ -55,7 +55,6 @@ SERVE_COMMAND_MAP: dict[tuple[str, str], str] = {
     ("GET", "/auth/status"): "auth status",
     ("GET", "/billing/credits"): "billing credits",
     ("GET", "/branches"): "branch list",
-    ("GET", "/branches/{project}/merge-url"): "branch merge",
     ("GET", "/branches/{project}/metadata"): "branch metadata-list",
     ("GET", "/branches/{project}/metadata/{key}"): "branch metadata-get",
     ("GET", "/changelog"): "changelog",
@@ -167,6 +166,7 @@ SERVE_COMMAND_MAP: dict[tuple[str, str], str] = {
     ("PATCH", "/agents/{task_id}"): "agent update",
     ("PATCH", "/configs/{project}/{component_id}/{config_id}"): "config update",
     ("PATCH", "/configs/{project}/{component_id}/{config_id}/variables"): "config variables-set",
+    ("PATCH", "/data-apps/{project}/{app_id}/git-auth"): "data-app git-auth-set",
     ("PATCH", "/data-apps/{project}/{app_id}/secrets"): "data-app secrets-set",
     ("PATCH", "/merge-requests/{project}/{merge_request_id}"): "merge-request update",
     ("PATCH", "/configs/{project}/{component_id}/{config_id}/rows/{row_id}"): "config row-update",
@@ -295,13 +295,10 @@ SERVE_COMMAND_MAP: dict[tuple[str, str], str] = {
     ("POST", "/workspaces/{project}/{workspace_id}/query"): "workspace query",
     ("PUT", "/branches/{project}/metadata/{key}"): "branch metadata-set",
     ("PUT", "/configs/{project}/{component_id}/{config_id}/metadata/{key}"): "config set-metadata",
-    ("PUT", "/merge-requests/{project}/{merge_request_id}"): "merge-request update",
     ("PUT", "/merge-requests/{project}/{merge_request_id}/auto-merge"): "merge-request auto-merge",
     ("PUT", "/configs/{project}/{component_id}/{config_id}/state"): "config state-set",
     ("PUT", "/configs/{project}/{component_id}/{config_id}/variables"): "config variables-set",
-    ("PUT", "/data-apps/{project}/{app_id}/secrets"): "data-app secrets-set",
     ("PUT", "/projects/{alias}/description"): "project description-set",
-    ("PUT", "/semantic-layer/items/{kind}/{name}"): "",
     ("PUT", "/semantic-layer/reference-data"): "semantic-layer reference-data set",
     ("PUT", "/semantic-layer/scope/{context_id}"): "semantic-layer scope set",
     (

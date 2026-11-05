@@ -490,7 +490,7 @@ class MemberInviteRow(BaseModel):
 
 
 class BulkInviteResult(BaseModel):
-    """Aggregate result of `kbagent project invite --from-csv`."""
+    """Aggregate result of `kbagent project invite --file`."""
 
     total: int
     succeeded: int

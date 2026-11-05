@@ -89,7 +89,6 @@ class TestDataAppList:
                     "name": "App",
                     "type": "python-js",
                     "state": "running",
-                    "desired_state": "running",
                     "config_version": "3",
                     "url": "https://x.hub.example.com",
                 }
@@ -210,7 +209,7 @@ class TestDataAppCreateValidation:
             "dry_run": True,
             "project_alias": "prod",
             "use_managed_git_repo": True,
-            "requests": {"post_apps": {}, "put_storage_config": {}, "patch_apps": {}},
+            "requests": {"post_apps": {}, "put_storage_config": {}, "post_deployments": {}},
             "message": "Dry run -- no API calls made.",
         }
         result = _invoke(
@@ -289,7 +288,7 @@ class TestDataAppCreateValidation:
         payload = {
             "dry_run": True,
             "project_alias": "prod",
-            "requests": {"post_apps": {}, "put_storage_config": {}, "patch_apps": {}},
+            "requests": {"post_apps": {}, "put_storage_config": {}, "post_deployments": {}},
             "message": "Dry run -- no API calls made.",
         }
 
@@ -315,8 +314,7 @@ class TestDataAppCreateValidation:
             "app_id": "42",
             "config_id": "ulid",
             "workspace": False,
-            "state": "created",
-            "desired_state": "stopped",
+            "state": "notDeployed",
             "message": "created",
         }
         result = _invoke(
@@ -353,8 +351,7 @@ class TestDataAppCreateValidation:
             "app_id": "42",
             "config_id": "ulid",
             "workspace": True,
-            "state": "created",
-            "desired_state": "stopped",
+            "state": "notDeployed",
             "message": "created",
         }
         result = _invoke(
@@ -391,7 +388,7 @@ class TestDataAppCreateValidation:
             "requests": {
                 "post_apps": {},
                 "put_storage_config": {},
-                "patch_apps": {},
+                "post_deployments": {},
             },
             "message": "Dry run -- no API calls made.",
         }
@@ -456,8 +453,7 @@ class TestDataAppLinkOutput:
             "config_id": "ulid",
             "workspace": True,
             "url": APP_URL,
-            "state": "created",
-            "desired_state": "stopped",
+            "state": "notDeployed",
             "message": "created",
         }
         return _invoke(
@@ -515,7 +511,6 @@ class TestDataAppDeploy:
             "app_id": "42",
             "action": "deploy",
             "state": "starting",
-            "desired_state": "running",
             "config_version": "5",
             "url": "https://x.hub.example.com",
             "message": "Data app 42 deploy requested.",
@@ -567,7 +562,6 @@ class TestDataAppDeploy:
             "app_id": "42",
             "action": "deploy",
             "state": "starting",
-            "desired_state": "running",
             "config_version": "5",
             "url": "",
             "message": "Data app 42 deploy requested.",

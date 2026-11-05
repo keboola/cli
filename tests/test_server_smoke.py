@@ -222,7 +222,7 @@ def test_semantic_layer_items_unknown_kind_put_422(client: TestClient) -> None:
     FastAPI rejects unknown ``kind`` path values at the framework layer
     via the ``ItemKind`` ``Literal`` alias, before reaching the handler.
     """
-    res = client.put(
+    res = client.patch(
         "/semantic-layer/items/widget/n",
         headers={"Authorization": "Bearer test-token"},
         json={"project": "x"},

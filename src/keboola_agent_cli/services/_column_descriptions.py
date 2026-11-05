@@ -17,7 +17,6 @@ from collections.abc import Callable
 from typing import Any
 
 from ..effective_branch import resolve_branch
-from ..errors import KeboolaApiError
 from .base import BaseService, item_failure
 
 logger = logging.getLogger(__name__)
@@ -161,9 +160,11 @@ def delete_legacy_entries(
         try:
             client.delete_table_metadata(table_id, entry.get("id"), branch_id=branch_id)
         except Exception as exc:
-            msg = exc.message if isinstance(exc, KeboolaApiError) else str(exc)
-            logger.warning("Could not delete legacy metadata %s on %s: %s", key, table_id, msg)
-            failures.append(item_failure(exc, column=column, reason="delete_failed", error=msg))
+            failure = item_failure(exc, column=column, reason="delete_failed")
+            logger.warning(
+                "Could not delete legacy metadata %s on %s: %s", key, table_id, failure["message"]
+            )
+            failures.append(failure)
     return failures
 
 
@@ -350,8 +351,7 @@ def migrate_tables(
                 pruned=pruned,
             )
         except Exception as exc:
-            msg = exc.message if isinstance(exc, KeboolaApiError) else str(exc)
-            errors.append(item_failure(exc, table_id=table_id, error=msg))
+            errors.append(item_failure(exc, table_id=table_id))
             continue
         if changed:
             tables_migrated += 1

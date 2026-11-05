@@ -13,47 +13,521 @@ Versioning convention:
 
 ## Forms that work on 0.x and 1.x
 
-From the release of kbagent 1.0.0 until its migration date (28 days later), the user can run 0.x (0.100.0 and later) or 1.x. Write every command so it works on both. `kbagent --version` tells which one runs. The migration page is `docs/migrate-to-1.0.md` in the repository.
+From the release of kbagent 1.0.0 until its migration date (28 days later), the user can run 0.x or 1.x. Write every command so it works on both. `kbagent --version` tells which one runs. The migration page is `docs/migrate-to-1.0.md` in the repository.
 
+- **Option and command names: use the 1.x names.** They work on 0.100.5 and later and on 1.x. When `kbagent --version` shows a 0.x release older than 0.100.5, ask the user to run `kbagent update` first: it stays on 0.x and installs 0.100.5 or a later 0.x release. The items below that name a difference still apply on 0.100.5.
+- **`dev-portal create/patch`**: give the payload with `--data-file PATH`. Inline JSON in `--data` is 1.x only (on 0.x `--data` is a path).
+- **`sharing share --target-project`**: give numeric project IDs. A registered alias is 1.x only.
+- **List options**: repeat the option once per value (`--target-project 11 --target-project 22`). This works on both; 1.x refuses a comma in a value. Write the long name: `semantic-layer import/promote --type` has no `-t` on 0.x.
+- **File input**: never give `@path` or a bare `-` to an inline option (`--configuration @f.json`, `--body -`). Use the `--X-file` option (`--configuration-file`, `--body-file`, `--definition-file`, ...); `-` as its path reads stdin. 1.x refuses `@path` and `-` inline with an error that names `--X-file`.
 - **Fan-out reads** (`search`, `billing credits`, `component list`, `config list`, `config search`, `data-app list`, `job list`, `storage buckets`, `storage tables`, `sharing list`, `sharing edges`, `flow list`, `schedule list`, `schedule find`, `notification list`, `branch list`, `workspace list`, `project status`): always give `--project P`, or `--all-projects` for every project. An omitted `--project` reads all projects on 0.x and only the active project on 1.x.
 - **Every command that uses a project gets `--project P`**, reads and writes alike. On 0.x most commands require it, and on 1.x a command without it silently uses the active project, which another terminal or agent conversation can change. This rule stays after the migration date too.
 - **Root flags** (`--json`, `--deny-writes`, `--deny-destructive`) go before the subcommand: `kbagent --json config list --project P`. 0.x refuses them after it.
 - **Help**: `--help`, not `-h`. Never run a bare group (`kbagent storage`): 0.x exits 0 with no output, 1.x exits 2.
-- **Options**: never give a single-value option twice (1.x refuses it on write, destructive and admin commands). A list option such as `sharing share --target-project-ids` gets one comma list (`11,22`): 0.x keeps only the last of repeated values.
-- **Confirmations**: run a destructive command under `--json` (consent on both), or with `--yes` where 0.x has it. `branch delete` and `workspace delete` have `--yes` and `--dry-run` only on 1.x: use `kbagent --json branch delete --project P --branch ID`. Never pipe `y` into a prompt: 1.x refuses without a terminal.
-- **Text from a file**: `--file` / `--sql-file`, never `--text @file` (1.x refuses it when the file exists, 0.x stores the literal text).
+- **Single-value options**: never give one twice (1.x refuses it on write, destructive and admin commands).
+- **Confirmations**: run a destructive command under `--json` (consent on both), or with `--yes` where 0.x has it. `branch delete` and `workspace delete` have `--yes` and `--dry-run` only on 1.x: use `kbagent --json branch delete --project P --branch ID`. `sharing unlink` takes `--yes` and `--dry-run` on both; *(updated 1.0.0)* only 1.x asks for confirmation. Never pipe `y` into a prompt: 1.x refuses without a terminal.
 - **Long option names**: write `--project`, `--limit`, `--column`, not short flags. On 0.x most commands have no `-p`, and 1.x removes the short flags listed in "One short flag per long option" below.
 - **Results**: read failed items and the outcome from `--json` (`errors[]`, `failed[]`, `exit_code`, `error.code`), not from human output or the exit code alone. The `Error:` lines, the headline and several exit codes differ between the majors (migration page, rows 15, 21 and 31).
-- **REST** (`kbagent http`, `kbagent serve`): send `project=` or `all_projects=true` on list routes, and `branch_id` on the routes that use the active branch on 1.x. Keep `PUT` on the 4 partial-update routes until 0.x is gone: 1.x still accepts it with a `DEPRECATED` warning, 0.x has no `PATCH` there.
+- **Removed keys**: read the error text of a failed item from `message` and fall back to `error` (0.x has only `error` or `reason`). Treat `source` `"pin"` (0.x) and `"active_project"` (1.x) of `project current` as the same. The other removed keys are in "Keys removed from `--json` output in 1.0.0" below.
+- **REST** (`kbagent http`, `kbagent serve`): send `project=` or `all_projects=true` on list routes, and `branch_id` on the routes that use the active branch on 1.x. The 4 partial-update routes have no form that works on both: 0.x has only `PUT` there, and 1.x has only `PATCH` (*(updated 1.0.0)* its `PUT` answers HTTP 405). Check `kbagent --version` first. `PUT .../variables` with `replace: true` (the full replace) works on both. The REST route of `sharing unlink` has no `dry_run` on 0.x.
+- **Removed forms** *(updated 1.0.0)*: 1.x refuses the old names, so never use them. This includes `stream delete --force` (use `--yes`), `semantic-layer import --yes` (omit it), `--id` on `merge-request`, `agent` and `semantic-layer reference-data` commands, the positional `TASK_ID` / `RUN_ID` of `agent` commands and `SOURCE_ID` of `stream detail/delete`, `branch merge`, and `semantic-layer scope request-delete` (use `request-cancel`). See "1.0.0 removes the deprecated forms" below.
 - **Updates**: `kbagent update` stays on the running major. Ask the user before `kbagent update --major`.
+
+## Keys removed from `--json` output in 1.0.0
+
+*(since 1.0.0)*
+
+1.0.0 removes the `--json` keys that 0.x kept only for compatibility, and renames one value. Read the replacement:
+
+- `semantic-layer model delete`: `orphaned_children` is removed. Read `cascade.deleted`.
+- `lineage show --column`: `column_filter` is removed. Read `column`.
+- `permissions show`: the top-level `mode`, `allow` and `deny` are removed. Read `persisted.mode`, `persisted.allow` and `persisted.deny`. `GET /permissions/show` does not change.
+- `config set-folder` and `POST /configs/{project}/{component_id}/{config_id}/folder`: `key`, `value` and `result` are removed. Read `folder` (`""` when cleared) and `configuration` (`{id, name, folder}`).
+- `data-app` commands and the `/data-apps` routes: `desired_state` and `last_start_timestamp` are removed, and `data-app create` has no `managed_git_repo_id`. Read `state` and `deployment_id` (1.x only).
+- A failed item or project in `failed[]`, `errors[]` or a similar list (`cascade.failures`, `cascaded_constraints`, `type_resolution_errors`, `bucket_errors`, `projects_failed`, the `projects` map of `sync push --all-projects`): `error` and `reason` with the error text are removed. Read `message`, with `error_code` and `retryable`. The `message` of an unexpected error is truncated. A `reason` that names a category stays (`skipped[]` of `storage describe` and `storage describe-migrate`: `orphan`, `conflict`, `delete_failed`).
+- `project use` and `project current`: `source: "pin"` is `source: "active_project"`, the name that `resolved_source` and `targets[].project_source` use. `pinned` does not change.
+
+These lists keep `error`, because their entries are not failed items with an error code: `fetch_errors` of `semantic-layer build`, `errors[]` of `flow schedule-remove`, `details.rollback.failed_deletes` of a failed semantic-layer push, the `error` of a `project status` row, and the `projects` map of `sync pull --all-projects` and `sync diff --all-projects`.
 
 ## One short flag per long option
 
-*(since vNEXT)* (#791, spec A2)
+*(since 1.0.0)* (#791, spec A2)
 
-- **Every option with a long name in the short-flag table has its short flag**: `-p` `--project` (on all 228, before on 24), `-n` `--name`, `-t` `--type`, `-L` `--limit`, `-o` `--output`, `-e` `--email`, `-d` `--directory`, `-y` `--yes` and the others in `docs/cli-interface-spec.md` A2. A long name that is not in the table has no short flag.
+- **Every option with a long name in the short-flag table has its short flag**: `-p` `--project` (on all 225, before on 24 of 228), `-n` `--name`, `-t` `--type`, `-L` `--limit`, `-o` `--output`, `-e` `--email`, `-d` `--directory`, `-y` `--yes` and the others in `docs/cli-interface-spec.md` A2. A long name that is not in the table has no short flag.
 - **Removed short flags** (a usage error, exit 2): `-c` (`permissions list --category`, `lineage show --column`), `-r` (`search` and `config search --regex`, `project invite` and `project member-set-role --role`), `-d` on `http post/patch --body`, `permissions set --deny` and `token create --description`, `-f` on `lineage show --format`, `-l` on `search --limit` and `-n` on `changelog` and `kai history --limit` (use `-L`), `-m` on `permissions set --mode`, and `-v` on `changelog --full` (`-v` is the global `--verbose`).
 - **In documents and agent commands, use the long names.** They work on 0.x and 1.x.
 
+## Data apps clone a private GitHub repo through the organization connection: `--git-auth organization`, `git-auth-set`
+
+*(since 1.1.0)*
+
+- **`data-app create --git-repo https://github.com/OWNER/REPO --git-auth organization`** writes `parameters.dataApp.git` as `{repository, branch, authType: "organization", private: true}` and stores NO credential: the platform mints a short-lived read-only token from the Keboola organization's GitHub App connection at deploy. Before, a private repo always needed `--git-username` plus a PAT, and kbagent never wrote `authType`. `--dry-run` and `POST /data-apps/{project}` with `git_auth: "organization"` show the same body.
+- **Only an `https://HOST/OWNER/REPO` URL qualifies** (no port, query, fragment or embedded credentials; `DATA_APP_INVALID_GIT` otherwise). kbagent does not check `HOST`: the stack accepts `github.com` and the GitHub Enterprise hosts it is configured for, and it checks that the GitHub App covers the repo. Those errors appear at DEPLOY time (`data-app runs`), not at create. Dev-mode apps are refused by the backend.
+- **`--git-auth organization` with `--git-public`, `--git-username`, a `--git-pat-*` flag or `--use-managed-git-repo` is `VALIDATION_ERROR`, exit 2**, before any API call. The backend rejects a git block that has `authType: organization` and a credential.
+- **Switch an existing app with `data-app git-auth-set --app-id ID --git-auth organization`**, not `config update --merge --set 'parameters.dataApp.git.authType=organization'`: a merge cannot delete keys, so it would leave `username` / `#password` / `#sshKey` beside `authType` and the deploy would fail. `git-auth-set` removes them in the same write (`removed_credentials`), keeps the other keys, and reports `status: switched`, `unchanged` (no write) or `dry_run`. It refuses a dev-mode app (`VALIDATION_ERROR`, before any write): the platform does not deploy organization auth in dev mode, so the switch would remove a working credential. An `ssh://` URL needs `--git-repo https://...` too. It never deploys: run `data-app deploy --wait` after it. REST: `PATCH /data-apps/{project}/{app_id}/git-auth`.
+- **`data-app validate-repo` never uses organization auth.** It reads the repo anonymously or with your PAT; validate an org-auth repo with a PAT that can read it.
+- **`data-app detail` and `--json` redact `#sshKey`** like `#password` (`<encrypted>`). Before, an SSH-key app showed the ciphertext.
+
 ## `kbagent context <group>` prints one group
 
-*(since vNEXT)* (CLI-52, #791)
+*(since 1.0.0)* (CLI-52, #791)
 
 - **`kbagent --json context storage`** prints only the `storage` section: the commands with their options and the first paragraph of their help, then the notes for the group. A top-level command (`search`, `serve`) or a hidden alias (`mr`, `sl`) works too. `data.group` names the section, or is null without an argument. `data.context` holds the text as before.
 - **An unknown group** is `INVALID_ARGUMENT` (exit 2), and the message lists the valid groups.
 - **The command lists are generated from the command manifest**, so they always match `--help`. On 0.x, `kbagent context` takes no argument and prints the whole hand-written text.
 
+## `branch create` on the `__env__` project succeeds without activating the branch
+
+*(since 1.0.0)*
+
+- **`branch create --project __env__`** (the headless project from
+  `KBAGENT_PROJECT_FROM_ENV`) now exits 0 with the created branch,
+  `activated: false`, and a top-level `warnings[]` entry `ACTIVE_BRANCH_NOT_STORED`
+  whose `hint` is `--branch <id>`. Before, the branch was created, then storing it as
+  the active branch failed: the command printed `status: error` and exited 5,
+  although the branch existed. A retry created a second branch. Over `kbagent serve`,
+  `POST /branches/__env__` answers 200 with the same warning in `Kbagent-Warnings`,
+  whose hint there is `branch_id=<id>`.
+- **An environment project has no active branch.** It lives only in memory, so pass
+  `--branch <id>` (REST: `branch_id`) on every command that should use the branch.
+- **`branch reset --project __env__`** exits 0 and changes nothing
+  (`previous_branch_id: null`). Before, it was refused with exit 5.
+- **`branch use --project __env__`** is refused with `CONFIG_ERROR` (exit 5) before any
+  API call; the message names `--branch`. Before, it read the branch list first.
+- **On an older version**, a failed `branch create` on `__env__` did create the branch:
+  run `kbagent branch list --project __env__` and use its ID, never create it again.
+
+## Deleting the last config of a pulled dev-branch folder is pushed
+
+*(since 1.0.0)*
+
+- **`sync pull --branch <dev>` then deleting the folder's only config** (or the last
+  one left) and `sync push --branch <dev> --force` now deletes that config on the dev
+  branch; a plain push lists it under `skipped_deletions`, and `sync diff` shows it
+  `deleted`. Before, with no `_config.yml` left in `<dev>/`, push read `main/` instead
+  (the promote path), returned `no_changes` with exit 0, and listed the config under
+  `orphaned` with reason `tracked_on_other_branch` and a hint calling the synced branch
+  "not the branch being synced". Deleting one of several configs always worked.
+- **The folder decides, not its files**: a `<dev>/` folder that a pull of that branch
+  created is the source while it is on disk, also when it is empty. So once `--force` has
+  deleted the last config, the next `sync push --branch <dev>` reports `no_changes`
+  instead of promoting `main/` onto the branch you just emptied. Without a `<dev>/`
+  folder, push still promotes `main/`; an entry of the synced branch is then `orphaned`
+  with a hint that says its folder was not read and names `sync pull --branch <dev>`.
+- **On an older version**, keep one config directory in `<dev>/` and delete the config
+  with `kbagent config delete --project <alias> --branch <dev> --component-id <component> --config-id <id>`, then `sync pull --branch <dev>`.
+
+## A code edit after `sync push` created the config is pushed
+
+*(since 0.100.4)*
+
+- **`sync push` that CREATES a config** (a new local config, a promote push from `main/`
+  to a dev branch, `sync clone`) now records the hashes of its code files (`transform.sql`,
+  `transform.py`, `code.py`, `pyproject.toml`, `_description.md`) in the manifest, as
+  `sync pull` does. Before, it recorded `_config.yml` only, so a later edit to one of those
+  files diffed as unchanged: `sync diff` said "in sync", `sync push` said "No changes to
+  push" with exit 0, and the remote kept the old code. An edit to `_config.yml` itself was
+  always detected. The same gap let `sync pull --force` replace an edited code file with
+  the remote code when the config had also changed remotely; that is now `SYNC_CONFLICT`.
+- **On an older version**, run `kbagent sync pull` (with `--branch` for a dev branch) after
+  every push that created a config, before you edit its code files. The pull records the
+  missing hashes. `sync pull --branch <id>` writes the branch's configs to that branch's
+  own folder (not `main/`), so edit the files there. If you already edited code files after
+  such a push, copy them aside first: a pull that takes a remote change overwrites them.
+
+## Deleting `is_disabled: true` re-enables a config on `sync push`
+
+*(since 1.0.0)*
+
+- **Re-enable by deleting the line.** `sync pull` writes `is_disabled: true` into the
+  `_config.yml` of a disabled config or row and writes no key for an enabled one. Delete
+  that line and run `sync push`: the config (or row) is enabled on the remote. Before, push
+  read a missing key as "leave the remote alone", reported `updated`, changed nothing, and
+  `sync diff` then said "in sync" while the config stayed disabled. `is_disabled: false`
+  still works on every version.
+- **How push knows.** The manifest records which pulled or pushed file had the line. A
+  missing key re-enables only when that file had it. A config disabled in the UI is never
+  enabled by an unrelated push.
+- **After upgrading, run `sync pull` once before you re-enable by deleting the line.** A
+  tree pulled with an older version has no record. Delete the line and push before any
+  pull, and push leaves the remote alone: the config stays disabled and `sync diff` then
+  says "in sync". A plain pull of the unedited file records it; or write
+  `is_disabled: false` instead of deleting the line, which works on every version.
+- **A plain `sync pull` keeps the deleted line deleted** (the config is locally modified),
+  and the next push still re-enables. If the config was re-enabled in the UI meanwhile,
+  diff shows nothing to push; if it was also changed there in another way, diff shows a
+  conflict and push sends nothing.
+- **`pyproject.toml` follows a rename and a create.** After `sync push` renames a Python
+  transformation or custom Python app, or creates one, or `sync clone` copies one, the
+  file's `[project] name` (and an app's `[tool.keboola] config_id`) are the values a pull
+  would write. Nothing else in the file changes. A promote push (`push --branch <dev>`
+  from `main/`) never writes the dev config id into `main/`.
+
+## Sync treats a config's companion files as one set; a new config's rows go up with it
+
+*(since 1.0.0)*
+
+- **A companion file the remote no longer has is removed by `sync pull`.** When the
+  description or the package list is cleared remotely (in the UI), pull now deletes
+  `_description.md` / `pyproject.toml`. Before, it left the old file, `sync diff` said
+  "in sync", and the next `sync push` of any edit to that config sent the old value back.
+  A tree an older pull left in that state is repaired by the next `sync pull`, also when
+  the remote has not changed since. Pull deletes only a file it can prove unchanged since
+  the last sync: an edited file keeps the config `skipped` (its old baseline too, so
+  `sync diff` shows the conflict), and a file pull cannot judge (a config created by a push
+  that stopped half-way, an adopted directory) or one edited while pull runs is kept, with
+  a `COMPANION_KEPT` entry in `warnings[]`. While that file exists, `sync diff` lists the
+  config as a `conflict` and `sync push` never sends it: delete the file to accept the
+  remote's cleared value, or run `sync pull --theirs`.
+- **A new companion file is a local change.** Creating `_description.md` for a config
+  pulled with an empty description (or any companion file that was not there at pull
+  time) now shows as `modified` and `sync push` sends it. Deleting one shows as
+  `modified` too and clears the value. The manifest records the companion set as
+  `pull_extra_hashes` plus `pull_extra_hashes_version: 1`; older kbagent versions read
+  such a manifest without any phantom change.
+- **Only the files the component uses count**: `_description.md` for every config,
+  plus `transform.sql` (SQL transformations), `transform.py` + `pyproject.toml` (Python
+  transformations), `code.py` + `pyproject.toml` (custom Python apps). Any other of those
+  file names in a config folder (a `code.py` beside an extractor, `transform.py` renamed
+  to `code.py`) is never pushed, compared or deleted; `sync diff` and `sync push` (also
+  with nothing to push, and `--dry-run`) report it as an `UNOWNED_COMPANION` entry in the
+  top-level `warnings[]` (`--json`) or a warning line on stderr; with `--all-projects`
+  each entry names its `project`.
+- **Empty versus deleted:** a companion file always wins over the same value inline, so an
+  empty `_description.md`, `code.py`, `transform.sql` or `transform.py` sends an empty
+  value. `pyproject.toml` is read as TOML: its `[project].dependencies` list is the package
+  list (`dependencies = []` is an empty one, a one-line list works). A file that states no
+  such list -- no key, a Poetry-only file, not valid TOML -- never decides the packages:
+  the inline `packages` apply, else push keeps the packages the remote config has (exactly,
+  also a value an older kbagent wrote without escaping its quotes); a new config in that
+  state is refused with `COMPANION_UNREADABLE` (`push --dry-run` and `clone --dry-run`
+  print the same error with its remedy and count planned, refused and executable configs
+  separately, also per project with `--all-projects`; the rows of a refused new config are
+  refused too, as the real push skips them), as is an update whose remote cannot be read.
+  `sync diff` reports a file that is not valid TOML (`COMPANION_UNREADABLE` warning). A deleted companion sends the value inline in
+  `_config.yml` (pull writes `description: ''` and `packages: []` there when they are
+  empty), or none. After a push that cleared the
+  description, `_config.yml` has the `description: ''` line a fresh pull writes.
+- **`_config.yml` deleted while an edited `transform.sql` (or another companion) is kept**
+  is a local change: `sync pull` no longer re-creates the folder over it (reported
+  `skipped`). Delete the whole folder, or use `--theirs`, to take the remote.
+- **Changing `_keboola.component_id` in a tracked folder is refused** by `sync diff` and
+  `sync push` (`CONFIG_ERROR`, exit 5). Restore it, or move the files to a new folder
+  without `_keboola.config_id` to create a config of the other component.
+- **A new config authored with `rows/` is created with its rows in one `sync push`**
+  (production and `--branch`). Before, push created the config alone and reported success;
+  a second push created the rows. `sync diff` and `push --dry-run` list those rows as
+  `added` with `parent_path` (the folder) and an empty `parent_config_id`. When the config
+  create fails, its rows fail with `PARENT_CONFIG_NOT_TRACKED`; when a row create fails or
+  the push stops half-way, the next push creates only what is missing -- also when a row
+  file carries a row id copied from another config (a copied id is never taken as the
+  row's identity: on `--branch` the row is linked to its production row by its folder once
+  production creates it). A row push creates now carries its
+  `_keboola.row_id` in its file, as a pull writes it (not on `--branch` from `main/`), so a
+  later `sync pull` finds it by id instead of writing a second copy. A create whose response was lost (the
+  server created it, kbagent never saw the id) can still be created twice; check the
+  remote before re-running after a network failure.
+- **Rows under a folder adopted by its config id** (no manifest entry, the file carries an
+  existing config id) are compared by row id. A row that differs from the remote, or a
+  remote row with no file, is a `conflict` -- never an update or a delete, because nothing
+  records which side changed it. A row file carrying an id the remote no longer has is
+  `remote_deleted`: push never creates it again, also after the adopted config was
+  registered (its rows are registered with it, that one included). Two row folders of one
+  config carrying the same row id (a copied row folder) are both a `conflict` naming both
+  folders, and push creates neither. Delete every folder that is not that row: the one left
+  with the row id IS the row (compared by id, `remote_deleted` when the remote lost it) and
+  is never created again. To keep a copy as a NEW row, remove the `row_id` line from its
+  `_config.yml` instead. This holds for a tracked row folder too: while two folders stand
+  for one row id, both are a conflict, push updates and deletes neither, and the row is
+  never inferred deleted. Any row folder that alone carries the id of a row the config has
+  (on the remote, in the manifest, or recorded when the config was adopted) is that row --
+  a moved or renamed row folder included. At a new path it has no proven baseline, so a
+  difference is a conflict until `sync pull`, which tracks the row at its new path (keeping
+  a local edit, which then pushes normally); when the remote deleted that row, pull removes
+  the moved folder if it is unedited and keeps and reports it otherwise. When the remote
+  deletes the whole CONFIG, pull keeps its folder (reported `skipped`) if any row folder in
+  it holds work: an edited row at any path, moved ones included, a row folder no tracked
+  row stands for (a new row), or several folders carrying one row's id. Another config's
+  folder nested inside it is that config's, not this one's work: it is judged (and kept or
+  removed) on its own. An outer config holding a nested one that stays is kept whole and
+  reported `skipped`; a later pull removes it once the nested config is gone -- also when
+  the nested config is reached through a link (`alias -> parent/child`). A config folder
+  that is a symbolic link, or that contains one anywhere, is never traversed or deleted
+  -- it is reported `skipped` instead, also under `--theirs`: kbagent does not decide what
+  a folder owns through links. Containment is judged by the filesystem, so it holds on
+  case-insensitive ones. What is kept is decided for every config before anything is
+  deleted, so the manifest order never changes the outcome. A new row (no row id) under such a config is created
+  when the config itself equals the remote; otherwise run `sync pull` first. Pushing the
+  adopted config registers its rows, so a later push never creates them a second time.
+- **A flow, orchestration or schedule created in the same push as a row it selects**
+  (typical for `sync clone`) keeps `link_pending` in the manifest while that row is
+  missing (also a new row under an existing config whose create failed), and the push that
+  creates the row also sets `configRowIds` -- no edit needed.
+  The same applies after a push that stopped before the links were set. That later push
+  reads the config from the remote and rewrites only its references (a change made in the
+  UI since survives); `sync diff` then shows the rewrite as a remote change unless the local
+  file was in sync, in which case the file is updated too.
+  A row created by an earlier push and deleted on the remote since is not a resolved
+  target: the reference stays pending (`LINK_UNRESOLVED`) instead of naming the deleted id.
+  The finishing push works from the references the REMOTE config holds: a link changed in
+  the UI since is kept, one repaired in the UI clears `link_pending` without a write, and
+  every config it is about to name is read first -- one that is gone or cannot be read
+  (a 5xx) is never written; the link stays pending and the push reports it
+  (`change_type: link_target`) -- once per push, not again for each link that names it.
+  A row the selected config has on the target is never remapped, also not when an
+  earlier create recorded that id as a placeholder.
+- **A new config folder whose `_config.yml` carries an id nothing tracks** (a
+  placeholder, e.g. `config_id: ex-ref`) is created as before, and now a flow created
+  in the same push that selects it by that id -- and its rows by the `row_id`s in its
+  row files -- is linked to the new config and rows. Those row ids count only under the
+  new config: a flow that selects the ORIGINAL config's row by a copied id keeps it. A
+  folder copied from a tracked config (its id is still tracked) is no placeholder, nor is
+  one carrying the placeholder a config was already created from. Two new folders
+  carrying the same free id link neither (`PLACEHOLDER_AMBIGUOUS` warning). A
+  transformation's link to a variables config that exists on the target, or to a
+  placeholder already created, is never re-pointed to the one variables config the push
+  created; only an id nobody claims is -- a placeholder whose create failed keeps its
+  links and stays `link_pending` (also when its folder is untracked), and the retry binds
+  them. An explicit `variables_values_id` is never re-pointed to another row of the new
+  variables config either: when its own row failed to create (or several rows carry it),
+  it is left as it is, pending, until that row exists. Row ids work the same way under their config: a row
+  folder carrying the id a row was already created from is a new row of its own, and two
+  new row folders carrying one id under one config link neither (`PLACEHOLDER_AMBIGUOUS`).
+  That decision is recorded on the config (`ambiguous_row_placeholders`): when one of
+  the rows fails to create, the retry does not make the other the row by default -- the
+  link stays pending and every push warns until no row file carries the id any more.
+  When the fallback chose the variables config but the values row failed to create, the
+  choice is recorded on the transformation (`fallback_links`) and the push that creates
+  the row finishes the link -- unless the chosen config is gone or cannot be read by
+  then (also after a `sync pull` dropped that config's entry): nothing is written, the
+  link stays pending and the record is kept. An ambiguous
+  row id is never resolved through that fallback either.
+- **A transformation created in the same push as its variables values row or shared-code
+  row** keeps `link_pending` the same way while that row is missing: the push that creates
+  the row also sets `variables_values_id` / `shared_code_row_ids` and the `{{<row id>}}`
+  placeholders -- before, the transformation kept the reference ids for good.
+- **`sync pull --force` finds a moved row by its id** before it checks for conflicts: a
+  row folder moved to another name and edited, whose remote row was edited too, is
+  `SYNC_CONFLICT` -- before, the check looked only at the old folder and missed it.
+
+## `sync push --force` never deletes a remote change; rows added in the UI are reported
+
+*(since 1.0.0)*
+
+- **A local delete is three-way.** A config or row folder you deleted is `deleted` only
+  while the remote still equals the baseline of the last pull of that branch. Edited,
+  renamed or disabled in the UI since -- or, for a config, any of its rows edited, added or
+  deleted -- it is a `conflict`, and so is a delete with no trustworthy baseline recorded.
+  `push --force` never deletes a conflict. Before, `push --force` deleted the config (or
+  row) and the remote edit with it. The conflict's `details` start with `Cannot delete
+  <component>/<config>[/rows/<row>] on branch <target>` and say the next step: `kbagent sync
+  pull` (`--branch <id>` for a dev branch), review the restored files, delete them again,
+  `sync push --force`. `sync push` (also `--dry-run`, with or without `--force`) lists every
+  delete it refuses under `refused_deletions[]` (`component_id`, `config_id`,
+  `parent_config_id`/`is_row` for a row, `path`, `message` = that text), and human mode
+  prints the message; the change itself carries `refused_delete: true`.
+- **A config delete covers its rows.** Push sends one DELETE for the config and none for its
+  rows; the config change lists them as `covered_rows` (in `--dry-run` `changes`,
+  `skipped_deletions` and `pushed_details`), and `--dry-run` `summary.deleted` counts the
+  config once. Before, each row DELETE answered 404 after the config was gone, landed in
+  `errors[]` and a successful push exited 1. A failed or timed-out config DELETE deletes no
+  row and keeps the manifest entry: run the same `push --force` again.
+- **`remote_only_rows[]`** (new `--json` key of `sync diff`, beside `remote_only[]`, with a
+  `summary.remote_only_rows` count): rows added on the remote under a config the tree
+  tracks, each `{component_id, parent_config_id, row_id, row_name}`. Before, such a row was
+  invisible to `sync diff`. It is not a `changes[]` item (no new `change_type`); `sync pull`
+  fetches it and push never creates or deletes it. `sync pull` `details[]` now has a record
+  for every row file it writes (`action` `new` or `updated`, with `row_id`). Under a folder
+  that carries a config id but has no manifest entry (adopted), a remote row no local row
+  folder carries is listed here too -- before, it was a `conflict` (push never deleted it
+  either way).
+- **`summary.unchanged` of `sync diff` changed meaning.** It is now the number of local
+  configs (tracked and adopted folders) with no config-level change -- a config whose only
+  changes are in its rows counts as unchanged, and a config delete or `deleted` conflict
+  is not a local config. Before, it was the local config count minus every `added`,
+  `modified`, `remote_modified` and `conflict` change (rows included) and each
+  `remote_deleted` config, so row changes
+  lowered it and it could go negative. Count row changes from `changes[]` (`is_row`).
+- **A retarget keeps production's deleted-row record.** After `sync pull --branch <dev>` and
+  a production pull, `deleted_rows` is back on the config entry, so a later promote push
+  still lists the rows production deleted as deletions.
+- **After `sync pull --branch <dev>`, a plain `sync pull` no longer leaves a deleted row
+  behind.** The bookkeeping of `main/`'s rows is kept in the manifest's branch metadata
+  (`retired_rows`), so a row production deleted meanwhile is removed (or kept and reported
+  when edited). Before, its folder stayed with no manifest entry and the next `sync push`
+  created the row again. A row still on the remote keeps the old rule: an edited one is kept
+  with an unknown base and is a `conflict`. A record is dropped once its config is in no
+  manifest entry and no row folder on disk carries its row ids.
+- **A promote push (`sync push --branch <dev>` reading `main/`) sees the rows production
+  deleted.** A dev row whose production copy a pull removed is `deleted`
+  (`skipped_deletions` without `--force`, three-way with it -- `conflict` when the dev row
+  changed or no baseline is recorded), also after a promote push of the config itself
+  recorded its dev-branch entry. The config entry records these rows under `deleted_rows`.
+  A dev row `main/` never had is in `remote_only_rows[]`. Before, the diff was silent about
+  both.
+- **Ignoring a component keeps local work** (#927). `sync pull` after a component is added to
+  `ignoredComponents` deletes only folders it can prove unchanged. An edited folder, or one
+  with a file that has no baseline (an adopted config, a row without a hash -- also when
+  the config's own `_config.yml` is gone or the row folder was moved), is kept with its
+  manifest entry and reported
+  `skipped` (reason names the component), also with `--force` and `--theirs`. Before, the
+  folders were deleted with the unpushed edits. After un-ignoring, the kept folder diffs
+  against its old baseline (`modified`, or `conflict` when the remote changed meanwhile).
+  `keboola.sandboxes` in `ignoredComponents` follows this rule too; only a shared SQL
+  workspace dropped because `syncWorkspaces` is off keeps the CLI-25 rule (`--theirs`
+  deletes it).
+- **A row file without a recorded hash is never deleted by a pull** (a push stopped between
+  creating a row and saving its baseline leaves one): not when its config is deleted on the
+  remote or its component ignored (also after the row folder was moved), and not when the
+  remote deleted the row itself -- then it is kept, reported `skipped`, and `sync diff`
+  lists it `remote_deleted`, so push never creates it again. Delete the folder yourself (or
+  run `sync pull --theirs`, except under an ignored component) to drop it.
+- **Limits, not fixed:** an edit that changes ONLY an encrypted value (`KBC::...`) is
+  invisible to the comparison, so such a config is still `deleted`; and the Storage API has
+  no conditional delete, so a UI edit made between `sync diff` and the DELETE is not
+  protected. Check `sync diff` right before `sync push --force`.
+- **On an older version**: run `kbagent sync pull` before every `sync push --force`, and
+  `sync diff` after it; check the UI for rows added since the last pull; copy edited
+  folders aside before adding their component to `ignoredComponents`.
+
+## `sync push --branch <dev>` from `main/` no longer changes what production sees
+
+*(since 1.0.0)*
+
+- **The promote push** (`sync push --branch <dev>` with no `<dev>/` folder, so kbagent
+  reads `main/`) now records what it wrote under the dev branch only. A dev branch made
+  from production holds the same config ids, and before, the push re-stamped the
+  production entry with the dev state: `sync diff` on production then called your
+  un-promoted edit a remote change, `sync push` refused it, and the `sync pull` it
+  recommended overwrote the edit in `main/`. Now production `sync diff` keeps showing the
+  edit as a local `modified` change until you push it to production, and `sync pull`
+  keeps it.
+- **A row added in `main/` and pushed to the dev branch** is recorded for the dev branch.
+  Before, production recorded it, and the next production `sync pull` deleted the new row
+  folder.
+- **A promote push never writes a dev config id into `main/`**, neither when it creates
+  the config on the dev branch nor when it updates it later. The dev branch's record
+  of the folder (`promoted_from` in `.keboola/manifest.json`) maps it to the dev id. A
+  production config the dev branch lacks is created there with its rows (before, every
+  row failed) and its `main/_config.yml` keeps the PRODUCTION id; before, the push wrote
+  the dev id into it and the next production `sync pull` renamed the folder to
+  `<name>-<id>`. A config authored in `main/` keeps no id at all, so a plain `sync push`
+  later creates it in production as a new config (before, production `sync diff` called
+  the folder an orphan and suggested deleting it).
+- **Every promote push rewrites references to the dev ids** -- a flow's or
+  orchestration's task `configId` and its `configRowIds` (mapped to the rows created
+  on the dev branch), a schedule's target, a data app's `parameters.id` (the dev
+  branch's own app), a
+  transformation's `variables_id` / `variables_values_id` / `shared_code_id` /
+  `shared_code_row_ids` and its `{{<row id>}}` placeholders -- for every config the
+  promote pushes created on the dev branch, on creates and on later updates alike, all
+  in one payload. Before, they kept the production ids, which do not exist there, and a
+  later edit sent the production ids again. Only the dev branch's copy changes; the
+  `main/` files keep the production ids. A config sent while a config it references
+  was not created yet stays pending in the manifest (`rebind_pending` lists the missing
+  references) until every one exists on the dev branch -- also when the push dies, the
+  final rewrite fails, a create fails, or the config is edited again meanwhile; a
+  reference leaves the list once it is rewritten. A task's config and the rows it selects
+  (likewise a shared-code or variables link and its rows) switch to the dev ids together,
+  only once all of them exist there (for a config the dev branch holds under the
+  production id, kbagent reads which rows its dev copy holds only while it rewrites that
+  dev copy; a row it selects that is neither there nor mapped, or rows it cannot read,
+  keep the reference pending. A payload built from the `main/` files maps its rows
+  through the row map alone). A dev config or row deleted on the dev branch is never
+  used as a target: a reference to it stays pending in its production form. The next promote push then reads that config
+  from the dev branch, rewrites only those references and sends only its configuration,
+  so its name, description, enabled state and any other change made there are kept. A
+  config deleted there, or of a component you have since added to `ignoredComponents`,
+  is dropped from the rewrite.
+- **A config created in `main/` and promoted** is no longer reported `removed` by the next
+  production `sync pull`, which used to delete its folder. Pull keeps the folder and keeps
+  the dev-branch record, and moves the record with the folder when production renames
+  the config, so the next promote updates that dev config instead of creating another
+  one. Its new rows are pushed by the second promote push, like on production. A row
+  added on production to a config already promoted (and pulled into `main/`) is created
+  under the dev copy with its production row id recorded, so a flow or other reference
+  that selects it switches to the new dev row in the same push. Rows promoted before
+  production created them are linked to their production ids when production does, so
+  a reference to such a production row maps to the dev row that already exists. An edit to
+  it after the promote is `modified`, not `modified` plus `conflict`. Production
+  `sync diff` lists the record under `orphaned` with reason `promoted_from_this_tree`
+  (nothing to do). Human output folds these records into one "nothing to do" line,
+  but `--json` of diff and push keeps each one in `orphaned[]`, and `sync diff`
+  counts it in `summary.orphaned` (since 1.0.0); its `reason` tells it apart from a config of
+  another branch's tree, which needs a `sync pull`. A pull of any branch keeps the dev-branch record of a component you
+  add to `ignoredComponents` as it is (diff and push skip it while it is ignored), so
+  after you remove the ignore and pull, the next promote updates that dev config again.
+  Before, the pull dropped the record and the promote created a second config there.
+  The ignored production pull still removes the component's `main/` folders, so an
+  edit that only lived there is gone after you un-ignore and pull. A record left
+  without its production id by a push that died right after creating the config is
+  linked by the next push, also one with nothing else to send. A `sync pull --branch
+  <dev>` keeps a pending rewrite, so the next `sync push --branch <dev>` (now from the
+  dev branch's own tree) still finishes it; the rewritten ids then show as a remote
+  change for the next pull. When a promote push cannot save the manifest right after a
+  create, its error names the dev config and the recovery: `kbagent sync pull --branch
+  <dev>`, which tracks it in the dev branch's own tree (a plain retry would create it
+  again). `sync status` reads a promoted config from `main/` instead of calling it
+  deleted. A row folder that names a row id the manifest lost is adopted by pull under
+  its tracked config too; when it differs from the remote it is a conflict, never a new
+  row. A promoted config whose record still points at `main/` after a `sync pull
+  --branch <dev>` left it out (its component was ignored then) is listed under
+  `orphaned` with reason `promoted_from_other_tree` by a push from `dev/`; even `--force`
+  never deletes it. Before, it read as deleted and `--force` deleted it on the branch.
+- **Deleting a promoted folder from `main/`** is a local delete for the dev branch:
+  `sync push --branch <dev>` lists it under `skipped_deletions`, and
+  `sync push --force --branch <dev>` deletes the dev config only. Production is untouched.
+- **A push that dies after creating a config or row** (a killed process, a crash) does not
+  create it again on the retry: the manifest is saved right after every create, before
+  anything else, and every save is atomic (a temp file renamed over the manifest, never
+  a half-written one). When that save fails (permissions, full disk), push stops at once
+  with `CONFIG_ERROR` (exit 5) naming the config it created; fix the cause before the
+  next push. The manifest keeps an existing file's mode; a new one gets the mode a
+  normal file write gives under your umask. A create whose response was lost (the
+  server created it, kbagent never saw the id) can still be created twice.
+- **`sync pull` reads only the records of the branch it pulls.** After
+  `sync pull --branch <dev>`, a plain `sync pull` no longer judges `main/` by the dev
+  branch's baselines (a false "locally modified") and no longer reuses a folder name the
+  dev branch renamed (it left the old folder as a copy that `sync push` created again in
+  production). It writes each config, and each row, into the folder whose `_config.yml`
+  carries its id. A config folder that differs from production then has no baseline: pull
+  keeps it (`skipped`) and `sync diff` calls it a `conflict`, as for any file with a
+  config id and no manifest entry. A row file that differs is kept too (`skipped`, reason
+  "row locally modified, not tracked in the manifest") with an unknown base: pull cannot
+  tell a stale file from an edited one, so `sync diff` calls the row a `conflict`,
+  `sync push` neither sends nor deletes it (so it can never overwrite a change made in
+  the UI; deleting the row folder locally is a conflict too, also with `--force`), and a
+  later pull never deletes it -- not when the row is deleted remotely, and not the
+  config folder holding it when the whole config is deleted remotely. Only
+  `sync pull --theirs`, or a pull that finds the file equal to the remote, resolves it. An id carried by two folders is adopted by neither: pull
+  leaves both alone and adds a `warnings[]` entry (`ambiguous_config_id` /
+  `ambiguous_row_id`).
+- **`sync pull` never writes a new config or row into a folder that already belongs to
+  another one** -- a tracked config, a promoted folder, a folder carrying an id, or a
+  config authored locally and never pushed -- whatever order the remote lists them in.
+  Before, a new remote config named like an existing one could be written into that
+  folder. The new one gets a `<name>-<id>` folder (`<name>-<id>-2`, ... when that one is
+  taken too).
+- **`sync pull --branch <other dev>` keeps the record of a promote to another dev
+  branch**, so the next `sync push --branch <dev>` still updates the config it created
+  there. Before, pulling a third branch dropped it and the next promote created the
+  config again.
+- **On an older version**, do not edit in `main/` and promote with `--branch` while you
+  also push the same configs to production. Run `sync pull --branch <dev>` once and work
+  in the `<dev>/` folder instead. If production `sync diff` shows `remote_modified` for a
+  config you only promoted, do not run `sync pull`: copy the folder aside first.
+
 ## Config folder is the configuration's `folder` field, not the `KBC.configuration.folderName` metadata key
 
-*(since vNEXT)* (DMD-2348)
+*(since 1.0.0)* (DMD-2348)
 
 - **`config set-folder`** (and `POST /configs/{project}/{component_id}/{config_id}/folder`
   over `kbagent serve`) writes the configuration's `folder` field with a config PUT. The
   Storage API trims the name, rejects one over 400 characters (HTTP 400), stores an empty one
-  as "no folder", and creates no configuration version. The `--json` result keeps its keys:
-  `folder`, `value` (the folder as stored, `""` when cleared), `key` (frozen at
-  `"KBC.configuration.folderName"`), and `result` (still a list, now `[{key, value}]`). The
-  new `configuration` key holds `{id, name, folder}` from the PUT response.
+  as "no folder", and creates no configuration version. The `--json` result has `folder`
+  (the folder as stored, `""` when cleared). The new `configuration` key holds
+  `{id, name, folder}` from the PUT response. The keys `key`, `value` and `result` are
+  removed in 1.0.0 (see "Keys removed from `--json` output in 1.0.0").
 - **`config list`** reads `folder` from the components listing it already fetches. The
   `search/component-configurations` call (and the `dev-branches` lookup it needed) is gone,
   so one project costs one request instead of three.
@@ -76,14 +550,13 @@ From the release of kbagent 1.0.0 until its migration date (28 days later), the 
   config but add a `folder_not_supported` entry to `warnings[]` (with `config_id` and
   `folder`), `sync pull` keeps the previous folders (`folder_lookup_failed: true`), and
   `config list` shows every folder as `""`. kbagent never falls back to the metadata key.
-- The `result` of `config set-folder --json` is still a one-entry list, but its entry is
-  now only `{key, value}`: the metadata-only fields (`id` of the metadata entry,
-  `provider`, `timestamp`) are gone because no metadata is written. Read
-  `configuration.id` for the configuration id.
+- `config set-folder --json` no longer returns the metadata entry (`id` of the metadata
+  entry, `provider`, `timestamp`) because no metadata is written. Read `configuration.id`
+  for the configuration id.
 
 ## One JSON document for every exit, root flags after the subcommand, `-h`, repeated options
 
-*(since vNEXT)* (CLI-44, #791)
+*(since 1.0.0)* (CLI-44, #791)
 
 - **The `--json` envelope has `schema_version` and, on success, `exit_code`.** Success: `{"status": "ok", "schema_version": "1.0", "exit_code": N, "targets"?, "warnings"?, "data"}`. Error: `{"status": "error", "schema_version": "1.0", "targets"?, "warnings"?, "error"}`, with no `exit_code`. `exit_code` equals the process exit code. `status: "ok"` with a non-zero `exit_code` is a negative answer (`flow validate`, `auth status`, `permissions check`, `data-app validate-repo`) or a failed item of a command that processes several items.
 - **stdout holds one JSON document for every exit code under `--json`.** A malformed command line (unknown option, missing required option) and a bare group (`kbagent --json storage`) give `USAGE_ERROR`, exit 2. A bad option value (wrong type, a value not in the allowed list, a value the command refuses) gives `INVALID_ARGUMENT`, exit 2, naming the option. A crash gives `INTERNAL_ERROR`, exit 1, with the traceback on stderr. Ctrl+C gives `INTERRUPTED` (exit 130). A crash after the success envelope is written leaves that envelope as the only document. A `--stream` command (`agent run --stream`, `agent test --stream`) keeps stdout NDJSON: an interrupt or crash after its first line adds one line `{"event": "error", "data": {"code": "INTERRUPTED"|"INTERNAL_ERROR", "message"}}`. Before, stdout was empty or held help text.
@@ -94,52 +567,77 @@ From the release of kbagent 1.0.0 until its migration date (28 days later), the 
 
 ## `auth login` notices on stderr, `--no-open`, one headline for multi-item commands, environment variables in `--help`
 
-*(since vNEXT)* (CLI-50, #791)
+*(since 1.0.0)* (CLI-50, #791)
 
 - **`auth login` prints its notices on stderr in every mode.** The device-login panel (verification URL and user code), the wait and fallback notices, the `auth register-projects` hint and the picker question go to stderr. The login result stays on stdout. Before, human mode printed the notices on stdout. Capture `2>&1` when you relay the URL and code.
 - **`auth login --no-open`** uses the device-code flow and opens nothing; the result has `method: "device"` and `fallback_reason: "--no-open is set."`. Without it, `auth login` opens the browser as before, also under `--json` and without a terminal (an exception to the rule that a command opens no browser there). A foreground `--json auth login` blocks until the user approves in the browser (or on the device page with `--no-open`), so run it in a background shell and check `kbagent --json auth status`.
-- **A command that processes several items ends its human output with one headline** on stdout, after the result (notices, hints and panels go to stderr): `Success: ...` or `Failed: N of M <noun>. ...` (the bulk `storage` deletes, `storage file-tag`, `storage describe-batch` and `describe-migrate`, `job terminate`, `sync push`/`clone` and the `--all-projects` runs, `org setup`, `project refresh`, `project invite --from-csv`, `workspace gc`, `flow schedule-remove`, `semantic-layer build`/`import`/`promote`/`edit metric`, `auth register-projects`, `token list --with-last-used`, `config detail` with several `--project`, and the 18 fan-out reads such as `config list` and `job list`). One form: `Success: 2 table(s) deleted.`, `Failed: 1 of 3 projects. 2 project(s) read.` A failed item is one `Error: <item>: <message>` line on stdout, before the headline (before: `Failed: <item>: ...` in the bulk `storage` commands, and a `Warning:` line on stderr in the fan-out reads, `config detail` with several `--project`, `sync push`/`clone` and `flow schedule-remove`). stderr holds only notices. Read failed projects from `--json` (`errors[]`), not from human output. `config detail` with several `--project` and `token list --with-last-used` now exit 1 when a project or a last-used lookup failed. The exit code and the `--json` output do not change. Do not parse human output: use `--json` and `exit_code`.
+- **A command that processes several items ends its human output with one headline** on stdout, after the result (notices, hints and panels go to stderr): `Success: ...` or `Failed: N of M <noun>. ...` (the bulk `storage` deletes, `storage file-tag`, `storage describe-batch` and `describe-migrate`, `job terminate`, `sync push`/`clone` and the `--all-projects` runs, `org setup`, `project refresh`, bulk `project invite`, `workspace gc`, `flow schedule-remove`, `semantic-layer build`/`import`/`promote`/`edit metric`, `auth register-projects`, `token list --with-last-used`, `config detail` with several `--project`, and the 18 fan-out reads such as `config list` and `job list`). One form: `Success: 2 table(s) deleted.`, `Failed: 1 of 3 projects. 2 project(s) read.` A failed item is one `Error: <item>: <message>` line on stdout, before the headline (before: `Failed: <item>: ...` in the bulk `storage` commands, and a `Warning:` line on stderr in the fan-out reads, `config detail` with several `--project`, `sync push`/`clone` and `flow schedule-remove`). stderr holds only notices. Read failed projects from `--json` (`errors[]`), not from human output. `config detail` with several `--project` and `token list --with-last-used` now exit 1 when a project or a last-used lookup failed. The exit code and the `--json` output do not change. Do not parse human output: use `--json` and `exit_code`.
 - **`--help` names the environment variable of an option** (`[env var: KBAGENT_CONFIG_DIR]` on `--config-dir`, `KBAGENT_CONVERSATION_ID` on `--conversation-id`). It never shows the value. The command reference of a release lists every variable that kbagent reads.
 - **The help of every command with `--wait` states the default** ("Default: no wait." or "Default: wait.") and the default `--timeout` in seconds. The defaults did not change: 300 for `job run` and the `data-app` waits, 600 for the Storage import waits.
 
 ## A confirmation without a terminal refuses, and `branch delete` and `workspace delete` ask
 
-*(since vNEXT)* (CLI-46, #791)
+*(since 1.0.0)* (CLI-46, #791)
 
 - **Human mode without a terminal: a confirmation refuses unless `--yes`.** A command that asks before it changes something (the deletes, `token delete/refresh`, `job terminate`, `merge-request merge`, `auth logout`, `org setup`, `project refresh`, ...) now exits 2 with `CONFIRMATION_REQUIRED` when stdin or stderr is not a terminal and `--yes` is not given. The message names `--yes` and says "AI agents: ask the user before you retry with --yes." Before, the prompt read its answer from stdin, so a harness with an open stdin pipe (or `echo y |`) could answer it. Nothing changes under `--json`: `--json` is consent and there is no prompt. On a terminal the prompt now goes to stderr. A declined prompt still prints `Aborted.` and exits 0.
 - **Exceptions that keep their own prompt.** The non-safety questions of `init` (copy the global projects) and of the `auth login` / `auth register-projects` project picker. The guards of `semantic-layer add metric` (a dataset that is not in the model) and `semantic-layer edit metric` (a rename that changes constraints) are in the service: without a terminal they refuse with `VALIDATION_ERROR` (exit 2) unless `--yes`, and on a terminal they ask also under `--json`.
 - **`semantic-layer edit glossary --new-term`, `semantic-layer remove *` and `semantic-layer reference-data delete` refuse under `--json` too.** For these `--json` is no consent: without a terminal and without `--yes` they refuse with `VALIDATION_ERROR` under `--json` (as before) and with `CONFIRMATION_REQUIRED` in human mode. Both exit 2.
 - **`storage delete-bucket` and `storage file-delete` without a terminal now refuse too.** Before, they deleted without asking when no terminal was attached. Give `--yes` (or `--json`).
 - **`branch delete` and `workspace delete` ask for confirmation and take `--yes` / `-y` and `--dry-run`.** `--dry-run` reads the branch (`GET /v2/storage/dev-branches`) or the workspace (one `GET`) and deletes nothing. A missing branch or workspace is `NOT_FOUND`. Over `kbagent serve`, `DELETE /branches/{project}/{branch_id}` and `DELETE /workspaces/{project}/{workspace_id}` accept `dry_run=true` and never prompt. On older versions these two commands deleted without a prompt and had neither flag: on both, `kbagent --json branch delete ...` works without a prompt.
-- **`stream delete --force` is a hidden deprecated alias of `--yes`, and `semantic-layer import --yes` is hidden and has no effect.** Both still work and add a `warnings[]` entry `{"code": "DEPRECATED", "replacement": "--yes" | null, "remove_after": null, "hint": ...}` (one stderr line in human mode). `remove_after` stays null until the removal date is known: at least 28 days after the 1.0 migration date. Use `stream delete --yes`, and drop `--yes` from `semantic-layer import`.
+- *(updated 1.0.0)* **`stream delete --force` and `semantic-layer import --yes` are removed.** On 1.x they are `USAGE_ERROR` (exit 2), and the message names the replacement. On 0.x `--force` is an alias of `--yes`, and `semantic-layer import --yes` has no effect. Use `stream delete --yes` (it works on both), and drop `--yes` from `semantic-layer import`.
 - **`workspace load` without a terminal does not ask about a large COPY.** It refuses with `WORKSPACE_LOAD_COPY_TOO_LARGE` and names `--force`, as under `--json`.
 
 ## The fan-out reads use the active project, exit 1 when a project failed, and `targets` names the project source
 
-*(since vNEXT)* (CLI-45, #791)
+*(since 1.0.0)* (CLI-45, #791)
 
 - **An omitted `--project` on the 18 fan-out reads uses the active project**, like every other command: `KBAGENT_PROJECT`, then `project use`, then the only registered project. With several projects and none of these, the read exits 5 with `CONFIG_ERROR` that names `--project`, `KBAGENT_PROJECT` and `project use`. The reads: `search`, `billing credits`, `component list`, `config list`, `config search`, `data-app list`, `job list`, `storage buckets`, `storage tables`, `sharing list`, `sharing edges`, `flow list`, `schedule list`, `schedule find`, `notification list`, `branch list`, `workspace list`, `project status`. Before, an omitted `--project` read all registered projects.
 - **All projects need `--all-projects`** (since 0.100.0). Write it in scripts and agent calls that want every project: it works on 0.100.0 and later. `--branch` with `--all-projects` is still `INVALID_ARGUMENT` (exit 2). `--branch` without `--project` now works when the active project resolves, because the read targets one project.
 - **A fan-out read exits 1 when a project failed**, after the full payload. The failure stays in `data.errors` (`project status`: a row with `status: "error"`), and the envelope has `exit_code: 1`. `PAYG_NOT_AVAILABLE` in `billing credits` is an answer, not a failure (exit 0). With no registered project the read exits 5 (`CONFIG_ERROR`), also with `--all-projects`. Before, these reads exited 0 and the failure was only in `data.errors`.
 - **Every record in `targets` has `project_source`**, next to `branch_source`: `explicit`, `env` (`KBAGENT_PROJECT`), `active_project` (`project use`), `sole` (the only registered project) or `all` (`--all-projects`). `explicit` means that the command line named the project: `--project`, or another project option such as `config clone --target-project`, `sync clone --target` or the `semantic-layer promote/diff` project options. Treat an unknown value like `active_project`. A project for which the command chose no branch gets one record with `branch_source: "none"` and `branch_id: null`.
 - **`project_source: null`** means that the command found the project in none of these ways (no project option, no `KBAGENT_PROJECT`, `project use` or sole-project fallback, no `--all-projects`). Every command with a `--project` option reports `explicit` when the option is given, and a command without `--project` that uses the chain reports the chain source. Treat null as unknown, like `active_project`.
-- **A destructive command under `--json` whose project or branch is the saved active choice adds a warning** (*(updated vNEXT)* an admin command too, for example `project edit` or `project remove`) `{"code": "TARGET_FROM_ACTIVE_CHOICE", "message", "hint"}` to the top-level `warnings[]`. The hint is the explicit flag (`--project prod`, `--branch 456`). The command still runs: `--json` is consent. Read and write commands, human mode and explicit flags give no such warning.
-- *(updated vNEXT -- CLI-49)* **The `kbagent serve` list routes follow the same rule.** `GET /configs`, `GET /jobs` and the other list routes without `project` read the active project. `all_projects=true` reads all registered projects. A route in which a project failed still answers HTTP 200 with the failure in `errors`.
-- *(updated vNEXT -- #791, spec T17)* **`POST /org/refresh` and `POST /workspaces/gc` follow it too.** Without a project (`aliases`, `project`) they use the active project. Before, `POST /org/refresh` with an empty body refreshed the tokens of all projects, and `POST /workspaces/gc` refused with HTTP 400. All projects need `all_projects=true`. The body field `refresh_all` is the deprecated name of `all_projects`, and `project refresh --all` the deprecated name of `--all-projects`.
-- *(updated vNEXT -- #791, spec T17)* **No command requires `--project`; without it, every command uses the active project, writes and deletes too.** Before, 171 commands required `--project` and exited 2 without it (for example `job detail`, `config update`, `storage delete-table`, `sync init`), and `sync pull/diff/push`, `workspace gc`, `project refresh`, `config detail`, `config new --push` and the single-shot `project invite` asked for it. A destructive command still asks on a terminal, and so does `project remove`, which also got `--yes` and `--dry-run` (use `kbagent --json project remove --project P`, which works on 0.x too). Under `--json`, a destructive or admin command adds the `TARGET_FROM_ACTIVE_CHOICE` warning. `workspace gc` and `sync pull/diff/push` without `--project` and `--all-projects` work on the active project only. `sync init` binds the directory to the active project and names it in its output. `project add` and `project create` take the new alias as `--alias`; `--project` still works there with a `DEPRECATED` warning, and it is the form that also works on 0.x. `flow schema --full` and `flow validate` use the live schema of the active project; when no project is registered or chosen they work offline (the bundled schema, semantic checks only). With a registered project a failed fetch (expired token, no network) is an error for `flow schema --full`; `flow validate` falls back to the semantic checks with a note. Exceptions, where `--project` names no target project: `init`, `agent prompt-improve` and `lineage show`. Options that name a second project keep their own rules: `sync clone --target` and the project options of `semantic-layer promote` are required, `config clone --target-project` defaults to the source project, and `semantic-layer diff` takes a project or a file for each side. kbagent checks the other options first, so a missing required option is still `USAGE_ERROR` (exit 2). When no project resolves, the command exits 5 with `CONFIG_ERROR`. Agents still pass `--project` on every command (rule above).
-- **"Active" is the one name for the saved choice.** `project use` prints `Active project: <alias>` (before: `Pinned: default project is <alias>`). The help texts, messages and REST summaries say "active project" and "active branch". The `--json` keys of `project current` (`pinned`, `source: "pin"`) and the `config.json` fields (`default_project`, `active_branch_id`) keep their names.
+- **A destructive command under `--json` whose project or branch is the saved active choice adds a warning** (*(updated 1.0.0)* an admin command too, for example `project edit` or `project remove`) `{"code": "TARGET_FROM_ACTIVE_CHOICE", "message", "hint"}` to the top-level `warnings[]`. The hint is the explicit flag (`--project prod`, `--branch 456`). The command still runs: `--json` is consent. Read and write commands, human mode and explicit flags give no such warning.
+- *(updated 1.0.0 -- CLI-49)* **The `kbagent serve` list routes follow the same rule.** `GET /configs`, `GET /jobs` and the other list routes without `project` read the active project. `all_projects=true` reads all registered projects. A route in which a project failed still answers HTTP 200 with the failure in `errors`.
+- *(updated 1.0.0 -- #791, spec T17)* **`POST /org/refresh` and `POST /workspaces/gc` follow it too.** Without a project (`aliases`, `project`) they use the active project. Before, `POST /org/refresh` with an empty body refreshed the tokens of all projects, and `POST /workspaces/gc` refused with HTTP 400. All projects need `all_projects=true`. *(updated 1.0.0)* The body field `refresh_all` and `project refresh --all` are removed: `refresh_all` answers HTTP 422 naming `all_projects`, and `--all` is `USAGE_ERROR` (exit 2) naming `--all-projects`.
+- *(updated 1.0.0 -- #791, spec T17)* **No command requires `--project`; without it, every command uses the active project, writes and deletes too.** Before, 171 commands required `--project` and exited 2 without it (for example `job detail`, `config update`, `storage delete-table`, `sync init`), and `sync pull/diff/push`, `workspace gc`, `project refresh`, `config detail`, `config new --push` and the single-shot `project invite` asked for it. A destructive command still asks on a terminal, and so does `project remove`, which also got `--yes` and `--dry-run` (use `kbagent --json project remove --project P`, which works on 0.x too). Under `--json`, a destructive or admin command adds the `TARGET_FROM_ACTIVE_CHOICE` warning. `workspace gc` and `sync pull/diff/push` without `--project` and `--all-projects` work on the active project only. `sync init` binds the directory to the active project and names it in its output. `project add` and `project create` take the new alias as `--alias`. *(updated 1.0.0)* Their `--project` is removed (`USAGE_ERROR`, exit 2, naming `--alias`). `--alias` also works on 0.100.3 and later. `flow schema --full` and `flow validate` use the live schema of the active project; when no project is registered or chosen they work offline (the bundled schema, semantic checks only). With a registered project a failed fetch (expired token, no network) is an error for `flow schema --full`; `flow validate` falls back to the semantic checks with a note. Exceptions, where `--project` names no target project: `init`, `agent prompt-improve` and `lineage show`. Options that name a second project keep their own rules: `sync clone --target` and the project options of `semantic-layer promote` are required, `config clone --target-project` defaults to the source project, and `semantic-layer diff` takes a project or a file for each side. kbagent checks the other options first, so a missing required option is still `USAGE_ERROR` (exit 2). When no project resolves, the command exits 5 with `CONFIG_ERROR`. Agents still pass `--project` on every command (rule above).
+- **"Active" is the one name for the saved choice.** `project use` prints `Active project: <alias>` (before: `Pinned: default project is <alias>`). The help texts, messages and REST summaries say "active project" and "active branch". The `--json` key `pinned` of `project current` and the `config.json` fields (`default_project`, `active_branch_id`) keep their names. The `source` value `"pin"` of `project use` and `project current` is `"active_project"` (see "Keys removed from `--json` output in 1.0.0").
 
 ## `kbagent serve`: the active branch, `Kbagent-Targets`, the CLI error fields, `PATCH` for partial updates
 
-*(since vNEXT)* (CLI-49, #791)
+*(since 1.0.0)* (CLI-49, #791)
 
 - **26 routes use the active branch when `branch_id` is omitted**, as their CLI commands do: the storage writes and `GET /storage/table-download/...`, `POST /jobs/{project}/run` and `/terminate` (filter form), the three `/transformations` routes, the `/configs/.../variables` routes and `POST /components/{component_id}/actions/{action}`. Before, they used production. Send `branch_id: 0` for production. The storage reads (`GET /storage/buckets`, `/tables`, `/table-detail/...`, `/files`, `/snapshots/...`) still read production.
 - **A response carries the `Kbagent-Targets` header** (the `targets` record of the request, JSON) and the `Kbagent-Warnings` header (JSON list of `{code, message, ...}`), each only when not empty. An error body has the same lists as `targets` and `warnings` keys. `kbagent http` prints only the body, so it does not show the headers.
 - **The REST `error` object has the CLI error fields:** `code`, `error_type`, `message`, `project`, `retryable`, `details`. The HTTP status follows `error_type`: `validation` and `configuration` 400, `authentication` 401, `authorization` 403, `not_found` 404, `conflict` 409, `api` and `network` 502 (400 for an `api` code that exits 2). Before, most codes answered 502 (for example `VALIDATION_ERROR`, `INVALID_TOKEN`, `FILE_NOT_FOUND`). Branch on `error.code`.
 - **`POST /projects/use/{alias}`, `POST /branches/{project}/use` and `/reset` change the saved choice for every CLI call** of the same configuration directory. The responses add `active_project_set`, `active_branch_set` or `active_branch_cleared` and a `Kbagent-Warnings` entry `ACTIVE_CHOICE_SHARED` with `config_dir`.
 - **A list route without `project` reads the active project**, as the CLI does: `GET /configs`, `/jobs`, `/storage/buckets`, `/storage/tables`, `/flows`, `/schedules`, `/data-apps`, `/workspaces`, `/branches`, `/components`, `/sharing`, `/notifications`, `/billing/credits`, `/search`, `/projects/status`, `/token/list` and the other routes that read several projects. Send `all_projects=true` for all projects. Before, an omitted `project` read all registered projects. With nothing to resolve the route answers HTTP 400 `CONFIG_ERROR`.
-- **A destructive route on the active branch adds `TARGET_FROM_ACTIVE_CHOICE`** to `Kbagent-Warnings` (hint `branch_id=<id>`), as a destructive CLI command under `--json` does (*(updated vNEXT)* an admin route too). Send `branch_id` to make the branch explicit. The route still runs.
-- **Partial updates use `PATCH`:** `/semantic-layer/items/{kind}/{name}`, `/merge-requests/{project}/{merge_request_id}`, `/data-apps/{project}/{app_id}/secrets`, and the merge of `/configs/{project}/{component_id}/{config_id}/variables`. A `PATCH` body refuses an undeclared field (HTTP 422). The old `PUT` still works and adds a `DEPRECATED` entry (`replacement`, `remove_after: null`) to `Kbagent-Warnings`. `PUT .../variables` with `replace: true` is the full replace and gives no warning. Without it, it merges with the warning.
+- **A destructive route on the active branch adds `TARGET_FROM_ACTIVE_CHOICE`** to `Kbagent-Warnings` (hint `branch_id=<id>`), as a destructive CLI command under `--json` does (*(updated 1.0.0)* an admin route too). Send `branch_id` to make the branch explicit. The route still runs.
+- **Partial updates use `PATCH`:** `/semantic-layer/items/{kind}/{name}`, `/merge-requests/{project}/{merge_request_id}`, `/data-apps/{project}/{app_id}/secrets`, and the merge of `/configs/{project}/{component_id}/{config_id}/variables`. A `PATCH` body refuses an undeclared field (HTTP 422). *(updated 1.0.0)* The old `PUT` form is removed: it answers HTTP 405, and the error message names `PATCH`. `PUT .../variables` with `replace: true` is still the full replace. Without `replace: true` it answers HTTP 405. On 0.x only `PUT` exists on these routes.
+
+## 1.0.0 removes the deprecated forms
+
+*(since 1.0.0)* (#791, spec C3)
+
+- **A removed form is `USAGE_ERROR` (exit 2), and the message names the replacement.** Example: `No such option: --force. stream delete --force was removed in 1.0.0. Use --yes to skip the confirmation.` There is no hidden alias and no `DEPRECATED` warning for these forms.
+- **Removed options and their replacements:**
+  - `project add --project` / `-p` and `project create --project` / `-p`: use `--alias`.
+  - `project refresh --all`: use `--all-projects`.
+  - `stream delete --force`: use `--yes`.
+  - `semantic-layer import --yes` / `-y`: it had no effect. Omit it.
+  - `--id` on the 10 `merge-request` commands that take a merge request: use `--merge-request-id`.
+  - `--id` on the 7 `agent` commands that take a task: use `--task-id`.
+  - The positional `TASK_ID` of `agent show`, `update`, `delete`, `run` and `runs`, and the positional `TASK_ID` / `RUN_ID` of `agent run-detail` and `run-events`: use `--task-id` / `--run-id`.
+  - `--id` on `semantic-layer reference-data get` and `delete`: use `--reference-data-id`.
+  - The positional `SOURCE_ID` of `stream detail` and `stream delete`: use `--source-id`. `stream detail --name` also matches a source id.
+  - `storage describe-batch --from-file` and `project invite --from-csv`: use `--file`.
+  - The file-input options (spec I1, I2): `lineage show/info/server --load` / `-l` use `--file`; `project description-set`, `storage describe-bucket` and `describe-table` `--text` / `--file` / `--stdin` use `--description` / `--description-file`; `branch metadata-set` `--text` / `--file` / `--stdin` use `--value` / `--value-file`; `workspace query --file` uses `--sql-file`; `agent create/test --from-file` uses `--definition` / `--definition-file`; `flow new/update/validate --file` uses `--definition` / `--definition-file`; `encrypt values --input` uses `--values` / `--values-file`; `data-app secrets-set --secrets-file` uses `--secret-file`; `dev-portal create/patch --data FILE` uses `--data-file FILE` (`--data` is now inline JSON). `-` reads stdin in every `--X-file` option; there is no `--stdin` flag.
+  - `@file` and `-` inline in `config update/new --configuration`, `config row-create/row-update --configuration`, `config state-set --state`, `component sync-action --config-data`, `http post/patch --body`, `merge-request resolve --resolved`, `transformation edit --storage` and `agent run --runtime-input`: use the sibling `--configuration-file`, `--state-file`, `--config-data-file`, `--body-file`, `--resolved-file`, `--storage-file`, `--runtime-input-file`.
+  - `storage create-table --not-null`: use `--not-null-column` (repeatable). `storage add-column --not-null` (a flag) does not change.
+  - The plural list options (spec A4: a list option has a singular name and is repeated once per value): `org setup --project-ids` (use `--project-id`), `sharing share --target-project-ids` (use `--target-project`, which also takes a registered alias) and `--target-users` (use `--target-user`), `semantic-layer add constraint --metrics` (use `--metric`), `semantic-layer edit constraint --new-metrics` (use `--new-metric`), `semantic-layer build --tables` and `workspace load --tables` (use `--table-id`), `semantic-layer import --types` and `promote --types` (use `--type` / `-t`), and `--columns` of `storage download-table`, `storage unload-table` and `token list` (use `--column`).
+- **`semantic-layer scope request-delete` is renamed to `semantic-layer scope request-cancel`.** The command cancels a pending scope-elevation request; it deletes no Keboola object. The old name is a usage error that names the new one. The permission key is `semantic-layer.scope.request-cancel`: a persisted policy that names `semantic-layer.scope.request-delete` matches nothing on 1.x. The REST route `DELETE /semantic-layer/scope/{context_id}/elevation-request` does not change.
+- **`branch merge` is removed.** It only printed the merge URL of the Keboola UI and reset the active branch. Use `kbagent merge-request` (a project with the `branches-merge-requests` feature), or merge in the Keboola UI. Over `kbagent serve`, `GET /branches/{project}/merge-url` is removed too.
+- **REST:** `PUT` on `/semantic-layer/items/{kind}/{name}`, `/merge-requests/{project}/{merge_request_id}` and `/data-apps/{project}/{app_id}/secrets` answers HTTP 405, and the error message names `PATCH`. `PUT .../variables` without `replace: true` answers HTTP 405 too (use `PATCH` to merge). The body field `refresh_all` of `POST /org/refresh` answers HTTP 422 naming `all_projects`.
+- **Every replacement above also works on 0.100.5 and later.** On an older 0.x, ask the user to run `kbagent update` first. The exceptions are in "Forms that work on 0.x and 1.x" at the top of this file.
 
 ## `--branch 0` is production in `job terminate`, `swap-tables`, `clone-table` and `create-table --source-branch-id`
 
@@ -151,14 +649,26 @@ From the release of kbagent 1.0.0 until its migration date (28 days later), the 
 - **`storage create-table --source-branch-id 0` reads the source table from production.** In a production request kbagent leaves `source.branchId` out (the API then uses the request branch, which is production). In a dev-branch request (`--branch ID` or an active branch) it sends the default branch ID. Before, it sent `source.branchId: 0`. Both cases rely on an omitted `source.branchId` meaning the request branch, as kbagent's create-table code already assumed; the dev-branch case is not verified against a live BigQuery project. The `Source:` line and the `source` record in `targets` now name production.
 - A project that reports no default branch fails `job terminate --branch 0`, `swap-tables --branch 0` and a dev-branch `create-table --source-branch-id 0` with `CONFIG_ERROR` (exit 5, HTTP 400 over `kbagent serve`) that names `kbagent branch list`.
 
-## List options repeat, `@<file>` in free text is refused, a bad input value is `INVALID_ARGUMENT`
+## List options take one value per occurrence, `@<file>` in free text is refused, a bad input value is `INVALID_ARGUMENT`
 
-*(since vNEXT)* (CLI-48, #791)
+*(since 1.0.0)* (CLI-48, #791)
 
-- **Nine list options are repeatable and still take a comma list:** `org setup --project-ids`, `sharing share --target-project-ids` and `--target-users`, `semantic-layer add constraint --metrics`, `edit constraint --new-metrics`, `build --tables`, `import --types`, `promote --types` and `schema --type`. `--target-project-ids 11 --target-project-ids 22,33` shares with 11, 22 and 33. Before, the option kept only its last value (22,33). A value given twice is used once. `sharing share` adds `target_project_ids` or `target_users` to `data`.
-- **`--text` of `project description-set`, `storage describe-bucket`, `storage describe-table` and `branch metadata-set`, and `transformation create --sql`, refuse `@` followed by the path of an existing file** (a relative path is relative to the current directory): `INVALID_ARGUMENT`, exit 2, and the message names the file option (`--file`, `--sql-file`). Before, kbagent stored the text `@notes.md`. Pass the file with the file option. To store text that starts with `@` while a file of that name exists, write the text to a file and pass that file with the file option. `@` followed by anything that is not a file is still stored as text. Only these 5 options refuse `@<file>`; every other free-text option (`--description`, `--change-description`, `--prompt`, ...) still stores it as text.
-- **A bad input value is `INVALID_ARGUMENT`, exit 2, and the message names the option, never a traceback:** a non-integer in `org setup --project-ids` or `sharing share --target-project-ids` (before: a traceback with exit 1, or a usage error without `--json` output), a missing or bad `http post/patch --body` file, a binary or unreadable file in `--file`, `--sql-file`, `--configuration-file`, `workspace query --file`, `data-app git-credentials-create --public-key-file`, `lineage server --load` (a missing `--load` file stays `FILE_NOT_FOUND`), `dev-portal patch --value-file`, and a bad `dev-portal create/patch --data` file. A JSON option that already failed with exit 2 keeps its error code (`--configuration`, `--state`, `--config-data`: `VALIDATION_ERROR`; `encrypt values --input`: `INPUT_ERROR`; `agent --from-file` / `--runtime-input`: `INVALID_FORMAT`) and no longer crashes on a binary or unreadable file; so do `data-app create --description-file` (`READ_ERROR`, exit 1), `data-app secrets-set --secrets-file` (`DATA_APP_INVALID_SECRET`) and `semantic-layer reference-data set --members-file` (`VALIDATION_ERROR`).
+- **A list option is repeated once per value, and a comma in a value is refused:** `--target-project 11 --target-project 22` shares with 11 and 22. A value with a comma in an option of IDs or fixed values (`org setup --project-id`, `sharing share --target-project` and `--target-user`, the semantic-layer `--metric`, `--new-metric`, `--table-id`, `--type` and `--target-project`, `workspace load --table-id`, `--column` of `storage download-table`, `storage unload-table` and `token list`) is `INVALID_ARGUMENT`, exit 2, and the message names the option and says to repeat it once per value. Before, nine of these options took one comma string and kept only the last of repeated values. A value given twice is used once. `sharing share --target-project` takes a registered alias or a numeric project ID, like the semantic-layer `--target-project`. `sharing share` adds `target_project_ids` or `target_users` to `data`. Free-form options (`--set`, `--var`, `--op`, `--secret`, JSON, SQL, text) are not checked for a comma.
+- **`--description` of `project description-set`, `storage describe-bucket` and `storage describe-table`, `--value` of `branch metadata-set`, and `transformation create --sql`, refuse `@` followed by the path of an existing file** (a relative path is relative to the current directory): `INVALID_ARGUMENT`, exit 2, and the message names the file option (`--description-file`, `--value-file`, `--sql-file`). On 0.x kbagent stores the text `@notes.md`. Pass the file with the file option. To store text that starts with `@` while a file of that name exists, write the text to a file and pass that file with the file option. `@` followed by anything that is not a file is still stored as text. Only these 5 options refuse `@<file>`; every other free-text option (`--change-description`, `--prompt`, ...) still stores it as text. (JSON and YAML options refuse `@file` and `-` for another reason: see "Input from files" below.)
+- **A bad input value is `INVALID_ARGUMENT`, exit 2, and the message names the option, never a traceback:** a non-integer in `org setup --project-id`, or a value of `sharing share --target-project` that is neither a registered alias nor a numeric project ID (before: a traceback with exit 1, or a usage error without `--json` output), a missing or bad `http post/patch --body` file, a binary or unreadable file in `--file`, `--sql-file`, `--configuration-file`, `workspace query --sql-file`, `data-app git-credentials-create --public-key-file`, `lineage server --file` (a missing `--file` stays `FILE_NOT_FOUND`), `dev-portal patch --value-file`, and a bad `dev-portal create/patch --data-file` file. A JSON option that already failed with exit 2 keeps its error code (`--configuration`, `--state`, `--config-data`: `VALIDATION_ERROR`; `encrypt values --values`: `INPUT_ERROR`; `agent --definition` / `--runtime-input`: `INVALID_FORMAT`) and no longer crashes on a binary or unreadable file; so do `data-app create --description-file` (`READ_ERROR`, exit 1), `data-app secrets-set --secret-file` (`DATA_APP_INVALID_SECRET`) and `semantic-layer reference-data set --members` / `--members-file` (`VALIDATION_ERROR`).
 - **`config update/new --configuration` and `--configuration-file`, `config row-create/row-update --configuration`, `config state-set --state` and `component sync-action --config-data` refuse JSON that is not an object** (for example `[1]`): `VALIDATION_ERROR`, exit 2. Before, the value went to the API.
+
+## Input from files: `--file`, or `--<field>` inline plus `--<field>-file`
+
+*(since 1.0.0)* (#791)
+
+- **One rule, like `git commit -m TEXT` / `-F FILE`.** The main input file of a command is `--file PATH`. A JSON, YAML or text value is `--X` inline, and its sibling `--X-file PATH` reads a file. `-` as the path reads stdin. There is no `--stdin` flag; the secret options `--token-stdin`, `--password-stdin`, `--token-file`, `--token-env`, `--git-pat-file` and `--git-pat-env` do not change.
+- **`--X` and `--X-file` exclude each other.** Passing both is a usage error (exit 2) that names both options.
+- **`@` never reads a file.** An inline value `@path` or `-` is refused: `USAGE_ERROR` / `INVALID_ARGUMENT`, exit 2, and the message names `--X-file`. The error code of a bad value stays per command (`VALIDATION_ERROR`, `INPUT_ERROR`, `INVALID_FORMAT`).
+- **Renamed options:** `lineage show/info/server --load` / `-l` is `--file`. `--text` / `--file` / `--stdin` of `project description-set`, `storage describe-bucket` and `storage describe-table` is `--description` / `--description-file`. The same options of `branch metadata-set` are `--value` / `--value-file`. `workspace query --file` is `--sql-file`. `agent create/test --from-file` is `--definition` / `--definition-file`. `flow new/update/validate --file` is `--definition` / `--definition-file`. `encrypt values --input` is `--values` / `--values-file`. `data-app secrets-set --secrets-file` is `--secret-file`. `dev-portal create/patch --data` was a path and is now inline JSON, with `--data-file PATH` for a file.
+- **New file siblings of an inline option:** `config row-create/row-update --configuration-file`, `config state-set --state-file`, `component sync-action --config-data-file`, `http post/patch --body-file`, `merge-request resolve --resolved-file` (hand `merge-request diff --output FILE` back with `resolve --resolved-file FILE`), `transformation edit --storage-file`, `agent run --runtime-input-file`, and an inline `semantic-layer reference-data set --members JSON` next to `--members-file`. `--configuration-file` of `config update/new`, `--op-file`, `--sql-file` of `transformation create`, `data-app create --description-file` and `dev-portal patch --value-file` also take `-` now.
+- **Unchanged:** `storage upload-table --file`, `storage file-upload --file`, `dev-portal upload-icon --file`, `sync clone --bucket-map` / `--variable-values` / `--instance-rename`, `semantic-layer diff --file-a` / `--file-b`, the `--output*` options and the REST bodies of `kbagent serve`.
+- **On 0.x** (0.100.5 and later) the new names work too, and `@file` / `-` inline still work. Never use `@file` or `-` inline: 1.x refuses them. See "Forms that work on 0.x and 1.x" at the top of this file.
 
 ## The updater stays on the running major version; `kbagent update --major`
 
@@ -177,7 +687,7 @@ From the release of kbagent 1.0.0 until its migration date (28 days later), the 
 
 ## The 1.x updater, and the first write after a major update
 
-*(since vNEXT)* (CLI-51, #791)
+*(since 1.0.0)* (CLI-51, #791)
 
 - **A 1.x client reads the release list filtered by its own major.** Until M, `/releases/latest` names the newest 0.x release. When it names a lower major than the running one, the updater reads the first page of `/releases?per_page=100` and takes the highest stable release of the running major. Without `--beta` it never takes a pre-release: a 1.x pre-release client without `--beta` stays where it is until a stable 1.x release exists. With `--beta` it finds newer 1.x pre-releases and stable 1.x releases. A 0.x client still reads only `/releases/latest`.
 - **Own version cache per major.** A 1.x client keeps its version check in `version_cache_v1.json` (major N: `version_cache_v<N>.json`). 0.x keeps `version_cache.json`. A 0.x client older than 0.100.0 never reads a 1.x version there and installs it.
@@ -203,8 +713,8 @@ From the release of kbagent 1.0.0 until its migration date (28 days later), the 
 
 - **18 reads accept `--all-projects`:** `search`, `billing credits`, `component list`, `config list`, `config search`, `data-app list`, `job list`, `storage buckets`, `storage tables`, `sharing list`, `sharing edges`, `flow list`, `schedule list`, `schedule find`, `notification list`, `branch list`, `workspace list`, `project status`. On this version it does the same as an omitted `--project`: the same service call and the same output. `component list --query` uses the default project when `--project` is omitted, so with `--all-projects` it does too, and adds a warning that `--all-projects` has no effect there.
 - **Why it exists:** from 1.0.0 an omitted `--project` on these reads reads only the active project (`KBAGENT_PROJECT`, then `project use`, then the sole project), and all projects need `--all-projects`. A script that writes `--all-projects` now works unchanged on 1.0.0. On an older kbagent the option does not exist (exit 2).
-  - *(updated vNEXT -- CLI-45)* The 1.x line does this now: see "The fan-out reads use the active project" above.
-- **`--all-projects` together with `--project` is `USAGE_ERROR`, exit 2** ("Cannot use --project with --all-projects"), as in `workspace gc`. `config detail` has no `--all-projects`: it requires `--project` (*(since vNEXT)* without it, the active project). The `kbagent serve` routes of these reads do not change: they take no `all_projects` parameter.
+  - *(updated 1.0.0 -- CLI-45)* The 1.x line does this now: see "The fan-out reads use the active project" above.
+- **`--all-projects` together with `--project` is `USAGE_ERROR`, exit 2** ("Cannot use --project with --all-projects"), as in `workspace gc`. `config detail` has no `--all-projects`: it requires `--project` (*(since 1.0.0)* without it, the active project). The `kbagent serve` routes of these reads do not change: they take no `all_projects` parameter.
 - **The `--json` envelope has an optional top-level `warnings` key**, a list of entries with `code` and `message` (`code` is `WARNING` today); an entry can also carry `hint` and further fields, so read the keys you know and ignore the rest. It is in the success envelope (`status`, `targets`, `warnings`, `data`) and in the error envelope (`status`, `targets`, `warnings`, `error`), and only when a command gave a warning; without one the key is absent. Before, a warning in `--json` mode was dropped. Human mode is unchanged: warnings go to stderr.
 - **A warning after the envelope is written is dropped**, so stdout stays one JSON document. Some commands warn only after their output (for example the `merge-request` group); their warnings stay in `data.warnings`.
 - **Top-level `warnings` is not `data.warnings`.** Some commands return their own `warnings` inside `data` (`data-app deploy`, `sync clone`, `sync push`, `merge-request`, `flow new/update`, `project edit`, `lineage show`). That key is part of the command result and does not change. The top-level key is set by the output layer and has the same entry shape for every command. A command can fill both, or only one of them: read both.
@@ -288,7 +798,7 @@ From the release of kbagent 1.0.0 until its migration date (28 days later), the 
     or `(from .keboola/manifest.json)` -- `sync` without an active branch.
   - `Source:` names the branch that a command reads from or merges from:
     the source project of `config clone`, the branch of a merge request
-    (`merge-request *`, `branch merge`), the branch notification commands
+    (`merge-request *`, and `branch merge` before 1.0.0), the branch notification commands
     read config names from, and the source table branch of `storage
     create-table --source-branch-id` / `storage clone-table` (production).
     `merge-request merge` and an armed `merge-request auto-merge` also print
@@ -374,12 +884,12 @@ From the release of kbagent 1.0.0 until its migration date (28 days later), the 
 - **`project current` with an ambiguous `KBAGENT_PROJECT`** keeps the value as
   typed, reports `env_points_to_configured_project: false` (commands using it
   fail) and puts the ambiguity message in the new `env_error` field.
-- **Not translated where `--project` is no registry lookup.** `project add
-  --project` and `project create --project` take the value as the new alias
-  (*(since vNEXT)* the option is `--alias`, and `--project` is its deprecated
-  name); `lineage show --project` filters the aliases inside an offline graph
-  file.
-- **`project invite --from-csv` changed:** a `project` column value now
+- **Not translated where `--project` is no registry lookup.** On 0.x,
+  `project add --project` and `project create --project` take the value as
+  the new alias. *(updated 1.0.0)* The option is `--alias` (also on 0.100.3
+  and later), and 1.0.0 removes `--project` of these two commands.
+  `lineage show --project` filters the aliases inside an offline graph file.
+- **`project invite --file` changed:** a `project` column value now
   follows the same rules -- an alias wins over a project ID, and an ID
   registered more than once fails that row with the list of aliases. Before,
   an all-digit value was always taken as an ID, and the first project with
@@ -422,7 +932,7 @@ From the release of kbagent 1.0.0 until its migration date (28 days later), the 
   warning whose detail names the expected location. Repair: `semantic-layer
   export`, replace each dataset's `fqn` -- and the same string inside every
   metric `sql` -- with that table's `storage table-detail` `sql_path`, then
-  `semantic-layer import --file ... --types datasets,metrics --overwrite`.
+  `semantic-layer import --file ... --type datasets --type metrics --overwrite`.
   Do not just swap the database name: linked-bucket datasets need the schema
   changed too.
 
@@ -594,7 +1104,7 @@ From the release of kbagent 1.0.0 until its migration date (28 days later), the 
   `config.json`'s `token` field becomes the literal string
   `kbc-session://{project_id}` for a session-registered project alias --
   `config.json`'s schema and `CURRENT_CONFIG_VERSION` are UNCHANGED (still 1).
-  Seeing that string in `project list --json` or a raw `config.json` read is
+  Seeing that string in `kbagent --json project list` or a raw `config.json` read is
   expected, not a corrupted token. An existing alias already pointing at the
   same project+stack is left untouched (`status: "exists"`). A *suggested*
   alias never collides in the first place -- it is computed against every
@@ -652,7 +1162,7 @@ From the release of kbagent 1.0.0 until its migration date (28 days later), the 
   `flow new`/`update`/`validate`), and Storage bucket `sharing` (the Storage API
   enforces the master privilege). If a task needs one of the three static-only
   features, register the same project again with a static Storage token
-  (`project add --project <alias2> --token-stdin`) instead of fighting the guard.
+  (`project add --alias <alias2> --token-stdin`, 0.100.3 and later) instead of fighting the guard.
 - **`dev-portal` is not on the list either.** It authenticates with its own
   Developer Portal identity (`dev-portal identity add`), never a project token,
   so a session project changes nothing there. And `flow` no longer splits:
@@ -832,7 +1342,7 @@ From the release of kbagent 1.0.0 until its migration date (28 days later), the 
   (`STACK_FEATURES__AGENT_PROVISIONING`), which is off on most stacks, so
   `kbagent project create --help` working tells you nothing about whether the
   stack will accept it. A stack without the feature answers 404, mapped to
-  `AUTH_NOT_SUPPORTED_ON_STACK` (exit 5 since vNEXT, exit 1 before); the message names the missing
+  `AUTH_NOT_SUPPORTED_ON_STACK` (exit 5 since 1.0.0, exit 1 before); the message names the missing
   feature, the flag an operator flips to enable it, and how to connect an
   existing project instead. That is a stack capability, not a broken URL and
   not a credential problem -- do not retry it, do not go looking for a token,
@@ -901,19 +1411,19 @@ From the release of kbagent 1.0.0 until its migration date (28 days later), the 
   1. `kbagent --json doctor` -> `checks[].details.tasks[]` for the affected
      task ids.
   2. Read that task's `action.params.input` from `<config_dir>/agents.json`
-     (or `kbagent --json agent show <id>`) -- those are the values to carry over.
+     (or `kbagent --json agent show --task-id <id>`) -- those are the values to carry over.
   3. Look the tool up in `docs/mcp-migration.md`, then
      `kbagent <native command> --help` -> map each input key to its flag. This
      is the step no tooling does for you; the naming differs per tool.
   4. `kbagent agent create --name ... --cron ... --type cli_command --argv ...`
-     with the result, verify it once with `kbagent agent run <new-id>`, then
-     `kbagent agent delete <old-id>`.
+     with the result, verify it once with `kbagent agent run --task-id <new-id>`, then
+     `kbagent agent delete --task-id <old-id>`.
 - **`agent update` CANNOT change a task's action** -- it patches name, cron,
   enabled/manual and the trigger only, so `--type` / `--argv` are not options
   there and exit 2. Migration therefore means create-new + delete-old, which
   has one trap: **the task id changes**. `Trigger.task_id` chains tasks by id,
   so if any OTHER task has `--trigger-task-id <old-id>`, repoint it with
-  `kbagent agent update <that-task> --trigger-task-id <new-id>` BEFORE deleting
+  `kbagent agent update --task-id <that-task> --trigger-task-id <new-id>` BEFORE deleting
   the old one, or the chain breaks silently. Check with
   `kbagent --json agent list` and grep the `trigger` blocks for the old id.
 - **`tool:read` / `tool:write` / `tool:destructive` permission patterns are
@@ -1285,7 +1795,7 @@ Two follow-on contract notes:
 - **`KBC.configuration.*` metadata propagates on CREATE.** If a placeholder
   entry's `metadata` dict contains keys starting with `KBC.`, they are
   POSTed to the metadata API via `client.set_config_metadata` immediately
-  after the create call. (updated vNEXT) `KBC.configuration.folderName` is
+  after the create call. (updated 1.0.0) `KBC.configuration.folderName` is
   sent as the create call's `folder` field instead, never to the metadata API.
   Bookkeeping keys (`pull_hash`, `pull_config_hash`, ...) are filtered
   out by the `KBC.` prefix check. `_push_update` does **not** propagate
@@ -1386,7 +1896,7 @@ stripping it, and reports `folder_lookup_failed: true` in the result. A `true`
 value means the folders were not refreshed this pull -- it separates "no folders
 configured" from "the lookup failed".
 
-- (updated vNEXT) Pull no longer makes the `search/component-configurations` call:
+- (updated 1.0.0) Pull no longer makes the `search/component-configurations` call:
   the folder is the configuration's own `folder` field in the listing pull already
   reads, and push / clone send it on the create POST. `folder_lookup_failed: true`
   now means the listing carried no `folder` field. See "Config folder is the
@@ -1505,8 +2015,8 @@ record per member. Consequences an agent must internalize:
   regardless of which `--model` you pass (the resolved model is just stored
   on the record) — it does NOT POST and collide with `ALREADY_EXISTS`. For
   the same reason `get --dimension` needs no `--model` (one dimension name
-  per project for this type). `get` rejects passing both `--id` and
-  `--dimension` (exit 2).
+  per project for this type). `get` rejects passing both
+  `--reference-data-id` (`--id` before 1.0.0) and `--dimension` (exit 2).
 - **Member field names mirror the `DIM_COA` columns 1:1 (snake_case):**
   `account_code` (required key), `account_name`, `parent_code`, `is_leaf`
   (integer 0/1, not bool), `level_1_code`, `cf_category`, … The metastore
@@ -1684,8 +2194,10 @@ BigQuery needs a Connection that accepts the type there too (it was refused on B
 applies, and a BigQuery project is enforced only by a Query Service release that carries the BigQuery enforcement (AJDA-3653). The REST
 route `POST /workspaces/{project}` takes `governed: true`. `workspace list` shows the workspace with login type
 `governed`, and `qs_compatible` is true on Snowflake (false on BigQuery until a query against a governed one is verified): Query Service reads it. A query with a Storage token (`workspace query`,
-local data-app development) is refused with `ACCESS_DENIED` unless a policy rule selects the administrator
-`keboola|<adminId>`, so `--qs-compatible` leaves governed workspaces out.
+local data-app development) is refused with `ACCESS_DENIED` when no policy rule selects the administrator
+`keboola|<adminId>`, and also when the query is not one plain `SELECT` on Storage bucket tables (no writes,
+`FLATTEN`, `INFORMATION_SCHEMA`/`SHOW` or UDFs): Query Service sends the same text for both, so an administrator
+that a rule selects can still get it. `--qs-compatible` leaves governed workspaces out.
 
 ## `workspace create --ui` cannot produce a UI-visible SQL workspace; a failed create no longer leaves a sandbox config behind
 
@@ -1891,7 +2403,8 @@ will be deleted.
   abort the cascade.
 - If ANY child fails, the parent is **preserved** and a `KeboolaApiError`
   is raised with `details.cascade = {attempted, deleted, failures: [{type,
-  id, name, error}], parent_deleted: False, model_uuid}`.
+  id, name, error_code, retryable, message}], parent_deleted: False,
+  model_uuid}`.
 - Re-run `kbagent semantic-layer model delete --project P --model <uuid>`
   after fixing the underlying error to finish the cascade.
 
@@ -1899,23 +2412,14 @@ will be deleted.
 
 - New top-level `cascade` block on success: `{attempted, deleted: {datasets,
   metrics, relationships, glossary, constraints}, failures: [], parent_deleted}`.
-- Legacy `orphaned_children` top-level key kept for back-compat with the
-  shape unchanged, but its **meaning** flips from 'leaked count' to
-  'cascaded count'. Happy-path JSON consumers always saw zeros on this key
-  before — the only way to populate it was the bug.
-
-**Deprecation:** `orphaned_children` is deprecated as of v0.43.4 and
-scheduled for **removal in a future minor release** (not before v0.44.0).
-Read `cascade.deleted` instead — it carries the same per-type counts plus
-the explicit `attempted` / `parent_deleted` / `failures` fields that
-disambiguate happy-path from partial-failure responses. JSON callers
-should migrate now; the field name is the only thing that changes.
+- The legacy `orphaned_children` top-level key copied `cascade.deleted`.
+  It was deprecated in v0.43.4. *(since 1.0.0)* it is removed. Read
+  `cascade.deleted` instead (see "Keys removed from `--json` output in
+  1.0.0").
 
 **Implication for AI agents / scripts:** Scripts that called `model delete`
 and then assumed they had to teardown children manually can drop that
-follow-up. Scripts that scraped `orphaned_children` to detect the bug now
-see the same zeros they always wanted — but should switch to
-`cascade.deleted` ahead of v0.42.0.
+follow-up.
 
 ## Web UI `Kai Chat` is gone — replaced by `Local AI`
 
@@ -2065,7 +2569,7 @@ events and emits a final `done` SSE frame mirroring the same record.
   atomicity would require side-staging every cascade item, which is
   disproportionate for a rename. Recovery recipe: `kbagent
   semantic-layer validate` to surface the dangling refs, then
-  re-run each failed cascade via `edit constraint --new-metrics ...`.
+  re-run each failed cascade via `edit constraint --new-metric ...`.
 
 ## Removing a metric corrupts `DIM_METRIC_THRESHOLD` downstream
 
@@ -2095,7 +2599,7 @@ events and emits a final `done` SSE frame mirroring the same record.
   `get_component_detail` and `suggest_components` as of v0.41.0 --
   no arbitrary-JSON endpoint. So `kbagent semantic-layer build`
   falls back to a DETERMINISTIC heuristic builder that synthesises:
-  one dataset per `--tables` entry (FQN auto-derived from
+  one dataset per `--table-id` value (FQN auto-derived from
   `tableId`; `fields[]` role-classified via the same PK_/FK_/*_DATE/
   *_DT/numeric-amount-name heuristics as `add dataset --deep-fields`),
   one `COUNT(*)` metric per dataset, one glossary entry per table.
@@ -2486,7 +2990,7 @@ response. Now:
   failed `--force-rerun`. An unknown outcome (a read timeout, a 5xx,
   exhausted retries, an expired login) keeps it, because the job may exist.
   A replay with the same key that
-  finds the pending entry exits 2 *(since vNEXT, exit 1 before)* with `INVALID_ARGUMENT` (HTTP 400 over
+  finds the pending entry exits 2 *(since 1.0.0, exit 1 before)* with `INVALID_ARGUMENT` (HTTP 400 over
   `kbagent serve`) and creates nothing. Check with `kbagent job list
   --component-id C --config-id ID`. If no job started, run again with
   `--force-rerun`. `POST /jobs/{project}/run` now accepts `idempotency_key`
@@ -2524,7 +3028,7 @@ response. Now:
   is also unchanged.
 - The Data Science API on every Keboola stack we've probed (europe-west3.gcp,
   us-east4.gcp; 2026-05-12) serves camelCase keys on the wire (`id`,
-  `configId`, `desiredState`, `configVersion`, ...). kbagent reads those
+  `configId`, `production`, `actualConfigVersion`, ...). kbagent reads those
   camelCase keys directly and emits its own snake_case-ish output keys.
   If a future API shape change introduces snake_case wire keys, this
   helper will need a defensive alias pass -- not yet warranted.
@@ -2654,7 +3158,7 @@ delete. Pass `--yes` to all of them in scripts.
 - **Do not re-issue the command on a timeout.** Follow the job with
   `kbagent storage job-detail --project P --job-id ID --wait` (the error
   message gives the full command), then check the physical result with
-  `storage table-detail --json` -> `.definition`. Re-running a swap that
+  `kbagent --json storage table-detail` -> `.definition`. Re-running a swap that
   succeeded swaps the tables *back*; re-running a `--source-table-id` create
   starts a second copy.
 
@@ -2887,14 +3391,16 @@ delete. Pass `--yes` to all of them in scripts.
   itself, and the top-level `runtime`/`authorization`/`storage`) is
   preserved bit-identical.
 - **`data-app list` hides workspace/sandbox deployments.**
-  The Data Science `GET /apps` collection returns EVERY deployment in the
+  The Data Science `/v1` `GET /apps` collection (kbagent before 1.0.0) returns EVERY deployment in the
   project, not just data apps -- interactive Snowflake/BigQuery
   workspaces (`componentId=keboola.sandboxes`, `type=snowflake`/`bigquery`,
   no name, a `*.snowflakecomputing.com` URL) live in the same collection.
   Before 0.43.9 they showed up as phantom unnamed `(snowflake)` rows that
   do NOT appear in the Apps UI. The command now keeps only
   `componentId == keboola.data-apps` (items missing `componentId` are kept
-  defensively); the JSON envelope carries `component_id` per app.
+  defensively); the JSON envelope carries `component_id` per app. Since
+  1.0.0 kbagent reads `/v2/apps`, which takes no filters; the same
+  `componentId` check stays as a guard.
 - **`data-app list` pages through the whole `GET /apps` collection
   *(since 0.96.1, #798)*.** The endpoint is paginated (default page = 100
   items) and the workspace/data-app mix is filtered CLIENT-side. Before
@@ -3031,19 +3537,17 @@ delete. Pass `--yes` to all of them in scripts.
 
 - `kbagent config update --project P --component-id keboola.data-apps ...` bumps the
   Storage config version; the deployed container keeps running at the
-  OLD version. The Data Science deployment record's `configVersion`
-  field is a *pinned pointer* that does not auto-advance when Storage
-  advances.
+  OLD version. A deployment's `configVersion` is a *pinned pointer* that
+  does not auto-advance when Storage advances.
 - To roll out the new config, run `kbagent data-app deploy --project P
   --app-id N` (optionally with `--wait`). The CLI reads the latest
-  Storage version and `PATCH`es the deployment with the §9 trio
-  `{desiredState=running, configVersion, restartIfRunning=true}`.
-- **Do NOT** call `PATCH /apps/{id} {desiredState:running}` directly --
-  the API silently pins to whatever `configVersion` the deployment
-  already had (often the empty shell from `POST /apps`), and the runner
-  errors `dataApp.git.repository is required in /data/config.json` with
-  no top-level error surfaced. The CLI's `data-app deploy` always sends
-  the trio together; sending only `configVersion` returns HTTP 422.
+  Storage version and *(since 1.0.0)* creates a `/v2` deployment pinned to
+  it (`POST /v2/apps/{id}/deployments {configVersion}`), promoted to
+  production once healthy. Before 1.0.0 it sent the `/v1` trio
+  `PATCH /apps/{id} {desiredState=running, configVersion, restartIfRunning=true}`.
+- **Do NOT** deploy the initial config version that `POST /v2/apps` wrote --
+  it is empty, and the runner errors `dataApp.git.repository is required
+  in /data/config.json` with no top-level error surfaced.
 - Same goes for `kbagent data-app start`: it WAKES an auto-suspended app
   at the currently-pinned version. It does NOT roll out new code or
   config -- use `data-app deploy` for that.
@@ -3065,23 +3569,31 @@ delete. Pass `--yes` to all of them in scripts.
 - Practical implication: you cannot copy-paste a `KBC::Project*` value
   from one project's `keboola.data-apps` config into another's.
 
-## Transient `state == stopped` during initial data-app deploy is not a failure
+## `state == running` during a redeploy is not "the new deploy is live"
 
-- After `data-app create` (or any `data-app deploy --wait`), polling
-  may observe `state == stopped` once for ~5-15s before the container
-  reaches `running`. This is normal: the platform transitions
-  `created → stopped → starting → running` while spinning up the
-  runtime. A naive poll that exits on `stopped` would falsely report
-  a failure.
-- The CLI's `--wait` flag refuses to treat `stopped` as terminal while
-  `desiredState == running`. Only `state == running` (success) and
-  `state == error` (build failure) and `--timeout` exhaustion are
-  terminal in that mode.
-- A LATER `state == stopped` (after the app has been running a while)
-  is a different beast: it means the platform auto-suspended the
-  container after `autoSuspendAfterSeconds` of inactivity. Hit the URL
-  to wake it (auto-restart triggers a 30-60s cold boot) or run
-  `kbagent data-app start --project P --app-id N`.
+*(since 1.0.0)*
+
+- The `/v2` app `state` is one of `notDeployed`, `starting`, `running`,
+  `suspended` and `disabled`. It says whether production serves, not which
+  deployment does: during a rollout the app stays `running` on the
+  deployment being replaced.
+- `data-app deploy --wait` (and `create --wait`) ends only when
+  `production.actualDeploymentId` names the new deployment and the app is
+  `running`. It fails with `DATA_APP_BUILD_FAILED` as soon as that
+  deployment's `buildState` or `runState` is `failed`, or once a newer
+  deploy (UI, MCP, another kbagent run) replaced it or it was deleted, and
+  with `DATA_APP_DEPLOY_TIMEOUT` after `--timeout`.
+- `suspended` is normal for an idle app: the next request to its URL wakes
+  it (30-60s cold boot), as does `kbagent data-app start`. `data-app stop`
+  suspends too. `disabled` means a failure stopped it; only `data-app start`
+  clears it.
+- `data-app start` / `stop` fail with HTTP 409 when no deployment serves
+  production: the app was never deployed, or it still runs on a start made
+  through `/v1` (the old CLI, UI or MCP server). Run `data-app deploy` once;
+  start and stop work from then on.
+- Before 1.0.0 kbagent used `/v1`, where the initial deploy passes a
+  transient `state == stopped`, and the `--wait` loop skipped it while
+  `desiredState == running`.
 ## `project invite` "already invited / already member" returns HTTP 400, not 422
 
 - Re-inviting a user the project already knows about returns HTTP **400** with
@@ -3090,7 +3602,7 @@ delete. Pass `--yes` to all of them in scripts.
   - `"This user is already a member of this project."` (active member)
 - `MemberService.invite()` translates both cases to `status="noop"` with
   `note="already_invited"` / `"already_member"` -- they are *not* exit-1
-  failures. Bulk runs (`--from-csv`) count them as `noop` in the summary, not
+  failures. Bulk runs (`--file`, `--from-csv` before 1.0.0) count them as `noop` in the summary, not
   `failed`.
 - The 422 heuristic in pre-v0.29.0 orchestrator scripts (`invite_participants.py:25`)
   is **wrong** for this API. If you write a parallel implementation, key off
@@ -3104,7 +3616,9 @@ delete. Pass `--yes` to all of them in scripts.
 - The kbagent `ManageClient.update_project_member_role` method emits PATCH;
   any custom code re-implementing the call must do the same.
 
-## `project invite --from-csv` order is not deterministic
+## `project invite --file` order is not deterministic
+
+Before 1.0.0 the bulk option is `--from-csv`.
 
 - Bulk invitation parallelises via `ThreadPoolExecutor` (default 8 workers).
   The `rows[]` array in the result is in completion order, not CSV order.
@@ -3332,7 +3846,7 @@ unknown -- do not try to parse a fallback message.
 | 7 | `JOB_TIMEOUT_TERMINATED` -- `job run --timeout` elapsed AND the remote job was successfully cancelled. Scripts can distinguish "we killed it" from "it failed on its own" (exit 1) from "it's still running" (exit 4). |
 | 130 | Interrupted (Ctrl-C) |
 
-Every error code has exactly one exit code and one `error.error_type` (since vNEXT). [docs/error-codes.md](https://github.com/keboola/cli/blob/main/docs/error-codes.md) lists them per code. Before vNEXT, an error code that reached `map_error_to_exit_code` without a dedicated mapping exited 1, so these codes exited 1 on some paths: `VALIDATION_ERROR`, `INVALID_ARGUMENT`, `INVALID_FORMAT`, `MISSING_PARAMETER`, `FILE_NOT_FOUND`, `DATA_APP_INVALID_SECRET` (now 2), `AUTH_MFA_INVALID` (now 3), `AUTH_NOT_SUPPORTED_ON_STACK` (now 5). Four command paths changed too: `transformation create` and `transformation edit` `VALIDATION_ERROR` (1, now 2), `lineage` `FILE_NOT_FOUND` for a missing cache file (1, now 2), `flow schema --full --project` (every failed fetch was `NOT_FOUND`, exit 4. Now a failed request keeps its own code, so a network failure is still exit 4, and only an answer without a usable schema is `NOT_FOUND`, exit 1), `http` `CONFIG_ERROR` (2, now 5; an invalid `--body` is now `INVALID_ARGUMENT`, still exit 2). `kai` and `semantic-layer` commands report the typed code of a configuration error (`AUTH_NOT_SUPPORTED_ON_STACK`, `FEATURE_NOT_ENABLED`) instead of `CONFIG_ERROR`, still exit 5.
+Every error code has exactly one exit code and one `error.error_type` (since 1.0.0). [docs/error-codes.md](https://github.com/keboola/cli/blob/main/docs/error-codes.md) lists them per code. Before 1.0.0, an error code that reached `map_error_to_exit_code` without a dedicated mapping exited 1, so these codes exited 1 on some paths: `VALIDATION_ERROR`, `INVALID_ARGUMENT`, `INVALID_FORMAT`, `MISSING_PARAMETER`, `FILE_NOT_FOUND`, `DATA_APP_INVALID_SECRET` (now 2), `AUTH_MFA_INVALID` (now 3), `AUTH_NOT_SUPPORTED_ON_STACK` (now 5). Four command paths changed too: `transformation create` and `transformation edit` `VALIDATION_ERROR` (1, now 2), `lineage` `FILE_NOT_FOUND` for a missing cache file (1, now 2), `flow schema --full --project` (every failed fetch was `NOT_FOUND`, exit 4. Now a failed request keeps its own code, so a network failure is still exit 4, and only an answer without a usable schema is `NOT_FOUND`, exit 1), `http` `CONFIG_ERROR` (2, now 5; an invalid `--body` is now `INVALID_ARGUMENT`, still exit 2). `kai` and `semantic-layer` commands report the typed code of a configuration error (`AUTH_NOT_SUPPORTED_ON_STACK`, `FEATURE_NOT_ENABLED`) instead of `CONFIG_ERROR`, still exit 5.
 
 ## `job run --wait` polling + log tail
 
@@ -3373,7 +3887,7 @@ Every error code has exactly one exit code and one `error.error_type` (since vNE
   succeeds; `--default flag=FALSE` fails with
   `storage.tables.definitionValidation`. The value is normalised to
   uppercase in storage but the input requires lowercase.
-- **`--not-null` / `--default` must reference a defined column.**
+- **`--not-null-column` (`--not-null` before 1.0.0) / `--default` must reference a defined column.**
   Typos exit 2 (`INVALID_ARGUMENT`) before any API call.
 - **Dev-branch `create-table` auto-materializes the bucket** when the
   target bucket has not been written to in the branch yet (mirrors the
@@ -3434,7 +3948,7 @@ type inventory and examples.
   key). This is the supported way to repartition a populated BigQuery table; promote it
   with `storage swap-tables`. Mirrors keboola/connection#7697.
 - **`--column` and `--source-table-id` are mutually exclusive.** Supplying both, or
-  neither, exits 2 (`INVALID_ARGUMENT`) before any API call. `--not-null` / `--default`
+  neither, exits 2 (`INVALID_ARGUMENT`) before any API call. `--not-null-column` / `--default`
   attach to `--column` definitions, so they are also rejected in source mode.
 - **Partition/clustering flags also work on a plain `--column` create** (BigQuery only):
   `--time-partitioning-type` (DAY/HOUR/MONTH/YEAR; required when any `--time-partitioning-*`
@@ -3663,7 +4177,7 @@ that says `path: "parameters.tables"` would double-nest if copied verbatim.)
 
 - `--merge` deep-merges and preserves sibling keys; `--set` implies merge.
 - `--dry-run` shows the diff without applying.
-- Input can be inline JSON, `@file.json`, or stdin (`-`).
+- Input is inline JSON (`--configuration`), or a file or stdin (`-`) with `--configuration-file`. *(since 1.0.0)* `--configuration @file` and `--configuration -` are refused.
 - There is no `str_replace` / `list_append` operation on `config update`. For
   SQL transformation bodies use `transformation edit` (9 ops incl.
   `str_replace`), which is the native replacement for the old
@@ -4114,7 +4628,7 @@ write descriptive metadata onto storage objects. Three behaviors are easy to mis
   the exit code. *(since 0.98.0)* `--json` also exits 1 when `error_count > 0`;
   on 0.97.0 and older it exited 0 even then, so there never trust a zero-exit
   as "everything applied." That tolerance covers **API** failures only: a
-  `--from-file` whose shape is wrong (a `tables:` / `buckets:` / `columns:`
+  `--file` whose shape is wrong (a `tables:` / `buckets:` / `columns:`
   section that is a list instead of a mapping of ID to description, a column
   entry that is not a mapping, a document that is not a mapping at all) is a
   usage error *(since v0.89.0)* — the whole file is rejected before the first
@@ -4237,7 +4751,7 @@ CLI hides via its four-bucket response, but they matter when interpreting result
   transition. Tasks are typed (`job`/`notification`/`variable`).
 - **`INVALID_FLOW_DAG` was renamed to `INVALID_FLOW_DEFINITION`.**
   Update any code/string matching on the old error code.
-- **Validation:** `kbagent flow validate --file @flow.yaml [--project ALIAS]`.
+- **Validation:** `kbagent flow validate --definition-file flow.yaml [--project ALIAS]`.
   With `--project` it fetches the **live** JSON Schema from the stack and runs
   full structural + semantic checks; without `--project` it runs semantic-only
   and adds a note that structural validation was skipped (no schema source).
@@ -4248,7 +4762,7 @@ CLI hides via its four-bucket response, but they matter when interpreting result
   read at runtime via the AI Service `configurationSchema` for `keboola.flow`
   (the same path `config new --push` uses). There is nothing vendored, pinned,
   or to re-sync. `flow schema --full` therefore **requires `--project`** (plain
-  `flow schema` is still the offline YAML template). *(updated vNEXT)* without
+  `flow schema` is still the offline YAML template). *(updated 1.0.0)* without
   `--project` it uses the active project, and the bundled snapshot when no
   project is registered or chosen.
 - **Graceful semantic-only degradation.** If the live schema
@@ -4436,13 +4950,13 @@ serve instance picks up the file on its next minute-tick.
 
 - **Symptom**: `kbagent agent create --cron "*/5 * * * *" --type ...` returns
   the persisted task with `next_run_at` populated, but the task never
-  actually runs. `agent runs <id>` stays empty hour after hour.
+  actually runs. `agent runs --task-id <id>` stays empty hour after hour.
 - **Cause**: no `kbagent serve` process is running, so the cron loop never
   ticks. The task is correctly persisted; the scheduler just isn't alive.
 - **Fix**: start `kbagent serve` (with or without `--ui`) on the machine that
   owns the config directory. The scheduler picks up the new task on the
   next tick and fires it on the cron's schedule.
-- **Diagnostic**: `kbagent agent run <id>` works offline (it dispatches via
+- **Diagnostic**: `kbagent agent run --task-id <id>` works offline (it dispatches via
   the in-process runner without consulting cron). If that runs the action
   successfully but cron-driven runs never happen, the scheduler is offline.
 
@@ -4550,6 +5064,9 @@ Gotchas:
 - The alias is literally `__env__` (double underscore both sides) — chosen so it
   cannot collide with a real user alias. A real project already registered under
   `__env__` wins; no injection happens.
+- **`__env__` has no active branch.** `branch create` creates the branch but does
+  not activate it (warning `ACTIVE_BRANCH_NOT_STORED`), `branch reset` is a no-op and
+  `branch use` is refused; pass `--branch <id>` on each command *(since 1.0.0)*.
 - **`__env__` shows `project_id` but a blank name in `project list`.** `load()`
   is offline, so the injection recovers `project_id` from the token prefix
   (`{projectId}-{tokenId}-{secret}`) but cannot fetch the real project name.
@@ -4575,7 +5092,7 @@ The ingest secret is **in the URL path**. `stream detail` / `create-source` mask
 it by default in every surface (the `endpoint`, all three per-signal endpoints,
 and the raw `source` object echoed in `--json`). Pass `--reveal` to print the
 real secret — e.g. to wire `OTEL_EXPORTER_OTLP_ENDPOINT` for a daemon:
-`kbagent --json stream detail SRC --project P --reveal`.
+`kbagent --json stream detail --name SRC --project P --reveal`.
 
 Creating an OTLP source **via the raw Stream API** creates only the bare source
 — no sinks, no tables. So `kbagent stream create-source --project P --type otlp` (matching
@@ -4609,7 +5126,7 @@ to `PATCH /admin/apps/{app}` instead:
 kbagent dev-portal identity add --alias admin-keboola \
     --username admin@keboola.com --role-hint admin --password-stdin
 kbagent dev-portal patch --app keboola.ex-foo \
-    --data /tmp/patch.json --identity admin-keboola
+    --data-file /tmp/patch.json --identity admin-keboola
 ```
 
 With `role_hint: vendor` (the default), kbagent now pre-flights the
@@ -4796,14 +5313,14 @@ These are Keboola-platform behaviors, not kbagent features, so they carry no
 `since` tag -- they hold on every kbagent version. The `keboola-expert` agent
 prompt keeps only a one-line trigger for each and links here for the full prose.
 
-### `flow update --file` is a full replace of phases + tasks
+### `flow update --definition-file` is a full replace of phases + tasks
 
 `kbagent flow update` preserves the body on metadata-only updates (rename,
-description). BUT `--file` is a **full-replace** of `phases` + `tasks` -- if your
+description). BUT the definition (`--definition` / `--definition-file`) is a **full-replace** of `phases` + `tasks` -- if your
 YAML omits a phase, task, transition, or per-task `retry` that existed before, it
 is silently dropped. For structural edits, always fetch via
 `kbagent --json flow detail` first, merge your diff locally, run
-`kbagent flow validate --file @merged.yaml --project ALIAS`, then push via `--file`.
+`kbagent flow validate --definition-file merged.yaml --project ALIAS`, then push via `--definition-file`.
 
 ### Primary keys on new output tables crash the first run
 
@@ -4878,11 +5395,30 @@ slice -- `workspace query` with a `WHERE` clause needs a live workspace.
 
 ### `storage add-column --not-null` needs an empty table or `--default`
 
-`storage add-column --column name:TYPE(length) [--not-null] [--default VALUE]`
-hits the SYNCHRONOUS Storage endpoint (no job to poll). `--not-null` on a table
-that ALREADY HAS ROWS is rejected by the backend with an API error (not a local
-validation error) unless you also pass `--default` -- the existing rows need a
-value for the new non-null column. Add `--default` when the table is non-empty.
+`storage add-column --column name:TYPE(length) [--not-null] [--default VALUE]`:
+`--not-null` on a table that ALREADY HAS ROWS is rejected by the backend (not a
+local validation error) unless you also pass `--default` -- the existing rows
+need a value for the new non-null column. Add `--default` when the table is
+non-empty. The rejection comes from the storage job, so before 1.0.0 kbagent
+did not see it (next entry).
+
+### `storage add-column` waits for the storage job
+
+(since 1.0.0) `POST /v2/storage[/branch/{id}]/tables/{id}/columns` answers `HTTP 202` with a
+queued `tableColumnAdd` storage job -- it is not synchronous. Before 1.0.0,
+kbagent returned on that receipt: `add-column` reported success while the
+column did not exist yet, so an immediate `storage table-detail` (most visibly
+with `--branch` on a dev branch) did not list it, and a job that FAILED (for
+example `--not-null` on a table with rows) was reported as success and the
+column was never added. Since 1.0.0 the command waits for the Storage job, so
+a following `table-detail` lists the column; a failed job is
+`STORAGE_JOB_FAILED` (exit 1) with the backend's message; a job that runs past
+the wait is `STORAGE_JOB_TIMEOUT` (exit 4, `retryable: false`,
+`details.job_id`) -- the job keeps running server-side, so follow it with the
+`storage job-detail --job-id ID --wait` command the message names instead of
+adding the column again (a repeat queues a second add). On an
+older kbagent, poll `table-detail` until the column appears, and treat a column
+that never appears as a failed add.
 
 ### `job run --idempotency-key` is client-side dedup, scoped to one machine
 
@@ -5023,6 +5559,9 @@ Four related sync-engine behaviors landed together (issues #466 / #467 / #472 / 
   disabled in production no longer looks "in sync"), and push sends the state:
   an explicit `is_disabled:` key in the local YAML updates the remote; an
   absent key leaves the remote state untouched. Same semantics for rows.
+  *(updated 1.0.0)* An absent key re-enables when the last pulled or pushed file
+  had `is_disabled: true` (you deleted the line); see "Deleting
+  `is_disabled: true` re-enables a config on `sync push`".
 - **Never-fetched guard.** A manifest entry with an EMPTY `pull_hash` and no
   local files (a phantom left by a pre-0.72 name-collision pull, issue #472) is
   excluded from delete planning: `sync push --force` will NOT delete that
@@ -5382,7 +5921,7 @@ even shaped like a real state document.
   row-update --is-disabled/--is-enabled` (the config-level flag is simply not
   settable via `--set`); anything else -> "not settable via --set". If a
   component genuinely has a `configuration.<prefix>` key with one of these
-  names, pass the full body via `--configuration JSON|@file|-` instead of
+  names, pass the full body via `--configuration JSON` or `--configuration-file PATH` instead of
   `--set`.
 - **A plain `--set 'parameters.x=y'` is unaffected** -- only paths whose
   *first* segment collides with a sibling field are rejected; the guard does
@@ -5697,20 +6236,22 @@ only purpose is finding a `--token-id`.
 - SDK parity: `Client.list_tokens(with_last_used=True)`; the fields land on
   `TokenListEntryResult` as `last_used`, `last_used_event`, `last_used_status`.
 
-## `token list --columns` is human-output only (since v0.88.0)
+## `token list --column` is human-output only (since v0.88.0)
 
-`--columns` (repeatable, e.g. `--columns description --columns last_used`)
+*(updated 1.0.0)* 1.0.0 removes the old name `--columns`. Use `--column`.
+
+`--column` (repeatable, e.g. `--column description --column last_used`)
 selects *and orders* the Rich table. `Refreshed` is now part of the default
 column set -- `--json` always returned it, the fixed table just had no way to
 show it.
 
 - **`--json` is deliberately unaffected.** The machine contract stays whole no
-  matter what the human view is narrowed to, so never use `--columns` to shape
+  matter what the human view is narrowed to, so never use `--column` to shape
   data you are about to parse.
 - Valid names: `id`, `description`, `created`, `refreshed`, `expires`, `master`,
   `created_by`, `last_used`, `last_used_event`. An unknown name exits 2 and
   prints the valid list.
-- An explicit `--columns` is taken literally -- combining it with
+- An explicit `--column` is taken literally -- combining it with
   `--with-last-used` does *not* silently append the derived columns. Name
   `last_used` yourself if you want it.
 - **`last_used` / `last_used_event` REQUIRE `--with-last-used`** and exit 2
@@ -5781,7 +6322,7 @@ sits under `_configuration_extra:` in `_config.yml`, not at the top level.
 `processors` from the top level (everything else rides along from
 `_configuration_extra`). A `phases:` / `tasks:` block added by hand at the top
 level is therefore **silently dropped** on push -- no error, no diff entry, a
-flow that pushes empty. This is the opposite of the `flow new --file` body
+flow that pushes empty. This is the opposite of the `flow new --definition` body
 shape, where `phases` / `tasks` ARE top-level; the two formats are not
 interchangeable.
 
@@ -5814,8 +6355,9 @@ documented multi-branch pull was enough (issue #649).
   `reason: "stale_branch_tree"` and acted on in no way at all.
 - **A config that exists only on the dev branch** is reported with
   `reason: "tracked_on_other_branch"` and `exists_on_target: false`; its hint
-  points at `kbagent branch merge`. Pushing it to production would have created
-  a second, unrelated config there.
+  says to merge the dev branch first. *(updated 1.0.0)* `branch merge` is
+  removed in 1.0.0: merge with `kbagent merge-request` or in the Keboola UI.
+  Pushing it to production would have created a second, unrelated config there.
 - **Production is spelled three ways** in manifests in the wild -- `None` (CLI
   `--branch` absent), `0` (`branchId: branch_id or 0` from a git-branching
   pull) and the default branch's numeric id (plain pull). All three normalize to
@@ -6096,11 +6638,13 @@ was silent, and the only way to notice was reading `permissions show` (or
   way.** Both used to flag only the retired `tool:*` namespace (see the MCP
   removal gotcha above); they now flag ANY persisted pattern matching zero
   known operations, so a policy written before this gate existed (or one
-  edited directly in `config.json`) still surfaces its typos. The `tool:`
+  edited directly in `config.json`) still reports its typos. On 0.x the `tool:`
   patterns keep their specific "MCP passthrough removed, see
   docs/mcp-migration.md" hint; every other dead pattern gets a generic
   "check for typos against `kbagent permissions list`" hint instead. A policy
-  mixing both kinds shows both hints.
+  mixing both kinds shows both hints. *(updated 1.0.0)* 1.x gives every inert
+  pattern, `tool:` included, the one generic hint: check for typos against
+  `kbagent permissions list`, or use a `cli:*` category.
 - **`PermissionEngine` itself stays lenient at evaluation time** -- a dead
   pattern already on disk is a silent no-op when the policy is enforced, not
   a crash. Only `permissions set` is strict; this preserves backward
@@ -6115,6 +6659,8 @@ was silent, and the only way to notice was reading `permissions show` (or
   `tool:`-prefixed** (since 0.91.0) -- a purely typo'd policy (e.g.
   `stroage.upload-table`) omits the key entirely, so JSON consumers must not
   assume `inert_since` is always present on `status: "warn"`.
+  *(updated 1.0.0)* 1.x removes the key: `doctor` has no `details.inert_since`,
+  and `GET /permissions/show` has no `inert_since_version`.
 
 ## `keboola.mcp-server-tool` is now always excluded from sync; `ignoredComponents` is live
 
@@ -6291,8 +6837,9 @@ It carries the command name, the outcome, and the duration -- never argument val
 - **`cleanup_skipped: true` on a merge result** means the source branch id could not be read and
   the local active-branch reset / sync unlink did NOT run (`branch_from_id_raw` echoes the value).
   Key on the flag; recover with `kbagent branch reset` + `kbagent sync branch-unlink`.
-- **`branch merge` is deprecated** (still works, carries `deprecation` in `--json`): it only
-  builds a UI URL and resets the active branch.
+- **`branch merge` is deprecated on 0.x** (still works, carries `deprecation` in `--json`): it
+  only builds a UI URL and resets the active branch. *(updated 1.0.0)* 1.0.0 removes it: use
+  `merge-request` or the Keboola UI.
 
 ## `sync pull` no longer deletes a re-created config or a locally edited directory (#792)
 
@@ -6386,6 +6933,62 @@ whose manifest was lost or written again, a `main/` file that
   file with the same config id in another directory stays a separate copy
   after the pull, and push creates it as a new config (fork by copy, #482).
 
+## A config directory moved by hand keeps its config id (#792)
+
+*(since 1.0.0)* Before, a hand move (`mv`, `git mv`) of a tracked config
+directory read as a deleted config plus a new one: `sync push` created a copy
+with a new id, and `sync push --force` also deleted the original (job history,
+schedules and flow references were lost). Now a tracked config whose directory
+is gone, and whose `_keboola.config_id` and `_keboola.component_id` exactly ONE
+untracked directory of the same branch tree carries, is a **move**:
+
+- `sync diff` lists it under `moves[]` (`component_id`, `config_id`,
+  `branch_id`, `moved_from`, `moved_to`; `summary.moved` counts them). The
+  content is compared as usual, so a moved and edited config is `modified`
+  (or `conflict` / `remote_modified` / `remote_deleted`), and that change
+  carries `moved_from` / `moved_to`. A pure move is no change.
+- `sync push` creates and deletes nothing for it, also with `--force`, and
+  records the new path in the manifest -- also when nothing else changed
+  (`status: no_changes` with `moves[]`). `--dry-run` and `sync diff` change
+  nothing on disk. Rows move with their config. A promoted dev copy that
+  shares the directory (`sync push --branch <dev>` from `main/`) moves too
+  and keeps its id.
+- `sync pull` pulls into the moved directory (`details[]` action `moved`) and
+  then renames it to the name of the config (action `renamed`), as for any
+  directory whose name differs from the config name. To change the directory
+  name for good, use `kbagent config rename --project P --component-id C --config-id ID --name NAME --directory DIR`.
+- `sync status` lists it under `moves[]` instead of a deleted plus an added
+  config.
+- The component is read from the file, not from the directory: a directory
+  moved into another component's folder is a move too, and the next pull
+  moves it back.
+- **Ambiguous move.** When the original directory is gone and two or more
+  directories carry its id (`mv A B; cp -r B C`), diff reports a `conflict`
+  with `ambiguous_move: true` and `candidates[]` (also `ambiguous_moves[]`).
+  Push creates and deletes nothing for it, also with `--force`; pull writes
+  none of the directories and reports it `skipped`. Keep one directory, and
+  remove the others or remove their `_keboola.config_id` (then they are new
+  configs).
+- **Swaps, rotations and symlinks are held, not resolved.** When a tracked
+  directory's `_config.yml` carries the id of ANOTHER tracked config of the
+  same component (two directories swapped, B moved away and A moved into B,
+  a symlink to another config's directory), diff reports a `conflict` with
+  `identity_conflict: true` for every config involved (also
+  `identity_conflicts[]`: the configs, the directories, the hint). Push
+  creates, updates and deletes nothing for them, also with `--force`; pull
+  writes none of their directories (also with `--theirs`); nothing about
+  them is saved, so the manifest and any promoted dev copy stay as they
+  were. Move the directories back (the next diff is clean again), or use
+  `config rename --directory`. A symlinked directory is never a move target.
+- `config rename --directory` renames the directory of the entry of the
+  target branch only. When the sync tree tracks the config on another branch
+  only, the local tree is not changed and `--json` says so in
+  `sync_skipped`.
+- Not a move: the original directory still exists (a copy is a new config,
+  fork by copy, as before; also when only its `_config.yml` was removed), the
+  original `_config.yml` is there but is not valid YAML, or the component is
+  ignored.
+
 ## `sync push` encrypts every secret before its first write (#792)
 
 *(since 0.99.0, #792)* Before, push encrypted the `#` secrets of each config
@@ -6474,6 +7077,7 @@ authorization failure:
 *(since 0.97.0)* `model create` / `add <kind>` gained `--scope
 project|organization|targeted` + `--target-project ALIAS|ID ...`, and a new
 `semantic-layer scope <get|add|remove|set|request-create|request-delete|request-list>`
+(*(updated 1.0.0)* 1.x renames `request-delete` to `request-cancel`)
 sub-app (also `GET/PUT /semantic-layer/scope/...` over `kbagent serve`). See
 [metastore-scope-workflow.md](metastore-scope-workflow.md) for worked
 examples. Surprises worth knowing before you touch this:
@@ -6521,8 +7125,8 @@ examples. Surprises worth knowing before you touch this:
 - **`add glossary` needs `--definition` (since 0.98.0).** Every
   `semantic-glossary` schema requires `definition`. Without it the metastore
   answered a bare 422 "Validation failed"; now it is a usage error (exit 2).
-- **`--target-project` takes an alias or a numeric project ID** (repeatable or
-  comma-separated), so the target need not be registered in kbagent. An alias
+- **`--target-project` takes an alias or a numeric project ID** (repeated
+  once per project), so the target need not be registered in kbagent. An alias
   must be on the owner project's stack (a project ID only means the same
   project on its own stack; a bare ID cannot be checked and is trusted).
   `--target-project` without `--scope targeted`, an unknown alias, or a bad
@@ -6569,6 +7173,33 @@ examples. Surprises worth knowing before you touch this:
   organization` call. Never loop this over a whole project's objects without
   the user having named which ones should become org-wide.
 
+## Headless GitOps / CI deploy pipelines: known pitfalls
+
+*(since 1.0.0)* A customer running `sync` unattended in a deploy pipeline on
+0.100.4 hit a set of pitfalls; each is listed with the versions it affects, the
+workaround and its fix in
+[gitops-cicd-workflow.md](gitops-cicd-workflow.md). All were observed on
+0.100.4. Fixed in 1.0.0: the unparseable and unknown-key `_config.yml` cases
+(#941), `branch create` on `__env__` (#940), `add-column` (#939), deleting the
+last config of a dev-branch tree (#938) and creating a data app in a dev branch
+(#943); `flow schedule`, the dry-run shapes and the optional keys are not
+changed. The ones that lose or hide work:
+
+- A `_config.yml` that does not parse is skipped with only a stderr warning
+  (exit 0); a tracked one counts as deleted and `sync push --force` deletes the
+  remote config. Parse every file before the push (fix: #941).
+- `sync push` drops every top-level key it does not know (flow `phases:` /
+  `tasks:`, `runtime:`, a `config new` `storage:` block) -- put them under
+  `_configuration_extra:` or top-level `input:` / `output:` (fix: #941).
+- `flow schedule` exits 0 with `activated: false` when activation is refused;
+  `sync push` never activates a schedule.
+- `branch create --project __env__` exits 5 although it created the branch;
+  check `branch list` before a retry (fix: #940).
+- `storage add-column` returns before the asynchronous column job finished, and
+  a failed job reported success (fix: #939).
+- `sync push --dry-run` has two result shapes (`dry_run` / `no_changes`), and
+  most list keys appear only when not empty.
+
 ## A partial failure is no longer reported as success
 
 *(since 0.98.0, closes #745)* A command that keeps going after one item fails
@@ -6586,7 +7217,7 @@ Now, when at least one item failed:
   `flow schedule-remove`) now print `Failed:` and the failed count instead, for
   example `Failed: Pushed: 3 created, 0 updated, 0 deleted, 1 failed`. The
   other commands keep their output: `org setup`, `project refresh`,
-  `project invite --from-csv`, `workspace gc` and the `semantic-layer`
+  `project invite --from-csv` (`--file` since 1.0.0), `workspace gc` and the `semantic-layer`
   commands list the failed items in a table or in summary lines, and the
   `--all-projects` sync variants state the failed count in their summary line;
 - `--json` output keeps its keys and is emitted before the exit. New keys:
@@ -6609,7 +7240,7 @@ Commands whose exit code changes from 0 to 1 (the key that holds the failures):
   `projects_refresh_failed`: entries keyed by `alias`, fix them with
   `project refresh`);
 - `project refresh` (`projects_failed`);
-- `project invite --from-csv` (`failed`);
+- `project invite --from-csv` (`--file` since 1.0.0) (`failed`);
 - `workspace gc` (`errors[]`: a workspace that was not deleted, or a project
   that could not be listed);
 - `semantic-layer import` / `semantic-layer promote` (`failed[]` of each type);
@@ -6812,3 +7443,51 @@ The package was named `keboola-agent-cli` up to 0.62.0 and is named `keboola-cli
 - **`col_map.in_table` matched by substring**, so a mapping could land on the wrong input edge. It must now be the full input table id, its `alias:`-qualified form, or a unique input-mapping destination; anything else is skipped and counted in `ai_col_map_skipped`.
 - **Stale AI results are not applied** *(since 0.99.1)*: a result whose `_code_hash` differs from the config's current code hash describes code that no longer exists; it is skipped entirely and listed in `ai_status.ai_results_stale` (a fresh task is emitted for it). A result without `_code_hash` is still applied. A `col_map` naming a table the config reads under two aliases now maps onto both edges instead of being skipped as ambiguous.
 - `ai_status` keys: `ai_edges_added` (reads + writes), `ai_reads_added`, `ai_writes_added`, `ai_columns_merged`, `ai_external_added`, `ai_col_map_skipped`, `ai_outputs_unresolved`, `ai_results_stale`, `ai_tasks_missing_code_file`.
+
+## Sync reads `_config.yml` strictly: a bad file is an error, never a delete
+
+*(since 1.0.0)* Before, a `_config.yml` that was not valid YAML (or empty, or
+not a mapping) was read as "no file": a tracked config was then `deleted` in
+`sync diff`, and `sync push --force` deleted it on the remote (#827 item 9).
+An untracked one was skipped without a word. A top-level key sync does not
+know (`storage:`, `runtime:`, a typo) was dropped on push without a word.
+Now:
+
+- `sync diff`, `sync push` and `sync push --dry-run` report every such file,
+  of a config or of a row, as one `errors[]` entry: `change_type`
+  `invalid_local_file`, `error_code` `SYNC_LOCAL_FILE_INVALID`, `path` (the
+  file), `component_id`, `config_id`, and a `message` that names the unknown
+  keys. `sync diff` also counts them in `summary.invalid`.
+- The config and all its rows are held: nothing is created, updated or
+  deleted for it, also with `--force`. The other configs are pushed.
+- The command exits **1** (`--json` still prints the result first).
+  `sync diff --all-projects` counts such a project as failed.
+- The keys sync reads are `version`, `name`, `description`, `is_disabled`,
+  `parameters`, `input`, `output`, `processors`, `_configuration_extra` and
+  `_keboola` -- exactly what `sync pull` writes. Put any other configuration
+  key under `_configuration_extra`. Rows of `keboola.variables` and
+  `keboola.shared-code` keep their top-level `values` / `code_content`.
+- `sync pull` keeps such a file (local work); `--theirs` overwrites it.
+- A `_config.yml` (config or row) without `description:` is the same as
+  `description: ''`. Before, a row without it diffed as "description
+  removed" on every push.
+- When `_description.md` and a different non-empty `description:` in
+  `_config.yml` both exist, the file still wins and diff/push add a
+  `DESCRIPTION_SHADOWED` entry to `warnings[]` naming both paths.
+- `kbagent config new` writes the table mappings as top-level `input:` /
+  `output:`, as pull does. Its old top-level `storage:` block was dropped by
+  push; a scaffold written by an older version now fails with
+  `SYNC_LOCAL_FILE_INVALID` -- move `storage.input` / `storage.output` to
+  the top level.
+
+## `data-app create --branch` and `sync push` of a data app in a dev branch failed with HTTP 422
+
+*(since 1.0.0)* `kbagent data-app create --project ALIAS --branch <dev-branch-id> ...`
+failed with HTTP 422 from the Data Science API, because kbagent sent `branchId`
+in `POST /apps` as a number and the API takes only a string. Without `--branch`
+(production) it worked. `sync push` (and `sync clone`) into a dev branch went
+through the same request, so a new data-app config in a dev-branch tree failed
+the same way. Now a dev branch id is sent as a string (`"branchId": "12345"`);
+production and `--branch 0` stay `null`. The `--dry-run` body of `data-app
+create` shows the same string. On an older version, create the app in
+production or in the Keboola UI.

@@ -170,7 +170,7 @@ class MemberService:
         if len(resolved_stacks) != 1:
             raise ConfigError(
                 f"CSV references multiple stack URLs ({sorted(resolved_stacks)}); "
-                "split the file by stack and run --from-csv per stack."
+                "split the file by stack and run --file per stack."
             )
         stack_url = resolved_stacks.pop()
 
@@ -617,7 +617,7 @@ class MemberService:
         if len(resolved_stacks) > 1:
             raise ConfigError(
                 f"CSV references multiple stack URLs ({sorted(resolved_stacks)}); "
-                "split the file by stack and run --from-csv per stack."
+                "split the file by stack and run --file per stack."
             )
         return BulkInviteResult(
             total=len(previewed),

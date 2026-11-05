@@ -518,7 +518,7 @@ class TestDescribeBatchService:
         assert len(result["errors"]) == 1
         assert result["applied"][0]["id"] == "in.c-good"
         assert result["errors"][0]["id"] == "in.c-bad"
-        assert "Bucket not found" in result["errors"][0]["error"]
+        assert "Bucket not found" in result["errors"][0]["message"]
 
     def test_empty_yaml(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
@@ -1489,7 +1489,7 @@ class TestDescribeMigrateService:
         assert result["tables_migrated"] == 1
         assert len(result["errors"]) == 1
         assert result["errors"][0]["table_id"] == "in.c-x.a"
-        assert "boom" in result["errors"][0]["error"]
+        assert "boom" in result["errors"][0]["message"]
         assert [m["table_id"] for m in result["migrated"]] == ["in.c-x.b"]
 
     def test_describe_migrate_progress_callback(self, tmp_path: Path) -> None:

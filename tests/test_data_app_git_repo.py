@@ -465,7 +465,7 @@ class TestGitRepoClient:
 
     def test_get_git_repo_url_and_shape(self, httpx_mock) -> None:
         httpx_mock.add_response(
-            url=f"{self.DATA_SCIENCE_BASE}/apps/42/git-repo",
+            url=f"{self.DATA_SCIENCE_BASE}/v2/apps/42/git-repo",
             json={"sshUrl": None, "httpsUrl": "https://github.com/o/r", "isManagedGitRepo": True},
             status_code=200,
         )
@@ -475,7 +475,7 @@ class TestGitRepoClient:
 
     def test_list_credentials_wrapped(self, httpx_mock) -> None:
         httpx_mock.add_response(
-            url=f"{self.DATA_SCIENCE_BASE}/apps/42/git-repo/credentials",
+            url=f"{self.DATA_SCIENCE_BASE}/v2/apps/42/git-repo/credentials",
             json={"credentials": [{"id": "u1", "type": "ssh_key"}]},
             status_code=200,
         )
@@ -485,7 +485,7 @@ class TestGitRepoClient:
 
     def test_create_app_managed_sends_flag(self, httpx_mock) -> None:
         httpx_mock.add_response(
-            url=f"{self.DATA_SCIENCE_BASE}/apps",
+            url=f"{self.DATA_SCIENCE_BASE}/v2/apps",
             method="POST",
             json={"id": "99", "configId": "ulid", "hasManagedGitRepo": True},
             status_code=200,
@@ -501,9 +501,9 @@ class TestGitRepoClient:
         sent = json.loads(httpx_mock.get_requests()[0].content)
         assert sent["useManagedGitRepo"] is True
 
-    def test_create_app_external_omits_flag(self, httpx_mock) -> None:
+    def test_create_app_external_sends_flag_false(self, httpx_mock) -> None:
         httpx_mock.add_response(
-            url=f"{self.DATA_SCIENCE_BASE}/apps",
+            url=f"{self.DATA_SCIENCE_BASE}/v2/apps",
             method="POST",
             json={"id": "99", "configId": "ulid"},
             status_code=200,
@@ -516,11 +516,11 @@ class TestGitRepoClient:
                 config={"parameters": {}},
             )
         sent = json.loads(httpx_mock.get_requests()[0].content)
-        assert "useManagedGitRepo" not in sent
+        assert sent["useManagedGitRepo"] is False
 
     def test_list_app_runs_returns_array_with_failure_reason(self, httpx_mock) -> None:
         httpx_mock.add_response(
-            url=f"{self.DATA_SCIENCE_BASE}/apps/42/runs?limit=5&offset=0",
+            url=f"{self.DATA_SCIENCE_BASE}/v2/apps/42/runs?limit=5&offset=0",
             json=[
                 {
                     "id": "run-1",
@@ -537,7 +537,7 @@ class TestGitRepoClient:
 
     def test_create_ssh_key_sends_public_key(self, httpx_mock) -> None:
         httpx_mock.add_response(
-            url=f"{self.DATA_SCIENCE_BASE}/apps/42/git-repo/credentials",
+            url=f"{self.DATA_SCIENCE_BASE}/v2/apps/42/git-repo/credentials",
             method="POST",
             json={"id": "u2", "type": "ssh_key", "permissions": "readOnly"},
             status_code=201,
@@ -555,7 +555,7 @@ class TestGitRepoClient:
 
     def test_create_http_token_omits_public_key(self, httpx_mock) -> None:
         httpx_mock.add_response(
-            url=f"{self.DATA_SCIENCE_BASE}/apps/42/git-repo/credentials",
+            url=f"{self.DATA_SCIENCE_BASE}/v2/apps/42/git-repo/credentials",
             method="POST",
             json={"id": "u3", "type": "http_token", "secret": "ghs_x"},
             status_code=201,

@@ -154,7 +154,7 @@ class TestDeleteBucketsService:
 
         assert result["deleted"] == []
         assert len(result["failed"]) == 1
-        assert "linked" in result["failed"][0]["error"].lower()
+        assert "linked" in result["failed"][0]["message"].lower()
         mock_client.delete_bucket.assert_not_called()
 
     def test_shared_bucket_blocked_without_force(self, tmp_path: Path) -> None:
@@ -170,7 +170,7 @@ class TestDeleteBucketsService:
 
         assert result["deleted"] == []
         assert len(result["failed"]) == 1
-        assert "shared" in result["failed"][0]["error"].lower()
+        assert "shared" in result["failed"][0]["message"].lower()
 
     def test_shared_bucket_blocked_with_force(self, tmp_path: Path) -> None:
         """--force overrides only the non-empty guard: a shared bucket is kept,
@@ -195,7 +195,7 @@ class TestDeleteBucketsService:
         assert result["failed"][0]["id"] == "in.c-shared"
         assert (
             "kbagent sharing unshare --project test --bucket-id in.c-shared"
-            in result["failed"][0]["error"]
+            in result["failed"][0]["message"]
         )
         assert [c.args[0] for c in mock_client.delete_bucket.call_args_list] == [
             "in.c-full",
