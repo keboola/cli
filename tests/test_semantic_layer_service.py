@@ -397,8 +397,8 @@ class TestDeleteModel:
             "glossary": 0,
             "constraints": 1,
         }
-        # orphaned_children kept as alias for the deleted counts (back-compat).
-        assert result["orphaned_children"] == result["cascade"]["deleted"]
+        # The deprecated orphaned_children alias is gone since 1.0.0.
+        assert "orphaned_children" not in result
 
     def test_cascade_partial_failure_preserves_parent(self, tmp_path: Path) -> None:
         """Mid-cascade child failure leaves the parent intact; surface failures."""
@@ -3311,7 +3311,7 @@ class TestEnrichSchemasWithWorkspaceTypes:
         )
         assert schemas["in.c-linked.t"]["column_details"][0]["type"] == "INT64"
         assert len(errors) == 1
-        assert "b" in errors[0]["error"]
+        assert "b" in errors[0]["message"]
 
 
 class TestBuildModelTypesWorkspace:
@@ -3464,7 +3464,7 @@ class TestBuildModelTypesWorkspace:
             )
             MockWorkspaceCls.return_value.execute_query.assert_not_called()
         assert len(result["type_resolution_errors"]) == 1
-        assert "no workspace" in result["type_resolution_errors"][0]["error"]
+        assert "no workspace" in result["type_resolution_errors"][0]["message"]
 
 
 # ---------------------------------------------------------------------------

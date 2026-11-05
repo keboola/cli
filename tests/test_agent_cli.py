@@ -75,7 +75,7 @@ class TestAgentCreateAndShow:
         tasks = json.loads(listed.output)["data"]["tasks"]
         assert len(tasks) == 1 and tasks[0]["id"] == task["id"]
         # show by id round-trips
-        shown = _invoke(tmp_path, "agent", "show", task["id"], json_mode=True)
+        shown = _invoke(tmp_path, "agent", "show", "--task-id", task["id"], json_mode=True)
         assert json.loads(shown.output)["data"]["id"] == task["id"]
 
     def test_create_ai_agent_requires_cli_and_prompt(self, tmp_path: Path) -> None:
@@ -123,8 +123,8 @@ class TestAgentCreateAndShow:
             "create",
             "--name",
             "T-File",
-            "--from-file",
-            f"@{action_payload}",
+            "--definition-file",
+            str(action_payload),
             json_mode=True,
         )
         assert result.exit_code == 0, result.output
@@ -151,6 +151,7 @@ class TestUpdateAndDelete:
             tmp_path,
             "agent",
             "update",
+            "--task-id",
             task_id,
             "--disabled",
             "--manual",
@@ -177,10 +178,10 @@ class TestUpdateAndDelete:
         )
         task_id = json.loads(created.output)["data"]["id"]
         # In JSON mode the confirmation is skipped (no prompts in non-TTY).
-        result = _invoke(tmp_path, "agent", "delete", task_id, json_mode=True)
+        result = _invoke(tmp_path, "agent", "delete", "--task-id", task_id, json_mode=True)
         assert result.exit_code == 0
         # Task gone
-        again = _invoke(tmp_path, "agent", "show", task_id, json_mode=True)
+        again = _invoke(tmp_path, "agent", "show", "--task-id", task_id, json_mode=True)
         assert again.exit_code == 1
 
 
@@ -227,7 +228,7 @@ class TestRunMocked:
             return run
 
         with patch("keboola_agent_cli.services.agent_service.run_task_once", side_effect=_fake):
-            result = _invoke(tmp_path, "agent", "run", task_id, json_mode=True)
+            result = _invoke(tmp_path, "agent", "run", "--task-id", task_id, json_mode=True)
         assert result.exit_code == 0
         run = json.loads(result.output)["data"]
         assert run["status"] == "ok"
@@ -263,6 +264,7 @@ class TestRunMocked:
                 tmp_path,
                 "agent",
                 "run",
+                "--task-id",
                 task_id,
                 "--runtime-prompt",
                 "extra-runtime",
@@ -275,7 +277,7 @@ class TestRunMocked:
 
 class TestRuns:
     def test_runs_for_unknown_task(self, tmp_path: Path) -> None:
-        result = _invoke(tmp_path, "agent", "runs", "missing-id", json_mode=True)
+        result = _invoke(tmp_path, "agent", "runs", "--task-id", "missing-id", json_mode=True)
         assert result.exit_code == 1
         assert json.loads(result.output)["error"]["code"] == "NOT_FOUND"
 
@@ -311,7 +313,7 @@ class TestAgentShow:
 
     def test_show_existing_returns_task_payload(self, tmp_path: Path) -> None:
         task_id = _make_runnable_task(tmp_path)
-        result = _invoke(tmp_path, "agent", "show", task_id, json_mode=True)
+        result = _invoke(tmp_path, "agent", "show", "--task-id", task_id, json_mode=True)
         assert result.exit_code == 0, result.output
         body = json.loads(result.output)
         assert body["status"] == "ok"
@@ -321,7 +323,7 @@ class TestAgentShow:
         assert task["action"]["params"]["argv"] == ["version"]
 
     def test_show_unknown_task_returns_not_found(self, tmp_path: Path) -> None:
-        result = _invoke(tmp_path, "agent", "show", "no-such-id", json_mode=True)
+        result = _invoke(tmp_path, "agent", "show", "--task-id", "no-such-id", json_mode=True)
         assert result.exit_code == 1
         assert json.loads(result.output)["error"]["code"] == "NOT_FOUND"
 
@@ -340,7 +342,7 @@ class TestAgentRunDetail:
             return run
 
         with patch("keboola_agent_cli.services.agent_service.run_task_once", side_effect=_fake):
-            run_result = _invoke(tmp_path, "agent", "run", task_id, json_mode=True)
+            run_result = _invoke(tmp_path, "agent", "run", "--task-id", task_id, json_mode=True)
         assert run_result.exit_code == 0
         run_id = json.loads(run_result.output)["data"]["run_id"]
         return task_id, run_id
@@ -349,7 +351,16 @@ class TestAgentRunDetail:
         self, tmp_path: Path, task_id_with_run: tuple[str, str]
     ) -> None:
         task_id, run_id = task_id_with_run
-        result = _invoke(tmp_path, "agent", "run-detail", task_id, run_id, json_mode=True)
+        result = _invoke(
+            tmp_path,
+            "agent",
+            "run-detail",
+            "--task-id",
+            task_id,
+            "--run-id",
+            run_id,
+            json_mode=True,
+        )
         assert result.exit_code == 0
         body = json.loads(result.output)["data"]
         assert body["run_id"] == run_id
@@ -358,7 +369,16 @@ class TestAgentRunDetail:
 
     def test_run_detail_unknown_run_returns_not_found(self, tmp_path: Path) -> None:
         task_id = _make_runnable_task(tmp_path)
-        result = _invoke(tmp_path, "agent", "run-detail", task_id, "bogus-run-id", json_mode=True)
+        result = _invoke(
+            tmp_path,
+            "agent",
+            "run-detail",
+            "--task-id",
+            task_id,
+            "--run-id",
+            "bogus-run-id",
+            json_mode=True,
+        )
         assert result.exit_code == 1
         assert json.loads(result.output)["error"]["code"] == "NOT_FOUND"
 
@@ -376,10 +396,19 @@ class TestAgentRunEvents:
             return run
 
         with patch("keboola_agent_cli.services.agent_service.run_task_once", side_effect=_fake):
-            run = _invoke(tmp_path, "agent", "run", task_id, json_mode=True)
+            run = _invoke(tmp_path, "agent", "run", "--task-id", task_id, json_mode=True)
         run_id = json.loads(run.output)["data"]["run_id"]
 
-        result = _invoke(tmp_path, "agent", "run-events", task_id, run_id, json_mode=True)
+        result = _invoke(
+            tmp_path,
+            "agent",
+            "run-events",
+            "--task-id",
+            task_id,
+            "--run-id",
+            run_id,
+            json_mode=True,
+        )
         # cli_command never persists events -> service raises NOT_FOUND.
         assert result.exit_code == 1
         body = json.loads(result.output)
@@ -477,10 +506,10 @@ class TestAgentPromptImprove:
 
 
 class TestAgentIdAlias:
-    """Task/run IDs accept both the positional form and --id/--task-id/--run-id.
+    """Task/run IDs are the --task-id / --run-id options (spec A3).
 
-    Positional stays for terse interactive use; the flag aliases bring agent
-    commands in line with the rest of the CLI (--job-id, --config-id, ...).
+    1.0.0 removed the positional TASK_ID / RUN_ID; the usage error names the
+    options, like the rest of the CLI (--job-id, --config-id, ...).
     """
 
     def _create(self, tmp_path: Path) -> str:
@@ -500,17 +529,21 @@ class TestAgentIdAlias:
         assert result.exit_code == 0, result.output
         return json.loads(result.output)["data"]["id"]
 
-    def test_show_positional_still_works(self, tmp_path: Path) -> None:
+    def test_removed_positional_names_task_id(self, tmp_path: Path) -> None:
         task_id = self._create(tmp_path)
         result = _invoke(tmp_path, "agent", "show", task_id, json_mode=True)
-        assert result.exit_code == 0, result.output
-        assert json.loads(result.output)["data"]["id"] == task_id
+        assert result.exit_code == 2, result.output
+        error = json.loads(result.output)["error"]
+        assert error["code"] == "USAGE_ERROR"
+        assert "The positional TASK_ID was removed in 1.0.0. Use --task-id." in error["message"]
 
-    def test_show_accepts_id_flag(self, tmp_path: Path) -> None:
+    def test_removed_id_flag_names_task_id(self, tmp_path: Path) -> None:
         task_id = self._create(tmp_path)
         result = _invoke(tmp_path, "agent", "show", "--id", task_id, json_mode=True)
-        assert result.exit_code == 0, result.output
-        assert json.loads(result.output)["data"]["id"] == task_id
+        assert result.exit_code == 2, result.output
+        error = json.loads(result.output)["error"]
+        assert error["code"] == "USAGE_ERROR"
+        assert "--id was removed in 1.0.0. Use --task-id" in error["message"]
 
     def test_show_accepts_task_id_flag(self, tmp_path: Path) -> None:
         task_id = self._create(tmp_path)
@@ -520,29 +553,25 @@ class TestAgentIdAlias:
 
     def test_delete_accepts_id_flag(self, tmp_path: Path) -> None:
         task_id = self._create(tmp_path)
-        result = _invoke(tmp_path, "agent", "delete", "--id", task_id, "--yes", json_mode=True)
+        result = _invoke(tmp_path, "agent", "delete", "--task-id", task_id, "--yes", json_mode=True)
         assert result.exit_code == 0, result.output
         assert json.loads(result.output)["status"] == "ok"
-
-    def test_conflicting_positional_and_flag_exits_2(self, tmp_path: Path) -> None:
-        task_id = self._create(tmp_path)
-        result = _invoke(tmp_path, "agent", "show", task_id, "--id", "ffffffffffff", json_mode=True)
-        assert result.exit_code == 2
-        assert json.loads(result.output)["error"]["code"] == "INVALID_ARGUMENT"
 
     def test_missing_id_exits_2(self, tmp_path: Path) -> None:
         result = _invoke(tmp_path, "agent", "show", json_mode=True)
         assert result.exit_code == 2
-        assert json.loads(result.output)["error"]["code"] == "MISSING_PARAMETER"
+        error = json.loads(result.output)["error"]
+        assert error["code"] == "USAGE_ERROR"
+        assert "--task-id" in error["message"]
 
     def test_run_detail_accepts_run_id_flag(self, tmp_path: Path) -> None:
-        """run-detail wires both --id and --run-id; a missing run resolves then 404s."""
+        """run-detail takes --task-id and --run-id; a missing run resolves then 404s."""
         task_id = self._create(tmp_path)
         result = _invoke(
             tmp_path,
             "agent",
             "run-detail",
-            "--id",
+            "--task-id",
             task_id,
             "--run-id",
             "ffffffffffff",
@@ -552,13 +581,13 @@ class TestAgentIdAlias:
         assert json.loads(result.output)["error"]["code"] == "NOT_FOUND"
 
     def test_run_accepts_id_flag(self, tmp_path: Path) -> None:
-        """run wires --id; a missing task resolves then 404s (avoids a real subprocess)."""
-        result = _invoke(tmp_path, "agent", "run", "--id", "ffffffffffff", json_mode=True)
+        """run takes --task-id; a missing task resolves then 404s (avoids a real subprocess)."""
+        result = _invoke(tmp_path, "agent", "run", "--task-id", "ffffffffffff", json_mode=True)
         assert result.exit_code == 1
         assert json.loads(result.output)["error"]["code"] == "NOT_FOUND"
 
     def test_runs_accepts_id_flag(self, tmp_path: Path) -> None:
         task_id = self._create(tmp_path)
-        result = _invoke(tmp_path, "agent", "runs", "--id", task_id, json_mode=True)
+        result = _invoke(tmp_path, "agent", "runs", "--task-id", task_id, json_mode=True)
         assert result.exit_code == 0, result.output
         assert json.loads(result.output)["data"]["runs"] == []

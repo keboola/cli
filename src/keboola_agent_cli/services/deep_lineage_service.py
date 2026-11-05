@@ -579,7 +579,6 @@ class DeepLineageService:
             }
         result.update(trace_column(graph, fqn, column, direction, depth))
         result["column"] = column
-        result["column_filter"] = column
         return result
 
     def diagram(

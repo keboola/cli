@@ -7,7 +7,7 @@ on: ``docs/merge-requests-notes.md``.
 
 What this module decides that the service leaves to the caller:
 
-- **Target resolution.** ``--merge-request-id`` (alias ``--id``) is optional on
+- **Target resolution.** ``--merge-request-id`` is optional on
   every command that takes one: omitted, the branch is resolved the house way
   (``--branch`` -> ``active_branch_id``) and the service maps it to its MR. A
   branch has at most one MR ever, so this cannot be ambiguous. See
@@ -248,7 +248,7 @@ def merge_request_diff(
         "-o",
         help=(
             "Write the resolution candidate (your branch's content, ready to edit) to "
-            "this file; hand it back with `merge-request resolve --resolved @FILE`"
+            "this file; hand it back with `merge-request resolve --resolved-file FILE`"
         ),
     ),
 ) -> None:
@@ -318,7 +318,7 @@ def merge_request_diff(
     resolve_cmd = f"merge-request resolve --component-id {escape(component_id)} --config-id {escape(config_id)}"
     if output is not None:
         shown = escape(str(output))
-        _hint_next(formatter, f"edit {shown}, then `{resolve_cmd} --resolved @{shown}`")
+        _hint_next(formatter, f"edit {shown}, then `{resolve_cmd} --resolved-file {shown}`")
     elif result.get("ours_deleted") or result.get("theirs_deleted"):
         _hint_next(formatter, f"`{resolve_cmd} --take delete|ours|theirs` as recommended above")
     else:

@@ -3,7 +3,7 @@
 All machine-readable codes emitted via `--json` output.  Every code is a member
 of `ErrorCode` in `src/keboola_agent_cli/errors.py`.
 
-This page is the one list of error codes, their exit codes and their error types *(since vNEXT)*. Other documents link here. `ERROR_CODE_TABLE` in `src/keboola_agent_cli/errors.py` holds the same pairs, and `make check-error-codes` fails when the two disagree ([CLI spec E1, E2](cli-interface-spec.md#E1)).
+This page is the one list of error codes, their exit codes and their error types *(since 1.0.0)*. Other documents link here. `ERROR_CODE_TABLE` in `src/keboola_agent_cli/errors.py` holds the same pairs, and `make check-error-codes` fails when the two disagree ([CLI spec E1, E2](cli-interface-spec.md#E1)).
 
 ## Exit codes
 
@@ -65,7 +65,7 @@ A command that fails with an error code exits with the code's `Exit` value below
 | `INVALID_ARGUMENT` | 2 | `validation` | Caller supplied an invalid argument value |
 | `INVALID_FORMAT` | 2 | `api` | Input is not in the expected format |
 | `USAGE_ERROR` | 2 | `validation` | Incorrect CLI flag combination or missing required argument |
-| `CONFIRMATION_REQUIRED` | 2 | `validation` | A command that asks for confirmation ran in human mode without a terminal and without `--yes`. Nothing was changed. Run the command again with `--yes`. An AI agent asks the user first (since vNEXT) |
+| `CONFIRMATION_REQUIRED` | 2 | `validation` | A command that asks for confirmation ran in human mode without a terminal and without `--yes`. Nothing was changed. Run the command again with `--yes`. An AI agent asks the user first (since 1.0.0) |
 | `MISSING_PARAMETER` | 2 | `validation` | A required parameter was not supplied |
 | `UNKNOWN_ERROR` | 1 | `api` | Catch-all for unclassified errors |
 | `UNEXPECTED_ERROR` | 1 | `api` | Per-project fallback in a multi-project command: that project raised an error carrying no code of its own. Other projects in the same run still report their own outcome |
@@ -159,6 +159,8 @@ A command that fails with an error code exits with the code's `Exit` value below
 | `LINK_UNRESOLVED` | 1 | `api` | `sync push` could not re-point a shared-code row id or a task `configRowIds` entry to a row created in the same push; the id keeps its old value |
 | `SYNC_CONFLICT` | 1 | `conflict` | `sync pull --force` aborted: local and remote both changed since the last pull (`details.conflicts` lists them) |
 | `SYNC_LEGACY_BOUNDARY` | 1 | `conflict` | `sync push` refused one config: the working tree predates statement-boundary tracking, so pushing it would merge separate SQL statements into one. Run `sync pull` first |
+| `COMPANION_UNREADABLE` | 1 | `conflict` | `sync push` refused one config: its `pyproject.toml` states no usable `[project].dependencies` list (no key, not valid TOML), `_config.yml` has no inline `packages`, and the remote packages could not be read, so a push would drop them. Fix the file or add `packages` inline |
+| `SYNC_LOCAL_FILE_INVALID` | 1 | `validation` | `sync diff` / `sync push` held one config back: its `_config.yml` (or a row's) is not valid YAML, is not a mapping, or has a top-level key sync does not know (`path` names the file). Nothing is created, updated or deleted for that config. Fix the file; put extra configuration keys under `_configuration_extra` |
 
 ### Encryption
 
@@ -177,7 +179,7 @@ A command that fails with an error code exits with the code's `Exit` value below
 
 | Code | Exit | Type | Description |
 |---|---|---|---|
-| `DATA_APP_BUILD_FAILED` | 1 | `api` | Data app deploy/start poll loop ended in a failed build or setup state |
+| `DATA_APP_BUILD_FAILED` | 1 | `api` | Data app deploy/start poll loop ended in a failed build or setup state, or a newer deploy replaced the deployment |
 | `DATA_APP_DEPLOY_TIMEOUT` | 1 | `api` | Polling timed out waiting for a data app deploy or start |
 | `DATA_APP_INVALID_GIT` | 1 | `api` | Data app git repository configuration is invalid or inaccessible |
 | `DATA_APP_INVALID_SECRET` | 2 | `api` | Data app secret key or value failed validation |

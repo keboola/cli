@@ -22,7 +22,7 @@ from ..constants import (
     PROJECT_ROLES,
 )
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
-from ..output import OutputFormatter, format_item_error
+from ..output import format_item_error
 from ..services.project_service import AUTH_MODE_SESSION, AUTH_MODE_STATIC
 from ._all_projects import (
     FANOUT_ONE_PROJECT_HELP,
@@ -38,7 +38,6 @@ from ._helpers import (
     RefuseAtFile,
     _confirm_or_abort,
     check_cli_permission,
-    deprecated_option,
     discard_token_file,
     emit_api_error,
     finish_items,
@@ -180,23 +179,10 @@ def _format_status_table(console: Console, statuses: list[dict[str, Any]]) -> No
     console.print(table)
 
 
-def _refuse_two_aliases(formatter: OutputFormatter, alias: str | None, project: str | None) -> None:
-    """Refuse ``--alias`` with a different value of its deprecated name ``--project`` (T17)."""
-    if project and alias != project:
-        formatter.error(
-            message="Pass the alias of the new project once, with --alias.",
-            error_code=ErrorCode.USAGE_ERROR,
-        )
-        raise typer.Exit(code=2)
-
-
 @project_app.command("add")
 def project_add(
     ctx: typer.Context,
     alias: str = typer.Option(..., "--alias", help="Alias of the new project"),
-    project: str | None = deprecated_option(
-        "project add --project", "--project", "-p", renamed_to="alias"
-    ),
     url: str = typer.Option(
         DEFAULT_STACK_URL,
         help="Keboola stack URL",
@@ -220,7 +206,6 @@ def project_add(
     --token keeps the value out of your shell history.
     """
     formatter = get_formatter(ctx)
-    _refuse_two_aliases(formatter, alias, project)
     service = get_service(ctx, "project_service")
     resolved_token = resolve_storage_token_input(
         token=token,
@@ -271,9 +256,6 @@ def project_create(
     alias: str | None = typer.Option(
         None, "--alias", help="Local alias for the new project (default: from its name)"
     ),
-    project: str | None = deprecated_option(
-        "project create --project", "--project", "-p", renamed_to="alias"
-    ),
     name: str | None = typer.Option(None, "--name", "-n", help="Name for the new Keboola project"),
     backend: ProjectBackend | None = typer.Option(
         None, "--backend", help="Storage backend (default: the stack's own default)"
@@ -300,7 +282,6 @@ def project_create(
     Keboola UI instead -- kbagent keeps one session per stack.
     """
     formatter = get_formatter(ctx)
-    _refuse_two_aliases(formatter, alias, project)
     service = get_service(ctx, "auth_service")
 
     try:
@@ -569,7 +550,7 @@ def _format_refresh_result(console: Console, data: dict) -> None:
     # Failed projects
     failed = data.get("projects_failed", [])
     for p in failed:
-        console.print(format_item_error(f"project '{p['alias']}'", p["error"]), soft_wrap=True)
+        console.print(format_item_error(f"project '{p['alias']}'", p["message"]), soft_wrap=True)
 
     # Summary line
     summary_parts = []
@@ -628,7 +609,6 @@ def project_refresh(
     all_projects: bool = typer.Option(
         False, "--all-projects", help="Refresh all projects with invalid tokens"
     ),
-    all_: bool = deprecated_option("project refresh --all", "--all"),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Preview what would be refreshed without making changes"
     ),
@@ -664,8 +644,7 @@ def project_refresh(
     service = get_service(ctx, "org_service")
 
     # --project and --all-projects name the projects in two ways; without either,
-    # the T1 chain picks one. --all is the deprecated name of --all-projects.
-    all_projects = all_projects or all_
+    # the T1 chain picks one.
     if project and all_projects:
         formatter.error(
             message="Provide --project or --all-projects, not both",
@@ -773,7 +752,7 @@ def project_current(ctx: typer.Context) -> None:
     """Show the active project.
 
     Reports whether the value comes from the ``KBAGENT_PROJECT`` env var
-    (``env``) or the saved active project (``pin``). Prints nothing but a hint if
+    (``env``) or the saved active project (``active_project``). Prints nothing but a hint if
     neither is set. ``resolved_alias`` / ``resolved_source`` name the project
     a command without ``--project`` would use (``env``, ``active_project``,
     ``sole``, or ``none``).
@@ -830,28 +809,27 @@ def project_description_set(
         help=f"Project alias or ID to update ({PROJECT_DEFAULT})",
     ),
     text: str | None = typer.Option(
-        None, "--text", help="Inline description string", callback=RefuseAtFile("--file").callback
+        None,
+        "--description",
+        help="Inline description string",
+        callback=RefuseAtFile("--description-file").callback,
     ),
     file: Path | None = typer.Option(
         None,
-        "--file",
-        help="Read description from a UTF-8 markdown file",
-    ),
-    stdin: bool = typer.Option(
-        False,
-        "--stdin",
-        help="Read description from standard input",
+        "--description-file",
+        help="Read the description from a UTF-8 markdown file (- for stdin)",
+        allow_dash=True,
     ),
 ) -> None:
     """Set the Keboola dashboard project description (markdown).
 
     Writes to ``KBC.projectDescription`` on the default branch. Provide the
-    content via exactly one of --text, --file, or --stdin.
+    content via exactly one of --description or --description-file.
     """
     formatter = get_formatter(ctx)
 
     try:
-        description = resolve_text_input(text=text, file=file, stdin=stdin)
+        description = resolve_text_input(value=text, file=file, option="--description")
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.INVALID_ARGUMENT)
         raise typer.Exit(code=2) from None
@@ -1084,22 +1062,22 @@ def project_invite(
     reason: str | None = typer.Option(
         None, "--reason", help="Optional human-readable reason attached to the invitation"
     ),
-    from_csv: Path | None = typer.Option(
+    file: Path | None = typer.Option(
         None,
-        "--from-csv",
+        "--file",
         help="CSV file with columns email, project (alias or numeric ID), role[, reason]",
     ),
     default_role: ProjectRole | None = typer.Option(
         None,
         "--default-role",
-        help="Role to apply when a CSV row has no role column",
+        help="Role for a --file row that has no role column",
     ),
     workers: int = typer.Option(
         DEFAULT_INVITE_WORKERS,
         "--workers",
         min=1,
         max=32,
-        help="Parallel workers for --from-csv (default 8)",
+        help="Parallel workers for --file (default 8)",
     ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview without sending invitations"),
 ) -> None:
@@ -1111,34 +1089,33 @@ def project_invite(
 
     \b
     Bulk (one row per email; CSV header required):
-        kbagent project invite --from-csv participants.csv --default-role guest
+        kbagent project invite --file participants.csv --default-role guest
     """
     formatter = get_formatter(ctx)
 
-    if from_csv and (project or email):
+    if file and (project or email):
         formatter.error(
-            message="--from-csv is mutually exclusive with --project / --email",
+            message="--file is mutually exclusive with --project / --email",
             error_code=ErrorCode.USAGE_ERROR,
         )
         raise typer.Exit(code=2)
-    if not from_csv and not (email and role):
+    if not file and not (email and role):
         formatter.error(
-            message="Provide --email and --role for single-shot invite "
-            "(or use --from-csv for bulk).",
+            message="Provide --email and --role for single-shot invite (or use --file for bulk).",
             error_code=ErrorCode.USAGE_ERROR,
         )
         raise typer.Exit(code=2)
-    if not from_csv:
+    if not file:
         project = resolve_project_alias(ctx, formatter, project)
 
     manage_token = resolve_manage_token(allow_env=ctx.obj["allow_env_manage_token"])
     service = get_service(ctx, "member_service")
 
     try:
-        if from_csv:
+        if file:
             result = service.invite_bulk(
                 manage_token=manage_token,
-                csv_path=from_csv,
+                csv_path=file,
                 default_role=default_role,
                 workers=workers,
                 dry_run=dry_run,

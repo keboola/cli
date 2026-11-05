@@ -10,7 +10,7 @@ auto-materialize behaviour, and the common pitfalls.
 --column name                      # bare name -> STRING (backend default length)
 --column name:TYPE                 # e.g. id:INTEGER, name:STRING
 --column name:TYPE(length)         # e.g. amount:NUMERIC(18,2), pk:VARCHAR(40)
---not-null COLUMN                  # repeatable; marks a defined column NOT NULL
+--not-null-column COLUMN           # repeatable; marks a defined column NOT NULL
 --default NAME=VALUE               # repeatable; sets a DEFAULT expression
 ```
 
@@ -65,7 +65,7 @@ does not validate them; the Storage API does.
 
 | Flag | Maps to `definition` field | Notes |
 |---|---|---|
-| `--not-null COL` | `nullable: false` | Must reference a column defined by a `--column`; unknown names fail fast (exit 2) |
+| `--not-null-column COL` | `nullable: false` | Must reference a column defined by a `--column`; unknown names fail fast (exit 2) |
 | `--default NAME=VALUE` | `default: "VALUE"` | Booleans must be lowercase (`true`/`false`) -- `FALSE` is rejected by API. Empty `VALUE` (e.g. `--default foo=`) is accepted and produces an empty-string default |
 
 ## Dev-branch auto-materialize
@@ -194,7 +194,7 @@ kbagent --json storage create-table \
   --column ch_name:VARCHAR\(80\) \
   --column is_admin:BOOLEAN \
   --primary-key pkey \
-  --not-null pkey --not-null ts \
+  --not-null-column pkey --not-null-column ts \
   --default num_members=0 --default is_admin=false
 ```
 
@@ -221,7 +221,7 @@ kbagent --json storage create-table \
   is clear but easy to miss).
 - `INTEGER(10)` is invalid: Keboola's `INTEGER` base type ignores length.
   If you want a narrow integer, use `--column age:NUMBER(3,0)` instead.
-- `--not-null` and `--default` names must match a `--column` name exactly
+- `--not-null-column` and `--default` names must match a `--column` name exactly
   (case-sensitive). Typos exit 2 (`INVALID_ARGUMENT`) before any API call.
 - `auto_created_bucket: true` is informational, not an error. Check
   the field in JSON mode; in human mode it is shown as a yellow note under
@@ -249,7 +249,7 @@ kbagent workspace create --project prod
 # Default auto-picks clone (fast, any size) when eligible, else copy --
 # on a large table that falls back to copy, --json refuses without --force.
 # See workspace-workflow.md "Load types" for the full clone/copy/view rules.
-kbagent workspace load --project prod --workspace-id W --tables in.c-foo.data
+kbagent workspace load --project prod --workspace-id W --table-id in.c-foo.data
 kbagent workspace query --project prod --workspace-id W --sql "
   CREATE TABLE \"in.c-foo.data_change_log\" AS
   SELECT id::VARCHAR(40) AS id, amount::NUMBER(18,2) AS amount
@@ -349,7 +349,7 @@ Rules:
   them server-side (422) as a backstop.
 - **`--column` XOR `--source-table-id`.** The two are mutually exclusive;
   the schema in source mode is derived from the source, so `--column` /
-  `--not-null` / `--default` must not be supplied.
+  `--not-null-column` / `--default` must not be supplied.
 - **Partitioning shapes.** Time partitioning needs `--time-partitioning-type`
   (DAY/HOUR/MONTH/YEAR); range partitioning needs all of
   `--range-partitioning-field/-start/-end/-interval` (bounds are strings).

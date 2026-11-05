@@ -400,62 +400,6 @@ class TestDeleteBranch:
             svc.delete_branch(alias="prod", branch_id=999)
 
 
-class TestGetMergeUrl:
-    """Tests for BranchService.get_merge_url()."""
-
-    def test_get_merge_url_with_explicit_branch(self, tmp_config_dir: Path) -> None:
-        """get_merge_url generates correct URL when branch_id is provided."""
-        store = setup_single_project(tmp_config_dir)
-        svc = BranchService(config_store=store)
-
-        result = svc.get_merge_url(alias="prod", branch_id=456)
-
-        expected_url = (
-            "https://connection.keboola.com/admin/projects/258/branch/456/development-overview"
-        )
-        assert result["url"] == expected_url
-        assert result["project_alias"] == "prod"
-        assert result["branch_id"] == 456
-
-    def test_get_merge_url_uses_active_branch(self, tmp_config_dir: Path) -> None:
-        """get_merge_url falls back to active_branch_id when no branch_id is given."""
-        store = setup_single_project(tmp_config_dir)
-        store.set_project_branch("prod", 789)
-
-        svc = BranchService(config_store=store)
-
-        result = svc.get_merge_url(alias="prod")
-
-        expected_url = (
-            "https://connection.keboola.com/admin/projects/258/branch/789/development-overview"
-        )
-        assert result["url"] == expected_url
-        assert result["branch_id"] == 789
-
-    def test_get_merge_url_no_branch_raises(self, tmp_config_dir: Path) -> None:
-        """get_merge_url raises ConfigError when no branch_id and no active branch."""
-        store = setup_single_project(tmp_config_dir)
-        svc = BranchService(config_store=store)
-
-        with pytest.raises(ConfigError, match="No branch specified and no active branch"):
-            svc.get_merge_url(alias="prod")
-
-    def test_get_merge_url_resets_active_branch(self, tmp_config_dir: Path) -> None:
-        """get_merge_url resets active_branch_id to None after generating the URL."""
-        store = setup_single_project(tmp_config_dir)
-        store.set_project_branch("prod", 456)
-
-        svc = BranchService(config_store=store)
-
-        result = svc.get_merge_url(alias="prod")
-        assert result["branch_id"] == 456
-
-        # After generating URL, active branch should be reset
-        project = store.get_project("prod")
-        assert project is not None
-        assert project.active_branch_id is None
-
-
 class TestListBranchesActiveBranches:
     """Tests for active_branches key in list_branches() response."""
 

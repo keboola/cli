@@ -400,6 +400,42 @@ class TestUnlink:
         assert "deleted" in result["message"]
         mock_client.delete_bucket.assert_called_once_with(bucket_id="in.c-shared-data", force=True)
 
+    def test_unlink_dry_run_reads_and_deletes_nothing(self, tmp_config_dir: Path) -> None:
+        mock_client = MagicMock()
+        mock_client.get_bucket_detail.return_value = {
+            "id": "in.c-shared-data",
+            "sourceBucket": {"id": "out.c-data", "project": {"id": 999}},
+        }
+
+        store = setup_single_project(tmp_config_dir)
+        service = SharingService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        result = service.unlink(alias="prod", bucket_id="in.c-shared-data", dry_run=True)
+
+        assert result["dry_run"] is True
+        assert result["source_bucket_id"] == "out.c-data"
+        assert "Would delete" in result["message"]
+        mock_client.get_bucket_detail.assert_called_once_with("in.c-shared-data")
+        mock_client.delete_bucket.assert_not_called()
+
+    def test_unlink_dry_run_rejects_non_linked_bucket(self, tmp_config_dir: Path) -> None:
+        """The preview checks the bucket like the real run does."""
+        mock_client = MagicMock()
+        mock_client.get_bucket_detail.return_value = {"id": "out.c-data", "sourceBucket": None}
+
+        store = setup_single_project(tmp_config_dir)
+        service = SharingService(
+            config_store=store,
+            client_factory=lambda url, token: mock_client,
+        )
+
+        with pytest.raises(KeboolaApiError, match="not a linked bucket"):
+            service.unlink(alias="prod", bucket_id="out.c-data", dry_run=True)
+        mock_client.delete_bucket.assert_not_called()
+
     def test_unlink_rejects_non_linked_bucket(self, tmp_config_dir: Path) -> None:
         """unlink raises error if bucket is not a linked bucket."""
         mock_client = MagicMock()

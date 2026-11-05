@@ -20,7 +20,7 @@ from keboola_agent_cli.constants import (
     KEBOOLA_DIR_NAME,
     MANIFEST_VERSION,
 )
-from keboola_agent_cli.errors import ConfigError
+from keboola_agent_cli.errors import ConfigError, KeboolaApiError
 from keboola_agent_cli.models import TokenVerifyResponse
 from keboola_agent_cli.services._sync_push_ops import push_update_row
 from keboola_agent_cli.services._sync_writeback import (
@@ -3194,6 +3194,7 @@ class TestFreshCreateWriteback:
             new_id="123456789",
             file_hash="abc123",
             cfg_hash="def456",
+            extra_hashes={"transform.sql": "sql789"},
         )
 
         entry = writeback.entry
@@ -3205,6 +3206,7 @@ class TestFreshCreateWriteback:
         assert entry.branch_id == 12345
         assert entry.metadata["pull_hash"] == "abc123"
         assert entry.metadata["pull_config_hash"] == "def456"
+        assert entry.metadata["pull_extra_hashes"] == {"transform.sql": "sql789"}
         assert entry.metadata["KBC.configuration.folderName"] == "FI Pipeline", (
             "user-declared KBC.* metadata must survive the writeback"
         )
@@ -3238,6 +3240,7 @@ class TestFreshCreateWriteback:
             new_id="dev-id-002",
             file_hash="h1",
             cfg_hash="h2",
+            extra_hashes={},
         )
 
         entry = writeback.entry
@@ -3269,6 +3272,7 @@ class TestFreshCreateWriteback:
             new_id="999",
             file_hash="h1",
             cfg_hash="h2",
+            extra_hashes={},
         )
 
         entry = writeback.entry
@@ -3276,7 +3280,11 @@ class TestFreshCreateWriteback:
         assert len(manifest.configurations) == 1
         assert manifest.configurations[0] is entry
         assert entry.id == "999"
-        assert entry.metadata == {"pull_hash": "h1", "pull_config_hash": "h2"}
+        assert entry.metadata == {
+            "pull_hash": "h1",
+            "pull_config_hash": "h2",
+            "pull_extra_hashes": {},
+        }
 
     def test_propagate_kbc_metadata_calls_set_config_metadata(self, tmp_config_dir: Path) -> None:
         """KBC.* keys are POSTed via client.set_config_metadata; bookkeeping
@@ -3706,7 +3714,8 @@ class TestFreshCreateVariableBinding:
                 for config in component["configurations"]:
                     if config["id"] == config_id:
                         return dict(config)
-            raise KeyError(config_id)
+            # Storage answers 404 for a config it does not have.
+            raise KeboolaApiError(f"Configuration {config_id} not found", status_code=404)
 
         def fake_row(
             component_id: str, config_id: str, row_id: str, branch_id: Any = None
@@ -4302,9 +4311,9 @@ class TestIssue649ProductionDiffAfterBranchPull:
             assert item["reason"] == "tracked_on_other_branch"
             assert item["component_id"] == "keboola.ex-http"
             assert item["path"]
-        # cfg-900 lives only on the dev branch -> the hint points at branch merge.
+        # cfg-900 lives only on the dev branch -> the hint points at a merge of its branch.
         assert by_id["cfg-900"]["exists_on_target"] is False
-        assert "branch merge" in by_id["cfg-900"]["hint"]
+        assert "kbagent merge-request" in by_id["cfg-900"]["hint"]
         assert by_id["cfg-001"]["exists_on_target"] is True
         assert "sync pull" in by_id["cfg-001"]["hint"]
 

@@ -23,7 +23,6 @@ from ..services.semantic_layer_service import SCHEMA_TYPE_ALIAS
 from ._helpers import (
     _confirm_or_abort,
     check_cli_permission,
-    deprecated_option,
     finish_items,
     get_formatter,
     get_service,
@@ -46,7 +45,7 @@ _COPY_SCOPE_HELP = (
     "Omitted: the target model's own scope, as with `add <kind>`."
 )
 _COPY_TARGET_PROJECT_HELP = (
-    "Project alias or ID that can see the new items (repeatable or comma-separated; "
+    "Project alias or ID that can see the new items (repeat for more projects; "
     "--scope targeted only)."
 )
 
@@ -148,7 +147,7 @@ def model_create(
         [],
         "--target-project",
         help=(
-            "Project alias or ID to grant visibility to (repeatable or comma-separated; "
+            "Project alias or ID to grant visibility to (repeat for more projects; "
             "--scope targeted only)."
         ),
     ),
@@ -316,7 +315,7 @@ def _print_import_result(console: Console, data: dict) -> None:
     for plural, per in (data.get("imported") or {}).items():
         for f in per.get("failed", []):
             console.print(
-                format_item_error(f"{plural}.{f.get('name')}", f.get("reason")), soft_wrap=True
+                format_item_error(f"{plural}.{f.get('name')}", f.get("message")), soft_wrap=True
             )
 
 
@@ -357,7 +356,7 @@ def _print_promote_result(console: Console, data: dict) -> None:
             console.print(f"  [yellow]~ {plural}.{key}[/yellow] ([dim]{keys}[/dim])")
         for f in per.get("failed", []):
             console.print(
-                format_item_error(f"{plural}.{f.get('name')}", f.get("reason")), soft_wrap=True
+                format_item_error(f"{plural}.{f.get('name')}", f.get("message")), soft_wrap=True
             )
 
 
@@ -401,7 +400,7 @@ def _print_build_result(console: Console, data: dict) -> None:
             f"\n[bold yellow]Type resolution: {len(type_errs)} table(s) unresolved[/bold yellow]"
         )
         for e in type_errs:
-            console.print(f"  [yellow]![/yellow] {e['table_id']} — {e['error']}")
+            console.print(f"  [yellow]![/yellow] {e['table_id']} — {e['message']}")
     if data.get("created"):
         console.print(f"\nCreated: {data['created']}")
     elif data.get("dry_run"):
@@ -485,8 +484,8 @@ def semantic_layer_build(
     ),
     tables: list[str] | None = typer.Option(
         None,
-        "--tables",
-        help="Table ID to base the model on (repeatable or comma-separated; required).",
+        "--table-id",
+        help="Table ID to base the model on (repeat for more tables; required).",
     ),
     name: str | None = typer.Option(
         None, "--name", "-n", help="Model name when creating (default: kbagent_build_model)."
@@ -539,14 +538,14 @@ def semantic_layer_build(
 
     if not tables:
         formatter.error(
-            message="--tables is required (table IDs, repeatable or comma-separated).",
+            message="--table-id is required (repeat it for more tables).",
             error_code=ErrorCode.MISSING_PARAMETER,
         )
         raise typer.Exit(code=2)
-    table_ids = split_multi(tables)
+    table_ids = split_multi(tables, label="--table-id")
     if not table_ids:
         formatter.error(
-            message="--tables contained no tableIds.",
+            message="--table-id contained no table IDs.",
             error_code=ErrorCode.VALIDATION_ERROR,
         )
         raise typer.Exit(code=2)
@@ -595,8 +594,9 @@ def semantic_layer_promote(
     ),
     types: list[str] | None = typer.Option(
         None,
-        "--types",
-        help="Item type to copy (repeatable or comma-separated): "
+        "--type",
+        "-t",
+        help="Item type to copy (repeat for more types): "
         "datasets, metrics, relationships, glossary, constraints",
     ),
     dry_run: bool = typer.Option(
@@ -618,7 +618,7 @@ def semantic_layer_promote(
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
-    type_list = split_multi(types) if types else None
+    type_list = split_multi(types, label="--type") if types else None
 
     if not dry_run:
         _confirm_or_abort(
@@ -680,8 +680,9 @@ def semantic_layer_import(
     ),
     types: list[str] | None = typer.Option(
         None,
-        "--types",
-        help="Item type to import (repeatable or comma-separated): "
+        "--type",
+        "-t",
+        help="Item type to import (repeat for more types): "
         "datasets, metrics, relationships, glossary, constraints",
     ),
     dry_run: bool = typer.Option(
@@ -690,7 +691,6 @@ def semantic_layer_import(
     overwrite: bool = typer.Option(
         False, "--overwrite", help="Update conflicting items in place (default: skip)"
     ),
-    yes: bool = deprecated_option("semantic-layer import --yes", "--yes", "-y"),
     scope: ScopeChoice | None = typer.Option(None, "--scope", help=_COPY_SCOPE_HELP),
     target_project: list[str] = typer.Option(
         [], "--target-project", help=_COPY_TARGET_PROJECT_HELP
@@ -699,9 +699,7 @@ def semantic_layer_import(
     """Replay a snapshot into a project. Default: skip on conflict (no surprise overwrites)."""
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
-    # The deprecated --yes has no effect; its callback adds the DEPRECATED warning (C3).
-    _ = yes
-    type_list = split_multi(types) if types else None
+    type_list = split_multi(types, label="--type") if types else None
     target_projects = resolve_scope_targets(
         ctx,
         operation="semantic-layer.import",
@@ -802,7 +800,7 @@ def semantic_layer_schema(
         "--type",
         "-t",
         help=(
-            "Semantic type (repeatable or comma-separated): "
+            "Semantic type (repeat for more types): "
             "model | dataset | metric | relationship | constraint | glossary."
         ),
     ),
@@ -814,7 +812,7 @@ def semantic_layer_schema(
 
     Schemas are fetched live from the project's metastore (never bundled),
     so they always match the deployed metastore version. Pass exactly one
-    of ``--type`` (repeatable or comma-separated) or ``--all``.
+    of ``--type`` (repeatable) or ``--all``.
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
@@ -830,7 +828,7 @@ def semantic_layer_schema(
     if all_types:
         type_list = list(SCHEMA_TYPE_ALIAS)
     else:
-        type_list = split_multi(types)
+        type_list = split_multi(types, label="--type")
         if not type_list:
             formatter.error(
                 message="--type contained no type names.",

@@ -153,11 +153,11 @@ def _find_config(project_root: Path, component_id: str) -> dict[str, Any]:
     raise AssertionError(f"no {component_id} _config.yml in the pulled tree")
 
 
-def _author_data_app(project_root: Path, *, with_type: bool) -> None:
+def _author_data_app(project_root: Path, *, with_type: bool, type_: str = "python-js") -> None:
     """Write an untracked data-app _config.yml so push sees it as CREATE."""
     keboola: dict[str, Any] = {"component_id": DATA_APP_COMPONENT}
     if with_type:
-        keboola["data_app_type"] = "python-js"
+        keboola["data_app_type"] = type_
     new_dir = _config_file(project_root).parent.parent / "new-data-app"
     new_dir.mkdir(parents=True)
     (new_dir / CONFIG_FILENAME).write_text(
@@ -397,6 +397,25 @@ def test_push_create_data_app_with_type_emits_no_default_warning(
 
     warnings = result.get("warnings", [])
     assert not [w for w in warnings if w["change_type"] == "data_app_type_default"]
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_push_refuses_a_data_app_type_v2_cannot_create(
+    tmp_config_dir: Path, tmp_path: Path, dry_run: bool
+) -> None:
+    """A tree pulled from an older app (`r`, `python`, ...) fails before POST /v2/apps."""
+    project_root = tmp_path / "project"
+    api = FakeApi(_sql_components(["SELECT 1;"]))
+    store = _init_and_pull(tmp_config_dir, project_root, api)
+    _author_data_app(project_root, with_type=True, type_="r")
+
+    ds = FakeDs(api)
+    result = _service(store, api, ds).push(alias="prod", project_root=project_root, dry_run=dry_run)
+
+    [error] = result["errors"]
+    assert error["error_code"] == ErrorCode.VALIDATION_ERROR
+    assert "data_app_type 'r'" in error["message"]
+    assert ds.create_app_calls == []
 
 
 DEV_BRANCH_ID = 999

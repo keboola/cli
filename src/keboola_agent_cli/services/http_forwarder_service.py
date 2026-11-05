@@ -2,7 +2,7 @@
 
 This is the *business* layer for ``kbagent http get|post|patch|delete``.
 The command (``commands/http_client.py``) is a thin Typer wrapper that
-parses CLI options (``--body`` through ``parse_json_arg``), calls
+parses CLI options (``--body`` / ``--body-file`` through ``structured_input``), calls
 ``HttpForwarderService.request()``, and formats the result. All HTTP
 transport, env-var resolution, and response decoding live here so the CLI stays a pure
 presentation layer (CONTRIBUTING.md §3-Layer architecture).
@@ -58,7 +58,7 @@ class ForwarderError(Exception):
     - ``1``  general API error (HTTP 4xx/5xx response from the serve): ``API_ERROR``
 
     A malformed ``--body`` never reaches the service: ``commands/http_client.py``
-    parses it with ``parse_json_arg`` and reports ``INVALID_ARGUMENT`` (exit 2).
+    parses it with ``structured_input`` and reports ``INVALID_ARGUMENT`` (exit 2).
     """
 
     error_code: ErrorCode

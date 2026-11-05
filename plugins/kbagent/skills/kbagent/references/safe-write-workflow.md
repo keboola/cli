@@ -139,7 +139,7 @@ once `.kbagent/` exists, you can run from any subdirectory of the repo.
 kbagent config detail ... > /tmp/config.json
 # ... 10 minutes of editing ...
 # meanwhile someone (or you) pushed v106
-kbagent config update --project prod --configuration @/tmp/config.json
+kbagent config update --project prod --configuration-file /tmp/config.json
 # Result: v107 is built from v105 + your edits, silently discarding v106.
 ```
 
@@ -147,7 +147,7 @@ kbagent config update --project prod --configuration @/tmp/config.json
 # GOOD: re-fetch immediately before each push
 kbagent config detail ... > /tmp/config.json   # fresh
 # ... edit ...
-kbagent config update --project prod --configuration @/tmp/config.json --merge --dry-run
+kbagent config update --project prod --configuration-file /tmp/config.json --merge --dry-run
 # preview, confirm, then push without --dry-run
 ```
 
@@ -266,3 +266,10 @@ to direct Snowflake paths or changing table prefixes.
 
 See `gotchas.md` "SQL editing: do NOT use global text replace on
 identifiers" for the full pattern, examples, and verification regexes.
+
+## Unattended deploy pipelines
+
+In CI there is no human for step 4. Replace it with checks the pipeline
+enforces: parse every `_config.yml`, review `sync push --dry-run`, and never
+pass `--force` without that review. See
+[gitops-cicd-workflow.md](gitops-cicd-workflow.md).

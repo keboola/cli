@@ -48,7 +48,7 @@ do.
 | `merge` | `merge` |
 | `conflicts` | `list_conflicts` |
 | `diff --component-id C --config-id I [--format short\|full] [--output PATH]` | `get_config_diff` |
-| `resolve --component-id C --config-id I (--take ours\|theirs\|delete \| --resolved JSON\|@file\|-) [--change-description TEXT]` | `resolve_conflict` |
+| `resolve --component-id C --config-id I (--take ours\|theirs\|delete \| --resolved JSON \| --resolved-file PATH) [--change-description TEXT]` | `resolve_conflict` |
 
 Every command above additionally accepts `--project A`, and every one except `list` and
 `create` accepts the target pair `[--merge-request-id N | --id N] [--branch B]` (see *Target
@@ -353,7 +353,7 @@ being `null` (above). The CLI tests pin a `theirs_deleted: true, changes: []` fi
 output contains the recommendation and **none** of the three section headings.
 
 `--output PATH` writes the ours-prefilled resolution candidate. Edit, then
-`resolve --resolved @file`: the git-mergetool loop with a file as the third pane.
+`resolve --resolved-file FILE` (since 1.0.0; 0.x: `--resolved @file`): the git-mergetool loop with a file as the third pane.
 
 **The candidate is composed by Layer 2, not Layer 1** (decided 2026-09-03; ships in the same PR
 as the commands). Rebase *replaces* the whole configuration, so after PR #703's blocking review
@@ -391,12 +391,12 @@ refuses a key that is present but `null` and a blank `name`; an ours envelope ca
 `"name": null` therefore composed into a candidate the guard then refused (#736 review, fixed
 2026-09-11). The predicate now mirrors the guard row for row: absent **or** `null` is a hole, a
 blank `name` is a hole. The CLI test suite pins the round trip end to end: the file `diff
---output` writes must pass `resolve --resolved @file` **unmodified**; the service suite pins the
+--output` writes must pass `resolve --resolved-file` **unmodified**; the service suite pins the
 `null` / blank-`name` suppression.
 
 A missing key is reported on two different exit paths depending on who is at fault, and the
 renderer must not collapse them: a hole in a `--take` side's envelope is a backend contract
-violation (`VALIDATION_ERROR`, exit 2 since vNEXT, exit 1 before, "author the resolution manually"); a hole in a
+violation (`VALIDATION_ERROR`, exit 2 since 1.0.0, exit 1 before, "author the resolution manually"); a hole in a
 `--resolved` body is the caller's (`ConfigError`, exit 5, naming the missing keys).
 
 **`resolve` has no `--all`.** Rebase *replaces*, so a bulk `--all --take theirs` is a bulk

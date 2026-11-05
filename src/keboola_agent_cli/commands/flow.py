@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 from typing import Any
 
 import typer
@@ -40,8 +41,8 @@ from ._helpers import (
     get_formatter,
     get_service,
     map_error_to_exit_code,
-    parse_json_arg,
     resolve_project_alias_or_none,
+    structured_input,
 )
 from ._project_ref import PROJECT_DEFAULT, PROJECT_HELP
 
@@ -56,9 +57,9 @@ flow_app = typer.Typer(help="Manage conditional flows (keboola.flow)")
 _FLOW_SCHEMA = """\
 # kbagent flow schema -- keboola.flow (Conditional Flow) configuration format
 #
-# Create with: kbagent flow new --project ALIAS --name "My Flow" --file @flow.yaml
-# Update with: kbagent flow update --project ALIAS --flow-id ID --file @flow.yaml
-# Validate offline: kbagent flow validate --file @flow.yaml
+# Create with: kbagent flow new --project ALIAS --name "My Flow" --definition-file flow.yaml
+# Update with: kbagent flow update --project ALIAS --flow-id ID --definition-file flow.yaml
+# Validate offline: kbagent flow validate --definition-file flow.yaml
 # Full JSON schema: kbagent flow schema --full
 # Real-world examples: kbagent flow examples
 #
@@ -485,7 +486,7 @@ def flow_examples(
 
     Examples are vendored from keboola-mcp-server. The default is
     keboola.flow (Conditional Flow); use them as blueprints for
-    ``kbagent flow new --file @flow.yaml``.
+    ``kbagent flow new --definition-file flow.yaml``.
 
     ``--component-id keboola.orchestrator`` serves the legacy orchestrator
     examples for reference only -- kbagent cannot create or edit orchestrator
@@ -529,10 +530,16 @@ def flow_examples(
 @flow_app.command("validate")
 def flow_validate(
     ctx: typer.Context,
-    file: str = typer.Option(
-        ...,
-        "--file",
-        help="YAML/JSON flow definition to validate (@file, -, or inline).",
+    definition: str | None = typer.Option(
+        None,
+        "--definition",
+        help="YAML/JSON flow definition to validate, inline.",
+    ),
+    definition_file: Path | None = typer.Option(
+        None,
+        "--definition-file",
+        help="Read the YAML/JSON flow definition from a file (- for stdin).",
+        allow_dash=True,
     ),
     project: str | None = typer.Option(
         None,
@@ -558,12 +565,18 @@ def flow_validate(
     formatter = get_formatter(ctx)
 
     try:
-        flow_def = _load_flow_yaml(file)
+        flow_def = _load_flow_yaml(definition, definition_file)
     except (OSError, yaml.YAMLError, ValueError) as exc:
         formatter.error(
             message=f"Cannot load flow definition: {exc}", error_code=ErrorCode.VALIDATION_ERROR
         )
         raise typer.Exit(code=2) from None
+    if flow_def is None:
+        formatter.error(
+            message="Pass the flow definition with --definition YAML or --definition-file PATH.",
+            error_code=ErrorCode.USAGE_ERROR,
+        )
+        raise typer.Exit(code=2)
 
     phases = flow_def.get("phases", [])
     tasks = flow_def.get("tasks", [])
@@ -619,9 +632,14 @@ def flow_validate(
 # ---------------------------------------------------------------------------
 
 
-def _load_flow_yaml(raw: str) -> dict[str, Any]:
-    """Load flow definition from inline YAML/JSON, @file, or - (stdin)."""
-    parsed = parse_json_arg(raw, label="--file", allow_yaml=True)
+def _load_flow_yaml(inline: str | None, file: Path | None) -> dict[str, Any] | None:
+    """The flow definition of ``--definition`` (inline YAML/JSON) or ``--definition-file``.
+
+    ``None`` when neither is given; ``-`` as the file is stdin (spec rule I1).
+    """
+    if not inline and file is None:
+        return None
+    parsed = structured_input(inline or None, file, label="--definition", allow_yaml=True)
     if parsed is None:
         return {}
     if not isinstance(parsed, dict):
@@ -637,11 +655,17 @@ def flow_new(
     project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     name: str = typer.Option(..., "--name", "-n", help="Flow name"),
     description: str = typer.Option("", "--description", help="Optional description"),
-    file: str | None = typer.Option(
+    definition: str | None = typer.Option(
         None,
-        "--file",
-        help="YAML/JSON flow definition (@file, -, or inline). "
+        "--definition",
+        help="YAML/JSON flow definition, inline. "
         "Run 'kbagent flow schema' to see the expected format.",
+    ),
+    definition_file: Path | None = typer.Option(
+        None,
+        "--definition-file",
+        help="Read the YAML/JSON flow definition from a file (- for stdin).",
+        allow_dash=True,
     ),
     branch: int | None = typer.Option(None, "--branch", help="Dev branch ID"),
 ) -> None:
@@ -650,10 +674,10 @@ def flow_new(
     \b
     Examples:
       # From a YAML file
-      kbagent flow new --project prod --name "Daily ETL" --file @flow.yaml
+      kbagent flow new --project prod --name "Daily ETL" --definition-file flow.yaml
 
       # Pipe from stdin
-      cat flow.yaml | kbagent flow new --project prod --name "Daily ETL" --file -
+      cat flow.yaml | kbagent flow new --project prod --name "Daily ETL" --definition-file -
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "flow_service")
@@ -661,14 +685,14 @@ def flow_new(
     phases: list[dict[str, Any]] = []
     tasks: list[dict[str, Any]] = []
 
-    if file:
-        try:
-            flow_def = _load_flow_yaml(file)
-        except (OSError, yaml.YAMLError, ValueError) as exc:
-            formatter.error(
-                message=f"Cannot load flow definition: {exc}", error_code=ErrorCode.VALIDATION_ERROR
-            )
-            raise typer.Exit(code=2) from None
+    try:
+        flow_def = _load_flow_yaml(definition, definition_file)
+    except (OSError, yaml.YAMLError, ValueError) as exc:
+        formatter.error(
+            message=f"Cannot load flow definition: {exc}", error_code=ErrorCode.VALIDATION_ERROR
+        )
+        raise typer.Exit(code=2) from None
+    if flow_def is not None:
         phases = flow_def.get("phases", [])
         tasks = flow_def.get("tasks", [])
 
@@ -712,10 +736,16 @@ def flow_update(
     flow_id: str = typer.Option(..., "--flow-id", help="Flow configuration ID"),
     name: str | None = typer.Option(None, "--name", "-n", help="New flow name"),
     description: str | None = typer.Option(None, "--description", help="New description"),
-    file: str | None = typer.Option(
+    definition: str | None = typer.Option(
         None,
-        "--file",
-        help="YAML/JSON flow definition to replace phases + tasks (@file, -, or inline)",
+        "--definition",
+        help="YAML/JSON flow definition to replace phases + tasks, inline",
+    ),
+    definition_file: Path | None = typer.Option(
+        None,
+        "--definition-file",
+        help="Read the YAML/JSON flow definition from a file (- for stdin).",
+        allow_dash=True,
     ),
     branch: int | None = typer.Option(None, "--branch", help="Dev branch ID"),
 ) -> None:
@@ -727,7 +757,7 @@ def flow_update(
       kbagent flow update --project prod --flow-id 123 --name "New Name"
 
       # Replace phases + tasks from file
-      kbagent flow update --project prod --flow-id 123 --file @flow.yaml
+      kbagent flow update --project prod --flow-id 123 --definition-file flow.yaml
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "flow_service")
@@ -735,20 +765,21 @@ def flow_update(
     phases: list[dict[str, Any]] | None = None
     tasks: list[dict[str, Any]] | None = None
 
-    if file:
-        try:
-            flow_def = _load_flow_yaml(file)
-        except (OSError, yaml.YAMLError, ValueError) as exc:
-            formatter.error(
-                message=f"Cannot load flow definition: {exc}", error_code=ErrorCode.VALIDATION_ERROR
-            )
-            raise typer.Exit(code=2) from None
+    try:
+        flow_def = _load_flow_yaml(definition, definition_file)
+    except (OSError, yaml.YAMLError, ValueError) as exc:
+        formatter.error(
+            message=f"Cannot load flow definition: {exc}", error_code=ErrorCode.VALIDATION_ERROR
+        )
+        raise typer.Exit(code=2) from None
+    if flow_def is not None:
         phases = flow_def.get("phases")
         tasks = flow_def.get("tasks")
 
     if name is None and description is None and phases is None and tasks is None:
         formatter.error(
-            message="At least one of --name, --description, or --file must be provided.",
+            message="At least one of --name, --description, --definition or --definition-file "
+            "must be provided.",
             error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2) from None

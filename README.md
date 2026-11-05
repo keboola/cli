@@ -35,10 +35,10 @@ Pick whichever fits the machine:
 ```powershell
 winget install --id astral-sh.uv -e            # skip if uv is already installed
 $ver = (Invoke-RestMethod "https://pypi.org/pypi/keboola-cli/json").info.version
-uv tool install --force `
+uv tool install --force --compile-bytecode `
   "keboola-cli[server] @ https://github.com/keboola/cli/releases/download/v$ver/keboola_cli-$ver-py3-none-any.whl"
-if ($LASTEXITCODE -ne 0 -and $ver) { uv tool install --force "keboola-cli[server]==$ver" }   # fallback: the same version from PyPI
-if ($LASTEXITCODE -ne 0) { uv tool install --force "keboola-cli[server]" }                    # last fallback: the newest stable version from PyPI
+if ($LASTEXITCODE -ne 0 -and $ver) { uv tool install --force --compile-bytecode "keboola-cli[server]==$ver" }   # fallback: the same version from PyPI
+if ($LASTEXITCODE -ne 0) { uv tool install --force --compile-bytecode "keboola-cli[server]" }                    # last fallback: the newest stable version from PyPI
 uv tool update-shell                            # puts %USERPROFILE%\.local\bin on PATH
 ```
 
@@ -81,7 +81,7 @@ curl -LsSf https://raw.githubusercontent.com/keboola/cli/main/install.sh | sh
 
 On Windows, run the PowerShell install from the Windows section above as the second step. Your configuration is not touched: the configuration folder keeps the name `keboola-agent-cli` on purpose.
 
-If `uv tool list` shows `keboola-cli` next to `keboola-agent-cli`, the update already worked. kbagent runs from `keboola-cli` and the old entry does no harm. Do not remove the old entry on its own: `uv tool uninstall keboola-agent-cli` also deletes the `kbagent` executable that `keboola-cli` uses, and the shell then reports `command not found`. To restore the executable, run `uv tool install --force --reinstall "keboola-cli[server] @ https://github.com/keboola/cli/releases/download/v<version>/keboola_cli-<version>-py3-none-any.whl"` with the newest version number from the [releases page](https://github.com/keboola/cli/releases).
+If `uv tool list` shows `keboola-cli` next to `keboola-agent-cli`, the update already worked. kbagent runs from `keboola-cli` and the old entry does no harm. Do not remove the old entry on its own: `uv tool uninstall keboola-agent-cli` also deletes the `kbagent` executable that `keboola-cli` uses, and the shell then reports `command not found`. To restore the executable, run `uv tool install --force --reinstall --compile-bytecode "keboola-cli[server] @ https://github.com/keboola/cli/releases/download/v<version>/keboola_cli-<version>-py3-none-any.whl"` with the newest version number from the [releases page](https://github.com/keboola/cli/releases).
 
 A failed startup update prints the last line of the uv output as `Cause:` (since 0.99.0), then the recovery command.
 
@@ -213,14 +213,14 @@ kbagent workspace query --project prod --workspace-id WS_ID \
 | **Configurations** | List, search, inspect, scaffold, update, delete configs. Full-text search across all config bodies (incl. rows). Row CRUD (`row-create / row-update / row-delete`) with `--merge`, `--set`, `--dry-run`, `--is-disabled / --is-enabled` (since 0.30.0). OAuth wizard URL minting with short-lived child tokens (`config oauth-url`, since 0.30.0). Variables management (`variables-set / -get / -clear`). Metadata CRUD + folder grouping. Output-bucket override (`set-default-bucket`). String-script auto-normalize for SQL transformations (closes the silent runtime crash from #245, since 0.28.0). |
 | **Jobs** | List, inspect, run with `--wait` polling (exponential curve), `--timeout` auto-kill, log tail on failure. Row-level execution for multi-row configs. Bulk terminate by ID list or filter (`job terminate --status processing` -- since 0.20.2). |
 | **Flows** | Create, update, delete **conditional flows** (`keboola.flow`) with schema-backed validation (`next[].goto` transitions + conditions; typed `job`/`notification`/`variable` tasks; string ids). Offline `flow validate` and `flow schema --full`. Attach cron schedules (timezone + enabled/disabled state). `keboola.orchestrator` is not supported (dropped in 0.57.0). |
-| **Storage** | Buckets, tables, files -- full CRUD. Upload CSV (auto-creates bucket+table). Download by file ID or by tag. Descriptions on buckets/tables/columns (batch-applicable from YAML). Native column types (`VARCHAR(40)`, `NUMBER(18,2)`, `TIMESTAMP_TZ`, `VARIANT`, ...) with per-column `--not-null` and `--default` flags; dev branches auto-materialize target buckets on first write. **`storage swap-tables`** -- atomically swap a typed rebuild back into the original table name in a dev branch without touching downstream config references (since 0.28.0; closes the typify migration footgun). Streamed downloads cap memory at ~1 MiB regardless of table size. Parquet export via `unload-table --file-type parquet`. BigQuery dialect-aware paths in `bucket-detail`. |
+| **Storage** | Buckets, tables, files -- full CRUD. Upload CSV (auto-creates bucket+table). Download by file ID or by tag. Descriptions on buckets/tables/columns (batch-applicable from YAML). Native column types (`VARCHAR(40)`, `NUMBER(18,2)`, `TIMESTAMP_TZ`, `VARIANT`, ...) with per-column `--not-null-column` and `--default` flags; dev branches auto-materialize target buckets on first write. **`storage swap-tables`** -- atomically swap a typed rebuild back into the original table name in a dev branch without touching downstream config references (since 0.28.0; closes the typify migration footgun). Streamed downloads cap memory at ~1 MiB regardless of table size. Parquet export via `unload-table --file-type parquet`. BigQuery dialect-aware paths in `bucket-detail`. |
 | **Dev branches** | Create a branch, activate it, and every command auto-targets it. Configs, storage writes, sync -- everything follows. Storage reads default to production (safer). |
 | **Sync & GitOps** | Pull configs as YAML, edit in IDE, push back. SQL/Python extracted as real files. Diff and status tracking. Adopt existing kbc Go CLI checkouts (`sync init --adopt-existing`). |
 | **Agent Tasks** | Schedule AI agents inside `kbagent serve` (CRON / manual / chained). Two action flavours per task: `claude` / `codex` / `gemini` with a prompt, or a raw kbagent CLI command. Per-run cost & token timeline with authoritative Claude 4.x pricing built-in; persisted JSONL history (`0600`); live SSE replay; **Artifacts tab** auto-renders long-form markdown reports (GFM tables, Copy / Download `.md`). Subprocesses get `KBAGENT_SERVE_URL` + `KBAGENT_SERVE_TOKEN` auto-injected for self-calls via `kbagent http`. (since 0.40.0) |
 | **Workspaces** | Create Snowflake/BQ workspace, load tables, run SQL. Create from transformation config for instant debugging. Orphan detection + garbage collection. |
 | **Sharing** | Cross-project bucket sharing with org/project/user access control. Share, link, unlink. |
-| **Data apps** | First-class lifecycle for Python/JS apps (`keboola.data-apps`; `python-js` is the default type, Streamlit via `--type streamlit`). `create / deploy / start / stop / password / delete` (since 0.27.0); `secrets-set / -list / -get / -remove` for `#`-prefixed runtime secrets with per-project KMS encryption (since 0.29.0); `validate-repo` pre-flight Golden Rule check that catches misconfigured git repos before a deploy (since 0.29.0); `logs` tails the container log buffer for triaging stuck deploys / runtime crashes (since 0.43.8). Hides the redeploy contract and per-project KMS encryption of git PATs. |
-| **Project members & invitations** | `project invite` (single or `--from-csv` bulk with parallel workers), `project member-list / member-remove / member-set-role`, `project invitation-list / invitation-cancel`. Role whitelist enforced at the CLI layer; Manage API "already invited" treated as `noop` not error (since 0.29.0). |
+| **Data apps** | First-class lifecycle for Python/JS apps (`keboola.data-apps`; `python-js` is the default type, Streamlit via `--type streamlit`). `create / deploy / start / stop / password / delete` (since 0.27.0); `secrets-set / -list / -get / -remove` for `#`-prefixed runtime secrets with per-project KMS encryption (since 0.29.0); `validate-repo` pre-flight Golden Rule check that catches misconfigured git repos before a deploy (since 0.29.0); `create --git-auth organization` clones a private GitHub repo through the organization's GitHub App connection with no PAT stored, and `git-auth-set` switches an existing app to it; `logs` tails the container log buffer for triaging stuck deploys / runtime crashes (since 0.43.8). Hides the redeploy contract and per-project KMS encryption of git PATs. |
+| **Project members & invitations** | `project invite` (single or `--file` bulk with parallel workers), `project member-list / member-remove / member-set-role`, `project invitation-list / invitation-cancel`. Role whitelist enforced at the CLI layer; Manage API "already invited" treated as `noop` not error (since 0.29.0). |
 | **Lineage** | Column-level dependency analysis across projects. SQL/Python parsing, AI-enhanced detection, interactive web browser, Mermaid/HTML/ER export. |
 | **Semantic layer** | Define and manage a metastore semantic model per project — datasets, metrics, relationships, constraints, glossary. Validate (incl. `--deep`), export, diff two models/files, import/promote across projects, AI-assisted `build` from tables. `kbagent semantic-layer ...` (alias `sl`). |
 | **Kai (AI Assistant)** | Ask Keboola's built-in AI questions about your project. One-shot or chat sessions with full MCP context. |
@@ -245,11 +245,11 @@ printf '%s' "$KBC_TOKEN" | kbagent project add --alias prod --url https://connec
 **Many projects by ID** — you have a Manage API or Personal Access Token + the project IDs:
 ```bash
 # Interactive: kbagent will prompt for the Manage API token (default since v0.28.0).
-kbagent org setup --project-ids 901,9621,10539 --url https://connection.keboola.com --yes
+kbagent org setup --project-id 901 --project-id 9621 --url https://connection.keboola.com --yes
 
 # CI / non-interactive: opt in to env-var resolution with --allow-env-manage-token.
 KBC_MANAGE_API_TOKEN=your-manage-or-personal-token \
-  kbagent --allow-env-manage-token org setup --project-ids 901,9621,10539 --url https://connection.keboola.com --yes
+  kbagent --allow-env-manage-token org setup --project-id 901 --project-id 9621 --url https://connection.keboola.com --yes
 ```
 
 **Whole organization** — you are org admin:

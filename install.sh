@@ -231,6 +231,8 @@ info "${DIM}Resolving the latest ${PKG} version...${RESET}"
 version=$(resolve_version)
 
 # --- install --------------------------------------------------------------
+# --compile-bytecode: a wheel holds .py files only. Without it, Python compiles
+# them on the first run of kbagent, which then takes about a second longer.
 installed=0
 if [ -n "$version" ]; then
   wheel_url="https://github.com/${REPO}/releases/download/v${version}/${DIST}-${version}-py3-none-any.whl"
@@ -238,7 +240,7 @@ if [ -n "$version" ]; then
   # minutes after the release is created).
   if curl -fsSL -I "$wheel_url" >/dev/null 2>&1; then
     if run_step "Installing kbagent v${version} (prebuilt wheel)" \
-      uv tool install --force "${spec} @ ${wheel_url}"; then
+      uv tool install --force --compile-bytecode "${spec} @ ${wheel_url}"; then
       installed=1
     else
       info "${DIM}Prebuilt wheel install failed; installing from PyPI.${RESET}"
@@ -248,21 +250,21 @@ if [ -n "$version" ]; then
   fi
   if [ "$installed" -ne 1 ]; then
     if run_step "Installing kbagent v${version} from PyPI" \
-      uv tool install --force "${spec}==${version}"; then
+      uv tool install --force --compile-bytecode "${spec}==${version}"; then
       installed=1
     fi
   fi
   # Last resort: the source build of the resolved tag, never the default branch.
   if [ "$installed" -ne 1 ]; then
     if run_step "Building kbagent v${version} from source (this can take a few minutes on WSL)" \
-      uv tool install --force "${spec} @ git+https://github.com/${REPO}@v${version}"; then
+      uv tool install --force --compile-bytecode "${spec} @ git+https://github.com/${REPO}@v${version}"; then
       installed=1
     fi
   fi
 else
   info "${DIM}Could not resolve the latest version; installing the newest stable version from PyPI.${RESET}"
   if run_step "Installing kbagent from PyPI" \
-    uv tool install --force "${spec}"; then
+    uv tool install --force --compile-bytecode "${spec}"; then
     installed=1
   fi
 fi
@@ -276,19 +278,33 @@ if [ "$installed" -ne 1 ]; then
 fi
 
 # --- summary + next steps -------------------------------------------------
-ver_str=$(kbagent --version 2>/dev/null || echo "kbagent installed")
-bin_path=$(command -v kbagent 2>/dev/null || echo "~/.local/bin/kbagent")
+# Report the executable this run installed. `kbagent` on PATH can be another
+# install (another channel, or UV_TOOL_BIN_DIR pointing elsewhere).
+bin_dir=$(uv tool dir --bin 2>/dev/null || true)
+bin_dir=${bin_dir%/}
+[ -n "$bin_dir" ] || bin_dir="$HOME/.local/bin"
+bin_path="$bin_dir/kbagent"
+path_bin=$(command -v kbagent 2>/dev/null || true)
+# uv could not name its bin directory: show what PATH finds instead.
+if [ ! -x "$bin_path" ] && [ -n "$path_bin" ]; then bin_path=$path_bin; fi
+ver_str=$("$bin_path" --version 2>/dev/null || echo "kbagent installed")
 
 info ""
 printf '  %s%s%s %s%s%s  %s  %s\n' "$GREEN" "$CHECK" "$RESET" "$BOLD" "$ver_str" "$RESET" "$ARROW" "$bin_path" >&2
 printf '  %sno sudo required%s\n' "$DIM" "$RESET" >&2
+if [ -n "$path_bin" ] && ! [ "$path_bin" -ef "$bin_path" ]; then
+  path_ver=$("$path_bin" --version 2>/dev/null || echo "kbagent")
+  info ""
+  info "  ${BOLD}warning:${RESET} ${path_ver} at ${path_bin} comes first on PATH,"
+  info "  so 'kbagent' runs that one. Remove it, or put ${bin_dir} before it on PATH."
+fi
 info ""
 printf '  %sNext steps%s\n' "$BOLD" "$RESET" >&2
 printf '    %sIn Claude Code:%s %s/kbagent:setup%s   %s# connect + verify in one command%s\n' "$DIM" "$RESET" "$BOLD" "$RESET" "$DIM" "$RESET" >&2
 printf '    %s(needs the plugin:%s %skbagent doctor%s %sprints the exact /plugin commands)%s\n' "$DIM" "$RESET" "$BOLD" "$RESET" "$DIM" "$RESET" >&2
 info ""
 printf '  %sOr do it by hand%s\n' "$BOLD" "$RESET" >&2
-printf '    %skbagent project add%s --project myproject \\\n' "$BOLD" "$RESET" >&2
+printf '    %skbagent project add%s --alias myproject \\\n' "$BOLD" "$RESET" >&2
 printf '        --url https://connection.keboola.com --token-stdin   %s# connect a project%s\n' "$DIM" "$RESET" >&2
 printf '    %skbagent --help%s     %s# see everything you can do%s\n' "$BOLD" "$RESET" "$DIM" "$RESET" >&2
 printf '    %skbagent doctor%s     %s# verify your setup%s\n' "$BOLD" "$RESET" "$DIM" "$RESET" >&2

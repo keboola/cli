@@ -189,11 +189,11 @@ def recorded_targets() -> list[BranchTarget]:
     return record.targets() if record is not None else []
 
 
-# The sources of `resolve_implicit_alias` ("pin" is the saved active project).
+# The sources of `resolve_implicit_alias`.
 _PROJECT_SOURCES: dict[str, ProjectSource] = {
     "explicit": "explicit",
     "env": "env",
-    "pin": "active_project",
+    "active_project": "active_project",
     "sole": "sole",
     "all": "all",
 }
@@ -202,8 +202,7 @@ _PROJECT_SOURCES: dict[str, ProjectSource] = {
 def record_project(alias: str, source: str, project: "ProjectConfig") -> None:
     """Record where the registered project ``alias`` came from (spec T6); the first source wins.
 
-    ``source`` is a :data:`ProjectSource` or ``"pin"``, the name that
-    ``resolve_implicit_alias`` and ``project current`` keep for the active project.
+    ``source`` is a :data:`ProjectSource`.
     """
     record = _open_record()
     if record is not None:

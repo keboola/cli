@@ -252,7 +252,7 @@ class TestTruncateTableService:
         assert result["truncated"][0]["table_id"] == "in.c-foo.data"
         assert len(result["failed"]) == 1
         assert result["failed"][0]["id"] == "in.c-foo.missing"
-        assert "not found" in result["failed"][0]["error"].lower()
+        assert "not found" in result["failed"][0]["message"].lower()
         # truncate_table must NOT have been called for the missing table.
         mock_client.truncate_table.assert_called_once()
 
@@ -535,7 +535,7 @@ class TestTruncateTableCLI:
             svc = MockSvc.return_value
             svc.truncate_tables.return_value = {
                 "truncated": [],
-                "failed": [{"id": "in.c-foo.missing", "error": "Table not found"}],
+                "failed": [{"id": "in.c-foo.missing", "message": "Table not found"}],
                 "dry_run": False,
                 "project_alias": "test",
             }

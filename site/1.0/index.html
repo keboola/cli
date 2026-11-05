@@ -452,7 +452,7 @@ footer {
   <header class="masthead">
     <div class="eyebrow">kbagent · 1.0 compared with 0.100</div>
     <h1>kbagent 1.0 at a glance</h1>
-    <p class="lede">kbagent 1.0 makes all commands follow the same rules. <strong>No command and no long option is removed. Two options get a new name, and the old names keep working for now.</strong> Some defaults, exit codes and messages change. The main changes come first, then the gaps that 0.x already closed, then the full list.</p>
+    <p class="lede">kbagent 1.0 makes all commands follow the same rules. <strong>One command is removed and one is renamed. The old forms that 0.x kept for compatibility are removed too. Each removed form is an error that names the new form.</strong> Some defaults, exit codes and messages change. The main changes come first, then the gaps that 0.x already closed, then the full list.</p>
   </header>
 
   <section id="main" aria-labelledby="main-h">
@@ -490,7 +490,7 @@ footer {
           <div class="before"><dt>0.x</dt><dd>A single-value option given twice used the last value with no message: <code>--project x ... --project test</code> acted on <code>test</code>. <code>--text @notes.md</code> saved the file name, not the file.</dd></div>
           <div class="after"><dt>1.0</dt><dd>Both are errors, and the message says what to fix. On read commands, an option given twice only adds a warning.</dd></div>
         </dl>
-        <p class="todo"><b>What to do:</b> give a single-value option once. Use <code>--file</code> for text from a file.</p>
+        <p class="todo"><b>What to do:</b> give a single-value option once. Use <code>--description-file</code> or another <code>--X-file</code> option for text from a file.</p>
       </article>
 
       <article class="card wide">
@@ -499,12 +499,12 @@ footer {
           <div class="before"><dt>0.x</dt><dd>A short flag worked on some commands and not on others, and seven short flags meant different options in different commands. For example, <code>-d</code> was <code>--directory</code>, <code>--body</code>, <code>--deny</code> or <code>--description</code>.</dd></div>
           <div class="after"><dt>1.0</dt><dd>Each short flag means one option, and every command with that option accepts it:
             <div class="tiles four">
-              <div class="tile t-flag"><b>24 → 228</b><span><code>-p</code> for <code>--project</code></span></div>
+              <div class="tile t-flag"><b>24 → 225</b><span><code>-p</code> for <code>--project</code></span></div>
               <div class="tile t-flag"><b>2 → 40</b><span><code>-n</code> for <code>--name</code>, as in the Azure CLI</span></div>
               <div class="tile t-flag"><b>1 → 20</b><span><code>-t</code> for <code>--type</code></span></div>
               <div class="tile t-flag"><b>0 → 14</b><span><code>-L</code> for <code>--limit</code>, as in the GitHub CLI</span></div>
             </div>
-            <p class="source">Commands that accept the short flag, before and after. Removed, because they meant a different option in some commands: <code>-c</code> and <code>-r</code> everywhere, and <code>-d</code>, <code>-f</code>, <code>-l</code>, <code>-m</code>, <code>-n</code> and <code>-v</code> where they did not mean <code>--directory</code>, <code>--feature</code>, <code>--load</code>, <code>--message</code>, <code>--name</code> and <code>--verbose</code>.</p>
+            <p class="source">Commands that accept the short flag, before and after. Removed, because they meant a different option in some commands: <code>-c</code>, <code>-r</code> and <code>-l</code> everywhere, and <code>-d</code>, <code>-f</code>, <code>-m</code>, <code>-n</code> and <code>-v</code> where they did not mean <code>--directory</code>, <code>--feature</code>, <code>--message</code>, <code>--name</code> and <code>--verbose</code>.</p>
           </dd></div>
         </dl>
         <p class="todo"><b>What to do:</b> replace a removed short flag with the long option name. Long names work on 0.x and on 1.0.</p>
@@ -552,8 +552,8 @@ footer {
     </div>
 
     <ul class="same" aria-label="What stays the same">
-      <li>No command removed or renamed, no long option removed</li>
-      <li>No JSON field removed or renamed</li>
+      <li>One command renamed: <code>semantic-layer scope request-delete</code> becomes <code>request-cancel</code>. One removed: <code>branch merge</code></li>
+      <li>No key of the JSON envelope removed or renamed</li>
       <li>No new exit codes (still 0 to 7 and 130)</li>
       <li>Python SDK unchanged</li>
     </ul>
@@ -621,7 +621,7 @@ footer {
       <div class="stop">
         <span class="when">The next 28 days</span>
         <h3>Installs that update themselves stay on 0.x</h3>
-        <p>kbagent 0.100 and later shows a notice with the move date. <code>kbagent update --major</code> moves to 1.0 at once.</p>
+        <p>kbagent 0.100 and later shows a notice with the move date. <code>kbagent update --major</code> moves to 1.0 at once. kbagent 0.100.5 accepts the 1.0 names, so you can change scripts before the move.</p>
       </div>
       <div class="stop">
         <span class="when">Day 28</span>
@@ -683,19 +683,19 @@ footer {
         </div>
       </details>
       <details class="item" id="list-options" data-group="high" data-who="scripts agents">
-        <summary><span class="title">Nine list options accept repeated values</span><span class="area">Options and input</span><span class="who-cell hide-narrow">Scripts and CI, AI agents</span></summary>
+        <summary><span class="title">List options take one value each time you give them</span><span class="area">Options and input</span><span class="who-cell hide-narrow">Scripts and CI, AI agents</span></summary>
         <div class="body">
-          <div class="before"><span class="tag">0.x</span><code>sharing share --target-project-ids 11 --target-project-ids 22</code> shared with 22 only.</div>
-          <div class="after"><span class="tag">1.0</span>Both values count. A comma list such as <code>11,22</code> still works.</div>
-          <p class="do"><b>What to do:</b> check scripts that repeat one of these options. They now send all values.</p>
+          <div class="before"><span class="tag">0.x</span>Nine list options took one comma list. <code>sharing share --target-project-ids 11 --target-project-ids 22</code> shared with 22 only.</div>
+          <div class="after"><span class="tag">1.0</span>Repeat the option once per value: <code>--target-project 11 --target-project 22</code>. A comma in an ID or a fixed value is an error. The options have singular names (see below).</div>
+          <p class="do"><b>What to do:</b> repeat the option instead of a comma list. Check scripts that repeat one of these options. They now send all values.</p>
         </div>
       </details>
       <details class="item" id="at-file" data-group="high" data-who="scripts agents terminal">
         <summary><span class="title"><code>@file</code> in a text option is refused</span><span class="area">Options and input</span><span class="who-cell hide-narrow">Scripts and CI, AI agents, terminal users</span></summary>
         <div class="body">
           <div class="before"><span class="tag">0.x</span><code>--text @notes.md</code> saved the text "@notes.md" in place of the file content.</div>
-          <div class="after"><span class="tag">1.0</span>An error that names <code>--file</code> or <code>--sql-file</code>.</div>
-          <p class="do"><b>What to do:</b> use <code>--file</code> or <code>--sql-file</code> for text from a file.</p>
+          <div class="after"><span class="tag">1.0</span>An error that names <code>--description-file</code>, <code>--value-file</code> or <code>--sql-file</code>.</div>
+          <p class="do"><b>What to do:</b> use <code>--description-file</code>, <code>--value-file</code> or <code>--sql-file</code> for text from a file.</p>
         </div>
       </details>
       <details class="item" id="no-pipe-answer" data-group="high" data-who="scripts agents">
@@ -722,6 +722,14 @@ footer {
           <p class="do"><b>What to do:</b> in scripts, add <code>--yes</code> or use <code>--json</code>.</p>
         </div>
       </details>
+      <details class="item" id="unlink-asks" data-group="high" data-who="scripts agents serve">
+        <summary><span class="title"><code>sharing unlink</code> asks first</span><span class="area">Confirmations</span><span class="who-cell hide-narrow">Scripts and CI, AI agents, kbagent serve clients</span></summary>
+        <div class="body">
+          <div class="before"><span class="tag">0.x</span><span class="risk">It deleted the linked bucket at once, with no question and no <code>--dry-run</code>. <code>--deny-destructive</code> did not block it.</span></div>
+          <div class="after"><span class="tag">1.0</span>It asks in a terminal, and takes <code>--yes</code> and <code>--dry-run</code>. Without a terminal it stops with <code>CONFIRMATION_REQUIRED</code> unless you give <code>--yes</code> or <code>--json</code>. <code>--deny-destructive</code> blocks it, also over REST, where the route takes <code>dry_run</code>.</div>
+          <p class="do"><b>What to do:</b> in scripts, add <code>--yes</code>. It works on 0.100.5 too.</p>
+        </div>
+      </details>
       <details class="item" id="flow-schema-project" data-group="high" data-who="scripts agents">
         <summary><span class="title"><code>flow schema --full</code> and <code>flow validate</code> use your active project</span><span class="area">Project and branch</span><span class="who-cell hide-narrow">Scripts and CI, AI agents</span></summary>
         <div class="body">
@@ -743,6 +751,46 @@ footer {
         <div class="body">
           <div class="after only"><span class="tag">1.0</span>After kbagent updates itself from 0.x, the first command that changes data stops once with <code>UPDATED_ACROSS_MAJOR</code> and a link to the migration guide. Run it again and it works. A move with <code>kbagent update --major</code> does not stop anything.</div>
           <p class="do"><b>What to do:</b> check the command against this page, then run it again.</p>
+        </div>
+      </details>
+      <details class="item" id="data-app-stop" data-group="high" data-who="scripts agents serve">
+        <summary><span class="title"><code>data-app stop</code> suspends the app</span><span class="area">Data apps</span><span class="who-cell hide-narrow">Scripts and CI, AI agents, kbagent serve clients</span></summary>
+        <div class="body">
+          <div class="before"><span class="tag">0.x</span><code>stop</code> stopped the app, and <code>stop --wait</code> waited until it was stopped.</div>
+          <div class="after"><span class="tag">1.0</span>The app is suspended, and the next request to its URL wakes it. <code>stop --wait</code> and <code>--timeout</code> do nothing. <code>start</code> and <code>stop</code> fail on an app that no deployment serves, and the message names <code>data-app deploy</code>.</div>
+          <p class="do"><b>What to do:</b> do not expect a stopped app to stay stopped. Run <code>data-app deploy</code> once for an app that <code>start</code> or <code>stop</code> refuses.</p>
+        </div>
+      </details>
+      <details class="item" id="data-app-output" data-group="high" data-who="scripts agents serve">
+        <summary><span class="title"><code>data-app</code> output follows the <code>/v2</code> API</span><span class="area">Data apps</span><span class="who-cell hide-narrow">Scripts and CI, AI agents, kbagent serve clients</span></summary>
+        <div class="body">
+          <div class="before"><span class="tag">0.x</span>The output had <code>desired_state</code> and <code>last_start_timestamp</code>, and <code>create</code> had <code>managed_git_repo_id</code>. <code>--type</code> accepted 7 types.</div>
+          <div class="after"><span class="tag">1.0</span>These keys are removed. <code>state</code> is <code>notDeployed</code>, <code>starting</code>, <code>running</code>, <code>suspended</code> or <code>disabled</code>. <code>detail</code>, <code>create</code> and <code>deploy</code> add <code>deployment_id</code>. <code>--type</code> accepts only <code>python-js</code> and <code>streamlit</code>, also for a data app that <code>sync push</code> creates.</div>
+          <p class="do"><b>What to do:</b> read <code>state</code> and <code>deployment_id</code>.</p>
+        </div>
+      </details>
+      <details class="item" id="sync-refused-delete" data-group="high" data-who="scripts agents">
+        <summary><span class="title"><code>sync push --force</code> keeps a config that changed in Keboola</span><span class="area">Sync</span><span class="who-cell hide-narrow">Scripts and CI, AI agents</span></summary>
+        <div class="body">
+          <div class="before"><span class="tag">0.x</span><span class="risk">A config or row deleted locally was deleted in Keboola, also when someone had changed it there since the last pull.</span></div>
+          <div class="after"><span class="tag">1.0</span>Such a delete is a conflict that <code>--force</code> never overrides. Push lists it in <code>refused_deletions</code>.</div>
+          <p class="do"><b>What to do:</b> run <code>sync pull</code>, then delete again.</p>
+        </div>
+      </details>
+      <details class="item" id="sync-moved-dir" data-group="high" data-who="scripts agents">
+        <summary><span class="title">A moved config directory keeps its config</span><span class="area">Sync</span><span class="who-cell hide-narrow">Scripts and CI, AI agents</span></summary>
+        <div class="body">
+          <div class="before"><span class="tag">0.x</span><span class="risk">A directory moved with <code>mv</code> or <code>git mv</code> was a new config: push created a copy, and <code>push --force</code> deleted the original.</span></div>
+          <div class="after"><span class="tag">1.0</span>The directory keeps its config id. Two directories with one id, or swapped directories, are a conflict: nothing is created, changed or deleted for them, also with <code>--force</code> or <code>--theirs</code>.</div>
+          <p class="do"><b>What to do:</b> give each config id one directory, or use <code>config rename --directory</code>.</p>
+        </div>
+      </details>
+      <details class="item" id="sync-invalid-file" data-group="high" data-who="scripts agents">
+        <summary><span class="title">A broken <code>_config.yml</code> is an error, not a delete</span><span class="area">Sync</span><span class="who-cell hide-narrow">Scripts and CI, AI agents</span></summary>
+        <div class="body">
+          <div class="before"><span class="tag">0.x</span><span class="risk">A <code>_config.yml</code> that was not valid YAML read as missing, so <code>sync push --force</code> deleted the config in Keboola.</span> An unknown top-level key was dropped without a message.</div>
+          <div class="after"><span class="tag">1.0</span><code>sync diff</code> and <code>sync push</code> report <code>SYNC_LOCAL_FILE_INVALID</code> in <code>errors[]</code> and end with exit code 1. They do not change that config or its rows, also with <code>--force</code>.</div>
+          <p class="do"><b>What to do:</b> fix the file that the error names. Put extra configuration keys under <code>_configuration_extra</code>.</p>
         </div>
       </details>
 
@@ -811,6 +859,22 @@ footer {
           <p class="do"><b>What to do:</b> use <code>error.code</code>, not only the status.</p>
         </div>
       </details>
+      <details class="item" id="companion-unreadable" data-group="errors" data-who="scripts agents">
+        <summary><span class="title"><code>sync push</code> refuses packages it cannot read</span><span class="area">Sync</span><span class="who-cell hide-narrow">Scripts and CI, AI agents</span></summary>
+        <div class="body">
+          <div class="before"><span class="tag">0.x</span>A <code>pyproject.toml</code> without a usable dependency list could clear the packages of a config in Keboola.</div>
+          <div class="after"><span class="tag">1.0</span>Push keeps the inline or the remote packages. A new config with neither is refused with <code>COMPANION_UNREADABLE</code> and exit code 1.</div>
+          <p class="do"><b>What to do:</b> fix <code>pyproject.toml</code>, or add <code>packages</code> inline.</p>
+        </div>
+      </details>
+      <details class="item" id="env-branch-create" data-group="errors" data-who="scripts serve">
+        <summary><span class="title"><code>branch create</code> on <code>__env__</code> ends with exit code 0</span><span class="area">Project and branch</span><span class="who-cell hide-narrow">Scripts and CI, kbagent serve clients</span></summary>
+        <div class="body">
+          <div class="before"><span class="tag">0.x</span>It created the branch, then ended with exit code 5, so a retry created a second branch.</div>
+          <div class="after"><span class="tag">1.0</span>Exit code 0, <code>activated: false</code> and the warning <code>ACTIVE_BRANCH_NOT_STORED</code>. <code>branch reset</code> does nothing, and <code>branch use</code> is refused before any API call.</div>
+          <p class="do"><b>What to do:</b> give <code>--branch</code> on the later commands.</p>
+        </div>
+      </details>
 
       <div class="group" data-group="text"><span class="gname">Changes the text output</span><span class="gdesc">Only for scripts that read the text output. With <code>--json</code>, nothing changes.</span></div>
       <details class="item" id="error-lines" data-group="text" data-who="scripts terminal">
@@ -846,12 +910,12 @@ footer {
         </div>
       </details>
 
-      <div class="group" data-group="deprecated"><span class="gname">Old forms that still work for now</span><span class="gdesc">They work with a warning for at least 56 days after the release. A later release can remove them.</span></div>
+      <div class="group" data-group="deprecated"><span class="gname">Old forms that are removed</span><span class="gdesc">1.0 removes them. Each one is an error that names the new form.</span></div>
       <details class="item" id="force-to-yes" data-group="deprecated" data-who="scripts terminal">
         <summary><span class="title"><code>stream delete --force</code> becomes <code>--yes</code></span><span class="area">Confirmations</span><span class="who-cell hide-narrow">Scripts and CI, terminal users</span></summary>
         <div class="body">
           <div class="before"><span class="tag">0.x</span><code>--force</code> skipped the confirmation. <code>semantic-layer import --yes</code> did nothing.</div>
-          <div class="after"><span class="tag">1.0</span>Use <code>stream delete --yes</code>, and run <code>semantic-layer import</code> without <code>--yes</code>.</div>
+          <div class="after"><span class="tag">1.0</span>Use <code>stream delete --yes</code>, and run <code>semantic-layer import</code> without <code>--yes</code>. The old flags are a usage error (exit code 2).</div>
           <p class="do"><b>What to do:</b> change the flags.</p>
         </div>
       </details>
@@ -859,7 +923,7 @@ footer {
         <summary><span class="title">Partial updates use <code>PATCH</code></span><span class="area">kbagent serve</span><span class="who-cell hide-narrow">kbagent serve clients</span></summary>
         <div class="body">
           <div class="before"><span class="tag">0.x</span>4 routes changed part of an item with <code>PUT</code>.</div>
-          <div class="after"><span class="tag">1.0</span><code>PATCH</code>. <code>PUT</code> works with a warning.</div>
+          <div class="after"><span class="tag">1.0</span><code>PATCH</code>. <code>PUT</code> answers HTTP 405, and the message names <code>PATCH</code>. <code>PUT</code> of the configuration variables with <code>replace: true</code> still replaces all variables.</div>
           <p class="do"><b>What to do:</b> switch these requests to <code>PATCH</code>.</p>
         </div>
       </details>
@@ -868,16 +932,89 @@ footer {
         <summary><span class="title"><code>project add --project</code> becomes <code>--alias</code></span><span class="area">Options and input</span><span class="who-cell hide-narrow">Scripts and CI, AI agents, terminal users</span></summary>
         <div class="body">
           <div class="before"><span class="tag">0.x</span><code>project add</code> and <code>project create</code> took the name of the new project as <code>--project</code>, which names an existing project everywhere else.</div>
-          <div class="after"><span class="tag">1.0</span><code>--alias</code>. <code>--project</code> works with a warning.</div>
-          <p class="do"><b>What to do:</b> use <code>--alias</code> once you run 1.0.</p>
+          <div class="after"><span class="tag">1.0</span><code>--alias</code>. <code>--project</code> and <code>-p</code> are a usage error that names <code>--alias</code>.</div>
+          <p class="do"><b>What to do:</b> use <code>--alias</code>. It works on 0.100.3 and later too.</p>
         </div>
       </details>
       <details class="item" id="all-projects-refresh" data-group="deprecated" data-who="scripts serve">
         <summary><span class="title"><code>project refresh --all</code> becomes <code>--all-projects</code></span><span class="area">Options and input</span><span class="who-cell hide-narrow">Scripts and CI, kbagent serve clients</span></summary>
         <div class="body">
           <div class="before"><span class="tag">0.x</span><code>project refresh --all</code>, and <code>refresh_all</code> in <code>POST /org/refresh</code>.</div>
-          <div class="after"><span class="tag">1.0</span><code>--all-projects</code> and <code>all_projects</code>, as everywhere else. The old names work with a warning.</div>
-          <p class="do"><b>What to do:</b> change the option once you run 1.0.</p>
+          <div class="after"><span class="tag">1.0</span><code>--all-projects</code> and <code>all_projects</code>, as everywhere else. <code>--all</code> is a usage error, and <code>refresh_all</code> answers HTTP 422. Both messages name the new name.</div>
+          <p class="do"><b>What to do:</b> use <code>--all-projects</code>. It works on 0.100.3 and later too.</p>
+        </div>
+      </details>
+      <details class="item" id="branch-merge-removed" data-group="deprecated" data-who="scripts agents serve">
+        <summary><span class="title"><code>branch merge</code> is removed</span><span class="area">Project and branch</span><span class="who-cell hide-narrow">Scripts and CI, AI agents, kbagent serve clients</span></summary>
+        <div class="body">
+          <div class="before"><span class="tag">0.x</span><code>branch merge</code> printed the merge URL of the Keboola UI and reset the active branch. Over REST: <code>GET /branches/{project}/merge-url</code>.</div>
+          <div class="after"><span class="tag">1.0</span>The command and the route are removed. The error names <code>kbagent merge-request</code>.</div>
+          <p class="do"><b>What to do:</b> merge a dev branch with <code>kbagent merge-request</code>, or in the Keboola UI.</p>
+        </div>
+      </details>
+      <details class="item" id="id-option-removed" data-group="deprecated" data-who="scripts agents">
+        <summary><span class="title"><code>--id</code> becomes <code>--merge-request-id</code> and <code>--task-id</code></span><span class="area">Options and input</span><span class="who-cell hide-narrow">Scripts and CI, AI agents</span></summary>
+        <div class="body">
+          <div class="before"><span class="tag">0.x</span>The 10 <code>merge-request</code> commands and the 7 <code>agent</code> commands took <code>--id</code>.</div>
+          <div class="after"><span class="tag">1.0</span><code>--merge-request-id</code> and <code>--task-id</code>. <code>--id</code> is a usage error that names the new option.</div>
+          <p class="do"><b>What to do:</b> change the option. The new names work on 0.x too.</p>
+        </div>
+      </details>
+
+      <details class="item" id="reference-data-id" data-group="deprecated" data-who="scripts agents">
+        <summary><span class="title"><code>reference-data --id</code> becomes <code>--reference-data-id</code></span><span class="area">Options and input</span><span class="who-cell hide-narrow">Scripts and CI, AI agents</span></summary>
+        <div class="body">
+          <div class="before"><span class="tag">0.x</span><code>semantic-layer reference-data get</code> and <code>delete</code> took the record as <code>--id</code>.</div>
+          <div class="after"><span class="tag">1.0</span><code>--reference-data-id</code>. <code>--id</code> is a usage error that names the new option. The REST routes do not change.</div>
+          <p class="do"><b>What to do:</b> change the option. It works on 0.100.5 too.</p>
+        </div>
+      </details>
+      <details class="item" id="agent-positional" data-group="deprecated" data-who="scripts agents">
+        <summary><span class="title"><code>agent</code> commands take <code>--task-id</code> and <code>--run-id</code> only</span><span class="area">Options and input</span><span class="who-cell hide-narrow">Scripts and CI, AI agents</span></summary>
+        <div class="body">
+          <div class="before"><span class="tag">0.x</span>A task or a run could be a positional argument: <code>agent show TASK_ID</code>.</div>
+          <div class="after"><span class="tag">1.0</span><code>--task-id</code> and <code>--run-id</code>. A positional ID is a usage error that names the option.</div>
+          <p class="do"><b>What to do:</b> use the options. They work on 0.x too.</p>
+        </div>
+      </details>
+      <details class="item" id="stream-positional" data-group="deprecated" data-who="scripts agents">
+        <summary><span class="title"><code>stream detail</code> and <code>stream delete</code> take <code>--source-id</code></span><span class="area">Options and input</span><span class="who-cell hide-narrow">Scripts and CI, AI agents</span></summary>
+        <div class="body">
+          <div class="before"><span class="tag">0.x</span>The source was a positional argument: <code>stream delete SOURCE_ID</code>.</div>
+          <div class="after"><span class="tag">1.0</span><code>--source-id</code>. A positional ID is a usage error that names the option. <code>stream detail --name</code> also matches a source id.</div>
+          <p class="do"><b>What to do:</b> use <code>--source-id</code>. It works on 0.100.5 too.</p>
+        </div>
+      </details>
+      <details class="item" id="list-names" data-group="deprecated" data-who="scripts agents">
+        <summary><span class="title">List options have singular names</span><span class="area">Options and input</span><span class="who-cell hide-narrow">Scripts and CI, AI agents</span></summary>
+        <div class="body">
+          <div class="before"><span class="tag">0.x</span>Plural names: <code>org setup --project-ids</code>, <code>sharing share --target-project-ids</code> and <code>--target-users</code>, the <code>semantic-layer</code> options <code>--metrics</code>, <code>--new-metrics</code>, <code>--tables</code> and <code>--types</code>, <code>workspace load --tables</code> and <code>--columns</code>.</div>
+          <div class="after"><span class="tag">1.0</span><code>--project-id</code>, <code>--target-project</code>, <code>--target-user</code>, <code>--metric</code>, <code>--new-metric</code>, <code>--table-id</code>, <code>--type</code> and <code>--column</code>, given once per value. An old name is a usage error that names the new one.</div>
+          <p class="do"><b>What to do:</b> use the new names. They work on 0.100.5 too.</p>
+        </div>
+      </details>
+      <details class="item" id="file-input" data-group="deprecated" data-who="scripts agents terminal">
+        <summary><span class="title">A file is read with <code>--file</code> or <code>--X-file</code>, not <code>@file</code></span><span class="area">Options and input</span><span class="who-cell hide-narrow">Scripts and CI, AI agents, terminal users</span></summary>
+        <div class="body">
+          <div class="before"><span class="tag">0.x</span><code>--configuration @cfg.json</code> read the file, and <code>--stdin</code> read the input. Each command named its file option in another way, for example <code>lineage --load</code>, <code>--text</code> and <code>--file</code>, <code>--from-file</code> or <code>--input</code>.</div>
+          <div class="after"><span class="tag">1.0</span>The main input file is <code>--file</code>. A value is <code>--X</code> inline or <code>--X-file PATH</code>, for example <code>--configuration-file cfg.json</code> or <code>--description-file notes.md</code>. <code>-</code> as the path reads the input. <code>@file</code>, <code>--stdin</code>, <code>-l</code> and the old option names are errors that name the new form.</div>
+          <p class="do"><b>What to do:</b> use the <code>--X-file</code> options and the new names. They work on 0.100.5 too, except inline JSON in <code>dev-portal --data</code>.</p>
+        </div>
+      </details>
+      <details class="item" id="not-null-column" data-group="deprecated" data-who="scripts agents">
+        <summary><span class="title"><code>create-table --not-null</code> becomes <code>--not-null-column</code></span><span class="area">Options and input</span><span class="who-cell hide-narrow">Scripts and CI, AI agents</span></summary>
+        <div class="body">
+          <div class="before"><span class="tag">0.x</span><code>storage create-table --not-null COL</code>.</div>
+          <div class="after"><span class="tag">1.0</span><code>--not-null-column COL</code>, once per column. <code>--not-null</code> is a usage error that names the new option. <code>add-column --not-null</code> does not change.</div>
+          <p class="do"><b>What to do:</b> change the option. It works on 0.100.5 too.</p>
+        </div>
+      </details>
+      <details class="item" id="request-cancel" data-group="deprecated" data-who="scripts agents">
+        <summary><span class="title"><code>scope request-delete</code> becomes <code>request-cancel</code></span><span class="area">Options and input</span><span class="who-cell hide-narrow">Scripts and CI, AI agents</span></summary>
+        <div class="body">
+          <div class="before"><span class="tag">0.x</span><code>semantic-layer scope request-delete</code> cancelled a pending request. Its permission key was <code>semantic-layer.scope.request-delete</code>.</div>
+          <div class="after"><span class="tag">1.0</span><code>semantic-layer scope request-cancel</code>, with the permission key <code>semantic-layer.scope.request-cancel</code>. The old name is a usage error that names the new one. A saved policy with the old key matches nothing.</div>
+          <p class="do"><b>What to do:</b> use <code>request-cancel</code>, and change the key in saved policies. Both work on 0.100.5 too.</p>
         </div>
       </details>
 
@@ -915,7 +1052,7 @@ footer {
       <details class="item" id="json-fields" data-group="new" data-who="scripts agents">
         <summary><span class="title">New fields in the JSON output</span><span class="area">JSON output</span><span class="who-cell hide-narrow">Scripts and CI, AI agents</span></summary>
         <div class="body">
-          <div class="after only"><span class="tag">1.0 adds</span><code>exit_code</code>, <code>schema_version</code>, where the project came from (<code>project_source</code>), a warning when a destructive or admin command uses a project or branch saved with <code>project use</code> or <code>branch use</code>, and the error code of each failed item. Nothing is removed or renamed.</div>
+          <div class="after only"><span class="tag">1.0 adds</span><code>exit_code</code>, <code>schema_version</code>, where the project came from (<code>project_source</code>), a warning when a destructive or admin command uses a project or branch saved with <code>project use</code> or <code>branch use</code>, and the error code of each failed item. A failed item has its error text in <code>message</code>, no longer in <code>error</code> or <code>reason</code>. A few other keys that 0.x kept only for compatibility are removed, and <code>project current</code> reports <code>source: "active_project"</code> instead of <code>"pin"</code>. The migration page lists them (rows 41 to 46).</div>
         </div>
       </details>
       <details class="item" id="serve-headers" data-group="new" data-who="serve">

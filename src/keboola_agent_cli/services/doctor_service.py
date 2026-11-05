@@ -24,9 +24,6 @@ from ..constants import ENV_CONVERSATION_ID
 from ..errors import KeboolaApiError
 from ..models import AppConfig
 from ..permissions import (
-    INERT_PATTERN_HINT,
-    INERT_PATTERN_PREFIX,
-    INERT_SINCE_VERSION,
     UNMATCHED_PATTERN_HINT,
     find_inert_patterns,
 )
@@ -291,11 +288,6 @@ class DoctorService:
         that gate existed can still carry dead rules of either kind. WARN rather
         than FAIL -- the policy is still enforced, it is just narrower than its
         author intended. Read-only: config.json only, no API call.
-
-        ``details["inert_since"]`` is included ONLY when at least one offending
-        pattern starts with ``tool:`` -- that key names the version the MCP
-        passthrough (and with it the ``tool:`` namespace) was removed, which is
-        meaningless context for an unrelated typo like ``stroage.upload-table``.
         """
         policy = config.permissions if config is not None else None
         if policy is None:
@@ -315,37 +307,15 @@ class DoctorService:
                 "message": "No inert patterns in the persisted permission policy.",
             }
 
-        has_tool_prefix = any(p.startswith(INERT_PATTERN_PREFIX) for p in inert)
-        has_other = any(not p.startswith(INERT_PATTERN_PREFIX) for p in inert)
-
-        since_clause = (
-            f" have been inert since v{INERT_SINCE_VERSION} (the 'tool:' namespace was "
-            "removed with the MCP passthrough) and"
-            if has_tool_prefix
-            else ""
-        )
-        hints = [
-            hint
-            for hint, present in (
-                (INERT_PATTERN_HINT, has_tool_prefix),
-                (UNMATCHED_PATTERN_HINT, has_other),
-            )
-            if present
-        ]
-
-        details: dict[str, Any] = {"mode": policy.mode, "patterns": inert}
-        if has_tool_prefix:
-            details["inert_since"] = INERT_SINCE_VERSION
-
         return {
             "check": "inert_permission_patterns",
             "name": "Inert permission patterns",
             "status": "warn",
             "message": (
-                f"{len(inert)} pattern(s) in the persisted permission policy{since_clause} "
-                f"match no known operation: {', '.join(inert)}. {' '.join(hints)}"
+                f"{len(inert)} pattern(s) in the persisted permission policy match no known "
+                f"operation: {', '.join(inert)}. {UNMATCHED_PATTERN_HINT}"
             ),
-            "details": details,
+            "details": {"mode": policy.mode, "patterns": inert},
         }
 
     def _check_config_source(self) -> dict[str, Any]:

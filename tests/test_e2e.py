@@ -1376,9 +1376,9 @@ class TestFullE2E:
             table_id,
             "--output",
             str(limited_path),
-            "--columns",
+            "--column",
             "id",
-            "--columns",
+            "--column",
             "name",
             "--limit",
             "2",
@@ -2727,7 +2727,7 @@ class TestFullE2E:
             self.alias,
             "--workspace-id",
             str(workspace_id),
-            "--tables",
+            "--table-id",
             table_id,
         )
         assert data["status"] == "ok"
@@ -3349,23 +3349,6 @@ class TestFullE2E:
         status = data["data"][0]
         assert status["active_branch_id"] is None
 
-        # Try branch merge
-        merge_result = self._run(
-            "branch",
-            "merge",
-            "--project",
-            self.alias,
-            "--branch",
-            str(branch_id),
-        )
-        # branch merge returns a URL for UI-based merge; it doesn't
-        # auto-merge via API. We verify the command succeeds, then delete.
-        if merge_result.exit_code == 0:
-            merge_data = json.loads(merge_result.output)
-            assert merge_data["status"] == "ok"
-            # The response contains a URL to the branch overview
-            assert "url" in merge_data["data"] or "message" in merge_data["data"]
-
         # Clean up: delete the branch
         self._run_ok(
             "branch",
@@ -3964,14 +3947,14 @@ class TestFullE2E:
         # Pre-condition: first-added is already the default. Verify via current.
         data = self._run_ok("project", "current")
         assert data["data"]["alias"] == self.alias
-        assert data["data"]["source"] == "pin"
+        assert data["data"]["source"] == "active_project"
 
         # Explicit `project use` is a no-op in value but confirms it persists.
         data = self._run_ok("project", "use", self.alias)
         assert data["data"]["alias"] == self.alias
-        # source is always "pin" on use (the field describes where the new
+        # source is always "active_project" on use (the field describes where the new
         # pin ended up, not how it arrived).
-        assert data["data"]["source"] == "pin"
+        assert data["data"]["source"] == "active_project"
 
         # `project use nonexistent` fails with exit 5 (CONFIG_ERROR).
         result = self._run("project", "use", "does-not-exist-alias")
@@ -3989,7 +3972,7 @@ class TestFullE2E:
 
         # After unsetting, pin is restored as the effective alias.
         data = self._run_ok("project", "current")
-        assert data["data"]["source"] == "pin"
+        assert data["data"]["source"] == "active_project"
         assert data["data"]["alias"] == self.alias
 
         # --- --deny-writes blocks writes, allows reads --------------------
@@ -4161,7 +4144,7 @@ class TestFullE2E:
             "describe-batch",
             "--project",
             self.alias,
-            "--from-file",
+            "--file",
             str(batch_file),
         )
         assert data["data"]["project_alias"] == self.alias
@@ -4457,7 +4440,7 @@ class TestFullE2E:
                 "inequality",
                 "--rule",
                 "value >= 0",
-                "--metrics",
+                "--metric",
                 f"{tag}_m_rev",
                 "--severity",
                 "warning",
@@ -4657,7 +4640,7 @@ class TestFullE2E:
                 "build",
                 "--project",
                 self.alias,
-                "--tables",
+                "--table-id",
                 f"in.c-{RUN_ID.replace('-', '_')}.{RUN_ID.replace('-', '_')}",
                 "--dry-run",
             )
@@ -6899,7 +6882,7 @@ class TestPinAndFirewallE2E:
         assert current.exit_code == 0
         data = _json_ok(current)
         assert data["data"]["alias"] == self.alias_a
-        assert data["data"]["source"] == "pin"
+        assert data["data"]["source"] == "active_project"
 
         # `project use` switches the pin; persistence survives next invocation.
         use_result = self._run("project", "use", self.alias_b)
@@ -6909,7 +6892,7 @@ class TestPinAndFirewallE2E:
 
         after = _json_ok(self._run("project", "current"))
         assert after["data"]["alias"] == self.alias_b
-        assert after["data"]["source"] == "pin"
+        assert after["data"]["source"] == "active_project"
 
         # Unknown alias -> exit 5.
         bad = self._run("project", "use", "does-not-exist")
@@ -7851,9 +7834,7 @@ class TestE2EPR8ConfigMetadata:
             folder_name,
         )
         assert data["data"]["folder"] == folder_name
-        # Frozen key of the metadata-era result shape.
-        assert data["data"]["key"] == "KBC.configuration.folderName"
-        assert data["data"]["value"] == folder_name
+        assert data["data"]["configuration"]["folder"] == folder_name
 
         _step(2, "config detail -- folder field is set")
         data = self._run_ok(
@@ -7882,7 +7863,7 @@ class TestE2EPR8ConfigMetadata:
             "",
         )
         assert data["data"]["folder"] == ""
-        assert data["data"]["result"]["folder"] is None
+        assert data["data"]["configuration"]["folder"] is None
 
     def test_get_metadata_missing_key_exits_1(self) -> None:
         """get-metadata for a non-existent key returns exit code 1."""
@@ -8250,7 +8231,7 @@ class TestE2EAgentTasks:
         yield
         for task_id in self.created_ids:
             with contextlib.suppress(Exception):
-                _invoke(self.config_dir, ["agent", "delete", task_id, "--yes"])
+                _invoke(self.config_dir, ["agent", "delete", "--task-id", task_id, "--yes"])
 
     def _run(self, *args: str) -> Any:
         return _invoke(self.config_dir, ["--json", *args])
@@ -8292,28 +8273,28 @@ class TestE2EAgentTasks:
         assert task_id in [t["id"] for t in listed["data"]["tasks"]]
 
         _step(3, "agent show -- round-trip the task")
-        shown = self._run_ok("agent", "show", task_id)
+        shown = self._run_ok("agent", "show", "--task-id", task_id)
         assert shown["data"]["name"] == f"{RUN_ID}-task"
 
         _step(4, "agent update -- disable + flip to manual")
-        updated = self._run_ok("agent", "update", task_id, "--disabled", "--manual")
+        updated = self._run_ok("agent", "update", "--task-id", task_id, "--disabled", "--manual")
         assert updated["data"]["enabled"] is False
         assert updated["data"]["manual"] is True
         assert updated["data"]["next_run_at"] is None
 
         _step(5, "agent run -- executes the cli_command action")
-        run = self._run_ok("agent", "run", task_id)
+        run = self._run_ok("agent", "run", "--task-id", task_id)
         assert run["data"]["status"] == "ok"
 
         _step(6, "agent runs -- history now has one entry")
-        runs = self._run_ok("agent", "runs", task_id)
+        runs = self._run_ok("agent", "runs", "--task-id", task_id)
         assert len(runs["data"]["runs"]) == 1
 
         _step(7, "agent delete -- task removed")
-        self._run_ok("agent", "delete", task_id, "--yes")
+        self._run_ok("agent", "delete", "--task-id", task_id, "--yes")
         self.created_ids.remove(task_id)
         # show on deleted task returns NOT_FOUND
-        gone = self._run("agent", "show", task_id)
+        gone = self._run("agent", "show", "--task-id", task_id)
         assert gone.exit_code == 1
 
     def test_agent_test_command(self) -> None:
@@ -8781,7 +8762,7 @@ class TestE2EStorageNativeTypesAndBranchMaterialize:
       flow through to the Storage API with ``definition.length`` intact and
       Snowflake produces the correct native types (``VARCHAR(40)``,
       ``NUMBER(18,2)``, ``TIMESTAMP_TZ(9)``).
-    - ``--not-null`` and ``--default`` flags map to ``nullable=false`` and
+    - ``--not-null-column`` and ``--default`` flags map to ``nullable=false`` and
       ``default=...`` on the column definition.
     - Creating a table in a dev branch against an unmaterialized bucket
       auto-creates the bucket first (response includes
@@ -8876,9 +8857,9 @@ class TestE2EStorageNativeTypesAndBranchMaterialize:
             "meta:VARIANT",
             "--primary-key",
             "pk",
-            "--not-null",
+            "--not-null-column",
             "pk",
-            "--not-null",
+            "--not-null-column",
             "amount",
             "--default",
             "amount=0",
@@ -9440,6 +9421,9 @@ ENV_DATA_APP_GIT_REPO_PUBLIC = "E2E_DATA_APP_GIT_REPO_PUBLIC"
 ENV_DATA_APP_GIT_REPO_PRIVATE = "E2E_DATA_APP_GIT_REPO_PRIVATE"
 ENV_DATA_APP_GIT_USER = "E2E_DATA_APP_GIT_USER"
 ENV_DATA_APP_GIT_PAT = "E2E_DATA_APP_GIT_PAT"
+# A private GitHub repo the E2E project's organization reaches through its
+# GitHub App connection (`--git-auth organization`).
+ENV_DATA_APP_ORG_REPO = "E2E_DATA_APP_ORG_REPO"
 ENV_MANAGE_TOKEN = "E2E_MANAGE_TOKEN"
 
 skip_without_data_app_public = pytest.mark.skipif(
@@ -9457,6 +9441,10 @@ skip_without_data_app_private = pytest.mark.skipif(
         f"requires {ENV_TOKEN} + {ENV_DATA_APP_GIT_REPO_PRIVATE} + "
         f"{ENV_DATA_APP_GIT_USER} + {ENV_DATA_APP_GIT_PAT}"
     ),
+)
+skip_without_data_app_org_repo = pytest.mark.skipif(
+    not (HAS_CREDENTIALS and os.environ.get(ENV_DATA_APP_ORG_REPO)),
+    reason=f"requires {ENV_TOKEN} + {ENV_DATA_APP_ORG_REPO}",
 )
 
 
@@ -9734,6 +9722,133 @@ class TestE2EDataAppLifecycle:
         )["data"]
         assert body["workspace"] is True
         assert body["requests"]["put_storage_config"]["runtime"]["workspace"] == {"enabled": True}
+
+    def _git_block_of(self, config_id: str) -> dict[str, Any]:
+        cfg = _json_ok(
+            _invoke(
+                self.config_dir,
+                [
+                    "--json",
+                    "config",
+                    "detail",
+                    "--project",
+                    self.alias,
+                    "--component-id",
+                    "keboola.data-apps",
+                    "--config-id",
+                    config_id,
+                ],
+            )
+        )["data"]
+        record = cfg[0] if isinstance(cfg, list) else cfg
+        return record["configuration"]["parameters"]["dataApp"]["git"]
+
+    def _create_args(self, name: str, slug: str, repo: str) -> list[str]:
+        return [
+            "--json",
+            "data-app",
+            "create",
+            "--project",
+            self.alias,
+            "--name",
+            f"{name} {RUN_ID}",
+            "--slug",
+            f"{slug}-{RUN_ID}"[:60],
+            "--git-repo",
+            repo,
+        ]
+
+    def test_data_app_org_auth_dry_run(self) -> None:
+        """``--git-auth organization`` renders a credential-free git block."""
+        _step(1, "Dry-run create with --git-auth organization")
+        repo = "https://github.com/keboola/does-not-matter-for-dry-run"
+        args = self._create_args("E2E OrgAuth", "e2e-org-dry", repo)
+        body = _json_ok(
+            _invoke(self.config_dir, [*args, "--git-auth", "organization", "--dry-run"])
+        )
+        git = body["data"]["requests"]["put_storage_config"]["parameters"]["dataApp"]["git"]
+        assert git == {
+            "repository": repo,
+            "branch": "main",
+            "authType": "organization",
+            "private": True,
+        }
+
+        _step(2, "A credential beside it is refused before any API call")
+        result = _invoke(
+            self.config_dir,
+            [*args, "--git-auth", "organization", "--git-username", "bob", "--dry-run"],
+        )
+        assert result.exit_code == 2, result.output
+
+    @skip_without_data_app_private
+    def test_data_app_git_auth_set_switches_the_config(self) -> None:
+        """git-auth-set removes a stored PAT (no deploy: the stack may lack the App)."""
+        _step(1, "Create a private-repo PAT app without deploying")
+        repo = os.environ[ENV_DATA_APP_GIT_REPO_PRIVATE]
+        args = self._create_args("E2E GitAuthSet", "e2e-gas", repo)
+        created = _json_ok(
+            _invoke(
+                self.config_dir,
+                [
+                    *args,
+                    "--git-username",
+                    os.environ[ENV_DATA_APP_GIT_USER],
+                    # The PAT goes in through the env var, never argv.
+                    "--git-pat-env",
+                    ENV_DATA_APP_GIT_PAT,
+                    "--auth",
+                    "public",
+                    "--no-deploy",
+                ],
+            )
+        )["data"]
+        self._created_app_ids.append(created["app_id"])
+        stored = self._git_block_of(created["config_id"])
+        assert {"username", "#password"} <= set(stored), stored.keys()
+
+        _step(2, "Switch it to organization auth")
+        switch_args = [
+            "--json",
+            "data-app",
+            "git-auth-set",
+            "--project",
+            self.alias,
+            "--app-id",
+            created["app_id"],
+            "--git-auth",
+            "organization",
+        ]
+        switched = _json_ok(_invoke(self.config_dir, switch_args))["data"]
+        assert switched["status"] == "switched"
+        assert switched["git_auth_before"] == "pat"
+        assert switched["removed_credentials"] == ["username", "#password"]
+        git = self._git_block_of(created["config_id"])
+        assert git["authType"] == "organization"
+        assert git["private"] is True
+        assert not {"username", "#password", "#sshKey"} & set(git)
+
+        _step(3, "A second run changes nothing")
+        again = _json_ok(_invoke(self.config_dir, switch_args))["data"]
+        assert again["status"] == "unchanged"
+
+    @skip_without_data_app_org_repo
+    def test_data_app_org_auth_deploys(self) -> None:
+        """A private repo deploys through the organization's GitHub App connection."""
+        _step(1, "Create + deploy with --git-auth organization")
+        repo = os.environ[ENV_DATA_APP_ORG_REPO]
+        args = self._create_args("E2E OrgAuth", "e2e-org", repo)
+        created = _json_ok(
+            _invoke(
+                self.config_dir,
+                [*args, "--git-auth", "organization", "--auth", "public", "--wait"],
+            )
+        )["data"]
+        self._created_app_ids.append(created["app_id"])
+        assert created["state"] == "running", created
+        git = self._git_block_of(created["config_id"])
+        assert git["authType"] == "organization"
+        assert not {"username", "#password", "#sshKey"} & set(git)
 
     @skip_without_data_app_public
     def test_data_app_git_repo_introspection(self) -> None:
@@ -10843,7 +10958,7 @@ def test_stream_otlp_e2e(tmp_path: Path) -> None:
         assert set(cdata["destination"]["tables"]) == {"logs", "metrics", "traces"}
 
         # 3. Detail masks the secret by default.
-        masked = _run("stream", "detail", source_id, "--project", alias)
+        masked = _run("stream", "detail", "--source-id", source_id, "--project", alias)
         assert masked.exit_code == 0, masked.output
         mdata = json.loads(masked.output)["data"]
         assert mdata["secret_revealed"] is False
@@ -10853,7 +10968,9 @@ def test_stream_otlp_e2e(tmp_path: Path) -> None:
         assert set(mdata["destination"]["tables"]) == {"logs", "metrics", "traces"}
 
         # 4. --reveal exposes the real endpoint (no mask marker).
-        revealed = _run("stream", "detail", source_id, "--project", alias, "--reveal")
+        revealed = _run(
+            "stream", "detail", "--source-id", source_id, "--project", alias, "--reveal"
+        )
         assert revealed.exit_code == 0, revealed.output
         rdata = json.loads(revealed.output)["data"]
         assert rdata["secret_revealed"] is True
@@ -10867,7 +10984,7 @@ def test_stream_otlp_e2e(tmp_path: Path) -> None:
         # TIMEOUT (exit 4) even though the delete keeps running server-side.
         # Treat that as "delete in progress" and confirm eventual removal via
         # the list below, so a slow-but-successful teardown does not red the run.
-        deleted = _run("stream", "delete", source_name, "--project", alias, "--yes")
+        deleted = _run("stream", "delete", "--source-id", source_name, "--project", alias, "--yes")
         if deleted.exit_code == 0:
             assert json.loads(deleted.output)["data"]["status"] == "deleted"
         else:
@@ -11532,7 +11649,7 @@ class TestE2ESemanticLayerLifecycle:
             assert data["data"]["scope"] == "project"
             data = self._run_ok("semantic-layer", "scope", "request-create", *scope_args)
             assert data["data"]["scope_elevation_requested_at"]
-            data = self._run_ok("semantic-layer", "scope", "request-delete", *scope_args)
+            data = self._run_ok("semantic-layer", "scope", "request-cancel", *scope_args)
             assert not data["data"]["scope_elevation_requested_at"]
             data = self._run_ok(
                 "semantic-layer",
@@ -11646,7 +11763,7 @@ class TestE2ESemanticLayerLifecycle:
                 "inequality",
                 "--rule",
                 "value >= 0",
-                "--metrics",
+                "--metric",
                 f"{tag}_m_rev",
                 "--severity",
                 "warning",
@@ -11888,7 +12005,7 @@ class TestE2ESemanticLayerLifecycle:
                     "build",
                     "--project",
                     self.alias,
-                    "--tables",
+                    "--table-id",
                     table_id,
                     "--dry-run",
                 )
@@ -12204,14 +12321,14 @@ class TestE2ESemanticLayerLifecycle:
             )["data"]
             assert dimension in {r["dimension_name"] for r in listed["reference_data"]}
 
-            _step(4, "reference-data get --id (members intact)")
+            _step(4, "reference-data get --reference-data-id (members intact)")
             got = self._run_ok(
                 "semantic-layer",
                 "reference-data",
                 "get",
                 "--project",
                 self.alias,
-                "--id",
+                "--reference-data-id",
                 record_id,
             )["data"]
             assert {m["account_code"] for m in got["members"]} == {"4011", "ISR99999"}
@@ -12244,7 +12361,7 @@ class TestE2ESemanticLayerLifecycle:
                 "delete",
                 "--project",
                 self.alias,
-                "--id",
+                "--reference-data-id",
                 record_id,
                 "--yes",
             )["data"]
@@ -12399,7 +12516,7 @@ class TestE2ESemanticLayerLifecycle:
                 "inequality",
                 "--rule",
                 "value >= 0",
-                "--metrics",
+                "--metric",
                 shared_metric,
                 "--severity",
                 "info",
@@ -12431,10 +12548,7 @@ class TestE2ESemanticLayerLifecycle:
             assert counts["datasets"] >= 2, f"datasets cascaded: {counts}"
             assert counts["metrics"] >= 1, f"metrics cascaded: {counts}"
             assert counts["constraints"] >= 1, f"constraints cascaded: {counts}"
-            # Back-compat alias: orphaned_children == cascade.deleted (deprecated v0.42.0).
-            assert envelope["orphaned_children"] == counts, (
-                "orphaned_children back-compat alias should equal cascade.deleted"
-            )
+            assert "orphaned_children" not in envelope, "removed alias is back"
 
             # The cascade succeeded — model A's children are gone.
             # Drop the cleanup token so the finally block doesn't try to delete it again.
@@ -13533,7 +13647,7 @@ class TestDevPortalE2E:
                 "patch",
                 "--app",
                 "keboola.ex-bogus",
-                "--data",
+                "--data-file",
                 str(payload_path),
                 "--identity",
                 "vendor-e2e",

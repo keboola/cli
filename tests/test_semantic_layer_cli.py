@@ -242,13 +242,6 @@ class TestModelDelete:
                 "failures": [],
                 "parent_deleted": True,
             },
-            "orphaned_children": {
-                "datasets": 0,
-                "metrics": 0,
-                "relationships": 0,
-                "glossary": 0,
-                "constraints": 0,
-            },
         }
         result = _invoke(
             [
@@ -660,7 +653,7 @@ class TestAddConstraint:
                 "inequality",
                 "--rule",
                 "value >= 0",
-                "--metrics",
+                "--metric",
                 "rev",
                 "--severity",
                 "warning",
@@ -671,7 +664,7 @@ class TestAddConstraint:
         assert result.exit_code == 0, result.output
 
     def test_empty_metrics_rejected(self, store: ConfigStore) -> None:
-        """An empty --metrics value must exit 2 with USAGE_ERROR."""
+        """An empty --metric value must exit 2."""
         mock = MagicMock()
         result = _invoke(
             [
@@ -687,8 +680,8 @@ class TestAddConstraint:
                 "inequality",
                 "--rule",
                 "x",
-                "--metrics",
-                ",,",
+                "--metric",
+                " ",
             ],
             store=store,
             sl_mock=mock,
@@ -916,8 +909,10 @@ class TestEditConstraint:
                 "prod",
                 "--name",
                 "rev_warning",
-                "--new-metrics",
-                "rev, profit",
+                "--new-metric",
+                "rev",
+                "--new-metric",
+                " profit",
             ],
             store=store,
             sl_mock=mock,
@@ -1331,7 +1326,7 @@ class TestBuild:
                 "build",
                 "--project",
                 "prod",
-                "--tables",
+                "--table-id",
                 "out.c.t",
                 "--dry-run",
             ],
@@ -1373,7 +1368,7 @@ class TestBuild:
                 "build",
                 "--project",
                 "prod",
-                "--tables",
+                "--table-id",
                 "out.c.t",
                 "--dry-run",
                 "--keep-on-failure",
@@ -1951,7 +1946,7 @@ class TestReferenceDataGet:
                 "get",
                 "--project",
                 "prod",
-                "--id",
+                "--reference-data-id",
                 "r1",
             ],
             store=store,
@@ -1973,7 +1968,7 @@ class TestReferenceDataGet:
                 "get",
                 "--project",
                 "prod",
-                "--id",
+                "--reference-data-id",
                 "r1",
                 "--dimension",
                 "chart_of_accounts",
@@ -2065,7 +2060,7 @@ class TestReferenceDataDelete:
                 "delete",
                 "--project",
                 "prod",
-                "--id",
+                "--reference-data-id",
                 "r1",
             ],
             store=store,
@@ -2088,7 +2083,7 @@ class TestReferenceDataDelete:
                 "delete",
                 "--project",
                 "prod",
-                "--id",
+                "--reference-data-id",
                 "r1",
                 "--yes",
             ],

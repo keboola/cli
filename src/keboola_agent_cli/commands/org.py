@@ -112,10 +112,10 @@ def _format_setup_result(console: Console, data: dict) -> None:
     # A failed project is one `Error:` line (HO2); token refresh failures are keyed by alias.
     for p in failed:
         item = f"project {p['project_id']} '{p['project_name']}'"
-        console.print(format_item_error(item, p["error"]), soft_wrap=True)
+        console.print(format_item_error(item, p["message"]), soft_wrap=True)
     for p in refresh_failed:
         item = f"project '{p['alias']}' token refresh"
-        console.print(format_item_error(item, p["error"]), soft_wrap=True)
+        console.print(format_item_error(item, p["message"]), soft_wrap=True)
 
     # Summary line
     summary_parts = []
@@ -144,8 +144,8 @@ def org_setup(
     ),
     project_ids_raw: list[str] | None = typer.Option(
         None,
-        "--project-ids",
-        help="Project ID (repeatable or comma-separated; works with Personal Access Token)",
+        "--project-id",
+        help="Project ID (repeat for more projects; works with Personal Access Token)",
     ),
     url: str = typer.Option(
         ...,
@@ -187,7 +187,7 @@ def org_setup(
 
     \b
     1. Org admin:    --org-id 123          (lists all projects in the org)
-    2. Project member: --project-ids 1,2,3 (fetches specific projects)
+    2. Project member: --project-id 1 --project-id 2 (fetches specific projects)
 
     Creates Storage API tokens and registers projects. Safe to re-run --
     already registered projects are skipped.
@@ -200,15 +200,15 @@ def org_setup(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "org_service")
 
-    # Validate: need at least one of --org-id or --project-ids
+    # Validate: need at least one of --org-id or --project-id
     try:
-        project_ids = split_int_multi(project_ids_raw, label="--project-ids") or None
+        project_ids = split_int_multi(project_ids_raw, label="--project-id") or None
     except ValueError as exc:
         formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
         raise typer.Exit(code=2) from None
     if not org_id and not project_ids:
         formatter.error(
-            message="Provide --org-id (org admin) or --project-ids (project member)",
+            message="Provide --org-id (org admin) or --project-id (project member)",
             error_code=ErrorCode.USAGE_ERROR,
         )
         raise typer.Exit(code=2)

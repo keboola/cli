@@ -175,7 +175,7 @@ class ProjectService(BaseService):
                         active_project_cleared = alias
                     removed.append(alias)
             except ConfigError as exc:
-                failed.append(item_failure(exc, alias=alias, error=exc.message))
+                failed.append(item_failure(exc, alias=alias))
 
         return {
             "removed": removed,
@@ -914,7 +914,7 @@ class ProjectService(BaseService):
         return {
             "alias": alias,
             "previous": previous,
-            "source": "pin",
+            "source": "active_project",
             "env_override": env_override or None,
             "active_project_set": alias,
         }
@@ -924,7 +924,7 @@ class ProjectService(BaseService):
 
         Resolution:
         - If ``KBAGENT_PROJECT`` is set, it wins (source=env).
-        - Otherwise the persisted pin wins (source=pin).
+        - Otherwise the persisted pin wins (source=active_project).
         - If neither is set, ``alias`` is ``None``.
 
         The env override is reported even when it points at a project that is
@@ -942,7 +942,7 @@ class ProjectService(BaseService):
         or ``none`` with ``resolved_alias`` None when that chain fails.
 
         Returns:
-            Dict with keys: alias, source ('env' | 'pin' | 'none'), pinned,
+            Dict with keys: alias, source ('env' | 'active_project' | 'none'), pinned,
             env_override, env_points_to_configured_project, env_error,
             resolved_alias, resolved_source.
         """
@@ -975,7 +975,7 @@ class ProjectService(BaseService):
 
         return {
             "alias": pinned,
-            "source": "pin" if pinned else "none",
+            "source": "active_project" if pinned else "none",
             "pinned": pinned,
             "env_override": None,
             "env_points_to_configured_project": None,
@@ -991,7 +991,7 @@ class ProjectService(BaseService):
             return {"resolved_alias": None, "resolved_source": "none"}
         return {
             "resolved_alias": alias,
-            "resolved_source": "active_project" if source == "pin" else source,
+            "resolved_source": source,
         }
 
     def get_info(self, alias: str) -> dict[str, Any]:

@@ -32,15 +32,16 @@
       "kind": "command",
       "hidden": false,
       "category": "write",
-      "help": "Register a new scheduled task.\n\nTwo ways to specify the action:\n1. ``--from-file JSON|@path|-`` with the full {type, params} JSON envelope.\n2. ``--type TYPE`` plus the type-specific flags (ai_agent: --cli/--prompt,\n   cli_command: --argv ...).",
+      "help": "Register a new scheduled task.\n\nTwo ways to specify the action:\n1. ``--definition JSON`` or ``--definition-file PATH`` with the full\n   {type, params} JSON envelope.\n2. ``--type TYPE`` plus the type-specific flags (ai_agent: --cli/--prompt,\n   cli_command: --argv ...).",
       "params": [
         {"kind": "option", "name": "name", "opts": ["--name", "-n"], "type": "text", "required": true, "default": null, "help": "Human-readable task name"},
         {"kind": "option", "name": "description", "opts": ["--description"], "type": "text", "default": "", "help": "Free-form description"},
         {"kind": "option", "name": "cron", "opts": ["--cron"], "type": "text", "default": "0 * * * *", "help": "Cron expression (UTC)"},
         {"kind": "option", "name": "manual", "opts": ["--manual"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip cron firing -- only run when triggered manually or as downstream."},
         {"kind": "option", "name": "enabled", "opts": ["--enabled"], "secondary_opts": ["--disabled"], "type": "boolean", "is_flag": true, "default": true, "help": "Initial enabled state."},
-        {"kind": "option", "name": "action_type", "opts": ["--type", "-t"], "type": "text", "default": null, "help": "Action type when not using --from-file: ai_agent|cli_command"},
-        {"kind": "option", "name": "from_file", "opts": ["--from-file"], "type": "text", "default": null, "help": "Full action JSON ({\"type\": \"...\", \"params\": {...}}): inline, @path, or - for stdin."},
+        {"kind": "option", "name": "action_type", "opts": ["--type", "-t"], "type": "text", "default": null, "help": "Action type when not using --definition: ai_agent|cli_command"},
+        {"kind": "option", "name": "definition", "opts": ["--definition"], "type": "text", "default": null, "help": "Full action JSON ({\"type\": \"...\", \"params\": {...}}), inline."},
+        {"kind": "option", "name": "definition_file", "opts": ["--definition-file"], "type": "path", "default": null, "help": "Read the full action JSON from a file (- for stdin)."},
         {"kind": "option", "name": "cli", "opts": ["--cli"], "type": "text", "default": null, "help": "ai_agent: claude|codex|gemini"},
         {"kind": "option", "name": "prompt", "opts": ["--prompt"], "type": "text", "default": null, "help": "ai_agent: prompt body"},
         {"kind": "option", "name": "extra_arg", "opts": ["--extra-arg"], "type": "text", "multiple": true, "default": [], "help": "ai_agent: extra CLI arg (repeatable). Forwarded to claude/codex/gemini."},
@@ -68,8 +69,7 @@
       "category": "destructive",
       "help": "Remove a task. Run history on disk is preserved.\n\nDisabled tasks should be deleted with this command (not just disabled),\nwhen they will never run again -- a long history of disabled tasks\nclutters the UI / list output.",
       "params": [
-        {"kind": "argument", "name": "task_id", "opts": ["task_id"], "type": "text", "default": null, "help": "Task ID to delete. Or use --id."},
-        {"kind": "option", "name": "task_id_opt", "opts": ["--id", "--task-id"], "type": "text", "default": null, "help": "Task ID (alias for the positional argument)."},
+        {"kind": "option", "name": "task_id", "opts": ["--task-id"], "type": "text", "required": true, "default": null, "help": "Task ID to delete."},
         {"kind": "option", "name": "yes", "opts": ["--yes", "-y"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip confirmation prompt."}
       ]
     },
@@ -103,11 +103,11 @@
       "category": "write",
       "help": "Trigger a task immediately (does not wait for the next cron firing).\n\nBy default blocks until the run finishes and prints the AgentRun\nrecord. Use ``--stream`` to render live events as they arrive (one\nline per event in human mode, NDJSON in --json mode).\n\n``--runtime-prompt`` is a shortcut for ai_agent tasks (most common\nuse case for manual tasks). For full control over the runtime merge,\npass ``--runtime-input '{\"key\": \"value\"}'``.",
       "params": [
-        {"kind": "argument", "name": "task_id", "opts": ["task_id"], "type": "text", "default": null, "help": "Task ID to run. Or use --id."},
-        {"kind": "option", "name": "task_id_opt", "opts": ["--id", "--task-id"], "type": "text", "default": null, "help": "Task ID (alias for the positional argument)."},
+        {"kind": "option", "name": "task_id", "opts": ["--task-id"], "type": "text", "required": true, "default": null, "help": "Task ID to run."},
         {"kind": "option", "name": "stream", "opts": ["--stream"], "type": "boolean", "is_flag": true, "default": false, "help": "Stream events live (each event on its own line / NDJSON in --json mode)."},
         {"kind": "option", "name": "runtime_prompt", "opts": ["--runtime-prompt"], "type": "text", "default": null, "help": "ai_agent: ad-hoc text appended to the persisted prompt for this run only."},
-        {"kind": "option", "name": "runtime_input", "opts": ["--runtime-input"], "type": "text", "default": null, "help": "JSON input merged into the action params for this run only. Inline, @path, or -."}
+        {"kind": "option", "name": "runtime_input", "opts": ["--runtime-input"], "type": "text", "default": null, "help": "JSON input merged into the action params for this run only, inline."},
+        {"kind": "option", "name": "runtime_input_file", "opts": ["--runtime-input-file"], "type": "path", "default": null, "help": "Read the runtime input JSON from a file (- for stdin)."}
       ]
     },
     {
@@ -117,10 +117,8 @@
       "category": "read",
       "help": "Show a single AgentRun record (status, summary, output, error).",
       "params": [
-        {"kind": "argument", "name": "task_id", "opts": ["task_id"], "type": "text", "default": null, "help": "Task ID. Or use --id/--task-id."},
-        {"kind": "argument", "name": "run_id", "opts": ["run_id"], "type": "text", "default": null, "help": "Run ID (12-char hex). Or use --run-id."},
-        {"kind": "option", "name": "task_id_opt", "opts": ["--id", "--task-id"], "type": "text", "default": null, "help": "Task ID (alias for the positional argument)."},
-        {"kind": "option", "name": "run_id_opt", "opts": ["--run-id"], "type": "text", "default": null, "help": "Run ID (alias for the positional argument)."}
+        {"kind": "option", "name": "task_id", "opts": ["--task-id"], "type": "text", "required": true, "default": null, "help": "Task ID."},
+        {"kind": "option", "name": "run_id", "opts": ["--run-id"], "type": "text", "required": true, "default": null, "help": "Run ID (12-char hex)."}
       ]
     },
     {
@@ -130,10 +128,8 @@
       "category": "read",
       "help": "Replay the persisted event timeline of an ai_agent run (line-by-line).",
       "params": [
-        {"kind": "argument", "name": "task_id", "opts": ["task_id"], "type": "text", "default": null, "help": "Task ID. Or use --id/--task-id."},
-        {"kind": "argument", "name": "run_id", "opts": ["run_id"], "type": "text", "default": null, "help": "Run ID. Or use --run-id."},
-        {"kind": "option", "name": "task_id_opt", "opts": ["--id", "--task-id"], "type": "text", "default": null, "help": "Task ID (alias for the positional argument)."},
-        {"kind": "option", "name": "run_id_opt", "opts": ["--run-id"], "type": "text", "default": null, "help": "Run ID (alias for the positional argument)."}
+        {"kind": "option", "name": "task_id", "opts": ["--task-id"], "type": "text", "required": true, "default": null, "help": "Task ID."},
+        {"kind": "option", "name": "run_id", "opts": ["--run-id"], "type": "text", "required": true, "default": null, "help": "Run ID (12-char hex)."}
       ]
     },
     {
@@ -143,8 +139,7 @@
       "category": "read",
       "help": "Show the run history of a task (most recent first).",
       "params": [
-        {"kind": "argument", "name": "task_id", "opts": ["task_id"], "type": "text", "default": null, "help": "Task ID whose history to show. Or use --id."},
-        {"kind": "option", "name": "task_id_opt", "opts": ["--id", "--task-id"], "type": "text", "default": null, "help": "Task ID (alias for the positional argument)."},
+        {"kind": "option", "name": "task_id", "opts": ["--task-id"], "type": "text", "required": true, "default": null, "help": "Task ID whose history to show."},
         {"kind": "option", "name": "limit", "opts": ["--limit", "-L"], "type": "integer", "default": 50, "help": "Max rows to return."}
       ]
     },
@@ -155,8 +150,7 @@
       "category": "read",
       "help": "Show one task's full configuration.",
       "params": [
-        {"kind": "argument", "name": "task_id", "opts": ["task_id"], "type": "text", "default": null, "help": "Task ID (12-char hex). Or use --id."},
-        {"kind": "option", "name": "task_id_opt", "opts": ["--id", "--task-id"], "type": "text", "default": null, "help": "Task ID (alias for the positional argument)."}
+        {"kind": "option", "name": "task_id", "opts": ["--task-id"], "type": "text", "required": true, "default": null, "help": "Task ID (12-char hex)."}
       ]
     },
     {
@@ -169,7 +163,8 @@
         {"kind": "option", "name": "name", "opts": ["--name", "-n"], "type": "text", "default": "[preview]", "help": "Name shown in event init payload."},
         {"kind": "option", "name": "stream", "opts": ["--stream"], "type": "boolean", "is_flag": true, "default": false, "help": "Stream events live instead of returning the final run record."},
         {"kind": "option", "name": "action_type", "opts": ["--type", "-t"], "type": "text", "default": null, "help": "ai_agent|cli_command"},
-        {"kind": "option", "name": "from_file", "opts": ["--from-file"], "type": "text", "default": null, "help": "Action JSON (or @path / -)."},
+        {"kind": "option", "name": "definition", "opts": ["--definition"], "type": "text", "default": null, "help": "Action JSON, inline."},
+        {"kind": "option", "name": "definition_file", "opts": ["--definition-file"], "type": "path", "default": null, "help": "Read the action JSON from a file (- for stdin)."},
         {"kind": "option", "name": "cli", "opts": ["--cli"], "type": "text", "default": null},
         {"kind": "option", "name": "prompt", "opts": ["--prompt"], "type": "text", "default": null},
         {"kind": "option", "name": "extra_arg", "opts": ["--extra-arg"], "type": "text", "multiple": true, "default": []},
@@ -184,8 +179,7 @@
       "category": "write",
       "help": "Patch one or more fields on a task. Omitted flags leave the field unchanged.",
       "params": [
-        {"kind": "argument", "name": "task_id", "opts": ["task_id"], "type": "text", "default": null, "help": "Task ID to update. Or use --id."},
-        {"kind": "option", "name": "task_id_opt", "opts": ["--id", "--task-id"], "type": "text", "default": null, "help": "Task ID (alias for the positional argument)."},
+        {"kind": "option", "name": "task_id", "opts": ["--task-id"], "type": "text", "required": true, "default": null, "help": "Task ID to update."},
         {"kind": "option", "name": "name", "opts": ["--name", "-n"], "type": "text", "default": null},
         {"kind": "option", "name": "description", "opts": ["--description"], "type": "text", "default": null},
         {"kind": "option", "name": "cron", "opts": ["--cron"], "type": "text", "default": null},
@@ -294,7 +288,7 @@
       "kind": "command",
       "hidden": false,
       "category": "write",
-      "help": "Create a new development branch and auto-activate it.\n\nThe created branch becomes the active branch for the project,\nso subsequent tool calls will automatically use it.",
+      "help": "Create a new development branch and auto-activate it.\n\nThe created branch becomes the active branch for the project,\nso subsequent tool calls will automatically use it. A project from\nenvironment variables (__env__) cannot store an active branch: the\nbranch is created, not activated, and a warning names --branch.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID to create the branch in (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "name", "opts": ["--name", "-n"], "type": "text", "required": true, "default": null, "help": "Name for the new development branch"},
@@ -309,7 +303,7 @@
       "help": "Delete a development branch.\n\nIf the deleted branch was the active branch, it is automatically\nreset to main/production.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID to delete the branch from (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
-        {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "required": true, "default": null, "help": "Branch ID to delete"},
+        {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "text", "required": true, "default": null, "help": "Branch ID to delete"},
         {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Read the branch and show what would be deleted; change nothing"},
         {"kind": "option", "name": "yes", "opts": ["--yes", "-y"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip the confirmation prompt"}
       ]
@@ -323,17 +317,6 @@
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "multiple": true, "default": null, "help": "Project alias or ID, repeatable (default: KBAGENT_PROJECT, then the active project, then the sole project; --all-projects for all projects)"},
         {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Cannot be used with --project."}
-      ]
-    },
-    {
-      "path": "branch merge",
-      "kind": "command",
-      "hidden": false,
-      "category": "write",
-      "help": "[DEPRECATED] Get the KBC UI merge URL for a development branch.\n\nDoes NOT perform the merge via API -- it builds the URL to the Keboola\nUI and then resets the active branch to main. Deprecated since 0.94.0:\non a project with merge requests enabled ('branches-merge-requests'),\nuse `kbagent merge-request create` and `kbagent merge-request merge`,\nwhich merge from the CLI and delete the source branch. This command\nkeeps working unchanged (it also serves projects without that feature).",
-      "params": [
-        {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
-        {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Branch ID to merge (uses active branch if not set)"}
       ]
     },
     {
@@ -377,13 +360,12 @@
       "kind": "command",
       "hidden": false,
       "category": "write",
-      "help": "Set a metadata key/value on a branch.\n\nThe value is taken from exactly one of --text, --file, or --stdin.",
+      "help": "Set a metadata key/value on a branch.\n\nThe value is taken from exactly one of --value or --value-file.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "key", "opts": ["--key"], "type": "text", "required": true, "default": null, "help": "Metadata key to set"},
-        {"kind": "option", "name": "text", "opts": ["--text"], "type": "text", "default": null, "help": "Inline string value"},
-        {"kind": "option", "name": "file", "opts": ["--file"], "type": "path", "default": null, "help": "Read value from a UTF-8 text file"},
-        {"kind": "option", "name": "stdin", "opts": ["--stdin"], "type": "boolean", "is_flag": true, "default": false, "help": "Read value from standard input"},
+        {"kind": "option", "name": "text", "opts": ["--value"], "type": "text", "default": null, "help": "Inline string value"},
+        {"kind": "option", "name": "file", "opts": ["--value-file"], "type": "path", "default": null, "help": "Read the value from a UTF-8 text file (- for stdin)"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "text", "default": "default", "help": "Branch ID or \"default\" for the main branch"}
       ]
     },
@@ -405,7 +387,7 @@
       "help": "Set an existing development branch as active.\n\nValidates the branch exists via the API before activating it.\nSubsequent tool calls will automatically use this branch.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID to set the active branch for (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
-        {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "required": true, "default": null, "help": "Branch ID to activate"}
+        {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "text", "required": true, "default": null, "help": "Branch ID to activate"}
       ]
     },
     {
@@ -458,11 +440,12 @@
       "params": [
         {"kind": "argument", "name": "action_name", "opts": ["action_name"], "type": "text", "required": true, "default": null, "help": "Sync action name (component-defined, e.g. testConnection, getTables)"},
         {"kind": "option", "name": "component_id", "opts": ["--component-id"], "type": "text", "required": true, "default": null, "help": "Component ID (e.g. keboola.ex-db-mysql)"},
-        {"kind": "option", "name": "config_id", "opts": ["--config-id"], "type": "text", "default": null, "help": "Configuration ID whose stored configData to send (required unless --config-data)"},
+        {"kind": "option", "name": "config_id", "opts": ["--config-id"], "type": "text", "default": null, "help": "Configuration ID whose stored configData to send (required unless --config-data or --config-data-file)"},
         {"kind": "option", "name": "row_id", "opts": ["--row-id"], "type": "text", "default": null, "help": "Configuration row ID to shallow-merge over the root configuration"},
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Run in a specific dev branch ID (defaults to active branch)"},
-        {"kind": "option", "name": "config_data", "opts": ["--config-data"], "type": "text", "default": null, "help": "Explicit configData JSON: inline, @file.json, or - for stdin (skips config fetch)"},
+        {"kind": "option", "name": "config_data", "opts": ["--config-data"], "type": "text", "default": null, "help": "Explicit configData JSON, inline (skips config fetch)"},
+        {"kind": "option", "name": "config_data_file", "opts": ["--config-data-file"], "type": "path", "default": null, "help": "Read the explicit configData JSON from a file, - for stdin (skips config fetch)"},
         {"kind": "option", "name": "timeout", "opts": ["--timeout"], "type": "integer", "default": null, "help": "Request timeout in seconds for the action call (long actions e.g. getTables)"}
       ]
     },
@@ -604,8 +587,8 @@
         {"kind": "option", "name": "push", "opts": ["--push"], "type": "boolean", "is_flag": true, "default": false, "help": "Also create the configuration remotely via the Storage API (one-shot; requires --name)"},
         {"kind": "option", "name": "no_files", "opts": ["--no-files"], "type": "boolean", "is_flag": true, "default": false, "help": "With --push: skip writing/printing scaffold; only POST to API (FIIA-style one-shot)"},
         {"kind": "option", "name": "description", "opts": ["--description"], "type": "text", "default": "", "help": "Configuration description (used with --push)"},
-        {"kind": "option", "name": "configuration", "opts": ["--configuration"], "type": "text", "default": null, "help": "Override the configuration body to POST (used with --push): JSON inline, @file, or - for stdin"},
-        {"kind": "option", "name": "configuration_file", "opts": ["--configuration-file"], "type": "path", "default": null, "help": "Override the configuration body from a JSON file (used with --push)"},
+        {"kind": "option", "name": "configuration", "opts": ["--configuration"], "type": "text", "default": null, "help": "Override the configuration body to POST (used with --push): JSON, inline"},
+        {"kind": "option", "name": "configuration_file", "opts": ["--configuration-file"], "type": "path", "default": null, "help": "Override the configuration body from a JSON file, - for stdin (used with --push)"},
         {"kind": "option", "name": "no_validate", "opts": ["--no-validate"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip schema validation against the component's AI Service spec (used with --push)"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Create in a specific dev branch (used with --push; defaults to active branch)"},
         {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "With --push: show planned POST + validation result without creating"},
@@ -659,14 +642,15 @@
       "kind": "command",
       "hidden": false,
       "category": "write",
-      "help": "Create a new configuration row.\n\n\b\nExamples:\n  # Create a row with a name only (empty configuration)\n  kbagent config row-create --project P --component-id C --config-id ID --name \"Row 1\"\n\n  # Create a row with configuration content\n  kbagent config row-create --project P --component-id C --config-id ID \\\n    --name \"Row 1\" --configuration '{\"parameters\": {\"table\": \"orders\"}}'\n\n  # Create from a JSON file\n  kbagent config row-create --project P --component-id C --config-id ID \\\n    --name \"Row 1\" --configuration @row.json\n\n  # Create a disabled row\n  kbagent config row-create --project P --component-id C --config-id ID \\\n    --name \"Row 1\" --is-disabled",
+      "help": "Create a new configuration row.\n\n\b\nExamples:\n  # Create a row with a name only (empty configuration)\n  kbagent config row-create --project P --component-id C --config-id ID --name \"Row 1\"\n\n  # Create a row with configuration content\n  kbagent config row-create --project P --component-id C --config-id ID \\\n    --name \"Row 1\" --configuration '{\"parameters\": {\"table\": \"orders\"}}'\n\n  # Create from a JSON file\n  kbagent config row-create --project P --component-id C --config-id ID \\\n    --name \"Row 1\" --configuration-file row.json\n\n  # Create a disabled row\n  kbagent config row-create --project P --component-id C --config-id ID \\\n    --name \"Row 1\" --is-disabled",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "component_id", "opts": ["--component-id"], "type": "text", "required": true, "default": null, "help": "Component ID (e.g. keboola.python-transformation-v2)"},
         {"kind": "option", "name": "config_id", "opts": ["--config-id"], "type": "text", "required": true, "default": null, "help": "Configuration ID to add the row to"},
         {"kind": "option", "name": "name", "opts": ["--name", "-n"], "type": "text", "required": true, "default": null, "help": "Row name"},
         {"kind": "option", "name": "description", "opts": ["--description"], "type": "text", "default": "", "help": "Row description"},
-        {"kind": "option", "name": "configuration", "opts": ["--configuration"], "type": "text", "default": null, "help": "Row configuration JSON: inline, @file.json, or - for stdin"},
+        {"kind": "option", "name": "configuration", "opts": ["--configuration"], "type": "text", "default": null, "help": "Row configuration JSON, inline"},
+        {"kind": "option", "name": "configuration_file", "opts": ["--configuration-file"], "type": "path", "default": null, "help": "Read the row configuration JSON from a file (- for stdin)"},
         {"kind": "option", "name": "is_disabled", "opts": ["--is-disabled"], "type": "boolean", "is_flag": true, "default": false, "help": "Create the row in disabled state (excluded from job runs)"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Create in a specific dev branch ID (defaults to active branch)"},
         {"kind": "option", "name": "allow_plaintext", "opts": ["--allow-plaintext-on-encrypt-failure"], "type": "boolean", "is_flag": true, "default": false, "help": "Allow write even if secret encryption fails (DANGEROUS: secrets stored as plaintext)"}
@@ -692,7 +676,7 @@
       "kind": "command",
       "hidden": false,
       "category": "write",
-      "help": "Update an existing configuration row.\n\n\b\nContent options modify the row configuration JSON:\n  --configuration : provide a full JSON blob (inline, @file, or -)\n  --set PATH=VALUE : set a single nested key (repeatable)\n  --merge : deep-merge into existing row config (preserves sibling keys)\n  --dry-run : preview changes without applying\n\n\b\nExamples:\n  # Update just the name\n  kbagent config row-update --project P --component-id C --config-id ID --row-id R --name \"New name\"\n\n  # Replace row configuration from a file\n  kbagent config row-update --project P --component-id C --config-id ID --row-id R \\\n    --configuration @row.json\n\n  # Set a single nested value (merge implied)\n  kbagent config row-update --project P --component-id C --config-id ID --row-id R \\\n    --set 'parameters.table=new_table'\n\n  # Preview changes without applying\n  kbagent config row-update --project P --component-id C --config-id ID --row-id R \\\n    --set 'parameters.table=new_table' --dry-run\n\n  # Disable a row (excludes it from job runs)\n  kbagent config row-update --project P --component-id C --config-id ID --row-id R --is-disabled\n\n  # Set a meaningful version changeDescription for the audit trail\n  kbagent config row-update --project P --component-id C --config-id ID --row-id R \\\n    --set 'parameters.table=new_table' --change-description \"AI-1234: repoint row\"",
+      "help": "Update an existing configuration row.\n\n\b\nContent options modify the row configuration JSON:\n  --configuration / --configuration-file : a full JSON blob (inline, or a file; - for stdin)\n  --set PATH=VALUE : set a single nested key (repeatable)\n  --merge : deep-merge into existing row config (preserves sibling keys)\n  --dry-run : preview changes without applying\n\n\b\nExamples:\n  # Update just the name\n  kbagent config row-update --project P --component-id C --config-id ID --row-id R --name \"New name\"\n\n  # Replace row configuration from a file\n  kbagent config row-update --project P --component-id C --config-id ID --row-id R \\\n    --configuration-file row.json\n\n  # Set a single nested value (merge implied)\n  kbagent config row-update --project P --component-id C --config-id ID --row-id R \\\n    --set 'parameters.table=new_table'\n\n  # Preview changes without applying\n  kbagent config row-update --project P --component-id C --config-id ID --row-id R \\\n    --set 'parameters.table=new_table' --dry-run\n\n  # Disable a row (excludes it from job runs)\n  kbagent config row-update --project P --component-id C --config-id ID --row-id R --is-disabled\n\n  # Set a meaningful version changeDescription for the audit trail\n  kbagent config row-update --project P --component-id C --config-id ID --row-id R \\\n    --set 'parameters.table=new_table' --change-description \"AI-1234: repoint row\"",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "component_id", "opts": ["--component-id"], "type": "text", "required": true, "default": null, "help": "Component ID"},
@@ -700,7 +684,8 @@
         {"kind": "option", "name": "row_id", "opts": ["--row-id"], "type": "text", "required": true, "default": null, "help": "Row ID to update"},
         {"kind": "option", "name": "name", "opts": ["--name", "-n"], "type": "text", "default": null, "help": "New row name"},
         {"kind": "option", "name": "description", "opts": ["--description"], "type": "text", "default": null, "help": "New row description"},
-        {"kind": "option", "name": "configuration", "opts": ["--configuration"], "type": "text", "default": null, "help": "Row configuration JSON: inline, @file.json, or - for stdin"},
+        {"kind": "option", "name": "configuration", "opts": ["--configuration"], "type": "text", "default": null, "help": "Row configuration JSON, inline"},
+        {"kind": "option", "name": "configuration_file", "opts": ["--configuration-file"], "type": "path", "default": null, "help": "Read the row configuration JSON from a file (- for stdin)"},
         {"kind": "option", "name": "set_values", "opts": ["--set"], "type": "text", "multiple": true, "default": null, "help": "Set a nested value: PATH=VALUE (e.g. --set 'parameters.table=orders')"},
         {"kind": "option", "name": "merge", "opts": ["--merge"], "type": "boolean", "is_flag": true, "default": false, "help": "Deep-merge into existing row config instead of replacing"},
         {"kind": "option", "name": "change_description", "opts": ["--change-description"], "type": "text", "default": null, "help": "Version changeDescription for the audit trail (default: auto-generated)"},
@@ -792,12 +777,13 @@
       "kind": "command",
       "hidden": false,
       "category": "write",
-      "help": "Overwrite the runtime ``state`` dict of a configuration or one of its rows.\n\nThis replaces the ENTIRE state object -- it is not a merge. ``--state``\nmust be a JSON object under the API's 4 MB cap.\n\n\b\nExamples:\n  kbagent config state-set --project P --component-id C --config-id ID \\\n    --state '{\"lastId\": 123}'\n  kbagent config state-set --project P --component-id C --config-id ID \\\n    --row-id ROW --state @state.json\n  kbagent config state-set --project P --component-id C --config-id ID \\\n    --state '{\"lastId\": 123}' --dry-run",
+      "help": "Overwrite the runtime ``state`` dict of a configuration or one of its rows.\n\nThis replaces the ENTIRE state object -- it is not a merge. ``--state``\nmust be a JSON object under the API's 4 MB cap.\n\n\b\nExamples:\n  kbagent config state-set --project P --component-id C --config-id ID \\\n    --state '{\"lastId\": 123}'\n  kbagent config state-set --project P --component-id C --config-id ID \\\n    --row-id ROW --state-file state.json\n  kbagent config state-set --project P --component-id C --config-id ID \\\n    --state '{\"lastId\": 123}' --dry-run",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "component_id", "opts": ["--component-id"], "type": "text", "required": true, "default": null, "help": "Component ID"},
         {"kind": "option", "name": "config_id", "opts": ["--config-id"], "type": "text", "required": true, "default": null, "help": "Configuration ID"},
-        {"kind": "option", "name": "state", "opts": ["--state"], "type": "text", "required": true, "default": null, "help": "New state as inline JSON object, @file, or - for stdin"},
+        {"kind": "option", "name": "state", "opts": ["--state"], "type": "text", "default": null, "help": "New state as a JSON object, inline"},
+        {"kind": "option", "name": "state_file", "opts": ["--state-file"], "type": "path", "default": null, "help": "Read the new state JSON object from a file (- for stdin)"},
         {"kind": "option", "name": "row_id", "opts": ["--row-id"], "type": "text", "default": null, "help": "Write this row's state instead of the config's root state"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID (defaults to active branch)"},
         {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Show what would change without applying"},
@@ -828,8 +814,8 @@
         {"kind": "option", "name": "config_id", "opts": ["--config-id"], "type": "text", "required": true, "default": null, "help": "Configuration ID to update"},
         {"kind": "option", "name": "name", "opts": ["--name", "-n"], "type": "text", "default": null, "help": "New configuration name"},
         {"kind": "option", "name": "description", "opts": ["--description"], "type": "text", "default": null, "help": "New configuration description"},
-        {"kind": "option", "name": "configuration", "opts": ["--configuration"], "type": "text", "default": null, "help": "Configuration JSON: inline, @file.json, or - for stdin"},
-        {"kind": "option", "name": "configuration_file", "opts": ["--configuration-file"], "type": "path", "default": null, "help": "Path to a JSON file with configuration content"},
+        {"kind": "option", "name": "configuration", "opts": ["--configuration"], "type": "text", "default": null, "help": "Configuration JSON, inline"},
+        {"kind": "option", "name": "configuration_file", "opts": ["--configuration-file"], "type": "path", "default": null, "help": "Read the configuration JSON from a file (- for stdin)"},
         {"kind": "option", "name": "set_values", "opts": ["--set"], "type": "text", "multiple": true, "default": null, "help": "Set a nested value: PATH VALUE (e.g. --set 'parameters.db.host=new-host')"},
         {"kind": "option", "name": "merge", "opts": ["--merge"], "type": "boolean", "is_flag": true, "default": false, "help": "Deep-merge into existing config instead of replacing"},
         {"kind": "option", "name": "change_description", "opts": ["--change-description"], "type": "text", "default": null, "help": "Version changeDescription for the audit trail (default: auto-generated)"},
@@ -905,20 +891,21 @@
       "kind": "command",
       "hidden": false,
       "category": "write",
-      "help": "Create a Keboola data app end-to-end (POST + encrypt + PUT + deploy).\n\nWith --wait on a password-auth app, the password is delivered once the app\nruns, as in `data-app password`: a c-to-copy prompt in a terminal,\n--copy / --reveal elsewhere. The password itself is never printed\nwithout --reveal.",
+      "help": "Create a Keboola data app end-to-end (POST + encrypt + PUT + deploy).\n\nA private GitHub repo needs either --git-username plus a PAT, or\n--git-auth organization (no credential stored; the token is minted from\nthe organization's GitHub App connection at deploy time).\n\nWith --wait on a password-auth app, the password is delivered once the app\nruns, as in `data-app password`: a c-to-copy prompt in a terminal,\n--copy / --reveal elsewhere. The password itself is never printed\nwithout --reveal.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "name", "opts": ["--name", "-n"], "type": "text", "required": true, "default": null, "help": "Display name shown in the Keboola UI"},
         {"kind": "option", "name": "description", "opts": ["--description"], "type": "text", "default": "", "help": "Long-form description (markdown). Mutually exclusive with --description-file."},
-        {"kind": "option", "name": "description_file", "opts": ["--description-file"], "type": "path", "default": null, "help": "Read description from a file. Mutually exclusive with --description."},
+        {"kind": "option", "name": "description_file", "opts": ["--description-file"], "type": "path", "default": null, "help": "Read description from a file (- for stdin). Mutually exclusive with --description."},
         {"kind": "option", "name": "slug", "opts": ["--slug"], "type": "text", "required": true, "default": null, "help": "URL slug (lowercase alphanumeric, hyphens; 2-64 chars)"},
         {"kind": "option", "name": "git_repo", "opts": ["--git-repo"], "type": "text", "default": "", "help": "External git repository URL to deploy from. Required unless --use-managed-git-repo is set (mutually exclusive with it)."},
         {"kind": "option", "name": "use_managed_git_repo", "opts": ["--use-managed-git-repo"], "type": "boolean", "is_flag": true, "default": false, "help": "Provision an empty Keboola-managed git repository for the app instead of cloning an external one. Mints code via `data-app git-credentials-create`, then push + deploy. Mutually exclusive with --git-repo and all --git-* auth flags."},
         {"kind": "option", "name": "git_branch", "opts": ["--git-branch"], "type": "text", "default": "main", "help": "Git branch to clone"},
         {"kind": "option", "name": "git_public", "opts": ["--git-public"], "secondary_opts": ["--no-git-public"], "type": "boolean", "is_flag": true, "default": false, "help": "Mark the repository as public (no credentials needed)."},
-        {"kind": "option", "name": "git_username", "opts": ["--git-username"], "type": "text", "default": null, "help": "GitHub username (required for private repos)"},
+        {"kind": "option", "name": "git_username", "opts": ["--git-username"], "type": "text", "default": null, "help": "GitHub username (required for a private repo, unless --git-auth organization)."},
+        {"kind": "option", "name": "git_auth", "opts": ["--git-auth"], "type": "text", "default": null, "help": "'organization': clone a private GitHub repo through the Keboola organization's GitHub App connection; no PAT is stored. Needs an https:// GitHub URL. Mutually exclusive with --git-public, --git-username, the --git-pat-* flags and --use-managed-git-repo."},
         {"kind": "option", "name": "git_pat_env", "opts": ["--git-pat-env"], "type": "text", "default": null, "help": "Environment variable containing the plaintext PAT (recommended)."},
-        {"kind": "option", "name": "git_pat_file", "opts": ["--git-pat-file"], "type": "path", "default": null, "help": "File containing the plaintext PAT."},
+        {"kind": "option", "name": "git_pat_file", "opts": ["--git-pat-file"], "type": "file", "default": null, "help": "File containing the plaintext PAT."},
         {"kind": "option", "name": "git_pat_encrypted", "opts": ["--git-pat-encrypted"], "type": "text", "default": null, "help": "Pre-encrypted PAT (KBC::Project... ciphertext). Must be encrypted against THIS project's KMS -- ciphertext does not cross projects."},
         {"kind": "option", "name": "auth", "opts": ["--auth"], "type": "text", "default": "password", "help": "Authentication mode: 'password' (simpleAuth) or 'public' (no auth gate)."},
         {"kind": "option", "name": "size", "opts": ["--size"], "type": "text", "default": "tiny", "help": "Runtime size: tiny, small, medium, or large."},
@@ -926,10 +913,10 @@
         {"kind": "option", "name": "type_", "opts": ["--type", "-t"], "type": "text", "default": "python-js", "help": "Runtime type. Default 'python-js' covers Python AND Node apps."},
         {"kind": "option", "name": "workspace", "opts": ["--workspace"], "secondary_opts": ["--no-workspace"], "type": "boolean", "is_flag": true, "default": true, "help": "Grant the app Storage access by writing runtime.workspace.enabled=true (default). This is what makes the platform inject WORKSPACE_ID / QUERY_SERVICE_URL / KBC_WORKSPACE_MANIFEST_PATH -- without it an app that reads Storage deploys and reports running while serving no data. Pass --no-workspace only for an app that never touches Storage."},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Keboola dev branch ID (defaults to production)."},
-        {"kind": "option", "name": "no_deploy", "opts": ["--no-deploy"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip the deploy step; create the shell + Storage config only."},
-        {"kind": "option", "name": "wait", "opts": ["--wait"], "type": "boolean", "is_flag": true, "default": false, "help": "Block until state == running (or error). Respects pitfall #1: stopped is not terminal. Default: no wait."},
+        {"kind": "option", "name": "no_deploy", "opts": ["--no-deploy"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip the deploy step; create the app + Storage config only."},
+        {"kind": "option", "name": "wait", "opts": ["--wait"], "type": "boolean", "is_flag": true, "default": false, "help": "Block until the deployment serves production (or fails). Default: no wait."},
         {"kind": "option", "name": "timeout", "opts": ["--timeout"], "type": "float", "default": 300.0, "help": "Maximum seconds to wait for state == running, with --wait. Default: 300."},
-        {"kind": "option", "name": "keep_on_failure", "opts": ["--keep-on-failure"], "type": "boolean", "is_flag": true, "default": false, "help": "Keep the orphan deployment shell if PUT or initial deploy fails (forensics)."},
+        {"kind": "option", "name": "keep_on_failure", "opts": ["--keep-on-failure"], "type": "boolean", "is_flag": true, "default": false, "help": "Keep the orphan app if PUT or initial deploy fails (forensics)."},
         {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Print the three request bodies without making any API call."},
         {"kind": "option", "name": "copy", "opts": ["--copy"], "type": "boolean", "is_flag": true, "default": false, "help": "Copy the data-app password to the clipboard at once, without the terminal prompt. The only way to copy it when there is no terminal (an AI agent, CI) or with --json. On create / deploy it needs --wait."},
         {"kind": "option", "name": "reveal", "opts": ["--reveal"], "type": "boolean", "is_flag": true, "default": false, "help": "Print the data-app password (human and --json output). For scripts and CI; in an AI agent session the password then goes into the chat history. On create / deploy it needs --wait."}
@@ -940,7 +927,7 @@
       "kind": "command",
       "hidden": false,
       "category": "destructive",
-      "help": "Delete the deployment AND the Storage config (cascade, irreversible).",
+      "help": "Delete the app: stop its deployments and move the Storage config to the trash.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "app_id", "opts": ["--app-id"], "type": "text", "required": true, "default": null, "help": "Data Science numeric app id"},
@@ -952,7 +939,7 @@
       "kind": "command",
       "hidden": false,
       "category": "write",
-      "help": "Deploy the latest Storage config (the §9 redeploy contract).\n\nWith --wait on a password-auth app, the password is delivered once the app\nruns, as in `data-app password`: a c-to-copy prompt in a terminal (the\ncommand then ends after Enter or 120 s), --copy / --reveal elsewhere.",
+      "help": "Deploy the latest Storage config version as a new production deployment.\n\nWith --wait on a password-auth app, the password is delivered once the app\nruns, as in `data-app password`: a c-to-copy prompt in a terminal (the\ncommand then ends after Enter or 120 s), --copy / --reveal elsewhere.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "app_id", "opts": ["--app-id"], "type": "text", "required": true, "default": null, "help": "Data Science numeric app id"},
@@ -975,6 +962,22 @@
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "app_id", "opts": ["--app-id"], "type": "text", "required": true, "default": null, "help": "Data Science numeric app id"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Storage branch ID for the linked config (defaults to production)."}
+      ]
+    },
+    {
+      "path": "data-app git-auth-set",
+      "kind": "command",
+      "hidden": false,
+      "category": "write",
+      "help": "Switch a data app's external GitHub repo to organization auth.\n\nSets parameters.dataApp.git.authType=organization and removes username /\n#password / #sshKey in ONE write -- the backend rejects a config with both,\nwhich is why `config update --merge` cannot do this. Nothing is deployed:\nrun `kbagent data-app deploy --wait` afterwards. A Keboola-managed repo is\nrefused (it needs no credential), and so is a dev-mode app (the platform\ndoes not support organization auth in dev mode).",
+      "params": [
+        {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
+        {"kind": "option", "name": "app_id", "opts": ["--app-id"], "type": "text", "required": true, "default": null, "help": "Data Science numeric app id"},
+        {"kind": "option", "name": "git_auth", "opts": ["--git-auth"], "type": "text", "required": true, "default": null, "help": "How the app clones its repo. Only 'organization' for now."},
+        {"kind": "option", "name": "git_repo", "opts": ["--git-repo"], "type": "text", "default": null, "help": "Replace the stored repository URL (an ssh:// or git@ URL must become https://HOST/OWNER/REPO for organization auth)."},
+        {"kind": "option", "name": "git_branch", "opts": ["--git-branch"], "type": "text", "default": null, "help": "Replace the stored git branch (default: keep it)."},
+        {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Storage branch ID for the linked config (defaults to production)."},
+        {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Show the Storage PUT body without writing it."}
       ]
     },
     {
@@ -1060,7 +1063,7 @@
       "kind": "command",
       "hidden": false,
       "category": "read",
-      "help": "List a data app's recent deployment attempts (runs), newest first.\n\nUnlike ``data-app logs`` (which needs a running container), ``runs`` works on\nnever-started / failed apps and surfaces the ``failure_reason`` +\n``startup_logs`` the platform records for each attempt -- including\nsetup-phase failures (e.g. a git-clone error during ``app_setup``) that\nproduce no container logs. This is the way to find out *why* a deploy\nreverted to ``stopped`` without the app ever serving.\n\nAuth: project Storage token only.",
+      "help": "List a data app's recent deployment attempts (runs), newest first.\n\nUnlike ``data-app logs`` (which needs a running container), ``runs`` works on\nnever-started / failed apps and surfaces the ``failure_reason`` +\n``startup_logs`` the platform records for each attempt -- including\nsetup-phase failures (e.g. a git-clone error during ``app_setup``) that\nproduce no container logs. This is the way to find out *why* a deployment\nfailed without the app ever serving.\n\nAuth: project Storage token only.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "app_id", "opts": ["--app-id"], "type": "text", "required": true, "default": null, "help": "Data Science numeric app id"},
@@ -1117,8 +1120,8 @@
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "app_id", "opts": ["--app-id"], "type": "text", "required": true, "default": null, "help": "Data Science numeric app id"},
-        {"kind": "option", "name": "secret", "opts": ["--secret"], "type": "text", "multiple": true, "default": null, "help": "One or more '#KEY=VALUE' plaintext entries. Repeatable. Mutually exclusive with --secrets-file."},
-        {"kind": "option", "name": "secrets_file", "opts": ["--secrets-file"], "type": "file", "default": null, "help": "Path to a JSON file mapping '#KEY' -> 'plaintext value'."},
+        {"kind": "option", "name": "secret", "opts": ["--secret"], "type": "text", "multiple": true, "default": null, "help": "One or more '#KEY=VALUE' plaintext entries. Repeatable. Mutually exclusive with --secret-file."},
+        {"kind": "option", "name": "secrets_file", "opts": ["--secret-file"], "type": "file", "default": null, "help": "Read a JSON object mapping '#KEY' -> 'plaintext value' from a file (- for stdin)."},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Storage branch ID for the linked config (defaults to production)."},
         {"kind": "option", "name": "allow_plaintext_on_encrypt_failure", "opts": ["--allow-plaintext-on-encrypt-failure"], "type": "boolean", "is_flag": true, "default": false, "help": "Bootstrap/debug only: write the value as-is if the Encryption API did not return a project-scoped ciphertext. NEVER use in production."},
         {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Show the encryption request and Storage PUT body without making either call."},
@@ -1130,7 +1133,7 @@
       "kind": "command",
       "hidden": false,
       "category": "write",
-      "help": "Wake an auto-suspended data app at its currently-pinned configVersion.",
+      "help": "Wake a suspended or disabled data app at the deployment production serves.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "app_id", "opts": ["--app-id"], "type": "text", "required": true, "default": null, "help": "Data Science numeric app id"},
@@ -1143,11 +1146,11 @@
       "kind": "command",
       "hidden": false,
       "category": "write",
-      "help": "Stop a running data app (preserves the URL and Storage config).",
+      "help": "Suspend a data app; the next request to its URL wakes it (URL and config kept).",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "app_id", "opts": ["--app-id"], "type": "text", "required": true, "default": null, "help": "Data Science numeric app id"},
-        {"kind": "option", "name": "wait", "opts": ["--wait"], "type": "boolean", "is_flag": true, "default": false, "help": "Block until stopped. Default: no wait."},
+        {"kind": "option", "name": "wait", "opts": ["--wait"], "type": "boolean", "is_flag": true, "default": false, "help": "No effect: the app is suspended when the call returns."},
         {"kind": "option", "name": "timeout", "opts": ["--timeout"], "type": "float", "default": 300.0, "help": "Max seconds to wait, with --wait. Default: 300."}
       ]
     },
@@ -1156,7 +1159,7 @@
       "kind": "command",
       "hidden": false,
       "category": "read",
-      "help": "Pre-flight check that a git repo follows the Keboola data-app Golden Rule.\n\nWalks the repo via GitHub Contents + Trees API and validates the\ndocumented structure (keboola-config/ tree, pyproject.toml, no\n'pip install' in setup.sh, requires-python at-or-below the runtime\npin, etc.). Each check emits BLOCKING / WARN / OK with a citation\nto the help-doc anchor that defines the rule.\n\nReference: https://help.keboola.com/data-apps/python-js/",
+      "help": "Pre-flight check that a git repo follows the Keboola data-app Golden Rule.\n\nWalks the repo via GitHub Contents + Trees API and validates the\ndocumented structure (keboola-config/ tree, pyproject.toml, no\n'pip install' in setup.sh, requires-python at-or-below the runtime\npin, etc.). Each check emits BLOCKING / WARN / OK with a citation\nto the help-doc anchor that defines the rule.\n\nThe repo is read anonymously or with YOUR PAT only. Organization GitHub\nauth (`create --git-auth organization`) is never used here: validate such\na repo with a PAT that can read it.\n\nReference: https://help.keboola.com/data-apps/python-js/",
       "params": [
         {"kind": "option", "name": "git_repo", "opts": ["--git-repo"], "type": "text", "required": true, "default": null, "help": "GitHub repo URL (https://github.com/owner/repo)."},
         {"kind": "option", "name": "git_branch", "opts": ["--git-branch"], "type": "text", "default": "main", "help": "Git ref to validate (default: main)."},
@@ -1181,7 +1184,8 @@
       "help": "Create (register) a new app in the Developer Portal. Requires TTY confirm; --dry-run for preview.",
       "params": [
         {"kind": "option", "name": "vendor", "opts": ["--vendor"], "type": "text", "required": true, "default": null},
-        {"kind": "option", "name": "data", "opts": ["--data"], "type": "text", "required": true, "default": null, "help": "Path to JSON payload, or '-' for stdin"},
+        {"kind": "option", "name": "data", "opts": ["--data"], "type": "text", "default": null, "help": "JSON payload, inline"},
+        {"kind": "option", "name": "data_file", "opts": ["--data-file"], "type": "path", "default": null, "help": "Read the JSON payload from a file (- for stdin)"},
         {"kind": "option", "name": "identity", "opts": ["--identity"], "type": "text", "default": null},
         {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false}
       ]
@@ -1312,7 +1316,8 @@
       "help": "Patch one or more properties of an existing Developer Portal app. Requires TTY confirm; --dry-run for preview.",
       "params": [
         {"kind": "option", "name": "app", "opts": ["--app"], "type": "text", "required": true, "default": null},
-        {"kind": "option", "name": "data", "opts": ["--data"], "type": "text", "default": null},
+        {"kind": "option", "name": "data", "opts": ["--data"], "type": "text", "default": null, "help": "JSON payload, inline"},
+        {"kind": "option", "name": "data_file", "opts": ["--data-file"], "type": "path", "default": null, "help": "Read the JSON payload from a file (- for stdin)"},
         {"kind": "option", "name": "property_", "opts": ["--property"], "type": "text", "default": null},
         {"kind": "option", "name": "value", "opts": ["--value"], "type": "text", "default": null},
         {"kind": "option", "name": "value_file", "opts": ["--value-file"], "type": "text", "default": null},
@@ -1340,7 +1345,7 @@
       "help": "Upload a 128x128 PNG icon for a Developer Portal app. Requires TTY confirm; --dry-run for preview.",
       "params": [
         {"kind": "option", "name": "app", "opts": ["--app"], "type": "text", "required": true, "default": null},
-        {"kind": "option", "name": "file", "opts": ["--file"], "type": "text", "required": true, "default": null},
+        {"kind": "option", "name": "file", "opts": ["--file"], "type": "path", "required": true, "default": null, "help": "Path to the 128x128 PNG icon"},
         {"kind": "option", "name": "identity", "opts": ["--identity"], "type": "text", "default": null},
         {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false}
       ]
@@ -1381,11 +1386,12 @@
       "kind": "command",
       "hidden": false,
       "category": "write",
-      "help": "Encrypt #-prefixed secret values for a Keboola component.\n\nInput must be a JSON object with #-prefixed keys and string values.\nAlready-encrypted values (KBC:: prefix) pass through unchanged.\n\nThe Keboola Encryption API is one-way -- there is no decrypt endpoint.\nEncrypted values can only be used by Keboola components at runtime.\n\nExamples:\n    kbagent encrypt values --project my-proj --component-id keboola.ex-db-snowflake --input '{\"#password\": \"secret\"}'\n    echo '{\"#token\": \"abc\"}' | kbagent encrypt values --project my-proj --component-id keboola.ex-db-snowflake --input -\n    kbagent encrypt values --project my-proj --component-id keboola.ex-db-snowflake --input @secrets.json --output-file encrypted.json",
+      "help": "Encrypt #-prefixed secret values for a Keboola component.\n\nInput must be a JSON object with #-prefixed keys and string values.\nAlready-encrypted values (KBC:: prefix) pass through unchanged.\n\nThe Keboola Encryption API is one-way -- there is no decrypt endpoint.\nEncrypted values can only be used by Keboola components at runtime.\n\nExamples:\n    kbagent encrypt values --project my-proj --component-id keboola.ex-db-snowflake --values '{\"#password\": \"secret\"}'\n    echo '{\"#token\": \"abc\"}' | kbagent encrypt values --project my-proj --component-id keboola.ex-db-snowflake --values-file -\n    kbagent encrypt values --project my-proj --component-id keboola.ex-db-snowflake --values-file secrets.json --output-file encrypted.json",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "component_id", "opts": ["--component-id"], "type": "text", "required": true, "default": null, "help": "Keboola component ID (e.g. keboola.python-transformation-v2)"},
-        {"kind": "option", "name": "input_data", "opts": ["--input"], "type": "text", "required": true, "default": null, "help": "JSON to encrypt: inline JSON, @file.json, or - for stdin"},
+        {"kind": "option", "name": "values", "opts": ["--values"], "type": "text", "default": null, "help": "JSON object to encrypt, inline"},
+        {"kind": "option", "name": "values_file", "opts": ["--values-file"], "type": "path", "default": null, "help": "Read the JSON object to encrypt from a file (- for stdin)"},
         {"kind": "option", "name": "output_file", "opts": ["--output-file"], "type": "path", "default": null, "help": "Write result to file (0600 permissions) instead of stdout"}
       ]
     },
@@ -1517,7 +1523,7 @@
       "kind": "command",
       "hidden": false,
       "category": "read",
-      "help": "Show bundled example flow configurations (offline, no project needed).\n\nExamples are vendored from keboola-mcp-server. The default is\nkeboola.flow (Conditional Flow); use them as blueprints for\n``kbagent flow new --file @flow.yaml``.\n\n``--component-id keboola.orchestrator`` serves the legacy orchestrator\nexamples for reference only -- kbagent cannot create or edit orchestrator\nflows (support was dropped in 0.57.0).",
+      "help": "Show bundled example flow configurations (offline, no project needed).\n\nExamples are vendored from keboola-mcp-server. The default is\nkeboola.flow (Conditional Flow); use them as blueprints for\n``kbagent flow new --definition-file flow.yaml``.\n\n``--component-id keboola.orchestrator`` serves the legacy orchestrator\nexamples for reference only -- kbagent cannot create or edit orchestrator\nflows (support was dropped in 0.57.0).",
       "params": [
         {"kind": "option", "name": "component_id", "opts": ["--component-id"], "type": "text", "default": "keboola.flow", "help": "Flow component id: keboola.flow (conditional, default) or keboola.orchestrator (legacy, informational only)."}
       ]
@@ -1540,12 +1546,13 @@
       "kind": "command",
       "hidden": false,
       "category": "write",
-      "help": "Create a new conditional-flow (keboola.flow) configuration.\n\n\b\nExamples:\n  # From a YAML file\n  kbagent flow new --project prod --name \"Daily ETL\" --file @flow.yaml\n\n  # Pipe from stdin\n  cat flow.yaml | kbagent flow new --project prod --name \"Daily ETL\" --file -",
+      "help": "Create a new conditional-flow (keboola.flow) configuration.\n\n\b\nExamples:\n  # From a YAML file\n  kbagent flow new --project prod --name \"Daily ETL\" --definition-file flow.yaml\n\n  # Pipe from stdin\n  cat flow.yaml | kbagent flow new --project prod --name \"Daily ETL\" --definition-file -",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "name", "opts": ["--name", "-n"], "type": "text", "required": true, "default": null, "help": "Flow name"},
         {"kind": "option", "name": "description", "opts": ["--description"], "type": "text", "default": "", "help": "Optional description"},
-        {"kind": "option", "name": "file", "opts": ["--file"], "type": "text", "default": null, "help": "YAML/JSON flow definition (@file, -, or inline). Run 'kbagent flow schema' to see the expected format."},
+        {"kind": "option", "name": "definition", "opts": ["--definition"], "type": "text", "default": null, "help": "YAML/JSON flow definition, inline. Run 'kbagent flow schema' to see the expected format."},
+        {"kind": "option", "name": "definition_file", "opts": ["--definition-file"], "type": "path", "default": null, "help": "Read the YAML/JSON flow definition from a file (- for stdin)."},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID"}
       ]
     },
@@ -1607,13 +1614,14 @@
       "kind": "command",
       "hidden": false,
       "category": "write",
-      "help": "Update a flow's name, description, or phases/tasks.\n\n\b\nExamples:\n  # Rename only\n  kbagent flow update --project prod --flow-id 123 --name \"New Name\"\n\n  # Replace phases + tasks from file\n  kbagent flow update --project prod --flow-id 123 --file @flow.yaml",
+      "help": "Update a flow's name, description, or phases/tasks.\n\n\b\nExamples:\n  # Rename only\n  kbagent flow update --project prod --flow-id 123 --name \"New Name\"\n\n  # Replace phases + tasks from file\n  kbagent flow update --project prod --flow-id 123 --definition-file flow.yaml",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "flow_id", "opts": ["--flow-id"], "type": "text", "required": true, "default": null, "help": "Flow configuration ID"},
         {"kind": "option", "name": "name", "opts": ["--name", "-n"], "type": "text", "default": null, "help": "New flow name"},
         {"kind": "option", "name": "description", "opts": ["--description"], "type": "text", "default": null, "help": "New description"},
-        {"kind": "option", "name": "file", "opts": ["--file"], "type": "text", "default": null, "help": "YAML/JSON flow definition to replace phases + tasks (@file, -, or inline)"},
+        {"kind": "option", "name": "definition", "opts": ["--definition"], "type": "text", "default": null, "help": "YAML/JSON flow definition to replace phases + tasks, inline"},
+        {"kind": "option", "name": "definition_file", "opts": ["--definition-file"], "type": "path", "default": null, "help": "Read the YAML/JSON flow definition from a file (- for stdin)."},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID"}
       ]
     },
@@ -1624,7 +1632,8 @@
       "category": "read",
       "help": "Validate a conditional-flow definition (schema + semantic checks).\n\nThe live keboola.flow JSON Schema is fetched from the stack of the project\n(``--project``, else the T1 chain) and structural validation runs alongside\nthe semantic checks; a fetch failure degrades gracefully (semantic-only + a\nwarning). When no project is registered or chosen, only the semantic checks\nrun and a note records that structural schema validation was skipped (no\nschema source).\n\nExit 0 when valid (warnings still printed), exit 2 when there are errors.",
       "params": [
-        {"kind": "option", "name": "file", "opts": ["--file"], "type": "text", "required": true, "default": null, "help": "YAML/JSON flow definition to validate (@file, -, or inline)."},
+        {"kind": "option", "name": "definition", "opts": ["--definition"], "type": "text", "default": null, "help": "YAML/JSON flow definition to validate, inline."},
+        {"kind": "option", "name": "definition_file", "opts": ["--definition-file"], "type": "path", "default": null, "help": "Read the YAML/JSON flow definition from a file (- for stdin)."},
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID whose stack gives the live JSON Schema (default: KBAGENT_PROJECT, then the active project, then the sole project; without any project, only the semantic checks run)"}
       ]
     },
@@ -1664,7 +1673,8 @@
       "help": "PATCH an endpoint on the running kbagent serve.",
       "params": [
         {"kind": "argument", "name": "path", "opts": ["path"], "type": "text", "required": true, "default": null, "help": "Endpoint path"},
-        {"kind": "option", "name": "body", "opts": ["--body"], "type": "text", "default": null, "help": "JSON body: inline JSON, @file.json, or - for stdin"},
+        {"kind": "option", "name": "body", "opts": ["--body"], "type": "text", "default": null, "help": "JSON body, inline"},
+        {"kind": "option", "name": "body_file", "opts": ["--body-file"], "type": "path", "default": null, "help": "Read the JSON body from a file (- for stdin)"},
         {"kind": "option", "name": "timeout", "opts": ["--timeout"], "type": "float", "default": 60.0, "help": "Request timeout (seconds)"}
       ]
     },
@@ -1676,7 +1686,8 @@
       "help": "POST to an endpoint on the running kbagent serve.",
       "params": [
         {"kind": "argument", "name": "path", "opts": ["path"], "type": "text", "required": true, "default": null, "help": "Endpoint path, e.g. /agents/test"},
-        {"kind": "option", "name": "body", "opts": ["--body"], "type": "text", "default": null, "help": "JSON body: inline JSON, @file.json, or - for stdin"},
+        {"kind": "option", "name": "body", "opts": ["--body"], "type": "text", "default": null, "help": "JSON body, inline"},
+        {"kind": "option", "name": "body_file", "opts": ["--body-file"], "type": "path", "default": null, "help": "Read the JSON body from a file (- for stdin)"},
         {"kind": "option", "name": "timeout", "opts": ["--timeout"], "type": "float", "default": 60.0, "help": "Request timeout (seconds)"}
       ]
     },
@@ -1866,7 +1877,7 @@
       "category": "read",
       "help": "Show what's in a cached lineage graph.\n\nDisplays per-project breakdown (tables, configs) and lists the most\nconnected tables -- good starting points for upstream/downstream queries.\n\nExample:\n\n  kbagent lineage info -l lineage.json",
       "params": [
-        {"kind": "option", "name": "load", "opts": ["--load", "-l"], "type": "path", "required": true, "default": null, "help": "Lineage JSON cache file (from `lineage build`)."}
+        {"kind": "option", "name": "load", "opts": ["--file"], "type": "path", "required": true, "default": null, "help": "Lineage JSON cache file (from `lineage build`)."}
       ]
     },
     {
@@ -1876,7 +1887,7 @@
       "category": "read",
       "help": "Start a local web server with interactive lineage browser.\n\nServes an interactive lineage browser from a cached lineage file.\nBrowse projects, tables, and configurations in the sidebar, then\nclick a node to query and visualize its upstream or downstream\ndependencies as a mermaid diagram.\n\nExample:\n\n  kbagent lineage server -l lineage.json\n  kbagent lineage server -l lineage.json --port 9000",
       "params": [
-        {"kind": "option", "name": "load", "opts": ["--load", "-l"], "type": "path", "required": true, "default": null, "help": "Lineage JSON cache file (from `lineage build`)."},
+        {"kind": "option", "name": "load", "opts": ["--file"], "type": "path", "required": true, "default": null, "help": "Lineage JSON cache file (from `lineage build`)."},
         {"kind": "option", "name": "port", "opts": ["--port"], "type": "integer", "default": 8088, "help": "Port to serve on."},
         {"kind": "option", "name": "host", "opts": ["--host"], "type": "text", "default": "127.0.0.1", "help": "Host to bind to."}
       ]
@@ -1888,7 +1899,7 @@
       "category": "read",
       "help": "Query upstream/downstream dependencies from a cached lineage graph.\n\nRequires a lineage cache file built with `lineage build`.\n\nNode identifiers for --upstream/--downstream:\n\n  Full FQN:    project-alias:bucket_id.table_name\n\n  Table only:  bucket_id.table_name  (auto-resolves, warns if ambiguous)\n\nOutput formats (--format):\n\n  text     Rich tree (default)\n\n  mermaid  Mermaid flowchart source code\n\n  html     Self-contained HTML file with embedded mermaid diagram\n\n  er       Mermaid entity-relationship diagram (tables with their columns)\n\nExamples:\n\n  kbagent lineage show -l lineage.json --downstream \"project:table\"\n\n  kbagent lineage show -l lineage.json --upstream \"project:table\" --columns\n\n  kbagent lineage show -l lineage.json --upstream \"project:table\" --column \"col_name\"\n\n  kbagent lineage show -l lineage.json --downstream \"project:table\" --format mermaid\n\n  kbagent lineage show -l lineage.json --downstream \"project:table\" --format html",
       "params": [
-        {"kind": "option", "name": "load", "opts": ["--load", "-l"], "type": "path", "required": true, "default": null, "help": "Lineage JSON cache file (from `lineage build`)."},
+        {"kind": "option", "name": "load", "opts": ["--file"], "type": "path", "required": true, "default": null, "help": "Lineage JSON cache file (from `lineage build`)."},
         {"kind": "option", "name": "upstream", "opts": ["--upstream"], "type": "text", "default": null, "help": "Show upstream dependencies. Use 'project:table_id' or just 'table_id'."},
         {"kind": "option", "name": "downstream", "opts": ["--downstream"], "type": "text", "default": null, "help": "Show downstream dependents. Use 'project:table_id' or just 'table_id'."},
         {"kind": "option", "name": "column", "opts": ["--column"], "type": "text", "default": null, "help": "Trace one column of a TABLE hop by hop (text or --json only). Follows column mappings recorded by `lineage build --ai`; stops, and says so, where no mapping is known."},
@@ -1912,7 +1923,7 @@
       "help": "Add your approval (destructive: the last approval is what a merge waits for).\n\nOnly possible while the merge request is `in_review`. On a non-SOX project\nwith 0 required approvals (the default) that state is never reached --\n`request-review` jumps straight to `approved` -- so this command answers\n422 there. It exists for projects that require approvals. Under --json the\ntarget must be explicit.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
-        {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id", "--id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
+        {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID whose merge request to use (default: the active branch set via `branch use`). Mutually exclusive with --merge-request-id"}
       ]
     },
@@ -1924,7 +1935,7 @@
       "help": "Arm or disarm automatic merging of this merge request (destructive).\n\nA backend scheduler runs every `approved` merge request whose strategy is\n`immediately` (or `scheduled` and due) through the same merge processor\n`merge` uses -- on its own, retrying until it lands, with `merge` never\ncalled. Arming is therefore a delayed production merge and its own,\nconsciously taken step: it is not a flag on `create` or `update`. Under\n--json the target must be explicit.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
-        {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id", "--id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
+        {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID whose merge request to use (default: the active branch set via `branch use`). Mutually exclusive with --merge-request-id"},
         {"kind": "option", "name": "strategy", "opts": ["--strategy"], "type": "text", "required": true, "default": null, "help": "immediately | scheduled | none. `immediately` and `scheduled` ARM: once the merge request is approved, the backend merges it into production on its own -- no `merge` call involved. `none` disarms"},
         {"kind": "option", "name": "at", "opts": ["--at"], "type": "text", "default": null, "help": "When to auto-merge (ISO 8601); required with --strategy scheduled"},
@@ -1939,7 +1950,7 @@
       "help": "List the configurations changed on both sides (computed live by the backend).\n\nConflicts are re-validated on every call and on every merge attempt, so\nrebasing each listed configuration (`merge-request resolve`) is sufficient\n-- there is no separate re-validate step.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
-        {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id", "--id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
+        {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID whose merge request to use (default: the active branch set via `branch use`). Mutually exclusive with --merge-request-id"}
       ]
     },
@@ -1966,7 +1977,7 @@
       "help": "Show one merge request: readiness, blockers, reviewers, change log, conflicts.\n\nReadiness (`mergeable` / `merge_blockers`) is informational -- the merge\nitself stays the authority. The change log is empty until the merge\nrequest is sent for review; that is the backend's behaviour, not a gap.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
-        {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id", "--id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
+        {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID whose merge request to use (default: the active branch set via `branch use`). Mutually exclusive with --merge-request-id"},
         {"kind": "option", "name": "activity_log", "opts": ["--activity-log"], "type": "boolean", "is_flag": true, "default": false, "help": "Include the merge request's activity log"}
       ]
@@ -1979,12 +1990,12 @@
       "help": "Three-way diff of one conflicting configuration, classified per path.\n\nEach differing path is tagged by who changed it: both (the actual\nconflict), only you, or only production. Deletions are not paths -- a\nside deleted wholesale is reported as such, with the resolution to pick.\nThe branch is the merge request's own; there is no --branch of the diff.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
-        {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id", "--id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
+        {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID whose merge request to use (default: the active branch set via `branch use`). Mutually exclusive with --merge-request-id"},
         {"kind": "option", "name": "component_id", "opts": ["--component-id"], "type": "text", "required": true, "default": null, "help": "Component ID"},
         {"kind": "option", "name": "config_id", "opts": ["--config-id"], "type": "text", "required": true, "default": null, "help": "Configuration ID"},
         {"kind": "option", "name": "output_format", "opts": ["--format"], "type": "text", "default": "short", "help": "short (long values elided) | full (print every value whole)"},
-        {"kind": "option", "name": "output", "opts": ["--output", "-o"], "type": "path", "default": null, "help": "Write the resolution candidate (your branch's content, ready to edit) to this file; hand it back with `merge-request resolve --resolved @FILE`"}
+        {"kind": "option", "name": "output", "opts": ["--output", "-o"], "type": "path", "default": null, "help": "Write the resolution candidate (your branch's content, ready to edit) to this file; hand it back with `merge-request resolve --resolved-file FILE`"}
       ]
     },
     {
@@ -2006,7 +2017,7 @@
       "help": "Merge the merge request into production and delete its source branch.\n\nWaits for the merge job (up to 10 minutes). Works straight from\n`development` when approvals are satisfied. The source branch is always\ndeleted afterwards (a separate async job). Under --json the target must be\nexplicit: pass --merge-request-id or --branch.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
-        {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id", "--id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
+        {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID whose merge request to use (default: the active branch set via `branch use`). Mutually exclusive with --merge-request-id"},
         {"kind": "option", "name": "yes", "opts": ["--yes", "-y"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip confirmation prompt"}
       ]
@@ -2019,7 +2030,7 @@
       "help": "Send the merge request back to development; existing approvals are removed.\n\nThis is also the closest thing to closing a merge request: the API has no\ncancel, and the web UI's \"cancel\" is exactly this call made by the\ncreator. The merge request stays open in `development` and can be\nresubmitted; deleting the branch is the terminal outcome.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
-        {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id", "--id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
+        {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID whose merge request to use (default: the active branch set via `branch use`). Mutually exclusive with --merge-request-id"},
         {"kind": "option", "name": "reason", "opts": ["--reason"], "type": "text", "default": null, "help": "Why (max 1000 characters)"}
       ]
@@ -2032,7 +2043,7 @@
       "help": "Send the merge request for review (destructive: it moves the MR toward production).\n\nOn a non-SOX project with 0 required approvals (the default) the backend\nfinishes the review itself and the merge request lands directly in\n`approved` -- where an armed auto-merge fires, and `merge` needs nothing\nmore. `merge` works straight from `development` there, so this step is\noptional. Note: with no reviewers selected, the review-requested email\ngoes to every project member. Under --json the target must be explicit.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
-        {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id", "--id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
+        {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID whose merge request to use (default: the active branch set via `branch use`). Mutually exclusive with --merge-request-id"}
       ]
     },
@@ -2044,12 +2055,13 @@
       "help": "Resolve one conflicting configuration (destructive: it removes a merge blocker).\n\nEvery mode replaces the configuration in your branch; the previous content\nstays in its version history. Rebasing each listed conflict makes the merge\nrequest mergeable -- there is no re-validate step, and on an armed MR the\nlast resolution is what lets the backend merge. There is deliberately no\n--all: conflicts are meant to be walked, not waved away. Under --json the\ntarget must be explicit.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
-        {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id", "--id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
+        {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID whose merge request to use (default: the active branch set via `branch use`). Mutually exclusive with --merge-request-id"},
         {"kind": "option", "name": "component_id", "opts": ["--component-id"], "type": "text", "required": true, "default": null, "help": "Component ID"},
         {"kind": "option", "name": "config_id", "opts": ["--config-id"], "type": "text", "required": true, "default": null, "help": "Configuration ID"},
-        {"kind": "option", "name": "take", "opts": ["--take"], "type": "text", "default": null, "help": "ours (keep your branch's content) | theirs (adopt production's) | delete. Mutually exclusive with --resolved"},
-        {"kind": "option", "name": "resolved", "opts": ["--resolved"], "type": "text", "default": null, "help": "A hand-authored resolution: JSON inline, @file, or - for stdin. Start from `merge-request diff --output FILE`; the body must carry name, description, isDisabled, configuration and rows (rebase REPLACES the whole configuration)"},
+        {"kind": "option", "name": "take", "opts": ["--take"], "type": "text", "default": null, "help": "ours (keep your branch's content) | theirs (adopt production's) | delete. Mutually exclusive with --resolved and --resolved-file"},
+        {"kind": "option", "name": "resolved", "opts": ["--resolved"], "type": "text", "default": null, "help": "A hand-authored resolution as inline JSON. Start from `merge-request diff --output FILE`; the body must carry name, description, isDisabled, configuration and rows (rebase REPLACES the whole configuration)"},
+        {"kind": "option", "name": "resolved_file", "opts": ["--resolved-file"], "type": "path", "default": null, "help": "Read the hand-authored resolution JSON from a file (- for stdin)"},
         {"kind": "option", "name": "change_description", "opts": ["--change-description"], "type": "text", "default": null, "help": "Version message for the rebased configuration"}
       ]
     },
@@ -2061,7 +2073,7 @@
       "help": "Change a merge request's title, description, reviewers or external id.\n\nOmitted fields stay as they are; an empty string clears --description /\n--external-id. --reviewer-id replaces the whole reviewer set. Auto-merge\nis not a field here -- it is the destructive `merge-request auto-merge`.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
-        {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id", "--id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
+        {"kind": "option", "name": "merge_request_id", "opts": ["--merge-request-id"], "type": "integer", "default": null, "help": "Merge request ID. Omit to use the merge request of --branch, or of the active branch (`branch use`)"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID whose merge request to use (default: the active branch set via `branch use`). Mutually exclusive with --merge-request-id"},
         {"kind": "option", "name": "title", "opts": ["--title"], "type": "text", "default": null, "help": "Merge request title"},
         {"kind": "option", "name": "description", "opts": ["--description"], "type": "text", "default": null, "help": "Description (on update: an empty string clears it)"},
@@ -2154,10 +2166,10 @@
       "kind": "command",
       "hidden": false,
       "category": "admin",
-      "help": "Set up projects and register them in the kbagent config.\n\nTwo modes:\n\n\b\n1. Org admin:    --org-id 123          (lists all projects in the org)\n2. Project member: --project-ids 1,2,3 (fetches specific projects)\n\nCreates Storage API tokens and registers projects. Safe to re-run --\nalready registered projects are skipped.\n\nThe Manage API token is read from an interactive hidden prompt by\ndefault (since 0.28.0). Pass the top-level --allow-env-manage-token\nflag to read KBC_MANAGE_API_TOKEN from env (CI/CD). Never passed as\na CLI argument.",
+      "help": "Set up projects and register them in the kbagent config.\n\nTwo modes:\n\n\b\n1. Org admin:    --org-id 123          (lists all projects in the org)\n2. Project member: --project-id 1 --project-id 2 (fetches specific projects)\n\nCreates Storage API tokens and registers projects. Safe to re-run --\nalready registered projects are skipped.\n\nThe Manage API token is read from an interactive hidden prompt by\ndefault (since 0.28.0). Pass the top-level --allow-env-manage-token\nflag to read KBC_MANAGE_API_TOKEN from env (CI/CD). Never passed as\na CLI argument.",
       "params": [
         {"kind": "option", "name": "org_id", "opts": ["--org-id"], "type": "integer", "default": null, "help": "Organization ID (requires org-admin manage token)"},
-        {"kind": "option", "name": "project_ids_raw", "opts": ["--project-ids"], "type": "text", "multiple": true, "default": null, "help": "Project ID (repeatable or comma-separated; works with Personal Access Token)"},
+        {"kind": "option", "name": "project_ids_raw", "opts": ["--project-id"], "type": "text", "multiple": true, "default": null, "help": "Project ID (repeat for more projects; works with Personal Access Token)"},
         {"kind": "option", "name": "url", "opts": ["--url"], "type": "text", "required": true, "envvar": "KBC_STORAGE_API_URL", "default": null, "help": "Keboola stack URL (e.g. https://connection.keboola.com)"},
         {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Preview what would happen without making changes"},
         {"kind": "option", "name": "yes", "opts": ["--yes", "-y"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip confirmation prompt"},
@@ -2234,7 +2246,6 @@
       "help": "Add a new Keboola project connection.\n\nThe token comes from --token-stdin, --token-file, --token-env, --token,\nthe KBC_TOKEN env var, or an interactive prompt. Every source other than\n--token keeps the value out of your shell history.",
       "params": [
         {"kind": "option", "name": "alias", "opts": ["--alias"], "type": "text", "required": true, "default": null, "help": "Alias of the new project"},
-        {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "hidden": true, "default": null},
         {"kind": "option", "name": "url", "opts": ["--url"], "type": "text", "envvar": "KBC_STORAGE_API_URL", "default": "https://connection.keboola.com", "help": "Keboola stack URL"},
         {"kind": "option", "name": "token", "opts": ["--token"], "type": "text", "envvar": "KBC_TOKEN", "default": null, "help": "Storage API token. Also settable via KBC_TOKEN. Prefer --token-stdin: a token passed here lands in your shell history and in a process listing."},
         {"kind": "option", "name": "token_stdin", "opts": ["--token-stdin"], "type": "boolean", "is_flag": true, "default": false, "help": "Read the token from stdin instead of --token. On a TTY this is a hidden prompt (Enter to confirm); on a pipe it reads until EOF (e.g. `printf '%s' \"$TOKEN\" | kbagent project edit --project P --token-stdin`). The token stays out of your shell history and out of a process listing."},
@@ -2252,7 +2263,6 @@
       "params": [
         {"kind": "option", "name": "url", "opts": ["--url"], "type": "text", "required": true, "default": null, "help": "Keboola stack URL to create the project on (required -- never guessed)"},
         {"kind": "option", "name": "alias", "opts": ["--alias"], "type": "text", "default": null, "help": "Local alias for the new project (default: from its name)"},
-        {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "hidden": true, "default": null},
         {"kind": "option", "name": "name", "opts": ["--name", "-n"], "type": "text", "default": null, "help": "Name for the new Keboola project"},
         {"kind": "option", "name": "backend", "opts": ["--backend"], "type": "choice", "choices": ["snowflake", "bigquery"], "default": null, "help": "Storage backend (default: the stack's own default)"},
         {"kind": "option", "name": "sync_backend_init", "opts": ["--sync-backend-init"], "type": "boolean", "is_flag": true, "default": false, "help": "Wait for the storage backend to be initialized before answering, instead of letting the stack finish it in the background"}
@@ -2263,7 +2273,7 @@
       "kind": "command",
       "hidden": false,
       "category": "read",
-      "help": "Show the active project.\n\nReports whether the value comes from the ``KBAGENT_PROJECT`` env var\n(``env``) or the saved active project (``pin``). Prints nothing but a hint if\nneither is set. ``resolved_alias`` / ``resolved_source`` name the project\na command without ``--project`` would use (``env``, ``active_project``,\n``sole``, or ``none``).",
+      "help": "Show the active project.\n\nReports whether the value comes from the ``KBAGENT_PROJECT`` env var\n(``env``) or the saved active project (``active_project``). Prints nothing but a hint if\nneither is set. ``resolved_alias`` / ``resolved_source`` name the project\na command without ``--project`` would use (``env``, ``active_project``,\n``sole``, or ``none``).",
       "params": []
     },
     {
@@ -2281,12 +2291,11 @@
       "kind": "command",
       "hidden": false,
       "category": "write",
-      "help": "Set the Keboola dashboard project description (markdown).\n\nWrites to ``KBC.projectDescription`` on the default branch. Provide the\ncontent via exactly one of --text, --file, or --stdin.",
+      "help": "Set the Keboola dashboard project description (markdown).\n\nWrites to ``KBC.projectDescription`` on the default branch. Provide the\ncontent via exactly one of --description or --description-file.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID to update (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
-        {"kind": "option", "name": "text", "opts": ["--text"], "type": "text", "default": null, "help": "Inline description string"},
-        {"kind": "option", "name": "file", "opts": ["--file"], "type": "path", "default": null, "help": "Read description from a UTF-8 markdown file"},
-        {"kind": "option", "name": "stdin", "opts": ["--stdin"], "type": "boolean", "is_flag": true, "default": false, "help": "Read description from standard input"}
+        {"kind": "option", "name": "text", "opts": ["--description"], "type": "text", "default": null, "help": "Inline description string"},
+        {"kind": "option", "name": "file", "opts": ["--description-file"], "type": "path", "default": null, "help": "Read the description from a UTF-8 markdown file (- for stdin)"}
       ]
     },
     {
@@ -2346,15 +2355,15 @@
       "kind": "command",
       "hidden": false,
       "category": "admin",
-      "help": "Invite a user (or many users via CSV) to one or more projects.\n\n\b\nSingle-shot:\n    kbagent project invite --project prod --email a@b.com --role admin\n\n\b\nBulk (one row per email; CSV header required):\n    kbagent project invite --from-csv participants.csv --default-role guest",
+      "help": "Invite a user (or many users via CSV) to one or more projects.\n\n\b\nSingle-shot:\n    kbagent project invite --project prod --email a@b.com --role admin\n\n\b\nBulk (one row per email; CSV header required):\n    kbagent project invite --file participants.csv --default-role guest",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID to invite the user to, single-shot mode (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "email", "opts": ["--email", "-e"], "type": "text", "default": null, "help": "Email address of the user to invite"},
         {"kind": "option", "name": "role", "opts": ["--role"], "type": "choice", "choices": ["admin", "guest", "readOnly", "share"], "default": null, "help": "Role to grant: admin | guest | readOnly | share"},
         {"kind": "option", "name": "reason", "opts": ["--reason"], "type": "text", "default": null, "help": "Optional human-readable reason attached to the invitation"},
-        {"kind": "option", "name": "from_csv", "opts": ["--from-csv"], "type": "path", "default": null, "help": "CSV file with columns email, project (alias or numeric ID), role[, reason]"},
-        {"kind": "option", "name": "default_role", "opts": ["--default-role"], "type": "choice", "choices": ["admin", "guest", "readOnly", "share"], "default": null, "help": "Role to apply when a CSV row has no role column"},
-        {"kind": "option", "name": "workers", "opts": ["--workers"], "type": "integer", "default": 8, "help": "Parallel workers for --from-csv (default 8)"},
+        {"kind": "option", "name": "file", "opts": ["--file"], "type": "path", "default": null, "help": "CSV file with columns email, project (alias or numeric ID), role[, reason]"},
+        {"kind": "option", "name": "default_role", "opts": ["--default-role"], "type": "choice", "choices": ["admin", "guest", "readOnly", "share"], "default": null, "help": "Role for a --file row that has no role column"},
+        {"kind": "option", "name": "workers", "opts": ["--workers"], "type": "integer", "default": 8, "help": "Parallel workers for --file (default 8)"},
         {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Preview without sending invitations"}
       ]
     },
@@ -2411,7 +2420,6 @@
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project; --all-projects for all projects)"},
         {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Refresh all projects with invalid tokens"},
-        {"kind": "option", "name": "all_", "opts": ["--all"], "type": "boolean", "is_flag": true, "hidden": true, "default": false},
         {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Preview what would be refreshed without making changes"},
         {"kind": "option", "name": "force", "opts": ["--force"], "type": "boolean", "is_flag": true, "default": false, "help": "Refresh even if token is valid"},
         {"kind": "option", "name": "yes", "opts": ["--yes", "-y"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip confirmation prompt"},
@@ -2546,10 +2554,10 @@
         {"kind": "option", "name": "name", "opts": ["--name", "-n"], "type": "text", "required": true, "default": null, "help": "Constraint name (regex ^[a-z][a-z0-9_]*$). For the 4-band health convention end with _critical / _warning / _healthy / _review."},
         {"kind": "option", "name": "constraint_type", "opts": ["--constraint-type"], "type": "text", "required": true, "default": null, "help": "One of: inequality|equality|range|composition|exclusion|temporal|conditional."},
         {"kind": "option", "name": "rule", "opts": ["--rule"], "type": "text", "required": true, "default": null, "help": "Rule expression STRING (e.g. \"value >= 0\"). NOT an object."},
-        {"kind": "option", "name": "metrics", "opts": ["--metrics"], "type": "text", "required": true, "multiple": true, "default": null, "help": "Metric name this constraint applies to (repeatable or comma-separated)."},
+        {"kind": "option", "name": "metrics", "opts": ["--metric"], "type": "text", "required": true, "multiple": true, "default": null, "help": "Metric name this constraint applies to (repeat for more metrics)."},
         {"kind": "option", "name": "severity", "opts": ["--severity"], "type": "text", "default": "warning", "help": "One of: error|warning|info (the 3-level API enum)."},
         {"kind": "option", "name": "scope", "opts": ["--scope"], "type": "choice", "choices": ["project", "organization", "targeted"], "default": null, "help": "Visibility: 'project' (owner only), 'organization' (every project in the org), or 'targeted' (owner + --target-project grants). Default: the model's own scope."},
-        {"kind": "option", "name": "target_project", "opts": ["--target-project"], "type": "text", "multiple": true, "default": [], "help": "Project alias or ID to grant visibility to (repeatable or comma-separated; --scope targeted only)."}
+        {"kind": "option", "name": "target_project", "opts": ["--target-project"], "type": "text", "multiple": true, "default": [], "help": "Project alias or ID to grant visibility to (repeat for more projects; --scope targeted only)."}
       ]
     },
     {
@@ -2569,7 +2577,7 @@
         {"kind": "option", "name": "deep_fields", "opts": ["--deep-fields"], "type": "boolean", "is_flag": true, "default": false, "help": "Fetch storage schema and synthesise fields[] with role heuristics."},
         {"kind": "option", "name": "fqn", "opts": ["--fqn"], "type": "text", "default": null, "help": "Store this fqn verbatim instead of reading the table's warehouse location from Storage, e.g. '\"DB\".\"out.c-bucket\".\"table\"'."},
         {"kind": "option", "name": "scope", "opts": ["--scope"], "type": "choice", "choices": ["project", "organization", "targeted"], "default": null, "help": "Visibility: 'project' (owner only), 'organization' (every project in the org), or 'targeted' (owner + --target-project grants). Default: the model's own scope."},
-        {"kind": "option", "name": "target_project", "opts": ["--target-project"], "type": "text", "multiple": true, "default": [], "help": "Project alias or ID to grant visibility to (repeatable or comma-separated; --scope targeted only)."}
+        {"kind": "option", "name": "target_project", "opts": ["--target-project"], "type": "text", "multiple": true, "default": [], "help": "Project alias or ID to grant visibility to (repeat for more projects; --scope targeted only)."}
       ]
     },
     {
@@ -2584,7 +2592,7 @@
         {"kind": "option", "name": "term", "opts": ["--term"], "type": "text", "required": true, "default": null, "help": "Glossary term"},
         {"kind": "option", "name": "definition", "opts": ["--definition"], "type": "text", "required": true, "default": null, "help": "Definition of the term (the metastore requires one)"},
         {"kind": "option", "name": "scope", "opts": ["--scope"], "type": "choice", "choices": ["project", "organization", "targeted"], "default": null, "help": "Visibility: 'project' (owner only), 'organization' (every project in the org), or 'targeted' (owner + --target-project grants). Default: the model's own scope."},
-        {"kind": "option", "name": "target_project", "opts": ["--target-project"], "type": "text", "multiple": true, "default": [], "help": "Project alias or ID to grant visibility to (repeatable or comma-separated; --scope targeted only)."}
+        {"kind": "option", "name": "target_project", "opts": ["--target-project"], "type": "text", "multiple": true, "default": [], "help": "Project alias or ID to grant visibility to (repeat for more projects; --scope targeted only)."}
       ]
     },
     {
@@ -2602,7 +2610,7 @@
         {"kind": "option", "name": "description", "opts": ["--description"], "type": "text", "default": "", "help": "Optional description"},
         {"kind": "option", "name": "yes", "opts": ["--yes", "-y"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip the dataset-mismatch warning"},
         {"kind": "option", "name": "scope", "opts": ["--scope"], "type": "choice", "choices": ["project", "organization", "targeted"], "default": null, "help": "Visibility: 'project' (owner only), 'organization' (every project in the org), or 'targeted' (owner + --target-project grants). Default: the model's own scope."},
-        {"kind": "option", "name": "target_project", "opts": ["--target-project"], "type": "text", "multiple": true, "default": [], "help": "Project alias or ID to grant visibility to (repeatable or comma-separated; --scope targeted only)."}
+        {"kind": "option", "name": "target_project", "opts": ["--target-project"], "type": "text", "multiple": true, "default": [], "help": "Project alias or ID to grant visibility to (repeat for more projects; --scope targeted only)."}
       ]
     },
     {
@@ -2620,7 +2628,7 @@
         {"kind": "option", "name": "on", "opts": ["--on"], "type": "text", "required": true, "default": null, "help": "Join condition"},
         {"kind": "option", "name": "type_", "opts": ["--type", "-t"], "type": "text", "default": "left", "help": "Join type: 'left' or 'inner'."},
         {"kind": "option", "name": "scope", "opts": ["--scope"], "type": "choice", "choices": ["project", "organization", "targeted"], "default": null, "help": "Visibility: 'project' (owner only), 'organization' (every project in the org), or 'targeted' (owner + --target-project grants). Default: the model's own scope."},
-        {"kind": "option", "name": "target_project", "opts": ["--target-project"], "type": "text", "multiple": true, "default": [], "help": "Project alias or ID to grant visibility to (repeatable or comma-separated; --scope targeted only)."}
+        {"kind": "option", "name": "target_project", "opts": ["--target-project"], "type": "text", "multiple": true, "default": [], "help": "Project alias or ID to grant visibility to (repeat for more projects; --scope targeted only)."}
       ]
     },
     {
@@ -2632,7 +2640,7 @@
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Target project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "model", "opts": ["--model"], "type": "text", "default": null, "help": "Update this existing model (name or UUID). If omitted, a new model is created."},
-        {"kind": "option", "name": "tables", "opts": ["--tables"], "type": "text", "multiple": true, "default": null, "help": "Table ID to base the model on (repeatable or comma-separated; required)."},
+        {"kind": "option", "name": "tables", "opts": ["--table-id"], "type": "text", "multiple": true, "default": null, "help": "Table ID to base the model on (repeat for more tables; required)."},
         {"kind": "option", "name": "name", "opts": ["--name", "-n"], "type": "text", "default": null, "help": "Model name when creating (default: kbagent_build_model)."},
         {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Print the generated JSON + validation, no POST."},
         {"kind": "option", "name": "keep_on_failure", "opts": ["--keep-on-failure"], "type": "boolean", "is_flag": true, "default": false, "help": "Keep partially-pushed model + children on failure (forensics). Default: rollback in reverse PUSH_ORDER + delete the model if we created it."},
@@ -2676,7 +2684,7 @@
         {"kind": "option", "name": "new_rule", "opts": ["--new-rule"], "type": "text", "default": null, "help": "Replace rule (STRING)"},
         {"kind": "option", "name": "new_constraint_type", "opts": ["--new-constraint-type"], "type": "text", "default": null, "help": "Replace constraintType (closed enum)"},
         {"kind": "option", "name": "new_severity", "opts": ["--new-severity"], "type": "text", "default": null, "help": "Replace severity (error|warning|info)"},
-        {"kind": "option", "name": "new_metrics", "opts": ["--new-metrics"], "type": "text", "multiple": true, "default": null, "help": "Replace metric names (repeatable or comma-separated)"}
+        {"kind": "option", "name": "new_metrics", "opts": ["--new-metric"], "type": "text", "multiple": true, "default": null, "help": "Replace the metric names (repeat for more metrics)"}
       ]
     },
     {
@@ -2776,12 +2784,11 @@
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Target project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "file", "opts": ["--file"], "type": "path", "required": true, "default": null, "help": "Snapshot JSON file (output of `semantic-layer export`)"},
         {"kind": "option", "name": "model", "opts": ["--model"], "type": "text", "default": null, "help": "Target model name or UUID (defaults to the sole model)"},
-        {"kind": "option", "name": "types", "opts": ["--types"], "type": "text", "multiple": true, "default": null, "help": "Item type to import (repeatable or comma-separated): datasets, metrics, relationships, glossary, constraints"},
+        {"kind": "option", "name": "types", "opts": ["--type", "-t"], "type": "text", "multiple": true, "default": null, "help": "Item type to import (repeat for more types): datasets, metrics, relationships, glossary, constraints"},
         {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Plan the import without calling any write API"},
         {"kind": "option", "name": "overwrite", "opts": ["--overwrite"], "type": "boolean", "is_flag": true, "default": false, "help": "Update conflicting items in place (default: skip)"},
-        {"kind": "option", "name": "yes", "opts": ["--yes", "-y"], "type": "boolean", "is_flag": true, "hidden": true, "default": false},
         {"kind": "option", "name": "scope", "opts": ["--scope"], "type": "choice", "choices": ["project", "organization", "targeted"], "default": null, "help": "Visibility of the NEW items: 'project', 'organization' or 'targeted'. Omitted: the target model's own scope, as with `add <kind>`."},
-        {"kind": "option", "name": "target_project", "opts": ["--target-project"], "type": "text", "multiple": true, "default": [], "help": "Project alias or ID that can see the new items (repeatable or comma-separated; --scope targeted only)."}
+        {"kind": "option", "name": "target_project", "opts": ["--target-project"], "type": "text", "multiple": true, "default": [], "help": "Project alias or ID that can see the new items (repeat for more projects; --scope targeted only)."}
       ]
     },
     {
@@ -2802,7 +2809,7 @@
         {"kind": "option", "name": "description", "opts": ["--description"], "type": "text", "default": "", "help": "Optional description"},
         {"kind": "option", "name": "sql_dialect", "opts": ["--sql-dialect"], "type": "text", "default": "Snowflake", "help": "SQL dialect (default: Snowflake)"},
         {"kind": "option", "name": "scope", "opts": ["--scope"], "type": "choice", "choices": ["project", "organization", "targeted"], "default": null, "help": "Visibility: 'project' (default, owner only), 'organization' (every project in the org), or 'targeted' (owner + explicit --target-project grants)."},
-        {"kind": "option", "name": "target_project", "opts": ["--target-project"], "type": "text", "multiple": true, "default": [], "help": "Project alias or ID to grant visibility to (repeatable or comma-separated; --scope targeted only)."}
+        {"kind": "option", "name": "target_project", "opts": ["--target-project"], "type": "text", "multiple": true, "default": [], "help": "Project alias or ID to grant visibility to (repeat for more projects; --scope targeted only)."}
       ]
     },
     {
@@ -2838,11 +2845,11 @@
         {"kind": "option", "name": "to_project", "opts": ["--to-project"], "type": "text", "required": true, "default": null, "help": "Target project alias"},
         {"kind": "option", "name": "from_model", "opts": ["--from-model"], "type": "text", "default": null, "help": "Source model name or UUID (defaults to sole)"},
         {"kind": "option", "name": "to_model", "opts": ["--to-model"], "type": "text", "default": null, "help": "Target model name or UUID (defaults to sole)"},
-        {"kind": "option", "name": "types", "opts": ["--types"], "type": "text", "multiple": true, "default": null, "help": "Item type to copy (repeatable or comma-separated): datasets, metrics, relationships, glossary, constraints"},
+        {"kind": "option", "name": "types", "opts": ["--type", "-t"], "type": "text", "multiple": true, "default": null, "help": "Item type to copy (repeat for more types): datasets, metrics, relationships, glossary, constraints"},
         {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Classify NEW/IDENTICAL/CHANGED without writing"},
         {"kind": "option", "name": "yes", "opts": ["--yes", "-y"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip the cross-project confirmation prompt"},
         {"kind": "option", "name": "scope", "opts": ["--scope"], "type": "choice", "choices": ["project", "organization", "targeted"], "default": null, "help": "Visibility of the NEW items: 'project', 'organization' or 'targeted'. Omitted: the target model's own scope, as with `add <kind>`."},
-        {"kind": "option", "name": "target_project", "opts": ["--target-project"], "type": "text", "multiple": true, "default": [], "help": "Project alias or ID that can see the new items (repeatable or comma-separated; --scope targeted only)."}
+        {"kind": "option", "name": "target_project", "opts": ["--target-project"], "type": "text", "multiple": true, "default": [], "help": "Project alias or ID that can see the new items (repeat for more projects; --scope targeted only)."}
       ]
     },
     {
@@ -2859,7 +2866,7 @@
       "help": "Delete a reference-data record by UUID (server-side soft-delete).",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
-        {"kind": "option", "name": "id_", "opts": ["--id"], "type": "text", "required": true, "default": null, "help": "Record UUID"},
+        {"kind": "option", "name": "reference_data_id", "opts": ["--reference-data-id"], "type": "text", "required": true, "default": null, "help": "Record UUID"},
         {"kind": "option", "name": "yes", "opts": ["--yes", "-y"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip the confirm prompt"}
       ]
     },
@@ -2868,11 +2875,11 @@
       "kind": "command",
       "hidden": false,
       "category": "read",
-      "help": "Fetch one record (all members) by ``--id`` or by ``--dimension``.",
+      "help": "Fetch one record (all members) by ``--reference-data-id`` or by ``--dimension``.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
-        {"kind": "option", "name": "id_", "opts": ["--id"], "type": "text", "default": null, "help": "Record UUID"},
-        {"kind": "option", "name": "dimension", "opts": ["--dimension"], "type": "text", "default": null, "help": "Dimension name (project-unique; instead of --id)"}
+        {"kind": "option", "name": "reference_data_id", "opts": ["--reference-data-id"], "type": "text", "default": null, "help": "Record UUID"},
+        {"kind": "option", "name": "dimension", "opts": ["--dimension"], "type": "text", "default": null, "help": "Dimension name (project-unique; instead of --reference-data-id)"}
       ]
     },
     {
@@ -2896,7 +2903,8 @@
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "model", "opts": ["--model"], "type": "text", "default": null, "help": "Model name or UUID"},
         {"kind": "option", "name": "dimension", "opts": ["--dimension"], "type": "text", "required": true, "default": null, "help": "Dimension name, e.g. 'chart_of_accounts'"},
-        {"kind": "option", "name": "members_file", "opts": ["--members-file"], "type": "text", "required": true, "default": null, "help": "Path to a JSON array of member objects ('-' reads stdin)."},
+        {"kind": "option", "name": "members", "opts": ["--members"], "type": "text", "default": null, "help": "JSON array of member objects, inline."},
+        {"kind": "option", "name": "members_file", "opts": ["--members-file"], "type": "path", "default": null, "help": "Read the JSON array of member objects from a file (- for stdin)."},
         {"kind": "option", "name": "dataset_id", "opts": ["--dataset-id"], "type": "text", "default": null, "help": "Optional tableId of the descriptive dataset (e.g. DIM_COA)"},
         {"kind": "option", "name": "description", "opts": ["--description"], "type": "text", "default": null, "help": "Optional description"}
       ]
@@ -2977,10 +2985,10 @@
       "kind": "command",
       "hidden": false,
       "category": "read",
-      "help": "Fetch the server-side JSON Schema of semantic object types.\n\nSchemas are fetched live from the project's metastore (never bundled),\nso they always match the deployed metastore version. Pass exactly one\nof ``--type`` (repeatable or comma-separated) or ``--all``.",
+      "help": "Fetch the server-side JSON Schema of semantic object types.\n\nSchemas are fetched live from the project's metastore (never bundled),\nso they always match the deployed metastore version. Pass exactly one\nof ``--type`` (repeatable) or ``--all``.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
-        {"kind": "option", "name": "types", "opts": ["--type", "-t"], "type": "text", "multiple": true, "default": null, "help": "Semantic type (repeatable or comma-separated): model | dataset | metric | relationship | constraint | glossary."},
+        {"kind": "option", "name": "types", "opts": ["--type", "-t"], "type": "text", "multiple": true, "default": null, "help": "Semantic type (repeat for more types): model | dataset | metric | relationship | constraint | glossary."},
         {"kind": "option", "name": "all_types", "opts": ["--all"], "type": "boolean", "is_flag": true, "default": false, "help": "Fetch the schema of every known semantic type."}
       ]
     },
@@ -3000,7 +3008,7 @@
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Owning project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "type_", "opts": ["--type", "-t"], "type": "choice", "choices": ["model", "dataset", "metric", "relationship", "constraint", "glossary"], "required": true, "default": null, "help": "Semantic item type"},
         {"kind": "option", "name": "context_id", "opts": ["--context-id"], "type": "text", "required": true, "default": null, "help": "Item UUID"},
-        {"kind": "option", "name": "target_project", "opts": ["--target-project"], "type": "text", "multiple": true, "default": [], "help": "Project alias or ID (repeatable, or comma-separated)."}
+        {"kind": "option", "name": "target_project", "opts": ["--target-project"], "type": "text", "multiple": true, "default": [], "help": "Project alias or ID (repeat for more projects)."}
       ]
     },
     {
@@ -3025,7 +3033,19 @@
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Owning project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "type_", "opts": ["--type", "-t"], "type": "choice", "choices": ["model", "dataset", "metric", "relationship", "constraint", "glossary"], "required": true, "default": null, "help": "Semantic item type"},
         {"kind": "option", "name": "context_id", "opts": ["--context-id"], "type": "text", "required": true, "default": null, "help": "Item UUID"},
-        {"kind": "option", "name": "target_project", "opts": ["--target-project"], "type": "text", "multiple": true, "default": [], "help": "Project alias or ID (repeatable, or comma-separated)."}
+        {"kind": "option", "name": "target_project", "opts": ["--target-project"], "type": "text", "multiple": true, "default": [], "help": "Project alias or ID (repeat for more projects)."}
+      ]
+    },
+    {
+      "path": "semantic-layer scope request-cancel",
+      "kind": "command",
+      "hidden": false,
+      "category": "write",
+      "help": "Withdraw a pending scope-elevation request. Idempotent no-op if none is pending.",
+      "params": [
+        {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Owning project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
+        {"kind": "option", "name": "type_", "opts": ["--type", "-t"], "type": "choice", "choices": ["model", "dataset", "metric", "relationship", "constraint", "glossary"], "required": true, "default": null, "help": "Semantic item type"},
+        {"kind": "option", "name": "context_id", "opts": ["--context-id"], "type": "text", "required": true, "default": null, "help": "Item UUID"}
       ]
     },
     {
@@ -3034,18 +3054,6 @@
       "hidden": false,
       "category": "write",
       "help": "Flag a project-scoped item as awaiting an org-admin's step-up decision.",
-      "params": [
-        {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Owning project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
-        {"kind": "option", "name": "type_", "opts": ["--type", "-t"], "type": "choice", "choices": ["model", "dataset", "metric", "relationship", "constraint", "glossary"], "required": true, "default": null, "help": "Semantic item type"},
-        {"kind": "option", "name": "context_id", "opts": ["--context-id"], "type": "text", "required": true, "default": null, "help": "Item UUID"}
-      ]
-    },
-    {
-      "path": "semantic-layer scope request-delete",
-      "kind": "command",
-      "hidden": false,
-      "category": "write",
-      "help": "Withdraw a pending scope-elevation request. Idempotent no-op if none is pending.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Owning project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "type_", "opts": ["--type", "-t"], "type": "choice", "choices": ["model", "dataset", "metric", "relationship", "constraint", "glossary"], "required": true, "default": null, "help": "Semantic item type"},
@@ -3076,7 +3084,7 @@
         {"kind": "option", "name": "type_", "opts": ["--type", "-t"], "type": "choice", "choices": ["model", "dataset", "metric", "relationship", "constraint", "glossary"], "required": true, "default": null, "help": "Semantic item type"},
         {"kind": "option", "name": "context_id", "opts": ["--context-id"], "type": "text", "required": true, "default": null, "help": "Item UUID"},
         {"kind": "option", "name": "scope", "opts": ["--scope"], "type": "choice", "choices": ["organization"], "default": null, "help": "Step the item up to organization scope. Requires org-admin; ONE-WAY, no downgrade."},
-        {"kind": "option", "name": "target_project", "opts": ["--target-project"], "type": "text", "multiple": true, "default": [], "help": "Project alias or ID (repeatable, or comma-separated)."},
+        {"kind": "option", "name": "target_project", "opts": ["--target-project"], "type": "text", "multiple": true, "default": [], "help": "Project alias or ID (repeat for more projects)."},
         {"kind": "option", "name": "clear", "opts": ["--clear"], "type": "boolean", "is_flag": true, "default": false, "help": "Clear every target project."},
         {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Show the change without applying it."},
         {"kind": "option", "name": "yes", "opts": ["--yes", "-y"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip the elevation confirmation."}
@@ -3200,20 +3208,22 @@
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID that owns the bucket to share (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "bucket_id", "opts": ["--bucket-id"], "type": "text", "required": true, "default": null, "help": "Bucket ID to share (e.g. out.c-data)."},
-        {"kind": "option", "name": "sharing_type", "opts": ["--type", "-t"], "type": "text", "required": true, "default": null, "help": "Sharing type: 'organization' (all org members), 'organization-project' (all project members in org), 'selected-projects' (specific projects, use --target-project-ids), 'selected-users' (specific users, use --target-users)."},
-        {"kind": "option", "name": "target_project_ids", "opts": ["--target-project-ids"], "type": "text", "multiple": true, "default": null, "help": "Project ID (repeatable or comma-separated; required for --type selected-projects)."},
-        {"kind": "option", "name": "target_users", "opts": ["--target-users"], "type": "text", "multiple": true, "default": null, "help": "Email address (repeatable or comma-separated; required for --type selected-users)."}
+        {"kind": "option", "name": "sharing_type", "opts": ["--type", "-t"], "type": "text", "required": true, "default": null, "help": "Sharing type: 'organization' (all org members), 'organization-project' (all project members in org), 'selected-projects' (specific projects, use --target-project), 'selected-users' (specific users, use --target-user)."},
+        {"kind": "option", "name": "target_project", "opts": ["--target-project"], "type": "text", "multiple": true, "default": null, "help": "Project alias or ID to share with (repeat for more projects; required for --type selected-projects)."},
+        {"kind": "option", "name": "target_user", "opts": ["--target-user"], "type": "text", "multiple": true, "default": null, "help": "Email address (repeat for more users; required for --type selected-users)."}
       ]
     },
     {
       "path": "sharing unlink",
       "kind": "command",
       "hidden": false,
-      "category": "write",
-      "help": "Remove a linked bucket from a project.\n\nDeletes the linked bucket. Does not affect the source bucket or\nother projects that have linked it. Uses the regular project token.",
+      "category": "destructive",
+      "help": "Remove a linked bucket from a project (destructive).\n\nDeletes the linked bucket and the tables it shows in this project. Does\nnot affect the source bucket or other projects that have linked it.\nUses the regular project token.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID containing the linked bucket (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
-        {"kind": "option", "name": "bucket_id", "opts": ["--bucket-id"], "type": "text", "required": true, "default": null, "help": "Linked bucket ID to remove (e.g. in.c-shared-data)."}
+        {"kind": "option", "name": "bucket_id", "opts": ["--bucket-id"], "type": "text", "required": true, "default": null, "help": "Linked bucket ID to remove (e.g. in.c-shared-data)."},
+        {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Check that the bucket is a linked bucket and show what would be deleted"},
+        {"kind": "option", "name": "yes", "opts": ["--yes", "-y"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip confirmation prompt"}
       ]
     },
     {
@@ -3238,7 +3248,7 @@
       "kind": "command",
       "hidden": false,
       "category": "write",
-      "help": "Add a single column to an existing table (synchronous, typed).\n\nMirrors ``create-table --column``: ``name:TYPE(length)`` creates a typed\ncolumn; a bare ``name`` adds an untyped STRING column. The Storage\nadd-column endpoint is synchronous -- there is no job to wait on.",
+      "help": "Add a single column to an existing table (typed; waits for the job).\n\nMirrors ``create-table --column``: ``name:TYPE(length)`` creates a typed\ncolumn; a bare ``name`` adds an untyped STRING column. The command waits\nfor the Storage job, so a following table-detail lists the column; a\nfailed job is reported as an error.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "table_id", "opts": ["--table-id"], "type": "text", "required": true, "default": null, "help": "Table ID to add the column to (e.g. 'in.c-bucket.table')"},
@@ -3305,14 +3315,14 @@
       "kind": "command",
       "hidden": false,
       "category": "write",
-      "help": "Create a new storage table with typed columns.\n\nBase types (`STRING`, `INTEGER`, `NUMERIC`, `FLOAT`, `BOOLEAN`, `DATE`,\n`TIMESTAMP`) plus any native backend type (`VARCHAR(n)`, `NUMBER(p,s)`,\n`TIMESTAMP_TZ`, `VARIANT`, etc.) are accepted. Type/length validation\nis delegated to the Keboola Storage API, which has precise per-backend\nrules and returns actionable errors.\n\nWhen `--branch` targets a dev branch and the bucket has not been\nmaterialized there yet, kbagent auto-creates it (mirrors the official\nGo CLI's `EnsureBucketExists`). The response's `auto_created_bucket`\nflag reports whether this happened.\n\nExamples:\n    kbagent storage create-table --project p --bucket-id in.c-b --name t \\\n        --column id:INTEGER --column name:STRING --primary-key id\n\n    kbagent storage create-table --project p --bucket-id in.c-b --name sales \\\n        --column pk:VARCHAR(40) --column amount:NUMERIC(18,2) \\\n        --column ts:TIMESTAMP_TZ --column is_paid:BOOLEAN \\\n        --primary-key pk --not-null pk --not-null amount \\\n        --default amount=0 --default is_paid=false\n\n    # BigQuery: repartition a populated table by copying it into a new\n    # layout, then swap it into place (no --column -- schema derives from\n    # the source):\n    kbagent storage create-table --project p --bucket-id in.c-main \\\n        --name events_repart --source-table-id in.c-main.events \\\n        --time-partitioning-type DAY --time-partitioning-field created_at \\\n        --clustering-field tenant_id --primary-key id --branch 123",
+      "help": "Create a new storage table with typed columns.\n\nBase types (`STRING`, `INTEGER`, `NUMERIC`, `FLOAT`, `BOOLEAN`, `DATE`,\n`TIMESTAMP`) plus any native backend type (`VARCHAR(n)`, `NUMBER(p,s)`,\n`TIMESTAMP_TZ`, `VARIANT`, etc.) are accepted. Type/length validation\nis delegated to the Keboola Storage API, which has precise per-backend\nrules and returns actionable errors.\n\nWhen `--branch` targets a dev branch and the bucket has not been\nmaterialized there yet, kbagent auto-creates it (mirrors the official\nGo CLI's `EnsureBucketExists`). The response's `auto_created_bucket`\nflag reports whether this happened.\n\nExamples:\n    kbagent storage create-table --project p --bucket-id in.c-b --name t \\\n        --column id:INTEGER --column name:STRING --primary-key id\n\n    kbagent storage create-table --project p --bucket-id in.c-b --name sales \\\n        --column pk:VARCHAR(40) --column amount:NUMERIC(18,2) \\\n        --column ts:TIMESTAMP_TZ --column is_paid:BOOLEAN \\\n        --primary-key pk --not-null-column pk --not-null-column amount \\\n        --default amount=0 --default is_paid=false\n\n    # BigQuery: repartition a populated table by copying it into a new\n    # layout, then swap it into place (no --column -- schema derives from\n    # the source):\n    kbagent storage create-table --project p --bucket-id in.c-main \\\n        --name events_repart --source-table-id in.c-main.events \\\n        --time-partitioning-type DAY --time-partitioning-field created_at \\\n        --clustering-field tenant_id --primary-key id --branch 123",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "bucket_id", "opts": ["--bucket-id"], "type": "text", "required": true, "default": null, "help": "Target bucket ID (e.g. 'in.c-my-bucket')"},
         {"kind": "option", "name": "name", "opts": ["--name", "-n"], "type": "text", "required": true, "default": null, "help": "Table name"},
         {"kind": "option", "name": "column", "opts": ["--column"], "type": "text", "multiple": true, "default": null, "help": "Column as 'name:TYPE' or 'name:TYPE(length)'. Repeatable. Base types: STRING, INTEGER, NUMERIC, FLOAT, BOOLEAN, DATE, TIMESTAMP. Native types are passed through to the Storage API (e.g. 'pk:VARCHAR(40)', 'amount:NUMERIC(18,2)', 'ts:TIMESTAMP_TZ', 'meta:VARIANT'). Required unless --source-table-id is given; the two are mutually exclusive."},
         {"kind": "option", "name": "primary_key", "opts": ["--primary-key"], "type": "text", "multiple": true, "default": null, "help": "Primary key column name. Can be repeated."},
-        {"kind": "option", "name": "not_null", "opts": ["--not-null"], "type": "text", "multiple": true, "default": null, "help": "Column name to mark NOT NULL. Can be repeated. Must match a --column name."},
+        {"kind": "option", "name": "not_null", "opts": ["--not-null-column"], "type": "text", "multiple": true, "default": null, "help": "Column name to mark NOT NULL. Can be repeated. Must match a --column name."},
         {"kind": "option", "name": "default", "opts": ["--default"], "type": "text", "multiple": true, "default": null, "help": "Column default as 'name=value'. Can be repeated. Boolean values must be lowercase ('true'/'false') per Keboola API validation."},
         {"kind": "option", "name": "source_table_id", "opts": ["--source-table-id"], "type": "text", "default": null, "help": "Create the table by copying an existing table's data into the requested partition/clustering layout (BigQuery only). The column definition is derived from the source, so --column must not be used. Pair with 'swap-tables' to repartition a populated table in place."},
         {"kind": "option", "name": "source_branch_id", "opts": ["--source-branch-id"], "type": "integer", "default": null, "help": "Branch ID the source table is resolved in (defaults to the request branch). 0 means production."},
@@ -3383,7 +3393,7 @@
       "help": "Apply descriptions to buckets, tables, and columns from a YAML file.\n\nYAML schema:\n\n    buckets:\n      in.c-my-bucket: \"Bucket description\"\n\n    tables:\n      in.c-my-bucket.my-table: \"Table description\"\n\n    columns:\n      in.c-my-bucket.my-table:\n        col1: \"Column 1 description\"\n        col2: \"Column 2 description\"\n\nAll sections are optional (absent or empty sections are skipped).\n\nA malformed file -- a section that is not a mapping of ID to\ndescription, a null description, a non-mapping columns entry -- is\nrejected before any write (INVALID_ARGUMENT, exit 2), naming the\noffending key.  Once application starts, a per-item API failure does\nnot abort the rest: those results are collected and reported, and the\ncommand exits 1 if any item failed.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
-        {"kind": "option", "name": "from_file", "opts": ["--from-file"], "type": "path", "required": true, "default": null, "help": "Path to a YAML file with bucket/table/column descriptions"},
+        {"kind": "option", "name": "file", "opts": ["--file"], "type": "path", "required": true, "default": null, "help": "Path to a YAML file with bucket/table/column descriptions"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID (defaults to active branch if set via 'branch use')"}
       ]
     },
@@ -3392,13 +3402,12 @@
       "kind": "command",
       "hidden": false,
       "category": "write",
-      "help": "Set the description on a storage bucket.\n\nStores the description as KBC.description in bucket metadata (upsert).\nProvide the text via --text, --file, or --stdin (exactly one required).",
+      "help": "Set the description on a storage bucket.\n\nStores the description as KBC.description in bucket metadata (upsert).\nProvide the text via --description or --description-file (exactly one).",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "bucket_id", "opts": ["--bucket-id"], "type": "text", "required": true, "default": null, "help": "Bucket ID (e.g. 'in.c-my-bucket')"},
-        {"kind": "option", "name": "text", "opts": ["--text"], "type": "text", "default": null, "help": "Description text (inline)"},
-        {"kind": "option", "name": "file", "opts": ["--file"], "type": "path", "default": null, "help": "Path to a file containing the description"},
-        {"kind": "option", "name": "stdin", "opts": ["--stdin"], "type": "boolean", "is_flag": true, "default": false, "help": "Read description from standard input"},
+        {"kind": "option", "name": "text", "opts": ["--description"], "type": "text", "default": null, "help": "Description text (inline)"},
+        {"kind": "option", "name": "file", "opts": ["--description-file"], "type": "path", "default": null, "help": "Read the description from a file (- for stdin)"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID (defaults to active branch if set via 'branch use')"}
       ]
     },
@@ -3436,13 +3445,12 @@
       "kind": "command",
       "hidden": false,
       "category": "write",
-      "help": "Set the description on a storage table.\n\nStores the description as KBC.description in table metadata (upsert).\nProvide the text via --text, --file, or --stdin (exactly one required).",
+      "help": "Set the description on a storage table.\n\nStores the description as KBC.description in table metadata (upsert).\nProvide the text via --description or --description-file (exactly one).",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "table_id", "opts": ["--table-id"], "type": "text", "required": true, "default": null, "help": "Table ID (e.g. 'in.c-my-bucket.my-table')"},
-        {"kind": "option", "name": "text", "opts": ["--text"], "type": "text", "default": null, "help": "Description text (inline)"},
-        {"kind": "option", "name": "file", "opts": ["--file"], "type": "path", "default": null, "help": "Path to a file containing the description"},
-        {"kind": "option", "name": "stdin", "opts": ["--stdin"], "type": "boolean", "is_flag": true, "default": false, "help": "Read description from standard input"},
+        {"kind": "option", "name": "text", "opts": ["--description"], "type": "text", "default": null, "help": "Description text (inline)"},
+        {"kind": "option", "name": "file", "opts": ["--description-file"], "type": "path", "default": null, "help": "Read the description from a file (- for stdin)"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID (defaults to active branch if set via 'branch use')"}
       ]
     },
@@ -3451,12 +3459,12 @@
       "kind": "command",
       "hidden": false,
       "category": "read",
-      "help": "Export a storage table to a local CSV file.\n\nDownloads table data via the async export API. Handles gzip\ndecompression transparently. Use --columns to select specific\ncolumns and --limit to cap row count.\n\nUse --keep-slices to write the individual slices into a directory\ninstead of concatenating them into a single file.",
+      "help": "Export a storage table to a local CSV file.\n\nDownloads table data via the async export API. Handles gzip\ndecompression transparently. Use --column to select specific\ncolumns and --limit to cap row count.\n\nUse --keep-slices to write the individual slices into a directory\ninstead of concatenating them into a single file.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "table_id", "opts": ["--table-id"], "type": "text", "required": true, "default": null, "help": "Table ID to export (e.g. 'in.c-my-bucket.my-table')"},
         {"kind": "option", "name": "output", "opts": ["--output", "-o"], "type": "text", "default": null, "help": "Output path. Default mode: file path (e.g. table.csv). With --keep-slices: directory path (default ./{project}/{table_id}.csv/)."},
-        {"kind": "option", "name": "columns", "opts": ["--columns"], "type": "text", "multiple": true, "default": null, "help": "Column names to export (repeat for multiple: --columns col1 --columns col2)"},
+        {"kind": "option", "name": "columns", "opts": ["--column"], "type": "text", "multiple": true, "default": null, "help": "Column name to export (repeat for more columns: --column col1 --column col2)"},
         {"kind": "option", "name": "limit", "opts": ["--limit", "-L"], "type": "integer", "default": null, "help": "Max number of rows to export"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID (defaults to active branch if set via 'branch use')"},
         {"kind": "option", "name": "keep_slices", "opts": ["--keep-slices"], "type": "boolean", "is_flag": true, "default": false, "help": "Save each slice as its own file under --output (treated as a directory). Avoids the concat pass, matches the parquet download layout, and is the analytical-workflow-friendly option for DuckDB, polars, Spark. A _columns.csv sidecar holds the column order."},
@@ -3527,7 +3535,7 @@
       "help": "Upload a local file to Storage Files.\n\nUploads any file (CSV, JSON, ZIP, etc.) to Keboola Storage Files.\nUse --tag to assign tags and --permanent to prevent auto-deletion.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
-        {"kind": "option", "name": "file", "opts": ["--file"], "type": "text", "required": true, "default": null, "help": "Path to the file to upload"},
+        {"kind": "option", "name": "file", "opts": ["--file"], "type": "path", "required": true, "default": null, "help": "Path to the file to upload"},
         {"kind": "option", "name": "name", "opts": ["--name", "-n"], "type": "text", "default": null, "help": "Custom file name (default: local filename)"},
         {"kind": "option", "name": "tag", "opts": ["--tag"], "type": "text", "multiple": true, "default": null, "help": "Tag to assign (repeat for multiple: --tag a --tag b)"},
         {"kind": "option", "name": "permanent", "opts": ["--permanent"], "type": "boolean", "is_flag": true, "default": false, "help": "Make file permanent (not auto-deleted after 15 days)"},
@@ -3711,7 +3719,7 @@
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "table_id", "opts": ["--table-id"], "type": "text", "required": true, "default": null, "help": "Table ID to export (e.g. 'in.c-my-bucket.my-table')"},
-        {"kind": "option", "name": "columns", "opts": ["--columns"], "type": "text", "multiple": true, "default": null, "help": "Column names to export (repeat for multiple)"},
+        {"kind": "option", "name": "columns", "opts": ["--column"], "type": "text", "multiple": true, "default": null, "help": "Column name to export (repeat for more columns)"},
         {"kind": "option", "name": "limit", "opts": ["--limit", "-L"], "type": "integer", "default": null, "help": "Max number of rows to export"},
         {"kind": "option", "name": "tag", "opts": ["--tag"], "type": "text", "multiple": true, "default": null, "help": "Tag to apply to the exported file (repeat for multiple)"},
         {"kind": "option", "name": "download", "opts": ["--download"], "type": "boolean", "is_flag": true, "default": false, "help": "Also download the exported file locally"},
@@ -3731,7 +3739,7 @@
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "table_id", "opts": ["--table-id"], "type": "text", "required": true, "default": null, "help": "Target table ID (e.g. 'in.c-my-bucket.my-table')"},
-        {"kind": "option", "name": "file", "opts": ["--file"], "type": "text", "required": true, "default": null, "help": "Path to the CSV file to upload"},
+        {"kind": "option", "name": "file", "opts": ["--file"], "type": "path", "required": true, "default": null, "help": "Path to the CSV file to upload"},
         {"kind": "option", "name": "incremental", "opts": ["--incremental"], "type": "boolean", "is_flag": true, "default": false, "help": "Append rows instead of full load (default: full load)"},
         {"kind": "option", "name": "delimiter", "opts": ["--delimiter"], "type": "text", "default": ",", "help": "CSV column delimiter (default: ',')"},
         {"kind": "option", "name": "enclosure", "opts": ["--enclosure"], "type": "text", "default": "\"", "help": "CSV value enclosure character (default: '\"')'"},
@@ -3771,10 +3779,9 @@
       "category": "destructive",
       "help": "Delete a Data Streams source (destructive).",
       "params": [
-        {"kind": "argument", "name": "source_id", "opts": ["source_id"], "type": "text", "required": true, "default": null, "help": "Source id to delete"},
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
+        {"kind": "option", "name": "source_id", "opts": ["--source-id"], "type": "text", "required": true, "default": null, "help": "Source id to delete"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "text", "default": null, "help": "Branch ref (default branch if unset)"},
-        {"kind": "option", "name": "force", "opts": ["--force"], "type": "boolean", "is_flag": true, "hidden": true, "default": false},
         {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Preview without deleting"},
         {"kind": "option", "name": "yes", "opts": ["--yes", "-y"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip confirmation prompt"}
       ]
@@ -3786,8 +3793,8 @@
       "category": "read",
       "help": "Show a source's endpoints, protocol, and destination tables.",
       "params": [
-        {"kind": "argument", "name": "source_id", "opts": ["source_id"], "type": "text", "default": null, "help": "Source id (or use --name)"},
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
+        {"kind": "option", "name": "source_id", "opts": ["--source-id"], "type": "text", "default": null, "help": "Source id (or use --name)"},
         {"kind": "option", "name": "name", "opts": ["--name", "-n"], "type": "text", "default": null, "help": "Look up the source by name"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "text", "default": null, "help": "Branch ref (default branch if unset)"},
         {"kind": "option", "name": "reveal", "opts": ["--reveal"], "type": "boolean", "is_flag": true, "default": false, "help": "Print the full endpoint incl. secret"}
@@ -3980,7 +3987,7 @@
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "with_last_used", "opts": ["--with-last-used"], "type": "boolean", "is_flag": true, "default": false, "help": "Derive each token's last activity (one extra API call PER TOKEN) and sort dormant-first"},
-        {"kind": "option", "name": "columns", "opts": ["--columns"], "type": "text", "multiple": true, "default": null, "help": "Table columns to show, in order (repeat for multiple). Available: id, description, created, refreshed, expires, master, created_by, last_used, last_used_event. Human output only -- --json is unaffected."}
+        {"kind": "option", "name": "columns", "opts": ["--column"], "type": "text", "multiple": true, "default": null, "help": "Table column to show, in order (repeat for more columns). Available: id, description, created, refreshed, expires, master, created_by, last_used, last_used_event. Human output only -- --json is unaffected."}
       ]
     },
     {
@@ -4011,7 +4018,7 @@
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "name", "opts": ["--name", "-n"], "type": "text", "required": true, "default": null, "help": "Transformation name"},
         {"kind": "option", "name": "sql", "opts": ["--sql"], "type": "text", "default": null, "help": "SQL text (semicolon-separated statements). Mutually exclusive with --sql-file."},
-        {"kind": "option", "name": "sql_file", "opts": ["--sql-file"], "type": "path", "default": null, "help": "Read SQL from a file. Mutually exclusive with --sql."},
+        {"kind": "option", "name": "sql_file", "opts": ["--sql-file"], "type": "path", "default": null, "help": "Read SQL from a file (- for stdin). Mutually exclusive with --sql."},
         {"kind": "option", "name": "created_table", "opts": ["--created-table"], "type": "text", "multiple": true, "default": null, "help": "Table name created by the SQL (repeatable). Each is mapped to out.c-<derived-bucket>.<table> in the output mapping."},
         {"kind": "option", "name": "component_id", "opts": ["--component-id"], "type": "text", "default": null, "help": "SQL transformation component ID (keboola.snowflake-transformation or keboola.google-bigquery-transformation). Default: derived from the project's default backend."},
         {"kind": "option", "name": "description", "opts": ["--description"], "type": "text", "default": "", "help": "Configuration description"},
@@ -4032,8 +4039,9 @@
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Edit in a specific dev branch ID (defaults to active branch)"},
         {"kind": "option", "name": "change_description", "opts": ["--change-description"], "type": "text", "required": true, "default": null, "help": "Human-readable summary of this change (stored in config version history)"},
         {"kind": "option", "name": "op", "opts": ["--op"], "type": "text", "multiple": true, "default": null, "help": "Operation as inline JSON (repeatable, applied in order). Ops: add_block, remove_block, rename_block, add_code, remove_code, rename_code, set_code, add_script, str_replace. Example: '{\"op\": \"set_code\", \"block_id\": \"b0\", \"code_id\": \"b0.c0\", \"script\": \"SELECT 1;\"}'. IDs come from `transformation show`. Mutually exclusive with --op-file."},
-        {"kind": "option", "name": "op_file", "opts": ["--op-file"], "type": "path", "default": null, "help": "Read operations from a JSON file containing an array of op objects."},
-        {"kind": "option", "name": "storage", "opts": ["--storage"], "type": "text", "default": null, "help": "FULL REPLACEMENT of configuration.storage (inline JSON, @file, or - for stdin). Include every input/output mapping you want to keep -- the existing storage block is overwritten wholesale."},
+        {"kind": "option", "name": "op_file", "opts": ["--op-file"], "type": "path", "default": null, "help": "Read operations from a JSON file containing an array of op objects (- for stdin)."},
+        {"kind": "option", "name": "storage", "opts": ["--storage"], "type": "text", "default": null, "help": "FULL REPLACEMENT of configuration.storage (inline JSON). Include every input/output mapping you want to keep -- the existing storage block is overwritten wholesale."},
+        {"kind": "option", "name": "storage_file", "opts": ["--storage-file"], "type": "path", "default": null, "help": "Read the FULL REPLACEMENT of configuration.storage from a JSON file (- for stdin)."},
         {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Apply ops locally and print the resulting tree without writing"}
       ]
     },
@@ -4167,7 +4175,7 @@
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "workspace_id", "opts": ["--workspace-id"], "type": "integer", "required": true, "default": null, "help": "Workspace ID"},
-        {"kind": "option", "name": "tables", "opts": ["--tables"], "type": "text", "required": true, "multiple": true, "default": null, "help": "Table ID to load (can be repeated, e.g. in.c-bucket.table-name)"},
+        {"kind": "option", "name": "tables", "opts": ["--table-id"], "type": "text", "required": true, "multiple": true, "default": null, "help": "Table ID to load (repeat for more tables, e.g. in.c-bucket.table-name)"},
         {"kind": "option", "name": "preserve", "opts": ["--preserve"], "type": "boolean", "is_flag": true, "default": false, "help": "Keep existing tables in the workspace (default: clear before loading)"},
         {"kind": "option", "name": "load_type", "opts": ["--load-type"], "type": "text", "default": null, "help": "clone|copy|view. Default (omitted) is auto: a zero-copy CLONE for every table the workspace backend can clone, COPY for the rest. An explicit value is sent as-is; an ineligible combination is rejected by the API with the exact reason."},
         {"kind": "option", "name": "force", "opts": ["--force"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip the size guard that asks before COPYing a table larger than 1 GB."},
@@ -4190,12 +4198,12 @@
       "kind": "command",
       "hidden": false,
       "category": "write",
-      "help": "Execute SQL query in a workspace via Query Service.\n\nProvide SQL via --sql or --file (exactly one required).\n\nBy default kbagent reads results inline (fast). For a result set larger than\n--limit, pass --full to export the complete CSV instead.",
+      "help": "Execute SQL query in a workspace via Query Service.\n\nProvide SQL via --sql or --sql-file (exactly one required).\n\nBy default kbagent reads results inline (fast). For a result set larger than\n--limit, pass --full to export the complete CSV instead.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "workspace_id", "opts": ["--workspace-id"], "type": "integer", "required": true, "default": null, "help": "Workspace ID"},
         {"kind": "option", "name": "sql", "opts": ["--sql"], "type": "text", "default": null, "help": "SQL statement to execute"},
-        {"kind": "option", "name": "file", "opts": ["--file"], "type": "path", "default": null, "help": "Path to a .sql file to execute"},
+        {"kind": "option", "name": "file", "opts": ["--sql-file"], "type": "path", "default": null, "help": "Path to a .sql file to execute (- for stdin)"},
         {"kind": "option", "name": "transactional", "opts": ["--transactional"], "type": "boolean", "is_flag": true, "default": false, "help": "Wrap query in a transaction"},
         {"kind": "option", "name": "full", "opts": ["--full"], "type": "boolean", "is_flag": true, "default": false, "help": "Fetch the complete result set via CSV export (slower). Default fetches a fast inline page capped by --limit."},
         {"kind": "option", "name": "limit", "opts": ["--limit", "-L"], "type": "integer", "default": 500, "help": "Max rows to fetch via the fast inline path (ignored with --full)."}

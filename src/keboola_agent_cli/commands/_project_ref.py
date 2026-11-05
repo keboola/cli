@@ -38,18 +38,9 @@ PROJECT_HELP = f"Project alias or ID ({PROJECT_DEFAULT})"
 
 # Commands whose --project is NOT a lookup in the registered projects, so it
 # is never translated:
-# - `project add` / `project create`: the deprecated --project is the old name
-#   of --alias, the NEW alias. Translating an ID would register the project
-#   under another project's alias.
 # - `lineage show`: the value filters the aliases inside an offline graph
 #   file; the command needs no config at all.
-NO_LOOKUP_COMMANDS: frozenset[tuple[str, ...]] = frozenset(
-    {
-        ("project", "add"),
-        ("project", "create"),
-        ("lineage", "show"),
-    }
-)
+NO_LOOKUP_COMMANDS: frozenset[tuple[str, ...]] = frozenset({("lineage", "show")})
 
 # Commands whose --project names a registered project but not the project the
 # command works in, so an omitted one stays omitted:
@@ -65,7 +56,7 @@ NOT_A_TARGET_COMMANDS: frozenset[tuple[str, ...]] = frozenset(
 # Commands that decide in their body what an omitted single --project means:
 # - `flow schema` / `flow validate`: the T1 chain, but when it finds no
 #   project they work offline (the bundled schema, the semantic checks).
-# - `project invite`: with --from-csv the projects come from the file, and
+# - `project invite`: with --file the projects come from the file, and
 #   --project is refused; without it, the body uses the T1 chain.
 OWN_PROJECT_DEFAULT_COMMANDS: frozenset[tuple[str, ...]] = frozenset(
     {

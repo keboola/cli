@@ -242,7 +242,9 @@ def build_kbagent_upgrade_command(
     spec = f"keboola-cli{'[server]' if has_server_extras() else ''} @ {install_source}"
     uv_path = shutil.which("uv")
     if uv_path:
-        return [uv_path, "tool", "install", "--force", "--reinstall", spec]
+        # --compile-bytecode: the wheel holds .py files only, and Python would
+        # compile them on the first run (about 1 s for ~700 modules).
+        return [uv_path, "tool", "install", "--force", "--reinstall", "--compile-bytecode", spec]
     pip_path = shutil.which("pip")
     if pip_path is None:
         return None
@@ -272,6 +274,7 @@ def _recovery_command(command: tuple[str, ...] | None, target_version: str | Non
                 "install",
                 "--force",
                 "--reinstall",
+                "--compile-bytecode",
                 *_uv_link_mode_args(),
                 command[-1],
             )
@@ -281,7 +284,16 @@ def _recovery_command(command: tuple[str, ...] | None, target_version: str | Non
     extras = "[server]" if has_server_extras() else ""
     source = f"keboola-cli{extras} @ {KBAGENT_INSTALL_SOURCE}@v{target_version}"
     return _render_command(
-        ("uv", "tool", "install", "--force", "--reinstall", *_uv_link_mode_args(), source)
+        (
+            "uv",
+            "tool",
+            "install",
+            "--force",
+            "--reinstall",
+            "--compile-bytecode",
+            *_uv_link_mode_args(),
+            source,
+        )
     )
 
 

@@ -32,7 +32,6 @@ from ...services.merge_request_service import (
     validate_auto_merge_flags,
 )
 from ..dependencies import ServiceRegistry, get_registry, require_permission
-from ..response_meta import warn_deprecated
 
 router = APIRouter(prefix="/merge-requests", tags=["merge-requests"])
 
@@ -201,23 +200,6 @@ def patch_merge_request(
     """Omitted fields stay; an empty string clears description/external_id;
     reviewer_ids replaces the set. Auto-merge is not a field here (PUT
     .../auto-merge). Mirrors `kbagent merge-request update`."""
-    return _update_merge_request(project, merge_request_id, body, registry)
-
-
-@router.put(
-    "/{project}/{merge_request_id}",
-    summary="Update a merge request (deprecated: use PATCH)",
-    dependencies=[_perm("update")],
-    deprecated=True,
-)
-def update_merge_request(
-    project: str,
-    merge_request_id: int,
-    body: MergeRequestUpdate,
-    registry: ServiceRegistry = Depends(get_registry),
-) -> dict[str, Any]:
-    """Deprecated form of ``PATCH`` (spec V9): same result, plus a ``DEPRECATED`` warning."""
-    warn_deprecated("PUT /merge-requests/{project}/{merge_request_id}")
     return _update_merge_request(project, merge_request_id, body, registry)
 
 

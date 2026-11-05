@@ -68,6 +68,7 @@ def _make_service(
         ds_mock = MagicMock()
         # No run history: a never-deployed app (a bare MagicMock would be truthy).
         ds_mock.list_app_runs.return_value = []
+        ds_mock.create_deployment.return_value = {"id": "dep-1"}
     storage_mock = storage_mock or MagicMock()
     if encrypt_mock is None:
         encrypt_mock = MagicMock()
@@ -414,6 +415,13 @@ class TestDataAppCreateAuthBlock:
         result = service.create_data_app(**self._create_kwargs(dry_run=True, branch_id=0))
         assert result["requests"]["post_apps"]["branchId"] is None
 
+    def test_dry_run_dev_branch_renders_branch_id_string(self, tmp_path: Path) -> None:
+        """The dry-run body matches the real request: a dev branch id is a string."""
+        store = _make_store(tmp_path)
+        service, *_ = _make_service(store)
+        result = service.create_data_app(**self._create_kwargs(dry_run=True, branch_id=12345))
+        assert result["requests"]["post_apps"]["branchId"] == "12345"
+
     def test_invalid_auth_value_rejected(self, tmp_path: Path) -> None:
         # Use a clearly-invalid sentinel (NOT a future-supported provider
         # like 'oidc' / 'github' / 'gitlab' / 'jumpcloud') so this test
@@ -447,7 +455,7 @@ class TestDataAppCreate:
         assert result["dry_run"] is True
         assert "post_apps" in result["requests"]
         assert "put_storage_config" in result["requests"]
-        assert "patch_apps" in result["requests"]
+        assert result["requests"]["post_deployments"] == {"configVersion": "<latest after PUT>"}
         ds_mock.assert_not_called()
         storage_mock.assert_not_called()
         encrypt_mock.encrypt.assert_not_called()
@@ -566,15 +574,10 @@ class TestDataAppCreate:
         ds_mock.create_app.return_value = {
             "id": "43661269",
             "configId": "01kqj88t0vktxe0vfhk6ps5kzs",
+            "state": "notDeployed",
+            "url": "https://my-app-43661269.hub.us-east4.gcp.keboola.com",
         }
         storage_mock.update_config.return_value = {"version": "3"}
-        ds_mock.patch_app.return_value = {
-            "id": "43661269",
-            "state": "starting",
-            "desiredState": "running",
-            "url": "https://my-app-43661269.hub.us-east4.gcp.keboola.com",
-            "configVersion": "3",
-        }
 
         result = service.create_data_app(
             alias="prod",
@@ -620,13 +623,9 @@ class TestDataAppCreate:
         assert body["runtime"]["backend"]["size"] == "tiny"
         assert "authorization" in body  # simpleAuth on by default
 
-        # 4. PATCH /apps deploys the trio
-        ds_mock.patch_app.assert_called_once_with(
-            "43661269",
-            desired_state="running",
-            config_version="3",
-            restart_if_running=True,
-        )
+        # 4. A deployment pins the version step 3 wrote
+        ds_mock.create_deployment.assert_called_once_with("43661269", config_version="3")
+        assert result["deployment_id"] == "dep-1"
 
         assert result["app_id"] == "43661269"
         assert result["config_id"] == "01kqj88t0vktxe0vfhk6ps5kzs"
@@ -634,7 +633,7 @@ class TestDataAppCreate:
         # Encrypted PAT is redacted in the returned dict for human display.
         assert result["git"]["#password"] == "<encrypted>"
 
-    def test_no_deploy_skips_patch(self, tmp_path: Path) -> None:
+    def test_no_deploy_skips_the_deployment(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
         service, ds_mock, storage_mock, _enc = _make_service(store)
         ds_mock.create_app.return_value = {"id": "1", "configId": "ulid"}
@@ -655,7 +654,7 @@ class TestDataAppCreate:
             wait=False,
             dry_run=False,
         )
-        ds_mock.patch_app.assert_not_called()
+        ds_mock.create_deployment.assert_not_called()
 
     def test_managed_repo_happy_path(self, tmp_path: Path) -> None:
         """Managed repo: useManagedGitRepo on POST, NO git block in PUT,
@@ -665,7 +664,7 @@ class TestDataAppCreate:
         ds_mock.create_app.return_value = {
             "id": "43676897",
             "configId": "01kvj0rwjr3g6tf10nc0xcvyyg",
-            "managedGitRepoId": "repo-77",
+            "hasManagedGitRepo": True,
         }
         storage_mock.update_config.return_value = {"version": "4"}
 
@@ -701,10 +700,9 @@ class TestDataAppCreate:
         assert "git" not in body["parameters"]["dataApp"]
 
         # 4. Deploy is forced off -- empty repo has nothing to run yet.
-        ds_mock.patch_app.assert_not_called()
+        ds_mock.create_deployment.assert_not_called()
 
         assert result["use_managed_git_repo"] is True
-        assert result["managed_git_repo_id"] == "repo-77"
         assert result["deployed"] is False
         assert result["git"] == {}
 
@@ -733,9 +731,9 @@ class TestDataAppCreate:
         assert result["use_managed_git_repo"] is True
         post = result["requests"]["post_apps"]
         assert post["useManagedGitRepo"] is True
-        # PUT preview omits the git block; PATCH is empty (no deploy).
+        # PUT preview omits the git block; no deployment (no deploy).
         assert "git" not in result["requests"]["put_storage_config"]["parameters"]["dataApp"]
-        assert result["requests"]["patch_apps"] == {}
+        assert result["requests"]["post_deployments"] == {}
         ds_mock.create_app.assert_not_called()
         storage_mock.update_config.assert_not_called()
         encrypt_mock.encrypt.assert_not_called()
@@ -1064,51 +1062,53 @@ class TestAzureKeyVaultCiphertext:
 
 
 class TestDataAppDeploy:
+    def test_deploy_without_wait_reports_the_requested_deployment(self, tmp_path: Path) -> None:
+        """`state` is still production's; the message says the new deployment is pending."""
+        store = _make_store(tmp_path)
+        service, ds_mock, _storage, _enc = _make_service(store)
+        ds_mock.get_app.return_value = {"configId": "ulid", **_serving("dep-0")}
+        ds_mock.create_deployment.return_value = {"id": "dep-1"}
+
+        result = service.deploy_data_app(alias="prod", app_id="42", config_version="3")
+
+        assert result["state"] == "running"
+        assert result["deployment_id"] == "dep-1"
+        assert result["config_version"] == "3"
+        assert "deployment dep-1 requested" in result["message"]
+        assert "until the new one serves" in result["message"]
+        ds_mock.get_deployment.assert_not_called()
+
     def test_deploy_reads_latest_storage_version(self, tmp_path: Path) -> None:
-        """The §9 redeploy contract."""
+        """Deploy pins the latest Storage version."""
         store = _make_store(tmp_path)
         service, ds_mock, storage_mock, _enc = _make_service(store)
         ds_mock.get_app.return_value = {"configId": "ulid"}
         storage_mock.get_config_detail.return_value = {"version": 7}
-        ds_mock.patch_app.return_value = {"state": "starting"}
 
         service.deploy_data_app(alias="prod", app_id="42")
 
-        ds_mock.patch_app.assert_called_once_with(
-            "42",
-            desired_state="running",
-            config_version="7",
-            restart_if_running=True,
-        )
+        ds_mock.create_deployment.assert_called_once_with("42", config_version="7")
 
     def test_deploy_pins_explicit_version(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
         service, ds_mock, storage_mock, _enc = _make_service(store)
         ds_mock.get_app.return_value = {"configId": "ulid"}
-        ds_mock.patch_app.return_value = {"state": "starting"}
 
         service.deploy_data_app(alias="prod", app_id="42", config_version="3")
 
         # Service did NOT need to read Storage to derive a version
         storage_mock.get_config_detail.assert_not_called()
-        ds_mock.patch_app.assert_called_once_with(
-            "42",
-            desired_state="running",
-            config_version="3",
-            restart_if_running=True,
-        )
+        ds_mock.create_deployment.assert_called_once_with("42", config_version="3")
 
     def test_deploy_never_sends_config_block(self, tmp_path: Path) -> None:
-        """`PATCH /apps {config: ...}` is silently dropped (writeup §8 row 3).
-        We never construct that payload in the first place."""
+        """The deployment carries only the version; config lives in Storage."""
         store = _make_store(tmp_path)
         service, ds_mock, storage_mock, _enc = _make_service(store)
         ds_mock.get_app.return_value = {"configId": "ulid"}
         storage_mock.get_config_detail.return_value = {"version": "5"}
-        ds_mock.patch_app.return_value = {"state": "running", "desiredState": "running"}
 
         service.deploy_data_app(alias="prod", app_id="42")
-        kwargs = ds_mock.patch_app.call_args.kwargs
+        kwargs = ds_mock.create_deployment.call_args.kwargs
         assert "config" not in kwargs
 
     def test_deploy_pure_managed_backfills_git_block_and_pins_new_version(
@@ -1131,7 +1131,6 @@ class TestDataAppDeploy:
             "isManagedGitRepo": True,
         }
         storage_mock.update_config.return_value = {"version": "5"}
-        ds_mock.patch_app.return_value = {"state": "starting"}
 
         service.deploy_data_app(alias="prod", app_id="42")
 
@@ -1146,7 +1145,7 @@ class TestDataAppDeploy:
         # slug survives the merge -- we mutate the fetched config, not replace it
         assert update_kwargs["configuration"]["parameters"]["dataApp"]["slug"] == "x"
 
-        patch_kwargs = ds_mock.patch_app.call_args.kwargs
+        patch_kwargs = ds_mock.create_deployment.call_args.kwargs
         assert patch_kwargs["config_version"] == "5"  # the newly-written version, pinned
 
     def test_deploy_pure_managed_falls_back_to_ssh_url(self, tmp_path: Path) -> None:
@@ -1164,7 +1163,6 @@ class TestDataAppDeploy:
             "isManagedGitRepo": True,
         }
         storage_mock.update_config.return_value = {"version": "2"}
-        ds_mock.patch_app.return_value = {"state": "starting"}
 
         service.deploy_data_app(alias="prod", app_id="42")
 
@@ -1192,7 +1190,7 @@ class TestDataAppDeploy:
             service.deploy_data_app(alias="prod", app_id="42")
 
         storage_mock.update_config.assert_not_called()
-        ds_mock.patch_app.assert_not_called()
+        ds_mock.create_deployment.assert_not_called()
 
     def test_deploy_pure_managed_raises_when_backfill_returns_no_version(
         self, tmp_path: Path
@@ -1218,7 +1216,7 @@ class TestDataAppDeploy:
             service.deploy_data_app(alias="prod", app_id="42")
 
         storage_mock.update_config.assert_called_once()
-        ds_mock.patch_app.assert_not_called()
+        ds_mock.create_deployment.assert_not_called()
 
     def test_deploy_pure_managed_result_reports_backfill(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
@@ -1230,7 +1228,6 @@ class TestDataAppDeploy:
         }
         ds_mock.get_git_repo.return_value = {"httpsUrl": "https://git.example.com/app-42.git"}
         storage_mock.update_config.return_value = {"version": "5"}
-        ds_mock.patch_app.return_value = {"state": "starting"}
 
         result = service.deploy_data_app(alias="prod", app_id="42")
 
@@ -1252,7 +1249,6 @@ class TestDataAppDeploy:
         }
         ds_mock.get_git_repo.return_value = {"httpsUrl": "https://git.example.com/app-42.git"}
         storage_mock.update_config.return_value = {"version": "5"}
-        ds_mock.patch_app.return_value = {"state": "starting"}
 
         result = service.deploy_data_app(alias="prod", app_id="42", git_branch=branch)
 
@@ -1272,7 +1268,6 @@ class TestDataAppDeploy:
         }
         ds_mock.get_git_repo.return_value = {"httpsUrl": "https://git.example.com/app-42.git"}
         storage_mock.update_config.return_value = {"version": "5"}
-        ds_mock.patch_app.return_value = {"state": "starting"}
 
         result = service.deploy_data_app(alias="prod", app_id="42")
 
@@ -1303,7 +1298,7 @@ class TestDataAppDeploy:
         assert "--git-branch BRANCH" in exc.value.message
         ds_mock.get_git_repo.assert_not_called()
         storage_mock.update_config.assert_not_called()
-        ds_mock.patch_app.assert_not_called()
+        ds_mock.create_deployment.assert_not_called()
 
     def test_deploy_backfill_explicit_git_branch_skips_run_check(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
@@ -1316,7 +1311,6 @@ class TestDataAppDeploy:
         ds_mock.list_app_runs.return_value = [{"state": "running"}]
         ds_mock.get_git_repo.return_value = {"httpsUrl": "https://git.example.com/app-42.git"}
         storage_mock.update_config.return_value = {"version": "5"}
-        ds_mock.patch_app.return_value = {"state": "starting"}
 
         result = service.deploy_data_app(alias="prod", app_id="42", git_branch="master")
 
@@ -1334,7 +1328,6 @@ class TestDataAppDeploy:
             "version": 9,
             "configuration": {"parameters": {"dataApp": {"git": git_block}}},
         }
-        ds_mock.patch_app.return_value = {"state": "starting"}
 
         result = service.deploy_data_app(alias="prod", app_id="42", git_branch="dev")
 
@@ -1361,7 +1354,6 @@ class TestDataAppDeploy:
             "version": 9,
             "configuration": {"parameters": {"dataApp": {"git": {"repository": "https://g/r"}}}},
         }
-        ds_mock.patch_app.return_value = {"state": "starting"}
 
         result = service.deploy_data_app(alias="prod", app_id="42")
 
@@ -1386,7 +1378,6 @@ class TestDataAppDeploy:
         }
         ds_mock.get_git_repo.return_value = {"httpsUrl": "https://git.example.com/app-42.git"}
         storage_mock.update_config.return_value = {"version": "5"}
-        ds_mock.patch_app.return_value = {"state": "starting"}
 
         service.deploy_data_app(alias="prod", app_id="42")
 
@@ -1405,7 +1396,6 @@ class TestDataAppDeploy:
         }
         ds_mock.get_git_repo.return_value = {"httpsUrl": "https://git.example.com/app-42.git"}
         storage_mock.update_config.return_value = {"version": "5"}
-        ds_mock.patch_app.return_value = {"state": "starting"}
 
         service.deploy_data_app(alias="prod", app_id="42", branch_id=777)
 
@@ -1417,13 +1407,12 @@ class TestDataAppDeploy:
         store = _make_store(tmp_path)
         service, ds_mock, storage_mock, _enc = _make_service(store)
         ds_mock.get_app.return_value = {"configId": "ulid", "hasManagedGitRepo": True}
-        ds_mock.patch_app.return_value = {"state": "starting"}
 
         result = service.deploy_data_app(alias="prod", app_id="42", config_version="3")
 
         ds_mock.get_git_repo.assert_not_called()
         storage_mock.update_config.assert_not_called()
-        assert ds_mock.patch_app.call_args.kwargs["config_version"] == "3"
+        assert ds_mock.create_deployment.call_args.kwargs["config_version"] == "3"
         assert "git_backfilled" not in result
 
     def test_deploy_managed_with_git_block_pins_latest(self, tmp_path: Path) -> None:
@@ -1438,11 +1427,10 @@ class TestDataAppDeploy:
                 "parameters": {"dataApp": {"slug": "x", "git": {"repository": "https://g/r"}}}
             },
         }
-        ds_mock.patch_app.return_value = {"state": "starting"}
 
         service.deploy_data_app(alias="prod", app_id="42")
 
-        kwargs = ds_mock.patch_app.call_args.kwargs
+        kwargs = ds_mock.create_deployment.call_args.kwargs
         assert kwargs["config_version"] == "9"  # pinned
 
 
@@ -1468,28 +1456,59 @@ class TestDataAppRuns:
 
 
 class TestDataAppStartStop:
-    def test_start_does_not_send_config_version(self, tmp_path: Path) -> None:
+    def test_start_resumes_without_a_new_deployment(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
         service, ds_mock, _storage, _enc = _make_service(store)
-        ds_mock.patch_app.return_value = {"state": "starting"}
+        ds_mock.resume_app.return_value = {"state": "starting"}
 
-        service.start_data_app(alias="prod", app_id="42")
+        result = service.start_data_app(alias="prod", app_id="42")
 
-        kwargs = ds_mock.patch_app.call_args.kwargs
-        assert kwargs["desired_state"] == "running"
-        assert kwargs["restart_if_running"] is True
-        assert "config_version" not in kwargs
+        ds_mock.resume_app.assert_called_once_with("42")
+        ds_mock.create_deployment.assert_not_called()
+        assert result["state"] == "starting"
 
-    def test_stop_sends_only_desired_state(self, tmp_path: Path) -> None:
+    def test_stop_suspends(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
         service, ds_mock, _storage, _enc = _make_service(store)
-        ds_mock.patch_app.return_value = {"state": "stopping"}
+        ds_mock.suspend_app.return_value = {"state": "suspended"}
 
-        service.stop_data_app(alias="prod", app_id="42")
-        kwargs = ds_mock.patch_app.call_args.kwargs
-        assert kwargs["desired_state"] == "stopped"
-        assert "config_version" not in kwargs
-        assert "restart_if_running" not in kwargs
+        result = service.stop_data_app(alias="prod", app_id="42", wait=True)
+
+        ds_mock.suspend_app.assert_called_once_with("42")
+        ds_mock.get_app.assert_not_called()
+        assert result["state"] == "suspended"
+
+    @pytest.mark.parametrize(("action", "call"), [("start", "resume_app"), ("stop", "suspend_app")])
+    def test_409_asks_for_a_deploy_first(self, tmp_path: Path, action: str, call: str) -> None:
+        """No deployment serves production: never deployed, or still on a /v1 start."""
+        store = _make_store(tmp_path)
+        service, ds_mock, _storage, _enc = _make_service(store)
+        getattr(ds_mock, call).side_effect = KeboolaApiError(
+            message='App "42" has no App CRD — deploy it first.',
+            status_code=409,
+            error_code=ErrorCode.API_ERROR,
+            retryable=False,
+        )
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            getattr(service, f"{action}_data_app")(alias="prod", app_id="42")
+
+        assert excinfo.value.status_code == 409
+        assert f"Cannot {action} data app 42" in excinfo.value.message
+        assert "kbagent data-app deploy" in excinfo.value.message
+
+    def test_other_errors_pass_through(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, _storage, _enc = _make_service(store)
+        error = KeboolaApiError(
+            message="Not Found", status_code=404, error_code=ErrorCode.NOT_FOUND, retryable=False
+        )
+        ds_mock.resume_app.side_effect = error
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.start_data_app(alias="prod", app_id="42")
+
+        assert excinfo.value is error
 
 
 # ---------------------------------------------------------------------------
@@ -1497,39 +1516,45 @@ class TestDataAppStartStop:
 # ---------------------------------------------------------------------------
 
 
+def _serving(deployment_id: str | None, state: str = "running") -> dict[str, Any]:
+    return {"state": state, "production": {"actualDeploymentId": deployment_id}}
+
+
 class TestDataAppPoll:
-    def test_stopped_is_not_terminal_during_initial_deploy(self, tmp_path: Path) -> None:
-        """While desiredState=running, observing state=stopped MUST NOT exit
-        the poll. The platform transitions created -> stopped -> starting ->
-        running on initial deploy."""
+    def test_deploy_waits_until_the_new_deployment_serves(self, tmp_path: Path) -> None:
+        """A running app still served by the previous deployment is not done."""
         store = _make_store(tmp_path)
         service, ds_mock, _storage, _enc = _make_service(store)
-
-        # Sequence: stopped (transient) -> starting -> running
         ds_mock.get_app.side_effect = [
-            {"state": "stopped", "desiredState": "running"},
-            {"state": "starting", "desiredState": "running"},
-            {
-                "state": "running",
-                "desiredState": "running",
-                "url": "https://x.hub.example.com",
-            },
+            _serving("dep-0"),
+            _serving("dep-0"),
+            {**_serving("dep-1"), "url": "https://x.hub.example.com"},
         ]
+        ds_mock.get_deployment.return_value = {"buildState": "ready", "runState": "starting"}
 
         with patch("keboola_agent_cli.services.data_app_service.time.sleep", lambda _: None):
             result = service._poll_until_terminal(
                 ds_mock,
                 "42",
-                target_desired_state="running",
+                deployment_id="dep-1",
                 timeout_seconds=60.0,
             )
-        assert result["state"] == "running"
+        assert result["url"] == "https://x.hub.example.com"
         assert ds_mock.get_app.call_count == 3
+        ds_mock.get_deployment.assert_called_with("42", "dep-1")
 
-    def test_error_state_raises(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize(
+        "deployment",
+        [
+            {"buildState": "ready", "runState": "failed"},
+            {"buildState": "failed", "runState": "neverRun"},
+        ],
+    )
+    def test_failed_deployment_raises(self, tmp_path: Path, deployment: dict[str, str]) -> None:
         store = _make_store(tmp_path)
         service, ds_mock, _storage, _enc = _make_service(store)
-        ds_mock.get_app.return_value = {"state": "error"}
+        ds_mock.get_app.return_value = _serving("dep-0")
+        ds_mock.get_deployment.return_value = deployment
 
         with (
             patch("keboola_agent_cli.services.data_app_service.time.sleep", lambda _: None),
@@ -1538,15 +1563,93 @@ class TestDataAppPoll:
             service._poll_until_terminal(
                 ds_mock,
                 "42",
-                target_desired_state="running",
+                deployment_id="dep-1",
                 timeout_seconds=60.0,
             )
         assert excinfo.value.error_code == ErrorCode.DATA_APP_BUILD_FAILED
+        assert "dep-1" in excinfo.value.message
+
+    def test_replaced_deployment_raises(self, tmp_path: Path) -> None:
+        """A newer deploy took over production's desired slot; ours will never serve."""
+        store = _make_store(tmp_path)
+        service, ds_mock, _storage, _enc = _make_service(store)
+        app = _serving("dep-0")
+        app["production"] |= {
+            "desiredDeploymentId": "dep-2",
+            "desiredCreatedAt": "2026-10-30T10:05:00+00:00",
+        }
+        ds_mock.get_app.return_value = app
+        ds_mock.get_deployment.return_value = {
+            "id": "dep-1",
+            "createdAt": "2026-10-30T10:00:00+00:00",
+            "buildState": "ready",
+            "runState": "neverRun",
+            "archived": False,
+        }
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service._poll_until_terminal(ds_mock, "42", deployment_id="dep-1", timeout_seconds=60.0)
+        assert excinfo.value.error_code == ErrorCode.DATA_APP_BUILD_FAILED
+        assert "a newer deployment dep-2 replaced it" in excinfo.value.message
+        ds_mock.list_app_runs.assert_not_called()
+
+    def test_archived_deployment_raises(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, _storage, _enc = _make_service(store)
+        ds_mock.get_app.return_value = _serving("dep-0")
+        ds_mock.get_deployment.return_value = {
+            "id": "dep-1",
+            "buildState": "ready",
+            "runState": "stopped",
+            "archived": True,
+        }
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service._poll_until_terminal(ds_mock, "42", deployment_id="dep-1", timeout_seconds=60.0)
+        assert "deleted (archived)" in excinfo.value.message
+
+    def test_older_desired_deployment_keeps_waiting(self, tmp_path: Path) -> None:
+        """Production still names the previous rollout: ours is not replaced, only pending."""
+        store = _make_store(tmp_path)
+        service, ds_mock, _storage, _enc = _make_service(store)
+        pending = _serving("dep-0")
+        pending["production"] |= {
+            "desiredDeploymentId": "dep-0",
+            "desiredCreatedAt": "2026-10-30T09:00:00+00:00",
+        }
+        ds_mock.get_app.side_effect = [pending, _serving("dep-1")]
+        ds_mock.get_deployment.return_value = {
+            "id": "dep-1",
+            "createdAt": "2026-10-30T10:00:00+00:00",
+            "buildState": "ready",
+            "runState": "starting",
+            "archived": False,
+        }
+
+        with patch("keboola_agent_cli.services.data_app_service.time.sleep", lambda _: None):
+            result = service._poll_until_terminal(
+                ds_mock, "42", deployment_id="dep-1", timeout_seconds=60.0
+            )
+        assert result["production"]["actualDeploymentId"] == "dep-1"
+        assert ds_mock.get_app.call_count == 2
+
+    def test_disabled_app_raises_on_start(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        service, ds_mock, _storage, _enc = _make_service(store)
+        ds_mock.get_app.side_effect = [_serving("dep-1", "starting"), _serving("dep-1", "disabled")]
+
+        with (
+            patch("keboola_agent_cli.services.data_app_service.time.sleep", lambda _: None),
+            pytest.raises(KeboolaApiError) as excinfo,
+        ):
+            service._poll_until_terminal(ds_mock, "42", timeout_seconds=60.0)
+        assert excinfo.value.error_code == ErrorCode.DATA_APP_BUILD_FAILED
+        ds_mock.get_deployment.assert_not_called()
 
     def test_timeout_raises(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
         service, ds_mock, _storage, _enc = _make_service(store)
-        ds_mock.get_app.return_value = {"state": "starting"}
+        ds_mock.get_app.return_value = _serving(None, "starting")
 
         # time.monotonic returns 0 then 100 -> exceeds the 1-second deadline
         # immediately on the second iteration.
@@ -1561,7 +1664,6 @@ class TestDataAppPoll:
             service._poll_until_terminal(
                 ds_mock,
                 "42",
-                target_desired_state="running",
                 timeout_seconds=1.0,
             )
         assert excinfo.value.error_code == ErrorCode.DATA_APP_DEPLOY_TIMEOUT
@@ -1571,10 +1673,7 @@ class TestDataAppPoll:
         the error (with the run details attached)."""
         store = _make_store(tmp_path)
         service, ds_mock, _storage, _enc = _make_service(store)
-        ds_mock.get_app.return_value = {
-            "state": "stopped",
-            "desiredState": "stopped",
-        }
+        ds_mock.get_app.return_value = _serving(None, "suspended")
         ds_mock.list_app_runs.return_value = [
             {
                 "id": "run-1",
@@ -1596,9 +1695,7 @@ class TestDataAppPoll:
             ),
             pytest.raises(KeboolaApiError) as excinfo,
         ):
-            service._poll_until_terminal(
-                ds_mock, "42", target_desired_state="running", timeout_seconds=1.0
-            )
+            service._poll_until_terminal(ds_mock, "42", timeout_seconds=1.0)
         exc = excinfo.value
         assert exc.error_code == ErrorCode.DATA_APP_DEPLOY_TIMEOUT
         assert "StartupProbeFailed" in exc.message
@@ -1610,7 +1707,7 @@ class TestDataAppPoll:
         """A failing runs fetch must NOT mask the original timeout error."""
         store = _make_store(tmp_path)
         service, ds_mock, _storage, _enc = _make_service(store)
-        ds_mock.get_app.return_value = {"state": "starting", "desiredState": "running"}
+        ds_mock.get_app.return_value = _serving(None, "starting")
         ds_mock.list_app_runs.side_effect = RuntimeError("network down")
         with (
             patch("keboola_agent_cli.services.data_app_service.time.sleep", lambda _: None),
@@ -1620,9 +1717,7 @@ class TestDataAppPoll:
             ),
             pytest.raises(KeboolaApiError) as excinfo,
         ):
-            service._poll_until_terminal(
-                ds_mock, "42", target_desired_state="running", timeout_seconds=1.0
-            )
+            service._poll_until_terminal(ds_mock, "42", timeout_seconds=1.0)
         assert excinfo.value.error_code == ErrorCode.DATA_APP_DEPLOY_TIMEOUT
 
 
@@ -1786,13 +1881,9 @@ class TestDataAppDetail:
             "id": "42",
             "configId": "ulid",
             "state": "running",
-            "desiredState": "running",
             "url": "https://x.hub.example.com",
-            "configVersion": "3",
+            "production": {"actualDeploymentId": "dep-1", "actualConfigVersion": "3"},
             "type": "python-js",
-            "size": "tiny",
-            "autoSuspendAfterSeconds": 900,
-            "lastStartTimestamp": "2026-05-01T00:00:00Z",
         }
         storage_mock.get_config_detail.return_value = {
             "version": 5,
@@ -1821,6 +1912,8 @@ class TestDataAppDetail:
         assert result["state"] == "running"
         assert result["config_version_storage"] == "5"
         assert result["config_version_deployed"] == "3"
+        assert result["deployment_id"] == "dep-1"
+        assert result["size"] == "tiny"
         assert result["slug"] == "my-app"
         # PAT redaction
         assert result["git"]["#password"] == "<encrypted>"
@@ -1905,12 +1998,8 @@ class TestDataAppListOutputKeys:
                 "configId": "01kqj88t0vktxe0vfhk6ps5kzs",
                 "type": "python-js",
                 "state": "running",
-                "desiredState": "running",
-                "configVersion": "3",
+                "production": {"actualConfigVersion": "3"},
                 "url": "https://x.hub.example.com",
-                "size": "tiny",
-                "autoSuspendAfterSeconds": 900,
-                "lastStartTimestamp": "2026-05-01T00:00:00Z",
             }
         ]
         storage_mock.list_component_configs.return_value = [
@@ -1977,7 +2066,6 @@ class TestDataAppEnvelopesNoBareIdKey:
         service, ds_mock, storage_mock, _enc = _make_service(store)
         ds_mock.get_app.return_value = {"configId": "ulid"}
         storage_mock.get_config_detail.return_value = {"version": "3"}
-        ds_mock.patch_app.return_value = {"state": "starting", "desiredState": "running"}
         result = service.deploy_data_app(alias="prod", app_id="42")
         assert result["app_id"] == "42"
         assert "id" not in result
@@ -1985,7 +2073,7 @@ class TestDataAppEnvelopesNoBareIdKey:
     def test_start_envelope(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
         service, ds_mock, _storage, _enc = _make_service(store)
-        ds_mock.patch_app.return_value = {"state": "starting", "desiredState": "running"}
+        ds_mock.resume_app.return_value = {"state": "starting"}
         result = service.start_data_app(alias="prod", app_id="42")
         assert result["app_id"] == "42"
         assert "id" not in result
@@ -1993,7 +2081,7 @@ class TestDataAppEnvelopesNoBareIdKey:
     def test_stop_envelope(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
         service, ds_mock, _storage, _enc = _make_service(store)
-        ds_mock.patch_app.return_value = {"state": "stopping", "desiredState": "stopped"}
+        ds_mock.suspend_app.return_value = {"state": "suspended"}
         result = service.stop_data_app(alias="prod", app_id="42")
         assert result["app_id"] == "42"
         assert "id" not in result
@@ -2269,7 +2357,7 @@ class TestTailAppLogsClient:
         from keboola_agent_cli.data_science_client import DataScienceClient
 
         httpx_mock.add_response(
-            url=f"{self.DATA_SCIENCE_BASE}/apps/42/logs/tail?lines=500",
+            url=f"{self.DATA_SCIENCE_BASE}/v2/apps/42/logs/tail?lines=500",
             text="line1\nline2\nline3\n",
             status_code=200,
             headers={"content-type": "text/plain"},
@@ -2290,7 +2378,7 @@ class TestTailAppLogsClient:
         # httpx auto-encodes the params dict; assert against the encoded URL.
         httpx_mock.add_response(
             url=(
-                f"{self.DATA_SCIENCE_BASE}/apps/42/logs/tail"
+                f"{self.DATA_SCIENCE_BASE}/v2/apps/42/logs/tail"
                 "?since=2026-05-21T13%3A00%3A00%2B00%3A00"
             ),
             text="",
@@ -2310,7 +2398,7 @@ class TestTailAppLogsClient:
         from keboola_agent_cli.data_science_client import DataScienceClient
 
         httpx_mock.add_response(
-            url=f"{self.DATA_SCIENCE_BASE}/apps/42/logs/tail",
+            url=f"{self.DATA_SCIENCE_BASE}/v2/apps/42/logs/tail",
             text="full buffer\n",
             status_code=200,
         )
@@ -2335,7 +2423,7 @@ class TestCreateAppClient:
         from keboola_agent_cli.data_science_client import DataScienceClient
 
         httpx_mock.add_response(
-            url="https://data-science.keboola.com/apps",
+            url="https://data-science.keboola.com/v2/apps",
             method="POST",
             json={"id": "10", "configId": "01CFG"},
         )
@@ -2347,6 +2435,97 @@ class TestCreateAppClient:
 
         body = json.loads(httpx_mock.get_requests()[0].content)
         assert body["branchId"] is None
+
+    def test_dev_branch_posts_branch_id_as_string(self, httpx_mock) -> None:
+        """A dev branch id goes out as a JSON string: the Data Science API
+        answers HTTP 422 on a numeric ``branchId``."""
+        from keboola_agent_cli.data_science_client import DataScienceClient
+
+        httpx_mock.add_response(
+            url="https://data-science.keboola.com/v2/apps",
+            method="POST",
+            json={"id": "10", "configId": "01CFG"},
+        )
+
+        with DataScienceClient(
+            stack_url="https://connection.keboola.com", token="901-test-token"
+        ) as client:
+            client.create_app(
+                type_="streamlit", name="app", description="", config={}, branch_id=12345
+            )
+
+        body = json.loads(httpx_mock.get_requests()[0].content)
+        assert body["branchId"] == "12345"
+
+    def test_no_branch_posts_branch_id_null(self, httpx_mock) -> None:
+        """Production (no branch) stays ``branchId: null``."""
+        from keboola_agent_cli.data_science_client import DataScienceClient
+
+        httpx_mock.add_response(
+            url="https://data-science.keboola.com/v2/apps",
+            method="POST",
+            json={"id": "10", "configId": "01CFG"},
+        )
+
+        with DataScienceClient(
+            stack_url="https://connection.keboola.com", token="901-test-token"
+        ) as client:
+            client.create_app(type_="streamlit", name="app", description="", config={})
+
+        body = json.loads(httpx_mock.get_requests()[0].content)
+        assert body["branchId"] is None
+
+
+class TestLifecycleClient:
+    """Deploy, start and stop go through ``/v2`` endpoints, not a PATCH of the app."""
+
+    BASE = "https://data-science.keboola.com/v2/apps/42"
+
+    def _client(self):
+        from keboola_agent_cli.data_science_client import DataScienceClient
+
+        return DataScienceClient(stack_url="https://connection.keboola.com", token="901-test-token")
+
+    def test_create_deployment_posts_the_pinned_version(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{self.BASE}/deployments",
+            method="POST",
+            status_code=202,
+            json={"id": "dep-1", "configVersion": "7", "runState": "pending"},
+        )
+        with self._client() as client:
+            deployment = client.create_deployment("42", config_version="7")
+
+        assert deployment["id"] == "dep-1"
+        assert json.loads(httpx_mock.get_requests()[0].content) == {"configVersion": "7"}
+
+    @pytest.mark.parametrize(
+        ("method_name", "path", "http_method"),
+        [
+            ("get_app", "", "GET"),
+            ("suspend_app", "/suspend", "POST"),
+            ("resume_app", "/resume", "POST"),
+        ],
+    )
+    def test_app_endpoints(self, httpx_mock, method_name: str, path: str, http_method: str) -> None:
+        httpx_mock.add_response(
+            url=f"{self.BASE}{path}", method=http_method, json={"id": "42", "state": "running"}
+        )
+        with self._client() as client:
+            assert getattr(client, method_name)("42")["state"] == "running"
+
+    def test_get_deployment(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{self.BASE}/deployments/dep-1", json={"id": "dep-1", "runState": "running"}
+        )
+        with self._client() as client:
+            assert client.get_deployment("42", "dep-1")["runState"] == "running"
+
+    def test_delete_app(self, httpx_mock) -> None:
+        httpx_mock.add_response(url=self.BASE, method="DELETE", status_code=202)
+        with self._client() as client:
+            client.delete_app("42")
+        assert httpx_mock.get_requests()[0].method == "DELETE"
 
 
 class TestListAppsPaginationClient:
@@ -2376,7 +2555,7 @@ class TestListAppsPaginationClient:
         from keboola_agent_cli.constants import DATA_SCIENCE_APPS_PAGE_SIZE as size
 
         httpx_mock.add_response(
-            url=f"{self.DATA_SCIENCE_BASE}/apps?limit={size}&offset=0",
+            url=f"{self.DATA_SCIENCE_BASE}/v2/apps?limit={size}&offset=0",
             json=[{"id": "1", "componentId": "keboola.data-apps"}],
         )
         with self._client() as client:
@@ -2393,11 +2572,11 @@ class TestListAppsPaginationClient:
             {"id": "d2", "componentId": "keboola.data-apps", "configId": "c2"},
         ]
         httpx_mock.add_response(
-            url=f"{self.DATA_SCIENCE_BASE}/apps?limit={size}&offset=0",
+            url=f"{self.DATA_SCIENCE_BASE}/v2/apps?limit={size}&offset=0",
             json=self._sandboxes(size),
         )
         httpx_mock.add_response(
-            url=f"{self.DATA_SCIENCE_BASE}/apps?limit={size}&offset={size}",
+            url=f"{self.DATA_SCIENCE_BASE}/v2/apps?limit={size}&offset={size}",
             json=[*self._sandboxes(3, start=size), *data_apps],
         )
         with self._client() as client:
@@ -2414,11 +2593,11 @@ class TestListAppsPaginationClient:
         from keboola_agent_cli.constants import DATA_SCIENCE_APPS_PAGE_SIZE as size
 
         httpx_mock.add_response(
-            url=f"{self.DATA_SCIENCE_BASE}/apps?limit={size}&offset=0",
+            url=f"{self.DATA_SCIENCE_BASE}/v2/apps?limit={size}&offset=0",
             json=self._sandboxes(size),
         )
         httpx_mock.add_response(
-            url=f"{self.DATA_SCIENCE_BASE}/apps?limit={size}&offset={size}",
+            url=f"{self.DATA_SCIENCE_BASE}/v2/apps?limit={size}&offset={size}",
             json=[],
         )
         with self._client() as client:
@@ -2426,16 +2605,6 @@ class TestListAppsPaginationClient:
 
         assert len(apps) == size
         assert len(httpx_mock.get_requests()) == 2
-
-    def test_wrapped_data_shape_is_still_supported(self, httpx_mock) -> None:
-        from keboola_agent_cli.constants import DATA_SCIENCE_APPS_PAGE_SIZE as size
-
-        httpx_mock.add_response(
-            url=f"{self.DATA_SCIENCE_BASE}/apps?limit={size}&offset=0",
-            json={"data": [{"id": "1", "componentId": "keboola.data-apps"}]},
-        )
-        with self._client() as client:
-            assert [a["id"] for a in client.list_apps()] == ["1"]
 
     def test_page_cap_stops_a_server_that_ignores_offset(self, httpx_mock, caplog) -> None:
         httpx_mock.add_response(json=self._sandboxes(2), is_reusable=True)
@@ -2453,7 +2622,7 @@ class TestListAppsPaginationClient:
             r.getMessage()
             for r in caplog.records
             if r.name == "keboola_agent_cli.data_science_client"
-        ] == ["GET /apps: stopped after 3 pages of 2; the listing may be incomplete"]
+        ] == ["GET /v2/apps: stopped after 3 pages of 2; the listing may be incomplete"]
 
     def test_error_on_a_later_page_raises_with_no_partial_result(self, httpx_mock) -> None:
         """A page that still fails after the client's retries fails the whole listing."""
@@ -2461,11 +2630,11 @@ class TestListAppsPaginationClient:
         from keboola_agent_cli.constants import MAX_RETRIES
 
         httpx_mock.add_response(
-            url=f"{self.DATA_SCIENCE_BASE}/apps?limit={size}&offset=0",
+            url=f"{self.DATA_SCIENCE_BASE}/v2/apps?limit={size}&offset=0",
             json=self._sandboxes(size),
         )
         httpx_mock.add_response(
-            url=f"{self.DATA_SCIENCE_BASE}/apps?limit={size}&offset={size}",
+            url=f"{self.DATA_SCIENCE_BASE}/v2/apps?limit={size}&offset={size}",
             status_code=503,
             json={"error": "Service Unavailable"},
             is_reusable=True,
@@ -2487,11 +2656,11 @@ class TestListAppsPaginationClient:
         from keboola_agent_cli.services._sync_data_app import load_data_app_types
 
         httpx_mock.add_response(
-            url=f"{self.DATA_SCIENCE_BASE}/apps?limit={size}&offset=0",
+            url=f"{self.DATA_SCIENCE_BASE}/v2/apps?limit={size}&offset=0",
             json=self._sandboxes(size),
         )
         httpx_mock.add_response(
-            url=f"{self.DATA_SCIENCE_BASE}/apps?limit={size}&offset={size}",
+            url=f"{self.DATA_SCIENCE_BASE}/v2/apps?limit={size}&offset={size}",
             json=[
                 {
                     "id": "d1",

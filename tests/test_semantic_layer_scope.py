@@ -87,12 +87,19 @@ def _child_item(
 
 
 class TestResolveTargetProjectIds:
-    def test_aliases_ids_and_comma_lists_resolve_and_dedupe(self, tmp_path: Path) -> None:
+    def test_aliases_and_ids_resolve_and_dedupe(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
         resolved = scope_helpers.resolve_target_project_ids(
-            store, "prod", ["analytics,5678", "analytics", "9"]
+            store, "prod", ["analytics", "5678", "analytics", "9"]
         )
         assert resolved == [1234, 5678, 9]
+
+    def test_a_comma_is_invalid_argument_naming_the_option(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        with pytest.raises(KeboolaApiError) as excinfo:
+            scope_helpers.resolve_target_project_ids(store, "prod", ["analytics,5678"])
+        assert excinfo.value.error_code == ErrorCode.INVALID_ARGUMENT
+        assert "Repeat --target-project once per value" in excinfo.value.message
 
     @pytest.mark.parametrize(
         ("target", "needle"),
@@ -252,7 +259,7 @@ class TestServiceScopeMethods:
     ) -> None:
         service, mock = _make_service(_make_store(tmp_path))
         mock.get_item.return_value = _item(OWNED)
-        service.scope_update_targets("prod", "dataset", "d1", add=["analytics,5678"])
+        service.scope_update_targets("prod", "dataset", "d1", add=["analytics", "5678"])
         mock.put_target_projects.assert_called_once_with(
             "semantic-dataset", "d1", [1, 2, 1234, 5678]
         )
@@ -325,7 +332,7 @@ class TestChildScopeInheritance:
             ({"scope": "organization"}, None, None, "organization", None),
             ({"scope": "targeted", "targetProjectIds": [5, 6]}, None, None, "targeted", [5, 6]),
             ({"scope": "organization"}, "project", None, "project", None),  # explicit wins
-            (None, "targeted", ["analytics,5678"], "targeted", [1234, 5678]),
+            (None, "targeted", ["analytics", "5678"], "targeted", [1234, 5678]),
             (None, "organization", None, "organization", None),
         ],
     )
@@ -511,8 +518,8 @@ class TestCopiedItemsTakeTheTargetModelsScope:
         snapshot = {"glossary": [_child_item("semantic-glossary", "src", {"term": "t"})]}
         result = service.import_snapshot_from_dict("prod", snapshot=snapshot)
         (failure,) = result["imported"]["glossary"]["failed"]
-        assert "organization-admin token" in failure["reason"]
-        assert "--scope project" in failure["reason"]
+        assert "organization-admin token" in failure["message"]
+        assert "--scope project" in failure["message"]
 
     def test_promote_creates_new_items_at_the_target_models_scope(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
@@ -647,7 +654,7 @@ class TestCopyScopeOverride:
         assert (kwargs["scope"], kwargs["target_project_ids"]) == ("project", None)
         mock.get_item.assert_not_called()  # an explicit scope needs no model lookup
         (failure,) = result["imported"]["glossary"]["failed"]
-        assert failure["reason"] == "Access denied"  # explicit scope: no inherited-scope hint
+        assert failure["message"] == "Access denied"  # explicit scope: no inherited-scope hint
 
     def test_promote_targeted_scope_resolves_the_target_projects(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)

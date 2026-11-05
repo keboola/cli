@@ -53,10 +53,10 @@ Once built, query the graph without re-scanning:
 
 ```bash
 # Show downstream dependencies of a table
-kbagent lineage show -l lineage.json --downstream "my-project:in.c-main.users"
+kbagent lineage show --file lineage.json --downstream "my-project:in.c-main.users"
 
 # Show upstream dependencies
-kbagent lineage show -l lineage.json --upstream "my-project:out.c-analytics.report"
+kbagent lineage show --file lineage.json --upstream "my-project:out.c-analytics.report"
 ```
 
 The text output is a real tree *(since 0.99.1)*: every node sits under the node
@@ -76,7 +76,7 @@ node dropped that node's descendants).
 
 ```bash
 # Show column-level mappings for all tables in the result
-kbagent lineage show -l lineage.json --downstream "my-project:in.c-main.users" --columns
+kbagent lineage show --file lineage.json --downstream "my-project:in.c-main.users" --columns
 ```
 
 In the text tree `--columns` prints the mapping (or column list) of each EDGE
@@ -88,7 +88,7 @@ the tree (at its first occurrence), not only under the queried node.
 
 ```bash
 # Trace a single column through the lineage
-kbagent lineage show -l lineage.json --downstream "my-project:in.c-main.users" --column user_id
+kbagent lineage show --file lineage.json --downstream "my-project:in.c-main.users" --column user_id
 ```
 
 `--column` *(since 0.99.1)* is a hop-by-hop trace, not a filter:
@@ -110,7 +110,8 @@ kbagent lineage show -l lineage.json --downstream "my-project:in.c-main.users" -
   `ambiguous_output_table` (the config writes several tables with that column
   name; `candidates` lists them) or `output_table_unknown`.
 - JSON edges carry `source_column` / `target_column` and only the relevant
-  mapping entry; the result has `column` (and the legacy `column_filter`).
+  mapping entry; the result has `column`. The legacy `column_filter` key is
+  removed (since 1.0.0).
 
 Before 0.99.1 `--column` kept every edge without column info and dropped edges whose
 column list lacked the name, so unrelated branches stayed and real hops vanished.
@@ -240,7 +241,7 @@ Use `lineage info` to see what's in a cached lineage graph without running
 a full query:
 
 ```bash
-kbagent lineage info -l lineage.json
+kbagent lineage info --file lineage.json
 ```
 
 This shows per-project breakdown, table counts, and most connected nodes.
@@ -251,16 +252,16 @@ The `--format` option controls how `lineage show` renders the result:
 
 ```bash
 # Default text output
-kbagent lineage show -l lineage.json --downstream "my-project:in.c-main.users"
+kbagent lineage show --file lineage.json --downstream "my-project:in.c-main.users"
 
 # Mermaid diagram (paste into mermaid.live or GitHub markdown)
-kbagent lineage show -l lineage.json --downstream "my-project:in.c-main.users" --format mermaid
+kbagent lineage show --file lineage.json --downstream "my-project:in.c-main.users" --format mermaid
 
 # ER diagram (entity-relationship style; always lists table columns)
-kbagent lineage show -l lineage.json --downstream "my-project:in.c-main.users" --format er
+kbagent lineage show --file lineage.json --downstream "my-project:in.c-main.users" --format er
 
 # Self-contained HTML page with interactive diagram
-kbagent lineage show -l lineage.json --downstream "my-project:in.c-main.users" --format html
+kbagent lineage show --file lineage.json --downstream "my-project:in.c-main.users" --format html
 ```
 
 Formats: `text` (default), `mermaid`, `html`, `er`.
@@ -294,8 +295,8 @@ Diagrams *(since 0.99.1)*:
 Start a local web server for interactive lineage exploration:
 
 ```bash
-kbagent lineage server -l lineage.json
-kbagent lineage server -l lineage.json --port 8080 --host 0.0.0.0
+kbagent lineage server --file lineage.json
+kbagent lineage server --file lineage.json --port 8080 --host 0.0.0.0
 ```
 
 Opens a sidebar-based node picker with mermaid/ER diagram rendering and

@@ -2,8 +2,8 @@
 
 Thin CLI layer that delegates to :class:`DataAppService`. The underlying
 Keboola Data Science API is not idempotent and has several footguns
-(redeploy contract, cross-project KMS, transient stopped during initial
-deploy); the service encodes them. The command layer's job is argument
+(version pinning, cross-project KMS, rollout state); the service encodes
+them. The command layer's job is argument
 parsing, mutual-exclusion validation, dual JSON / human output, and
 exit-code mapping.
 """
@@ -47,6 +47,7 @@ from ._helpers import (
     get_formatter,
     get_service,
     map_error_to_exit_code,
+    read_input_file,
 )
 from ._project_ref import PROJECT_HELP
 from ._url_copy import LINK_STYLE
@@ -77,7 +78,6 @@ def _print_data_app_table(formatter, result: dict) -> None:
             f"[cyan]{app.get('name', '')}[/cyan] "
             f"({app.get('type', '?')}) "
             f"state=[yellow]{app.get('state', '?')}[/yellow] "
-            f"desired={app.get('desired_state', '?')} "
             f"v{app.get('config_version', '?')} "
             f"in [magenta]{app['project_alias']}[/magenta]"
         )
@@ -190,10 +190,7 @@ def data_app_detail(
             c.print(f"  [bold]Project:[/bold] {d['project_alias']}"),
             c.print(f"  [bold]Slug:[/bold] {d.get('slug', '')}"),
             c.print(f"  [bold]Type:[/bold] {d.get('type', '')}"),
-            c.print(
-                f"  [bold]State:[/bold] [yellow]{d.get('state', '?')}[/yellow] "
-                f"(desired={d.get('desired_state', '?')})"
-            ),
+            c.print(f"  [bold]State:[/bold] [yellow]{d.get('state', '?')}[/yellow]"),
             c.print(
                 f"  [bold]Config version:[/bold] storage="
                 f"{d.get('config_version_storage', '?')}, "
@@ -207,7 +204,6 @@ def data_app_detail(
                 highlight=False,
                 soft_wrap=True,
             ),
-            c.print(f"  [bold]Last started:[/bold] {d.get('last_start_timestamp', '')}"),
             c.print(f"  [bold]Git:[/bold] {d.get('git', {})}"),
         ),
     )
@@ -228,8 +224,11 @@ def _print_create_result(console: Console, result: dict[str, Any]) -> None:
         console.print(f"  [bold]App ID:[/bold] {result['app_id']}")
         console.print(f"  [bold]Config ID:[/bold] {result['config_id']}")
         if result.get("use_managed_git_repo"):
-            repo_id = result.get("managed_git_repo_id") or "(provisioning)"
-            console.print(f"  [bold]Managed git repo:[/bold] {repo_id}")
+            console.print(
+                "  [bold]Managed git repo:[/bold] yes (`data-app git-repo` shows its URL)"
+            )
+        if result.get("git_auth"):
+            console.print(f"  [bold]Git auth:[/bold] {result['git_auth']} (no credential stored)")
         if result.get("workspace"):
             # Report what we WROTE, not what the platform will do with it.
             # kbagent sets the key; whether the runtime honours it is the
@@ -252,10 +251,7 @@ def _print_create_result(console: Console, result: dict[str, Any]) -> None:
                 highlight=False,
                 soft_wrap=True,
             )
-        console.print(
-            f"  [bold]State:[/bold] {result.get('state', '?')} "
-            f"(desired={result.get('desired_state', '?')})"
-        )
+        console.print(f"  [bold]State:[/bold] {result.get('state', '?')}")
 
 
 @data_app_app.command("create")
@@ -271,9 +267,10 @@ def data_app_create(
     description_file: Path | None = typer.Option(
         None,
         "--description-file",
-        help="Read description from a file. Mutually exclusive with --description.",
+        help="Read description from a file (- for stdin). Mutually exclusive with --description.",
         exists=True,
         readable=True,
+        allow_dash=True,
     ),
     slug: str = typer.Option(
         ..., "--slug", help="URL slug (lowercase alphanumeric, hyphens; 2-64 chars)"
@@ -303,7 +300,19 @@ def data_app_create(
         help="Mark the repository as public (no credentials needed).",
     ),
     git_username: str | None = typer.Option(
-        None, "--git-username", help="GitHub username (required for private repos)"
+        None,
+        "--git-username",
+        help="GitHub username (required for a private repo, unless --git-auth organization).",
+    ),
+    git_auth: str | None = typer.Option(
+        None,
+        "--git-auth",
+        help=(
+            "'organization': clone a private GitHub repo through the Keboola "
+            "organization's GitHub App connection; no PAT is stored. Needs an "
+            "https:// GitHub URL. Mutually exclusive with --git-public, "
+            "--git-username, the --git-pat-* flags and --use-managed-git-repo."
+        ),
     ),
     git_pat_env: str | None = typer.Option(
         None,
@@ -316,6 +325,7 @@ def data_app_create(
         help="File containing the plaintext PAT.",
         exists=True,
         readable=True,
+        dir_okay=False,
     ),
     git_pat_encrypted: str | None = typer.Option(
         None,
@@ -362,13 +372,12 @@ def data_app_create(
     no_deploy: bool = typer.Option(
         False,
         "--no-deploy",
-        help="Skip the deploy step; create the shell + Storage config only.",
+        help="Skip the deploy step; create the app + Storage config only.",
     ),
     wait: bool = typer.Option(
         False,
         "--wait",
-        help="Block until state == running (or error). Respects pitfall #1: stopped is not "
-        "terminal. Default: no wait.",
+        help="Block until the deployment serves production (or fails). Default: no wait.",
     ),
     timeout: float = typer.Option(
         DEFAULT_JOB_RUN_TIMEOUT,
@@ -379,7 +388,7 @@ def data_app_create(
     keep_on_failure: bool = typer.Option(
         False,
         "--keep-on-failure",
-        help="Keep the orphan deployment shell if PUT or initial deploy fails (forensics).",
+        help="Keep the orphan app if PUT or initial deploy fails (forensics).",
     ),
     dry_run: bool = typer.Option(
         False,
@@ -390,6 +399,10 @@ def data_app_create(
     reveal: RevealOption = False,
 ) -> None:
     """Create a Keboola data app end-to-end (POST + encrypt + PUT + deploy).
+
+    A private GitHub repo needs either --git-username plus a PAT, or
+    --git-auth organization (no credential stored; the token is minted from
+    the organization's GitHub App connection at deploy time).
 
     With --wait on a password-auth app, the password is delivered once the app
     runs, as in `data-app password`: a c-to-copy prompt in a terminal,
@@ -415,10 +428,10 @@ def data_app_create(
     effective_description = description
     if description_file is not None:
         try:
-            effective_description = description_file.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError) as exc:
+            effective_description = read_input_file(description_file, label="--description-file")
+        except ValueError as exc:
             formatter.error(
-                message=f"Cannot read --description-file {description_file}: {exc}",
+                message=str(exc),
                 error_code=ErrorCode.READ_ERROR,
             )
             raise typer.Exit(code=exit_code_for(ErrorCode.READ_ERROR)) from None
@@ -473,6 +486,7 @@ def data_app_create(
             git_pat_plaintext=pat_plaintext,
             git_pat_encrypted=git_pat_encrypted,
             use_managed_git_repo=use_managed_git_repo,
+            git_auth=git_auth,
             auth=auth,
             size=size,
             auto_suspend_after_seconds=auto_suspend,
@@ -576,7 +590,7 @@ def data_app_deploy(
     copy: CopyOption = False,
     reveal: RevealOption = False,
 ) -> None:
-    """Deploy the latest Storage config (the §9 redeploy contract).
+    """Deploy the latest Storage config version as a new production deployment.
 
     With --wait on a password-auth app, the password is delivered once the app
     runs, as in `data-app password`: a c-to-copy prompt in a terminal (the
@@ -611,7 +625,7 @@ def data_app_start(
         help=f"Max seconds to wait, with --wait. Default: {DEFAULT_JOB_RUN_TIMEOUT:g}.",
     ),
 ) -> None:
-    """Wake an auto-suspended data app at its currently-pinned configVersion."""
+    """Wake a suspended or disabled data app at the deployment production serves."""
     _run_lifecycle(
         ctx,
         "start_data_app",
@@ -627,14 +641,16 @@ def data_app_stop(
     ctx: typer.Context,
     project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
     app_id: str = typer.Option(..., "--app-id", help="Data Science numeric app id"),
-    wait: bool = typer.Option(False, "--wait", help="Block until stopped. Default: no wait."),
+    wait: bool = typer.Option(
+        False, "--wait", help="No effect: the app is suspended when the call returns."
+    ),
     timeout: float = typer.Option(
         DEFAULT_JOB_RUN_TIMEOUT,
         "--timeout",
         help=f"Max seconds to wait, with --wait. Default: {DEFAULT_JOB_RUN_TIMEOUT:g}.",
     ),
 ) -> None:
-    """Stop a running data app (preserves the URL and Storage config)."""
+    """Suspend a data app; the next request to its URL wakes it (URL and config kept)."""
     _run_lifecycle(
         ctx,
         "stop_data_app",
@@ -662,7 +678,7 @@ def data_app_delete(
         help="Skip the confirmation prompt.",
     ),
 ) -> None:
-    """Delete the deployment AND the Storage config (cascade, irreversible)."""
+    """Delete the app: stop its deployments and move the Storage config to the trash."""
     formatter = get_formatter(ctx)
     service = get_service(ctx, "data_app_service")
 
@@ -824,8 +840,8 @@ def data_app_runs(
     never-started / failed apps and surfaces the ``failure_reason`` +
     ``startup_logs`` the platform records for each attempt -- including
     setup-phase failures (e.g. a git-clone error during ``app_setup``) that
-    produce no container logs. This is the way to find out *why* a deploy
-    reverted to ``stopped`` without the app ever serving.
+    produce no container logs. This is the way to find out *why* a deployment
+    failed without the app ever serving.
 
     Auth: project Storage token only.
     """
@@ -916,6 +932,10 @@ def data_app_validate_repo(
     'pip install' in setup.sh, requires-python at-or-below the runtime
     pin, etc.). Each check emits BLOCKING / WARN / OK with a citation
     to the help-doc anchor that defines the rule.
+
+    The repo is read anonymously or with YOUR PAT only. Organization GitHub
+    auth (`create --git-auth organization`) is never used here: validate such
+    a repo with a PAT that can read it.
 
     Reference: https://help.keboola.com/data-apps/python-js/
     """

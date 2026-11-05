@@ -25,7 +25,7 @@ import { useHashSelection } from "../useHashSelection";
 
 interface BulkDeleteResult {
   removed: string[];
-  failed: { alias: string; error: string }[];
+  failed: { alias: string; message: string }[];
   dry_run: boolean;
 }
 
@@ -99,7 +99,7 @@ export function ProjectsPage() {
       }
       qc.invalidateQueries({ queryKey: ["projects"] });
       if (res.failed.length > 0) {
-        const lines = res.failed.map((f) => `${f.alias} (${f.error})`).join(", ");
+        const lines = res.failed.map((f) => `${f.alias} (${f.message})`).join(", ");
         setRemoveNotice(
           `Removed ${res.removed.length}; ${res.failed.length} failed: ${lines}`,
         );

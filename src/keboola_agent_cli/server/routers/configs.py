@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict
 from ...permissions import PermissionEngine
 from ...services.base import resolve_fanout_aliases
 from ..dependencies import ALL_PROJECTS_HELP, ServiceRegistry, get_permission_engine, get_registry
-from ..response_meta import note_operation, warn_deprecated
+from ..response_meta import note_operation, removed_form_error
 
 router = APIRouter(prefix="/configs", tags=["configs"])
 
@@ -693,16 +693,13 @@ def variables_set(
 ) -> dict[str, Any]:
     """Replace all variables of a configuration. Mirrors `kbagent config variables-set --replace`.
 
-    Send ``replace: true``. Without it the request still merges, as before,
-    with a ``DEPRECATED`` entry in ``Kbagent-Warnings`` (spec V9): use
-    ``PATCH`` to merge. After the window such a request is refused, never
-    run as a replace.
+    Send ``replace: true``. Without it the request is refused with HTTP 405,
+    never run as a replace: ``PATCH`` merges (spec V9).
     """
-    if body.replace:
-        engine.check_or_raise("config.variables-set --replace")
-        note_operation("config.variables-set --replace")
-    else:
-        warn_deprecated("PUT /configs/{project}/{component_id}/{config_id}/variables")
+    if not body.replace:
+        raise removed_form_error("PUT /configs/{project}/{component_id}/{config_id}/variables")
+    engine.check_or_raise("config.variables-set --replace")
+    note_operation("config.variables-set --replace")
     return registry.variables.set_variables(
         alias=project,
         component_id=component_id,

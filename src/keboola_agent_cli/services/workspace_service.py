@@ -947,7 +947,6 @@ class WorkspaceService(BaseService):
                         exc,
                         workspace_id=ws["id"],
                         project_alias=ws["project_alias"],
-                        error=str(exc),
                     )
                 )
 
