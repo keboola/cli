@@ -1,5 +1,6 @@
 """Tests for storage export row-filters (where / changed_since) and add-column (0.62.0)."""
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -240,6 +241,7 @@ class TestAddColumnService:
     def test_parses_spec_and_calls_client(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
         mock_client = MagicMock()
+        mock_client.get_table_detail.return_value = {"id": "in.c-b.t", "isTyped": True}
         mock_client.add_column.return_value = {"id": "in.c-b.t"}
         service = _make_service(store, mock_client)
 
@@ -265,6 +267,81 @@ class TestAddColumnService:
         )
         mock_client.close.assert_called_once()
 
+    def test_typed_table_bare_name_sends_implicit_string(self, tmp_path: Path) -> None:
+        mock_client = MagicMock()
+        mock_client.get_table_detail.return_value = {"id": "in.c-b.t", "isTyped": True}
+        service = _make_service(_make_store(tmp_path), mock_client)
+
+        result = service.add_column(alias="test", table_id="in.c-b.t", column="notes")
+
+        assert result["definition"] == {"type": "STRING"}
+        assert mock_client.add_column.call_args.kwargs["definition"] == {"type": "STRING"}
+
+    def test_untyped_table_bare_name_sends_no_definition(self, tmp_path: Path) -> None:
+        mock_client = MagicMock()
+        mock_client.get_table_detail.return_value = {"id": "out.c-b.t", "isTyped": False}
+        service = _make_service(_make_store(tmp_path), mock_client)
+
+        result = service.add_column(
+            alias="test", table_id="out.c-b.t", column="Match_Type", branch_id=7
+        )
+
+        assert result["definition"] is None
+        mock_client.get_table_detail.assert_called_once_with("out.c-b.t", branch_id=7)
+        mock_client.add_column.assert_called_once_with(
+            "out.c-b.t", name="Match_Type", definition=None, branch_id=7
+        )
+        mock_client.close.assert_called_once()
+
+    @pytest.mark.parametrize(
+        ("column", "not_null", "default"),
+        [
+            ("Match_Type:STRING", False, None),
+            ("Match_Type", True, None),
+            ("Match_Type", False, "x"),
+        ],
+    )
+    def test_untyped_table_rejects_type_not_null_and_default(
+        self, tmp_path: Path, column: str, not_null: bool, default: str | None
+    ) -> None:
+        mock_client = MagicMock()
+        mock_client.get_table_detail.return_value = {"id": "out.c-b.t", "isTyped": False}
+        service = _make_service(_make_store(tmp_path), mock_client)
+
+        with pytest.raises(ValueError, match="is untyped"):
+            service.add_column(
+                alias="test",
+                table_id="out.c-b.t",
+                column=column,
+                not_null=not_null,
+                default=default,
+            )
+
+        mock_client.add_column.assert_not_called()
+        mock_client.close.assert_called_once()
+
+    def test_untyped_table_request_body_has_only_name(self, tmp_path: Path, httpx_mock) -> None:
+        httpx_mock.add_response(
+            method="GET",
+            url=f"{STACK}/v2/storage/tables/out.c-b.t",
+            json={"id": "out.c-b.t", "isTyped": False},
+        )
+        httpx_mock.add_response(
+            method="POST",
+            url=f"{STACK}/v2/storage/tables/out.c-b.t/columns",
+            status_code=200,
+            json={"id": "out.c-b.t", "columns": ["id", "Match_Type"]},
+        )
+        service = StorageService(
+            config_store=_make_store(tmp_path),
+            client_factory=lambda url, token: KeboolaClient(url, token),
+        )
+
+        service.add_column(alias="test", table_id="out.c-b.t", column="Match_Type")
+
+        post = httpx_mock.get_requests(method="POST")[0]
+        assert json.loads(post.content) == {"name": "Match_Type"}
+
 
 class TestStorageCLI:
     def _invoke(self, tmp_path: Path, mock_client: MagicMock, args: list[str]):
@@ -280,6 +357,7 @@ class TestStorageCLI:
 
     def test_add_column_cli(self, tmp_path: Path) -> None:
         mock_client = MagicMock()
+        mock_client.get_table_detail.return_value = {"id": "in.c-b.t", "isTyped": True}
         mock_client.add_column.return_value = {"id": "in.c-b.t"}
         result = self._invoke(
             tmp_path,
@@ -299,6 +377,20 @@ class TestStorageCLI:
         assert result.exit_code == 0, result.output
         assert mock_client.add_column.call_args.kwargs["name"] == "status"
         assert mock_client.add_column.call_args.kwargs["definition"]["type"] == "VARCHAR"
+
+    def test_add_column_cli_untyped_table(self, tmp_path: Path) -> None:
+        mock_client = MagicMock()
+        mock_client.get_table_detail.return_value = {"id": "out.c-b.t", "isTyped": False}
+        mock_client.add_column.return_value = {"id": "out.c-b.t"}
+        args = ["storage", "add-column", "--project", "test", "--table-id", "out.c-b.t"]
+
+        result = self._invoke(tmp_path, mock_client, [*args, "--column", "Match_Type"])
+        assert result.exit_code == 0, result.output
+        assert "Match_Type (untyped)" in result.output
+
+        result = self._invoke(tmp_path, mock_client, [*args, "--column", "Match_Type:STRING"])
+        assert result.exit_code == 2, result.output
+        assert "untyped" in result.output
 
     def test_download_table_forwards_filters(self, tmp_path: Path) -> None:
         mock_service = MagicMock()

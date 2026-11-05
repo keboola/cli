@@ -3490,11 +3490,11 @@
       "kind": "command",
       "hidden": false,
       "category": "write",
-      "help": "Add a single column to an existing table (typed; waits for the job).\n\nMirrors ``create-table --column``: ``name:TYPE(length)`` creates a typed\ncolumn; a bare ``name`` adds an untyped STRING column. The command waits\nfor the Storage job, so a following table-detail lists the column; a\nfailed job is reported as an error.",
+      "help": "Add a single column to an existing table (waits for the job).\n\nMirrors ``create-table --column``: on a typed table ``name:TYPE(length)``\ncreates a typed column and a bare ``name`` a STRING column. An untyped\ntable takes only a bare ``name`` (no type, --not-null or --default). The command waits\nfor the Storage job, so a following table-detail lists the column; a\nfailed job is reported as an error.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "table_id", "opts": ["--table-id"], "type": "text", "required": true, "default": null, "help": "Table ID to add the column to (e.g. 'in.c-bucket.table')"},
-        {"kind": "option", "name": "column", "opts": ["--column"], "type": "text", "required": true, "default": null, "help": "Column spec: 'name', 'name:TYPE', or 'name:TYPE(length)' (e.g. 'status:VARCHAR(20)', 'amount:NUMBER(18,2)')."},
+        {"kind": "option", "name": "column", "opts": ["--column"], "type": "text", "required": true, "default": null, "help": "Column spec: 'name', 'name:TYPE', or 'name:TYPE(length)' (e.g. 'status:VARCHAR(20)', 'amount:NUMBER(18,2)'). An untyped table takes only a bare 'name'."},
         {"kind": "option", "name": "not_null", "opts": ["--not-null"], "type": "boolean", "is_flag": true, "default": false, "help": "Make the new column NOT NULL (needs an empty table or a --default)."},
         {"kind": "option", "name": "default", "opts": ["--default"], "type": "text", "default": null, "help": "Default value for the new column."},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID (defaults to active branch if set via 'branch use')"}
