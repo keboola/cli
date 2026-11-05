@@ -196,7 +196,7 @@ Encrypt secrets for component configurations:
 ```bash
 kbagent encrypt values --project prod \
   --component-id keboola.ex-db-snowflake \
-  --input '{"#password": "secret123", "#api_token": "tok_xxx"}'
+  --values '{"#password": "secret123", "#api_token": "tok_xxx"}'   # 0.x: --input
 ```
 
 Returns encrypted values ready for `sync push` or a `config update` write.

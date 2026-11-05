@@ -16,6 +16,7 @@ from typing import Any
 from ..constants import BUCKET_STAGES, DEFAULT_LINK_STAGE, ENV_KBC_MASTER_TOKEN
 from ..errors import ErrorCode, KeboolaApiError
 from ..models import ProjectConfig
+from ._semantic_layer_scope import resolve_target_project_ids
 from .base import BaseService
 
 logger = logging.getLogger(__name__)
@@ -101,17 +102,25 @@ class SharingService(BaseService):
         sharing_type: str,
         target_project_ids: list[int] | None = None,
         target_users: list[str] | None = None,
+        target_projects: list[str] | None = None,
     ) -> dict[str, Any]:
         """Enable sharing on a bucket.
 
         Requires a master token with organization membership.
         Set KBC_MASTER_TOKEN_{ALIAS} or KBC_MASTER_TOKEN env var.
 
+        ``target_projects`` (the CLI's ``--target-project``) takes registered
+        aliases or numeric project IDs, resolved like the semantic-layer
+        ``--target-project``; the IDs are added to ``target_project_ids``.
+
         Returns:
             Dict with operation result.
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
+        if target_projects:
+            resolved = resolve_target_project_ids(self._config_store, alias, target_projects)
+            target_project_ids = list(dict.fromkeys([*(target_project_ids or []), *resolved]))
         token = self.resolve_master_token(alias, project)
 
         client = self._client_factory(project.stack_url, token)
@@ -243,13 +252,20 @@ class SharingService(BaseService):
         self,
         alias: str,
         bucket_id: str,
+        dry_run: bool = False,
     ) -> dict[str, Any]:
         """Delete a linked bucket from the target project.
 
         Uses the regular project token.
 
+        Args:
+            alias: Project alias.
+            bucket_id: Linked bucket ID.
+            dry_run: Read the bucket (one GET), check that it is a linked
+                bucket, and delete nothing.
+
         Returns:
-            Dict with operation result.
+            Dict with operation result, or the preview with ``dry_run: true``.
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
@@ -266,10 +282,19 @@ class SharingService(BaseService):
                     error_code=ErrorCode.NOT_LINKED_BUCKET,
                     retryable=False,
                 )
-            client.delete_bucket(bucket_id=bucket_id, force=True)
+            if not dry_run:
+                client.delete_bucket(bucket_id=bucket_id, force=True)
         finally:
             client.close()
 
+        if dry_run:
+            return {
+                "project_alias": alias,
+                "bucket_id": bucket_id,
+                "source_bucket_id": bucket["sourceBucket"].get("id"),
+                "dry_run": True,
+                "message": f"Would delete linked bucket '{bucket_id}' from project '{alias}'.",
+            }
         return {
             "project_alias": alias,
             "bucket_id": bucket_id,

@@ -15,7 +15,7 @@
 |---------|-------------|----------------|
 | `sharing list` | Regular project token | Already in config |
 | `sharing link` | Regular project token | Already in config |
-| `sharing unlink` | Regular project token | Already in config |
+| `sharing unlink` | Regular project token | Already in config (destructive-class since 1.0.0: asks for confirmation; `--json` or `--yes` is consent, `--dry-run` deletes nothing) |
 | `sharing share` | **Master token** (org membership) | `KBC_MASTER_TOKEN_{ALIAS}` or `KBC_MASTER_TOKEN` env var |
 | `sharing unshare` | **Master token** (org membership) | Same as above |
 
@@ -66,7 +66,7 @@ still has a linked bucket pointing to it.
 ```bash
 KBC_MASTER_TOKEN_PROJ_A="..." kbagent --json sharing share \
   --project proj-a --bucket-id out.c-data \
-  --type selected-projects --target-project-ids 901,9621
+  --type selected-projects --target-project 901 --target-project 9621
 ```
 
 ## Share to specific users
@@ -74,8 +74,10 @@ KBC_MASTER_TOKEN_PROJ_A="..." kbagent --json sharing share \
 ```bash
 KBC_MASTER_TOKEN_PROJ_A="..." kbagent --json sharing share \
   --project proj-a --bucket-id out.c-data \
-  --type selected-users --target-users alice@example.com,bob@example.com
+  --type selected-users --target-user alice@example.com --target-user bob@example.com
 ```
+
+Repeat `--target-project` and `--target-user` once per value. Give `--target-project` numeric project IDs. *(since 1.0.0)* 1.x refuses a comma in a value (exit 2) and also takes a registered alias in `--target-project`.
 
 ## Key behaviors
 

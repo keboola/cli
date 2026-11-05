@@ -121,7 +121,9 @@ class TestCreateScopeFlags:
                     *("model", "create", "--project", "prod", "--name", "n", "--scope", "targeted")
                 ),
                 "--target-project",
-                "analytics,5678",
+                "analytics",
+                "--target-project",
+                "5678",
             ],
             store=store,
             sl_mock=mock,
@@ -129,7 +131,7 @@ class TestCreateScopeFlags:
         assert result.exit_code == 0, result.output
         kwargs = mock.create_model.call_args.kwargs
         assert kwargs["scope"] == "targeted"
-        assert kwargs["target_projects"] == ["analytics,5678"]
+        assert kwargs["target_projects"] == ["analytics", "5678"]
 
     def test_targeted_scope_without_target_fails_fast_non_tty(self, store: ConfigStore) -> None:
         mock = MagicMock()
@@ -279,7 +281,7 @@ class TestScopeVerbs:
                 {"remove": ["analytics,5678"]},
             ),
             (["request-create"], "scope_request_create", {}),
-            (["request-delete"], "scope_request_delete", {}),
+            (["request-cancel"], "scope_request_delete", {}),
         ],
     )
     def test_verb_calls_the_service(
@@ -405,7 +407,7 @@ WRITE_VERBS = [
     ["remove", "--target-project", "analytics"],
     ["set", "--clear"],
     ["request-create"],
-    ["request-delete"],
+    ["request-cancel"],
 ]
 READ_VERBS = [["get", *ITEM], ["request-list", "--project", "prod", "--type", "dataset"]]
 
@@ -455,7 +457,7 @@ _COPY_COMMANDS = {
     ),
     "build": (
         "build",
-        ["--project", "prod", "--model", "m", "--tables", "a.b.c"],
+        ["--project", "prod", "--model", "m", "--table-id", "a.b.c"],
         "build_model",
     ),
 }
@@ -514,7 +516,7 @@ class TestCopyCommandsGateInheritedOrganizationScope:
         mock = MagicMock()
         mock.build_model.return_value = {}
         result = _invoke(
-            ["--deny-destructive", *_sl("build", "--project", "prod", "--tables", "a.b.c")],
+            ["--deny-destructive", *_sl("build", "--project", "prod", "--table-id", "a.b.c")],
             store=store,
             sl_mock=mock,
         )

@@ -5,6 +5,7 @@ No business logic belongs here.
 """
 
 import json
+from pathlib import Path
 
 import typer
 from rich.console import Console
@@ -270,7 +271,7 @@ def component_sync_action(
     config_id: str | None = typer.Option(
         None,
         "--config-id",
-        help="Configuration ID whose stored configData to send (required unless --config-data)",
+        help="Configuration ID whose stored configData to send (required unless --config-data or --config-data-file)",
     ),
     row_id: str | None = typer.Option(
         None,
@@ -286,7 +287,13 @@ def component_sync_action(
     config_data: str | None = typer.Option(
         None,
         "--config-data",
-        help="Explicit configData JSON: inline, @file.json, or - for stdin (skips config fetch)",
+        help="Explicit configData JSON, inline (skips config fetch)",
+    ),
+    config_data_file: Path | None = typer.Option(
+        None,
+        "--config-data-file",
+        help="Read the explicit configData JSON from a file, - for stdin (skips config fetch)",
+        allow_dash=True,
     ),
     timeout: int | None = typer.Option(
         None,
@@ -323,9 +330,9 @@ def component_sync_action(
     service = get_service(ctx, "component_service")
     config_store: ConfigStore = ctx.obj["config_store"]
 
-    if config_id is None and config_data is None:
+    if config_id is None and config_data is None and config_data_file is None:
         formatter.error(
-            message="Either --config-id or --config-data is required.",
+            message="Either --config-id, --config-data or --config-data-file is required.",
             error_code=ErrorCode.MISSING_PARAMETER,
         )
         raise typer.Exit(code=2)
@@ -337,13 +344,11 @@ def component_sync_action(
         )
         raise typer.Exit(code=2)
 
-    override: dict | None = None
-    if config_data is not None:
-        try:
-            override = _parse_json_input(config_data, label="--config-data")
-        except ValueError as exc:
-            formatter.error(message=str(exc), error_code=ErrorCode.VALIDATION_ERROR)
-            raise typer.Exit(code=2) from None
+    try:
+        override = _parse_json_input(config_data, config_data_file, label="--config-data")
+    except ValueError as exc:
+        formatter.error(message=str(exc), error_code=ErrorCode.VALIDATION_ERROR)
+        raise typer.Exit(code=2) from None
 
     effective_branch = resolve_branch(config_store, project, branch)
 

@@ -16,7 +16,7 @@ and deletes the policy objects the enforcement reads.
 
 - `targeted` (the default, and the metastore schema's own default) governs the
   table in the owning project (`--project`) plus every project granted with
-  `--target-project` (alias or project ID, repeatable or comma-separated).
+  `--target-project` (alias or project ID, repeated once per value).
 - `--scope organization` governs the table in **every project of the
   organization** where it is enforced (see the prerequisite below). The
   enforcement applies every policy the metastore lists for a project -- it does

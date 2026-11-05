@@ -1,4 +1,4 @@
-"""Shape validation for the `storage describe-batch --from-file` document.
+"""Shape validation for the `storage describe-batch --file` document.
 
 Lives outside ``storage_service.py`` because that module is over its
 file-size budget (CONTRIBUTING.md > "File-size budgets"), and because parsing
@@ -184,7 +184,7 @@ def parse_describe_batch_file(from_file: Path) -> DescribeBatchInput:
     """Read and validate a describe-batch YAML file.
 
     Args:
-        from_file: Path to the ``--from-file`` document.
+        from_file: Path to the ``--file`` document.
 
     Returns:
         The validated sections, descriptions coerced to ``str``. Absent,

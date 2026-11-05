@@ -250,7 +250,7 @@ class TestProjectInviteBulk:
                     "--json",
                     "project",
                     "invite",
-                    "--from-csv",
+                    "--file",
                     str(csv_path),
                 ],
             )
@@ -261,7 +261,7 @@ class TestProjectInviteBulk:
         assert out["data"]["succeeded"] == 1
         assert out["data"]["noop"] == 1
 
-    def test_from_csv_mutually_exclusive_with_project(self, tmp_path: Path) -> None:
+    def test_file_mutually_exclusive_with_project(self, tmp_path: Path) -> None:
         config_dir = tmp_path / "config"
         config_dir.mkdir()
         _seed_store(config_dir)
@@ -278,7 +278,7 @@ class TestProjectInviteBulk:
                     "--json",
                     "project",
                     "invite",
-                    "--from-csv",
+                    "--file",
                     str(csv_path),
                     "--project",
                     ALIAS,

@@ -70,7 +70,7 @@ class TestBind:
             tmp_path,
             [
                 "--json", "rls", "bind", "--project", "prod", "--workspace-id", "42",
-                "--rls-policy", f"{RLS_ID},{RLS_ID}", "--cls-policy", CLS_ID,
+                "--rls-policy", RLS_ID, "--rls-policy", RLS_ID, "--cls-policy", CLS_ID,
                 "--stack-id", STACK,
             ],
             service,

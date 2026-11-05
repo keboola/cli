@@ -14,8 +14,6 @@ verbs in :class:`SemanticLayerService`.
 
 from __future__ import annotations
 
-import json
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +27,7 @@ from ._helpers import (
     check_cli_permission,
     get_formatter,
     get_service,
+    structured_input,
 )
 from ._project_ref import PROJECT_HELP
 from ._semantic_layer_helpers import _handle_service_call, _is_stdin_tty
@@ -110,31 +109,22 @@ def _print_reference_data_delete_result(console: Console, data: dict) -> None:
     )
 
 
-def _load_members(formatter: Any, members_file: str) -> list[dict]:
-    """Read a JSON array of member objects from a file or ``-`` (stdin)."""
+def _load_members(formatter: Any, members: str | None, members_file: Path | None) -> list[dict]:
+    """The JSON array of member objects of ``--members`` or ``--members-file`` (``-`` = stdin)."""
     try:
-        raw = (
-            sys.stdin.read()
-            if members_file == "-"
-            else Path(members_file).read_text(encoding="utf-8")
-        )
-    except (OSError, UnicodeDecodeError) as exc:
+        parsed = structured_input(members, members_file, label="--members")
+    except ValueError as exc:
+        formatter.error(message=str(exc), error_code=ErrorCode.VALIDATION_ERROR)
+        raise typer.Exit(code=2) from None
+    if parsed is None:
         formatter.error(
-            message=f"Could not read members file {members_file!r}: {exc}",
-            error_code=ErrorCode.VALIDATION_ERROR,
+            message="Pass the members with --members JSON or --members-file PATH.",
+            error_code=ErrorCode.USAGE_ERROR,
         )
-        raise typer.Exit(code=2) from exc
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        formatter.error(
-            message=f"Members file is not valid JSON: {exc}",
-            error_code=ErrorCode.VALIDATION_ERROR,
-        )
-        raise typer.Exit(code=2) from exc
+        raise typer.Exit(code=2)
     if not isinstance(parsed, list):
         formatter.error(
-            message="Members file must contain a JSON array of member objects.",
+            message="--members must be a JSON array of member objects.",
             error_code=ErrorCode.VALIDATION_ERROR,
         )
         raise typer.Exit(code=2)
@@ -160,22 +150,24 @@ def reference_data_list(
 def reference_data_get(
     ctx: typer.Context,
     project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
-    id_: str | None = typer.Option(None, "--id", help="Record UUID"),
+    reference_data_id: str | None = typer.Option(None, "--reference-data-id", help="Record UUID"),
     dimension: str | None = typer.Option(
-        None, "--dimension", help="Dimension name (project-unique; instead of --id)"
+        None,
+        "--dimension",
+        help="Dimension name (project-unique; instead of --reference-data-id)",
     ),
 ) -> None:
-    """Fetch one record (all members) by ``--id`` or by ``--dimension``."""
+    """Fetch one record (all members) by ``--reference-data-id`` or by ``--dimension``."""
     formatter = get_formatter(ctx)
-    if id_ is not None and dimension is not None:
+    if reference_data_id is not None and dimension is not None:
         formatter.error(
-            message="Pass --id or --dimension, not both.",
+            message="Pass --reference-data-id or --dimension, not both.",
             error_code=ErrorCode.VALIDATION_ERROR,
         )
         raise typer.Exit(code=2)
-    if id_ is None and dimension is None:
+    if reference_data_id is None and dimension is None:
         formatter.error(
-            message="Provide --id or --dimension.",
+            message="Provide --reference-data-id or --dimension.",
             error_code=ErrorCode.VALIDATION_ERROR,
         )
         raise typer.Exit(code=2)
@@ -184,7 +176,7 @@ def reference_data_get(
         ctx,
         service.get_reference_data,
         alias=project,
-        record_id=id_,
+        record_id=reference_data_id,
         dimension=dimension,
     )
     formatter.output(result, _print_reference_data_detail)
@@ -198,10 +190,14 @@ def reference_data_set(
     dimension: str = typer.Option(
         ..., "--dimension", help="Dimension name, e.g. 'chart_of_accounts'"
     ),
-    members_file: str = typer.Option(
-        ...,
+    members: str | None = typer.Option(
+        None, "--members", help="JSON array of member objects, inline."
+    ),
+    members_file: Path | None = typer.Option(
+        None,
         "--members-file",
-        help="Path to a JSON array of member objects ('-' reads stdin).",
+        help="Read the JSON array of member objects from a file (- for stdin).",
+        allow_dash=True,
     ),
     dataset_id: str | None = typer.Option(
         None, "--dataset-id", help="Optional tableId of the descriptive dataset (e.g. DIM_COA)"
@@ -215,14 +211,14 @@ def reference_data_set(
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "semantic_layer_service")
-    members = _load_members(formatter, members_file)
+    member_list = _load_members(formatter, members, members_file)
     result = _handle_service_call(
         ctx,
         service.set_reference_data,
         alias=project,
         model_name_or_uuid=model,
         dimension=dimension,
-        members=members,
+        members=member_list,
         dataset_id=dataset_id,
         description=description,
     )
@@ -233,7 +229,7 @@ def reference_data_set(
 def reference_data_delete(
     ctx: typer.Context,
     project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
-    id_: str = typer.Option(..., "--id", help="Record UUID"),
+    reference_data_id: str = typer.Option(..., "--reference-data-id", help="Record UUID"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirm prompt"),
 ) -> None:
     """Delete a reference-data record by UUID (server-side soft-delete)."""
@@ -242,10 +238,15 @@ def reference_data_delete(
     # --json without a terminal still refuses: here --json is no consent.
     if not yes and formatter.json_mode and not _is_stdin_tty():
         formatter.error(
-            message=f"Refusing to delete reference-data {id_!r} non-interactively without --yes.",
+            message=(
+                f"Refusing to delete reference-data {reference_data_id!r} "
+                "non-interactively without --yes."
+            ),
             error_code=ErrorCode.VALIDATION_ERROR,
         )
         raise typer.Exit(code=2)
-    _confirm_or_abort(formatter, yes, f"Delete reference-data record '{id_}'?")
-    result = _handle_service_call(ctx, service.delete_reference_data, alias=project, record_id=id_)
+    _confirm_or_abort(formatter, yes, f"Delete reference-data record '{reference_data_id}'?")
+    result = _handle_service_call(
+        ctx, service.delete_reference_data, alias=project, record_id=reference_data_id
+    )
     formatter.output(result, _print_reference_data_delete_result)

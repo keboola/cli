@@ -248,7 +248,7 @@ def merge_request_diff(
         "-o",
         help=(
             "Write the resolution candidate (your branch's content, ready to edit) to "
-            "this file; hand it back with `merge-request resolve --resolved @FILE`"
+            "this file; hand it back with `merge-request resolve --resolved-file FILE`"
         ),
     ),
 ) -> None:
@@ -318,7 +318,7 @@ def merge_request_diff(
     resolve_cmd = f"merge-request resolve --component-id {escape(component_id)} --config-id {escape(config_id)}"
     if output is not None:
         shown = escape(str(output))
-        _hint_next(formatter, f"edit {shown}, then `{resolve_cmd} --resolved @{shown}`")
+        _hint_next(formatter, f"edit {shown}, then `{resolve_cmd} --resolved-file {shown}`")
     elif result.get("ours_deleted") or result.get("theirs_deleted"):
         _hint_next(formatter, f"`{resolve_cmd} --take delete|ours|theirs` as recommended above")
     else:

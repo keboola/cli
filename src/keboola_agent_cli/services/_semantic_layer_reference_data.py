@@ -119,7 +119,7 @@ def run_get(
     """
     if record_id is None and dimension is None:
         raise KeboolaApiError(
-            message="Provide --id or --dimension.",
+            message="Provide --reference-data-id or --dimension.",
             error_code=ErrorCode.VALIDATION_ERROR,
         )
     client = open_client()
@@ -139,7 +139,7 @@ def run_get(
             item = found
         else:  # pragma: no cover - the guard above guarantees one is set
             raise KeboolaApiError(
-                message="Provide --id or --dimension.",
+                message="Provide --reference-data-id or --dimension.",
                 error_code=ErrorCode.VALIDATION_ERROR,
             )
     finally:

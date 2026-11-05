@@ -311,6 +311,7 @@ ROUTE_OPERATIONS: dict[tuple[str, str], str] = {
     ("GET", "/data-apps/{project}/{app_id}/secrets"): "data-app.secrets-list",
     ("GET", "/data-apps/{project}/{app_id}/secrets/{key:path}"): "data-app.secrets-get",
     ("PATCH", "/data-apps/{project}/{app_id}/secrets"): "data-app.secrets-set",
+    ("PATCH", "/data-apps/{project}/{app_id}/git-auth"): "data-app.git-auth-set",
     ("POST", "/data-apps/{project}/{app_id}/secrets/remove"): "data-app.secrets-remove",
     ("POST", "/data-apps/validate-repo"): "data-app.validate-repo",
     ("GET", "/data-apps/{project}/{app_id}/git-repo"): "data-app.git-repo",
@@ -376,7 +377,7 @@ ROUTE_OPERATIONS: dict[tuple[str, str], str] = {
     (
         "DELETE",
         "/semantic-layer/scope/{context_id}/elevation-request",
-    ): "semantic-layer.scope.request-delete",
+    ): "semantic-layer.scope.request-cancel",
     # ── transformations ──────────────────────────────────────────────
     ("POST", "/transformations/{project}"): "transformation.create",
     ("GET", "/transformations/{project}/{config_id}"): "transformation.show",

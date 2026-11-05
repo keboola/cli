@@ -6,7 +6,7 @@ surface is open-ended: agents can stamp their own keys to leave breadcrumbs for
 later runs (e.g. `agent.owner`, `agent.lastAudit`, `agent.domain`).
 
 The UI folder is **not** metadata any more: it is the configuration's own
-`folder` field (since vNEXT, DMD-2348), set with `config set-folder`. Do not
+`folder` field (since 1.0.0, DMD-2348), set with `config set-folder`. Do not
 write the old `KBC.configuration.folderName` key with `set-metadata`.
 
 kbagent exposes the metadata CRUD surface plus the folder command on `kbagent config`:
@@ -16,7 +16,7 @@ metadata-list    -- list all entries (id, key, value, provider, timestamp)
 get-metadata     -- read one value by key
 set-metadata     -- upsert a single key/value
 delete-metadata  -- remove an entry by its numeric id
-set-folder       -- sets the configuration's folder field (not metadata)
+set-folder       -- sets the configuration's folder field (since 1.0.0; the metadata key on 0.x)
 ```
 
 All five are branch-aware; omit `--branch` to use the project's active branch.
@@ -29,7 +29,7 @@ All five are branch-aware; omit `--branch` to use the project's active branch.
 - **Agent breadcrumbs**: tag configs an agent has touched so later runs can
   skip, re-audit, or attribute them (`set-metadata --key agent.* ...`).
 - **Ownership / governance tags**: stamp `owner`, `domain`, `cost-center`,
-  etc. and filter via `config list --json | jq` downstream.
+  etc. and filter via `kbagent --json config list | jq` downstream.
 - **Provenance tracking**: record when a config was last generated or
   refactored by an automated workflow.
 
@@ -183,9 +183,9 @@ Returns `NOT_FOUND` (exit 1) when the key is absent -- there is no sentinel
 Each returns `project_alias`, `component_id`, `config_id`, `branch_id`, and a
 human-readable `message`. `set-folder` additionally returns `folder` (the
 folder as stored, `""` when cleared) so callers don't have to re-parse the
-message string. It also returns `configuration` (`{id, name, folder}` from the
+message string. Since 1.0.0 it also returns `configuration` (`{id, name, folder}` from the
 config PUT). The keys `key`, `value` and `result` from the time it wrote the
-metadata key are removed (since vNEXT). Read `folder` instead.
+metadata key are removed (since 1.0.0). Read `folder` instead.
 
 ## Provider semantics
 

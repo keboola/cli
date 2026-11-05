@@ -3,7 +3,7 @@
 # Simple linear walkthrough of 0.25.0 `storage create-table` upgrades:
 #   1. create a bucket (plain production, no branch)
 #   2. create a table with native types: VARCHAR(40), NUMERIC(18,2),
-#      TIMESTAMP_TZ, VARIANT, BOOLEAN + --not-null + --default
+#      TIMESTAMP_TZ, VARIANT, BOOLEAN + --not-null-column + --default
 #   3. inspect column_details -- native_type / length / nullable / default
 #      all round-trip through to Snowflake
 #   4. cleanup (delete-bucket --force cascades to the table)
@@ -52,14 +52,14 @@ Sleep 200ms
 Type "# Step 2: create a typed table with native Snowflake types"
 Enter
 Sleep 200ms
-Type "#   VARCHAR(40) / NUMERIC(18,2) / TIMESTAMP_TZ / VARIANT + --not-null / --default"
+Type "#   VARCHAR(40) / NUMERIC(18,2) / TIMESTAMP_TZ / VARIANT + --not-null-column / --default"
 Enter
 Sleep 600ms
 
 Type "kbagent storage create-table --project padak-2-0 --bucket-id in.c-demo-types --name sales "
 Type "--column 'pk:VARCHAR(40)' --column 'amount:NUMERIC(18,2)' "
 Type "--column 'ts:TIMESTAMP_TZ' --column 'meta:VARIANT' --column 'is_paid:BOOLEAN' "
-Type "--primary-key pk --not-null pk --not-null amount "
+Type "--primary-key pk --not-null-column pk --not-null-column amount "
 Type "--default amount=0 --default is_paid=false"
 Sleep 400ms
 Enter

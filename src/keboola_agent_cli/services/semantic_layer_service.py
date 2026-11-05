@@ -161,7 +161,7 @@ CHILD_TYPES: tuple[SemanticType, ...] = (
     "semantic-glossary",
 )
 
-# Plural keys used in snapshot envelopes and accepted by ``--types`` filters
+# Plural keys used in snapshot envelopes and accepted by ``--type`` filters
 # on ``import`` and ``promote``. Must mirror the keys produced by
 # :meth:`SemanticLayerService.export`.
 PLURAL_TYPES: tuple[str, ...] = (
@@ -174,9 +174,9 @@ PLURAL_TYPES: tuple[str, ...] = (
 
 
 def _validate_types_filter(types: list[str] | None) -> set[str] | None:
-    """Validate ``--types`` against the known plural list, return a set or None.
+    """Validate ``--type`` against the known plural list, return a set or None.
 
-    Closes the silent no-op trap where a typo like ``--types BOGUS`` would
+    Closes the silent no-op trap where a typo like ``--type BOGUS`` would
     filter every type out and emit zero imports without an error.
     """
     if not types:
@@ -185,7 +185,7 @@ def _validate_types_filter(types: list[str] | None) -> set[str] | None:
     if unknown:
         raise KeboolaApiError(
             message=(
-                f"--types {unknown!r} not recognised. Must be a subset of {list(PLURAL_TYPES)}."
+                f"--type {unknown!r} not recognised. Must be a subset of {list(PLURAL_TYPES)}."
             ),
             error_code=ErrorCode.VALIDATION_ERROR,
         )
@@ -1320,7 +1320,7 @@ class SemanticLayerService(BaseService):
                 missing = [m for m in new_metrics if m not in existing_names]
                 if missing:
                     raise KeboolaApiError(
-                        message=(f"--new-metrics references metric(s) not in model: {missing}."),
+                        message=(f"--new-metric references metric(s) not in model: {missing}."),
                         error_code=ErrorCode.VALIDATION_ERROR,
                     )
             return _edit_simple_helper(
@@ -1745,7 +1745,7 @@ class SemanticLayerService(BaseService):
         """
         if not table_ids:
             raise KeboolaApiError(
-                message="--tables must contain at least one tableId.",
+                message="--table-id must contain at least one table ID.",
                 error_code=ErrorCode.VALIDATION_ERROR,
             )
 

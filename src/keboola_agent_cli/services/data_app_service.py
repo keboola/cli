@@ -48,6 +48,14 @@ from ._data_app_bodies import (
     git_backfill_warning,
     resolve_effective_version,
 )
+from ._data_app_git_source import (
+    MAX_GIT_BRANCH_LENGTH,
+    GitSource,
+    build_git_block,
+    preview_git_block,
+    validate_git_credentials,
+    validate_git_flags,
+)
 from ._data_app_lifecycle import raise_if_deployment_cannot_serve, suspend_or_resume
 from ._data_app_password import (
     DataAppPassword,
@@ -113,9 +121,6 @@ SLUG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$")
 # exfiltrate giant payloads or smuggle control characters into audit logs.
 MAX_NAME_LENGTH = 255
 MAX_DESCRIPTION_LENGTH = 65_536  # 64 KiB
-MAX_GIT_REPO_LENGTH = 1024
-MAX_GIT_BRANCH_LENGTH = 255
-MAX_GIT_USERNAME_LENGTH = 255
 
 POLL_INTERVAL_SECONDS = 5.0
 RUNNING_STATE = "running"
@@ -123,16 +128,6 @@ RUNNING_STATE = "running"
 DISABLED_STATE = "disabled"
 FAILED_DEPLOYMENT_STATE = "failed"
 
-
-# URL schemes accepted for ``--git-repo``. Anything else (file://, gopher://,
-# bare ssh syntax like ``git@host:path``) is rejected at the service
-# boundary -- the data-app runner only ever talks https / http / git / ssh.
-ALLOWED_GIT_REPO_SCHEMES: tuple[str, ...] = (
-    "https://",
-    "http://",
-    "ssh://",
-    "git://",
-)
 
 # Secret-key shape accepted under ``parameters.dataApp.secrets``. Must start
 # with ``#`` (Keboola encryption convention); the rest must form a valid
@@ -319,6 +314,7 @@ class DataAppService(BaseService):
         git_pat_plaintext: str | None = None,
         git_pat_encrypted: str | None = None,
         use_managed_git_repo: bool = False,
+        git_auth: str | None = None,
         auth: str = "password",
         size: str = DEFAULT_SIZE,
         auto_suspend_after_seconds: int = DEFAULT_AUTO_SUSPEND_SECONDS,
@@ -337,8 +333,9 @@ class DataAppService(BaseService):
 
         1. Validate inputs (slug, size, type, git auth combination).
         2. POST a minimal app to ``/v2/apps`` to mint id + configId.
-        3. If the repo is private, encrypt the PAT under THIS project's KMS
-           via :class:`EncryptService`.
+        3. If the repo is private with an explicit PAT, encrypt it under THIS
+           project's KMS via :class:`EncryptService`. ``git_auth="organization"``
+           stores no credential (see ``_data_app_git_source``).
         4. PUT the full Storage config body, including the auto-injected
            ``parameters.id`` back-pointer (writeup §5 — required) and, unless
            ``workspace=False``, ``runtime.workspace.enabled: true`` -- the
@@ -351,6 +348,16 @@ class DataAppService(BaseService):
         7. On failure between (2) and (5), DELETE the orphan app unless
            ``keep_on_failure`` is set.
         """
+        source = GitSource(
+            repo=git_repo,
+            branch=git_branch,
+            public=git_public,
+            username=git_username,
+            pat_plaintext=git_pat_plaintext,
+            pat_encrypted=git_pat_encrypted,
+            auth_type=git_auth,
+            managed=use_managed_git_repo,
+        )
         self._validate_create_inputs(
             type_=type_,
             slug=slug,
@@ -358,13 +365,7 @@ class DataAppService(BaseService):
             auth=auth,
             name=name,
             description=description,
-            git_repo=git_repo,
-            git_branch=git_branch,
-            git_public=git_public,
-            git_username=git_username,
-            git_pat_plaintext=git_pat_plaintext,
-            git_pat_encrypted=git_pat_encrypted,
-            use_managed_git_repo=use_managed_git_repo,
+            source=source,
         )
 
         # A managed git repo is provisioned empty at create time, so there is
@@ -379,11 +380,7 @@ class DataAppService(BaseService):
                 name=name,
                 description=description,
                 slug=slug,
-                git_repo=git_repo,
-                git_branch=git_branch,
-                git_public=git_public,
-                git_username=git_username,
-                use_managed_git_repo=use_managed_git_repo,
+                source=source,
                 auth=auth,
                 size=size,
                 auto_suspend_after_seconds=auto_suspend_after_seconds,
@@ -436,19 +433,7 @@ class DataAppService(BaseService):
             # A managed repo has no external URL/PAT -- the Git Service owns the
             # link (app.managedGitRepoId), so we write NO git block into the
             # Storage config.
-            git_block = (
-                None
-                if use_managed_git_repo
-                else self._build_git_block(
-                    alias=alias,
-                    git_repo=git_repo,
-                    git_branch=git_branch,
-                    git_public=git_public,
-                    git_username=git_username,
-                    git_pat_plaintext=git_pat_plaintext,
-                    git_pat_encrypted=git_pat_encrypted,
-                )
-            )
+            git_block = build_git_block(source, self._encrypt_service, alias)
 
             # Step 4: PUT Storage config with full body + parameters.id back-pointer.
             full_config = self._build_storage_config_body(
@@ -510,6 +495,7 @@ class DataAppService(BaseService):
                 "workspace": bool(workspace),
                 "git": _redact_git_block(git_block) if git_block else {},
                 "use_managed_git_repo": use_managed_git_repo,
+                "git_auth": git_auth,
                 "branch_id": branch_id,
                 "config_version": storage_version,
                 "deployed": bool(deploy),
@@ -971,7 +957,7 @@ class DataAppService(BaseService):
                     message=(
                         f"Secret '{key}' value starts with 'KBC::', which suggests an "
                         "already-encrypted ciphertext. The --secret flag expects "
-                        "plaintext; pass pre-encrypted values via --secrets-file or "
+                        "plaintext; pass pre-encrypted values via --secret-file or "
                         "re-encrypt under THIS project's KMS via "
                         "`kbagent encrypt values --component-id keboola.data-apps`."
                     ),
@@ -1048,8 +1034,8 @@ class DataAppService(BaseService):
                 ) from exc
 
             # Validate every returned ciphertext starts with a project-scoped
-            # prefix. Mirror the fail-closed check from _build_git_block at
-            # data_app_service.py:1000-1008.
+            # prefix. Mirror the fail-closed check of the git PAT in
+            # _data_app_git_source._encrypt_pat.
             problems: list[str] = []
             for key, ciphertext in encrypted.items():
                 if not isinstance(ciphertext, str) or not any(
@@ -1478,70 +1464,19 @@ class DataAppService(BaseService):
         auth: str,
         name: str,
         description: str,
-        git_repo: str,
-        git_branch: str,
-        git_public: bool,
-        git_username: str | None,
-        git_pat_plaintext: str | None,
-        git_pat_encrypted: str | None,
-        use_managed_git_repo: bool = False,
+        source: GitSource,
     ) -> None:
-        # A Keboola-managed repo is mutually exclusive with every external-git
-        # flag: the Git Service provisions an empty repo and owns the link, so
-        # there is no URL / branch-override / PAT to supply. Reject the combo
-        # up front rather than silently ignoring the external flags.
-        if use_managed_git_repo:
-            offenders = []
-            if git_repo:
-                offenders.append("--git-repo")
-            if git_public:
-                offenders.append("--git-public")
-            if git_username:
-                offenders.append("--git-username")
-            if git_pat_plaintext is not None and git_pat_plaintext != "":
-                offenders.append("--git-pat-env/--git-pat-file")
-            if git_pat_encrypted is not None and git_pat_encrypted != "":
-                offenders.append("--git-pat-encrypted")
-            if offenders:
-                raise KeboolaApiError(
-                    message=(
-                        "--use-managed-git-repo provisions an empty Keboola-hosted "
-                        "repository and is incompatible with external-git flags: "
-                        f"{', '.join(offenders)}."
-                    ),
-                    status_code=0,
-                    error_code=ErrorCode.VALIDATION_ERROR,
-                    retryable=False,
-                )
-
-        # Defence-in-depth length / control-char checks at the service
-        # boundary. The service can be invoked directly (via the
-        # ``kbagent serve`` REST API or external Python callers) so we do
-        # not rely on the command layer alone.
+        # The git-flag conflicts come first (a managed repo or organization
+        # auth beside a credential is the likeliest mistake), then the
+        # defence-in-depth length / control-char checks at the service
+        # boundary -- the service is also reached through ``kbagent serve`` and
+        # external Python callers, so we do not rely on the command layer.
+        validate_git_flags(source)
         for field_name, field_value, max_len, allow_ws in (
             ("--name", name, MAX_NAME_LENGTH, False),
             ("--description", description, MAX_DESCRIPTION_LENGTH, True),
-            ("--git-repo", git_repo, MAX_GIT_REPO_LENGTH, False),
-            ("--git-branch", git_branch, MAX_GIT_BRANCH_LENGTH, False),
-            ("--git-username", git_username or "", MAX_GIT_USERNAME_LENGTH, False),
         ):
             _check_text_field(field_name, field_value, max_len, allow_ws)
-
-        # Reject git_repo URLs that don't use a known clone scheme. The
-        # data-app runner only handles https / http / git / ssh; anything
-        # else (file://, gopher://, etc.) is either nonsense or an SSRF /
-        # local-file-read footgun and must not reach Storage.
-        if git_repo and not any(git_repo.startswith(scheme) for scheme in ALLOWED_GIT_REPO_SCHEMES):
-            raise KeboolaApiError(
-                message=(
-                    f"--git-repo must use one of {', '.join(ALLOWED_GIT_REPO_SCHEMES)}."
-                    " Bare ssh syntax (git@host:path) and other schemes are not"
-                    " accepted."
-                ),
-                status_code=0,
-                error_code=ErrorCode.DATA_APP_INVALID_GIT,
-                retryable=False,
-            )
 
         if type_ not in VALID_TYPES:
             raise KeboolaApiError(
@@ -1575,147 +1510,7 @@ class DataAppService(BaseService):
                 retryable=False,
             )
 
-        if git_public:
-            if git_username or git_pat_plaintext or git_pat_encrypted:
-                raise KeboolaApiError(
-                    message=(
-                        "--git-public is incompatible with --git-username / "
-                        "--git-pat-env / --git-pat-file / --git-pat-encrypted."
-                    ),
-                    status_code=0,
-                    error_code=ErrorCode.VALIDATION_ERROR,
-                    retryable=False,
-                )
-        elif not use_managed_git_repo:
-            # Managed repos skip the private-repo auth checks entirely -- the
-            # mutex above guarantees git_public is False and all git/PAT flags
-            # are empty here, so neither branch should fire for managed.
-            if not git_username:
-                raise KeboolaApiError(
-                    message="--git-username is required for private repositories.",
-                    status_code=0,
-                    error_code=ErrorCode.VALIDATION_ERROR,
-                    retryable=False,
-                )
-            provided = sum(
-                1 for v in (git_pat_plaintext, git_pat_encrypted) if v is not None and v != ""
-            )
-            if provided == 0:
-                raise KeboolaApiError(
-                    message=(
-                        "Private repository requires a PAT. Pass one of: "
-                        "--git-pat-env VAR / --git-pat-file PATH / "
-                        "--git-pat-encrypted KBC::Project..."
-                    ),
-                    status_code=0,
-                    error_code=ErrorCode.VALIDATION_ERROR,
-                    retryable=False,
-                )
-            if provided > 1:
-                raise KeboolaApiError(
-                    message=(
-                        "Specify exactly one of --git-pat-env / --git-pat-file / "
-                        "--git-pat-encrypted; they are mutually exclusive."
-                    ),
-                    status_code=0,
-                    error_code=ErrorCode.VALIDATION_ERROR,
-                    retryable=False,
-                )
-            if git_pat_plaintext is not None and git_pat_plaintext.startswith("KBC::"):
-                # A plaintext input that already looks like a Keboola
-                # ciphertext is almost certainly someone pasting an
-                # encrypted value into --git-pat-env / --git-pat-file by
-                # mistake. EncryptService.encrypt() short-circuits any
-                # ``KBC::``-prefixed value and would pass it through
-                # unchanged, so a stray ciphertext from another project
-                # could reach Storage and silently fail at runtime
-                # decrypt. Reject up front.
-                raise KeboolaApiError(
-                    message=(
-                        "--git-pat-env / --git-pat-file expect plaintext PATs. "
-                        "The value starts with 'KBC::' which suggests an "
-                        "already-encrypted ciphertext; if so, pass it via "
-                        "--git-pat-encrypted instead so the prefix is validated."
-                    ),
-                    status_code=0,
-                    error_code=ErrorCode.DATA_APP_INVALID_GIT,
-                    retryable=False,
-                )
-            if git_pat_encrypted is not None and not any(
-                git_pat_encrypted.startswith(p) for p in ENCRYPTED_PASSWORD_PREFIXES
-            ):
-                raise KeboolaApiError(
-                    message=(
-                        "--git-pat-encrypted must be a project-scoped Encryption "
-                        f"API ciphertext (one of: {', '.join(ENCRYPTED_PASSWORD_PREFIXES)}). "
-                        "Re-encrypt with `kbagent encrypt values --component-id "
-                        f"{DATA_APP_COMPONENT_ID}` against THIS project; ciphertext "
-                        "from another project will not decrypt (writeup §8)."
-                    ),
-                    status_code=0,
-                    error_code=ErrorCode.VALIDATION_ERROR,
-                    retryable=False,
-                )
-
-    def _build_git_block(
-        self,
-        *,
-        alias: str,
-        git_repo: str,
-        git_branch: str,
-        git_public: bool,
-        git_username: str | None,
-        git_pat_plaintext: str | None,
-        git_pat_encrypted: str | None,
-    ) -> dict[str, Any]:
-        if git_public:
-            return {
-                "repository": git_repo,
-                "private": False,
-                "branch": git_branch,
-            }
-
-        # Plaintext PATs are encrypted under the target project's KMS via
-        # EncryptService. Pre-encrypted ciphertext was prefix-validated in
-        # _validate_create_inputs; EncryptService short-circuits anything
-        # starting with ``KBC::`` (encrypt_service.py) and returns the value
-        # unchanged, so we do not pay the encryption round-trip on a
-        # caller-supplied ciphertext. We still re-validate the result below
-        # so a misconfigured input cannot reach Storage as plaintext.
-        secret_input = git_pat_plaintext or git_pat_encrypted or ""
-        try:
-            encrypted = self._encrypt_service.encrypt(
-                alias=alias,
-                component_id=DATA_APP_COMPONENT_ID,
-                input_data={"#password": secret_input},
-            )
-        except ConfigError as exc:
-            raise KeboolaApiError(
-                message=f"Failed to prepare git PAT for encryption: {exc.message}",
-                status_code=0,
-                error_code=ErrorCode.ENCRYPTION_FAILED,
-                retryable=False,
-            ) from exc
-        encrypted_pat = encrypted.get("#password", "")
-        if not encrypted_pat or not any(
-            encrypted_pat.startswith(p) for p in ENCRYPTED_PASSWORD_PREFIXES
-        ):
-            raise KeboolaApiError(
-                message=(
-                    "Encryption API did not return a project-scoped ciphertext "
-                    "for the git PAT; refusing to write plaintext to Storage."
-                ),
-                status_code=0,
-                error_code=ErrorCode.ENCRYPTION_FAILED,
-                retryable=False,
-            )
-        return {
-            "repository": git_repo,
-            "private": True,
-            "username": git_username or "",
-            "#password": encrypted_pat,
-            "branch": git_branch,
-        }
+        validate_git_credentials(source)
 
     def _build_storage_config_body(
         self,
@@ -1754,7 +1549,8 @@ class DataAppService(BaseService):
         auth = kwargs["auth"]
         auto_suspend = kwargs["auto_suspend_after_seconds"]
         type_ = kwargs["type_"]
-        use_managed_git_repo = bool(kwargs.get("use_managed_git_repo", False))
+        source: GitSource = kwargs["source"]
+        use_managed_git_repo = source.managed
         workspace = bool(kwargs.get("workspace", True))
 
         post_body = {
@@ -1781,22 +1577,9 @@ class DataAppService(BaseService):
         # The Storage config's dataApp block carries the git pointer only for
         # external repos. Managed repos omit it (parameters.dataApp.git absent).
         data_app_preview: dict[str, Any] = {"slug": slug}
-        if not use_managed_git_repo:
-            # We can't know the app_id pre-create; show the placeholder.
-            if kwargs["git_public"]:
-                data_app_preview["git"] = {
-                    "repository": kwargs["git_repo"],
-                    "private": False,
-                    "branch": kwargs["git_branch"],
-                }
-            else:
-                data_app_preview["git"] = {
-                    "repository": kwargs["git_repo"],
-                    "private": True,
-                    "username": kwargs["git_username"] or "<from input>",
-                    "#password": "<encrypted at runtime>",
-                    "branch": kwargs["git_branch"],
-                }
+        git_preview = preview_git_block(source)
+        if git_preview is not None:
+            data_app_preview["git"] = git_preview
 
         put_body = {
             "parameters": {
@@ -1828,6 +1611,7 @@ class DataAppService(BaseService):
             "dry_run": True,
             "project_alias": kwargs["alias"],
             "use_managed_git_repo": use_managed_git_repo,
+            "git_auth": source.auth_type,
             "workspace": workspace,
             "requests": {
                 "post_apps": post_body,

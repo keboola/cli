@@ -32,20 +32,20 @@ For detailed workflows, see the `references/` docs linked at the bottom.
 
 For **command flags and parameters**, use `kbagent <command> --help` (e.g. `kbagent config new --help`).
 
-If kbagent is not installed or you need the full standalone reference, run `kbagent context`. On 1.x, `kbagent context <group>` prints one group (since vNEXT).
+If kbagent is not installed or you need the full standalone reference, run `kbagent context`. On 1.x, `kbagent context <group>` prints one group (since 1.0.0).
 
 ## Rules
 
 1. **Always use `--json`**: `kbagent --json <command>` for parseable output
 2. **Set conversation ID**: pass `--conversation-id "<unique-id>"` (e.g. session UUID) on every kbagent call -- `kbagent --json --conversation-id <id> <command>`. All API requests include it as the `X-Conversation-ID` header for platform observability. **Do not use a standalone `export`**: agent harnesses (Claude Code included) do not persist shell state between tool calls, so the variable is gone by the next command -- and prefixing each command with `export ...` stops it matching a `Bash(kbagent ...)` permission allow-rule. For a whole session, set `KBAGENT_CONVERSATION_ID` in the harness's own env block (Claude Code: `settings.json` -> `env`) instead.
-3. **Multi-project reads**: pass `--all-projects` (0.100.0+) to read ALL registered projects in parallel -- no need to loop. Always give a fan-out read `--project P` or `--all-projects`: without either it reads all projects on 0.x and the active project on 1.x (since vNEXT)
-4. **Always pass `--project P`** on every command that uses a project, reads and writes alike. Choose the project at the start of the task (ask the user when more than one is registered and the task names none), then pass it on every call. Never rely on the active project and never run `project use` to choose one: it is shared by every terminal, agent conversation and `kbagent serve` of the same configuration directory, so another session can change it between two commands. On 1.x a command without `--project` uses the active project without asking (since vNEXT)
+3. **Multi-project reads**: pass `--all-projects` (0.100.0+) to read ALL registered projects in parallel -- no need to loop. Always give a fan-out read `--project P` or `--all-projects`: without either it reads all projects on 0.x and the active project on 1.x (since 1.0.0)
+4. **Always pass `--project P`** on every command that uses a project, reads and writes alike. Choose the project at the start of the task (ask the user when more than one is registered and the task names none), then pass it on every call. Never rely on the active project and never run `project use` to choose one: it is shared by every terminal, agent conversation and `kbagent serve` of the same configuration directory, so another session can change it between two commands. On 1.x a command without `--project` uses the active project without asking (since 1.0.0)
 5. **Tokens are always masked** in output -- this is expected, not an error
 6. **Always fetch fresh before write**: configs change between commands and across users. Re-fetch from the API immediately before any update; never reuse a config dump from earlier in the session. Stale local files are how `vN+1` silently overwrites someone else's `vN` changes.
 7. **Always `--dry-run` first** for writes that have it (`config update`, `config delete`, `storage delete-*`, `sync push`). Show the user the diff and get explicit confirmation before applying. Some destructive commands have no `--dry-run` (`http delete`, and on 0.x `branch delete` and `workspace delete`). For these, describe the change and get confirmation first.
 8. **There is no MCP passthrough.** `kbagent tool list` / `tool call` and `agent --type mcp_tool` were removed in v0.85.0 -- every catalog tool has a native command. If a user names an old tool (`update_config`, `get_configs`, `query_data`, ...), map it via `docs/mcp-migration.md` in the repo and run the native command instead.
 9. **Never auto-run jobs after config changes**. `config update` (or `sync push`) and `job run` are always two separate steps. Wait for the user to confirm before triggering a run -- do not chain them.
-10. **Write commands that work on 0.x and 1.x**: root flags before the subcommand, `--help` not `-h`, no single-value option twice, one comma list for a list option. Until the 1.0 migration date the user may run either major. See [gotchas.md](references/gotchas.md) "Forms that work on 0.x and 1.x". When `kbagent --version` is 0.x, ask the user before `kbagent update --major`.
+10. **Write commands that work on 0.x and 1.x**: root flags before the subcommand, `--help` not `-h`, no single-value option twice, a list option repeated once per value. Use the 1.x option names: they work on 0.100.5 and later and on 1.x; on an older 0.x, ask the user to run `kbagent update` first. Until the 1.0 migration date the user may run either major. See [gotchas.md](references/gotchas.md) "Forms that work on 0.x and 1.x". When `kbagent --version` is 0.x, ask the user before `kbagent update --major`.
 
 ## Safe write workflow
 
@@ -134,7 +134,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Update an existing configuration row | `kbagent config row-update --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID --row-id ROW-ID` |
 | Delete a configuration row | `kbagent config row-delete --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID --row-id ROW-ID` |
 | Read the runtime ``state`` dict of a configuration or one of its rows | `kbagent config state-get --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
-| Overwrite the runtime ``state`` dict of a configuration or one of its rows | `kbagent config state-set --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID --state STATE` |
+| Overwrite the runtime ``state`` dict of a configuration or one of its rows | `kbagent config state-set --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Duplicate a configuration, whole -- including runtime, storage and authorization | `kbagent config clone --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID --name NAME` |
 | Requires master token. | `kbagent config oauth-url --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
 | Restore a configuration from the trash (undo of 'config delete') | `kbagent config restore --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
@@ -149,6 +149,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Tail the container logs for a deployed data app | `kbagent data-app logs --project PROJECT --app-id APP-ID` |
 | List a data app's recent deployment attempts (runs), newest first | `kbagent data-app runs --project PROJECT --app-id APP-ID` |
 | Pre-flight check that a git repo follows the Keboola data-app Golden Rule | `kbagent data-app validate-repo --git-repo GIT-REPO` |
+| Switch a data app's external GitHub repo to organization auth | `kbagent data-app git-auth-set --project PROJECT --app-id APP-ID --git-auth GIT-AUTH` |
 | Show the clone URLs of a data app's configured git repository | `kbagent data-app git-repo --project PROJECT --app-id APP-ID` |
 | List the credentials of a data app's MANAGED git repository | `kbagent data-app git-credentials --project PROJECT --app-id APP-ID` |
 | Create a git credential (SSH key or HTTP token) for a MANAGED repo | `kbagent data-app git-credentials-create --project PROJECT --app-id APP-ID --type CRED-TYPE --permissions PERMISSIONS` |
@@ -190,25 +191,25 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Set the description on a storage bucket | `kbagent storage describe-bucket --project PROJECT --bucket-id BUCKET-ID` |
 | Set the description on a storage table | `kbagent storage describe-table --project PROJECT --table-id TABLE-ID` |
 | Set descriptions on one or more columns of a storage table | `kbagent storage describe-column --project PROJECT --table-id TABLE-ID --column COLUMN` |
-| Apply descriptions to buckets, tables, and columns from a YAML file | `kbagent storage describe-batch --project PROJECT --from-file FROM-FILE` |
+| Apply descriptions to buckets, tables, and columns from a YAML file | `kbagent storage describe-batch --project PROJECT --file FILE` |
 | Convert legacy KBC.column.* descriptions to the native definition endpoint | `kbagent storage describe-migrate --project PROJECT` |
 | Show a Storage job -- status, table, rows imported, timing, error | `kbagent storage job-detail --project PROJECT --job-id JOB-ID` |
 | Delete one or more storage buckets | `kbagent storage delete-bucket --project PROJECT --bucket-id BUCKET-ID` |
 | Delete one or more Storage Files | `kbagent storage file-delete --project PROJECT --file-id FILE-ID` |
 | List Data Streams sources in a project | `kbagent stream list --project PROJECT` |
 | Create an OTLP (or HTTP) source and return its endpoint | `kbagent stream create-source --project PROJECT --name NAME` |
-| Show a source's endpoints, protocol, and destination tables | `kbagent stream detail [SOURCE-ID] --project PROJECT` |
-| Delete a Data Streams source (destructive) | `kbagent stream delete <SOURCE-ID> --project PROJECT` |
+| Show a source's endpoints, protocol, and destination tables | `kbagent stream detail --project PROJECT` |
+| Delete a Data Streams source (destructive) | `kbagent stream delete --project PROJECT --source-id SOURCE-ID` |
 | List shared buckets available for linking | `kbagent sharing list --project PROJECT` |
 | Enable sharing on a bucket | `kbagent sharing share --project PROJECT --bucket-id BUCKET-ID --type SHARING-TYPE` |
 | Disable sharing on a bucket | `kbagent sharing unshare --project PROJECT --bucket-id BUCKET-ID` |
 | Link a shared bucket into a project | `kbagent sharing link --project PROJECT --source-project-id SOURCE-PROJECT-ID --bucket-id BUCKET-ID` |
-| Remove a linked bucket from a project | `kbagent sharing unlink --project PROJECT --bucket-id BUCKET-ID` |
+| Remove a linked bucket from a project (destructive) | `kbagent sharing unlink --project PROJECT --bucket-id BUCKET-ID` |
 | Show cross-project data flow edges via bucket sharing | `kbagent sharing edges --project PROJECT` |
 | Build column-level lineage graph from sync'd data | `kbagent lineage build --output OUTPUT` |
-| Show what's in a cached lineage graph | `kbagent lineage info --load LOAD` |
-| Query upstream/downstream dependencies from a cached lineage graph | `kbagent lineage show --load LOAD` |
-| Start a local web server with interactive lineage browser | `kbagent lineage server --load LOAD` |
+| Show what's in a cached lineage graph | `kbagent lineage info --file LOAD` |
+| Query upstream/downstream dependencies from a cached lineage graph | `kbagent lineage show --file LOAD` |
+| Start a local web server with interactive lineage browser | `kbagent lineage server --file LOAD` |
 | Check Kai server health and MCP connection status | `kbagent kai ping --project PROJECT` |
 | Ask Kai a one-shot question and get the full response | `kbagent kai ask --message MESSAGE --project PROJECT` |
 | Send a message to Kai in a chat session | `kbagent kai chat --message MESSAGE --project PROJECT` |
@@ -223,7 +224,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Show detailed conditional-flow information including phases and tasks | `kbagent flow detail --project PROJECT --flow-id FLOW-ID` |
 | Print the conditional-flow YAML template, or --full for the JSON Schema | `kbagent flow schema --project PROJECT` |
 | Show bundled example flow configurations (offline, no project needed) | `kbagent flow examples` |
-| Validate a conditional-flow definition (schema + semantic checks) | `kbagent flow validate --file FILE --project PROJECT` |
+| Validate a conditional-flow definition (schema + semantic checks) | `kbagent flow validate --project PROJECT` |
 | Create a new conditional-flow (keboola.flow) configuration | `kbagent flow new --project PROJECT --name NAME` |
 | Update a flow's name, description, or phases/tasks | `kbagent flow update --project PROJECT --flow-id FLOW-ID` |
 | Delete a conditional-flow (keboola.flow) configuration | `kbagent flow delete --project PROJECT --flow-id FLOW-ID` |
@@ -276,7 +277,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Show workspace details (password NOT included) | `kbagent workspace detail --project PROJECT --workspace-id WORKSPACE-ID` |
 | Delete a workspace | `kbagent workspace delete --project PROJECT --workspace-id WORKSPACE-ID` |
 | Reset workspace password and show the new one | `kbagent workspace password --project PROJECT --workspace-id WORKSPACE-ID` |
-| Load tables into a workspace | `kbagent workspace load --project PROJECT --workspace-id WORKSPACE-ID --tables TABLES` |
+| Load tables into a workspace | `kbagent workspace load --project PROJECT --workspace-id WORKSPACE-ID --table-id TABLES` |
 | Execute SQL query in a workspace via Query Service | `kbagent workspace query --project PROJECT --workspace-id WORKSPACE-ID` |
 | Garbage-collect orphaned workspaces | `kbagent workspace gc --project PROJECT` |
 | Create a workspace from a transformation config | `kbagent workspace from-transformation --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |
@@ -289,7 +290,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Link the current git branch to a Keboola development branch | `kbagent sync branch-link --project PROJECT` |
 | Remove the branch mapping for the current git branch | `kbagent sync branch-unlink` |
 | Show the branch mapping status for the current git branch | `kbagent sync branch-status` |
-| Encrypt #-prefixed secret values for a Keboola component | `kbagent encrypt values --project PROJECT --component-id COMPONENT-ID --input INPUT-DATA` |
+| Encrypt #-prefixed secret values for a Keboola component | `kbagent encrypt values --project PROJECT --component-id COMPONENT-ID` |
 | Encrypt the project's storage token for transformation `user_properties` | `kbagent semantic-layer token --project PROJECT --component-id COMPONENT-ID` |
 | Build a semantic-layer model from a list of storage tables (non-interactive) | `kbagent semantic-layer build --project PROJECT` |
 | Promote a model from one project to another (NEW + overwrite CHANGED; never deletes) | `kbagent semantic-layer promote --from-project FROM-PROJECT --to-project TO-PROJECT` |
@@ -307,7 +308,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Add a metric to a semantic-layer model | `kbagent semantic-layer add metric --project PROJECT --name NAME --sql SQL --dataset DATASET` |
 | Add a dataset (FQN read from the table's Storage location) | `kbagent semantic-layer add dataset --project PROJECT --name NAME --table-id TABLE-ID` |
 | Add a relationship between two datasets | `kbagent semantic-layer add relationship --project PROJECT --name NAME --from FROM- --to TO --on ON` |
-| Add a constraint | `kbagent semantic-layer add constraint --project PROJECT --name NAME --constraint-type CONSTRAINT-TYPE --rule RULE --metrics METRICS` |
+| Add a constraint | `kbagent semantic-layer add constraint --project PROJECT --name NAME --constraint-type CONSTRAINT-TYPE --rule RULE --metric METRICS` |
 | Add a glossary term | `kbagent semantic-layer add glossary --project PROJECT --term TERM --definition DEFINITION` |
 | Edit a metric. | `kbagent semantic-layer edit metric --project PROJECT --name NAME` |
 | Edit a dataset (no cascade — metric.dataset uses tableId, not name) | `kbagent semantic-layer edit dataset --project PROJECT --name NAME` |
@@ -320,15 +321,15 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Remove a relationship. | `kbagent semantic-layer remove relationship --project PROJECT --name NAME` |
 | Remove a glossary term. | `kbagent semantic-layer remove glossary --project PROJECT --term TERM` |
 | List reference-data records (dimension summaries; use ``get`` for members) | `kbagent semantic-layer reference-data list --project PROJECT` |
-| Fetch one record (all members) by ``--id`` or by ``--dimension`` | `kbagent semantic-layer reference-data get --project PROJECT` |
-| Create or replace a reference-data record (keyed by dimension) | `kbagent semantic-layer reference-data set --project PROJECT --dimension DIMENSION --members-file MEMBERS-FILE` |
-| Delete a reference-data record by UUID (server-side soft-delete) | `kbagent semantic-layer reference-data delete --project PROJECT --id ID-` |
+| Fetch one record (all members) by ``--reference-data-id`` or by ``--dimension`` | `kbagent semantic-layer reference-data get --project PROJECT` |
+| Create or replace a reference-data record (keyed by dimension) | `kbagent semantic-layer reference-data set --project PROJECT --dimension DIMENSION` |
+| Delete a reference-data record by UUID (server-side soft-delete) | `kbagent semantic-layer reference-data delete --project PROJECT --reference-data-id REFERENCE-DATA-ID` |
 | Show an item's current scope, target-project grants, and pending elevation | `kbagent semantic-layer scope get --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
 | Add target projects to a targeted-scope item (merges with the current grants) | `kbagent semantic-layer scope add --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
 | Remove target projects from a targeted-scope item (merges with the current grants) | `kbagent semantic-layer scope remove --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
 | Write an item's scope: elevate to organization, or replace/clear its target projects | `kbagent semantic-layer scope set --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
 | Flag a project-scoped item as awaiting an org-admin's step-up decision | `kbagent semantic-layer scope request-create --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
-| Withdraw a pending scope-elevation request. | `kbagent semantic-layer scope request-delete --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
+| Withdraw a pending scope-elevation request. | `kbagent semantic-layer scope request-cancel --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
 | List items of --type awaiting an org-admin's elevation decision, across the org | `kbagent semantic-layer scope request-list --project PROJECT --type TYPE-` |
 | Encrypt the project's storage token for transformation `user_properties` | `kbagent sl token --project PROJECT --component-id COMPONENT-ID` |
 | Build a semantic-layer model from a list of storage tables (non-interactive) | `kbagent sl build --project PROJECT` |
@@ -347,7 +348,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Add a metric to a semantic-layer model | `kbagent sl add metric --project PROJECT --name NAME --sql SQL --dataset DATASET` |
 | Add a dataset (FQN read from the table's Storage location) | `kbagent sl add dataset --project PROJECT --name NAME --table-id TABLE-ID` |
 | Add a relationship between two datasets | `kbagent sl add relationship --project PROJECT --name NAME --from FROM- --to TO --on ON` |
-| Add a constraint | `kbagent sl add constraint --project PROJECT --name NAME --constraint-type CONSTRAINT-TYPE --rule RULE --metrics METRICS` |
+| Add a constraint | `kbagent sl add constraint --project PROJECT --name NAME --constraint-type CONSTRAINT-TYPE --rule RULE --metric METRICS` |
 | Add a glossary term | `kbagent sl add glossary --project PROJECT --term TERM --definition DEFINITION` |
 | Edit a metric. | `kbagent sl edit metric --project PROJECT --name NAME` |
 | Edit a dataset (no cascade — metric.dataset uses tableId, not name) | `kbagent sl edit dataset --project PROJECT --name NAME` |
@@ -360,15 +361,15 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Remove a relationship. | `kbagent sl remove relationship --project PROJECT --name NAME` |
 | Remove a glossary term. | `kbagent sl remove glossary --project PROJECT --term TERM` |
 | List reference-data records (dimension summaries; use ``get`` for members) | `kbagent sl reference-data list --project PROJECT` |
-| Fetch one record (all members) by ``--id`` or by ``--dimension`` | `kbagent sl reference-data get --project PROJECT` |
-| Create or replace a reference-data record (keyed by dimension) | `kbagent sl reference-data set --project PROJECT --dimension DIMENSION --members-file MEMBERS-FILE` |
-| Delete a reference-data record by UUID (server-side soft-delete) | `kbagent sl reference-data delete --project PROJECT --id ID-` |
+| Fetch one record (all members) by ``--reference-data-id`` or by ``--dimension`` | `kbagent sl reference-data get --project PROJECT` |
+| Create or replace a reference-data record (keyed by dimension) | `kbagent sl reference-data set --project PROJECT --dimension DIMENSION` |
+| Delete a reference-data record by UUID (server-side soft-delete) | `kbagent sl reference-data delete --project PROJECT --reference-data-id REFERENCE-DATA-ID` |
 | Show an item's current scope, target-project grants, and pending elevation | `kbagent sl scope get --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
 | Add target projects to a targeted-scope item (merges with the current grants) | `kbagent sl scope add --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
 | Remove target projects from a targeted-scope item (merges with the current grants) | `kbagent sl scope remove --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
 | Write an item's scope: elevate to organization, or replace/clear its target projects | `kbagent sl scope set --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
 | Flag a project-scoped item as awaiting an org-admin's step-up decision | `kbagent sl scope request-create --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
-| Withdraw a pending scope-elevation request. | `kbagent sl scope request-delete --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
+| Withdraw a pending scope-elevation request. | `kbagent sl scope request-cancel --project PROJECT --type TYPE- --context-id CONTEXT-ID` |
 | List items of --type awaiting an org-admin's elevation decision, across the org | `kbagent sl scope request-list --project PROJECT --type TYPE-` |
 | List row-level security policies visible to a project | `kbagent rls list --project PROJECT` |
 | Show one RLS policy's full rule set | `kbagent rls detail --project PROJECT --policy-id POLICY-ID` |
@@ -392,20 +393,20 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | PATCH an endpoint on the running kbagent serve | `kbagent http patch <PATH>` |
 | DELETE an endpoint on the running kbagent serve | `kbagent http delete <PATH>` |
 | List all registered agent tasks | `kbagent agent list` |
-| Show one task's full configuration | `kbagent agent show [TASK-ID]` |
+| Show one task's full configuration | `kbagent agent show --task-id TASK-ID` |
 | Register a new scheduled task | `kbagent agent create --name NAME` |
-| Patch one or more fields on a task. | `kbagent agent update [TASK-ID]` |
-| Remove a task. | `kbagent agent delete [TASK-ID]` |
-| Trigger a task immediately (does not wait for the next cron firing) | `kbagent agent run [TASK-ID]` |
-| Show the run history of a task (most recent first) | `kbagent agent runs [TASK-ID]` |
-| Show a single AgentRun record (status, summary, output, error) | `kbagent agent run-detail [TASK-ID] [RUN-ID]` |
-| Replay the persisted event timeline of an ai_agent run (line-by-line) | `kbagent agent run-events [TASK-ID] [RUN-ID]` |
+| Patch one or more fields on a task. | `kbagent agent update --task-id TASK-ID` |
+| Remove a task. | `kbagent agent delete --task-id TASK-ID` |
+| Trigger a task immediately (does not wait for the next cron firing) | `kbagent agent run --task-id TASK-ID` |
+| Show the run history of a task (most recent first) | `kbagent agent runs --task-id TASK-ID` |
+| Show a single AgentRun record (status, summary, output, error) | `kbagent agent run-detail --task-id TASK-ID --run-id RUN-ID` |
+| Replay the persisted event timeline of an ai_agent run (line-by-line) | `kbagent agent run-events --task-id TASK-ID --run-id RUN-ID` |
 | Execute an action ad-hoc (no persistence, no scheduling) | `kbagent agent test` |
 | Show the next N firings of a cron expression | `kbagent agent cron-preview --cron CRON` |
 | Polish a plain-English goal into an unattended-agent-ready prompt | `kbagent agent prompt-improve --goal GOAL` |
 | List Developer Portal apps for a vendor | `kbagent dev-portal list --vendor VENDOR` |
 | Show the full Developer Portal entry for one app | `kbagent dev-portal get --app APP` |
-| Create (register) a new app in the Developer Portal. | `kbagent dev-portal create --vendor VENDOR --data DATA` |
+| Create (register) a new app in the Developer Portal. | `kbagent dev-portal create --vendor VENDOR` |
 | Patch one or more properties of an existing Developer Portal app. | `kbagent dev-portal patch --app APP` |
 | Upload a 128x128 PNG icon for a Developer Portal app. | `kbagent dev-portal upload-icon --app APP --file FILE` |
 | Publish an app in the Developer Portal (requests Keboola review). | `kbagent dev-portal publish --app APP` |
@@ -595,7 +596,7 @@ printf '%s' "$KBC_TOKEN" | kbagent --json project add --alias prod --url https:/
 KBC_MANAGE_API_TOKEN=xxx kbagent --allow-env-manage-token --json org setup --org-id 123 --url https://connection.keboola.com --yes
 
 # Or onboard specific projects (any project member, uses Personal Access Token)
-KBC_MANAGE_API_TOKEN=xxx kbagent --allow-env-manage-token --json org setup --project-ids 901,9621,10539 --url https://connection.keboola.com --yes
+KBC_MANAGE_API_TOKEN=xxx kbagent --allow-env-manage-token --json org setup --project-id 901 --project-id 9621 --url https://connection.keboola.com --yes
 ```
 
 ### 4. Verify

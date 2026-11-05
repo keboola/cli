@@ -711,7 +711,7 @@ class TestGrants:
 
     @pytest.mark.parametrize(
         ("targets", "expected_call"),
-        [(None, None), ([], []), (["7", "8,9"], [7, 8, 9])],
+        [(None, None), ([], []), (["7", "8", "9"], [7, 8, 9])],
     )
     def test_target_projects_semantics(
         self, tmp_path: Path, targets: list | None, expected_call: list | None

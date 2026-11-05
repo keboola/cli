@@ -1086,7 +1086,7 @@ class MergeRequestService(BaseService):
             return None
         # A hole in the server-produced envelope is a backend contract
         # violation (the schema marks every content key required). Writing it
-        # as an explicit null would make `resolve --resolved @file` blame the
+        # as an explicit null would make `resolve --resolved-file FILE` blame the
         # CALLER for a file kbagent wrote -- so there is no candidate, and the
         # caller learns why from `warnings` (the same message the --take path
         # raises as VALIDATION_ERROR).

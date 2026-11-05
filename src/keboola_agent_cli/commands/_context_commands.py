@@ -20,15 +20,16 @@ COMMAND_SECTIONS: dict[str, str] = {
 Scheduled agent tasks (cron / manual / chained)
 
   kbagent agent create --name NAME [--description DESCRIPTION] [--cron CRON]
-      [--manual] [--enabled/--disabled] [--type TYPE] [--from-file FILE]
-      [--cli CLI] [--prompt PROMPT] [--extra-arg ARG ...] [--argv ARGV ...]
-      [--timeout N] [--trigger-task-id ID] [--trigger-on ON]
+      [--manual] [--enabled/--disabled] [--type TYPE]
+      [--definition DEFINITION] [--definition-file PATH] [--cli CLI]
+      [--prompt PROMPT] [--extra-arg ARG ...] [--argv ARGV ...] [--timeout N]
+      [--trigger-task-id ID] [--trigger-on ON]
     Register a new scheduled task.
 
   kbagent agent cron-preview --cron CRON [--count N]
     Show the next N firings of a cron expression.
 
-  kbagent agent delete [TASK_ID] [--task-id ID] [--yes]
+  kbagent agent delete --task-id ID [--yes]
     Remove a task. Run history on disk is preserved.
 
   kbagent agent list
@@ -38,31 +39,30 @@ Scheduled agent tasks (cron / manual / chained)
       [--project PROJECT] [--extra-arg ARG ...] [--stream/--no-stream]
     Polish a plain-English goal into an unattended-agent-ready prompt.
 
-  kbagent agent run [TASK_ID] [--task-id ID] [--stream]
-      [--runtime-prompt PROMPT] [--runtime-input INPUT]
+  kbagent agent run --task-id ID [--stream] [--runtime-prompt PROMPT]
+      [--runtime-input INPUT] [--runtime-input-file PATH]
     Trigger a task immediately (does not wait for the next cron firing).
 
-  kbagent agent run-detail [TASK_ID] [RUN_ID] [--task-id ID] [--run-id ID]
+  kbagent agent run-detail --task-id ID --run-id ID
     Show a single AgentRun record (status, summary, output, error).
 
-  kbagent agent run-events [TASK_ID] [RUN_ID] [--task-id ID] [--run-id ID]
+  kbagent agent run-events --task-id ID --run-id ID
     Replay the persisted event timeline of an ai_agent run (line-by-line).
 
-  kbagent agent runs [TASK_ID] [--task-id ID] [--limit N]
+  kbagent agent runs --task-id ID [--limit N]
     Show the run history of a task (most recent first).
 
-  kbagent agent show [TASK_ID] [--task-id ID]
+  kbagent agent show --task-id ID
     Show one task's full configuration.
 
-  kbagent agent test [--name NAME] [--stream] [--type TYPE] [--from-file FILE]
-      [--cli CLI] [--prompt PROMPT] [--extra-arg ARG ...] [--argv ARGV ...]
-      [--timeout N]
+  kbagent agent test [--name NAME] [--stream] [--type TYPE]
+      [--definition DEFINITION] [--definition-file PATH] [--cli CLI]
+      [--prompt PROMPT] [--extra-arg ARG ...] [--argv ARGV ...] [--timeout N]
     Execute an action ad-hoc (no persistence, no scheduling).
 
-  kbagent agent update [TASK_ID] [--task-id ID] [--name NAME]
-      [--description DESCRIPTION] [--cron CRON] [--enabled/--disabled]
-      [--manual/--auto] [--clear-trigger] [--trigger-task-id ID]
-      [--trigger-on ON]
+  kbagent agent update --task-id ID [--name NAME] [--description DESCRIPTION]
+      [--cron CRON] [--enabled/--disabled] [--manual/--auto] [--clear-trigger]
+      [--trigger-task-id ID] [--trigger-on ON]
     Patch one or more fields on a task. Omitted flags leave the field
     unchanged.
 """,
@@ -110,7 +110,8 @@ Manage development branches
       [--description DESCRIPTION]
     Create a new development branch and auto-activate it.
 
-  kbagent branch delete [--project PROJECT] --branch N [--dry-run] [--yes]
+  kbagent branch delete [--project PROJECT] --branch BRANCH [--dry-run]
+      [--yes]
     Delete a development branch.
 
   kbagent branch list [--project PROJECT ...] [--all-projects]
@@ -127,14 +128,14 @@ Manage development branches
   kbagent branch metadata-list [--project PROJECT] [--branch BRANCH]
     List all metadata entries on a branch.
 
-  kbagent branch metadata-set [--project PROJECT] --key KEY [--text TEXT]
-      [--file PATH] [--stdin] [--branch BRANCH]
+  kbagent branch metadata-set [--project PROJECT] --key KEY [--value VALUE]
+      [--value-file PATH] [--branch BRANCH]
     Set a metadata key/value on a branch.
 
   kbagent branch reset [--project PROJECT]
     Reset the active branch back to main/production.
 
-  kbagent branch use [--project PROJECT] --branch N
+  kbagent branch use [--project PROJECT] --branch BRANCH
     Set an existing development branch as active.
 """,
     "changelog": """\
@@ -190,7 +191,7 @@ Discover and inspect Keboola components
 
   kbagent component sync-action ACTION_NAME --component-id ID [--config-id ID]
       [--row-id ID] [--project PROJECT] [--branch N] [--config-data DATA]
-      [--timeout N]
+      [--config-data-file PATH] [--timeout N]
     Run a synchronous component action such as testConnection.
 """,
     "config": """\
@@ -258,8 +259,8 @@ Browse and inspect configurations
 
   kbagent config row-create [--project PROJECT] --component-id ID
       --config-id ID --name NAME [--description DESCRIPTION]
-      [--configuration CONFIGURATION] [--is-disabled] [--branch N]
-      [--allow-plaintext-on-encrypt-failure]
+      [--configuration CONFIGURATION] [--configuration-file PATH]
+      [--is-disabled] [--branch N] [--allow-plaintext-on-encrypt-failure]
     Create a new configuration row.
 
   kbagent config row-delete [--project PROJECT] --component-id ID
@@ -268,9 +269,10 @@ Browse and inspect configurations
 
   kbagent config row-update [--project PROJECT] --component-id ID
       --config-id ID --row-id ID [--name NAME] [--description DESCRIPTION]
-      [--configuration CONFIGURATION] [--set SET ...] [--merge]
-      [--change-description DESCRIPTION] [--dry-run] [--is-disabled]
-      [--is-enabled] [--branch N] [--allow-plaintext-on-encrypt-failure]
+      [--configuration CONFIGURATION] [--configuration-file PATH]
+      [--set SET ...] [--merge] [--change-description DESCRIPTION] [--dry-run]
+      [--is-disabled] [--is-enabled] [--branch N]
+      [--allow-plaintext-on-encrypt-failure]
     Update an existing configuration row.
 
   kbagent config search --query QUERY [--project PROJECT ...] [--all-projects]
@@ -295,8 +297,8 @@ Browse and inspect configurations
     Read the runtime ``state`` dict of a configuration or one of its rows.
 
   kbagent config state-set [--project PROJECT] --component-id ID
-      --config-id ID --state STATE [--row-id ID] [--branch N] [--dry-run]
-      [--yes]
+      --config-id ID [--state STATE] [--state-file PATH] [--row-id ID]
+      [--branch N] [--dry-run] [--yes]
     Overwrite the runtime ``state`` dict of a configuration or one of its
     rows.
 
@@ -342,7 +344,7 @@ Keboola data-app lifecycle (create, deploy, manage)
       [--description DESCRIPTION] [--description-file PATH] --slug SLUG
       [--git-repo REPO] [--use-managed-git-repo] [--git-branch BRANCH]
       [--git-public/--no-git-public] [--git-username USERNAME]
-      [--git-pat-env ENV] [--git-pat-file PATH]
+      [--git-auth AUTH] [--git-pat-env ENV] [--git-pat-file PATH]
       [--git-pat-encrypted ENCRYPTED] [--auth AUTH] [--size SIZE]
       [--auto-suspend N] [--type TYPE] [--workspace/--no-workspace]
       [--branch N] [--no-deploy] [--wait] [--timeout N] [--keep-on-failure]
@@ -360,6 +362,11 @@ Keboola data-app lifecycle (create, deploy, manage)
 
   kbagent data-app detail [--project PROJECT] --app-id ID [--branch N]
     Show merged Data Science + Storage detail for one data app.
+
+  kbagent data-app git-auth-set [--project PROJECT] --app-id ID
+      --git-auth AUTH [--git-repo REPO] [--git-branch BRANCH] [--branch N]
+      [--dry-run]
+    Switch a data app's external GitHub repo to organization auth.
 
   kbagent data-app git-credentials [--project PROJECT] --app-id ID
     List the credentials of a data app's MANAGED git repository.
@@ -401,7 +408,7 @@ Keboola data-app lifecycle (create, deploy, manage)
     0).
 
   kbagent data-app secrets-set [--project PROJECT] --app-id ID
-      [--secret SECRET ...] [--secrets-file PATH] [--branch N]
+      [--secret SECRET ...] [--secret-file PATH] [--branch N]
       [--allow-plaintext-on-encrypt-failure] [--dry-run] [--no-hint-next]
     Encrypt and write app-runtime secrets to the linked Storage config.
 
@@ -423,8 +430,8 @@ Keboola data-app lifecycle (create, deploy, manage)
 
 Keboola Developer Portal — multi-identity, production-safe writes.
 
-  kbagent dev-portal create --vendor VENDOR --data DATA [--identity IDENTITY]
-      [--dry-run]
+  kbagent dev-portal create --vendor VENDOR [--data DATA] [--data-file PATH]
+      [--identity IDENTITY] [--dry-run]
     Create (register) a new app in the Developer Portal. Requires TTY confirm;
     --dry-run for preview.
 
@@ -463,8 +470,9 @@ Keboola Developer Portal — multi-identity, production-safe writes.
   kbagent dev-portal list --vendor VENDOR [--identity IDENTITY]
     List Developer Portal apps for a vendor.
 
-  kbagent dev-portal patch --app APP [--data DATA] [--property PROPERTY]
-      [--value VALUE] [--value-file FILE] [--identity IDENTITY] [--dry-run]
+  kbagent dev-portal patch --app APP [--data DATA] [--data-file PATH]
+      [--property PROPERTY] [--value VALUE] [--value-file FILE]
+      [--identity IDENTITY] [--dry-run]
     Patch one or more properties of an existing Developer Portal app. Requires
     TTY confirm; --dry-run for preview.
 
@@ -472,7 +480,7 @@ Keboola Developer Portal — multi-identity, production-safe writes.
     Publish an app in the Developer Portal (requests Keboola review). Requires
     TTY confirm; --dry-run for preview.
 
-  kbagent dev-portal upload-icon --app APP --file FILE [--identity IDENTITY]
+  kbagent dev-portal upload-icon --app APP --file PATH [--identity IDENTITY]
       [--dry-run]
     Upload a 128x128 PNG icon for a Developer Portal app. Requires TTY
     confirm; --dry-run for preview.
@@ -496,8 +504,8 @@ Ask the Keboola documentation natural-language questions
 
 Encrypt secret values via Keboola Encryption API (one-way, no decrypt)
 
-  kbagent encrypt values [--project PROJECT] --component-id ID --input INPUT
-      [--output-file PATH]
+  kbagent encrypt values [--project PROJECT] --component-id ID
+      [--values VALUES] [--values-file PATH] [--output-file PATH]
     Encrypt #-prefixed secret values for a Keboola component.
 """,
     "feature": """\
@@ -550,7 +558,7 @@ Manage conditional flows (keboola.flow)
     List conditional flows (keboola.flow) across projects.
 
   kbagent flow new [--project PROJECT] --name NAME [--description DESCRIPTION]
-      [--file FILE] [--branch N]
+      [--definition DEFINITION] [--definition-file PATH] [--branch N]
     Create a new conditional-flow (keboola.flow) configuration.
 
   kbagent flow schedule [--project PROJECT] --flow-id ID --cron CRON
@@ -568,10 +576,12 @@ Manage conditional flows (keboola.flow)
     Show every trigger kbagent can see for a flow (cron + table triggers).
 
   kbagent flow update [--project PROJECT] --flow-id ID [--name NAME]
-      [--description DESCRIPTION] [--file FILE] [--branch N]
+      [--description DESCRIPTION] [--definition DEFINITION]
+      [--definition-file PATH] [--branch N]
     Update a flow's name, description, or phases/tasks.
 
-  kbagent flow validate --file FILE [--project PROJECT]
+  kbagent flow validate [--definition DEFINITION] [--definition-file PATH]
+      [--project PROJECT]
     Validate a conditional-flow definition (schema + semantic checks).
 """,
     "http": """\
@@ -586,10 +596,10 @@ KBAGENT_SERVE_TOKEN env vars).
   kbagent http get PATH [--timeout N]
     GET an endpoint on the running kbagent serve.
 
-  kbagent http patch PATH [--body BODY] [--timeout N]
+  kbagent http patch PATH [--body BODY] [--body-file PATH] [--timeout N]
     PATCH an endpoint on the running kbagent serve.
 
-  kbagent http post PATH [--body BODY] [--timeout N]
+  kbagent http post PATH [--body BODY] [--body-file PATH] [--timeout N]
     POST to an endpoint on the running kbagent serve.
 """,
     "init": """\
@@ -655,13 +665,13 @@ Column-level data lineage across projects.
   kbagent lineage build [--directory PATH] --output PATH [--ai] [--refresh]
     Build column-level lineage graph from sync'd data.
 
-  kbagent lineage info --load PATH
+  kbagent lineage info --file PATH
     Show what's in a cached lineage graph.
 
-  kbagent lineage server --load PATH [--port N] [--host HOST]
+  kbagent lineage server --file PATH [--port N] [--host HOST]
     Start a local web server with interactive lineage browser.
 
-  kbagent lineage show --load PATH [--upstream UPSTREAM]
+  kbagent lineage show --file PATH [--upstream UPSTREAM]
       [--downstream DOWNSTREAM] [--column COLUMN] [--columns]
       [--project PROJECT] [--depth N] [--format FORMAT]
     Query upstream/downstream dependencies from a cached lineage graph.
@@ -719,7 +729,8 @@ Merge requests: merge a development branch into production with review
 
   kbagent merge-request resolve [--project PROJECT] [--merge-request-id N]
       [--branch N] --component-id ID --config-id ID [--take TAKE]
-      [--resolved RESOLVED] [--change-description DESCRIPTION]
+      [--resolved RESOLVED] [--resolved-file PATH]
+      [--change-description DESCRIPTION]
     Resolve one conflicting configuration (destructive: it removes a merge
     blocker).
 
@@ -759,7 +770,7 @@ write, 'delete' as destructive.
 
 Organization management
 
-  kbagent org setup [--org-id N] [--project-ids IDS ...] --url URL [--dry-run]
+  kbagent org setup [--org-id N] [--project-id ID ...] --url URL [--dry-run]
       [--yes] [--token-description DESCRIPTION] [--token-expires-in N]
       [--refresh]
     Set up projects and register them in the kbagent config.
@@ -805,8 +816,8 @@ Manage connected Keboola projects
   kbagent project description-get [--project PROJECT]
     Get the Keboola dashboard project description.
 
-  kbagent project description-set [--project PROJECT] [--text TEXT]
-      [--file PATH] [--stdin]
+  kbagent project description-set [--project PROJECT]
+      [--description DESCRIPTION] [--description-file PATH]
     Set the Keboola dashboard project description (markdown).
 
   kbagent project edit [--project PROJECT] [--url URL] [--token TOKEN]
@@ -825,7 +836,7 @@ Manage connected Keboola projects
     List pending project invitations.
 
   kbagent project invite [--project PROJECT] [--email EMAIL]
-      [--role admin|guest|readOnly|share] [--reason REASON] [--from-csv PATH]
+      [--role admin|guest|readOnly|share] [--reason REASON] [--file PATH]
       [--default-role admin|guest|readOnly|share] [--workers N] [--dry-run]
     Invite a user (or many users via CSV) to one or more projects.
 
@@ -950,7 +961,7 @@ Manage Keboola semantic layer (metastore) models -- datasets, metrics,
 relationships, constraints, and glossary terms.
 
   kbagent semantic-layer add constraint [--project PROJECT] [--model MODEL]
-      --name NAME --constraint-type TYPE --rule RULE --metrics METRICS ...
+      --name NAME --constraint-type TYPE --rule RULE --metric METRIC ...
       [--severity SEVERITY] [--scope project|organization|targeted]
       [--target-project PROJECT ...]
     Add a constraint.
@@ -978,7 +989,7 @@ relationships, constraints, and glossary terms.
     Add a relationship between two datasets.
 
   kbagent semantic-layer build [--project PROJECT] [--model MODEL]
-      [--tables TABLES ...] [--name NAME] [--dry-run] [--keep-on-failure]
+      [--table-id ID ...] [--name NAME] [--dry-run] [--keep-on-failure]
       [--output PATH] [--types-workspace N] [--auto-types-workspace]
     Build a semantic-layer model from a list of storage tables
     (non-interactive).
@@ -991,7 +1002,7 @@ relationships, constraints, and glossary terms.
   kbagent semantic-layer edit constraint [--project PROJECT] [--model MODEL]
       --name NAME [--new-name NAME] [--new-rule RULE]
       [--new-constraint-type TYPE] [--new-severity SEVERITY]
-      [--new-metrics METRICS ...]
+      [--new-metric METRIC ...]
     Edit a constraint (in-place update, with local validators).
 
   kbagent semantic-layer edit dataset [--project PROJECT] [--model MODEL]
@@ -1021,7 +1032,7 @@ relationships, constraints, and glossary terms.
     Fetch a single semantic-layer entity by id, irrespective of its type.
 
   kbagent semantic-layer import [--project PROJECT] --file PATH
-      [--model MODEL] [--types TYPES ...] [--dry-run] [--overwrite]
+      [--model MODEL] [--type TYPE ...] [--dry-run] [--overwrite]
       [--scope project|organization|targeted] [--target-project PROJECT ...]
     Replay a snapshot into a project. Default: skip on conflict (no surprise
     overwrites).
@@ -1039,19 +1050,20 @@ relationships, constraints, and glossary terms.
     List all semantic-layer models in a project.
 
   kbagent semantic-layer promote --from-project PROJECT --to-project PROJECT
-      [--from-model MODEL] [--to-model MODEL] [--types TYPES ...] [--dry-run]
+      [--from-model MODEL] [--to-model MODEL] [--type TYPE ...] [--dry-run]
       [--yes] [--scope project|organization|targeted]
       [--target-project PROJECT ...]
     Promote a model from one project to another (NEW + overwrite CHANGED;
     never deletes).
 
-  kbagent semantic-layer reference-data delete [--project PROJECT] --id ID
-      [--yes]
+  kbagent semantic-layer reference-data delete [--project PROJECT]
+      --reference-data-id ID [--yes]
     Delete a reference-data record by UUID (server-side soft-delete).
 
-  kbagent semantic-layer reference-data get [--project PROJECT] [--id ID]
-      [--dimension DIMENSION]
-    Fetch one record (all members) by ``--id`` or by ``--dimension``.
+  kbagent semantic-layer reference-data get [--project PROJECT]
+      [--reference-data-id ID] [--dimension DIMENSION]
+    Fetch one record (all members) by ``--reference-data-id`` or by
+    ``--dimension``.
 
   kbagent semantic-layer reference-data list [--project PROJECT]
       [--model MODEL]
@@ -1059,8 +1071,8 @@ relationships, constraints, and glossary terms.
     members).
 
   kbagent semantic-layer reference-data set [--project PROJECT]
-      [--model MODEL] --dimension DIMENSION --members-file FILE
-      [--dataset-id ID] [--description DESCRIPTION]
+      [--model MODEL] --dimension DIMENSION [--members MEMBERS]
+      [--members-file PATH] [--dataset-id ID] [--description DESCRIPTION]
     Create or replace a reference-data record (keyed by dimension).
 
   kbagent semantic-layer remove constraint [--project PROJECT] [--model MODEL]
@@ -1104,16 +1116,16 @@ relationships, constraints, and glossary terms.
     Remove target projects from a targeted-scope item (merges with the current
     grants).
 
-  kbagent semantic-layer scope request-create [--project PROJECT]
-      --type model|dataset|metric|relationship|constraint|glossary
-      --context-id ID
-    Flag a project-scoped item as awaiting an org-admin's step-up decision.
-
-  kbagent semantic-layer scope request-delete [--project PROJECT]
+  kbagent semantic-layer scope request-cancel [--project PROJECT]
       --type model|dataset|metric|relationship|constraint|glossary
       --context-id ID
     Withdraw a pending scope-elevation request. Idempotent no-op if none is
     pending.
+
+  kbagent semantic-layer scope request-create [--project PROJECT]
+      --type model|dataset|metric|relationship|constraint|glossary
+      --context-id ID
+    Flag a project-scoped item as awaiting an org-admin's step-up decision.
 
   kbagent semantic-layer scope request-list [--project PROJECT]
       --type model|dataset|metric|relationship|constraint|glossary [--limit N]
@@ -1167,11 +1179,12 @@ Cross-project bucket sharing and linking.
     List shared buckets available for linking.
 
   kbagent sharing share [--project PROJECT] --bucket-id ID --type TYPE
-      [--target-project-ids IDS ...] [--target-users USERS ...]
+      [--target-project PROJECT ...] [--target-user USER ...]
     Enable sharing on a bucket.
 
-  kbagent sharing unlink [--project PROJECT] --bucket-id ID
-    Remove a linked bucket from a project.
+  kbagent sharing unlink [--project PROJECT] --bucket-id ID [--dry-run]
+      [--yes]
+    Remove a linked bucket from a project (destructive).
 
   kbagent sharing unshare [--project PROJECT] --bucket-id ID
     Disable sharing on a bucket.
@@ -1202,8 +1215,9 @@ Browse and manage storage buckets, tables, and files
     Create a new storage bucket.
 
   kbagent storage create-table [--project PROJECT] --bucket-id ID --name NAME
-      [--column COLUMN ...] [--primary-key KEY ...] [--not-null NULL ...]
-      [--default DEFAULT ...] [--source-table-id ID] [--source-branch-id N]
+      [--column COLUMN ...] [--primary-key KEY ...]
+      [--not-null-column COLUMN ...] [--default DEFAULT ...]
+      [--source-table-id ID] [--source-branch-id N]
       [--time-partitioning-type TYPE] [--time-partitioning-field FIELD]
       [--time-partitioning-expiration-ms MS]
       [--range-partitioning-field FIELD] [--range-partitioning-start START]
@@ -1224,12 +1238,11 @@ Browse and manage storage buckets, tables, and files
       [--dry-run] [--yes] [--branch N]
     Delete one or more storage tables.
 
-  kbagent storage describe-batch [--project PROJECT] --from-file PATH
-      [--branch N]
+  kbagent storage describe-batch [--project PROJECT] --file PATH [--branch N]
     Apply descriptions to buckets, tables, and columns from a YAML file.
 
   kbagent storage describe-bucket [--project PROJECT] --bucket-id ID
-      [--text TEXT] [--file PATH] [--stdin] [--branch N]
+      [--description DESCRIPTION] [--description-file PATH] [--branch N]
     Set the description on a storage bucket.
 
   kbagent storage describe-column [--project PROJECT] --table-id ID
@@ -1242,11 +1255,11 @@ Browse and manage storage buckets, tables, and files
     endpoint.
 
   kbagent storage describe-table [--project PROJECT] --table-id ID
-      [--text TEXT] [--file PATH] [--stdin] [--branch N]
+      [--description DESCRIPTION] [--description-file PATH] [--branch N]
     Set the description on a storage table.
 
   kbagent storage download-table [--project PROJECT] --table-id ID
-      [--output OUTPUT] [--columns COLUMNS ...] [--limit N] [--branch N]
+      [--output OUTPUT] [--column COLUMN ...] [--limit N] [--branch N]
       [--keep-slices] [--where-column COLUMN] [--where-operator OPERATOR]
       [--where-value VALUE ...] [--changed-since SINCE]
       [--changed-until UNTIL] [--progress]
@@ -1267,7 +1280,7 @@ Browse and manage storage buckets, tables, and files
       [--remove REMOVE ...]
     Add and/or remove tags on a Storage File.
 
-  kbagent storage file-upload [--project PROJECT] --file FILE [--name NAME]
+  kbagent storage file-upload [--project PROJECT] --file PATH [--name NAME]
       [--tag TAG ...] [--permanent] [--branch N] [--progress]
     Upload a local file to Storage Files.
 
@@ -1320,12 +1333,12 @@ Browse and manage storage buckets, tables, and files
     Truncate (delete all rows from) one or more storage tables.
 
   kbagent storage unload-table [--project PROJECT] --table-id ID
-      [--columns COLUMNS ...] [--limit N] [--tag TAG ...] [--download]
+      [--column COLUMN ...] [--limit N] [--tag TAG ...] [--download]
       [--output OUTPUT] [--branch N] [--file-type TYPE] [--keep-slices]
       [--progress]
     Export a table to a Storage File.
 
-  kbagent storage upload-table [--project PROJECT] --table-id ID --file FILE
+  kbagent storage upload-table [--project PROJECT] --table-id ID --file PATH
       [--incremental] [--delimiter DELIMITER] [--enclosure ENCLOSURE]
       [--auto-create/--no-auto-create] [--branch N] [--wait/--no-wait]
       [--timeout N] [--progress]
@@ -1341,11 +1354,11 @@ Data Streams (OTLP) source management
       [--reveal]
     Create an OTLP (or HTTP) source and return its endpoint.
 
-  kbagent stream delete SOURCE_ID [--project PROJECT] [--branch BRANCH]
+  kbagent stream delete [--project PROJECT] --source-id ID [--branch BRANCH]
       [--dry-run] [--yes]
     Delete a Data Streams source (destructive).
 
-  kbagent stream detail [SOURCE_ID] [--project PROJECT] [--name NAME]
+  kbagent stream detail [--project PROJECT] [--source-id ID] [--name NAME]
       [--branch BRANCH] [--reveal]
     Show a source's endpoints, protocol, and destination tables.
 
@@ -1410,7 +1423,7 @@ Storage API token management (scoped mint / revoke / rotate)
     tokens).
 
   kbagent token list [--project PROJECT] [--with-last-used]
-      [--columns COLUMNS ...]
+      [--column COLUMN ...]
     List the project's Storage API tokens (no secrets -- those are mint-only).
 
   kbagent token refresh [--project PROJECT] --token-id ID [--yes]
@@ -1429,7 +1442,8 @@ SQL transformations - create, inspect, and edit blocks/codes
 
   kbagent transformation edit [--project PROJECT] --config-id ID
       [--component-id ID] [--branch N] --change-description DESCRIPTION
-      [--op OP ...] [--op-file PATH] [--storage STORAGE] [--dry-run]
+      [--op OP ...] [--op-file PATH] [--storage STORAGE] [--storage-file PATH]
+      [--dry-run]
     Edit a SQL transformation's blocks/codes with positional operations.
 
   kbagent transformation show [--project PROJECT] --config-id ID
@@ -1478,7 +1492,7 @@ Workspace lifecycle for SQL debugging
     projects.
 
   kbagent workspace load [--project PROJECT] --workspace-id N
-      --tables TABLES ... [--preserve] [--load-type TYPE] [--force]
+      --table-id ID ... [--preserve] [--load-type TYPE] [--force]
       [--timeout N]
     Load tables into a workspace.
 
@@ -1486,7 +1500,7 @@ Workspace lifecycle for SQL debugging
     Reset workspace password and show the new one.
 
   kbagent workspace query [--project PROJECT] --workspace-id N [--sql SQL]
-      [--file PATH] [--transactional] [--full] [--limit N]
+      [--sql-file PATH] [--transactional] [--full] [--limit N]
     Execute SQL query in a workspace via Query Service.
 """,
 }

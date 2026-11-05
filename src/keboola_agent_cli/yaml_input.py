@@ -7,7 +7,7 @@ nested mapping (one fat-fingered colon away from valid input) into the literal
 string ``"{'new': 'in.c-new'}"``, which then lands in the target project as a
 "bucket ID". This module rejects non-scalar values (and ``None``) up front,
 naming the offending key and its actual type -- same approach as the
-``storage describe-batch --from-file`` validation in
+``storage describe-batch --file`` validation in
 ``services/_describe_batch_input.py``.
 
 Type names come out in YAML vocabulary ("mapping", "list", "null"), not

@@ -74,7 +74,7 @@ SCOPE_HELP = (
     "organization-admin-only choice, gated as destructive."
 )
 TARGET_HELP = (
-    "Project alias or ID the policy also applies to (repeatable or comma-separated; "
+    "Project alias or ID the policy also applies to (repeatable, one value per occurrence; "
     "--scope targeted only; granting needs the organization-admin role)"
 )
 TABLE_HELP = "Storage table ID, e.g. in.c-crm.invoices"

@@ -15,7 +15,6 @@ permission config denies Read/Write/Edit on any path matching ``*secrets*``.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import typer
@@ -28,6 +27,7 @@ from ._helpers import (
     get_formatter,
     get_service,
     map_error_to_exit_code,
+    parse_json_file_arg,
 )
 from ._project_ref import PROJECT_HELP
 
@@ -56,36 +56,26 @@ def _parse_secret_arg(arg: str) -> tuple[str, str]:
 
 def _read_secrets_file(path: Path) -> dict[str, str]:
     try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as exc:
-        raise typer.BadParameter(
-            f"Cannot read secrets file {path}: {exc}",
-            param_hint="--secrets-file",
-        ) from exc
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise typer.BadParameter(
-            f"Secrets file {path} is not valid JSON: {exc}",
-            param_hint="--secrets-file",
-        ) from exc
+        parsed = parse_json_file_arg(path, label="--secret-file")
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--secret-file") from exc
     if not isinstance(parsed, dict):
         raise typer.BadParameter(
             f"Secrets file {path} must be a JSON object mapping #KEY -> value.",
-            param_hint="--secrets-file",
+            param_hint="--secret-file",
         )
     out: dict[str, str] = {}
     for key, value in parsed.items():
         if not isinstance(key, str) or not isinstance(value, str):
             raise typer.BadParameter(
                 f"Secrets file {path} contains non-string entry for {key!r}.",
-                param_hint="--secrets-file",
+                param_hint="--secret-file",
             )
         out[key] = value
     if not out:
         raise typer.BadParameter(
             f"Secrets file {path} is empty.",
-            param_hint="--secrets-file",
+            param_hint="--secret-file",
         )
     return out
 
@@ -99,16 +89,17 @@ def data_app_secrets_set(
         "--secret",
         help=(
             "One or more '#KEY=VALUE' plaintext entries. Repeatable. "
-            "Mutually exclusive with --secrets-file."
+            "Mutually exclusive with --secret-file."
         ),
     ),
     secrets_file: Path | None = typer.Option(
         None,
-        "--secrets-file",
-        help="Path to a JSON file mapping '#KEY' -> 'plaintext value'.",
+        "--secret-file",
+        help="Read a JSON object mapping '#KEY' -> 'plaintext value' from a file (- for stdin).",
         exists=True,
         readable=True,
         dir_okay=False,
+        allow_dash=True,
     ),
     branch: int | None = typer.Option(
         None,
@@ -152,14 +143,14 @@ def data_app_secrets_set(
 
     if secret and secrets_file:
         formatter.error(
-            message=("--secret and --secrets-file are mutually exclusive; pick one input mode."),
+            message=("--secret and --secret-file are mutually exclusive; pick one input mode."),
             error_code=ErrorCode.USAGE_ERROR,
         )
         raise typer.Exit(code=2) from None
 
     if not secret and not secrets_file:
         formatter.error(
-            message=("Provide at least one --secret '#KEY=VALUE' or --secrets-file PATH."),
+            message=("Provide at least one --secret '#KEY=VALUE' or --secret-file PATH."),
             error_code=ErrorCode.MISSING_PARAMETER,
         )
         raise typer.Exit(code=2) from None

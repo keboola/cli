@@ -119,7 +119,7 @@ OPERATION_REGISTRY: dict[str, str] = {
     "sharing.share": "write",
     "sharing.unshare": "write",
     "sharing.link": "write",
-    "sharing.unlink": "write",
+    "sharing.unlink": "destructive",
     # Organization
     "org.setup": "admin",
     # Branch lifecycle
@@ -244,6 +244,7 @@ OPERATION_REGISTRY: dict[str, str] = {
     "data-app.git-repo": "read",
     "data-app.git-credentials": "read",
     "data-app.git-credentials-create": "write",
+    "data-app.git-auth-set": "write",
     # Developer Portal — identity sub-app leaves (composed by the
     # identity_app callback as "dev-portal.identity.<subcommand>")
     "dev-portal.identity.add": "write",
@@ -395,7 +396,7 @@ OPERATION_REGISTRY: dict[str, str] = {
     "semantic-layer.scope.remove": "write",
     "semantic-layer.scope.set": "write",
     "semantic-layer.scope.request-create": "write",
-    "semantic-layer.scope.request-delete": "write",
+    "semantic-layer.scope.request-cancel": "write",
     # Serve-only AI helpers (since 0.99.0). Neither touches Keboola, but both
     # spawn a local `claude` / `codex` / `gemini` process on the host, exactly
     # like `agent prompt-improve` -- classified `write` for the same reason, so

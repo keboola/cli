@@ -82,66 +82,152 @@ def resolve_manage_token(*, allow_env: bool = False) -> str:
     raise typer.Exit(code=2)
 
 
-def parse_json_arg(raw: str, *, label: str, allow_yaml: bool = False) -> Any:
-    """Parse a ``JSON|@file|-`` argument: inline JSON, ``@path``, or ``-`` for stdin.
-
-    The house input contract for structured flags (spec rule I1): ``config
-    update --configuration``, ``transformation edit --op``, ``merge-request
-    resolve --resolved``, ``encrypt values --input``, ``http post --body`` and
-    the others. ``allow_yaml`` parses the text as YAML, a superset of JSON
-    (``flow new/update/validate --file``).
+def read_input_file(path: str | Path, *, label: str) -> str:
+    """Read the text of a file option: a path, or ``-`` for stdin (spec rules I2, I6).
 
     Raises:
-        ValueError: On a missing/unreadable file or malformed JSON -- the message
-            names ``label`` (the flag) so the caller can print it at exit 2 as-is.
+        ValueError: On a missing or unreadable file; the message names
+            ``label`` (the file option) so the caller can print it at exit 2.
     """
-    loads: Callable[[str], Any] = yaml.safe_load if allow_yaml else json.loads
+    if str(path) == "-":
+        return sys.stdin.read()
+    file_path = Path(path)
     try:
-        if raw == "-":
-            return loads(sys.stdin.read())
-        if raw.startswith("@"):
-            file_path = Path(raw[1:])
-            if not file_path.is_file():
-                raise ValueError(f"{label}: file not found: {file_path}")
-            return loads(file_path.read_text(encoding="utf-8"))
-        return loads(raw)
-    except (json.JSONDecodeError, yaml.YAMLError) as exc:
-        raise ValueError(f"{label}: invalid {'YAML' if allow_yaml else 'JSON'}: {exc}") from exc
+        if not file_path.is_file():
+            raise ValueError(f"{label}: file not found: {file_path}")
+        return file_path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
         # a directory, a permission problem, a binary file -- a usage error, not a crash
-        raise ValueError(f"{label}: cannot read input: {exc}") from exc
+        raise ValueError(f"{label}: cannot read file {file_path}: {exc}") from exc
 
 
-def split_multi(values: Iterable[str] | None) -> list[str]:
-    """Flatten a repeatable option that also takes a comma list (spec rule A4).
+def _loads(text: str, *, label: str, allow_yaml: bool) -> Any:
+    loads: Callable[[str], Any] = yaml.safe_load if allow_yaml else json.loads
+    try:
+        return loads(text)
+    except (json.JSONDecodeError, yaml.YAMLError) as exc:
+        raise ValueError(f"{label}: invalid {'YAML' if allow_yaml else 'JSON'}: {exc}") from exc
 
-    ``--x a --x b,c`` gives ``["a", "b", "c"]``. Empty parts are dropped, and a
-    value given twice is kept once, in first-seen order. Use it only for IDs
-    and fixed values: a free-form value (JSON, ``KEY=VALUE``, SQL, text) can
-    contain a comma, so those options are repeat-only and stay unsplit.
+
+def parse_json_arg(
+    raw: str, *, label: str, allow_yaml: bool = False, file_option: str | None = None
+) -> Any:
+    """Parse the inline JSON (or YAML) text of a structured option (spec rule I1).
+
+    A structured option ``--X`` takes the text inline; its sibling ``--X-file``
+    reads it from a file or stdin (``parse_json_file_arg``). ``@path`` and
+    ``-`` are not read here: 0.x took them, so they get an error that names
+    ``file_option`` (default ``<label>-file``). ``allow_yaml`` parses the text
+    as YAML, a superset of JSON (``flow new/update/validate --definition``).
+
+    Raises:
+        ValueError: On malformed text, ``@path`` or ``-``; the message names
+            ``label`` (the option) so the caller can print it at exit 2 as-is.
     """
-    parts = (part.strip() for value in values or () for part in value.split(","))
+    kind = "YAML or JSON" if allow_yaml else "JSON"
+    if raw == "-" or raw.startswith("@"):
+        file_flag = file_option or f"{label}-file"
+        target = "stdin" if raw == "-" else raw[1:]
+        raise ValueError(
+            f"{label} takes {kind} text, got {raw!r}. To read {target}, use "
+            f"{file_flag} {'-' if raw == '-' else raw[1:]}."
+        )
+    return _loads(raw, label=label, allow_yaml=allow_yaml)
+
+
+def parse_json_file_arg(path: str | Path, *, label: str, allow_yaml: bool = False) -> Any:
+    """Read and parse the file of a ``--X-file`` structured option; ``-`` is stdin (I1).
+
+    Raises:
+        ValueError: On a missing or unreadable file or malformed content; the
+            message names ``label`` (the file option).
+    """
+    return _loads(read_input_file(path, label=label), label=label, allow_yaml=allow_yaml)
+
+
+def structured_input(
+    inline: str | None,
+    file: str | Path | None,
+    *,
+    label: str,
+    allow_yaml: bool = False,
+    file_option: str | None = None,
+) -> Any:
+    """The value of a structured option pair ``--X`` / ``--X-file`` (spec rule I1).
+
+    Returns ``None`` when neither is given.
+
+    Raises:
+        ValueError: When both are given, or on bad input; the message names
+            the options.
+    """
+    file_flag = file_option or f"{label}-file"
+    if inline is not None and file is not None:
+        raise ValueError(f"{label} and {file_flag} are mutually exclusive; pass one of them.")
+    if file is not None:
+        return parse_json_file_arg(file, label=file_flag, allow_yaml=allow_yaml)
+    if inline is not None:
+        return parse_json_arg(inline, label=label, allow_yaml=allow_yaml, file_option=file_flag)
+    return None
+
+
+def text_input(inline: str | None, file: str | Path | None, *, label: str) -> str | None:
+    """The value of a text option pair ``--X`` / ``--X-file`` (spec rule I2).
+
+    Returns ``None`` when neither is given.
+
+    Raises:
+        ValueError: When both are given, or the file cannot be read.
+    """
+    file_flag = f"{label}-file"
+    if inline is not None and file is not None:
+        raise ValueError(f"{label} and {file_flag} are mutually exclusive; pass one of them.")
+    if file is not None:
+        return read_input_file(file, label=file_flag)
+    return inline
+
+
+def split_multi(values: Iterable[str] | None, *, label: str) -> list[str]:
+    """The values of a repeatable ID or fixed-value option (spec rule A4).
+
+    One value per occurrence: ``--x a --x b`` gives ``["a", "b"]``. Whitespace
+    around a value is removed, an empty value is dropped, and a value given
+    twice is kept once, in first-seen order. A value that contains a comma is
+    ``BadParameter`` (``INVALID_ARGUMENT``, exit 2) whose message names
+    ``label`` and says to repeat the option: 0.x took ``--x a,b``. Do not use it
+    for a free-form option (JSON, ``KEY=VALUE``, SQL, text), where a comma is
+    part of the value.
+    """
+    parts = [value.strip() for value in values or ()]
+    with_comma = next((part for part in parts if "," in part), None)
+    if with_comma is not None:
+        raise typer.BadParameter(comma_value_message(label, with_comma))
     return list(dict.fromkeys(part for part in parts if part))
 
 
+def comma_value_message(label: str, value: str) -> str:
+    """The A4 refusal of a comma in one value of ``label``."""
+    return (
+        f"{label} takes one value per occurrence, got {value!r}. "
+        f"Repeat {label} once per value: {label} A {label} B."
+    )
+
+
 def split_int_multi(values: Iterable[str] | None, *, label: str) -> list[int]:
-    """``split_multi`` for integer IDs; a part that is not an integer raises ``ValueError``."""
-    parts = split_multi(values)
+    """``split_multi`` for integer IDs; a value that is not an integer raises ``ValueError``."""
+    parts = split_multi(values, label=label)
     bad = [part for part in parts if not (part.isascii() and part.isdigit())]
     if bad:
         raise ValueError(f"{label} takes integer IDs, got: {', '.join(bad)}")
     return [int(part) for part in parts]
 
 
-def read_text_arg(formatter: OutputFormatter, path: Path, *, label: str) -> str:
-    """Read a UTF-8 file option; an unreadable file is ``INVALID_ARGUMENT`` naming ``label``."""
+def read_text_arg(formatter: OutputFormatter, path: str | Path, *, label: str) -> str:
+    """Read a UTF-8 file option (``-`` is stdin); a bad file is ``INVALID_ARGUMENT`` naming ``label``."""
     try:
-        return path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as exc:
-        formatter.error(
-            message=f"{label}: cannot read file {path}: {exc}",
-            error_code=ErrorCode.INVALID_ARGUMENT,
-        )
+        return read_input_file(path, label=label)
+    except ValueError as exc:
+        formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
         raise typer.Exit(code=2) from None
 
 
@@ -156,7 +242,7 @@ def _is_file(path: str) -> bool:
 class RefuseAtFile:
     """Option callback for free text that refuses ``@<existing file>`` (spec rule I3).
 
-    Without it, ``--text @notes.md`` stores the literal text ``@notes.md``.
+    Without it, ``--description @notes.md`` stores the literal text ``@notes.md``.
     The refusal is ``INVALID_ARGUMENT`` (exit 2) with a hint that names the
     file option of the command, also for the case where the text itself starts
     with ``@``. ``@`` followed by anything that is not a file (a relative path
@@ -536,7 +622,7 @@ def item_failure_exit_code(failed: int) -> int | None:
     """Map the number of failed items of a multi-item operation to a CLI exit code.
 
     Commands that keep going after one item fails (a config in ``sync push``,
-    a project in ``org setup``, a row in ``project invite --from-csv``) used to
+    a project in ``org setup``, a row in ``project invite --file``) used to
     collect those failures into the result and still exit 0 -- so a run where
     every item failed was indistinguishable from a clean one by exit code
     alone, and a script could not tell success from total failure (issue #745).
@@ -840,10 +926,12 @@ class Deprecation:
 
 
 # C3: every deprecated or removed form, keyed by its command path and option,
-# or by its command path alone for a removed command. A key of a group and an
-# option ("agent --id") covers every command of the group. A removed form
-# stays here, so that its error can name the replacement. 1.0.0 removed the
-# forms that 0.x and the 1.0 pre-releases kept for compatibility (#791).
+# by its command path and the metavar of a removed positional argument
+# ("stream delete SOURCE_ID"), or by its command path alone for a removed
+# command. A key of a group and an option ("agent --id") covers every command
+# of the group. A removed form stays here, so that its error can name the
+# replacement. 1.0.0 removed the forms that 0.x and the 1.0 pre-releases kept
+# for compatibility (#791).
 DEPRECATIONS: dict[str, Deprecation] = {
     "stream delete --force": Deprecation(
         message="stream delete --force was removed in 1.0.0. Use --yes to skip the confirmation.",
@@ -891,16 +979,168 @@ DEPRECATIONS: dict[str, Deprecation] = {
         removed_in="1.0.0",
     ),
     "agent --id": Deprecation(
-        message="--id was removed in 1.0.0. Use --task-id or the TASK_ID argument.",
+        message="--id was removed in 1.0.0. Use --task-id.",
         hint="--task-id",
         replacement="--task-id",
         removed_in="1.0.0",
     ),
+    "semantic-layer reference-data get --id": Deprecation(
+        message="--id was removed in 1.0.0. Use --reference-data-id.",
+        hint="--reference-data-id",
+        replacement="--reference-data-id",
+        removed_in="1.0.0",
+    ),
+    "semantic-layer reference-data delete --id": Deprecation(
+        message="--id was removed in 1.0.0. Use --reference-data-id.",
+        hint="--reference-data-id",
+        replacement="--reference-data-id",
+        removed_in="1.0.0",
+    ),
+    # I2: a file option is --file or --<field>-file.
+    "storage describe-batch --from-file": Deprecation(
+        message="--from-file was removed in 1.0.0. Use --file.",
+        hint="--file",
+        replacement="--file",
+        removed_in="1.0.0",
+    ),
+    "project invite --from-csv": Deprecation(
+        message="--from-csv was removed in 1.0.0. Use --file.",
+        hint="--file",
+        replacement="--file",
+        removed_in="1.0.0",
+    ),
+    # A1: --not-null is a flag in the storage group (add-column).
+    "storage create-table --not-null": Deprecation(
+        message="--not-null was removed in 1.0.0. Use --not-null-column.",
+        hint="--not-null-column",
+        replacement="--not-null-column",
+        removed_in="1.0.0",
+    ),
+    # A3: an identifier is an option, not a positional argument.
+    "stream detail SOURCE_ID": Deprecation(
+        message="The positional SOURCE_ID was removed in 1.0.0. Use --source-id.",
+        hint="--source-id",
+        replacement="--source-id",
+        removed_in="1.0.0",
+    ),
+    "stream delete SOURCE_ID": Deprecation(
+        message="The positional SOURCE_ID was removed in 1.0.0. Use --source-id.",
+        hint="--source-id",
+        replacement="--source-id",
+        removed_in="1.0.0",
+    ),
+    **{
+        f"agent {command} TASK_ID": Deprecation(
+            message="The positional TASK_ID was removed in 1.0.0. Use --task-id.",
+            hint="--task-id",
+            replacement="--task-id",
+            removed_in="1.0.0",
+        )
+        for command in ("show", "update", "delete", "run", "runs")
+    },
+    **{
+        f"agent {command} TASK_ID": Deprecation(
+            message="The positional TASK_ID and RUN_ID were removed in 1.0.0. Use --task-id "
+            "and --run-id.",
+            hint="--task-id and --run-id",
+            replacement="--task-id",
+            removed_in="1.0.0",
+        )
+        for command in ("run-detail", "run-events")
+    },
     "branch merge": Deprecation(
         message="branch merge was removed in 1.0.0. It only printed the merge URL of the "
         "Keboola UI. Merge a dev branch with `kbagent merge-request`, or in the Keboola UI.",
         hint="kbagent merge-request",
         replacement="merge-request",
+        removed_in="1.0.0",
+    ),
+    # S1: the verb names the effect; the command cancels a pending request.
+    "semantic-layer scope request-delete": Deprecation(
+        message="semantic-layer scope request-delete was removed in 1.0.0. Use "
+        "`kbagent semantic-layer scope request-cancel`.",
+        hint="kbagent semantic-layer scope request-cancel",
+        replacement="semantic-layer scope request-cancel",
+        removed_in="1.0.0",
+    ),
+    # A4: a list option has a singular name and takes one value per occurrence.
+    **{
+        f"{command} {old}": Deprecation(
+            message=f"{old} was removed in 1.0.0. Use {new}, once per value: {new} A {new} B.",
+            hint=new,
+            replacement=new,
+            removed_in="1.0.0",
+        )
+        for command, old, new in (
+            ("org setup", "--project-ids", "--project-id"),
+            ("sharing share", "--target-project-ids", "--target-project"),
+            ("sharing share", "--target-users", "--target-user"),
+            ("semantic-layer add constraint", "--metrics", "--metric"),
+            ("semantic-layer edit constraint", "--new-metrics", "--new-metric"),
+            ("semantic-layer build", "--tables", "--table-id"),
+            ("semantic-layer import", "--types", "--type"),
+            ("semantic-layer promote", "--types", "--type"),
+            ("workspace load", "--tables", "--table-id"),
+            ("storage download-table", "--columns", "--column"),
+            ("storage unload-table", "--columns", "--column"),
+            ("token list", "--columns", "--column"),
+        )
+    },
+    # I1, I2, I6: input from files. The main input file is --file; a JSON, YAML
+    # or text value is --<field> inline and --<field>-file PATH (- = stdin).
+    **{
+        f"lineage {command} --load": Deprecation(
+            message="--load was removed in 1.0.0. Use --file.",
+            hint="--file",
+            replacement="--file",
+            removed_in="1.0.0",
+            other_names=("-l",),
+        )
+        for command in ("show", "info", "server")
+    },
+    **{
+        f"{command} {old}": Deprecation(
+            message=f"{old} was removed in 1.0.0. Use {new} TEXT, or {new}-file PATH "
+            f"(- reads stdin).",
+            hint=f"{new} or {new}-file",
+            replacement=new,
+            removed_in="1.0.0",
+        )
+        for command, new in (
+            ("storage describe-bucket", "--description"),
+            ("storage describe-table", "--description"),
+            ("project description-set", "--description"),
+            ("branch metadata-set", "--value"),
+        )
+        for old in ("--text", "--file", "--stdin")
+    },
+    "workspace query --file": Deprecation(
+        message="--file was removed in 1.0.0. Use --sql-file PATH (- reads stdin).",
+        hint="--sql-file",
+        replacement="--sql-file",
+        removed_in="1.0.0",
+    ),
+    **{
+        f"{command} {old}": Deprecation(
+            message=f"{old} was removed in 1.0.0. Use {new} with inline {kind}, or "
+            f"{new}-file PATH (- reads stdin).",
+            hint=f"{new} or {new}-file",
+            replacement=new,
+            removed_in="1.0.0",
+        )
+        for command, old, new, kind in (
+            ("agent create", "--from-file", "--definition", "JSON"),
+            ("agent test", "--from-file", "--definition", "JSON"),
+            ("flow new", "--file", "--definition", "YAML or JSON"),
+            ("flow update", "--file", "--definition", "YAML or JSON"),
+            ("flow validate", "--file", "--definition", "YAML or JSON"),
+            ("encrypt values", "--input", "--values", "JSON"),
+        )
+    },
+    "data-app secrets-set --secrets-file": Deprecation(
+        message="--secrets-file was removed in 1.0.0. Use --secret-file PATH (- reads stdin).",
+        hint="--secret-file",
+        replacement="--secret-file",
         removed_in="1.0.0",
     ),
     "GET /branches/{project}/merge-url": Deprecation(
@@ -966,6 +1206,17 @@ def removed_form(path: Sequence[str], option: str | None = None) -> Deprecation 
             command, _, name = form.rpartition(" ")
             if entry.removed_in and command == prefix and option in (name, *entry.other_names):
                 return entry
+    return None
+
+
+def removed_argument(path: Sequence[str]) -> Deprecation | None:
+    """The removed positional argument of a command path (C3), keyed "<path> <METAVAR>"."""
+    names = [ALIASES.get(path[0], path[0]), *path[1:]] if path else []
+    prefix = " ".join(names)
+    for form, entry in DEPRECATIONS.items():
+        command, _, name = form.rpartition(" ")
+        if entry.removed_in and command == prefix and name.isupper():
+            return entry
     return None
 
 

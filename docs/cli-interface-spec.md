@@ -67,12 +67,12 @@ Every rule with its level, the version from which it applies, and how it is chec
 | [A5](#A5) | MUST | now | `args.no-dead-parameter` |
 | [A6](#A6) | MUST | 1.0.0 | `args.repeated-single-value` |
 | [A7](#A7) | SHOULD for new options | now | `args.boolean-flag-shape`, review |
-| [I1](#I1) | MUST | now | `input.single-parser` |
-| [I2](#I2) | MUST | now | `input.file-option-vocabulary` |
+| [I1](#I1) | MUST | 1.0.0 | `input.single-parser` |
+| [I2](#I2) | MUST | 1.0.0 | `input.file-option-vocabulary` |
 | [I3](#I3) | MUST | 1.0.0 | `input.content-option-refuses-at-file` |
 | [I4](#I4) | MUST | 1.0.0 | `output.one-json-document`, review |
 | [I5](#I5) | SHOULD for new options | now | review |
-| [I6](#I6) | SHOULD for new options | now | review |
+| [I6](#I6) | MUST | 1.0.0 | `input.file-option-vocabulary`, `input.single-parser` |
 | [T1](#T1) | MUST | now | review, unit tests |
 | [T2](#T2) | MUST | 1.0.0 | `target.project-help-states-default` |
 | [T3](#T3) | MUST | now | `target.no-write-fanout` |
@@ -235,9 +235,9 @@ What stays as it is:
 ## 3. Arguments and options
 
 <a id="A1"></a><a id="args.global-option-one-shape"></a><a id="args.long-option-one-shape"></a>
-**A1 · MUST · now.** A global option name has one meaning and one shape in the whole tree. The global names are listed in the reviewed registry `GLOBAL_OPTIONS` (`--project`, `--branch`, `--all-projects`, `--yes`, `--force`, `--dry-run`, `--limit`, `--wait`, `--timeout`, `--json`, …). Every other long name has one meaning and one shape inside its command group. The shape is the multiplicity and the value kind (text, identifier, integer, JSON, path, flag). A `click.Choice` is text with fixed values, so it fits a text option of the same name. The multiplicity of `--project` follows T2, not this rule. `--scope`, `--target-project`, `--type` and `--job-id` keep their names and their meanings per group.
+**A1 · MUST · now.** A global option name has one meaning and one shape in the whole tree. The global names are listed in the reviewed registry `GLOBAL_OPTIONS` (`--project`, `--branch`, `--all-projects`, `--yes`, `--force`, `--dry-run`, `--limit`, `--wait`, `--timeout`, `--json`, …). Every other long name has one meaning and one shape inside its command group. The shape is the value kind (text, identifier, integer, JSON, path, flag). The number of values (one, or a repeated option) is not part of the shape, so `--project` that takes one project and `--project` that is repeated have one shape (T2). A `click.Choice` is text with fixed values, so it fits a text option of the same name. `--scope`, `--target-project`, `--type` and `--job-id` keep their names and their meanings per group.
 
-- Checked by: `args.global-option-one-shape` (deferred: the `GLOBAL_OPTIONS` registry is not reviewed yet); `args.long-option-one-shape` (report only).
+- Checked by: `args.global-option-one-shape` (deferred: the `GLOBAL_OPTIONS` registry is not reviewed yet); `args.long-option-one-shape`.
 
 <a id="A2"></a><a id="args.short-flag-one-meaning"></a><a id="args.short-flag-on-every-option"></a><a id="args.no-global-option-shadow"></a>
 **A2 · MUST · now.** One short flag maps to one long option, and every option with that long name has the short flag. The map is the `SHORT_FLAGS` registry in `scripts/check_cli_spec.py`. A new short flag needs an entry there, and the same pull request adds it to every option of its long name. A new option whose long name is in the registry declares its short flag. A long name that is not in the registry has no short flag. A command option does not reuse the name of a global option.
@@ -255,7 +255,6 @@ What stays as it is:
 | `-e` | `--email` | kbagent |
 | `-f` | `--feature` | kbagent |
 | `-i` | `--ignore-case` | kbagent |
-| `-l` | `--load` | kbagent |
 | `-m` | `--message` | kbagent |
 | `-n` | `--name` | Azure CLI (`az group create -n`) |
 | `-o` | `--output` | kbagent |
@@ -264,15 +263,15 @@ What stays as it is:
 | `-t` | `--type` | kbagent |
 | `-y` | `--yes` | kbagent |
 
-Before 1.0.0, `-p` was on 24 of the 228 `--project` options, and seven short flags had two or more meanings. kbagent 1.0.0 removes the short flags that meant another long option: `-c` (`--category`, `--column`), `-r` (`--regex`, `--role`), `-d` on `--body`, `--deny` and `--description`, `-f` on `--format`, `-l` and `-n` on `--limit` (use `-L`), `-m` on `--mode`, and `-v` on `changelog --full` (`-v` is the global `--verbose`).
+Before 1.0.0, `-p` was on 24 of the 228 `--project` options, and seven short flags had two or more meanings. kbagent 1.0.0 removes the short flags that meant another long option: `-c` (`--category`, `--column`), `-r` (`--regex`, `--role`), `-d` on `--body`, `--deny` and `--description`, `-f` on `--format`, `-l` and `-n` on `--limit` (use `-L`), `-m` on `--mode`, and `-v` on `changelog --full` (`-v` is the global `--verbose`). `-l` of `lineage --load` goes with the option, which 1.0.0 renames to `--file` (I2).
 
 <a id="A3"></a><a id="args.no-positional-arguments"></a><a id="args.no-bare-id-option"></a>
-**A3 · MUST for new commands · now.** An identifier is an option `--<noun>-id`, with one name per identifier: `--config-id` for any configuration, `--component-id`, `--project`, `--identity`. Existing positional identifiers stay accepted.
+**A3 · MUST for new commands · now.** An identifier is an option `--<noun>-id`, with one name per identifier: `--config-id` for any configuration, `--component-id`, `--project`, `--identity`. A command may take its one required main input as a positional argument when that input is not an identifier: `http get PATH`, `search QUERY`, `project use ALIAS`.
 
-- Checked by: `args.no-positional-arguments`, `args.no-bare-id-option` (both report only).
+- Checked by: `args.no-positional-arguments` reports a positional argument that is optional, that is one of two or more positional arguments of a command, or whose metavar ends with `_ID`; `args.no-bare-id-option` reports a generic `--id`.
 
 <a id="A4"></a><a id="args.list-option-repeatable"></a>
-**A4 · MUST · now for new options; 1.0.0 for existing ones.** A list-valued option is repeatable. An option whose values are IDs or fixed values (project IDs, table IDs, types) also accepts a comma list in one occurrence. An option with free-form values (JSON, `KEY=VALUE`, `PATH=VALUE`, SQL, text; for example `transformation edit --op`, `config update --set`, `config variables-set --var`) is repeat-only, because a comma can be part of the value. `split_multi()` in `commands/_helpers.py` flattens the values of an ID or fixed-value option. From 1.0.0 this covers the nine options that took one comma string before (`org setup --project-ids`, `sharing share --target-project-ids` and `--target-users`, and six `semantic-layer` options); in 0.x they take one comma string.
+**A4 · MUST · now for new options; 1.0.0 for existing ones.** A list-valued option is repeatable and takes one value per occurrence. Option names are singular. A comma in a value of an ID or fixed-value option (project IDs, table IDs, column names, types) is a usage error: `INVALID_ARGUMENT`, exit 2, with a message that names the option and says to repeat it once per value. `split_multi()` in `commands/_helpers.py` reads the values of such an option and refuses the comma. An option with free-form values (JSON, `KEY=VALUE`, `PATH=VALUE`, SQL, text; for example `transformation edit --op`, `config update --set`, `config variables-set --var`) does not check for a comma, because a comma can be part of the value. In 0.x, nine list options took one comma string, and twelve list options had a plural name. kbagent 1.0.0 renames them (`org setup --project-id`, `sharing share --target-project` and `--target-user`, `semantic-layer add constraint --metric`, `edit constraint --new-metric`, `build --table-id`, `import` and `promote --type`, `workspace load --table-id`, `--column` of `storage download-table`, `storage unload-table` and `token list`), and an old name is a usage error that names the new one (C3).
 
 - Checked by: `args.list-option-repeatable`.
 
@@ -295,24 +294,25 @@ Before 1.0.0, `-p` was on 24 of the 228 `--project` options, and seven short fla
 ## 4. Input
 
 <a id="I1"></a><a id="input.single-parser"></a>
-**I1 · MUST · now.** A structured value (JSON or YAML) accepts inline text, `@path`, and `-` for stdin, with the behavior of `parse_json_arg` in `commands/_helpers.py`, and every structured option calls it (`allow_yaml=True` for YAML). The only other code that reads an `@` value is the refusal of I3.
+**I1 · MUST · 1.0.0.** A structured value (JSON or YAML) has two options: `--X` takes the text inline, and a sibling `--X-file PATH` reads it from a file, where the path `-` reads stdin. The two options are mutually exclusive: both given is a usage error that names both. `@` never reads a file, and `-` is not a value of the inline option. An inline value `@path` or `-` is refused with an error that names `--X-file`, so a 0.x script gets the fix. `structured_input()` in `commands/_helpers.py` reads such a pair: `parse_json_arg` for the inline text and `parse_json_file_arg` for the file, with one set of parse rules and error messages (`allow_yaml=True` for YAML). In 0.x, the inline option also took `@path` and `-`, and some commands took the structured value only as a file (`dev-portal --data`) or under another name (`encrypt values --input`, `agent --from-file`, `flow --file`).
 
-- Checked by: `input.single-parser`.
+- Why: one rule for input from files, like `git commit -m TEXT` / `-F FILE` and gcloud `--metadata` / `--metadata-from-file`. A value that starts with `@` is never a guess between text and a file name.
+- Checked by: `input.single-parser` (no code looks at an `@` value except `parse_json_arg` and the refusal of I3; no code reads stdin except `read_input_file` and the secret reader of I5; no code builds an `@path` value for `parse_json_arg`).
 
 <a id="I2"></a><a id="input.file-option-vocabulary"></a>
-**I2 · MUST · now.** An option named `--file`, `--*-file` or `--from-file` that carries text or data takes a path or `-`, and never treats a mistyped path as content. Listed legacy: `flow new/update/validate --file` and `agent create/test --from-file` also accept inline content. A new file option is named `--<field>-file`, or `--file` when the file is the main input of the command. `--from-file` is not used for new options.
+**I2 · MUST · 1.0.0.** An option that reads a file is `--file PATH` when the file is the main input of the command (`storage upload-table`, `storage describe-batch`, `project invite`, `semantic-layer import`, `lineage show`), and `--<field>-file PATH` next to the option `--<field>` that takes the same value inline (`--description` / `--description-file`, `--sql` / `--sql-file`, `--configuration` / `--configuration-file`). A secret file option sits next to `--<field>-env` or `--<field>-stdin` instead (`--token-file`, `--git-pat-file`). The path `-` reads stdin where the option reads text or data. A file option never treats a mistyped path as content. `--from-file`, `--from-csv`, `--input`, `--load` and `--stdin` are not used. Output files (`--output`, `--output-file`, `--output-dir`) are not covered.
 
 - Why: an inline fallback would store or upload a mistyped path as content.
-- Checked by: `input.file-option-vocabulary` (report only).
+- Checked by: `input.file-option-vocabulary` (a `--X-file` without a sibling `--X`, `--X-env` or `--X-stdin`, and the names that are not used).
 
 <a id="I3"></a><a id="input.content-option-refuses-at-file"></a>
-**I3 · MUST · 1.0.0.** A free-text content option refuses a value that is `@` followed by the path of an existing file (a relative path is relative to the current directory), with exit 2 and a hint that names the file option. The hint also says how to store text that starts with `@`: write it to a file and pass that file with the file option. The option declares `callback=RefuseAtFile("--file").callback` (`commands/_helpers.py`); `@` followed by anything that is not a file stays text. In 1.0.0 this covers only five options: `--text` of the four commands that use `resolve_text_input` and `transformation create --sql` (`transformation edit` has no `--sql`). The other free-text options follow after 1.0.0 and store `@<file>` as text until then. In 0.x, such a value is stored as text. A free-text content option is an option of a write, destructive or admin command whose name is in `CONTENT_OPTIONS` in `scripts/check_cli_spec.py`.
+**I3 · MUST · 1.0.0.** A free-text content option refuses a value that is `@` followed by the path of an existing file (a relative path is relative to the current directory), with exit 2 and a hint that names the sibling `--<field>-file` option (I2). The hint also says how to store text that starts with `@`: write it to a file and pass that file with the file option. The option declares `callback=RefuseAtFile("--<field>-file").callback` (`commands/_helpers.py`); `@` followed by anything that is not a file stays text. In 1.0.0 this covers only five options: `--description` of `project description-set`, `storage describe-bucket` and `storage describe-table`, `--value` of `branch metadata-set`, and `transformation create --sql` (`transformation edit` has no `--sql`). The other free-text options follow after 1.0.0 and store `@<file>` as text until then. In 0.x, such a value is stored as text. A free-text content option is an option of a write, destructive or admin command whose name is in `CONTENT_OPTIONS` in `scripts/check_cli_spec.py`; an option of such a name that takes JSON or YAML (I1) is in `STRUCTURED_OPTIONS` there.
 
 - Why: project and branch metadata keep no old value, so a wrong guess cannot be undone.
 - Checked by: `input.content-option-refuses-at-file` (the options without the refusal are in the baseline).
 
 <a id="I4"></a>
-**I4 · MUST · 1.0.0.** A bad input value is a usage error (exit 2, `INVALID_ARGUMENT`) that names the option, never a traceback. In 0.x, some bad values end in a traceback with exit 1. Known gaps in 1.0.0: the structured options that exited 2 before 1.0.0 keep their error code (`config` `--configuration`, `--state` and `--config-data`: `VALIDATION_ERROR`; `encrypt values --input`: `INPUT_ERROR`; `agent --from-file` and `--runtime-input`: `INVALID_FORMAT`; `flow --file`: `VALIDATION_ERROR`; `data-app create --description-file`: `READ_ERROR`, exit 1; `data-app secrets-set --secrets-file`: `DATA_APP_INVALID_SECRET`; `semantic-layer reference-data set --members-file`: `VALIDATION_ERROR`). A value refused by Click's type check or by `typer.BadParameter` is `INVALID_ARGUMENT` too (the root command class maps `BadParameter`); a missing required option stays `USAGE_ERROR`.
+**I4 · MUST · 1.0.0.** A bad input value is a usage error (exit 2, `INVALID_ARGUMENT`) that names the option, never a traceback. In 0.x, some bad values end in a traceback with exit 1. Known gaps in 1.0.0: the structured options that exited 2 before 1.0.0 keep their error code (`config` `--configuration`, `--state` and `--config-data`: `VALIDATION_ERROR`; `encrypt values --values`: `INPUT_ERROR`; `agent --definition` and `--runtime-input`: `INVALID_FORMAT`; `flow --definition`: `VALIDATION_ERROR`; `data-app create --description-file`: `READ_ERROR`, exit 1; `data-app secrets-set --secret-file`: `DATA_APP_INVALID_SECRET`; `semantic-layer reference-data set --members`: `VALIDATION_ERROR`; each with its `--X-file` sibling). A value refused by Click's type check or by `typer.BadParameter` is `INVALID_ARGUMENT` too (the root command class maps `BadParameter`); a missing required option stays `USAGE_ERROR`.
 
 - Checked by: `output.one-json-document` (crash case) and review.
 
@@ -322,9 +322,9 @@ Before 1.0.0, `-p` was on 24 of the 228 `--project` options, and seven short fla
 - Checked by: review.
 
 <a id="I6"></a>
-**I6 · SHOULD for new options · now.** Standard input is `-` as the value of a file option (I2) or of a structured option (I1). A new command adds no `--stdin` flag. The four existing `--stdin` flags (`project description-set`, `storage describe-bucket`, `storage describe-table`, `branch metadata-set`) stay. `--*-stdin` for secrets (I5) stays.
+**I6 · MUST · 1.0.0.** Standard input is `-` as the value of a file option (I2), for example `--configuration-file -` or `--description-file -`. No command has a `--stdin` flag, and `-` is not a value of an inline option (I1). The `--*-stdin` flags for secrets (I5: `--token-stdin`, `--password-stdin`) stay. In 0.x, `project description-set`, `storage describe-bucket`, `storage describe-table` and `branch metadata-set` had a `--stdin` flag, and the structured options took `-` inline.
 
-- Checked by: review.
+- Checked by: `input.file-option-vocabulary` (no `--stdin`), `input.single-parser` (stdin is read only by `read_input_file` and the secret reader).
 
 ## 5. Target selection
 
@@ -406,7 +406,7 @@ Before 1.0.0, `-p` was on 24 of the 228 `--project` options, and seven short fla
 - Checked by: review.
 
 <a id="T16"></a>
-**T16 · MUST · now.** An option that names a registered project takes its alias or its project ID: `--project` on every command, `KBAGENT_PROJECT`, `project use`, `sync clone --target`, `config clone --target-project`, `--stack` on the `auth` commands, the project options of `semantic-layer promote` and `semantic-layer diff`, and the project parameters in `kbagent serve` paths and queries. An alias wins; kbagent looks up the ID only when no alias matches. An alias that is also the ID of another registered project gives a warning on stderr. An ID that matches several registered projects is `CONFIG_ERROR` with the matching aliases, except when all matches are on one stack and exactly one of them has a session token. kbagent translates the ID to the alias once, before the command runs, and `targets` names the alias. An option whose value is a new alias (`project add --alias`) takes no ID. A new option that names a target project that does not have to be registered takes a registered alias or a project ID, repeatable or as a comma list (A4). REST request bodies are not covered yet.
+**T16 · MUST · now.** An option that names a registered project takes its alias or its project ID: `--project` on every command, `KBAGENT_PROJECT`, `project use`, `sync clone --target`, `config clone --target-project`, `--stack` on the `auth` commands, the project options of `semantic-layer promote` and `semantic-layer diff`, and the project parameters in `kbagent serve` paths and queries. An alias wins; kbagent looks up the ID only when no alias matches. An alias that is also the ID of another registered project gives a warning on stderr. An ID that matches several registered projects is `CONFIG_ERROR` with the matching aliases, except when all matches are on one stack and exactly one of them has a session token. kbagent translates the ID to the alias once, before the command runs, and `targets` names the alias. An option whose value is a new alias (`project add --alias`) takes no ID. A new option that names a target project that does not have to be registered takes a registered alias or a project ID, one per occurrence, and is repeated for more projects (A4): `semantic-layer --target-project`, `sharing share --target-project`. REST request bodies are not covered yet.
 
 - Checked by: review and unit tests (`tests/test_project_ref.py`).
 
@@ -562,7 +562,7 @@ The message names the fix (E7). A refusal that uses another code today keeps it,
 
 A flag that raises the class is in `FLAG_ESCALATIONS` and is checked where the flag is read (`sync.push --force`, the `--scope organization` entries, `config.variables-set --replace`). `token.refresh` and `workspace.password` are `destructive`. Declared deviation: the full load of `storage upload-table` and `storage load-file` replaces data and stays `write`; the help and the `--dry-run` output say that it replaces data. Categories and deny policies describe effects on Keboola, not on local files: `sync pull --theirs` stays `read`, its help names the effect, and `--dry-run` shows it.
 
-- Checked by: review; `safety.destructive-verb-category` (report only).
+- Checked by: review; `safety.destructive-verb-category` (a delete-like verb is `destructive` or `admin`; it skips the commands in `LOCAL_ONLY_COMMANDS` of `scripts/check_cli_spec.py`, which change only local files).
 
 <a id="S2"></a><a id="safety.destructive-has-dry-run"></a><a id="safety.destructive-has-yes"></a><a id="safety.write-has-dry-run"></a>
 **S2 · MUST · now.** A `destructive` command has `--dry-run` and `--yes`. Recorded exceptions, each with its reason in the baseline: `config delete` (soft delete; `config restore` undoes it), `dev-portal deprecate` (a random code on a terminal), `http delete` (raw client; the `http` permission check applies), and the merge-request transitions (an explicit target under `--json`). `branch delete` and `workspace delete` get `--yes`, a read-only `--dry-run` and a confirmation in 1.0.0. `safety.write-has-dry-run` (report only) counts `write` commands without `--dry-run`; it measures, and no rule requires it.
@@ -650,7 +650,7 @@ A flag that raises the class is in `FLAG_ESCALATIONS` and is checked where the f
 <a id="L5"></a><a id="lists.list-has-limit"></a>
 **L5 · SHOULD · now.** Sort options are `--sort-by` and `--sort-order`. A list command backed by an API has `--limit` with a documented default.
 
-- Checked by: `lists.list-has-limit` (report only).
+- Checked by: `lists.list-has-limit`.
 
 <a id="L6"></a>
 **L6 · SHOULD for new options · now.** A filter option is named after the field it matches (`--component-id`, `--config-id`, `--status`, `--type`). A free-text match is `--query`, with a `--regex` flag when a pattern is allowed. Several filters combine with AND. A filter takes one value, unless the API accepts several; then it follows A4.

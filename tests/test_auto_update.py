@@ -597,7 +597,7 @@ class TestMaybeAutoUpdate:
             mock_write.assert_not_called()
 
     @patch("keboola_agent_cli.auto_update._read_cache", return_value=None)
-    @patch("keboola_agent_cli.auto_update.fetch_gated_release", return_value=_gated("1.1.0"))
+    @patch("keboola_agent_cli.auto_update.fetch_gated_release", return_value=_gated("1.2.0"))
     @patch("keboola_agent_cli.auto_update._write_cache")
     @patch("keboola_agent_cli.auto_update._is_up_to_date", return_value=True)
     def test_cache_stale_fetches(self, mock_up_to_date, mock_write, mock_fetch, mock_cache):
@@ -607,7 +607,7 @@ class TestMaybeAutoUpdate:
         # args) so the test inspects call_args.kwargs.
         mock_write.assert_called_once()
         kwargs = mock_write.call_args.kwargs
-        assert kwargs.get("latest_version") == "1.1.0"
+        assert kwargs.get("latest_version") == "1.2.0"
         assert set(kwargs) == {"latest_version", "next_major_keys"}
 
     @patch("keboola_agent_cli.auto_update._read_cache", return_value=None)
@@ -622,7 +622,7 @@ class TestMaybeAutoUpdate:
         mock_update.assert_not_called()
 
     @patch("keboola_agent_cli.auto_update._read_cache", return_value=None)
-    @patch("keboola_agent_cli.auto_update.fetch_gated_release", return_value=_gated("1.1.0"))
+    @patch("keboola_agent_cli.auto_update.fetch_gated_release", return_value=_gated("1.2.0"))
     @patch("keboola_agent_cli.auto_update._write_cache")
     @patch("keboola_agent_cli.auto_update._is_up_to_date", return_value=False)
     @patch(
@@ -642,12 +642,12 @@ class TestMaybeAutoUpdate:
     ):
         maybe_auto_update()
         mock_update.assert_called_once()
-        assert mock_update.call_args.args == ("1.1.0",)
+        assert mock_update.call_args.args == ("1.2.0",)
         assert "command" in mock_update.call_args.kwargs
         mock_reexec.assert_called_once()
 
     @patch("keboola_agent_cli.auto_update._read_cache", return_value=None)
-    @patch("keboola_agent_cli.auto_update.fetch_gated_release", return_value=_gated("1.1.0"))
+    @patch("keboola_agent_cli.auto_update.fetch_gated_release", return_value=_gated("1.2.0"))
     @patch("keboola_agent_cli.auto_update._write_cache")
     @patch("keboola_agent_cli.auto_update._is_up_to_date", return_value=False)
     @patch(
@@ -671,7 +671,7 @@ class TestMaybeAutoUpdate:
         mock_reexec.assert_not_called()
 
     @patch("keboola_agent_cli.auto_update._read_cache", return_value=None)
-    @patch("keboola_agent_cli.auto_update.fetch_gated_release", return_value=_gated("1.1.0"))
+    @patch("keboola_agent_cli.auto_update.fetch_gated_release", return_value=_gated("1.2.0"))
     @patch("keboola_agent_cli.auto_update._is_up_to_date", return_value=False)
     @patch(
         "keboola_agent_cli.auto_update._perform_update",
@@ -751,7 +751,8 @@ class TestGetCachePath:
     """Tests for _get_cache_path()."""
 
     def test_returns_path_with_filename(self):
-        path = _get_cache_path()
+        with patch("keboola_agent_cli.auto_update.__version__", "0.100.0"):
+            path = _get_cache_path()
         assert path.name == "version_cache.json"
         assert "keboola-agent-cli" in str(path)
 
@@ -1128,7 +1129,7 @@ class TestStartupDefersTheReinstall:
             ),
             patch(
                 "keboola_agent_cli.auto_update.fetch_gated_release",
-                return_value=_gated("1.1.0"),
+                return_value=_gated("1.2.0"),
             ),
             patch("keboola_agent_cli.auto_update._is_up_to_date", return_value=False),
             patch("keboola_agent_cli.auto_update.__version__", "1.0.0"),
@@ -1152,7 +1153,7 @@ class TestStartupDefersTheReinstall:
         mock_reexec.assert_not_called()
         request = mock_request.call_args.args[0]
         assert request.from_version == "1.0.0"
-        assert request.target_version == "1.1.0"
+        assert request.target_version == "1.2.0"
         # The hardlink retry (#786) is derived from the same install command.
         mock_retry.assert_called_once_with(request.install_command)
         assert request.hardlink_retry_command == ("uv", "retry-in-copy-mode")
@@ -1338,7 +1339,8 @@ class TestFrozenBuildGuard:
         mock_plan.assert_not_called()
 
     def test_frozen_notification_names_the_real_channel(self, capsys):
-        self._run_frozen(cached=False)
+        with patch("keboola_agent_cli.auto_update.__version__", "0.100.0"):
+            self._run_frozen(cached=False)
         stderr = capsys.readouterr().err
         assert "choco upgrade keboola-cli2" in stderr
         assert "0.999.0" in stderr

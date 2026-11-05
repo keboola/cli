@@ -4,7 +4,7 @@ All transport / env-var resolution lives in
 ``services/http_forwarder_service.py``; this command layer only does
 what CONTRIBUTING.md §3-Layer architecture requires of commands:
 
-1. Parse Typer arguments (``--body`` through ``parse_json_arg``).
+1. Parse Typer arguments (``--body`` / ``--body-file`` through ``structured_input``).
 2. Call the service method.
 3. Format and output the result via ``OutputFormatter``.
 4. Catch :class:`ForwarderError` and map ``exit_code`` to ``typer.Exit``.
@@ -16,6 +16,7 @@ of :mod:`keboola_agent_cli.services.http_forwarder_service`.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 import typer
@@ -28,7 +29,7 @@ from ..services.http_forwarder_service import (
     ForwarderError,
     HttpForwarderService,
 )
-from ._helpers import check_cli_permission, get_formatter, parse_json_arg
+from ._helpers import check_cli_permission, get_formatter, structured_input
 
 http_app = typer.Typer(
     help=(
@@ -85,17 +86,16 @@ def _do_request(
     path: str,
     body: str | None,
     timeout: float,
+    body_file: Path | None = None,
 ) -> None:
     """Shared dispatch for get/post/patch/delete -- thin wrapper layer."""
     formatter = get_formatter(ctx)
     service = _resolve_service(ctx)
-    payload: Any = None
-    if body:
-        try:
-            payload = parse_json_arg(body, label="--body")
-        except ValueError as exc:
-            formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
-            raise typer.Exit(code=exit_code_for(ErrorCode.INVALID_ARGUMENT)) from None
+    try:
+        payload: Any = structured_input(body or None, body_file, label="--body")
+    except ValueError as exc:
+        formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
+        raise typer.Exit(code=exit_code_for(ErrorCode.INVALID_ARGUMENT)) from None
     try:
         result: ForwardedResponse = service.request(
             method,
@@ -134,14 +134,20 @@ def http_post(
     body: str | None = typer.Option(
         None,
         "--body",
-        help="JSON body: inline JSON, @file.json, or - for stdin",
+        help="JSON body, inline",
+    ),
+    body_file: Path | None = typer.Option(
+        None,
+        "--body-file",
+        help="Read the JSON body from a file (- for stdin)",
+        allow_dash=True,
     ),
     timeout: float = typer.Option(
         HTTP_DEFAULT_TIMEOUT, "--timeout", help="Request timeout (seconds)"
     ),
 ) -> None:
     """POST to an endpoint on the running kbagent serve."""
-    _do_request(ctx, "POST", path, body=body, timeout=timeout)
+    _do_request(ctx, "POST", path, body=body, timeout=timeout, body_file=body_file)
 
 
 @http_app.command("patch")
@@ -151,14 +157,20 @@ def http_patch(
     body: str | None = typer.Option(
         None,
         "--body",
-        help="JSON body: inline JSON, @file.json, or - for stdin",
+        help="JSON body, inline",
+    ),
+    body_file: Path | None = typer.Option(
+        None,
+        "--body-file",
+        help="Read the JSON body from a file (- for stdin)",
+        allow_dash=True,
     ),
     timeout: float = typer.Option(
         HTTP_DEFAULT_TIMEOUT, "--timeout", help="Request timeout (seconds)"
     ),
 ) -> None:
     """PATCH an endpoint on the running kbagent serve."""
-    _do_request(ctx, "PATCH", path, body=body, timeout=timeout)
+    _do_request(ctx, "PATCH", path, body=body, timeout=timeout, body_file=body_file)
 
 
 @http_app.command("delete")

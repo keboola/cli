@@ -268,7 +268,7 @@ class TestCreate:
         mock.post_item.return_value = _item(scope="targeted")
 
         service.create_policy(
-            "prod", table="in.c-crm.invoices", rules=_RULES, target_projects=["7,8"]
+            "prod", table="in.c-crm.invoices", rules=_RULES, target_projects=["7", "8"]
         )
 
         assert mock.post_item.call_args.kwargs["target_project_ids"] == [7, 8]

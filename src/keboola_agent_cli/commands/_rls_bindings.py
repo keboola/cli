@@ -74,12 +74,12 @@ def register(app: typer.Typer) -> None:
         rls_policy: list[str] | None = typer.Option(
             None,
             "--rls-policy",
-            help="RLS policy ID to bind (repeatable or comma-separated)",
+            help="RLS policy ID to bind (repeatable, one per occurrence)",
         ),
         cls_policy: list[str] | None = typer.Option(
             None,
             "--cls-policy",
-            help="CLS policy ID to bind (repeatable or comma-separated)",
+            help="CLS policy ID to bind (repeatable, one per occurrence)",
         ),
         stack_id: str | None = typer.Option(
             None, "--stack-id", envvar=ENV_STACK_ID, help=STACK_ID_HELP
@@ -100,8 +100,8 @@ def register(app: typer.Typer) -> None:
             project,
             workspace_id,
             stack_id=stack_id,
-            rls_policies=split_multi(rls_policy),
-            cls_policies=split_multi(cls_policy),
+            rls_policies=split_multi(rls_policy, label="--rls-policy"),
+            cls_policies=split_multi(cls_policy, label="--cls-policy"),
             dry_run=dry_run,
         )
         if formatter.json_mode:

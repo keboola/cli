@@ -35,7 +35,7 @@ SERVE_COMMAND_MAP: dict[tuple[str, str], str] = {
     (
         "DELETE",
         "/semantic-layer/scope/{context_id}/elevation-request",
-    ): "semantic-layer scope request-delete",
+    ): "semantic-layer scope request-cancel",
     ("DELETE", "/semantic-layer/scope/{context_id}/target-projects"): "semantic-layer scope remove",
     ("DELETE", "/semantic-layer/models/{model}"): "semantic-layer model delete",
     (
@@ -177,6 +177,7 @@ SERVE_COMMAND_MAP: dict[tuple[str, str], str] = {
     ("PATCH", "/cls/{project}/{policy_id}"): "cls update",
     ("PATCH", "/configs/{project}/{component_id}/{config_id}"): "config update",
     ("PATCH", "/configs/{project}/{component_id}/{config_id}/variables"): "config variables-set",
+    ("PATCH", "/data-apps/{project}/{app_id}/git-auth"): "data-app git-auth-set",
     ("PATCH", "/data-apps/{project}/{app_id}/secrets"): "data-app secrets-set",
     ("PATCH", "/merge-requests/{project}/{merge_request_id}"): "merge-request update",
     ("PATCH", "/configs/{project}/{component_id}/{config_id}/rows/{row_id}"): "config row-update",

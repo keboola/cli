@@ -6791,7 +6791,7 @@ class TestOrgSetupBasic:
         assert output["error"]["code"] == "INVALID_TOKEN"
 
     def test_missing_org_id_and_project_ids_exit_2(self) -> None:
-        """org setup without --org-id and --project-ids exits with code 2."""
+        """org setup without --org-id and --project-id exits with code 2."""
         with patch(
             "keboola_agent_cli.commands.org.resolve_manage_token",
             return_value="manage-token-123456789012345678",
@@ -6811,7 +6811,7 @@ class TestOrgSetupBasic:
         assert result.exit_code == 2, f"Exit code {result.exit_code}: {result.output}"
 
     def test_project_ids_json_output(self, tmp_path: Path) -> None:
-        """org setup --project-ids with --json outputs structured success."""
+        """org setup --project-id with --json outputs structured success."""
         config_dir = tmp_path / "config"
         config_dir.mkdir()
         store = ConfigStore(config_dir=config_dir)
@@ -6856,8 +6856,10 @@ class TestOrgSetupBasic:
                     "--json",
                     "org",
                     "setup",
-                    "--project-ids",
-                    "901,9621",
+                    "--project-id",
+                    "901",
+                    "--project-id",
+                    "9621",
                     "--url",
                     "https://connection.keboola.com",
                     "--dry-run",

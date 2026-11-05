@@ -56,7 +56,7 @@ NOT_A_TARGET_COMMANDS: frozenset[tuple[str, ...]] = frozenset(
 # Commands that decide in their body what an omitted single --project means:
 # - `flow schema` / `flow validate`: the T1 chain, but when it finds no
 #   project they work offline (the bundled schema, the semantic checks).
-# - `project invite`: with --from-csv the projects come from the file, and
+# - `project invite`: with --file the projects come from the file, and
 #   --project is refused; without it, the body uses the T1 chain.
 OWN_PROJECT_DEFAULT_COMMANDS: frozenset[tuple[str, ...]] = frozenset(
     {

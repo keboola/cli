@@ -73,8 +73,8 @@ transitive package; without the flag uv silently resolves an ancient version.)
 
 ## Migrating a scheduled task
 
-1. `kbagent agent show TASK_ID` -- read the old `params` (tool, project, input).
+1. `kbagent agent show --task-id TASK_ID` -- read the old `params` (tool, project, input).
 2. Find the native command in the table above.
-3. `kbagent agent update TASK_ID` cannot change the action type -- create a new
+3. `kbagent agent update --task-id TASK_ID` cannot change the action type -- create a new
    task with `--type cli_command --argv <cmd> --argv <sub> --argv --project=ALIAS ...`
-   and `kbagent agent delete OLD_ID --yes`.
+   and `kbagent agent delete --task-id OLD_ID --yes`.

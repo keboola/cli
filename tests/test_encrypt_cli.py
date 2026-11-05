@@ -81,7 +81,7 @@ class TestEncryptValuesJson:
                     "prod",
                     "--component-id",
                     "keboola.ex-db-snowflake",
-                    "--input",
+                    "--values",
                     '{"#password": "secret123"}',
                 ],
             )
@@ -128,7 +128,7 @@ class TestEncryptValuesJson:
                     "prod",
                     "--component-id",
                     "keboola.ex-db-snowflake",
-                    "--input",
+                    "--values",
                     '{"#key1": "val1", "#key2": "val2"}',
                 ],
             )
@@ -144,7 +144,7 @@ class TestEncryptValuesFileInput:
     """Tests for @file and stdin input modes."""
 
     def test_encrypt_values_file_input(self, tmp_path: Path) -> None:
-        """@file.json input reads from file and passes parsed JSON to service."""
+        """--values-file reads the JSON from a file and passes it to the service."""
         config_dir = tmp_path / "config"
         config_dir.mkdir()
 
@@ -178,8 +178,8 @@ class TestEncryptValuesFileInput:
                     "prod",
                     "--component-id",
                     "keboola.ex-db-snowflake",
-                    "--input",
-                    f"@{input_file}",
+                    "--values-file",
+                    str(input_file),
                 ],
             )
 
@@ -224,7 +224,7 @@ class TestEncryptValuesFileInput:
                     "prod",
                     "--component-id",
                     "keboola.ex-db-snowflake",
-                    "--input",
+                    "--values-file",
                     "-",
                 ],
                 input='{"#token": "abc"}',
@@ -276,7 +276,7 @@ class TestEncryptValuesOutputFile:
                     "prod",
                     "--component-id",
                     "keboola.ex-db-snowflake",
-                    "--input",
+                    "--values",
                     '{"#password": "secret"}',
                     "--output-file",
                     str(output_file),
@@ -326,7 +326,7 @@ class TestEncryptValuesErrors:
                     "prod",
                     "--component-id",
                     "keboola.ex-db-snowflake",
-                    "--input",
+                    "--values",
                     "not-valid-json{",
                 ],
             )
@@ -363,7 +363,7 @@ class TestEncryptValuesErrors:
                     "values",
                     "--component-id",
                     "keboola.ex-db-snowflake",
-                    "--input",
+                    "--values",
                     '{"#x": "y"}',
                 ],
             )
@@ -400,7 +400,7 @@ class TestEncryptValuesErrors:
                     "prod",
                     "--component-id",
                     "keboola.ex-db-snowflake",
-                    "--input",
+                    "--values",
                     '{"password": "secret"}',
                 ],
             )
@@ -445,7 +445,7 @@ class TestEncryptValuesErrors:
                     "prod",
                     "--component-id",
                     "keboola.ex-db-snowflake",
-                    "--input",
+                    "--values",
                     '{"#password": "secret"}',
                 ],
             )
