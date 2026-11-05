@@ -16,7 +16,9 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
+from ..constants import DEFINITION_VALIDATION_ERROR_CODE
 from ..effective_branch import resolve_branch
+from ..errors import KeboolaApiError
 from .base import BaseService, item_failure
 
 logger = logging.getLogger(__name__)
@@ -58,6 +60,36 @@ def effective_definition(table: dict[str, Any]) -> dict[str, Any]:
         if isinstance(source_definition, dict):
             return source_definition
     return {}
+
+
+def is_unchanged_description(
+    client: Any,
+    error: KeboolaApiError,
+    table_id: str,
+    description: str,
+    branch_id: int | None,
+) -> bool:
+    """Whether a rejected table-description write left the requested text in place.
+
+    Storage answers a definition PUT that changes nothing with HTTP 400 and
+    ``DEFINITION_VALIDATION_ERROR_CODE``, but uses the same code for other
+    validation failures. The table is read again and only a stored
+    ``definition.description`` equal to ``description`` counts as unchanged.
+    A failed re-read counts as not unchanged, so the caller raises the
+    original error.
+    """
+    if error.status_code != 400:
+        return False
+    if error.details.get("api_error_code") != DEFINITION_VALIDATION_ERROR_CODE:
+        return False
+    try:
+        table = client.get_table_detail(table_id, branch_id=branch_id)
+    except KeboolaApiError:
+        logger.debug(
+            "describe_table %s: re-read after a rejected write failed", table_id, exc_info=True
+        )
+        return False
+    return (effective_definition(table).get("description") or "") == description
 
 
 def column_definition(column: Any) -> dict[str, Any]:

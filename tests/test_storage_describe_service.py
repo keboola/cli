@@ -120,6 +120,20 @@ class TestDescribeBucketService:
 _JOB_RESPONSE = {"id": 123, "status": "success", "operationName": "tableDefinitionUpdate"}
 
 
+def _definition_rejection(
+    api_error_code: str = "storage.tables.definitionUpdateValidationFailed",
+    status_code: int = 400,
+) -> KeboolaApiError:
+    """Build the error a rejected table-definition PUT raises."""
+    return KeboolaApiError(
+        message="No table definition changes were provided",
+        status_code=status_code,
+        error_code="API_ERROR",
+        retryable=False,
+        details={"api_error_code": api_error_code},
+    )
+
+
 class TestDescribeTableService:
     """Tests for StorageService.describe_table()."""
 
@@ -170,24 +184,133 @@ class TestDescribeTableService:
             branch_id=99,
         )
 
-    def test_unchanged_description_is_a_no_op(self, tmp_path: Path) -> None:
+    def test_unchanged_description_reports_unchanged(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.update_table_definition.side_effect = _definition_rejection()
+        mock_client.get_table_detail.return_value = _table_detail(
+            definition={"description": "same", "columns": []}
+        )
+        service = _make_service(store, mock_client)
+
+        result = service.describe_table(
+            alias="prod", table_id="in.c-sales.orders", description="same", branch_id=99
+        )
+
+        assert result["status"] == "unchanged"
+        assert result["result"] is None
+        assert result["description"] == "same"
+        assert "unchanged" in result["message"]
+        mock_client.get_table_detail.assert_called_once_with("in.c-sales.orders", branch_id=99)
+        mock_client.close.assert_called_once()
+
+    def test_success_reports_updated(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.update_table_definition.return_value = _JOB_RESPONSE
+        service = _make_service(store, mock_client)
+
+        result = service.describe_table(
+            alias="prod", table_id="in.c-sales.orders", description="new"
+        )
+
+        assert result["status"] == "updated"
+        assert "Description set" in result["message"]
+        mock_client.get_table_detail.assert_not_called()
+
+    def test_validation_code_with_different_stored_text_raises_original(
+        self, tmp_path: Path
+    ) -> None:
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        rejection = _definition_rejection()
+        mock_client.update_table_definition.side_effect = rejection
+        mock_client.get_table_detail.return_value = _table_detail(
+            definition={"description": "something else", "columns": []}
+        )
+        service = _make_service(store, mock_client)
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.describe_table(alias="prod", table_id="in.c-sales.orders", description="new")
+
+        assert excinfo.value is rejection
+        mock_client.get_table_detail.assert_called_once()
+        mock_client.close.assert_called_once()
+
+    def test_validation_code_with_no_stored_definition_raises_original(
+        self, tmp_path: Path
+    ) -> None:
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        rejection = _definition_rejection()
+        mock_client.update_table_definition.side_effect = rejection
+        mock_client.get_table_detail.return_value = _table_detail(definition=[])
+        service = _make_service(store, mock_client)
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.describe_table(alias="prod", table_id="in.c-sales.orders", description="new")
+
+        assert excinfo.value is rejection
+
+    def test_failed_reread_raises_original(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        rejection = _definition_rejection()
+        mock_client.update_table_definition.side_effect = rejection
+        mock_client.get_table_detail.side_effect = KeboolaApiError(
+            message="Service unavailable",
+            status_code=503,
+            error_code="API_ERROR",
+            retryable=True,
+        )
+        service = _make_service(store, mock_client)
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.describe_table(alias="prod", table_id="in.c-sales.orders", description="same")
+
+        assert excinfo.value is rejection
+        mock_client.close.assert_called_once()
+
+    def test_other_error_code_raises_without_reread(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.update_table_definition.side_effect = _definition_rejection(
+            api_error_code="storage.tables.validation"
+        )
+        service = _make_service(store, mock_client)
+
+        with pytest.raises(KeboolaApiError):
+            service.describe_table(alias="prod", table_id="in.c-sales.orders", description="x")
+
+        mock_client.get_table_detail.assert_not_called()
+
+    def test_english_message_without_code_raises(self, tmp_path: Path) -> None:
+        """The message text alone does not mark a rejection as unchanged."""
         store = _make_store(tmp_path)
         mock_client = MagicMock()
         mock_client.update_table_definition.side_effect = KeboolaApiError(
             message="No table definition changes were provided",
             status_code=400,
-            error_code="storage.tables.validation",
+            error_code="API_ERROR",
             retryable=False,
         )
         service = _make_service(store, mock_client)
 
-        result = service.describe_table(
-            alias="prod", table_id="in.c-sales.orders", description="same"
-        )
+        with pytest.raises(KeboolaApiError, match="No table definition changes"):
+            service.describe_table(alias="prod", table_id="in.c-sales.orders", description="same")
 
-        assert result["result"] is None
-        assert result["description"] == "same"
-        mock_client.close.assert_called_once()
+        mock_client.get_table_detail.assert_not_called()
+
+    def test_validation_code_on_non_400_raises_without_reread(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.update_table_definition.side_effect = _definition_rejection(status_code=422)
+        service = _make_service(store, mock_client)
+
+        with pytest.raises(KeboolaApiError):
+            service.describe_table(alias="prod", table_id="in.c-sales.orders", description="x")
+
+        mock_client.get_table_detail.assert_not_called()
 
     def test_other_bad_request_propagates(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
@@ -523,6 +646,32 @@ class TestDescribeBatchService:
         assert mock_client.set_bucket_metadata.call_count == 1
         mock_client.set_table_metadata.assert_not_called()
         assert mock_client.update_table_definition.call_count == 2
+        table_item = next(a for a in result["applied"] if a["type"] == "table")
+        assert table_item["status"] == "updated"
+
+    def test_table_with_stored_text_reports_unchanged(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.update_table_definition.side_effect = _definition_rejection()
+        mock_client.get_table_detail.return_value = _table_detail(
+            definition={"description": "Order data", "columns": []}
+        )
+        service = _make_service(store, mock_client)
+
+        batch_file = tmp_path / "batch.yaml"
+        batch_file.write_text("tables:\n  in.c-sales.orders: Order data\n", encoding="utf-8")
+
+        result = service.describe_batch(alias="prod", from_file=batch_file)
+
+        assert result["errors"] == []
+        assert result["applied"] == [
+            {
+                "type": "table",
+                "id": "in.c-sales.orders",
+                "description": "Order data",
+                "status": "unchanged",
+            }
+        ]
 
     def test_file_not_found(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)

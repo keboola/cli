@@ -40,9 +40,13 @@ descriptions are native fields on the table definition:
 - **Table description** *(since vNEXT)* -- `definition.description`, written
   through the same `PUT .../tables/{table_id}/definition` call as column
   descriptions, with `isDescriptionSystemManaged: false`. No `KBC.description`
-  metadata row is created. Sending the stored text again succeeds (Storage
-  answers HTTP 400 "No table definition changes were provided", which is
-  treated as a no-op and returns `result: null`). The definition endpoint
+  metadata row is created. The result reports `status: "updated"` after a
+  write. Sending the stored text again succeeds with `status: "unchanged"` and
+  `result: null` (human output "Description unchanged"): Storage rejects it with
+  HTTP 400 code `storage.tables.definitionUpdateValidationFailed`, and kbagent
+  reads the table again and compares the stored description with the requested
+  text. Storage uses that code for other validation failures too, so a 400
+  whose stored text differs is raised. The definition endpoint
   supports Snowflake and BigQuery only, so `describe-table` fails on tables of
   other backends. Before vNEXT the table
   description was a `KBC.description` (provider=user) metadata row, which

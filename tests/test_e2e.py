@@ -4097,6 +4097,22 @@ class TestFullE2E:
         )
         assert data["data"]["table_id"] == table_id
         assert data["data"]["description"] == "E2E table description"
+        assert data["data"]["status"] == "updated"
+
+        # Sending the stored text again: Storage rejects the PUT, kbagent re-reads
+        # the table and reports the description as unchanged.
+        data = self._run_ok(
+            "storage",
+            "describe-table",
+            "--project",
+            self.alias,
+            "--table-id",
+            table_id,
+            "--description",
+            "E2E table description",
+        )
+        assert data["data"]["status"] == "unchanged"
+        assert data["data"]["result"] is None
 
         data = self._run_ok(
             "storage", "table-detail", "--project", self.alias, "--table-id", table_id

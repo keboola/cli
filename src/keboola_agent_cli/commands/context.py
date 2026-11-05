@@ -2107,8 +2107,8 @@ remain branch-aware because modifying a dev branch is the expected intent.
 
   storage describe-table
     Set the native table description through PUT .../tables/{id}/definition (upsert, async storage job) with
-    isDescriptionSystemManaged=false; no KBC.description metadata row is created. Resending the stored text
-    is a no-op (result null). Readable via table-detail --json .data.description (definition.description).
+    isDescriptionSystemManaged=false; no KBC.description metadata row is created. Result status is "updated"
+    after a write, "unchanged" (result null) when the table already holds the text. Readable via table-detail --json .data.description (definition.description).
 
   storage describe-column
     Set per-column descriptions via the native PUT .../tables/{id}/definition endpoint (0.88.0+, upsert,

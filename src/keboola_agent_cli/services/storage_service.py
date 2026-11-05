@@ -10,11 +10,11 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from ..constants import NO_DEFINITION_CHANGES, STORAGE_BRANCHES_FEATURE, TABLE_DATA_JOB_MAX_WAIT
+from ..constants import STORAGE_BRANCHES_FEATURE, TABLE_DATA_JOB_MAX_WAIT
 from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..models import ProjectConfig
-from ._column_descriptions import ColumnDescriptionsMixin
+from ._column_descriptions import ColumnDescriptionsMixin, is_unchanged_description
 from ._storage_downloads import (
     DownloadProgress,
     file_download_target,
@@ -2405,9 +2405,10 @@ class StorageService(ColumnDescriptionsMixin):
         Writes ``description`` through ``PUT .../tables/{id}/definition`` (an
         asynchronous Storage job, waited for) with
         ``isDescriptionSystemManaged=false``, so the next Output Mapping run
-        does not overwrite the text. Sending the stored value again succeeds:
-        Storage answers it with HTTP 400 "No table definition changes were
-        provided", which is a no-op here.
+        does not overwrite the text. Storage rejects a PUT that changes
+        nothing with HTTP 400 and ``DEFINITION_VALIDATION_ERROR_CODE``; see
+        ``is_unchanged_description`` for how that is told apart from other
+        validation failures.
 
         Args:
             alias: Project alias.
@@ -2416,8 +2417,10 @@ class StorageService(ColumnDescriptionsMixin):
             branch_id: If set, target a specific dev branch.
 
         Returns:
-            Dict with project_alias, table_id, description, result (the
-            completed storage job, None for an unchanged description), message.
+            Dict with project_alias, table_id, description, status
+            (``"updated"`` after a write, ``"unchanged"`` when Storage already
+            held the text), result (the completed storage job, None when
+            unchanged), message.
         """
         branch_id = resolve_branch(self._config_store, alias, branch_id)
         projects = self.resolve_projects([alias])
@@ -2434,17 +2437,24 @@ class StorageService(ColumnDescriptionsMixin):
                     branch_id=branch_id,
                 )
             except KeboolaApiError as exc:
-                if exc.status_code != 400 or NO_DEFINITION_CHANGES not in exc.message:
+                if not is_unchanged_description(client, exc, table_id, description, branch_id):
                     raise
                 result = None
         finally:
             client.close()
+        if result is None:
+            status = "unchanged"
+            message = f"Description unchanged on table '{table_id}' in project '{alias}'."
+        else:
+            status = "updated"
+            message = f"Description set on table '{table_id}' in project '{alias}'."
         return {
             "project_alias": alias,
             "table_id": table_id,
             "description": description,
+            "status": status,
             "result": result,
-            "message": f"Description set on table '{table_id}' in project '{alias}'.",
+            "message": message,
         }
 
     def describe_batch(
@@ -2494,6 +2504,8 @@ class StorageService(ColumnDescriptionsMixin):
 
         Returns:
             Dict with project_alias, applied, errors, applied_count, error_count.
+            A ``tables:`` entry in ``applied`` carries the ``status`` of
+            ``describe_table`` (``"updated"`` or ``"unchanged"``).
         """
         branch_id = resolve_branch(self._config_store, alias, branch_id)
         from ._describe_batch_input import parse_describe_batch_file
@@ -2522,8 +2534,15 @@ class StorageService(ColumnDescriptionsMixin):
             if progress_callback is not None:
                 progress_callback("table", table_id, current, total)
             try:
-                self.describe_table(alias, table_id, desc, branch_id=branch_id)
-                applied.append({"type": "table", "id": table_id, "description": desc})
+                outcome = self.describe_table(alias, table_id, desc, branch_id=branch_id)
+                applied.append(
+                    {
+                        "type": "table",
+                        "id": table_id,
+                        "description": desc,
+                        "status": outcome["status"],
+                    }
+                )
             except Exception as exc:
                 errors.append(item_failure(exc, type="table", id=table_id))
 

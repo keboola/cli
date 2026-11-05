@@ -4593,8 +4593,15 @@ write descriptive metadata onto storage objects. Three behaviors are easy to mis
 - **Table descriptions are native** *(since vNEXT)*. `describe-table` (and the
   `tables:` section of `describe-batch`) write `definition.description` through
   `PUT .../tables/{id}/definition` with `isDescriptionSystemManaged: false` and
-  create no `KBC.description` metadata row; a re-send of the stored text is a
-  no-op (`result: null`). `storage table-detail` reads the table description
+  create no `KBC.description` metadata row. The result has `status`:
+  `"updated"` after a write, `"unchanged"` (with `result: null`; human output
+  "Description unchanged") when the table already holds the text. Storage
+  rejects such a no-op PUT with HTTP 400 code
+  `storage.tables.definitionUpdateValidationFailed`, which it also uses for other
+  validation failures, so kbagent reads the table again and reports `unchanged`
+  only when the stored description equals the requested text; otherwise the
+  400 is raised. `describe-batch` `applied[]` entries of the `tables:` section
+  carry the same `status`. `storage table-detail` reads the table description
   from `definition.description` only -- not from `KBC.description` metadata, not
   from the top-level `description`, and with no `provider == "user"`
   preference -- so it shows what the UI shows. A description that exists only
