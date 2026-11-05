@@ -637,6 +637,12 @@ OTLP_SINK_COLUMNS: tuple[dict[str, str], ...] = (
 # See plugins/kbagent/skills/kbagent/references/storage-types-workflow.md.
 STORAGE_BRANCHES_FEATURE: str = "storage-branches"
 
+# Error `code` of the HTTP 400 Storage answers when a table-definition PUT
+# fails validation. Storage uses it for a PUT that changes nothing (e.g. the
+# stored description sent again) and for other validation failures, so the
+# code alone does not prove the request was a no-op.
+DEFINITION_VALIDATION_ERROR_CODE: str = "storage.tables.definitionUpdateValidationFailed"
+
 # --- Merge Requests (Branches 2.0) ---
 # Feature flag gating the non-SOX merge-request flow. Layer 3
 # (client/merge_requests.py) does no feature check itself -- a missing

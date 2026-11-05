@@ -187,6 +187,46 @@ class TestStorageDescribeBucket:
         assert output["error"]["code"] == "BUCKET_NOT_FOUND"
 
 
+def _invoke_with_storage(store: ConfigStore, mock_storage: MagicMock, args: list[str]):
+    """Run the CLI with ``mock_storage`` as the storage service."""
+    with (
+        patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+        patch("keboola_agent_cli.cli.ProjectService") as MockProjService,
+        patch("keboola_agent_cli.cli.ConfigService") as MockCfgService,
+        patch("keboola_agent_cli.cli.JobService") as MockJobService,
+        patch("keboola_agent_cli.cli.StorageService") as MockStorageService,
+    ):
+        MockStore.return_value = store
+        MockProjService.return_value = ProjectService(config_store=store)
+        MockCfgService.return_value = ConfigService(config_store=store)
+        MockJobService.return_value = JobService(config_store=store)
+        MockStorageService.return_value = mock_storage
+        return runner.invoke(app, args)
+
+
+def _describe_table_result(status: str) -> dict:
+    return {
+        "project_alias": "prod",
+        "table_id": "in.c-bucket.orders",
+        "description": "All orders",
+        "status": status,
+        "result": None if status == "unchanged" else {"id": 1, "status": "success"},
+        "message": "irrelevant",
+    }
+
+
+_DESCRIBE_TABLE_ARGS = [
+    "storage",
+    "describe-table",
+    "--project",
+    "prod",
+    "--table-id",
+    "in.c-bucket.orders",
+    "--description",
+    "All orders",
+]
+
+
 class TestStorageDescribeTable:
     """Tests for `kbagent storage describe-table`."""
 
@@ -337,6 +377,46 @@ class TestStorageDescribeTable:
             description="Description from file",
             branch_id=None,
         )
+
+    def test_describe_table_human_unchanged(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+        mock_storage = MagicMock()
+        mock_storage.describe_table.return_value = _describe_table_result("unchanged")
+
+        result = _invoke_with_storage(store, mock_storage, _DESCRIBE_TABLE_ARGS)
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        assert "Description unchanged: in.c-bucket.orders" in result.output
+        assert "Description set" not in result.output
+
+    def test_describe_table_human_updated(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+        mock_storage = MagicMock()
+        mock_storage.describe_table.return_value = _describe_table_result("updated")
+
+        result = _invoke_with_storage(store, mock_storage, _DESCRIBE_TABLE_ARGS)
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        assert "Description set: in.c-bucket.orders" in result.output
+        assert "unchanged" not in result.output
+
+    def test_describe_table_json_unchanged_status(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+        mock_storage = MagicMock()
+        mock_storage.describe_table.return_value = _describe_table_result("unchanged")
+
+        result = _invoke_with_storage(store, mock_storage, ["--json", *_DESCRIBE_TABLE_ARGS])
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        output = json.loads(result.output)
+        assert output["data"]["status"] == "unchanged"
+        assert output["data"]["result"] is None
 
 
 class TestStorageDescribeColumn:
@@ -712,6 +792,35 @@ class TestStorageDescribeBatch:
         assert output["error"]["code"] == "INVALID_ARGUMENT"
         assert "'tables' must be a mapping of table ID to description" in output["error"]["message"]
         assert "got a list" in output["error"]["message"]
+
+    def test_describe_batch_human_marks_unchanged_table(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+        batch_file = tmp_path / "descriptions.yaml"
+        batch_file.write_text("tables: {}\n", encoding="utf-8")
+        mock_storage = MagicMock()
+        mock_storage.describe_batch.return_value = {
+            "project_alias": "prod",
+            "applied": [
+                {"type": "table", "id": "in.c-s.same", "description": "d", "status": "unchanged"},
+                {"type": "table", "id": "in.c-s.new", "description": "d", "status": "updated"},
+            ],
+            "errors": [],
+            "applied_count": 2,
+            "error_count": 0,
+        }
+
+        result = _invoke_with_storage(
+            store,
+            mock_storage,
+            ["storage", "describe-batch", "--project", "prod", "--file", str(batch_file)],
+        )
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        assert "table in.c-s.same (unchanged)" in result.output
+        assert "table in.c-s.new (unchanged)" not in result.output
+        assert "table in.c-s.new" in result.output
 
     def test_describe_batch_human_mode_wires_progress_callback(self, tmp_path: Path) -> None:
         """Human mode must pass a progress_callback; JSON mode must not."""

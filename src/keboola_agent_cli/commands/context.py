@@ -2235,13 +2235,14 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Set the KBC.description metadata on a bucket (upsert). Visible in bucket-detail.
 
   storage describe-table
-    Set the KBC.description metadata on a table (upsert). Readable via table-detail --json .data.description.
+    Set the native table description through PUT .../tables/{id}/definition (upsert, async storage job) with
+    isDescriptionSystemManaged=false; no KBC.description metadata row is created. Result status is "updated"
+    after a write, "unchanged" (result null) when the table already holds the text. Readable via table-detail --json .data.description (definition.description).
 
   storage describe-column
     Set per-column descriptions via the native PUT .../tables/{id}/definition endpoint (0.88.0+, upsert,
     async storage job). Writes isDescriptionSystemManaged=false so the next component run's Output Mapping
-    cannot overwrite the text; the backend mirrors the value into columnMetadata KBC.description, so the
-    Keboola UI, the MCP server and the warehouse COMMENT all see it. Unknown column names fail fast before
+    cannot overwrite the text, so the Keboola UI, the MCP server and the warehouse COMMENT all see it. Unknown column names fail fast before
     any write. Legacy flat KBC.column.*.description entries on the same table are migrated in the same write
     (conflict/orphan entries skipped) and the migrated flat keys deleted.
     Readable via table-detail --json .data.column_details[].description, and (since 0.89.0) in the

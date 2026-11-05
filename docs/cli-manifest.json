@@ -3687,7 +3687,7 @@
       "kind": "command",
       "hidden": false,
       "category": "write",
-      "help": "Set the description on a storage table.\n\nStores the description as KBC.description in table metadata (upsert).\nProvide the text via --description or --description-file (exactly one).",
+      "help": "Set the description on a storage table.\n\nWrites the native table description (the one the web UI shows) through\nthe table-definition endpoint and marks it user-authored, so the next\nOutput Mapping run keeps it. Provide the text via --description or\n--description-file (exactly one). The result reports status 'updated'\nafter a write, or 'unchanged' when the table already has the text.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "table_id", "opts": ["--table-id"], "type": "text", "required": true, "default": null, "help": "Table ID (e.g. 'in.c-my-bucket.my-table')"},
