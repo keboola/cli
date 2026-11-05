@@ -743,8 +743,11 @@ KILLABLE_JOB_STATUSES: frozenset[str] = frozenset({"created", "waiting", "proces
 SNOWFLAKE_WORKSPACE_LOGIN_TYPE: str = "snowflake-person-keypair"
 # A governed workspace has no login at all: nobody but Query Service obtains its credentials, so
 # `workspace password` and a direct warehouse connection are refused and Query Service applies the
-# row- and column-level policies of the project. Snowflake only.
+# row- and column-level policies of the project. Snowflake and BigQuery. A Snowflake one is on
+# QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES; a BigQuery one stays off the BigQuery list until a query
+# against one has been verified on a stack (that list is "confirmed", not "expected").
 GOVERNED_WORKSPACE_LOGIN_TYPE: str = "governed"
+GOVERNED_WORKSPACE_BACKENDS: frozenset[str] = frozenset({"snowflake", "bigquery"})
 
 # --- Policy bindings (`rls bind`) ---
 # The stack segment of a workspace KID, `KID:<stack>:project-<n>:workspace-<n>`. Query Service takes

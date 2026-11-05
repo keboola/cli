@@ -2182,16 +2182,18 @@ under an active branch. `--branch` requires exactly one `--project`.
 
 *(since vNEXT)*
 
-`workspace create --governed` requests `loginType: governed` (Snowflake, headless only). The workspace has no
+`workspace create --governed` requests `loginType: governed` (Snowflake or BigQuery, headless only). The workspace has no
 login: the result has no `private_key`, an empty `password` and `governed: true` / `login_type: "governed"`.
 Only Query Service can obtain its credentials, so `workspace password`, a direct warehouse connection, a public
 key, an SSO login and Connection's native `/query` are all refused for every caller, administrators included;
 read it through Query Service, which applies the project's row- and column-level policies. Creating one needs no
 project feature and no step-up, but the stack's Connection must accept the type (an older one answers a
 validation error naming the allowed `loginType` values): try it, do not assume. `--governed` with `--ui` and
-`--governed` on BigQuery are `INVALID_ARGUMENT` (exit 2); nothing is created in either case. A stack whose Connection ignores the type and answers a workspace with a login fails with `API_ERROR`: the workspace is deleted and the sandbox config trashed (`details.workspace_id`, `details.workspace_rolled_back`), so a credentialed workspace is never reported as governed. The REST
+`--governed` on a backend other than Snowflake or BigQuery are `INVALID_ARGUMENT` (exit 2); nothing is created in either case. A stack whose Connection ignores the type and answers a workspace with a login fails with `API_ERROR`: the workspace is deleted and the sandbox config trashed (`details.workspace_id`, `details.workspace_rolled_back`), so a credentialed workspace is never reported as governed.
+BigQuery needs a Connection that accepts the type there too (it was refused on BigQuery until keboola/connection#9157): the same try-it rule
+applies, and a BigQuery project is enforced only by a Query Service release that carries the BigQuery enforcement (AJDA-3653). The REST
 route `POST /workspaces/{project}` takes `governed: true`. `workspace list` shows the workspace with login type
-`governed` and `qs_compatible` true: Query Service reads it. A query with a Storage token (`workspace query`,
+`governed`, and `qs_compatible` is true on Snowflake (false on BigQuery until a query against a governed one is verified): Query Service reads it. A query with a Storage token (`workspace query`,
 local data-app development) is refused with `ACCESS_DENIED` when no policy rule selects the administrator
 `keboola|<adminId>`, and also when the query is not one plain `SELECT` on Storage bucket tables (no writes,
 `FLATTEN`, `INFORMATION_SCHEMA`/`SHOW` or UDFs): Query Service sends the same text for both, so an administrator
