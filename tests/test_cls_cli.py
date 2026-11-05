@@ -91,23 +91,23 @@ def _preview(**overrides: Any) -> dict[str, Any]:
 class TestList:
     def test_json(self, tmp_path: Path) -> None:
         service = MagicMock()
-        service.list_policies.return_value = {"project": "prod", "policies": [_row()]}
+        service.list_policies.return_value = {"project": "prod", "policies": [_row()], "total": 1}
 
         result = _run(["--json", "cls", "list", "--project", "prod"], tmp_path, service)
 
         assert result.exit_code == 0, result.output
         assert json.loads(result.output)["data"]["policies"][0]["table"] == "in.c-crm.invoices"
-        service.list_policies.assert_called_once_with(alias="prod")
+        service.list_policies.assert_called_once_with(alias="prod", limit=100)
 
     def test_human_table_and_empty(self, tmp_path: Path) -> None:
         service = MagicMock()
-        service.list_policies.return_value = {"project": "prod", "policies": [_row()]}
+        service.list_policies.return_value = {"project": "prod", "policies": [_row()], "total": 1}
         assert (
             "in.c-crm.invoices"
             in _run(["cls", "list", "--project", "prod"], tmp_path, service).output
         )
 
-        service.list_policies.return_value = {"project": "prod", "policies": []}
+        service.list_policies.return_value = {"project": "prod", "policies": [], "total": 0}
         assert (
             "No CLS policies found"
             in _run(["cls", "list", "--project", "prod"], tmp_path, service).output

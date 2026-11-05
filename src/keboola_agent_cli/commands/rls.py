@@ -77,6 +77,8 @@ TARGET_HELP = (
     "Project alias or ID the policy also applies to (repeatable, one value per occurrence; "
     "--scope targeted only; granting needs the organization-admin role)"
 )
+# How many policies `rls list` / `cls list` show unless `--limit` says otherwise.
+DEFAULT_POLICY_LIST_LIMIT = 100
 TABLE_HELP = "Storage table ID, e.g. in.c-crm.invoices"
 DEFAULT_HELP = (
     "JSON|@file|- condition for identities no rule matches, e.g. '{\"false\": true}' (no rows); "
@@ -249,10 +251,10 @@ def _parse_default_arg(formatter: Any, raw: str | None) -> dict[str, Any] | None
     return parsed
 
 
-def list_policies(ctx: typer.Context, group: PolicyGroup, project: str) -> None:
+def list_policies(ctx: typer.Context, group: PolicyGroup, project: str, limit: int) -> None:
     formatter = get_formatter(ctx)
     service = get_service(ctx, group.service)
-    result = handle_service_call(ctx, service.list_policies, alias=project)
+    result = handle_service_call(ctx, service.list_policies, alias=project, limit=limit)
 
     if formatter.json_mode:
         formatter.output(result)
@@ -260,6 +262,10 @@ def list_policies(ctx: typer.Context, group: PolicyGroup, project: str) -> None:
         formatter.console.print(f"[dim]No {group.label} policies found.[/dim]")
     else:
         _format_policy_table(formatter, result["policies"])
+        if result["total"] > len(result["policies"]):
+            formatter.console.print(
+                f"[dim]Showing {len(result['policies'])} of {result['total']}; raise --limit.[/dim]"
+            )
 
 
 def show_policy(ctx: typer.Context, group: PolicyGroup, project: str, policy_id: str) -> None:
@@ -421,9 +427,12 @@ def rls_list(
     project: str = typer.Option(
         None, "--project", "-p", help="Project alias (default: the active project)"
     ),
+    limit: int = typer.Option(
+        DEFAULT_POLICY_LIST_LIMIT, "--limit", "-L", min=1, help="Max policies to list"
+    ),
 ) -> None:
     """List row-level security policies visible to a project."""
-    list_policies(ctx, RLS, project)
+    list_policies(ctx, RLS, project, limit)
 
 
 @rls_app.command("detail")

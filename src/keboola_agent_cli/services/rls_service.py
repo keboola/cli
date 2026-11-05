@@ -360,12 +360,16 @@ class RlsService(BaseService):
     # Read
     # ------------------------------------------------------------------
 
-    def list_policies(self, alias: str) -> dict[str, Any]:
-        """List every policy object visible to ``alias``'s project."""
+    def list_policies(self, alias: str, limit: int | None = None) -> dict[str, Any]:
+        """List the policy objects visible to ``alias``'s project: every one, or the first ``limit``.
+
+        ``total`` is the number visible, so a caller can tell that the list was cut.
+        """
         project = self._resolve_one_project(alias)
         with self._new_metastore_client(project) as client:
             raw = client.list_items(self.item_type)
-        return {"project": alias, "policies": [self._row_from_item(item) for item in raw]}
+        rows = [self._row_from_item(item) for item in raw]
+        return {"project": alias, "policies": rows[:limit], "total": len(rows)}
 
     def get_policy(self, alias: str, policy_id: str) -> dict[str, Any]:
         """Fetch one policy object's full attributes + meta."""

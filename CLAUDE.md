@@ -1470,7 +1470,7 @@ kbagent semantic-layer reference-data delete [--project P] --reference-data-id I
 #   0.97.0)` cannot be written on these `# ` comment lines (check_version_gates.py parses them as
 #   ATX headings).
 
-kbagent rls list --project P
+kbagent rls list --project P [--limit N]
 kbagent rls detail --project P --policy-id ID
 kbagent rls schema --project P
 kbagent rls create --project P --table-id TABLE_ID --rules JSON|@file|- [--default JSON|@file|-] [--dialect snowflake|bigquery] [--scope targeted|organization] [--target-project ALIAS|ID ...] [--dry-run] [--yes]
@@ -1546,7 +1546,7 @@ kbagent rls bindings-sweep --project P [--older-than DAYS] [--dry-run | --yes]
 #   gotchas.md -- a `(since vNEXT)` tag cannot be written on these `# ` comment lines
 #   (check_version_gates.py parses them as ATX markdown headings).
 
-kbagent cls list --project P
+kbagent cls list --project P [--limit N]
 kbagent cls detail --project P --policy-id ID
 kbagent cls schema --project P
 kbagent cls create --project P --table-id TABLE_ID --rules JSON|@file|- [--dialect snowflake|bigquery] [--scope targeted|organization] [--target-project ALIAS|ID ...] [--dry-run] [--yes]

@@ -455,7 +455,8 @@
       "category": "read",
       "help": "List column-level security policies visible to a project.",
       "params": [
-        {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias (default: the active project)"}
+        {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias (default: the active project)"},
+        {"kind": "option", "name": "limit", "opts": ["--limit", "-L"], "type": "integer", "default": 100, "help": "Max policies to list"}
       ]
     },
     {
@@ -2647,7 +2648,8 @@
       "category": "read",
       "help": "List row-level security policies visible to a project.",
       "params": [
-        {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias (default: the active project)"}
+        {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias (default: the active project)"},
+        {"kind": "option", "name": "limit", "opts": ["--limit", "-L"], "type": "integer", "default": 100, "help": "Max policies to list"}
       ]
     },
     {

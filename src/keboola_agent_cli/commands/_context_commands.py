@@ -164,7 +164,7 @@ are gated as admin -- see CONTRIBUTING.md.
   kbagent cls detail [--project PROJECT] --policy-id ID
     Show one CLS policy's full rule set.
 
-  kbagent cls list [--project PROJECT]
+  kbagent cls list [--project PROJECT] [--limit N]
     List column-level security policies visible to a project.
 
   kbagent cls schema [--project PROJECT]
@@ -908,7 +908,7 @@ gated as admin -- see CONTRIBUTING.md.
   kbagent rls detail [--project PROJECT] --policy-id ID
     Show one RLS policy's full rule set.
 
-  kbagent rls list [--project PROJECT]
+  kbagent rls list [--project PROJECT] [--limit N]
     List row-level security policies visible to a project.
 
   kbagent rls schema [--project PROJECT]

@@ -137,6 +137,19 @@ class TestListPolicies:
         assert result["policies"][0]["id"] == "p-1"
         assert result["policies"][0]["rule_count"] == 1
         assert result["policies"][0]["scope"] == "organization"
+        assert result["total"] == 1
+
+    @pytest.mark.parametrize(("limit", "shown"), [(None, 3), (2, 2), (3, 3), (10, 3)])
+    def test_limit_cuts_the_list_and_total_keeps_the_count(
+        self, tmp_path: Path, limit: int | None, shown: int
+    ) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.list_items.return_value = [_policy_item(), _policy_item(), _policy_item()]
+
+        result = service.list_policies("prod", limit=limit)
+
+        assert len(result["policies"]) == shown
+        assert result["total"] == 3
 
 
 class TestGetPolicy:

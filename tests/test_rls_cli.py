@@ -83,7 +83,11 @@ class TestRlsListCli:
     def test_json_output(self, tmp_path: Path) -> None:
         store = _setup_config(tmp_path / "cfg", {"prod": {}})
         service = MagicMock()
-        service.list_policies.return_value = {"project": "prod", "policies": [_policy_row()]}
+        service.list_policies.return_value = {
+            "project": "prod",
+            "policies": [_policy_row()],
+            "total": 1,
+        }
 
         result = _run(["--json", "rls", "list", "--project", "prod"], store, service)
 
@@ -94,7 +98,11 @@ class TestRlsListCli:
     def test_human_output_shows_table(self, tmp_path: Path) -> None:
         store = _setup_config(tmp_path / "cfg", {"prod": {}})
         service = MagicMock()
-        service.list_policies.return_value = {"project": "prod", "policies": [_policy_row()]}
+        service.list_policies.return_value = {
+            "project": "prod",
+            "policies": [_policy_row()],
+            "total": 1,
+        }
 
         result = _run(["rls", "list", "--project", "prod"], store, service)
 
@@ -104,7 +112,7 @@ class TestRlsListCli:
     def test_empty_list(self, tmp_path: Path) -> None:
         store = _setup_config(tmp_path / "cfg", {"prod": {}})
         service = MagicMock()
-        service.list_policies.return_value = {"project": "prod", "policies": []}
+        service.list_policies.return_value = {"project": "prod", "policies": [], "total": 0}
 
         result = _run(["rls", "list", "--project", "prod"], store, service)
 

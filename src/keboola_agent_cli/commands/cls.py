@@ -32,6 +32,7 @@ import typer
 
 from ._helpers import check_cli_permission
 from .rls import (
+    DEFAULT_POLICY_LIST_LIMIT,
     DIALECT_HELP,
     SCOPE_HELP,
     TABLE_HELP,
@@ -74,9 +75,12 @@ def cls_list(
     project: str = typer.Option(
         None, "--project", "-p", help="Project alias (default: the active project)"
     ),
+    limit: int = typer.Option(
+        DEFAULT_POLICY_LIST_LIMIT, "--limit", "-L", min=1, help="Max policies to list"
+    ),
 ) -> None:
     """List column-level security policies visible to a project."""
-    list_policies(ctx, CLS, project)
+    list_policies(ctx, CLS, project, limit)
 
 
 @cls_app.command("detail")
