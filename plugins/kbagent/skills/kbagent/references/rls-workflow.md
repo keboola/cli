@@ -219,7 +219,8 @@ kbagent --json rls bindings-sweep --project prod --older-than 30 --yes   # delet
   because a policy left out stops applying: binding only `--cls-policy` drops every
   `rls-policy`, so the readers a cls-policy names get every row of its tables (their
   columns) and every other table is refused; binding only `--rls-policy` drops every
-  `cls-policy`, so those readers get every column. List each policy you want enforced.
+  `cls-policy`, so the readers of an rls-policy's tables get every column and a table only
+  a cls-policy covers is refused. List each policy you want enforced.
 - The sweep deletes only a binding whose workspace is gone (404 in production
   and every dev branch) and that is older than `--older-than` days; app KIDs are
   never swept. References to a binding cannot be checked first; the metastore

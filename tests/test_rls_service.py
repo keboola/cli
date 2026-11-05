@@ -32,7 +32,7 @@ TEST_TOKEN = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
 # ---------------------------------------------------------------------------
 
 
-def _make_store(tmp_path: Path, alias: str = "prod") -> ConfigStore:
+def _make_store(tmp_path: Path, alias: str = "prod", project_id: int | None = 5725) -> ConfigStore:
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     store = ConfigStore(config_dir=config_dir)
@@ -42,7 +42,7 @@ def _make_store(tmp_path: Path, alias: str = "prod") -> ConfigStore:
             stack_url="https://connection.keboola.com",
             token=TEST_TOKEN,
             project_name=alias,
-            project_id=5725,
+            project_id=project_id,
         ),
     )
     return store
@@ -63,12 +63,13 @@ def _make_service(
     return service, mock
 
 
-def storage_client_factory(backend: str = "snowflake") -> Any:
-    """A Storage client factory whose token belongs to a project on ``backend``."""
+def storage_client_factory(backend: str = "snowflake", project_id: int | None = None) -> Any:
+    """A Storage client factory whose token belongs to project ``project_id`` on ``backend``."""
     storage = MagicMock()
     storage.__enter__ = MagicMock(return_value=storage)
     storage.__exit__ = MagicMock(return_value=False)
     storage.verify_token.return_value.default_backend = backend
+    storage.verify_token.return_value.project_id = project_id
     return lambda url, token: storage
 
 
@@ -829,6 +830,26 @@ class TestUpdateOfAStoredPolicy:
 
         mock.put_target_projects.assert_not_called()
         mock.patch_item.assert_not_called()
+
+    @pytest.mark.parametrize(("verified_id", "refused"), [(5725, True), (None, True), (999, False)])
+    def test_an_unregistered_project_id_is_resolved_from_the_token(
+        self, tmp_path: Path, verified_id: int | None, refused: bool
+    ) -> None:
+        """Without a registered project ID the guard verifies the token, and an ID it cannot get is not ownership."""
+        service, mock = _make_service(_make_store(tmp_path, project_id=None))
+        service._client_factory = storage_client_factory(project_id=verified_id)
+        mock.get_schema.side_effect = KeboolaApiError(message="n/a", status_code=404)
+        stored = _policy_item(scope="targeted", target_project_ids=[])
+        stored["meta"]["projectId"] = 999
+        mock.get_item.return_value = stored
+
+        if refused:
+            with pytest.raises(KeboolaApiError, match="owned by project 999"):
+                service.update_policy("prod", "p-1", rules=_RULES, target_projects=["7"])
+            mock.patch_item.assert_not_called()
+        else:
+            service.update_policy("prod", "p-1", rules=_RULES, target_projects=["7"])
+            mock.patch_item.assert_called_once()
 
     def test_grants_alone_from_another_project_are_still_allowed(self, tmp_path: Path) -> None:
         service, mock = _make_service(_make_store(tmp_path))

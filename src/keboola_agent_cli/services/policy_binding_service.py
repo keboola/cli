@@ -316,12 +316,14 @@ class PolicyBindingService(BaseService):
         if not cls_ids:
             warnings.append(
                 "The binding lists no cls-policy, so every cls-policy of the project stops applying to "
-                "this workspace (all columns visible). Add --cls-policy to keep a column restriction."
+                "this workspace: tables of the listed rls-policies show every column, tables only a "
+                "cls-policy covers become unreadable. Add --cls-policy to keep a column restriction."
             )
         if not rls_ids:
             warnings.append(
                 "The binding lists no rls-policy, so every rls-policy of the project stops applying to "
-                "this workspace (all rows visible). Add --rls-policy to keep a row filter."
+                "this workspace: tables of the listed cls-policies show every row, tables only an "
+                "rls-policy covers become unreadable. Add --rls-policy to keep a row filter."
             )
         data: dict[str, Any] = {"kid": kid}
         if rls_ids:

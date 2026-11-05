@@ -201,6 +201,13 @@ class RlsService(BaseService):
             "target_project_ids": meta.get("targetProjectIds") or [],
         }
 
+    def _own_project_id(self, project: ProjectConfig) -> int | None:
+        """The project's ID: the registered one, else one token verification; ``None`` when neither names it."""
+        if project.project_id is not None:
+            return project.project_id
+        with self._client_factory(project.stack_url, project.token) as client:
+            return client.verify_token().project_id
+
     def _project_dialect(self, project: ProjectConfig) -> str:
         """The project's backend -- the only dialect the enforcement accepts for its policies."""
         with self._client_factory(project.stack_url, project.token) as client:
@@ -497,14 +504,17 @@ class RlsService(BaseService):
             meta = current.get("meta") or {}
             scope = meta.get("scope", "")
             owner_id = meta.get("projectId")
-            owned = owner_id is None or project.project_id is None or owner_id == project.project_id
+            # A project whose ID cannot be resolved is treated as not owning the policy.
+            owned = owner_id is None or owner_id == self._own_project_id(project)
             if target_ids is not None and changes and not owned:
                 # The grants are readable (and a rules PATCH is found) only through the owning project, so a
                 # failed PATCH could not put the old grants back.
                 self._raise_invalid(
                     [
-                        f"the policy is owned by project {owner_id}: change its target projects from that "
-                        "project, or in a separate `rls update` without rules (an organization admin)"
+                        (
+                            f"the policy is owned by project {owner_id}: change its target projects from that "
+                            "project, or in a separate `rls update` without rules (an organization admin)"
+                        )
                     ]
                 )
             if target_ids is not None and scope != "targeted":

@@ -7519,7 +7519,7 @@ governed-workspace flow.
 - A `policy-binding` restricts one governed workspace to some of the project's rls/cls policies. It is
   named by the workspace KID `KID:<stack>:project-<id>:workspace-<id>` (no branch segment). **No binding =
   the workspace gets every policy of the project**; a binding is an allowlist: it never opens a table that none of its policies covers (a governed
-  workspace is deny-by-default), but a policy it leaves out stops applying, also an `organization` one, so it can loosen access. Binding only `--cls-policy` drops every `rls-policy` (the readers a cls-policy names get every row of its tables); binding only `--rls-policy` drops every `cls-policy` (every column). Query Service re-reads it on every governed query, so `bind` /
+  workspace is deny-by-default), but a policy it leaves out stops applying, also an `organization` one, so it can loosen access. Binding only `--cls-policy` drops every `rls-policy` (the readers a cls-policy names get every row of its tables); binding only `--rls-policy` drops every `cls-policy` (every column of the rls-covered tables). A table covered only by a policy the binding leaves out becomes unreadable, not open. Query Service re-reads it on every governed query, so `bind` /
   `unbind` apply to the next query.
 - **`--stack-id` (env `KBAGENT_STACK_ID`) is required and kbagent cannot check it.** No Storage, Manage or
   Connection API exposes the stack segment; it must equal Query Service's `QUERY_RLS_STACK_ID` (AWS dev:
