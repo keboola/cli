@@ -1683,7 +1683,7 @@ validation error naming the allowed `loginType` values): try it, do not assume. 
 BigQuery needs a Connection that accepts the type there too (it was refused on BigQuery until keboola/connection#9157): the same try-it rule
 applies, and a BigQuery project is enforced only by a Query Service release that carries the BigQuery enforcement (AJDA-3653). The REST
 route `POST /workspaces/{project}` takes `governed: true`. `workspace list` shows the workspace with login type
-`governed` and `qs_compatible` true: Query Service reads it. A query with a Storage token (`workspace query`,
+`governed`, and `qs_compatible` is true on Snowflake (false on BigQuery until a query against a governed one is verified): Query Service reads it. A query with a Storage token (`workspace query`,
 local data-app development) is refused with `ACCESS_DENIED` unless a policy rule selects the administrator
 `keboola|<adminId>`, so `--qs-compatible` leaves governed workspaces out.
 
