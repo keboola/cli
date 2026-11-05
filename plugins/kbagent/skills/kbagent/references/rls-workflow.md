@@ -1,0 +1,641 @@
+# RLS / CLS Workflow -- Row- and Column-Level Security Policies
+
+Row-level security in Keboola is authored as metastore `rls-policy` objects
+-- one object per protected table, holding a list of per-reader condition
+primitives (never a hand-written SQL predicate). `kbagent` only **authors**
+these objects; enforcement (the actual SQL rewrite on a query) happens
+outside kbagent, in the Query Service policy engine (a sidecar of Query Service,
+go-monorepo `services/query/policy-engine`), which rewrites every query of a
+governed workspace (see [End-to-end](#end-to-end----governed-workspace-policies-query-service);
+since vNEXT). The MCP server's `query_data` tool reaches it through a governed
+workspace the MCP server creates itself. `kbagent rls` never
+decides whether a real query gets filtered -- it only creates, reads, updates
+and deletes the policy objects the enforcement reads.
+
+**Scope: `targeted` by default, `organization` only when asked for, never `project`.**
+
+- `targeted` (the default, and the metastore schema's own default) governs the
+  table in the owning project (`--project`) plus every project granted with
+  `--target-project` (alias or project ID, repeated once per value).
+- `--scope organization` governs the table in **every project of the
+  organization** where it is enforced (see the prerequisite below). The
+  enforcement applies every policy the metastore lists for a project -- it does
+  not re-check the owning project -- so an organization policy is never "only
+  for my project" (only a workspace binding or a Data App's policy lists can leave
+  it out, see [bindings](#restrict-one-workspace-to-some-policies-bindings)). It is gated as `destructive` (`rls.create --scope
+  organization` in `FLAG_ESCALATIONS`), so `--deny-destructive` blocks it.
+- There is no `--scope project`: the schema does not support it for policies.
+
+**Who may write** (the metastore schema ACL, not kbagent):
+
+| Operation | Project admin (master token, admin role) | Organization admin |
+|---|---|---|
+| `create` / `update` / `delete` a `targeted` policy of its own project, no grants | yes | yes |
+| `--target-project` (grants) on `create` or `update`, `--clear-target-projects` | no (403) | yes |
+| `--scope organization` | no (403) | yes |
+| Read (`list` / `detail`) | only the policies its project owns | everything visible to the project |
+
+**Enforcement prerequisite.** Policies are enforced only on a governed
+workspace. Query Service always enforces a governed workspace, in every project
+and with no per-project switch (since vNEXT); an ordinary workspace is not
+filtered at all. A table that no `rls-policy` and no `cls-policy` applies to is not
+readable: an ordinary reader gets an empty result (HTTP 200, no rows), an administrator behind a Storage
+token gets the refusal `Row-level security does not allow this query` (HTTP 403).
+The `row-level-security` project feature is read only by the MCP server, to decide
+that its own workspace is created governed
+(see [The MCP server's workspace](#the-mcp-servers-workspace)).
+
+**Who a rule selects (policy schema 1.2.0; since vNEXT).** A rule selects readers
+by `subjects` -- `<idp>|<sub>` entries, the issuer of the identity provider, a `|`
+and the user's `sub` -- or by IdP `groups`, exactly one of the two per rule; an
+email is **not** a selector in a new policy (an identity provider can assert any
+email), and `kbagent rls|cls create|update` refuse `principal` / `principals`
+with a usage error (exit 2) before anything is written. An administrator
+behind a Storage token (kbagent, MCP, a script) is `keboola|<user id>`, where the
+id is the member `id` of `kbagent project member-list` (needs a Manage token). An
+app user is `<idp>|<sub>` exactly as apps-proxy sends it (for GitHub the login,
+which another account can take over after a rename: accepted risk K13 of the Query
+Service RFC); an author cannot read it off the identity provider, so **group rules
+and `["*"]` are the practical selectors** until user discovery exists. `["*"]`
+(in `subjects` or `groups`) is every identified reader. Needs a metastore whose
+`rls-policy` / `cls-policy` schema is 1.2.0 (go-monorepo #668): on an older one
+`--dry-run` says so and nothing is written. Policies already stored with
+`principal` / `principals` (1.0.0 / 1.1.0) are still read by the enforcement and
+shown by `list`/`detail` flagged as legacy; to change their rules, recreate the policy
+with `subjects`/`groups`.
+
+**How rules combine (all schema versions).** Within a
+policy, every rule that matches the reader applies: RLS conditions combine with
+OR, CLS `visible_columns` are united. An RLS policy may set a `default` condition
+for an identified reader no rule matches; without one, an ordinary reader gets no rows and an
+administrator the 403 (`{"false": true}` gives an ordinary reader the same empty result, so it only turns
+the administrator's 403 into no rows). Several policies on one table combine with AND (CLS: intersection), so a
+policy added to a table that is already readable narrows access; a workspace binding
+that leaves a policy out loosens it again (see [bindings](#restrict-one-workspace-to-some-policies-bindings)). A reader with no identity
+is always refused. Each stored policy is read by the rules of its own schema version.
+
+**Dialect.** `dialect` is optional from schema 1.1.0 on, and the Query Service engine does
+not read it: it compiles every condition for the workspace's own backend. So kbagent
+**leaves `dialect` out** of a new policy unless `--dialect` is passed (an `organization`
+policy then works in Snowflake and BigQuery projects alike), and a `--dialect` that
+differs from the project backend is refused (`INVALID_RLS_POLICY`). A metastore that
+still serves schema 1.0.0 (or whose schema kbagent could not read) requires the field:
+the project backend is sent then, and in a mixed Snowflake/BigQuery organization an
+`organization` policy should be `targeted` instead.
+
+Same metastore requirements as [semantic-layer-workflow.md](semantic-layer-workflow.md):
+a MASTER (project admin) Storage token (`kbagent --json project info
+--project P` -> `is_master_token`), same `MISSING_MASTER_TOKEN` reclassification
+on a non-master token. A master token is NOT an organization admin: grants and
+organization scope also need the organization-admin role, which the metastore
+checks (403 otherwise).
+
+**Backend availability.** The `rls-policy` and `cls-policy` object types are registered by
+the metastore's `2026-09-29` schema migrations. A stack whose metastore predates the `rls-policy`/`cls-policy` schema migrations answers `rls schema`/`cls schema` with a classified `NOT_FOUND` (schema-fetch failure) -- expected there, not a kbagent bug. See Workflow 7.
+
+Full per-command flag reference: [commands-reference.md](commands-reference.md#row-level-security-rls).
+Non-obvious behaviors and version gates: [gotchas.md](gotchas.md).
+
+## When to use what
+
+| Goal | Command |
+|------|---------|
+| See what RLS policies already protect a project | `rls list --project P` |
+| Inspect one policy's full rule set | `rls detail --project P --policy-id ID` |
+| Check the live condition/rules shape before hand-writing JSON | `rls schema --project P` |
+| Walk an admin through authoring a new policy interactively | `rls setup --project P` |
+| Script or automate policy creation (CI, batch onboarding) | `rls create --project P --table-id T --rules '[...]'` |
+| Change one field on an existing policy without touching the rest | `rls update --project P --policy-id ID --table-id/--dialect/--rules ...` |
+| Share one policy with sibling projects (organization admin) | `rls create`/`rls update ... --target-project ALIAS_OR_ID` |
+| Govern the table in every project of the organization (organization admin) | `rls create ... --scope organization` |
+| Preview the compiled condition before writing anything | any write command + `--dry-run` |
+| Remove a policy (the table is not opened: with no other policy it is unreadable) | `rls delete --project P --policy-id ID` (`--dry-run` shows it first) |
+| Query a table with the policies applied, no MCP server | governed workspace -- see [End-to-end](#end-to-end----governed-workspace-policies-query-service) |
+| Give one workspace only some of the policies | `rls bind --project P --workspace-id WS --rls-policy ID --stack-id S` (`rls unbind`, `rls bindings`, `rls bindings-sweep`) |
+
+## End-to-end -- governed workspace, policies, Query Service
+
+*(since vNEXT)*
+
+Everything below is kbagent commands: no MCP server, no warehouse credentials.
+Workspace details and gotchas: [workspace-workflow.md](workspace-workflow.md#governed-workspace).
+
+```bash
+# 1. A governed workspace (Snowflake, headless). The result has no password and
+#    no private_key: there is nothing to save. Note workspace_id.
+kbagent --json workspace create --project prod --name "governed-ws" --governed
+
+# 2. Policies on the Storage table (preview with --dry-run first, see Workflow 2).
+#    Under default deny a table no policy covers is refused, so give every
+#    reader a rule -- including the identity you query with in step 3. An
+#    administrator behind a Storage token is `keboola|<user id>` (the member `id` of
+#    `kbagent project member-list`) and has no groups, so it needs a `subjects` rule.
+kbagent --json rls create --project prod --table-id in.c-crm.invoices \
+  --rules '[{"groups": ["eu-analysts"],
+             "condition": {"column": "region", "op": "eq", "value": "EU"}},
+            {"subjects": ["keboola|1234"],
+             "condition": {"column": "region", "op": "eq", "value": "EU"}}]'
+kbagent --json cls create --project prod --table-id in.c-crm.invoices \
+  --rules '[{"groups": ["eu-analysts"],
+             "visible_columns": ["id", "region", "amount"]},
+            {"subjects": ["keboola|1234"],
+             "visible_columns": ["id", "region", "amount"]}]'
+
+# 3. Read it through Query Service -- the only way into a governed workspace.
+#    No `workspace load`: Query Service reads the Storage table by its bucket name.
+kbagent --json workspace query --project prod --workspace-id WS_ID \
+  --sql 'SELECT * FROM "in.c-crm"."invoices"'
+```
+
+Name a table as `"<bucket id>"."<table>"` (`"in.c-crm"."invoices"`). A bare
+`"invoices"` is refused with the same 403 as an unprotected table.
+
+Expected (illustrative): step 3 runs as `keboola|1234`, so it gets only the
+`region = 'EU'` rows and only the columns `id`, `region`, `amount`, as a reader in
+`eu-analysts` would. A reader no rule selects is refused with the 403, because the
+`cls-policy` does not name them (with only an `rls-policy`, an ordinary reader would get
+an empty result and an administrator the 403; a table that no `rls-policy` and no
+`cls-policy` applies to reads the same way). A reader with no identity (a token that
+is not a user's) is refused with the same 403.
+
+- `workspace password` is refused on a governed workspace, and so is any direct
+  warehouse login: Query Service is the only reader.
+- `--governed` with `--ui` and `--governed` on a non-Snowflake backend are
+  `INVALID_ARGUMENT` (exit 2). Nothing is created in either case.
+- Query Service always enforces the policies on a governed workspace, in every
+  project. The `row-level-security` project feature gates only whether the MCP
+  server creates its workspace governed.
+
+### Restrict one workspace to some policies (bindings)
+
+Without a binding a workspace gets **every** policy of the project. A binding is
+an allowlist: it names the policies one workspace gets and every other policy,
+organization ones included, stops applying to it. It never opens a table that none of
+its policies covers, but leaving a policy out can loosen access (see the last
+bullets). Query Service re-reads it on every query, so a change applies to the next query.
+
+```bash
+# Policy ids come from `rls list` / `cls list`. --stack-id (or KBAGENT_STACK_ID)
+# must equal Query Service's QUERY_RLS_STACK_ID; no API exposes it.
+kbagent --json rls bind --project prod --workspace-id WS_ID \
+  --rls-policy RLS_POLICY_ID --cls-policy CLS_POLICY_ID \
+  --stack-id dev-keboola-aws-eu-west-1 --dry-run   # validate, then rerun without --dry-run
+# -> {"kid": "KID:dev-keboola-aws-eu-west-1:project-1234:workspace-WS_ID", "action": "create", ...}
+
+kbagent --json rls bindings --project prod          # kid, policy ids, updated, workspace_exists
+kbagent rls unbind --project prod --workspace-id WS_ID --stack-id dev-keboola-aws-eu-west-1
+#   -> the workspace gets every policy of the project again
+
+# Deleting a workspace leaves its binding behind: unbind first, or sweep the leftovers.
+kbagent --json rls bindings-sweep --project prod                 # report only
+kbagent --json rls bindings-sweep --project prod --older-than 30 --yes   # delete the orphans
+```
+
+- `bind` validates first (at least one policy, every id is a policy of the
+  project, the workspace exists) and replaces both lists when the workspace is
+  already bound. A non-governed workspace is only a warning.
+- A wrong `--stack-id` writes a binding nothing reads: the workspace silently
+  keeps every policy. Check with a `workspace query` as the bound identity.
+- **A Data App is not bound this way.** `rls bind` writes a `policy-binding` for a
+  *workspace* KID (`KID:<stack>:project-<n>:workspace-<id>`); kbagent does not create
+  an app KID, and a workspace id does not survive a redeploy of the app. A Data App
+  gets its policies from its own configuration, `runtime.workspace.rlsPolicies` for
+  row policies and `runtime.workspace.clsPolicies` for column policies (each 1-100 unique
+  policy UUIDs, `[]` is refused; the platform checks them, kbagent does not). The two lists
+  are independent: the platform creates the app's governed workspace with a binding for
+  exactly the listed policies, an app with neither list is **not governed** and reads every
+  row and column, and a changed list takes effect at the next deploy. List a `cls-policy` UUID
+  in `clsPolicies` and an `rls-policy` UUID in `rlsPolicies`.
+  It also needs single sign-on (the platform refuses a password or public-path app
+  with either list), and the app must forward the end user's token to Query Service.
+  ```bash
+  kbagent --json config update --project prod --component-id keboola.data-apps --config-id CFG \
+    --merge --configuration '{"runtime": {"workspace": {"rlsPolicies": ["POLICY_ID"], "clsPolicies": ["CLS_POLICY_ID"]}}}'
+  kbagent --json data-app deploy --project prod --app-id APP_ID --wait   # pins the new config version
+  ```
+- A policy listed in a binding cannot be deleted until it is unbound.
+- The workspace is governed: a table that none of the bound policies covers is
+  refused, so a binding never opens such a table. It can still loosen a covered one,
+  because a policy left out stops applying: binding only `--cls-policy` drops every
+  `rls-policy`, so the readers a cls-policy names get every row of its tables (their
+  columns) and every other table is refused; binding only `--rls-policy` drops every
+  `cls-policy`, so the readers of an rls-policy's tables get every column and a table only
+  a cls-policy covers is refused. List each policy you want enforced.
+- The sweep deletes only a binding whose workspace is gone (404 in production
+  and every dev branch) and that is older than `--older-than` days; app KIDs are
+  never swept. References to a binding cannot be checked first; the metastore
+  refuses a delete that one blocks.
+
+### The MCP server's workspace
+
+In a Snowflake or BigQuery project with the `row-level-security` feature,
+`keboola-mcp-server` creates its own workspace governed (config `mcp-workspace-<hex>` of the
+`keboola.mcp-server-tool` component), so Query Service enforces the policies on
+`query_data`. kbagent sets everything up for it with the commands above:
+
+```bash
+kbagent feature project-add --project prod --feature row-level-security   # super-admin manage token, once per project
+kbagent --json workspace list --project prod            # the MCP workspace: login_type governed, name mcp-workspace-<hex>
+kbagent --json rls list --project prod                  # the policies it gets
+kbagent --json rls bind --project prod --workspace-id MCP_WS_ID --rls-policy ID --stack-id S   # optional: only some of them
+```
+
+- **No binding = every policy of the project.** The MCP server never creates a
+  binding. Bind only to give the MCP workspace fewer policies than the project has.
+- **The KID changes with the workspace.** A branch session (a workspace per
+  branch) or a recreated workspace has a new id, so the binding of the old one
+  does not follow it and the new workspace starts with every policy again. Bind
+  again after `workspace list` shows the new id; `rls bindings-sweep` removes
+  what the old ones left behind.
+- **Deny by default.** A table that no `rls-policy` and no `cls-policy` applies to is
+  not readable from the MCP workspace (the opposite of an ordinary workspace, where it is
+  unfiltered): an ordinary reader gets an empty result, an administrator the 403
+  refusal. A `"*"` rule opens a table to every identified reader.
+- **Identity.** Since go-monorepo #668 every reader has a *subject*, which is what
+  `subjects` rules are matched against (exactly, case-sensitive): an administrator
+  behind a Storage token (a kbagent session, a programmatic token -- also the one the
+  MCP server forwards -- or an administrator's master Storage token) is
+  `keboola|<user id>`, an app user is `<idp>|<sub>`. An email is never matched by a
+  1.2.0 policy; only stored 1.0.0 / 1.1.0 policies still match by email. **Write your
+  own subject into the first policy** (`keboola|<your user id>`, the member `id` of
+  `kbagent project member-list`, which needs a Manage token), or a group or `["*"]`
+  rule that covers you; otherwise you cannot read the table you protected. An
+  integration, data app or other non-administrator token has no identity and is
+  refused.
+- **Stack id.** `--stack-id` must equal Query Service's `QUERY_RLS_STACK_ID`
+  (for example `dev-keboola-aws-eu-west-1`); no API exposes it.
+
+---
+
+## Workflow 1 -- Guided setup (the default path for a human admin)
+
+`rls setup` is interactive-terminal-only -- it needs a real TTY for the
+checkbox table picker and the condition-builder prompts. Under `--json` or
+without an interactive terminal (stdin or stdout piped) it exits 2 with an
+`INVALID_ARGUMENT` error (a JSON envelope under `--json`) pointing at `rls create`.
+
+```bash
+# 1. Run it directly in an interactive terminal -- NOT through kbagent http,
+#    NOT with --json, NOT from a scheduled agent task.
+kbagent rls setup --project prod
+
+# 2. It shows a checkbox picker over `storage tables --project prod`'s
+#    result: arrows/j-k to move, space to toggle, 'a' to select all,
+#    enter to confirm, 'q'/esc/ctrl-c to cancel.
+
+# 3. For the rules, either:
+#    (a) build interactively -- it prompts for a selector (subjects, groups or
+#        everyone; never an email), then a small
+#        menu: comparison / IN-NOT_IN / IS NULL-IS NOT NULL / always-true,
+#        with an "add another rule?" loop. A typed value is read as JSON when
+#        it is one (42, 4.5, true); quote it ("42") to keep a string. Or
+#    (b) skip the builder entirely with a prepared --rules file for
+#        anything beyond a single simple comparison per selector:
+kbagent rls setup --project prod --rules @rls_rules.json
+
+# 4. It prints a compiled-condition preview per selected table, then a
+#    single confirm (skip with --yes) before creating one `rls-policy`
+#    object per table -- via the exact same write path `rls create` uses.
+#    No dialect is written unless --dialect is passed (it must be the project backend).
+```
+
+## Workflow 2 -- Scripted / non-interactive policy creation
+
+The path for CI, batch onboarding, or any AI-agent-driven invocation.
+`--rules` always takes the same `JSON|@file|-` form the rest of kbagent uses
+for structured input (see e.g. `config update --configuration`).
+
+```bash
+# 1. Write the rules array to a file (or build it inline for something
+#    this short) -- ALWAYS a declarative condition, never a predicate string.
+cat > rls_rules.json <<'EOF'
+[
+  {
+    "groups": ["eu-analysts"],
+    "condition": {"column": "region", "op": "eq", "value": "EU"}
+  },
+  {
+    "subjects": ["keboola|1234", "https://login.example.com|user-5678"],
+    "condition": {"column": "region", "op": "eq", "value": "US"}
+  }
+]
+EOF
+
+# 2. ALWAYS preview first -- --dry-run runs every validation (a given dialect vs
+#    backend, rule and default shape, live schema check when
+#    available) and compiles a condition preview, but writes nothing.
+kbagent --json rls create \
+  --project prod \
+  --table-id in.c-crm.invoices \
+  --rules @rls_rules.json \
+  --dry-run
+# -> {"table": "in.c-crm.invoices",
+#     "scope": "targeted", "target_project_ids": [], "preview": [
+#       {"groups": ["eu-analysts"], "condition": "\"region\" = 'EU'"},
+#       {"subjects": ["keboola|1234", "https://login.example.com|user-5678"],
+#        "condition": "\"region\" = 'US'"}
+#     ], "dry_run": true}
+
+# 3. Then the real write (still --json for a clean, single-document
+#    response -- no confirmation prompt in --json mode):
+kbagent --json rls create --project prod --table-id in.c-crm.invoices --rules @rls_rules.json
+```
+
+A reader with no rule on a governed table reads nothing -- fail-closed is the
+enforcement engine's whole design point (see the Query Service RFC in go-monorepo,
+`docs/rfc/query-service-rls-cls`): an ordinary reader gets an empty result, an
+administrator behind a Storage token the 403 refusal. Before protecting a table, make
+sure every reader who legitimately needs access has a matching rule, including
+yourself if you plan to verify the result (`query_data` or a governed workspace): your own
+subject is `keboola|<your user id>`, matched exactly (case-sensitive, the issuer's trailing `/` aside).
+
+## Workflow 3 -- Inspect existing policies before making a change
+
+```bash
+# 1. What's visible to this project?
+kbagent --json rls list --project prod
+# -> {"project": "prod", "policies": [
+#      {"id": "...", "table": "in.c-crm.invoices", "dialect": "snowflake",
+#       "rule_count": 2, "scope": "targeted", "owner_project_id": 12345,
+#       "source_project_id": null, "target_project_ids": [22222]}
+#    ]}
+
+# 2. Full rule set for one policy (needed before a partial `rls update`):
+kbagent --json rls detail --project prod --policy-id <id-from-list>
+```
+
+Every policy in the listing **applies** to the project: the metastore lists
+what the project owns, what is granted to it (`targeted`) and every
+`organization` policy, and the enforcement applies all of them.
+`owner_project_id` is the project that owns (and alone may update or delete)
+a `targeted` policy; it is `null` for an `organization` policy.
+`target_project_ids` is shown to the owning project only.
+
+## Workflow 4 -- Condition primitive cookbook
+
+Every `condition` is one of six shapes -- there is no free-text predicate
+field anywhere in this schema, by design (closes the injection surface a
+hand-written-SQL model would have). `rls schema --project P` returns the
+live, authoritative JSON Schema; this is the quick-reference version.
+
+```jsonc
+// Comparison: eq | ne | gt | gte | lt | lte   (value: string, number or boolean)
+{"column": "status", "op": "eq", "value": "active"}
+
+// Membership: in | not_in
+{"column": "region", "op": "in", "values": ["EU", "US"]}
+
+// Nullness: is_null | is_not_null  -- the ONLY way to match null
+{"column": "deleted_at", "op": "is_null"}
+
+// Boolean composition (2+ nested conditions each; there is no "not")
+{"and": [
+  {"column": "region", "op": "eq", "value": "EU"},
+  {"column": "status", "op": "ne", "value": "draft"}
+]}
+{"or": [
+  {"column": "region", "op": "eq", "value": "EU"},
+  {"column": "region", "op": "eq", "value": "US"}
+]}
+
+// Always applies (no filtering for this reader -- use sparingly, this
+// is the escape hatch for "this admin sees everything")
+{"true": true}
+```
+
+- `"value": null` (or `null` inside `values`) is refused: the enforcement would
+  render `col = NULL`, which matches no row. Use `is_null` / `is_not_null`.
+- Column names are matched **case-exactly**: the enforcement quotes them
+  (`"region"` on Snowflake, `` `region` `` on BigQuery), and so does the preview.
+
+`rls create --dry-run` (or `rls setup`'s preview step) renders a condition
+as a `WHERE`-clause-shaped string. It follows the enforcement's rendering
+(quoted columns, `TRUE`/`FALSE`), but it is kbagent's own renderer -- the
+engine that decides what a query returns is the Query Service policy engine
+(go-monorepo `services/query/policy-engine`, `rls.py`, sqlglot-based). Treat the preview as "does this look like what I
+meant," not as proof of what will be enforced.
+
+## Workflow 4b -- Groups, a default and identity placeholders (schema 1.1.0)
+
+*(since vNEXT)*
+
+One policy for many readers instead of one rule per person. Groups are the IdP
+`groups` claim strings exactly as delivered (Entra may deliver object ids);
+Keboola never manages membership.
+
+```bash
+cat > orders_rules.json <<'EOF'
+[
+  {"groups": ["sales-eu"],
+   "condition": {"column": "region", "op": "in", "values": ["EU"]}},
+  {"groups": ["sales-reps"],
+   "condition": {"column": "owner_email", "op": "eq", "value": {"$identity": "email"}}},
+  {"subjects": ["keboola|4321"],
+   "condition": {"true": true}}
+]
+EOF
+kbagent --json rls create --project prod --table-id in.c-sales.orders \
+  --rules @orders_rules.json --default '{"false": true}' --dry-run
+```
+
+A reader in `sales-eu` and `sales-reps` sees
+`"region" IN ('EU') OR "owner_email" = <their email>`; the auditor sees every
+row; anyone else sees no rows (the `default`), instead of an error.
+
+- `{"$identity": "email"}` (as `value`) and `{"$identity": "groups"}` (as
+  `values`) are resolved by the enforcement per reader, as bound literals.
+- `{"false": true}` matches no row -- useful as a `default` or a rule.
+- A default cannot be removed by `rls update` (the metastore's partial update
+  cannot delete a key); recreate the policy instead.
+- An administrator behind a Storage token (kbagent, the MCP server) has no groups
+  (unknown), so a `groups` rule never matches it, and an email is not a selector: give
+  it a `subjects` rule (`keboola|<user id>`). `groups` rules match readers whose
+  identity carries a groups claim, such as an app user.
+
+## Workflow 4c -- Default deny and the wildcard (governed workspaces)
+
+*(since vNEXT)*
+
+In a **governed workspace** (`workspace create --governed`, or the workspace the
+MCP server creates governed in a project with the `row-level-security` feature)
+nothing is readable
+until a policy says so: a table with **no** policy (rls or cls) is refused (an
+ordinary reader gets an empty result, an administrator the 403), and so is a
+table whose policies match the reader in no rule. Admins and organization admins
+are not exempt. An admin who sees no data has not authored the policies yet --
+author them before reading through a governed workspace.
+
+To open a table to every identified reader, use the wildcard selector `"*"`
+(`subjects` or `groups`, schema 1.2.0; `groups` from 1.1.0) with an explicit condition:
+
+```bash
+kbagent --json rls create --project prod --table-id in.c-ref.countries \
+  --rules '[{"subjects": ["*"], "condition": {"true": true}}]' --dry-run
+```
+
+- `"*"` must be the **only** entry of a `subjects` / `groups` list
+  (`["*", "keboola|1234"]` is refused locally); it never matches a reader with
+  no identity; it cannot widen a stricter policy on the same table (policies
+  AND together), unless a workspace binding leaves that policy out.
+- It needs a metastore whose `rls-policy` schema is 1.1.0 or later for `groups` and 1.2.0 for
+  `subjects`: on a 1.0.0 schema `"*"` is a literal that matches nobody, so kbagent refuses it.
+- A debug or "see everything" user is a normal rule (for example
+  `{"groups": ["debug"], "condition": {"true": true}}`), not a bypass flag.
+- A `cls-policy` alone opens the table for the readers it names, with every row and only its
+  columns; a reader it does not name is refused. Rows are limited only by an `rls-policy`: author
+  both to limit rows and columns.
+
+## Workflow 5 -- Share a policy with sibling projects (targeted grants)
+
+`--target-project` (on `create`/`setup`/`update`) takes a registered alias or a
+project ID, repeatable or comma-separated, de-duplicated. On `create` the grants
+travel in the create request itself (one transaction). On `update` the list
+REPLACES the grants of a `targeted` policy, and `--clear-target-projects` revokes
+them all. Granting needs the organization-admin role; on `update` the grants
+change before the rules, so a refused grant writes nothing.
+
+An `organization` policy has no grants and cannot be narrowed -- delete it and
+create a `targeted` one instead.
+
+```bash
+kbagent --json rls create \
+  --project prod \
+  --table-id in.c-crm.invoices \
+  --rules @rls_rules.json \
+  --target-project customer-a,33333 \
+  --dry-run
+# -> {"scope": "targeted", "target_project_ids": [22222, 33333], ...}
+```
+
+Omitting `--target-project` on a later `rls update` leaves the grants
+untouched -- pass the FULL desired list to change them, not just an addition.
+
+## Workflow 6 -- Update or revoke a policy safely
+
+`rls update` changes only the flags you pass. It reads the policy, validates the
+MERGED result (the metastore's partial update validates only the keys it
+receives), then sends a partial update (`PATCH`) with just the changed keys --
+keys kbagent does not know and concurrent changes to other keys survive. The
+result is read back after the write.
+
+```bash
+# Change only the rules, leave table/dialect/scope/grants exactly as they are:
+kbagent --json rls update \
+  --project prod \
+  --policy-id <id> \
+  --rules @updated_rls_rules.json \
+  --dry-run   # preview first, same as create
+
+kbagent --json rls update --project prod --policy-id <id> --rules @updated_rls_rules.json
+
+# Delete the policy (this does not open the table: with no other policy it is unreadable). Show it first, then delete:
+kbagent --json rls delete --project prod --policy-id <id> --dry-run
+kbagent rls delete --project prod --policy-id <id>
+# --yes to skip the confirmation prompt in a script; --json also skips it.
+# `delete` is destructive-class: `--deny-destructive` blocks it.
+```
+
+## Workflow 7 -- Troubleshooting errors
+
+On a stack whose metastore predates the `rls-policy`/`cls-policy` schemas,
+EVERY command in this group fails with a classified `NOT_FOUND` -- expected,
+not a kbagent bug. Tell it apart from a real problem:
+
+```bash
+kbagent --json rls schema --project prod
+```
+
+- **`NOT_FOUND` / "Could not fetch the rls-policy schema: ..."** -- the
+  object type isn't registered on this stack's metastore (same for
+  `cls schema`). Nothing here is broken; use a stack with a newer metastore.
+  `detail`/`update`/`delete` also answer `NOT_FOUND` for a policy this token
+  may not read (owned by another project).
+- **`MISSING_MASTER_TOKEN`** -- the registered token for this project isn't a
+  master token. `kbagent project info --project P` -> `is_master_token`, then
+  `project edit --project P --token ...` with a master token.
+- **`ACCESS_DENIED` (403)** on `--target-project`, `--clear-target-projects` or
+  `--scope organization` -- the token's user is not an organization admin.
+- **`INVALID_RLS_POLICY`** -- the policy failed validation: a `--dialect` other than
+  the project backend, a malformed rule or default, a null comparison, or the
+  live JSON-Schema check. The message lists every
+  violation; nothing was written.
+- **`ALREADY_EXISTS`** -- the project already has a policy for this table
+  (policies are named by table). `rls update` or `rls delete` it.
+- **`INVALID_ARGUMENT` / exit 2** -- a bad option value: an unknown
+  `--target-project`, `--target-project` with `--scope organization`, or an
+  update with nothing to change.
+- **`CONFIG_ERROR` / exit 5** -- the `--project` alias isn't registered
+  locally. `kbagent project list`.
+- **`workspace query` on a governed workspace: `ACCESS_DENIED` (403) "Row-level
+  security does not allow this query"** -- Query Service refuses by default.
+  Check in this order: the table is named `"<bucket id>"."<table>"`; an `rls-policy` (and a `cls-policy` if you use
+  one) covers the table (`rls list`) and a rule matches your identity or `"*"`;
+  the token is an administrator's (see Identity above); the workspace binding,
+  if any, lists that policy (`rls bindings`).
+- **The same 403 for a statement the engine refuses whatever the policies say**
+  *(since vNEXT)* -- one generic message for every refusal, an ordinary reader included
+  (no empty result). Refused anywhere in the statement: `IDENTIFIER()` / `TABLE()`
+  outside FROM, the `AI_*` / `AI.*` functions (and `Generate*`, `PREDICT`,
+  `VECTOR_SEARCH`), `TO_FILE`, `READ_CSV` / `READ_PARQUET`, `SECRET`, the
+  session-context functions (`CURRENT_USER()`, `CURRENT_ROLE()`, ...), `<sequence>.NEXTVAL`,
+  `$x` / `$1` and `@@x`, a control character (other than tab, line feed, carriage
+  return), an unquoted name with `$$` or a non-ASCII character, and a statement over
+  32 KiB, 200 CTEs or 300 table references. `CURRENT_DATE` / `CURRENT_TIME` /
+  `CURRENT_TIMESTAMP` stay allowed. Rewrite the query (quote the name, drop the
+  function); the refusal does not say which rule it hit (go-monorepo #687, AJDA-3729).
+- **`workspace query` on a governed workspace: `503` "Row-level security could not
+  be applied to this workspace"** *(since vNEXT)* -- the enforcement itself failed
+  (engine or policy store unavailable, an engine failure). Retryable: repeat the
+  query; it is not a policy decision and nothing was run unfiltered.
+
+---
+
+## Reference: RLS contract gotchas
+
+- [gotchas.md](gotchas.md) -- search "rls" for the full list, version-tagged.
+- One `rls-policy` object per protected table, never one blob per project.
+- Every policy a project can list applies to it -- an `organization` policy
+  governs the table in every project of the organization, except where a workspace
+  binding or a Data App's policy lists leave it out.
+- `--scope project` does not exist anywhere in this command group. This is
+  intentional, not a missing feature -- see the Query Service RFC (go-monorepo,
+  `docs/rfc/query-service-rls-cls`).
+- `rls setup` has no REST route (`kbagent serve`) -- it is genuinely
+  terminal-only, same carve-out as `auth register-projects`'s picker.
+
+---
+
+## Column-Level Security (CLS)
+
+`kbagent cls` authors `cls-policy` objects: one per protected table, each rule a selector
+(`subjects` or IdP `groups`, never an email) and the `visible_columns` those readers may see
+(an allowlist -- unlisted columns are omitted from the result; masking is not supported).
+It mirrors `rls` (`list`, `detail`, `schema`, `create`, `update`, `delete`) with the same
+scope rule and default, the same write permissions, dialect check, `--dry-run`/`--yes`
+flags and partial `update`; there is no `cls setup` wizard and no `default`.
+Enforcement and RLS+CLS composition happen in the same place as for RLS: the Query
+Service policy engine on a governed workspace. A column policy alone opens the
+table for the readers it names (every row, only its columns); with an `rls-policy` too, rows come from the
+`rls-policy` and columns from the `cls-policy`.
+
+```bash
+kbagent --json cls schema --project prod            # live shape
+kbagent --json cls list --project prod              # expect [] on a fresh project
+
+# Dry-run first: prints each selector's projection, writes nothing.
+kbagent cls create --project prod --table-id in.c-crm.customers \
+  --rules '[{"groups":["analysts"],"visible_columns":["id","region","amount"]},
+            {"subjects":["keboola|1234","keboola|5678"],"visible_columns":["id"]}]' --dry-run
+
+kbagent cls create --project prod --table-id in.c-crm.customers --rules @cls_rules.json --yes
+kbagent --json cls update --project prod --policy-id <id> --rules @cls_rules_v2.json
+kbagent cls delete --project prod --policy-id <id> --yes
+```
+
+- A table can carry both an `rls-policy` and a `cls-policy`; author them separately. Rows come from the
+  `rls-policy`, columns from the `cls-policy`; either one alone also opens the table for the readers it names.
+- `INVALID_CLS_POLICY` -- the policy failed validation (exactly one of `subjects`/
+  `groups` per rule, non-empty `visible_columns` of `[A-Za-z0-9_]+` names, the dialect check,
+  no `default`, plus the live JSON Schema). Nothing was written.
+- Within one CLS policy, an identity several rules match sees the union of their
+  `visible_columns`; several CLS policies on one table intersect (since vNEXT).

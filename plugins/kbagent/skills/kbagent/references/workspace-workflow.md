@@ -118,8 +118,9 @@ kbagent --json workspace create --project ALIAS --name "governed-ws" --governed 
 kbagent --json workspace detail --project ALIAS --workspace-id WS_ID              # login_type: governed
 ```
 
-There is no password or key to save. `workspace password` and a direct login are refused; load tables with
-`workspace load` as usual and read them through Query Service (`workspace list --qs-compatible` does not list it: `workspace query` uses a Storage token, which a policy must select). See gotchas.md
+There is no password or key to save. `workspace password` and a direct login are refused; read tables through
+Query Service. It is `qs_compatible` in `workspace list` / `workspace detail`, but `workspace list --qs-compatible`
+does not list it: `workspace query` uses a Storage token, which a policy must select. See gotchas.md
 "`workspace create --governed`".
 
 ## Load types: clone / copy / view

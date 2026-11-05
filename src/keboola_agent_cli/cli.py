@@ -13,6 +13,7 @@ from .commands.auth import auth_app
 from .commands.billing import billing_app
 from .commands.branch import branch_app
 from .commands.changelog import changelog_command
+from .commands.cls import cls_app
 from .commands.component import component_app
 from .commands.config import config_app
 from .commands.context import context_command
@@ -34,6 +35,7 @@ from .commands.org import org_app
 from .commands.permissions import permissions_app
 from .commands.project import project_app
 from .commands.repl import repl_command
+from .commands.rls import rls_app
 from .commands.schedule import schedule_app
 from .commands.search import search_command
 from .commands.semantic_layer import semantic_layer_app
@@ -61,6 +63,7 @@ from .services.agent_service import AgentService
 from .services.auth_service import AuthService
 from .services.billing_service import BillingService
 from .services.branch_service import BranchService
+from .services.cls_service import ClsService
 from .services.component_service import ComponentService
 from .services.config_service import ConfigService
 from .services.data_app_git_service import DataAppGitService
@@ -79,8 +82,10 @@ from .services.member_service import MemberService
 from .services.merge_request_service import MergeRequestService
 from .services.notification_service import NotificationService
 from .services.org_service import OrgService
+from .services.policy_binding_service import PolicyBindingService
 from .services.project_service import ProjectService
 from .services.repo_validate_service import RepoValidateService
+from .services.rls_service import RlsService
 from .services.schedule_service import ScheduleService
 from .services.search_service import SearchService
 from .services.semantic_layer_service import SemanticLayerService
@@ -166,6 +171,8 @@ app.add_typer(sync_app, name="sync", rich_help_panel=_DEV)
 app.add_typer(encrypt_app, name="encrypt", rich_help_panel=_DEV)
 app.add_typer(semantic_layer_app, name="semantic-layer", rich_help_panel=_DEV)
 app.add_typer(semantic_layer_app, name="sl", rich_help_panel=_DEV, hidden=True)
+app.add_typer(rls_app, name="rls", rich_help_panel=_DEV)
+app.add_typer(cls_app, name="cls", rich_help_panel=_DEV)
 app.add_typer(http_app, name="http", rich_help_panel=_DEV)
 app.add_typer(agent_app, name="agent", rich_help_panel=_DEV)
 app.add_typer(dev_portal_app, name="dev-portal", rich_help_panel=_DEV)
@@ -362,6 +369,9 @@ def main(
     data_app_service = DataAppService(config_store=config_store)
     data_app_git_service = DataAppGitService(config_store=config_store)
     semantic_layer_service = SemanticLayerService(config_store=config_store)
+    rls_service = RlsService(config_store=config_store)
+    cls_service = ClsService(config_store=config_store)
+    policy_binding_service = PolicyBindingService(config_store=config_store)
     repo_validate_service = RepoValidateService(config_store=config_store)
     kai_service = KaiService(config_store=config_store)
     docs_service = DocsService(config_store=config_store)
@@ -423,6 +433,9 @@ def main(
     ctx.obj["data_app_service"] = data_app_service
     ctx.obj["data_app_git_service"] = data_app_git_service
     ctx.obj["semantic_layer_service"] = semantic_layer_service
+    ctx.obj["rls_service"] = rls_service
+    ctx.obj["cls_service"] = cls_service
+    ctx.obj["policy_binding_service"] = policy_binding_service
     ctx.obj["repo_validate_service"] = repo_validate_service
     ctx.obj["kai_service"] = kai_service
     ctx.obj["docs_service"] = docs_service

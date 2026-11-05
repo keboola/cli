@@ -1,0 +1,374 @@
+"""RLS condition primitives: shape constants, structural validation, preview.
+
+Pure functions: no HTTP, no ``ConfigStore`` -- trivially unit-testable,
+mirroring ``flow_validation.py``'s split for the same reason.
+
+The condition/rules shape mirrored here is the one defined in
+the Query Service RFC (go-monorepo ``docs/rfc/query-service-rls-cls``) -- kbagent never
+invents its own shape, it authors exactly what the enforcement engine (go-monorepo
+``services/query/policy-engine``, ``rls.py::_compile_primitive``, sqlglot-based)
+expects to read back from the metastore. The checks follow the policy
+schema 1.2.0 (go-monorepo ``rls-policy_schema_1.2.0.json``): a rule selects identities by
+``subjects`` (``<idp>|<sub>``) or IdP ``groups``, never by email (AJDA-3680; the legacy 1.0.0/1.1.0
+``principal`` / ``principals`` still exist in stored policies and are read, not authored); within a policy every rule matching one identity
+applies (the conditions combine with OR; policies on one table combine with AND); ``{"false": true}`` matches no row; a literal may be the
+``{"$identity": ...}`` placeholder the engine resolves per reader.
+
+``compile_condition_preview`` below is a **preview** for ``--dry-run`` /
+confirmation display, not the enforcement engine -- that lives in
+the Query Service policy engine (go-monorepo ``services/query/policy-engine``,
+sqlglot-based, a different repo). It follows the
+enforcement's rendering where an admin could be misled otherwise: columns
+quoted per dialect (the enforcement matches them case-exactly), booleans as
+``TRUE``/``FALSE``. ``null`` comparisons never reach it: the enforcement would
+render ``col = NULL`` (matches nothing), so validation refuses them. ``$identity``
+placeholders render as ``<identity.email>`` / ``(<identity.groups>)``. Adding
+sqlglot as a kbagent dependency just for this string is not warranted.
+"""
+
+from __future__ import annotations
+
+import re
+from enum import StrEnum
+from typing import Any
+
+# The condition operators of the policy schema, checked locally so a typo gets a specific error
+# even when the live schema is unavailable. COMPARISON_SQL also renders the preview.
+COMPARISON_SQL = {"eq": "=", "ne": "!=", "gt": ">", "gte": ">=", "lt": "<", "lte": "<="}
+RLS_COMPARISON_OPS = frozenset(COMPARISON_SQL)
+RLS_MEMBERSHIP_OPS = frozenset({"in", "not_in"})
+RLS_NULLNESS_OPS = frozenset({"is_null", "is_not_null"})
+RLS_CONDITION_OPS = RLS_COMPARISON_OPS | RLS_MEMBERSHIP_OPS | RLS_NULLNESS_OPS
+
+
+# The metastore's `rls-policy` schema (RFC) restricts `dialect` to these two
+# -- the same pair `rewrite_query()` on the enforcement side never transpiles
+# between (predicates are pinned to one workspace dialect per policy).
+class Dialect(StrEnum):
+    """The policy schema's ``dialect`` enum (the CLI ``--dialect`` choice and the REST field)."""
+
+    SNOWFLAKE = "snowflake"
+    BIGQUERY = "bigquery"
+
+
+RLS_DIALECTS: tuple[str, ...] = tuple(Dialect)
+
+# The legacy (schema 1.0.0/1.1.0) principal pattern: no whitespace or control characters.
+_PRINCIPAL_RE = re.compile(r"^[^\s\x00-\x1f\x7f]+$")
+# A subject is `<idp>|<sub>`: the issuer of the identity provider (no `|`, white space or control character), a
+# `|`, the user's `sub` (printable text). The policy engine's pattern, stricter than the 1.2.0 schema: a control
+# character the schema stores makes the engine refuse the whole policy set of the project (`RULE_INVALID`).
+_SUBJECT_RE = re.compile(r"^[^|\s\x00-\x1f\x7f]+\|[^\x00-\x1f\x7f]+$")
+_SUBJECT_MAX_LENGTH = 1024
+# IdP group names may contain spaces ("Sales EU"); only control characters are refused.
+_GROUP_RE = re.compile(r"^[^\x00-\x1f\x7f]+$")
+
+# The rule selectors a NEW policy may use (schema 1.2.0) -- each rule names exactly one. The legacy selectors
+# of 1.0.0/1.1.0 objects are only read (stored policies, an update that keeps their rules), never authored.
+SELECTORS: tuple[str, ...] = ("subjects", "groups")
+LEGACY_SELECTORS: tuple[str, ...] = ("principal", "principals")
+ALL_SELECTORS: tuple[str, ...] = (*LEGACY_SELECTORS, *SELECTORS)
+
+# Wildcard selector: matches every IDENTIFIED reader (never an anonymous one). It must be the only entry of a
+# `subjects` / `groups` (or legacy `principals`) list; it exists from schema 1.1.0 (in a 1.0.0 object it is a
+# literal that no email equals, so it matches nobody).
+WILDCARD = "*"
+WILDCARD_MIN_SCHEMA_VERSION = (1, 1, 0)
+# `subjects` exist from schema 1.2.0; an older metastore would refuse the key (or, worse, never match it).
+SUBJECTS_MIN_SCHEMA_VERSION = (1, 2, 0)
+
+# The `$identity` placeholders: `value` may be the reader's email, `values` the reader's groups.
+IDENTITY_EMAIL = {"$identity": "email"}
+IDENTITY_GROUPS = {"$identity": "groups"}
+
+# How each dialect quotes an identifier. The enforcement compiles columns quoted (case-exact), so the
+# preview must too -- an unquoted preview would hide a case mismatch the real filter does not forgive.
+_QUOTE = {"snowflake": '"', "bigquery": "`"}
+
+
+def _is_sentinel(condition: dict[Any, Any], key: str) -> bool:
+    """Exactly ``{"true": true}`` / ``{"false": true}``. ``{"true": false}`` (or ``0``/extra keys) would
+    otherwise read as the opposite of what the author typed. ``is True`` because ``1 == True``."""
+    return len(condition) == 1 and condition[key] is True
+
+
+def _is_scalar(value: Any) -> bool:
+    """A literal the primitives allow: string, number or boolean -- never an object or array."""
+    return isinstance(value, str | int | float | bool)
+
+
+def validate_condition_ops(condition: Any) -> list[str]:
+    """Recursively check every operator name used in ``condition`` is known.
+
+    A defensive pre-check ahead of the (possibly unavailable) live schema
+    fetch: an unknown ``op`` typo gets a specific error here instead of a
+    generic Draft7 "not valid under any of the given schemas" once it does
+    reach structural validation. Returns human-readable error strings.
+    """
+    errors: list[str] = []
+    if not isinstance(condition, dict):
+        return [f"condition must be an object, got {type(condition).__name__}"]
+    for sentinel in ("true", "false"):
+        if sentinel in condition:
+            if not _is_sentinel(condition, sentinel):
+                errors.append(f"'{sentinel}' condition must be exactly {{\"{sentinel}\": true}}")
+            return errors
+    if "and" in condition or "or" in condition:
+        # Exactly one composition key and nothing else: `{"and": [...], "or": [...]}` would otherwise have
+        # one branch silently validated and the other dropped, so the policy would no longer be the tree
+        # the author submitted.
+        if set(condition) not in ({"and"}, {"or"}):
+            errors.append(
+                f"an 'and'/'or' condition must have exactly one of those keys and no others, got {sorted(condition)}"
+            )
+            return errors
+        key = "and" if "and" in condition else "or"
+        clauses = condition[key]
+        if not isinstance(clauses, list) or len(clauses) < 2:
+            errors.append(f"'{key}' requires at least 2 nested conditions")
+            return errors
+        for clause in clauses:
+            errors.extend(validate_condition_ops(clause))
+        return errors
+    op = condition.get("op")
+    if not isinstance(op, str) or op not in RLS_CONDITION_OPS:
+        errors.append(f"unknown condition op {op!r} (expected one of {sorted(RLS_CONDITION_OPS)})")
+        return errors
+    # The primitive's shape: checked here so a malformed rule fails as INVALID_RLS_POLICY even when the
+    # live schema is unavailable, instead of reaching `compile_condition_preview` and crashing it.
+    column = condition.get("column")
+    if not isinstance(column, str) or not column:
+        errors.append(f"condition with op {op!r} needs a non-empty string 'column'")
+    if op in RLS_COMPARISON_OPS:
+        if "value" not in condition:
+            errors.append(f"condition with op {op!r} needs a 'value'")
+        elif condition["value"] is None:
+            # The enforcement renders `col = NULL`, which matches no row: the principal silently sees nothing.
+            errors.append(
+                f"condition with op {op!r} cannot compare to null; use op 'is_null' / 'is_not_null'"
+            )
+        elif not _is_scalar(condition["value"]) and condition["value"] != IDENTITY_EMAIL:
+            errors.append(
+                f"condition with op {op!r} needs a string, number or boolean 'value', "
+                f"or {IDENTITY_EMAIL}"
+            )
+    if op in RLS_MEMBERSHIP_OPS:
+        values = condition.get("values")
+        if values == IDENTITY_GROUPS:
+            pass
+        elif not isinstance(values, list) or not values:
+            errors.append(
+                f"condition with op {op!r} needs a non-empty list 'values', or {IDENTITY_GROUPS}"
+            )
+        elif any(value is None for value in values):
+            errors.append(
+                f"condition with op {op!r} cannot list null in 'values' (it never matches); use 'is_null'"
+            )
+        elif not all(_is_scalar(value) for value in values):
+            errors.append(f"condition with op {op!r} needs string, number or boolean 'values'")
+    # No keys beyond the op's own shape (the schema forbids additional properties): a stray `values` on an
+    # `eq`, or a `value` on an `in`, is an authoring mistake that would otherwise be silently ignored.
+    allowed = {"column", "op"} | (
+        {"value"} if op in RLS_COMPARISON_OPS else {"values"} if op in RLS_MEMBERSHIP_OPS else set()
+    )
+    if extra := sorted(set(condition) - allowed):
+        errors.append(f"condition with op {op!r} has unexpected keys {extra}")
+    return errors
+
+
+def validate_selector_fields(rule: dict[Any, Any], index: int) -> list[str]:
+    """Each rule names exactly one selector: ``subjects`` or ``groups`` (or a stored legacy ``principal`` /
+    ``principals``, which authoring refuses separately, see :func:`legacy_selector_errors`).
+
+    Shared by the RLS and CLS (``cls_service``) local checks -- both policy types use the identical
+    selector shape. Key PRESENCE decides "exactly one" (a truthiness test would let
+    ``{"subjects": ["a|b"], "groups": []}`` through); the value is then checked on its own.
+    """
+    present = [key for key in ALL_SELECTORS if key in rule]
+    if len(present) != 1:
+        return [f"rules[{index}] must set exactly one of {'/'.join(SELECTORS)}"]
+    key = present[0]
+    names = [rule[key]] if key == "principal" else rule[key]
+    if (
+        not isinstance(names, list)
+        or not names
+        or not all(isinstance(name, str) and name for name in names)
+    ):
+        shape = (
+            "a non-empty string" if key == "principal" else "a non-empty list of non-empty strings"
+        )
+        return [f"rules[{index}].{key} must be {shape}"]
+    if key != "principal" and WILDCARD in names and len(names) > 1:
+        return [
+            f"rules[{index}].{key}: {WILDCARD!r} (every identified reader) must be the only entry"
+        ]
+    if key == "subjects":
+        return [
+            f"rules[{index}]: subjects entry {name!r} must be '<idp>|<sub>' (the issuer of the "
+            "identity provider, a '|', the user's sub) or '*'"
+            for name in names
+            if name != WILDCARD
+            and (not _SUBJECT_RE.fullmatch(name) or len(name) > _SUBJECT_MAX_LENGTH)
+        ]
+    pattern, problem = (
+        (_GROUP_RE, "control characters")
+        if key == "groups"
+        else (_PRINCIPAL_RE, "whitespace or control characters")
+    )
+    return [
+        f"rules[{index}]: {key} entry {name!r} contains {problem}"
+        for name in names
+        if not pattern.fullmatch(name)
+    ]
+
+
+def legacy_selector_errors(rules: Any) -> list[str]:
+    """One error per rule that names an email selector (``principal`` / ``principals``): a new policy selects by
+    ``subjects`` or ``groups`` (AJDA-3680)."""
+    if not isinstance(rules, list):
+        return []
+    return [
+        f"rules[{index}] uses {'/'.join(key for key in LEGACY_SELECTORS if key in rule)}: an email is "
+        "no longer allowed as a selector in a new policy; use 'subjects' (<idp>|<sub>, an administrator "
+        "behind a Storage token is keboola|<user id>) or 'groups'"
+        for index, rule in enumerate(rules)
+        if isinstance(rule, dict) and any(key in rule for key in LEGACY_SELECTORS)
+    ]
+
+
+def rules_use_wildcard(rules: Any) -> bool:
+    """Whether any rule selects by the ``"*"`` wildcard (``subjects``, ``groups`` or a legacy email selector)."""
+    if not isinstance(rules, list):
+        return False
+    return any(
+        isinstance(rule, dict)
+        and any(
+            (rule[key] == WILDCARD) if key == "principal" else (WILDCARD in (rule[key] or []))
+            for key in ALL_SELECTORS
+            if key in rule and isinstance(rule[key], str | list)
+        )
+        for rule in rules
+    )
+
+
+def schema_older_than(schema: dict[str, Any], minimum: tuple[int, int, int]) -> str | None:
+    """The schema's ``version`` when it is older than ``minimum``, else ``None``.
+
+    An unreadable or absent ``version`` is not proof of anything, so it returns ``None`` (the caller's
+    structural validation against the live schema still runs).
+    """
+    version = schema.get("version")
+    try:
+        parsed = tuple(int(part) for part in str(version).split(".")[:3])
+    except ValueError:
+        return None
+    return str(version) if parsed < minimum else None
+
+
+def schema_lacks_wildcard(schema: dict[str, Any]) -> str | None:
+    """The schema's ``version`` when it is older than the one that defines ``"*"``, else ``None``."""
+    return schema_older_than(schema, WILDCARD_MIN_SCHEMA_VERSION)
+
+
+def rules_use_subjects(rules: Any) -> bool:
+    """Whether any rule selects by ``subjects``."""
+    return isinstance(rules, list) and any(
+        isinstance(rule, dict) and "subjects" in rule for rule in rules
+    )
+
+
+def rule_selector(rule: dict[str, Any]) -> dict[str, Any]:
+    """The rule's selector as written (``{"subjects": [...]}``, ``{"groups": [...]}`` or, in a stored policy, a legacy
+    ``{"principal": ...}`` / ``{"principals": [...]}``)."""
+    return {key: rule[key] for key in ALL_SELECTORS if key in rule}
+
+
+def validate_rules_local(rules: Any) -> list[str]:
+    """Semantic checks on ``rules`` that hold regardless of schema availability.
+
+    Runs even when the live schema fetch degraded (see ``RlsService._fetch_schema``): each rule names
+    exactly one selector (:func:`validate_selector_fields`) and a well-formed ``condition``
+    (:func:`validate_condition_ops`). Rules naming the same identity are fine -- the engine ORs them.
+    Returns human-readable error strings (empty = valid).
+    """
+    errors: list[str] = []
+    if not isinstance(rules, list) or not rules:
+        return ["'rules' must be a non-empty array"]
+    for index, rule in enumerate(rules):
+        if not isinstance(rule, dict):
+            errors.append(f"rules[{index}] must be an object")
+            continue
+        errors.extend(validate_selector_fields(rule, index))
+        condition = rule.get("condition")
+        if condition is None:
+            errors.append(f"rules[{index}] is missing 'condition'")
+            continue
+        errors.extend(f"rules[{index}].{err}" for err in validate_condition_ops(condition))
+    return errors
+
+
+def compile_condition_preview(condition: dict[str, Any], dialect: str) -> str:
+    """Render ``condition`` as a human-readable ``WHERE``-clause-shaped string.
+
+    Preview only -- see module docstring. Raises ``ValueError`` on a
+    condition shape this renderer doesn't recognize (callers should already
+    have run it through :func:`validate_condition_ops` / structural
+    validation first; this function stays strict rather than silently
+    rendering something misleading).
+    """
+    for sentinel in ("true", "false"):
+        if sentinel in condition:
+            if not _is_sentinel(condition, sentinel):
+                raise ValueError(
+                    f"'{sentinel}' condition must be exactly {{\"{sentinel}\": true}}: {condition!r}"
+                )
+            return sentinel.upper()
+    if "and" in condition or "or" in condition:
+        if len(condition) != 1:
+            raise ValueError(
+                f"an 'and'/'or' condition must have exactly one of those keys and no others: {condition!r}"
+            )
+        if "and" in condition:
+            return " AND ".join(
+                f"({compile_condition_preview(c, dialect)})" for c in condition["and"]
+            )
+        return " OR ".join(f"({compile_condition_preview(c, dialect)})" for c in condition["or"])
+
+    column = condition.get("column")
+    op = condition.get("op")
+    if not column or op is None:
+        raise ValueError(f"unrecognized condition shape: {condition!r}")
+
+    quote = _QUOTE.get(dialect, '"')
+    column = f"{quote}{column}{quote}"
+    if op in COMPARISON_SQL:
+        return f"{column} {COMPARISON_SQL[op]} {_preview_literal(condition.get('value'))}"
+    if op in RLS_MEMBERSHIP_OPS:
+        values = condition.get("values") or []
+        rendered = (
+            "<identity.groups>"
+            if values == IDENTITY_GROUPS
+            else ", ".join(_preview_literal(v) for v in values)
+        )
+        keyword = "IN" if op == "in" else "NOT IN"
+        return f"{column} {keyword} ({rendered})"
+    if op == "is_null":
+        return f"{column} IS NULL"
+    if op == "is_not_null":
+        return f"{column} IS NOT NULL"
+    raise ValueError(f"unrecognized condition op: {op!r}")
+
+
+def _preview_literal(value: Any) -> str:
+    """Render one scalar literal for the preview string. Not SQL-injection-safe
+
+    on purpose -- this output is never executed, only displayed for human
+    review (see module docstring).
+    """
+    if value == IDENTITY_EMAIL:
+        return "<identity.email>"
+    if isinstance(value, str):
+        return "'" + value.replace("'", "''") + "'"
+    if isinstance(value, bool):  # before the generic str(): Python's `True` is SQL's TRUE
+        return "TRUE" if value else "FALSE"
+    return str(value)
