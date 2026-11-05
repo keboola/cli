@@ -119,6 +119,7 @@ Every rule with its level, the version from which it applies, and how it is chec
 | [R3](#R3) | MUST | now | review, unit tests |
 | [R4](#R4) | SHOULD | now | review |
 | [R5](#R5) | MUST | now | `tests/test_job_idempotency_store.py`, review, unit tests |
+| [R6](#R6) | MUST | now for new and changed commands | `tests/test_config_set_default_bucket.py`, `tests/test_config_state.py`, review, unit tests |
 | [L1](#L1) | note | – | – |
 | [L2](#L2) | MUST | now for new commands; existing lists after 1.0.0 | review |
 | [L3](#L3) | MUST | now for new commands; existing commands after 1.0.0 | review, unit tests |
@@ -626,6 +627,12 @@ A flag that raises the class is in `FLAG_ESCALATIONS` and is checked where the f
 **R5 · MUST · now.** `--idempotency-key` records a pending entry before the create. A definite failure of the create (a 4xx, a validation or permission error, a refused connection or a connect timeout) removes the entry. An unknown outcome (a read timeout, a 5xx, exhausted retries) keeps it; `errors.request_outcome_unknown` classifies the outcome. A replay that finds a pending entry refuses instead of creating again, with a hint that names `kbagent job list` and `--force-rerun`. `POST /jobs/{project}/run` accepts `idempotency_key`.
 
 - Checked by: review and unit tests (`tests/test_job_idempotency_store.py`).
+
+<a id="R6"></a>
+**R6 · MUST · now for new and changed commands.** A mutating command that can finish without a change (class `converges`, R1) reports its outcome in `data.status`. When the command changed something, the value is a verb in the past tense (`updated`, `deleted`, `switched`, `merged`). When the command changed nothing, the value is `unchanged`, or `already_<state>` when the state has a name (`already_in_trash`, `already_merged`). The exit code is 0 in both cases. A `--dry-run` preview is not an outcome, and this rule does not cover it. An existing command gets `status` when a pull request changes it. These commands follow the rule: `config delete`, `flow delete`, `merge-request merge`, `data-app git-auth-set`, `config set-default-bucket` and `config state-set`. `config set-default-bucket` and `config state-set` also keep the older boolean key `changed` for compatibility. Existing outliers: `storage create-table --if-not-exists` (`action: "skipped"`) and the per-item `action` of `sync`.
+
+- Why: an agent that repeats a `converges` command (R1) reads one key to know if the repeat wrote something. Before this rule, the commands used `status`, `changed: false` or `action: "skipped"`.
+- Checked by: review and unit tests (`tests/test_config_set_default_bucket.py`, `tests/test_config_state.py`).
 
 ## 10. Lists
 
