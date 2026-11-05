@@ -2164,6 +2164,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Use --limit to cap row count. Handles sliced files and gzip decompression transparently. Branch-aware.
   storage add-column
     Add a single column to an existing table. Same name:TYPE(length) grammar as create-table --column.
+    An untyped table (isTyped false) takes only a bare name: a type, --not-null or --default exits 2.
     Waits for the Storage job, so a following table-detail lists the column. A failed job exits 1 (STORAGE_JOB_FAILED).
     A wait timeout (exit 4, not retryable) leaves the job running: follow it with storage job-detail --job-id ID --wait; do not add the column again.
 

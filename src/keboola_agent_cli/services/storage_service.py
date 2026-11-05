@@ -1383,18 +1383,27 @@ class StorageService(ColumnDescriptionsMixin):
         the client waits for that job, so the column is listed by
         ``table-detail`` as soon as this returns.
 
+        Storage accepts a ``definition`` only for a typed table (``isTyped``),
+        so on an untyped table a bare name is sent as ``{"name": ...}`` and a
+        type, ``not_null`` or ``default`` is rejected before the request.
+
         Args:
             alias: Project alias.
             table_id: Full table ID (e.g. "in.c-bucket.table").
             column: Column spec, e.g. ``status:VARCHAR(20)`` or a bare ``notes``
-                (implicit STRING).
+                (implicit STRING on a typed table, untyped on an untyped one).
             not_null: If True, the new column is NOT NULL (the backend rejects
                 this unless the table is empty or a default is supplied).
             default: Optional default value for the new column.
             branch_id: If set, target a specific dev branch.
 
         Returns:
-            Dict with the added column name, its definition, table_id, and alias.
+            Dict with the added column name, its definition (``None`` on an
+            untyped table), table_id, and alias.
+
+        Raises:
+            ValueError: the column spec is invalid, or it has a type,
+                ``not_null`` or ``default`` and the table is untyped.
         """
         branch_id = resolve_branch(self._config_store, alias, branch_id)
         projects = self.resolve_projects([alias])
@@ -1405,12 +1414,23 @@ class StorageService(ColumnDescriptionsMixin):
         defaults = {col_name: default} if default is not None else {}
         parsed = _parse_column_spec(column, not_null_set, defaults)
 
+        definition: dict[str, Any] | None = parsed["definition"]
+
         client = self._client_factory(project.stack_url, project.token)
         try:
+            table = client.get_table_detail(table_id, branch_id=branch_id)
+            if not table.get("isTyped"):
+                if ":" in column or not_null or default is not None:
+                    raise ValueError(
+                        f"Table {table_id!r} is untyped: add the column by name only "
+                        f"(--column {parsed['name']}), without a type, --not-null or "
+                        f"--default."
+                    )
+                definition = None
             client.add_column(
                 table_id,
                 name=parsed["name"],
-                definition=parsed["definition"],
+                definition=definition,
                 branch_id=branch_id,
             )
         except KeboolaApiError as exc:
@@ -1420,7 +1440,7 @@ class StorageService(ColumnDescriptionsMixin):
         return {
             "table_id": table_id,
             "column": parsed["name"],
-            "definition": parsed["definition"],
+            "definition": definition,
             "project_alias": alias,
         }
 

@@ -5393,6 +5393,18 @@ the raw Storage API instead of the CLI, the values parameter is `whereValues[]`
 This is the credential-only, no-workspace way to pull a filtered/incremental
 slice -- `workspace query` with a `WHERE` clause needs a live workspace.
 
+### `storage add-column` on an untyped table takes only a bare name
+
+(since vNEXT) Storage accepts a column `definition` only for a typed table
+(`table-detail` shows `isTyped: true`). On an untyped table the API rejects any
+`definition` with `400 Invalid parameters - definition: This field was not
+expected.` Before vNEXT kbagent turned a bare `--column NAME` into an implicit
+`STRING` definition, so `add-column` failed on every untyped table. kbagent now
+reads the table first: on an untyped table a bare name sends `{"name": NAME}`,
+and a `NAME:TYPE`, `--not-null` or `--default` is a local `INVALID_ARGUMENT`
+(exit 2). On an older kbagent, add the column in the UI or with
+`POST /v2/storage/tables/{id}/columns` and body `{"name": "NAME"}`.
+
 ### `storage add-column --not-null` needs an empty table or `--default`
 
 `storage add-column --column name:TYPE(length) [--not-null] [--default VALUE]`:
