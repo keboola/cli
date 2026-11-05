@@ -22,6 +22,8 @@ class WorkspaceCreate(BaseModel):
     backend: str | None = None
     read_only: bool = True
     ui_mode: bool = False
+    # Snowflake only, not with ui_mode: a workspace with no login that only Query Service reads.
+    governed: bool = False
 
 
 class WorkspaceLoad(BaseModel):
@@ -96,7 +98,7 @@ def list_workspaces(
         False,
         description=(
             "Filter to RO + whitelisted-loginType workspaces (the canonical "
-            "data-app shape). See QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES."
+            "data-app shape), without governed ones. See QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES."
         ),
     ),
     all_projects: bool = Query(False, description=ALL_PROJECTS_HELP),
@@ -149,6 +151,7 @@ def create(
         backend=body.backend,
         read_only=body.read_only,
         ui_mode=body.ui_mode,
+        governed=body.governed,
     )
 
 

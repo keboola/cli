@@ -2178,6 +2178,25 @@ print `Target:` with the branch they use (see the #766 entry at the top).
 `storage buckets` / `storage tables` are the reads that use production
 under an active branch. `--branch` requires exactly one `--project`.
 
+## `workspace create --governed` makes a workspace nobody can log in to
+
+*(since vNEXT)*
+
+`workspace create --governed` requests `loginType: governed` (Snowflake, headless only). The workspace has no
+login: the result has no `private_key`, an empty `password` and `governed: true` / `login_type: "governed"`.
+Only Query Service can obtain its credentials, so `workspace password`, a direct warehouse connection, a public
+key, an SSO login and Connection's native `/query` are all refused for every caller, administrators included;
+read it through Query Service, which applies the project's row- and column-level policies. Creating one needs no
+project feature and no step-up, but the stack's Connection must accept the type (an older one answers a
+validation error naming the allowed `loginType` values): try it, do not assume. `--governed` with `--ui` and
+`--governed` on BigQuery are `INVALID_ARGUMENT` (exit 2); nothing is created in either case. A stack whose Connection ignores the type and answers a workspace with a login fails with `API_ERROR`: the workspace is deleted and the sandbox config trashed (`details.workspace_id`, `details.workspace_rolled_back`), so a credentialed workspace is never reported as governed. The REST
+route `POST /workspaces/{project}` takes `governed: true`. `workspace list` shows the workspace with login type
+`governed` and `qs_compatible` true: Query Service reads it. A query with a Storage token (`workspace query`,
+local data-app development) is refused with `ACCESS_DENIED` when no policy rule selects the administrator
+`keboola|<adminId>`, and also when the query is not one plain `SELECT` on Storage bucket tables (no writes,
+`FLATTEN`, `INFORMATION_SCHEMA`/`SHOW` or UDFs): Query Service sends the same text for both, so an administrator
+that a rule selects can still get it. `--qs-compatible` leaves governed workspaces out.
+
 ## `workspace create --ui` cannot produce a UI-visible SQL workspace; a failed create no longer leaves a sandbox config behind
 
 Applies since 0.99.0 (issue #755). The `--ui` path queues a `keboola.sandboxes`

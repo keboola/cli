@@ -20,6 +20,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from ..client import _collect_inline_results
 from ..constants import (
     BIGQUERY_WORKSPACE_LOGIN_TYPE,
+    GOVERNED_WORKSPACE_LOGIN_TYPE,
     QUERY_RESULTS_DEFAULT_LIMIT,
     QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES,
     QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES_BIGQUERY,
@@ -50,6 +51,9 @@ logger = logging.getLogger(__name__)
 # poll, a failed workspace lookup after a green job) leaves the outcome unknown.
 _DEFINITE_JOB_ERRORS = frozenset({ErrorCode.QUEUE_JOB_FAILED, ErrorCode.WORKSPACE_NOT_FOUND})
 
+# The exact text of Query Service's 403 for a request that row-level security refuses.
+_RLS_DENIED_MESSAGE = "Row-level security does not allow this query"
+
 
 def _create_outcome_unknown(exc: KeboolaApiError) -> bool:
     """Could a workspace exist (or still appear) after this step-2 error?
@@ -64,7 +68,11 @@ def _create_outcome_unknown(exc: KeboolaApiError) -> bool:
     undelivered is definite; a 5xx, a read/write timeout or
     ``RETRY_EXHAUSTED`` is unknown. ``_create_workspace_via_job`` puts
     ``job_id`` into the details of every error raised after the job exists.
+    An ungoverned workspace that ``--governed`` got back is known: it exists
+    until it is deleted, which ``workspace_rolled_back`` says.
     """
+    if "workspace_rolled_back" in exc.details:
+        return not exc.details["workspace_rolled_back"]
     if exc.details.get("job_id") is None:
         return request_outcome_unknown(exc)
     return exc.error_code not in _DEFINITE_JOB_ERRORS
@@ -102,6 +110,16 @@ def _classify_qs_compatibility(login_type: str, backend: str) -> bool:
     if backend.lower() == "bigquery":
         return login_type in QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES_BIGQUERY
     return login_type in QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES
+
+
+def _governed_usage_error(message: str) -> KeboolaApiError:
+    """A `--governed` combination that cannot work: a usage error (exit 2), refused before anything is created."""
+    return KeboolaApiError(
+        message=message,
+        status_code=0,
+        error_code=ErrorCode.INVALID_ARGUMENT,
+        retryable=False,
+    )
 
 
 def _sandbox_config_delete_command(alias: str, config_id: str, branch_id: int) -> str:
@@ -352,6 +370,7 @@ class WorkspaceService(BaseService):
         backend: str | None = None,
         read_only: bool = True,
         ui_mode: bool = False,
+        governed: bool = False,
     ) -> dict[str, Any]:
         """Create a new workspace.
 
@@ -370,10 +389,22 @@ class WorkspaceService(BaseService):
             backend: Workspace backend. Auto-detected from project if None.
             read_only: Whether the workspace has read-only storage access.
             ui_mode: If True, create via Queue job (visible in Keboola UI).
+            governed: If True, create a governed workspace (Snowflake only, headless only):
+                it has no login and no credentials, only Query Service reads it.
 
         Returns:
-            Dict with workspace details including connection credentials.
+            Dict with workspace details including connection credentials (none for a
+            governed workspace).
+
+        Raises:
+            KeboolaApiError: INVALID_ARGUMENT for ``governed`` with ``ui_mode`` or on a backend
+                other than Snowflake.
         """
+        if governed and ui_mode:
+            raise _governed_usage_error(
+                "--governed cannot be combined with --ui: the Queue job path cannot "
+                "request a loginType."
+            )
         projects = self.resolve_projects([alias])
         project = projects[alias]
         branch_id = self._resolve_branch_id(alias, project)
@@ -382,6 +413,11 @@ class WorkspaceService(BaseService):
         client = self._client_factory(project.stack_url, project.token)
         try:
             effective_backend = backend or self._detect_backend(client)
+            if governed and effective_backend.lower() != "snowflake":
+                # Before the sandbox config exists, so nothing is left to roll back.
+                raise _governed_usage_error(
+                    f"--governed is supported only on Snowflake; the backend is '{effective_backend}'."
+                )
             # Step 1: Create keboola.sandboxes config (in the correct branch)
             sandbox_config = client.create_sandbox_config(
                 name=effective_name,
@@ -415,6 +451,7 @@ class WorkspaceService(BaseService):
                     branch_id,
                     effective_backend,
                     read_only,
+                    governed,
                 )
             except KeboolaApiError as exc:
                 if _create_outcome_unknown(exc):
@@ -493,20 +530,39 @@ class WorkspaceService(BaseService):
         branch_id: int,
         backend: str,
         read_only: bool,
+        governed: bool,
     ) -> dict[str, Any]:
         """Create workspace via Storage API (fast, headless)."""
-        key_pair = _workspace_key_pair_for_backend(backend)
+        if governed:
+            login_type: str | None = GOVERNED_WORKSPACE_LOGIN_TYPE
+            key_pair = None
+        else:
+            login_type = _workspace_login_type_for_backend(backend)
+            key_pair = _workspace_key_pair_for_backend(backend)
         ws_data = client.create_config_workspace(
             branch_id=branch_id,
             component_id="keboola.sandboxes",
             config_id=config_id,
             backend=backend,
-            login_type=_workspace_login_type_for_backend(backend),
+            login_type=login_type,
             public_key=key_pair.public_pem if key_pair else None,
         )
 
         connection = ws_data.get("connection", {})
-        credential_label = "private key" if key_pair else "password"
+        if governed and connection.get("loginType") != GOVERNED_WORKSPACE_LOGIN_TYPE:
+            raise self._ungoverned_workspace_error(client, alias, ws_data, branch_id)
+        if governed:
+            message = (
+                f"Governed workspace '{name}' created in project '{alias}'. It has no credentials: "
+                "only Query Service reads it, and the row- and column-level policies of the "
+                "project apply."
+            )
+        else:
+            credential_label = "private key" if key_pair else "password"
+            message = (
+                f"Workspace '{name}' created in project '{alias}'. "
+                f"Save the {credential_label} -- it cannot be retrieved later!"
+            )
         result = {
             "project_alias": alias,
             "workspace_id": ws_data.get("id"),
@@ -521,12 +577,46 @@ class WorkspaceService(BaseService):
             "password": connection.get("password", ""),
             "read_only": read_only,
             "ui_mode": False,
-            "message": f"Workspace '{name}' created in project '{alias}'. "
-            f"Save the {credential_label} -- it cannot be retrieved later!",
+            "login_type": connection.get("loginType", ""),
+            "governed": governed,
+            "message": message,
         }
         if key_pair is not None:
             result["private_key"] = key_pair.private_pem
         return result
+
+    @staticmethod
+    def _ungoverned_workspace_error(
+        client: Any, alias: str, ws_data: dict[str, Any], branch_id: int
+    ) -> KeboolaApiError:
+        """Delete a workspace that came back with a login although ``--governed`` asked for none.
+
+        Such a workspace has credentials and no policies, so reporting it as a
+        success would let the caller treat its data as protected. The error
+        names the workspace; ``workspace_rolled_back`` says whether it is gone.
+        """
+        workspace_id = ws_data.get("id")
+        login_type = ws_data.get("connection", {}).get("loginType", "")
+        details: dict[str, Any] = {"workspace_id": workspace_id, "login_type": login_type}
+        try:
+            client.delete_workspace(workspace_id, branch_id=branch_id)
+        except KeboolaApiError as cleanup_exc:
+            details["workspace_rolled_back"] = False
+            outcome = (
+                f"It could not be deleted ({cleanup_exc.message}); delete it with "
+                f"'kbagent workspace delete --project {alias} --workspace-id {workspace_id}'."
+            )
+        else:
+            details["workspace_rolled_back"] = True
+            outcome = "It was deleted."
+        return KeboolaApiError(
+            message=(
+                f"--governed was requested, but the API created workspace {workspace_id} with "
+                f"login type '{login_type}', which has credentials and no policies. {outcome}"
+            ),
+            error_code=ErrorCode.API_ERROR,
+            details=details,
+        )
 
     def _create_workspace_via_job(
         self,
@@ -697,7 +787,10 @@ class WorkspaceService(BaseService):
             qs_compatible_only: If True, return only workspaces whose
                 ``login_type`` is in ``QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES``
                 AND that are read-only -- the canonical shape for a Streamlit
-                / Quix data-app reading via the Query Service.
+                / Quix data-app reading via the Query Service. A governed
+                workspace is left out: it stays ``qs_compatible``, but a query
+                with a Storage token is refused unless a policy rule selects
+                the administrator, so it is not one kbagent can read.
 
         Returns:
             Dict with "workspaces" and "errors" lists. Each workspace entry
@@ -757,7 +850,11 @@ class WorkspaceService(BaseService):
                         if _is_orphaned_workspace(entry, config_names):
                             workspaces.append(entry)
                     elif qs_compatible_only:
-                        if entry["qs_compatible"] and entry["read_only"]:
+                        if (
+                            entry["qs_compatible"]
+                            and entry["read_only"]
+                            and login_type != GOVERNED_WORKSPACE_LOGIN_TYPE
+                        ):
                             workspaces.append(entry)
                     else:
                         workspaces.append(entry)
@@ -1289,12 +1386,17 @@ class WorkspaceService(BaseService):
         client = self._client_factory(project.stack_url, project.token)
         try:
             # Submit query
-            query_job = client.submit_query(
-                branch_id=branch_id,
-                workspace_id=workspace_id,
-                statements=[sql],
-                transactional=transactional,
-            )
+            try:
+                query_job = client.submit_query(
+                    branch_id=branch_id,
+                    workspace_id=workspace_id,
+                    statements=[sql],
+                    transactional=transactional,
+                )
+            except KeboolaApiError as exc:
+                if exc.status_code == 403 and _RLS_DENIED_MESSAGE in exc.message:
+                    raise self._rls_refused_error(workspace_id, exc) from exc
+                raise
 
             query_job_id = str(query_job.get("queryJobId", query_job.get("id", "")))
 
@@ -1333,6 +1435,25 @@ class WorkspaceService(BaseService):
             }
         finally:
             client.close()
+
+    @staticmethod
+    def _rls_refused_error(workspace_id: int, exc: KeboolaApiError) -> KeboolaApiError:
+        """Explain a row-level-security refusal of a query sent with a Storage token."""
+        return KeboolaApiError(
+            message=(
+                f"Query Service refused the query on workspace {workspace_id}: "
+                f"{_RLS_DENIED_MESSAGE}. kbagent queries with the Storage token, which Query "
+                "Service treats as the administrator `keboola|<adminId>`. On a governed workspace "
+                "Query Service refuses the query when no policy rule selects that subject, or when "
+                "the query is not one plain `SELECT` on Storage bucket tables (no writes, "
+                "`FLATTEN`, `INFORMATION_SCHEMA`/`SHOW` or UDFs). Query another workspace, add a "
+                "rule for the subject, or simplify the query."
+            ),
+            status_code=exc.status_code,
+            error_code=ErrorCode.ACCESS_DENIED,
+            retryable=False,
+            details={"workspace_id": workspace_id},
+        )
 
     @staticmethod
     def _attach_statement_results(

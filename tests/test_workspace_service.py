@@ -19,7 +19,10 @@ from keboola_agent_cli.errors import ConfigError, ErrorCode, KeboolaApiError
 from keboola_agent_cli.models import ProjectConfig, TokenVerifyResponse
 from keboola_agent_cli.services import workspace_service as workspace_service_module
 from keboola_agent_cli.services._workspace_load_plan import plan_auto_load_type
-from keboola_agent_cli.services.workspace_service import WorkspaceService
+from keboola_agent_cli.services.workspace_service import (
+    WorkspaceService,
+    _classify_qs_compatibility,
+)
 
 SAMPLE_TOKEN_VERIFY = TokenVerifyResponse(
     token_id="12345",
@@ -128,6 +131,7 @@ class TestCreateWorkspace:
         assert result["workspace_id"] == 42
         assert result["name"] == "test-ws"
         assert result["config_id"] == "cfg-123"
+        assert result["governed"] is False
         assert result["backend"] == "snowflake"
         assert result["host"] == "account.snowflakecomputing.com"
         assert result["warehouse"] == "KEBOOLA_PROD"
@@ -156,6 +160,127 @@ class TestCreateWorkspace:
         assert public_key.startswith("-----BEGIN PUBLIC KEY-----")
         # close() called twice: once in _resolve_branch_id, once in create_workspace
         assert mock_client.close.call_count == 2
+
+    @pytest.mark.parametrize(
+        ("backend", "read_only"),
+        [("snowflake", True), ("Snowflake", False)],
+        ids=["ro", "rw-cased"],
+    )
+    def test_create_workspace_governed(
+        self, tmp_config_dir: Path, backend: str, read_only: bool
+    ) -> None:
+        """--governed asks for loginType governed, sends no key and returns no credentials."""
+        mock_client = MagicMock()
+        mock_client.list_dev_branches.return_value = [{"id": 123, "isDefault": True}]
+        mock_client.create_sandbox_config.return_value = {"id": "cfg-123", "name": "gov-ws"}
+        mock_client.create_config_workspace.return_value = {
+            "id": 77,
+            "name": "gov-ws",
+            "connection": {
+                "backend": "snowflake",
+                "host": "account.snowflakecomputing.com",
+                "schema": "WORKSPACE_77",
+                "user": "",
+                "loginType": "governed",
+            },
+        }
+
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(config_store=store, client_factory=lambda url, token: mock_client)
+
+        result = svc.create_workspace(
+            alias="prod", name="gov-ws", backend=backend, read_only=read_only, governed=True
+        )
+
+        mock_client.create_config_workspace.assert_called_once_with(
+            branch_id=123,
+            component_id="keboola.sandboxes",
+            config_id="cfg-123",
+            backend=backend,
+            login_type="governed",
+            public_key=None,
+        )
+        assert result["governed"] is True
+        assert result["login_type"] == "governed"
+        assert result["read_only"] is read_only
+        assert "private_key" not in result
+        assert result["password"] == ""
+        assert "no credentials" in result["message"]
+        assert "Save the" not in result["message"]
+
+    @pytest.mark.parametrize(
+        ("delete_fails", "rolled_back", "config_trashed", "expected"),
+        [
+            (False, True, True, "It was deleted."),
+            (True, False, False, "could not be deleted"),
+        ],
+        ids=["workspace-deleted", "workspace-delete-fails"],
+    )
+    def test_create_workspace_governed_that_comes_back_with_a_login_fails(
+        self,
+        tmp_config_dir: Path,
+        delete_fails: bool,
+        rolled_back: bool,
+        config_trashed: bool,
+        expected: str,
+    ) -> None:
+        """A workspace with credentials is no governed workspace: delete it, trash the config, fail."""
+        mock_client = MagicMock()
+        mock_client.list_dev_branches.return_value = [{"id": 123, "isDefault": True}]
+        mock_client.create_sandbox_config.return_value = {"id": "cfg-1", "name": "ws"}
+        mock_client.create_config_workspace.return_value = SAMPLE_WORKSPACE
+        if delete_fails:
+            mock_client.delete_workspace.side_effect = KeboolaApiError(
+                message="boom", status_code=500, error_code=ErrorCode.API_ERROR
+            )
+
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(config_store=store, client_factory=lambda url, token: mock_client)
+
+        with pytest.raises(KeboolaApiError, match=expected) as excinfo:
+            svc.create_workspace(alias="prod", name="ws", backend="snowflake", governed=True)
+
+        assert excinfo.value.error_code == ErrorCode.API_ERROR
+        assert excinfo.value.details["workspace_id"] == 42
+        assert excinfo.value.details["workspace_rolled_back"] is rolled_back
+        mock_client.delete_workspace.assert_called_once_with(42, branch_id=123)
+        # Config is trashed only once the workspace is gone; a workspace that stays keeps its config.
+        assert mock_client.delete_config.called is config_trashed
+
+    @pytest.mark.parametrize(
+        ("backend", "default_backend", "ui_mode", "expected"),
+        [
+            ("bigquery", None, False, "only on Snowflake"),
+            (None, "bigquery", False, "only on Snowflake"),
+            ("snowflake", None, True, "cannot be combined with --ui"),
+            ("bigquery", None, True, "cannot be combined with --ui"),
+        ],
+        ids=["bigquery", "detected-bigquery", "ui", "ui-wins-over-backend"],
+    )
+    def test_create_workspace_governed_refused_before_anything_is_created(
+        self,
+        tmp_config_dir: Path,
+        backend: str | None,
+        default_backend: str | None,
+        ui_mode: bool,
+        expected: str,
+    ) -> None:
+        """An unsupported --governed combination is a usage error before a sandbox config exists."""
+        mock_client = MagicMock()
+        mock_client.list_dev_branches.return_value = [{"id": 123, "isDefault": True}]
+        mock_client.verify_token.return_value.default_backend = default_backend
+
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(config_store=store, client_factory=lambda url, token: mock_client)
+
+        with pytest.raises(KeboolaApiError, match=expected) as excinfo:
+            svc.create_workspace(
+                alias="prod", name="ws", backend=backend, ui_mode=ui_mode, governed=True
+            )
+
+        assert excinfo.value.error_code == ErrorCode.INVALID_ARGUMENT
+        mock_client.create_sandbox_config.assert_not_called()
+        mock_client.create_config_workspace.assert_not_called()
 
     def test_create_workspace_unknown_project(self, tmp_config_dir: Path) -> None:
         """create_workspace raises ConfigError for an unknown alias."""
@@ -1393,6 +1518,39 @@ class TestExecuteQuery:
         # close() called twice: once in _resolve_branch_id, once in execute_query
         assert mock_client.close.call_count == 2
 
+    @pytest.mark.parametrize(
+        ("status", "message", "explained"),
+        [
+            (403, "Row-level security does not allow this query", True),
+            (403, "Access denied for another reason", False),
+            (500, "Row-level security does not allow this query", False),
+        ],
+    )
+    def test_execute_query_explains_a_row_level_security_refusal(
+        self, tmp_config_dir: Path, status: int, message: str, explained: bool
+    ) -> None:
+        """Only Query Service's 403 for row-level security is turned into the governed-workspace error."""
+        mock_client = MagicMock()
+        mock_client.list_dev_branches.return_value = SAMPLE_BRANCHES
+        mock_client.submit_query.side_effect = KeboolaApiError(
+            message=f"Access denied (token: xxx): {message}",
+            status_code=status,
+            error_code=ErrorCode.ACCESS_DENIED,
+        )
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(config_store=store, client_factory=lambda url, token: mock_client)
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            svc.execute_query(alias="prod", workspace_id=42, sql="SELECT 1")
+
+        if explained:
+            assert "keboola|<adminId>" in excinfo.value.message
+            assert "not one plain `SELECT`" in excinfo.value.message  # the second cause
+            assert excinfo.value.details == {"workspace_id": 42}
+            assert excinfo.value.error_code == ErrorCode.ACCESS_DENIED
+        else:
+            assert "keboola|<adminId>" not in excinfo.value.message
+
     def test_execute_query_full_uses_csv_export(self, tmp_config_dir: Path) -> None:
         """full=True takes the legacy CSV export path (complete result set)."""
         mock_client = MagicMock()
@@ -2217,6 +2375,20 @@ class TestIssue304WorkspaceListEnrichment:
         # confirmed broken with Query Service via "JWT token is invalid")
         assert legacy["qs_compatible"] is False
 
+    @pytest.mark.parametrize(
+        ("login_type", "backend", "expected"),
+        [
+            ("governed", "snowflake", True),
+            ("governed", "Snowflake", True),
+            ("governed", "bigquery", False),
+            ("default", "bigquery", True),
+            ("default", "snowflake", False),
+        ],
+    )
+    def test_classify_qs_compatibility(self, login_type: str, backend: str, expected: bool) -> None:
+        """A governed Snowflake workspace is read through Query Service; the BigQuery set is separate."""
+        assert _classify_qs_compatibility(login_type, backend) is expected
+
     def test_qs_compatible_filter_requires_both_compat_and_ro(self, tmp_config_dir: Path) -> None:
         """`qs_compatible_only=True` drops workspaces that are compat-but-RW or RO-but-unknown."""
         mock_client = MagicMock()
@@ -2252,6 +2424,13 @@ class TestIssue304WorkspaceListEnrichment:
                 },
                 "readOnlyStorageAccess": True,
             },
+            # Miss: governed and RO -- still qs_compatible, but a Storage-token query is refused
+            {
+                "id": 4,
+                "name": "governed",
+                "connection": {"backend": "snowflake", "loginType": "governed"},
+                "readOnlyStorageAccess": True,
+            },
         ]
         mock_client.list_component_configs.return_value = []
 
@@ -2262,9 +2441,11 @@ class TestIssue304WorkspaceListEnrichment:
         )
 
         result = svc.list_workspaces(aliases=["prod"], qs_compatible_only=True)
+        everything = svc.list_workspaces(aliases=["prod"])
 
-        ids = [w["id"] for w in result["workspaces"]]
-        assert ids == [1]
+        assert [w["id"] for w in result["workspaces"]] == [1]
+        governed = next(w for w in everything["workspaces"] if w["id"] == 4)
+        assert governed["qs_compatible"] is True
 
     def test_explicit_branch_id_propagated_to_client(self, tmp_config_dir: Path) -> None:
         """When the command layer passes branch_id, the client call uses it verbatim."""

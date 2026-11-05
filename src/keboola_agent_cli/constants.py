@@ -741,11 +741,16 @@ KILLABLE_JOB_STATUSES: frozenset[str] = frozenset({"created", "waiting", "proces
 # (see BIGQUERY_WORKSPACE_LOGIN_TYPE). Compatibility is therefore keyed by
 # (backend, loginType) -- see `_classify_qs_compatibility`.
 SNOWFLAKE_WORKSPACE_LOGIN_TYPE: str = "snowflake-person-keypair"
+# A governed workspace has no login at all: nobody but Query Service obtains its credentials, so
+# `workspace password` and a direct warehouse connection are refused and Query Service applies the
+# row- and column-level policies of the project. Snowflake only.
+GOVERNED_WORKSPACE_LOGIN_TYPE: str = "governed"
 QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES: frozenset[str] = frozenset(
     {
         "snowflake-service-keypair",
         "snowflake-person-sso",
         SNOWFLAKE_WORKSPACE_LOGIN_TYPE,
+        GOVERNED_WORKSPACE_LOGIN_TYPE,
     }
 )
 
