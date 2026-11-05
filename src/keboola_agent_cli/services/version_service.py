@@ -12,6 +12,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -24,6 +25,7 @@ from packaging.version import InvalidVersion, Version
 
 from .. import __version__
 from ..constants import (
+    APP_NAME,
     ENV_UPDATE_TIMEOUT,
     KBAGENT_GITHUB_REPO,
     KBAGENT_INSTALL_SOURCE,
@@ -165,8 +167,8 @@ def _uv_link_mode_args() -> tuple[str, ...]:
     Issue #786: when the uv cache or the tool directory sits on a cloud-synced
     volume (OneDrive Files-On-Demand and similar), uv's default hardlink mode
     fails with ``os error 396`` (ERROR_CLOUD_FILE_INCOMPATIBLE_HARDLINKS).
-    By then ``--force --reinstall`` has already removed the old tool venv, so
-    kbagent disappears entirely.
+    By then uv has already removed the old installation, so kbagent stops
+    working.
 
     Used only on the failure path: the one-time retry after a hardlink error
     (:func:`build_hardlink_retry_command`) and the printed recovery command.
@@ -202,6 +204,28 @@ def build_hardlink_retry_command(command: tuple[str, ...] | None) -> tuple[str, 
     if not link_mode:
         return None
     return (*command[:-1], *link_mode, command[-1])
+
+
+def _uv_update_args() -> tuple[str, ...]:
+    """The ``uv tool install`` options of the self-update, before the spec.
+
+    ``--python`` is the interpreter this kbagent runs on. Without it uv selects
+    an interpreter by its own rules. After the user installed a new Python, uv
+    built the tool environment again on that Python. On Python 3.15 without a
+    C compiler (Windows) the PyYAML build then failed, and kbagent was gone.
+
+    No ``--force``: with it, uv 0.10.10 and newer always builds a new tool
+    environment and deletes it when the install fails. Without it, uv updates
+    the existing environment and keeps the old version when a download or a
+    build fails.
+    The legacy ``keboola-agent-cli`` distribution keeps ``--force``: its update
+    installs the new tool ``keboola-cli``, which takes over the ``kbagent``
+    executable of the old tool.
+    """
+    force = ("--force",) if APP_NAME == "keboola-agent-cli" else ()
+    # In a venv, sys._base_executable is the interpreter the venv was made from.
+    python = getattr(sys, "_base_executable", sys.executable)
+    return (*force, "--reinstall", "--compile-bytecode", "--python", python)
 
 
 def build_kbagent_upgrade_command(
@@ -244,7 +268,7 @@ def build_kbagent_upgrade_command(
     if uv_path:
         # --compile-bytecode: the wheel holds .py files only, and Python would
         # compile them on the first run (about 1 s for ~700 modules).
-        return [uv_path, "tool", "install", "--force", "--reinstall", "--compile-bytecode", spec]
+        return [uv_path, "tool", "install", *_uv_update_args(), spec]
     pip_path = shutil.which("pip")
     if pip_path is None:
         return None
@@ -261,7 +285,7 @@ def _render_command(command: tuple[str, ...]) -> str:
 
 
 def _recovery_command(command: tuple[str, ...] | None, target_version: str | None) -> str | None:
-    """Render an exact forced-reinstall command safe to copy after failure."""
+    """Render an exact reinstall command safe to copy after failure."""
     if command is not None:
         if _is_uv_command(command):
             # The regular install keeps uv's default link mode; the recovery
@@ -1036,10 +1060,10 @@ class VersionService:
     ) -> dict[str, Any]:
         """Update kbagent to the latest version.
 
-        Uses ``uv tool install --force --reinstall`` from an exact release
-        wheel or Git tag. If the installed kbagent is already at the latest
-        version, the update reports ``updated=False`` without running a
-        subprocess.
+        Uses ``uv tool install --reinstall --python <running interpreter>``
+        from an exact release wheel or Git tag. If the installed kbagent is
+        already at the latest version, the update reports ``updated=False``
+        without running a subprocess.
 
         Args:
             include_prerelease: When True (driven by ``kbagent update --beta``
