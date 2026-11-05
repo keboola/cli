@@ -530,7 +530,8 @@ does not name is refused. With an `rls-policy` too, rows come from the `rls-poli
     Set or clear configuration.storage.output.default_bucket on a config without
     raw-mode JSON edits. --bucket/--clear are mutually exclusive. Read-modify-write
     that preserves sibling keys under storage.output and the rest of the config.
-    No-op (with changed=false) when the value is already what you'd be setting.
+    status is "updated" after a write, or "unchanged" (no write, exit 0) when the
+    value is already what you'd be setting. The older changed=false stays.
 
   config rename
     Rename a configuration. Updates name via API. If a local sync directory
@@ -646,8 +647,9 @@ does not name is refused. With an `rls-policy` too, rows come from the `rls-poli
     Write a configuration's runtime state via the dedicated PUT .../state
     endpoint (branch-scoped). --state must be a JSON object under 4 MB.
     --row-id targets a row's state instead of the root. --dry-run previews
-    the current-vs-new diff without writing; no-op (changed=false) when the
-    new state equals the current one. Guarded write: prompts for
+    the current-vs-new diff without writing. status is "updated" after a
+    write, or "unchanged" (no write, exit 0) when the new state equals the
+    current one; the older changed key stays. Guarded write: prompts for
     confirmation unless --yes or --json. Use this to seed/reset/backfill
     state (e.g. seeding a dev branch's lastImportId before testing
     changed_since: adaptive) -- `config update --set 'state...'` does NOT

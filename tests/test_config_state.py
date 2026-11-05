@@ -511,6 +511,7 @@ class TestConfigServiceSetConfigState:
             state={"lastId": 1},
         )
 
+        assert result["status"] == "unchanged"
         assert result["changed"] is False
         assert result["state"] == {"lastId": 1}
         client.update_config_state.assert_not_called()
@@ -527,6 +528,7 @@ class TestConfigServiceSetConfigState:
             state={"lastId": 2},
         )
 
+        assert result["status"] == "updated"
         assert result["changed"] is True
         assert result["state"] == {"lastId": 2}
         assert result["row_id"] is None
@@ -553,6 +555,7 @@ class TestConfigServiceSetConfigState:
             row_id="row-1",
         )
 
+        assert result["status"] == "updated"
         assert result["changed"] is True
         assert result["state"] == {"cursor": "new"}
         assert result["row_id"] == "row-1"
@@ -825,6 +828,7 @@ class TestConfigStateCli:
 
         assert result.exit_code == 0, result.output
         payload = json.loads(result.output)
+        assert payload["data"]["status"] == "updated"
         assert payload["data"]["changed"] is True
         mock_client.update_config_state.assert_called_once()
 
@@ -1076,7 +1080,41 @@ class TestConfigStateCli:
 
         assert result.exit_code == 0, result.output
         payload = json.loads(result.output)
+        assert payload["data"]["status"] == "unchanged"
         assert payload["data"]["changed"] is False
+        assert "warnings" not in payload
+        mock_client.update_config_state.assert_not_called()
+
+    def test_state_set_no_op_human_output(self, tmp_config_dir: Path) -> None:
+        """Human mode says "No change" the way `data-app git-auth-set` does (spec R6)."""
+        store = setup_single_project(tmp_config_dir)
+        mock_client = MagicMock()
+        mock_client.get_config_detail.return_value = _state_detail(state={"lastId": 1})
+
+        with pytest.MonkeyPatch.context() as mp:
+            self._patch_service(mp, store, mock_client)
+            result = self._invoke(
+                tmp_config_dir,
+                "state-set",
+                [
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "keboola.ex-db-snowflake",
+                    "--config-id",
+                    "cfg-001",
+                    "--state",
+                    '{"lastId": 1}',
+                    "--yes",
+                ],
+                json_mode=False,
+            )
+
+        assert result.exit_code == 0, result.output
+        assert (
+            "Success: No change: state for keboola.ex-db-snowflake/cfg-001 already matches."
+            in result.output
+        )
         mock_client.update_config_state.assert_not_called()
 
 

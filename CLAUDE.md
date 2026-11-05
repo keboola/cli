@@ -603,6 +603,9 @@ kbagent config detail [--project NAME] [--project NAME ...] --component-id ID [-
 kbagent config search --query PATTERN [--project NAME | --all-projects] [--component-type TYPE] [--ignore-case] [--regex] [--branch ID]
 kbagent config update [--project NAME] --component-id ID --config-id ID [--name N] [--description D] [--configuration JSON | --configuration-file PATH] [--set PATH=VALUE ...] [--merge] [--change-description TEXT] [--dry-run] [--branch ID] [--allow-plaintext-on-encrypt-failure]
 kbagent config set-default-bucket [--project NAME] --component-id ID --config-id ID (--bucket BUCKET_ID | --clear) [--dry-run] [--branch ID]
+# set-default-bucket / state-set (since vNEXT, spec R6): `status` is "updated" after a write, or
+#   "unchanged" when the value or state already matches (no write, exit 0). The older boolean
+#   `changed` stays for compatibility; read `status`.
 kbagent config rename [--project NAME] --component-id ID --config-id ID --name "New Name" [--branch ID] [--directory DIR]
 kbagent config delete [--project NAME] --component-id ID --config-id ID [--branch ID] [--dry-run]
 kbagent config restore [--project NAME] --component-id ID --config-id ID [--branch ID]
