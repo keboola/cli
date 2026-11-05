@@ -42,7 +42,7 @@ descriptions are native fields on the table definition:
   descriptions, with `isDescriptionSystemManaged: false`. No `KBC.description`
   metadata row is created. The result reports `status: "updated"` after a
   write. Sending the stored text again succeeds with `status: "unchanged"` and
-  `result: null` (human output "Description unchanged"): Storage rejects it with
+  `result: null` (human output "Success: No change: ..."): Storage rejects it with
   HTTP 400 code `storage.tables.definitionUpdateValidationFailed`, and kbagent
   reads the table again and compares the stored description with the requested
   text. Storage uses that code for other validation failures too, so a 400
@@ -59,7 +59,10 @@ descriptions are native fields on the table definition:
   component run's Output Mapping from overwriting a hand-authored description.
   The value is visible to the UI, to the MCP server, and in the Snowflake
   `COMMENT` / BigQuery column description. Read them back via `storage table-detail`
-  (`column_details[].description`).
+  (`column_details[].description`). *(since vNEXT)* The result reports `status`
+  like `describe-table`: sending descriptions that are all stored already
+  succeeds with `status: "unchanged"` and `result: null`. Before vNEXT that
+  case failed with HTTP 400 "No table definition changes were provided".
 
 Descriptions are `upsert`: calling `describe-*` with a new text replaces
 whatever was there before. There is no append mode.

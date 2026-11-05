@@ -4637,7 +4637,7 @@ write descriptive metadata onto storage objects. Three behaviors are easy to mis
   `PUT .../tables/{id}/definition` with `isDescriptionSystemManaged: false` and
   create no `KBC.description` metadata row. The result has `status`:
   `"updated"` after a write, `"unchanged"` (with `result: null`; human output
-  "Description unchanged") when the table already holds the text. Storage
+  "Success: No change: ...") when the table already holds the text. Storage
   rejects such a no-op PUT with HTTP 400 code
   `storage.tables.definitionUpdateValidationFailed`, which it also uses for other
   validation failures, so kbagent reads the table again and reports `unchanged`
@@ -4650,6 +4650,16 @@ write descriptive metadata onto storage objects. Three behaviors are easy to mis
   as a stale `KBC.description` row no longer appears; set it again with
   `describe-table`. On 0.99.x and older `describe-table` wrote the metadata row,
   which outranked later UI edits (DMD-2434).
+- **Repeating a column description succeeds** *(since vNEXT)*.
+  `describe-column` and the `columns:` section of `describe-batch` report
+  `status` the same way as `describe-table`: `"updated"` after a write,
+  `"unchanged"` (with `result: null`; human output "Success: No change: ...")
+  when Storage rejects the PUT with code
+  `storage.tables.definitionUpdateValidationFailed` and a re-read shows every
+  requested text. Any other 400 is raised. When the same write deleted a
+  legacy `KBC.column.*.description` key, the status is `"updated"`. From
+  0.88.0 up to vNEXT, sending a column description that was already stored
+  failed with that HTTP 400.
 - **Column types of a typed table come from `definition`** *(since vNEXT)*.
   `storage table-detail` `column_details[]` of a table with `isTyped: true`
   takes `type` (basetype), `native_type`, `length`, `nullable` and `default`
