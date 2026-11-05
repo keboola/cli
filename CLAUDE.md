@@ -806,7 +806,7 @@ kbagent storage describe-migrate [--project ALIAS] [--table-id ID ...] [--bucket
 # Table descriptions and column types (since vNEXT, DMD-2439): describe-table (and describe-batch `tables:`)
 #   write `definition.description` through the same definition PUT as describe-column, with
 #   isDescriptionSystemManaged=false and no KBC.description row; the result reports status "updated", or
-#   "unchanged" (result null, human "Description unchanged") when Storage rejects the PUT with code
+#   "unchanged" (result null, human "Success: No change: ...") when Storage rejects the PUT with code
 #   storage.tables.definitionUpdateValidationFailed AND a re-read shows the same text; any other 400
 #   (same code, different stored text) is raised. table-detail reads the table description from `definition.description` only, column
 #   descriptions from `definition.columns[]` then the legacy flat key (columnMetadata KBC.description is
@@ -825,7 +825,10 @@ kbagent storage describe-migrate [--project ALIAS] [--table-id ID ...] [--bucket
 #   and warns in human mode when legacy keys remain; it never writes. `describe-migrate` converts
 #   legacy keys in bulk (scope: --table-id / --bucket-id / whole project; scan-then-confirm,
 #   --dry-run reports only; per-table errors accumulate). describe-column/describe-batch also migrate
-#   leftovers on the table they touch. Rules: a column whose visible description already differs is
+#   leftovers on the table they touch. describe-column and describe-batch `columns:` report `status`
+#   like describe-table: "unchanged" (result null) when Storage rejects the PUT with the same code AND a
+#   re-read shows every requested text; before, that case failed with HTTP 400. Version gate in gotchas.md.
+#   Rules: a column whose visible description already differs is
 #   skipped as `conflict` (newer value wins), an entry for a dropped column is skipped as `orphan`
 #   unless --prune-orphans. Migrated flat entries are DELETED so a later clear cannot be resurrected
 #   by the read fallback.
