@@ -2955,6 +2955,85 @@ def _api_error(status_code: int, error_code: ErrorCode, retryable: bool = False)
     )
 
 
+class TestCreatedWorkspacePassword:
+    """The workspaceCreate job may omit the secret; password logins get a reset."""
+
+    @staticmethod
+    def _password(
+        mock_client: MagicMock, ws_data: dict, backend: str, key_pair: bool = False
+    ) -> workspace_service_module.WorkspacePassword:
+        return workspace_service_module._created_workspace_password(
+            mock_client,
+            ws_data,
+            key_pair=MagicMock() if key_pair else None,
+            backend=backend,
+            branch_id=123,
+            alias="prod",
+        )
+
+    def test_password_in_job_result_is_used_as_is(self) -> None:
+        mock_client = MagicMock()
+
+        secret = self._password(mock_client, SAMPLE_WORKSPACE, backend="redshift")
+
+        assert secret.password == "s3cret!Passw0rd"
+        assert secret.warning is None
+        mock_client.reset_workspace_password.assert_not_called()
+
+    def test_missing_password_is_reset(self) -> None:
+        mock_client = MagicMock()
+        mock_client.reset_workspace_password.return_value = {"password": "fresh"}
+
+        secret = self._password(mock_client, SAMPLE_WORKSPACE_NO_PASSWORD, backend="redshift")
+
+        assert secret.password == "fresh"
+        assert secret.warning is None
+        mock_client.reset_workspace_password.assert_called_once_with(42, branch_id=123)
+
+    @pytest.mark.parametrize(
+        ("backend", "key_pair"),
+        [("snowflake", True), ("bigquery", False), ("BigQuery", False)],
+        ids=["key-pair", "bigquery", "bigquery-case"],
+    )
+    def test_no_reset_when_no_password_is_expected(self, backend: str, key_pair: bool) -> None:
+        mock_client = MagicMock()
+
+        secret = self._password(
+            mock_client, SAMPLE_WORKSPACE_NO_PASSWORD, backend=backend, key_pair=key_pair
+        )
+
+        assert secret.password == ""
+        assert secret.warning is None
+        mock_client.reset_workspace_password.assert_not_called()
+
+    def test_failed_reset_becomes_a_warning(self) -> None:
+        mock_client = MagicMock()
+        mock_client.reset_workspace_password.side_effect = _api_error(403, ErrorCode.ACCESS_DENIED)
+
+        secret = self._password(mock_client, SAMPLE_WORKSPACE_NO_PASSWORD, backend="redshift")
+
+        assert secret.password == ""
+        assert secret.warning is not None
+        assert "kbagent workspace password --project prod --workspace-id 42" in secret.warning
+
+    def test_create_workspace_surfaces_reset_password(self, tmp_config_dir: Path) -> None:
+        """End to end through the service: the reset password reaches the result."""
+        mock_client = MagicMock()
+        mock_client.list_dev_branches.return_value = [{"id": 123, "isDefault": True}]
+        mock_client.create_sandbox_config.return_value = {"id": "cfg-1", "name": "ws"}
+        mock_client.create_config_workspace.return_value = SAMPLE_WORKSPACE_NO_PASSWORD
+        mock_client.reset_workspace_password.return_value = {"password": "fresh"}
+        svc = WorkspaceService(
+            config_store=setup_single_project(tmp_config_dir),
+            client_factory=lambda url, token: mock_client,
+        )
+
+        result = svc.create_workspace(alias="prod", name="ws", backend="redshift")
+
+        assert result["password"] == "fresh"
+        assert "warnings" not in result
+
+
 class TestCreateWorkspaceOutcomeRule:
     """Which step-2 errors trash the sandbox config and which keep it (#755).
 
@@ -3056,6 +3135,59 @@ class TestCreateWorkspaceOutcomeRule:
         if not rolled_back:
             assert exc.details["sandbox_config_kept_reason"] == "outcome_unknown"
             assert "the outcome of job j1 is unknown" in exc.message
+
+    @pytest.mark.parametrize(
+        ("error", "rolled_back"),
+        [
+            pytest.param(
+                _api_error(500, ErrorCode.STORAGE_JOB_FAILED), True, id="job-failed-rolled-back"
+            ),
+            pytest.param(_api_error(504, ErrorCode.STORAGE_JOB_TIMEOUT), False, id="timeout-kept"),
+            pytest.param(_api_error(503, ErrorCode.API_ERROR), False, id="poll-5xx-kept"),
+        ],
+    )
+    def test_headless_error_after_storage_job_was_queued(
+        self, tmp_config_dir: Path, error: KeboolaApiError, rolled_back: bool
+    ) -> None:
+        """A failed workspaceCreate job is definite; a timed-out or unreadable one is not."""
+        error.details["job_id"] = 7
+        mock_client = self._client()
+        mock_client.create_config_workspace.side_effect = error
+
+        exc = self._create(tmp_config_dir, mock_client, ui_mode=False)
+
+        assert exc.details["sandbox_config_rolled_back"] is rolled_back
+        assert mock_client.delete_config.called is rolled_back
+        if not rolled_back:
+            assert "the outcome of job 7 is unknown" in exc.message
+
+    def test_headless_failed_poll_keeps_config_end_to_end(
+        self, tmp_config_dir: Path, httpx_mock, monkeypatch
+    ) -> None:
+        """Real client: a 404 on the job poll is unknown (job exists), not a refused POST."""
+        monkeypatch.setattr("keboola_agent_cli.client._core.time.sleep", lambda _s: None)
+        base = "https://connection.keboola.com/v2/storage"
+        httpx_mock.add_response(
+            url=f"{base}/branch/123/components/keboola.sandboxes/configs/cfg-1/workspaces?async=true",
+            method="POST",
+            json={"id": 7, "status": "waiting"},
+            status_code=202,
+        )
+        httpx_mock.add_response(
+            url=f"{base}/jobs/7", method="GET", json={"error": "nope"}, status_code=404
+        )
+        real_client = client_module.KeboolaClient(
+            stack_url="https://connection.keboola.com", token="901-x-y"
+        )
+        mock_client = self._client()
+        mock_client.create_config_workspace.side_effect = real_client.create_config_workspace
+
+        exc = self._create(tmp_config_dir, mock_client, ui_mode=False)
+        real_client.close()
+
+        assert exc.details["job_id"] == 7
+        assert exc.details["sandbox_config_rolled_back"] is False
+        mock_client.delete_config.assert_not_called()
 
     def test_transport_error_after_send_keeps_config(self, tmp_config_dir: Path) -> None:
         """A dropped connection mid-POST is not mapped by ``_request``; the config stays."""

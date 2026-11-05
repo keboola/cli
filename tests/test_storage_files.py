@@ -708,12 +708,14 @@ class TestClientDeleteFile:
     """Tests for KeboolaClient.delete_file()."""
 
     def test_delete_file(self, httpx_mock) -> None:
+        """The DELETE sends async=true; an already-finished job needs no poll."""
         from keboola_agent_cli.client import KeboolaClient
 
         httpx_mock.add_response(
-            url="https://connection.keboola.com/v2/storage/files/12345",
+            url="https://connection.keboola.com/v2/storage/files/12345?async=true",
             method="DELETE",
-            status_code=204,
+            json={"id": 3, "status": "success"},
+            status_code=202,
         )
         client = KeboolaClient(
             stack_url="https://connection.keboola.com",
@@ -722,6 +724,44 @@ class TestClientDeleteFile:
         client.delete_file(12345)
         assert len(httpx_mock.get_requests()) == 1
         client.close()
+
+    def test_delete_file_polls_job(self, httpx_mock, monkeypatch) -> None:
+        """A queued delete job is polled until it finishes."""
+        from keboola_agent_cli.client import KeboolaClient
+
+        monkeypatch.setattr("keboola_agent_cli.client._core.time.sleep", lambda _s: None)
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/files/12345?async=true",
+            method="DELETE",
+            json={"id": 3, "status": "waiting"},
+            status_code=202,
+        )
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/jobs/3",
+            method="GET",
+            json={"id": 3, "status": "success"},
+        )
+        with KeboolaClient(stack_url="https://connection.keboola.com", token=TEST_TOKEN) as client:
+            client.delete_file(12345)
+        assert len(httpx_mock.get_requests()) == 2
+
+    def test_delete_file_failed_job_raises(self, httpx_mock) -> None:
+        """A delete job that ends in error surfaces as STORAGE_JOB_FAILED."""
+        from keboola_agent_cli.client import KeboolaClient
+        from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
+
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/files/12345?async=true",
+            method="DELETE",
+            json={"id": 3, "status": "error", "error": {"message": "File is locked"}},
+            status_code=202,
+        )
+        with (
+            KeboolaClient(stack_url="https://connection.keboola.com", token=TEST_TOKEN) as client,
+            pytest.raises(KeboolaApiError) as exc_info,
+        ):
+            client.delete_file(12345)
+        assert exc_info.value.error_code == ErrorCode.STORAGE_JOB_FAILED
 
 
 class TestClientTagFile:
@@ -1248,7 +1288,9 @@ class TestClientDeleteFileBranch:
     def test_delete_file_with_branch(self, httpx_mock) -> None:
         from keboola_agent_cli.client import KeboolaClient
 
-        httpx_mock.add_response(method="DELETE", status_code=204)
+        httpx_mock.add_response(
+            method="DELETE", json={"id": 3, "status": "success"}, status_code=202
+        )
         client = KeboolaClient(
             stack_url="https://connection.keboola.com",
             token=TEST_TOKEN,
@@ -1256,6 +1298,7 @@ class TestClientDeleteFileBranch:
         client.delete_file(12345, branch_id=42)
         request = httpx_mock.get_requests()[0]
         assert "/v2/storage/branch/42/files/12345" in str(request.url)
+        assert request.url.params["async"] == "true"
         client.close()
 
 

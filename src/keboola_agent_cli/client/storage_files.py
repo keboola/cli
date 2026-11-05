@@ -170,14 +170,23 @@ class _StorageFilesMixin(_CoreClient):
         }
 
     def delete_file(self, file_id: int, branch_id: int | None = None) -> None:
-        """Delete a Storage File.
+        """Delete a Storage File through a Storage job and wait for it.
+
+        The API checks that the file exists before enqueueing, so a missing
+        file is still a 404 on the DELETE itself.
 
         Args:
             file_id: Storage file ID.
             branch_id: If set, target a file in a specific dev branch scope.
+
+        Raises:
+            KeboolaApiError: ``STORAGE_JOB_FAILED`` if the delete job fails,
+                ``STORAGE_JOB_TIMEOUT`` (details ``job_id``) if it outlasts
+                ``STORAGE_JOB_MAX_WAIT``.
         """
         prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
-        self._request("DELETE", f"{prefix}/files/{file_id}")
+        response = self._request("DELETE", f"{prefix}/files/{file_id}", params={"async": "true"})
+        self._wait_for_storage_job(response.json())
 
     def tag_file(self, file_id: int, tag: str, branch_id: int | None = None) -> None:
         """Add a tag to a Storage File.
