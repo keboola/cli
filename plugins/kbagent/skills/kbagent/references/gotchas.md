@@ -1008,6 +1008,8 @@ These lists keep `error`, because their entries are not failed items with an err
   drop fails later, the workspace has no config, so `workspace gc` removes it.
   A later `workspace delete` of the same workspace never purges the trashed
   config.
+- **`storage file-delete` waits up to 60 s** for its job. The SDK's
+  `Files.delete` waits the same way and raises the same two codes.
 - **The create job's result omits the password** on Queue v2 projects
   without the `workspace-create-show-password` feature. Snowflake is
   unaffected (key-pair; the private key is generated locally). Other
