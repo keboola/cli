@@ -34,6 +34,7 @@ from ..effective_branch import record_branch, resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError, request_outcome_unknown
 from ..models import ProjectConfig
 from ._storage_jobs import resolve_wait_timeout
+from ._workspace_delete import delete_workspace_and_config
 from ._workspace_load_plan import (
     LOAD_TYPE_CLONE,
     LOAD_TYPE_COPY,
@@ -1094,7 +1095,9 @@ class WorkspaceService(BaseService):
 
         Raises:
             KeboolaApiError: If an API call fails; in a dry run also when the
-                workspace does not exist (NOT_FOUND).
+                workspace does not exist (NOT_FOUND). A drop that outlasts the
+                wait is ``STORAGE_JOB_TIMEOUT`` (``retryable=False``), raised
+                after the sandbox config was trashed (``_workspace_delete``).
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
@@ -1119,25 +1122,7 @@ class WorkspaceService(BaseService):
                 "message": f"Would delete workspace {workspace_id} from project '{alias}'.",
             }
         try:
-            # Get workspace details to find associated config
-            config_id = None
-            component = None
-            try:
-                ws_data = client.get_workspace(workspace_id, branch_id=branch_id)
-                component = ws_data.get("component")
-                config_id = ws_data.get("configurationId")
-            except KeboolaApiError:
-                pass  # Workspace might not exist, proceed with delete
-
-            # Delete the workspace
-            client.delete_workspace(workspace_id, branch_id=branch_id)
-
-            # Clean up associated sandboxes config (in the correct branch)
-            if config_id and component == "keboola.sandboxes":
-                try:
-                    client.delete_config("keboola.sandboxes", config_id, branch_id=branch_id)
-                except KeboolaApiError:
-                    logger.debug("Could not delete sandbox config %s", config_id)
+            delete_workspace_and_config(client, alias, workspace_id, branch_id)
         finally:
             client.close()
 

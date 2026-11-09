@@ -999,6 +999,15 @@ These lists keep `error`, because their entries are not failed items with an err
   the job keeps running and may still produce a workspace, so its
   `keboola.sandboxes` config is kept -- check `workspace list` before
   retrying. A failed create job trashes the config like a refused request.
+- **A timed-out `workspace delete` (`STORAGE_JOB_TIMEOUT`, `retryable:
+  false`) still trashes the workspace's `keboola.sandboxes` config.** The drop
+  keeps running; follow it with the `storage job-detail --wait` command in the
+  message instead of deleting again. `details` carry `workspace_id`,
+  `sandbox_config_id` and `sandbox_config_trashed`; when the config could not
+  be trashed, `cleanup_command` is the `config delete` that removes it. If the
+  drop fails later, the workspace has no config, so `workspace gc` removes it.
+  A later `workspace delete` of the same workspace never purges the trashed
+  config.
 - **The create job's result omits the password** on Queue v2 projects
   without the `workspace-create-show-password` feature. Snowflake is
   unaffected (key-pair; the private key is generated locally). Other

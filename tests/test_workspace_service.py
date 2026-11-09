@@ -923,6 +923,123 @@ class TestDeleteWorkspace:
         )
 
 
+def _drop_timeout() -> KeboolaApiError:
+    """The client's wait timeout on a ``workspaceDrop`` job."""
+    return KeboolaApiError(
+        message="Storage workspace drop job 77 did not finish within 300s.",
+        error_code=ErrorCode.STORAGE_JOB_TIMEOUT,
+        status_code=504,
+        retryable=False,
+        details={"job_id": 77},
+    )
+
+
+def _not_found(message: str) -> KeboolaApiError:
+    return KeboolaApiError(
+        message=message, error_code=ErrorCode.NOT_FOUND, status_code=404, retryable=False
+    )
+
+
+class TestDeleteWorkspaceDropTimeout:
+    """A drop job that outlasts the wait must not leave the sandbox config behind."""
+
+    @staticmethod
+    def _service(tmp_config_dir: Path, mock_client: MagicMock) -> WorkspaceService:
+        mock_client.list_dev_branches.return_value = [{"id": 123, "isDefault": True}]
+        mock_client.get_workspace.return_value = {
+            "component": "keboola.sandboxes",
+            "configurationId": "cfg-123",
+        }
+        mock_client.delete_workspace.side_effect = _drop_timeout()
+        return WorkspaceService(
+            config_store=setup_single_project(tmp_config_dir),
+            client_factory=lambda url, token: mock_client,
+        )
+
+    def test_timeout_trashes_config_and_reports_job(self, tmp_config_dir: Path) -> None:
+        """The config goes to the trash; the error names the job and is not retryable."""
+        mock_client = MagicMock()
+        mock_client.get_config_detail.return_value = {"id": "cfg-123", "isDeleted": False}
+        svc = self._service(tmp_config_dir, mock_client)
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            svc.delete_workspace(alias="prod", workspace_id=42)
+
+        exc = exc_info.value
+        assert exc.error_code == ErrorCode.STORAGE_JOB_TIMEOUT
+        assert exc.retryable is False
+        assert exc.details["job_id"] == 77
+        assert exc.details["workspace_id"] == 42
+        assert exc.details["branch_id"] == 123
+        assert exc.details["sandbox_config_id"] == "cfg-123"
+        assert exc.details["sandbox_config_trashed"] is True
+        assert "cleanup_command" not in exc.details
+        assert "kbagent storage job-detail --project prod --job-id 77 --wait" in exc.message
+        assert "workspace gc" in exc.message
+        mock_client.delete_config.assert_called_once_with(
+            "keboola.sandboxes", "cfg-123", branch_id=123
+        )
+
+    def test_timeout_with_failed_config_trash_names_cleanup(self, tmp_config_dir: Path) -> None:
+        """A config that could not be trashed is named with the command that removes it."""
+        mock_client = MagicMock()
+        mock_client.get_config_detail.return_value = {"id": "cfg-123"}
+        mock_client.delete_config.side_effect = KeboolaApiError(
+            message="Service unavailable",
+            error_code=ErrorCode.API_ERROR,
+            status_code=503,
+            retryable=True,
+        )
+        svc = self._service(tmp_config_dir, mock_client)
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            svc.delete_workspace(alias="prod", workspace_id=42)
+
+        exc = exc_info.value
+        assert exc.error_code == ErrorCode.STORAGE_JOB_TIMEOUT
+        assert exc.details["sandbox_config_trashed"] is False
+        command = (
+            "kbagent config delete --project prod --component-id keboola.sandboxes "
+            "--config-id cfg-123 --branch 123"
+        )
+        assert exc.details["cleanup_command"] == command
+        assert command in exc.message
+
+    def test_rerun_never_deletes_a_trashed_config_again(self, tmp_config_dir: Path) -> None:
+        """A re-run after the timeout finds the config in the trash and sends no DELETE.
+
+        A second DELETE on a trashed configuration purges it permanently.
+        """
+        mock_client = MagicMock()
+        mock_client.get_config_detail.side_effect = _not_found("Configuration not found")
+        mock_client.list_deleted_configs.return_value = [{"id": "cfg-123"}]
+        svc = self._service(tmp_config_dir, mock_client)
+        mock_client.delete_workspace.side_effect = None
+
+        svc.delete_workspace(alias="prod", workspace_id=42)
+
+        mock_client.delete_workspace.assert_called_once_with(42, branch_id=123)
+        mock_client.delete_config.assert_not_called()
+
+    def test_timeout_on_non_sandbox_workspace_has_no_config_keys(
+        self, tmp_config_dir: Path
+    ) -> None:
+        """A workspace without a sandbox config only gets the job hint."""
+        mock_client = MagicMock()
+        svc = self._service(tmp_config_dir, mock_client)
+        mock_client.get_workspace.return_value = {
+            "component": "keboola.snowflake-transformation",
+            "configurationId": "tr-1",
+        }
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            svc.delete_workspace(alias="prod", workspace_id=42)
+
+        assert exc_info.value.error_code == ErrorCode.STORAGE_JOB_TIMEOUT
+        assert "sandbox_config_id" not in exc_info.value.details
+        mock_client.delete_config.assert_not_called()
+
+
 class TestResetPassword:
     """Tests for WorkspaceService.reset_password()."""
 

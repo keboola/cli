@@ -43,16 +43,19 @@ class _WorkspacesMixin(_CoreClient):
             max_wait: Seconds to poll the job. ``None`` means ``WORKSPACE_JOB_MAX_WAIT``.
 
         Raises:
-            KeboolaApiError: ``STORAGE_JOB_FAILED`` if the drop job fails,
-                ``STORAGE_JOB_TIMEOUT`` (details ``job_id``) if it outlasts the budget.
+            KeboolaApiError: ``STORAGE_JOB_FAILED`` if the drop job fails, or
+                ``STORAGE_JOB_TIMEOUT`` (``retryable=False``, details ``job_id``)
+                if it outlasts the budget; the drop keeps running server-side.
         """
         prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
         response = self._request(
             "DELETE", f"{prefix}/workspaces/{workspace_id}", params={"async": "true"}
         )
-        self._wait_for_storage_job(
+        self._wait_keeps_running(
             response.json(),
-            max_wait=WORKSPACE_JOB_MAX_WAIT if max_wait is None else max_wait,
+            budget=WORKSPACE_JOB_MAX_WAIT if max_wait is None else max_wait,
+            operation="workspace drop",
+            warning="; a repeated delete hits the workspace while it is being dropped.",
         )
 
     def reset_workspace_password(

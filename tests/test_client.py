@@ -732,6 +732,27 @@ class TestDeleteWorkspaceClient:
 
         assert exc_info.value.error_code == ErrorCode.STORAGE_JOB_FAILED
 
+    def test_delete_workspace_timeout_is_not_retryable(self, httpx_mock, monkeypatch) -> None:
+        """A drop that outlasts the wait keeps running server-side, so a retry is not offered."""
+        monkeypatch.setattr("keboola_agent_cli.client._core.time.sleep", _noop_sleep)
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/workspaces/42?async=true",
+            method="DELETE",
+            json={"id": 9, "status": "processing"},
+            status_code=202,
+        )
+
+        with (
+            KeboolaClient(stack_url="https://connection.keboola.com", token="901-x-y") as client,
+            pytest.raises(KeboolaApiError) as exc_info,
+        ):
+            client.delete_workspace(42, max_wait=0)
+
+        assert exc_info.value.error_code == ErrorCode.STORAGE_JOB_TIMEOUT
+        assert exc_info.value.retryable is False
+        assert exc_info.value.details["job_id"] == 9
+        assert "workspace drop keeps running server-side" in exc_info.value.message
+
     def test_delete_missing_workspace_is_404_on_the_request(self, httpx_mock) -> None:
         """Existence is checked before enqueueing, so NOT_FOUND comes from the DELETE."""
         httpx_mock.add_response(
