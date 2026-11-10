@@ -1983,6 +1983,8 @@ a `name_drift_warnings: [...]` array on the result envelope. The
 still runs, so a future operator who wants to audit can flip the flag off
 without losing data.
 
+*(updated vNEXT, CLI-54)* The dir that `sync pull` gives the second of two same-named configs, `<name>-<id8>` (or `<name>-<id8>-<n>`), is no drift. Before, push reported it on every run.
+
 ## `sync` carries a data app's runtime type: pull records it, push and clone send it
 
 A `keboola.data-apps` config's runtime type (`python-js` / `streamlit` / ...) lives only on the Data Science `/apps` record, never in the Storage config body. So `sync pull` used to drop it, and `sync push` / `sync clone` recreated the config through the Storage API alone. A cloned `python-js` app then deployed under the platform default, `streamlit` (since 0.94.0).
