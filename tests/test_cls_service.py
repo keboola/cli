@@ -9,7 +9,7 @@ order, fetch-then-merge) without HTTP. The shared plumbing is inherited from
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 from unittest.mock import ANY, MagicMock
 
 import pytest
@@ -257,6 +257,7 @@ class TestCreate:
             data={"table": "in.c-crm.invoices", "dialect": "snowflake", "rules": _RULES},
             scope="targeted",
             target_project_ids=None,
+            schema_version=None,
             conflict_hint=ANY,
         )
         assert result["preview"] == [
@@ -366,4 +367,54 @@ class TestEmailSelectorsAreRefused:
         assert exc.value.error_code == ErrorCode.INVALID_ARGUMENT
         assert "subjects" in exc.value.message
         assert "email" in exc.value.message
+        mock.post_item.assert_not_called()
+
+
+class TestAttributesSelector:
+    """A ``cls-policy`` selects by ``attributes`` + ``issuers`` like an ``rls-policy`` (schema 1.3.0, AJDA-3783)."""
+
+    _RULE: ClassVar[dict[str, Any]] = {
+        "attributes": {"department": ["finance"]},
+        "issuers": ["https://login.example.com/tenant-1/v2.0"],
+        "visible_columns": ["id", "region"],
+    }
+
+    def test_an_attributes_rule_is_created_at_schema_1_3_0(self, tmp_path: Path) -> None:
+        service, mock = _make_service(tmp_path)
+        mock.get_schema.side_effect = None
+        mock.get_schema.return_value = {"type": "object", "version": "1.3.0"}
+        mock.post_item.return_value = _item([self._RULE])
+
+        service.create_policy("prod", table="in.c-crm.invoices", rules=[self._RULE])
+
+        mock.get_schema.assert_called_once_with("cls-policy", version="1.3.0")
+        kwargs = mock.post_item.call_args.kwargs
+        assert kwargs["schema_version"] == "1.3.0"
+        assert kwargs["data"]["rules"] == [self._RULE]
+
+    def test_the_preview_shows_the_issuers_next_to_the_attributes(self, tmp_path: Path) -> None:
+        service, mock = _make_service(tmp_path)
+        mock.get_schema.side_effect = None
+        mock.get_schema.return_value = {"type": "object", "version": "1.3.0"}
+
+        result = service.create_policy(
+            "prod", table="in.c-crm.invoices", rules=[self._RULE], dry_run=True
+        )
+
+        assert result["preview"] == [
+            {
+                "attributes": self._RULE["attributes"],
+                "issuers": self._RULE["issuers"],
+                "visible_columns": ["id", "region"],
+            }
+        ]
+        mock.post_item.assert_not_called()
+
+    def test_a_rule_without_issuers_is_refused(self, tmp_path: Path) -> None:
+        service, mock = _make_service(tmp_path)
+        rule = {k: v for k, v in self._RULE.items() if k != "issuers"}
+
+        with pytest.raises(KeboolaApiError, match="issuers is required"):
+            service.create_policy("prod", table="in.c-crm.invoices", rules=[rule])
+
         mock.post_item.assert_not_called()

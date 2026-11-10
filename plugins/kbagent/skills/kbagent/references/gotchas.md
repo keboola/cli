@@ -7702,3 +7702,13 @@ the same way. Now a dev branch id is sent as a string (`"branchId": "12345"`);
 production and `--branch 0` stay `null`. The `--dry-run` body of `data-app
 create` shows the same string. On an older version, create the app in
 production or in the Keboola UI.
+- **Rules can select readers by IdP attributes (since vNEXT, schema 1.3.0).** A `rls|cls` rule may be
+  `{"attributes": {"department": ["finance"]}, "issuers": ["<idp>"]}` instead of `subjects` or `groups`: it matches a
+  reader of one of the issuers who has one of the values for every listed claim. `issuers` is required and goes only
+  with `attributes`; an empty map, an empty value, `"*"` as a value and a missing `issuers` are refused locally (exit
+  2) before anything is written. 1.3.0 is not the metastore default: `create` requests that version by itself when a
+  rule uses `attributes`, validates against the live 1.3.0 schema, and refuses (nothing written) a metastore that does
+  not serve it. A policy stored at 1.2.0 or older cannot gain an attributes rule (recreate it), and `update` never
+  re-stamps or drops a rule it was not asked to change: `--rules` replaces the whole list, so pass the attributes rule
+  as it is stored. An administrator and the MCP server have no attributes, so such a rule never matches them. The
+  claims a reader has are those in `attributeClaims` of the app's OIDC provider (Sandboxes API).

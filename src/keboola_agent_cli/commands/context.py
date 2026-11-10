@@ -436,7 +436,7 @@ GROUP_NOTES: dict[str, str] = {
 Author `cls-policy` metastore objects: one object per protected table, a
 `visible_columns` allowlist per rule (unlisted columns are omitted from
 that reader's result; masking is not supported). Rules select by
-`subjects` (`<idp>|<sub>`) or `groups`, never by email; within a policy an identity several rules
+`subjects` (`<idp>|<sub>`), `groups` or, from schema 1.3.0, `attributes` (IdP claims such as `department`, with a required `issuers`), never by email; within a policy an identity several rules
 match sees the union of their columns, several policies intersect; there is
 no `default`. Sibling of RLS -- same scope default, permissions, checks,
 partial update and enforcement path (the Query Service policy engine on a governed
@@ -445,7 +445,7 @@ alone opens the table for the readers it names (every row, only its columns); a 
 does not name is refused. With an `rls-policy` too, rows come from the `rls-policy` and columns from the `cls-policy`.
 
   cls create
-    --rules is a JSON array of {subjects|groups,
+    --rules is a JSON array of {subjects|groups|attributes+issuers,
     visible_columns: [col, ...]} objects. --dry-run prints each selector's
     allowed projection without writing.
 """,
@@ -1607,7 +1607,7 @@ explicit Storage config version, never the empty shell the create writes.
 
 Author `rls-policy` metastore objects: one object per protected table, a
 declarative condition primitive per rule (never free-text SQL). Policy schema
-1.2.0: a rule selects readers by `subjects` (`<idp>|<sub>`; an administrator behind a Storage token is `keboola|<user id>`) or IdP `groups`, never by email (principal/principals are refused, exit 2; stored legacy policies are still shown);
+1.2.0: a rule selects readers by `subjects` (`<idp>|<sub>`; an administrator behind a Storage token is `keboola|<user id>`) or IdP `groups`, never by email (principal/principals are refused, exit 2; stored legacy policies are still shown). Schema 1.3.0 (not the metastore default) adds `attributes`: {"attributes": {"department": ["finance"]}, "issuers": ["<idp>"]} selects a reader of one of the issuers that has one of the values for every claim; a policy that uses it is created at 1.3.0 automatically and keeps that version;
 within a policy every rule matching one identity applies and the conditions
 combine with OR; several policies on one table combine with AND (a policy added
 to an already readable table narrows it; a workspace binding that leaves one out
@@ -1645,7 +1645,7 @@ allow this query`. The identity that queries needs a matching rule.
     Policies visible to -- and applied in -- a project (id, table, dialect,
     rule_count, scope, owner_project_id, target_project_ids).
   rls create
-    --rules is a JSON array of {subjects|groups, condition}
+    --rules is a JSON array of {subjects|groups|attributes+issuers, condition}
     objects -- condition is a primitive tree (column/op/value, in/not_in,
     is_null/is_not_null, and/or nesting, `{"true": true}` or
     `{"false": true}`), never a raw predicate string; use is_null, never

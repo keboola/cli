@@ -20,7 +20,9 @@ WITHOUT target projects; granting target projects and ``organization`` scope
 need the organization-admin role.
 
 Policy schema 1.2.0 (the metastore default where it is deployed): a rule selects identities by
-``subjects`` (``<idp>|<sub>``) or IdP ``groups``, never by email (AJDA-3680); the legacy 1.0.0/1.1.0
+``subjects`` (``<idp>|<sub>``) or IdP ``groups``, never by email (AJDA-3680). Schema 1.3.0 (not the default; a
+policy that uses it is created by asking for that version) adds ``attributes`` -- claims of the IdP, such as a
+``department`` -- with a required ``issuers`` list (AJDA-3783); the legacy 1.0.0/1.1.0
 ``principal`` / ``principals`` of stored policies are read, not authored; within a policy every rule
 matching one identity applies and the conditions combine with OR (so one
 identity in several rules is fine); several policies on one table combine
@@ -275,6 +277,19 @@ class RlsService(BaseService):
                     "stack yet)"
                 )
             )
+        if _rls_condition.rules_use_attributes(policy["rules"]) and (
+            old := _rls_condition.schema_older_than(
+                fetch.schema, _rls_condition.ATTRIBUTES_MIN_SCHEMA_VERSION
+            )
+        ):
+            errors.append(
+                f"'attributes' needs {self.item_type} schema {_rls_condition.ATTRIBUTES_SCHEMA_VERSION} or later; "
+                + (
+                    f"this policy is stored at {old} and keeps that version (recreate it to use attributes)"
+                    if stored_version
+                    else f"this metastore serves {old}"
+                )
+            )
         if _rls_condition.rules_use_wildcard(policy["rules"]) and (
             old := _rls_condition.schema_lacks_wildcard(fetch.schema)
         ):
@@ -425,8 +440,16 @@ class RlsService(BaseService):
         if default is not None:
             policy["default"] = default
 
+        # The `attributes` selector exists only from schema 1.3.0, which is not the metastore default: a policy that
+        # uses it is validated against, and stamped with, that version. Without it nothing is sent and the default
+        # applies, as before.
+        schema_version = (
+            _rls_condition.ATTRIBUTES_SCHEMA_VERSION
+            if _rls_condition.rules_use_attributes(rules)
+            else None
+        )
         with self._new_metastore_client(project) as client:
-            fetch = self._fetch_schema(client)
+            fetch = self._fetch_schema(client, schema_version)
             if dialect is not None or _schema_requires_dialect(fetch.schema):
                 policy["dialect"] = dialect or backend
             check = self._validate_policy(
@@ -434,6 +457,17 @@ class RlsService(BaseService):
             )
             if check.errors:
                 self._raise_invalid(check.errors)
+            if schema_version and not fetch.schema:
+                # Checked after the rules, so that a malformed rule is reported as such. Without the schema nothing
+                # proves the metastore takes the version, and a write that asks for it would only fail later.
+                self._raise_invalid(
+                    [
+                        (
+                            f"'attributes' needs {self.item_type} schema {schema_version}, which this "
+                            f"metastore does not serve: {fetch.reason}"
+                        )
+                    ]
+                )
             preview = self._preview(policy, backend)
             if dry_run:
                 return self._with_warnings(
@@ -453,6 +487,7 @@ class RlsService(BaseService):
                 data=policy,
                 scope=cast(ObjectScope, str(scope)),  # checked against PolicyScope above
                 target_project_ids=target_ids or None,
+                schema_version=schema_version,
                 conflict_hint=self._conflict_hint,
             )
         return self._with_warnings({**self._detail_row(created), **preview}, check.warnings)
