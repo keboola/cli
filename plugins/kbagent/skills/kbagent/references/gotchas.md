@@ -508,6 +508,10 @@ These lists keep `error`, because their entries are not failed items with an err
   Before, a new remote config named like an existing one could be written into that
   folder. The new one gets a `<name>-<id>` folder (`<name>-<id>-2`, ... when that one is
   taken too).
+  - *(updated vNEXT, CLI-54)* In 1.0.0 to 1.1.0, every `sync pull` moved such a
+    `<name>-<id>` folder to `<name>-<id>-2` and back, and changed its path in the
+    manifest. The config did not change. Now the folder stays where it is. A folder left
+    at `<name>-<id>-2` moves back to `<name>-<id>` once, on the next pull.
 - **`sync pull --branch <other dev>` keeps the record of a promote to another dev
   branch**, so the next `sync push --branch <dev>` still updates the config it created
   there. Before, pulling a third branch dropped it and the next promote created the
