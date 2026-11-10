@@ -117,8 +117,8 @@ ObjectScope = Literal["project", "organization", "targeted"]
 
 # Envelope fields kept constant across every POST (per metastore contract).
 _ENVELOPE_BRANCH = "main"
-# No ``schemaVersion`` is sent on create: for an empty version the metastore
-# resolves the stack's DEFAULT schema and stores that version on the item. The
+# No ``schemaVersion`` is sent on create unless the caller asks for one (``post_item(schema_version=...)``): for an
+# empty version the metastore resolves the stack's DEFAULT schema and stores that version on the item. The
 # server checks a later scope elevation (PATCH / elevation request) against the
 # STORED version, and every ``semantic-*`` schema supports only ``scope=project``
 # at 1.0.0 (the later schema versions add "organization"/"targeted"), so pinning "1.0.0" here would
@@ -336,9 +336,14 @@ class MetastoreClient(BaseHttpClient):
         *,
         scope: ObjectScope = _DEFAULT_SCOPE,
         target_project_ids: list[int] | None = None,
+        schema_version: str | None = None,
         conflict_hint: str | None = None,
     ) -> dict[str, Any]:
         """Create an item. Returns the server's stored representation.
+
+        ``schema_version`` stamps the item with that schema version instead of the stack's default (for a
+        policy that uses a selector only a newer, non-default version defines: ``rls-policy`` 1.3.0
+        ``attributes``). Omitted, the default is used. A version the metastore does not serve is refused by it.
 
         ``data`` is the inner ``attributes`` payload (including ``modelUUID``
         for non-model types). The outer envelope is added here.
@@ -377,6 +382,8 @@ class MetastoreClient(BaseHttpClient):
         }
         if target_project_ids is not None:
             envelope["targetProjectIds"] = target_project_ids
+        if schema_version is not None:
+            envelope["schemaVersion"] = schema_version
         try:
             response = self._do_request(
                 "POST",

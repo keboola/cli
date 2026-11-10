@@ -64,6 +64,30 @@ and `["*"]` are the practical selectors** until user discovery exists. `["*"]`
 shown by `list`/`detail` flagged as legacy; to change their rules, recreate the policy
 with `subjects`/`groups`.
 
+**Attributes: an IdP claim such as `department` (policy schema 1.3.0; since vNEXT).**
+A third selector, `attributes`, selects readers by claims of their identity provider:
+
+```json
+{"attributes": {"department": ["finance", "hr"]},
+ "issuers": ["https://login.example.com/tenant-1/v2.0"],
+ "condition": {"column": "department", "op": "in", "values": ["finance", "hr"]}}
+```
+
+It matches a reader of one of the `issuers` who has, for **every** listed claim,
+**one** of its values (claims AND, values OR; exact and case-sensitive). `issuers` is
+required and goes only with `attributes`: it is the `idp` of the app user token, and a
+rule names the issuers it trusts because the owner of an app chooses its identity
+provider. A rule has exactly one of `subjects`, `groups`, `attributes`; there is no
+`"*"` for attributes. A reader has only the claims that the app owner allowed in
+`attributeClaims` of the app's OIDC provider; a claim it lacks is unknown, so the rule
+does not match it, and an administrator behind a Storage token or the MCP server has
+no attributes. Schema 1.3.0 is **not** the metastore default: `rls|cls create` asks
+for it by itself when a rule uses `attributes` (the live 1.3.0 schema validates the
+policy, and a metastore that does not serve it is refused before anything is written).
+A policy stored at an older version keeps it (recreate it to use attributes), and
+`update` never re-stamps a policy: to change the rules, pass the whole list with the
+attributes rule exactly as stored.
+
 **How rules combine (all schema versions).** Within a
 policy, every rule that matches the reader applies: RLS conditions combine with
 OR, CLS `visible_columns` are united. An RLS policy may set a `default` condition

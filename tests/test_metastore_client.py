@@ -178,6 +178,30 @@ class TestPostItem:
         assert body["data"]["modelUUID"] == "u"
         assert "targetProjectIds" not in body
 
+    def test_post_envelope_carries_the_schema_version_only_when_asked(self, httpx_mock) -> None:
+        for _ in range(2):
+            httpx_mock.add_response(
+                url=f"{METASTORE_URL_US}/api/v1/repository/rls-policy",
+                json={"data": {"type": "rls-policy", "id": "p", "attributes": {}}},
+                status_code=201,
+            )
+        client = MetastoreClient(stack_url=STACK_URL_US, token=TOKEN)
+        try:
+            client.post_item("rls-policy", name="t", data={"table": "a.b"}, scope="targeted")
+            client.post_item(
+                "rls-policy",
+                name="t",
+                data={"table": "a.b"},
+                scope="targeted",
+                schema_version="1.3.0",
+            )
+        finally:
+            client.close()
+
+        plain, versioned = (json.loads(r.content) for r in httpx_mock.get_requests())
+        assert "schemaVersion" not in plain
+        assert versioned["schemaVersion"] == "1.3.0"
+
 
 @pytest.fixture
 def metastore_client():

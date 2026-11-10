@@ -106,7 +106,7 @@ class PolicyGroup:
 
 RLS = PolicyGroup(
     name="rls",
-    rules_shape="{subjects|groups, condition}",
+    rules_shape="{subjects|groups|attributes+issuers, condition}",
     rule_text=lambda rule: str(rule.get("condition")),
     preview_text=lambda entry: f"WHERE {entry.get('condition')}",
 )
@@ -142,8 +142,14 @@ def gate_scope(
 
 
 def _selector_text(item: dict[str, Any]) -> str:
-    """A rule's (or preview entry's) selector: ``subjects: idp|sub, ...``, ``groups: g1, g2`` or, for a stored
-    1.0.0/1.1.0 policy, the legacy email selector flagged as such."""
+    """A rule's (or preview entry's) selector: ``subjects: idp|sub, ...``, ``groups: g1, g2``,
+    ``attributes: department=finance|hr (issuers: ...)`` or, for a stored 1.0.0/1.1.0 policy, the legacy email
+    selector flagged as such."""
+    if "attributes" in item:
+        claims = "; ".join(
+            f"{name}={'|'.join(values)}" for name, values in item["attributes"].items()
+        )
+        return f"attributes: {claims} (issuers: {', '.join(item.get('issuers') or [])})"
     for key in ("subjects", "groups"):
         if key in item:
             names = item[key]
@@ -480,9 +486,11 @@ def rls_create(
         ...,
         "--rules",
         help=(
-            "JSON|@file|- array of {subjects|groups, condition} objects (subjects are '<idp>|<sub>', "
-            "an administrator behind a Storage token is 'keboola|<user id>'; '[\"*\"]' is every identified "
-            "reader; an email is not allowed); rules matching one identity combine with OR "
+            "JSON|@file|- array of {subjects|groups|attributes+issuers, condition} objects (subjects are "
+            "'<idp>|<sub>', an administrator behind a Storage token is 'keboola|<user id>'; '[\"*\"]' is every "
+            "identified reader; an email is not allowed; attributes are IdP claims, "
+            '{"attributes": {"department": ["finance"]}, "issuers": ["<idp>"]}, schema 1.3.0); '
+            "rules matching one identity combine with OR "
             "(see rls-workflow.md for the condition shape)"
         ),
     ),

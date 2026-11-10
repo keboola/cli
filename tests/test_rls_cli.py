@@ -1114,3 +1114,24 @@ class TestWizardTypedValues:
 
         assert rls_commands._prompt_typed(formatter, "Value", many=many) == expected
         formatter.err_console.print.assert_called_once()
+
+
+class TestSelectorText:
+    def test_an_attributes_selector_shows_its_claims_and_issuers(self) -> None:
+        from keboola_agent_cli.commands.rls import _selector_text
+
+        selector = {
+            "attributes": {"department": ["finance", "hr"], "region": ["eu"]},
+            "issuers": ["https://login.example.com/tenant-1/v2.0"],
+        }
+
+        assert _selector_text(selector) == (
+            "attributes: department=finance|hr; region=eu "
+            "(issuers: https://login.example.com/tenant-1/v2.0)"
+        )
+
+    def test_the_other_selectors_read_as_before(self) -> None:
+        from keboola_agent_cli.commands.rls import _selector_text
+
+        assert _selector_text({"groups": ["*"]}) == "groups: every identified reader"
+        assert _selector_text({"subjects": ["keboola|1"]}) == "subjects: keboola|1"

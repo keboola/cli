@@ -19,6 +19,7 @@ from keboola_agent_cli.json_utils import draft7_errors
 from keboola_agent_cli.models import ProjectConfig
 from keboola_agent_cli.services._rls_condition import (
     compile_condition_preview,
+    rule_selector,
     validate_condition_ops,
     validate_rules_local,
 )
@@ -1489,3 +1490,148 @@ class TestUnresolvedVersionListing:
 
         result = service.create_policy("prod", table="in.c-crm.t", rules=_RULES)
         assert any("version listing" in w for w in result["warnings"])
+
+
+class TestAttributesSelector:
+    """Schema 1.3.0 adds ``attributes`` + ``issuers`` (AJDA-3783). 1.3.0 is not the metastore default, so a policy
+    that uses them is created by asking for it, and an edit of one never drops a rule or re-stamps the policy."""
+
+    _COND: ClassVar[dict[str, Any]] = {"column": "department", "op": "eq", "value": "finance"}
+    _ISSUER = "https://login.example.com/tenant-1/v2.0"
+    _RULE: ClassVar[dict[str, Any]] = {
+        "attributes": {"department": ["finance", "hr"], "region": ["eu"]},
+        "issuers": [_ISSUER],
+        "condition": {"true": True},
+    }
+
+    @staticmethod
+    def _stored(version: str, rules: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        stored = _policy_item(rules=rules)
+        stored["meta"]["schemaVersion"] = version
+        return stored
+
+    def test_a_well_formed_attributes_rule_passes_the_local_checks(self) -> None:
+        assert validate_rules_local([self._RULE]) == []
+
+    @pytest.mark.parametrize(
+        ("rule", "fragment"),
+        [
+            ({"attributes": {}, "issuers": [_ISSUER]}, "non-empty object"),
+            ({"attributes": {"department": []}, "issuers": [_ISSUER]}, "non-empty list"),
+            ({"attributes": {"department": [""]}, "issuers": [_ISSUER]}, "non-empty list"),
+            ({"attributes": {"department": "finance"}, "issuers": [_ISSUER]}, "non-empty list"),
+            ({"attributes": {"department": ["*"]}, "issuers": [_ISSUER]}, "is not a value"),
+            ({"attributes": {"department": ["a"]}}, "issuers is required"),
+            ({"attributes": {"department": ["a"]}, "issuers": []}, "issuers is required"),
+            ({"attributes": {"department": ["a"]}, "issuers": ["*"]}, "must be an issuer"),
+            (
+                {"attributes": {"department": ["a"]}, "issuers": ["https://x|y"]},
+                "must be an issuer",
+            ),
+            ({"attributes": {"department": ["a"]}, "issuers": ["a b"]}, "must be an issuer"),
+            (
+                {"attributes": {"department": ["a"]}, "groups": ["g"], "issuers": [_ISSUER]},
+                "exactly one of",
+            ),
+            ({"groups": ["g"], "issuers": [_ISSUER]}, "'issuers' goes only with 'attributes'"),
+            ({"subjects": ["keboola|1"], "issuers": [_ISSUER]}, "'issuers' goes only with"),
+        ],
+    )
+    def test_a_malformed_attributes_rule_is_refused(
+        self, rule: dict[str, Any], fragment: str
+    ) -> None:
+        errors = validate_rules_local([{**rule, "condition": self._COND}])
+
+        assert errors, rule
+        assert fragment in " ".join(errors)
+
+    def test_the_selector_of_a_preview_keeps_the_issuers(self) -> None:
+        assert rule_selector(self._RULE) == {
+            "attributes": self._RULE["attributes"],
+            "issuers": [self._ISSUER],
+        }
+        assert rule_selector({"groups": ["g"], "condition": self._COND}) == {"groups": ["g"]}
+
+    def test_a_policy_with_attributes_is_validated_against_and_stamped_with_schema_1_3_0(
+        self, tmp_path: Path
+    ) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.get_schema.return_value = {"type": "object", "version": "1.3.0"}
+        mock.post_item.return_value = _policy_item()
+
+        service.create_policy("prod", table="t.x", rules=[self._RULE])
+
+        mock.get_schema.assert_called_once_with("rls-policy", version="1.3.0")
+        kwargs = mock.post_item.call_args.kwargs
+        assert kwargs["schema_version"] == "1.3.0"
+        assert kwargs["data"]["rules"] == [self._RULE]
+
+    def test_a_policy_without_attributes_is_created_at_the_default_version(
+        self, tmp_path: Path
+    ) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.get_schema.return_value = {"type": "object", "version": "1.2.0"}
+        mock.post_item.return_value = _policy_item()
+
+        service.create_policy("prod", table="t.x", rules=_RULES)
+
+        assert mock.post_item.call_args.kwargs["schema_version"] is None
+
+    @pytest.mark.parametrize(
+        ("schema", "fragment"),
+        [
+            (KeboolaApiError(message="no such version", status_code=404), "does not serve"),
+            ({"type": "object", "version": "1.2.0"}, r"needs rls-policy schema 1\.3\.0 or later"),
+        ],
+    )
+    def test_attributes_on_a_metastore_without_schema_1_3_0_are_refused_before_any_write(
+        self, tmp_path: Path, schema: Any, fragment: str
+    ) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        if isinstance(schema, Exception):
+            mock.get_schema.side_effect = schema
+        else:
+            mock.get_schema.return_value = schema
+
+        with pytest.raises(KeboolaApiError, match=fragment):
+            service.create_policy("prod", table="t.x", rules=[self._RULE])
+
+        mock.post_item.assert_not_called()
+
+    def test_editing_another_key_of_a_1_3_0_policy_sends_only_that_key(
+        self, tmp_path: Path
+    ) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.get_schema.return_value = {"type": "object", "version": "1.3.0"}
+        mock.get_item.return_value = self._stored("1.3.0", [self._RULE])
+
+        service.update_policy("prod", "p-1", default={"true": True})
+
+        mock.get_schema.assert_called_once_with("rls-policy", version="1.3.0")
+        assert mock.patch_item.call_args.kwargs["data"] == {"default": {"true": True}}
+
+    def test_an_edit_of_the_rules_keeps_the_untouched_attributes_rule_as_written(
+        self, tmp_path: Path
+    ) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.get_schema.return_value = {"type": "object", "version": "1.3.0"}
+        mock.get_item.return_value = self._stored("1.3.0", [self._RULE])
+        other = {"groups": ["sales"], "condition": {"true": True}}
+
+        service.update_policy("prod", "p-1", rules=[self._RULE, other])
+
+        sent = mock.patch_item.call_args.kwargs["data"]["rules"]
+        assert sent == [self._RULE, other]
+        assert sent[0] == self._RULE
+
+    def test_attributes_cannot_be_added_to_a_policy_stored_at_an_older_version(
+        self, tmp_path: Path
+    ) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        mock.get_schema.return_value = {"type": "object", "version": "1.2.0"}
+        mock.get_item.return_value = self._stored("1.2.0")
+
+        with pytest.raises(KeboolaApiError, match=r"stored at 1\.2\.0 and keeps that version"):
+            service.update_policy("prod", "p-1", rules=[self._RULE])
+
+        mock.patch_item.assert_not_called()

@@ -11,8 +11,8 @@ rule is just a selector plus a column allowlist, so ``create`` covers it):
 - ``cls update`` -- partial (PATCH) update of an existing policy (write).
 - ``cls delete`` -- remove a policy (destructive).
 
-Each rule is ``{subjects|groups, visible_columns: [...]}`` (``subjects`` are ``<idp>|<sub>``, an
-email is not a selector): the listed
+Each rule is ``{subjects|groups|attributes+issuers, visible_columns: [...]}`` (``subjects`` are ``<idp>|<sub>``, an
+email is not a selector; ``attributes`` are IdP claims with a required ``issuers``, schema 1.3.0): the listed
 columns are the only ones the selected readers can read (allowlist projection;
 masking is not supported). A ``cls-policy`` alone opens the table for the readers it names (every row, only its
 columns); with an ``rls-policy`` too, rows come from the ``rls-policy``. As with ``rls``, every write is authored at
@@ -58,7 +58,7 @@ cls_app = typer.Typer(
 
 CLS = PolicyGroup(
     name="cls",
-    rules_shape="{subjects|groups, visible_columns}",
+    rules_shape="{subjects|groups|attributes+issuers, visible_columns}",
     rule_text=lambda rule: ", ".join(rule.get("visible_columns") or []),
     preview_text=lambda entry: f"SELECT {', '.join(entry.get('visible_columns') or [])}",
 )

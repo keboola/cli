@@ -62,10 +62,13 @@ _SUBJECT_RE = re.compile(r"^[^|\s\x00-\x1f\x7f]+\|[^\x00-\x1f\x7f]+$")
 _SUBJECT_MAX_LENGTH = 1024
 # IdP group names may contain spaces ("Sales EU"); only control characters are refused.
 _GROUP_RE = re.compile(r"^[^\x00-\x1f\x7f]+$")
+# An issuer of an `attributes` rule is the first part of a subject: no `|`, white space or control character.
+_ISSUER_RE = re.compile(r"^[^|\s\x00-\x1f\x7f]+$")
 
-# The rule selectors a NEW policy may use (schema 1.2.0) -- each rule names exactly one. The legacy selectors
-# of 1.0.0/1.1.0 objects are only read (stored policies, an update that keeps their rules), never authored.
-SELECTORS: tuple[str, ...] = ("subjects", "groups")
+# The rule selectors a NEW policy may use -- each rule names exactly one. `attributes` (schema 1.3.0) is the only one
+# that comes with a second key, the required `issuers`. The legacy selectors of 1.0.0/1.1.0 objects are only read
+# (stored policies, an update that keeps their rules), never authored.
+SELECTORS: tuple[str, ...] = ("subjects", "groups", "attributes")
 LEGACY_SELECTORS: tuple[str, ...] = ("principal", "principals")
 ALL_SELECTORS: tuple[str, ...] = (*LEGACY_SELECTORS, *SELECTORS)
 
@@ -76,6 +79,10 @@ WILDCARD = "*"
 WILDCARD_MIN_SCHEMA_VERSION = (1, 1, 0)
 # `subjects` exist from schema 1.2.0; an older metastore would refuse the key (or, worse, never match it).
 SUBJECTS_MIN_SCHEMA_VERSION = (1, 2, 0)
+# `attributes` (with `issuers`) exist from schema 1.3.0, which is NOT the metastore default: a policy that uses them is
+# created by asking for that version, and one stored at an older version keeps it (a PATCH never re-stamps).
+ATTRIBUTES_SCHEMA_VERSION = "1.3.0"
+ATTRIBUTES_MIN_SCHEMA_VERSION = (1, 3, 0)
 
 # The `$identity` placeholders: `value` may be the reader's email, `values` the reader's groups.
 IDENTITY_EMAIL = {"$identity": "email"}
@@ -188,6 +195,10 @@ def validate_selector_fields(rule: dict[Any, Any], index: int) -> list[str]:
     if len(present) != 1:
         return [f"rules[{index}] must set exactly one of {'/'.join(SELECTORS)}"]
     key = present[0]
+    if key == "attributes":
+        return _attributes_errors(rule, index)
+    if "issuers" in rule:
+        return [f"rules[{index}]: 'issuers' goes only with 'attributes'"]
     names = [rule[key]] if key == "principal" else rule[key]
     if (
         not isinstance(names, list)
@@ -220,6 +231,46 @@ def validate_selector_fields(rule: dict[Any, Any], index: int) -> list[str]:
         for name in names
         if not pattern.fullmatch(name)
     ]
+
+
+def _attributes_errors(rule: dict[Any, Any], index: int) -> list[str]:
+    """The shape of an ``attributes`` selector and its required ``issuers`` (schema 1.3.0).
+
+    Only what is cheap and certain is checked here: a non-empty map of names to non-empty lists of non-empty
+    strings that are not the wildcard (an empty map would select every reader), and the issuers. The limits
+    (names, count, length) and the reserved claim names are the live schema's to enforce, so kbagent holds no
+    second copy of them; a rule it lets through is checked against that schema before any write.
+    """
+    attributes = rule["attributes"]
+    if not isinstance(attributes, dict) or not attributes:
+        return [f"rules[{index}].attributes must be a non-empty object of claim name to values"]
+    errors: list[str] = []
+    for name, values in attributes.items():
+        if (
+            not isinstance(name, str)
+            or not isinstance(values, list)
+            or not values
+            or not all(isinstance(value, str) and value for value in values)
+        ):
+            errors.append(
+                f"rules[{index}].attributes[{name!r}] must be a non-empty list of non-empty strings"
+            )
+        elif WILDCARD in values:
+            errors.append(f"rules[{index}].attributes[{name!r}]: {WILDCARD!r} is not a value")
+    issuers = rule.get("issuers")
+    if not isinstance(issuers, list) or not issuers or not all(isinstance(i, str) for i in issuers):
+        errors.append(
+            f"rules[{index}].issuers is required with attributes: a non-empty list of the issuers "
+            "(the idp of the app user token) whose users the rule is for"
+        )
+    else:
+        errors.extend(
+            f"rules[{index}]: issuers entry {issuer!r} must be an issuer without '|', white space or "
+            f"control characters, and not {WILDCARD!r}"
+            for issuer in issuers
+            if issuer == WILDCARD or not _ISSUER_RE.fullmatch(issuer)
+        )
+    return errors
 
 
 def legacy_selector_errors(rules: Any) -> list[str]:
@@ -277,10 +328,20 @@ def rules_use_subjects(rules: Any) -> bool:
     )
 
 
+def rules_use_attributes(rules: Any) -> bool:
+    """Whether any rule selects by ``attributes`` (which needs schema 1.3.0)."""
+    return isinstance(rules, list) and any(
+        isinstance(rule, dict) and "attributes" in rule for rule in rules
+    )
+
+
 def rule_selector(rule: dict[str, Any]) -> dict[str, Any]:
-    """The rule's selector as written (``{"subjects": [...]}``, ``{"groups": [...]}`` or, in a stored policy, a legacy
-    ``{"principal": ...}`` / ``{"principals": [...]}``)."""
-    return {key: rule[key] for key in ALL_SELECTORS if key in rule}
+    """The rule's selector as written (``{"subjects": [...]}``, ``{"groups": [...]}``, ``{"attributes": {...},
+    "issuers": [...]}`` or, in a stored policy, a legacy ``{"principal": ...}`` / ``{"principals": [...]}``)."""
+    selector = {key: rule[key] for key in ALL_SELECTORS if key in rule}
+    if "attributes" in selector and "issuers" in rule:
+        selector["issuers"] = rule["issuers"]
+    return selector
 
 
 def validate_rules_local(rules: Any) -> list[str]:
