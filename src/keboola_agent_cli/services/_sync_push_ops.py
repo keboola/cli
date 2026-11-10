@@ -310,6 +310,19 @@ def _dependent_row_refusals(
     ]
 
 
+def _is_collision_dirname(dirname: str, expected_dirname: str, config_id: str) -> bool:
+    """True for the dir ``sync pull`` gives a config whose name another config has.
+
+    ``free_path`` names it ``<name>-<id8>``, or ``<name>-<id8>-<n>`` when that is
+    taken too, so the dir matches the config name and is no drift.
+    """
+    suffix = f"{expected_dirname}-{config_id[:8]}"
+    if dirname == suffix:
+        return True
+    counter = dirname.removeprefix(f"{suffix}-")
+    return counter != dirname and counter.isascii() and counter.isdigit()
+
+
 def detect_name_drift(
     service: SyncService, manifest: Manifest, project_root: Path
 ) -> list[dict[str, str]]:
@@ -338,7 +351,9 @@ def detect_name_drift(
             continue
 
         expected_dirname = sanitize_name(config_name)
-        if dirname != expected_dirname:
+        if dirname != expected_dirname and not _is_collision_dirname(
+            dirname, expected_dirname, cfg.id
+        ):
             warnings.append(
                 {
                     "component_id": cfg.component_id,
