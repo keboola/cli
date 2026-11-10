@@ -28,6 +28,47 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "1.2.0": [
+        "New (#778): `kbagent rls` and `kbagent cls` write row-level and column-level security "
+        "policies for Storage tables. Query Service applies them when it reads a governed "
+        "workspace. `rls bind`, `rls unbind` and `rls bindings` limit one governed workspace to "
+        "some of the project's policies. `rls bindings-sweep` finds the bindings of deleted "
+        "workspaces and removes them with `--yes`. A new policy applies to its own project and "
+        "the `--target-project` projects. `--scope organization` applies it in every project of "
+        "the organization. The commands need a stack whose metastore has the policy types. On "
+        "another stack they report that the policy schema is not found. `kbagent serve` has the "
+        "same routes under `/rls` and `/cls`.",
+        "New (#892, #922): `workspace create --governed` creates a Snowflake or BigQuery "
+        "workspace that nobody can log in to. Only Query Service reads it, and it applies the "
+        "project's row-level and column-level policies. The result has no private key and no "
+        "password. The stack's Connection must accept the governed login type. On another "
+        "stack the create fails, and kbagent removes what it created. `POST /workspaces/{project}` "
+        "of `kbagent serve` takes `governed: true`.",
+        "New (#964): `config set-default-bucket` and `config state-set` report `status`: "
+        "`updated` after a write, `unchanged` when nothing changed. The `kbagent serve` routes "
+        "return the same key. The boolean `changed` stays.",
+        "Change (#945): `storage describe-table` writes the table description into the native "
+        "table definition, as `describe-column` does for columns. `storage table-detail` reads "
+        "the table description, and the column types of a typed table, from that definition. A "
+        "description that exists only as an old `KBC.description` metadata row no longer shows. "
+        "A repeat with the same text reports `status: unchanged`. The definition supports "
+        "Snowflake and BigQuery tables only.",
+        "Change (#956): `workspace create`, `workspace delete`, `workspace gc` and "
+        "`storage file-delete` run as Storage jobs and wait for them. The synchronous API calls "
+        "they used are deprecated. A job that does not finish in time reports "
+        "`STORAGE_JOB_TIMEOUT` with the job ID, and the job keeps running. When the job result "
+        "of a password-login workspace has no password, `workspace create` resets the password "
+        "once, so `password` is filled. The SDK `Files.delete` now waits for its job too.",
+        "Fix (#963): a failed self-update keeps the installed kbagent, and the update stays on "
+        "the Python that kbagent was installed with. Before, a failed download or build could "
+        "delete kbagent, and an update could move to a newly installed Python, for example "
+        "Python 3.15 on Windows, where PyYAML needs a C compiler.",
+        "Fix (#968): `sync pull` no longer moves the folder of a same-named config between "
+        "`<name>-<id8>` and `<name>-<id8>-2` on every pull. Versions 1.0.0 to 1.1.0 did this. A "
+        "folder left at `<name>-<id8>-2` moves back to `<name>-<id8>` once, on the next pull.",
+        "Fix (#969): `sync push` no longer reports the `<name>-<id8>` folder of a same-named "
+        "config as name drift.",
+    ],
     "1.1.0": [
         "New (#948): `data-app create --git-auth organization` deploys a private GitHub repo "
         "through the organization's GitHub App, with no PAT stored. The git block is "

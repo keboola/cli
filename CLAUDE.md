@@ -603,7 +603,7 @@ kbagent config detail [--project NAME] [--project NAME ...] --component-id ID [-
 kbagent config search --query PATTERN [--project NAME | --all-projects] [--component-type TYPE] [--ignore-case] [--regex] [--branch ID]
 kbagent config update [--project NAME] --component-id ID --config-id ID [--name N] [--description D] [--configuration JSON | --configuration-file PATH] [--set PATH=VALUE ...] [--merge] [--change-description TEXT] [--dry-run] [--branch ID] [--allow-plaintext-on-encrypt-failure]
 kbagent config set-default-bucket [--project NAME] --component-id ID --config-id ID (--bucket BUCKET_ID | --clear) [--dry-run] [--branch ID]
-# set-default-bucket / state-set (since vNEXT, spec R6): `status` is "updated" after a write, or
+# set-default-bucket / state-set (since 1.2.0, spec R6): `status` is "updated" after a write, or
 #   "unchanged" when the value or state already matches (no write, exit 0). The older boolean
 #   `changed` stays for compatibility; read `status`.
 kbagent config rename [--project NAME] --component-id ID --config-id ID --name "New Name" [--branch ID] [--directory DIR]
@@ -806,7 +806,7 @@ kbagent storage describe-table [--project NAME] --table-id ID (--description STR
 kbagent storage describe-column [--project NAME] --table-id ID --column NAME=DESC [--column ...] [--branch ID]
 kbagent storage describe-batch [--project NAME] --file YAML [--branch ID]
 kbagent storage describe-migrate [--project ALIAS] [--table-id ID ...] [--bucket-id ID] [--prune-orphans] [--dry-run] [--yes] [--branch ID]
-# Table descriptions and column types (since vNEXT, DMD-2439): describe-table (and describe-batch `tables:`)
+# Table descriptions and column types (since 1.2.0, DMD-2439): describe-table (and describe-batch `tables:`)
 #   write `definition.description` through the same definition PUT as describe-column, with
 #   isDescriptionSystemManaged=false and no KBC.description row; the result reports status "updated", or
 #   "unchanged" (result null, human "Description unchanged") when Storage rejects the PUT with code

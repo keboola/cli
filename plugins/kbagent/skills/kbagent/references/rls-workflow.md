@@ -7,7 +7,7 @@ these objects; enforcement (the actual SQL rewrite on a query) happens
 outside kbagent, in the Query Service policy engine (a sidecar of Query Service,
 go-monorepo `services/query/policy-engine`), which rewrites every query of a
 governed workspace (see [End-to-end](#end-to-end----governed-workspace-policies-query-service);
-since vNEXT). The MCP server's `query_data` tool reaches it through a governed
+since 1.2.0). The MCP server's `query_data` tool reaches it through a governed
 workspace the MCP server creates itself. `kbagent rls` never
 decides whether a real query gets filtered -- it only creates, reads, updates
 and deletes the policy objects the enforcement reads.
@@ -37,7 +37,7 @@ and deletes the policy objects the enforcement reads.
 
 **Enforcement prerequisite.** Policies are enforced only on a governed
 workspace. Query Service always enforces a governed workspace, in every project
-and with no per-project switch (since vNEXT); an ordinary workspace is not
+and with no per-project switch (since 1.2.0); an ordinary workspace is not
 filtered at all. A table that no `rls-policy` and no `cls-policy` applies to is not
 readable: an ordinary reader gets an empty result (HTTP 200, no rows), an administrator behind a Storage
 token gets the refusal `Row-level security does not allow this query` (HTTP 403).
@@ -45,7 +45,7 @@ The `row-level-security` project feature is read only by the MCP server, to deci
 that its own workspace is created governed
 (see [The MCP server's workspace](#the-mcp-servers-workspace)).
 
-**Who a rule selects (policy schema 1.2.0; since vNEXT).** A rule selects readers
+**Who a rule selects (policy schema 1.2.0; since 1.2.0).** A rule selects readers
 by `subjects` -- `<idp>|<sub>` entries, the issuer of the identity provider, a `|`
 and the user's `sub` -- or by IdP `groups`, exactly one of the two per rule; an
 email is **not** a selector in a new policy (an identity provider can assert any
@@ -115,7 +115,7 @@ Non-obvious behaviors and version gates: [gotchas.md](gotchas.md).
 
 ## End-to-end -- governed workspace, policies, Query Service
 
-*(since vNEXT)*
+*(since 1.2.0)*
 
 Everything below is kbagent commands: no MCP server, no warehouse credentials.
 Workspace details and gotchas: [workspace-workflow.md](workspace-workflow.md#governed-workspace).
@@ -417,7 +417,7 @@ meant," not as proof of what will be enforced.
 
 ## Workflow 4b -- Groups, a default and identity placeholders (schema 1.1.0)
 
-*(since vNEXT)*
+*(since 1.2.0)*
 
 One policy for many readers instead of one rule per person. Groups are the IdP
 `groups` claim strings exactly as delivered (Entra may deliver object ids);
@@ -454,7 +454,7 @@ row; anyone else sees no rows (the `default`), instead of an error.
 
 ## Workflow 4c -- Default deny and the wildcard (governed workspaces)
 
-*(since vNEXT)*
+*(since 1.2.0)*
 
 In a **governed workspace** (`workspace create --governed`, or the workspace the
 MCP server creates governed in a project with the `row-level-security` feature)
@@ -573,7 +573,7 @@ kbagent --json rls schema --project prod
   the token is an administrator's (see Identity above); the workspace binding,
   if any, lists that policy (`rls bindings`).
 - **The same 403 for a statement the engine refuses whatever the policies say**
-  *(since vNEXT)* -- one generic message for every refusal, an ordinary reader included
+  *(since 1.2.0)* -- one generic message for every refusal, an ordinary reader included
   (no empty result). Refused anywhere in the statement: `IDENTIFIER()` / `TABLE()`
   outside FROM, the `AI_*` / `AI.*` functions (and `Generate*`, `PREDICT`,
   `VECTOR_SEARCH`), `TO_FILE`, `READ_CSV` / `READ_PARQUET`, `SECRET`, the
@@ -584,7 +584,7 @@ kbagent --json rls schema --project prod
   `CURRENT_TIMESTAMP` stay allowed. Rewrite the query (quote the name, drop the
   function); the refusal does not say which rule it hit (go-monorepo #687, AJDA-3729).
 - **`workspace query` on a governed workspace: `503` "Row-level security could not
-  be applied to this workspace"** *(since vNEXT)* -- the enforcement itself failed
+  be applied to this workspace"** *(since 1.2.0)* -- the enforcement itself failed
   (engine or policy store unavailable, an engine failure). Retryable: repeat the
   query; it is not a policy decision and nothing was run unfiltered.
 
@@ -638,4 +638,4 @@ kbagent cls delete --project prod --policy-id <id> --yes
   `groups` per rule, non-empty `visible_columns` of `[A-Za-z0-9_]+` names, the dialect check,
   no `default`, plus the live JSON Schema). Nothing was written.
 - Within one CLS policy, an identity several rules match sees the union of their
-  `visible_columns`; several CLS policies on one table intersect (since vNEXT).
+  `visible_columns`; several CLS policies on one table intersect (since 1.2.0).

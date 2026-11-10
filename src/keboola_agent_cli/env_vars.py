@@ -67,7 +67,7 @@ ENV_VARS: tuple[EnvVar, ...] = (
         "Stack segment of a workspace KID for 'rls bind' and 'rls unbind', when --stack-id "
         "is not given.",
         secret=False,
-        added_in="vNEXT",
+        added_in="1.2.0",
         option="rls bind --stack-id, rls unbind --stack-id",
     ),
     EnvVar(
