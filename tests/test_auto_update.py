@@ -628,6 +628,7 @@ class TestMaybeAutoUpdate:
     )
     @patch("keboola_agent_cli.auto_update._re_exec")
     @patch("keboola_agent_cli.auto_update.__version__", "1.0.0")
+    @patch("keboola_agent_cli.services.version_service.__version__", "1.0.0")
     def test_newer_available_updates_and_reexec(
         self,
         mock_reexec,
@@ -653,6 +654,7 @@ class TestMaybeAutoUpdate:
     )
     @patch("keboola_agent_cli.auto_update._re_exec")
     @patch("keboola_agent_cli.auto_update.__version__", "1.0.0")
+    @patch("keboola_agent_cli.services.version_service.__version__", "1.0.0")
     def test_update_failure_continues(
         self,
         mock_reexec,
@@ -677,6 +679,7 @@ class TestMaybeAutoUpdate:
     @patch("keboola_agent_cli.auto_update._re_exec")
     @patch("keboola_agent_cli.auto_update._write_cache")
     @patch("keboola_agent_cli.auto_update.__version__", "1.0.0")
+    @patch("keboola_agent_cli.services.version_service.__version__", "1.0.0")
     def test_timeout_outcome_is_not_a_failure(
         self,
         mock_write,
@@ -1130,6 +1133,7 @@ class TestStartupDefersTheReinstall:
             ),
             patch("keboola_agent_cli.auto_update._is_up_to_date", return_value=False),
             patch("keboola_agent_cli.auto_update.__version__", "1.0.0"),
+            patch("keboola_agent_cli.services.version_service.__version__", "1.0.0"),
         ):
             yield
 

@@ -508,7 +508,7 @@ These lists keep `error`, because their entries are not failed items with an err
   Before, a new remote config named like an existing one could be written into that
   folder. The new one gets a `<name>-<id>` folder (`<name>-<id>-2`, ... when that one is
   taken too).
-  - *(updated vNEXT, CLI-54)* In 1.0.0 to 1.1.0, every `sync pull` moved such a
+  - *(updated 1.2.0, CLI-54)* In 1.0.0 to 1.1.0, every `sync pull` moved such a
     `<name>-<id>` folder to `<name>-<id>-2` and back, and changed its path in the
     manifest. The config did not change. Now the folder stays where it is. A folder left
     at `<name>-<id>-2` moves back to `<name>-<id>` once, on the next pull.
@@ -713,7 +713,7 @@ These lists keep `error`, because their entries are not failed items with an err
 
 ## The self-update keeps the Python and the tool environment
 
-*(since vNEXT)*
+*(since 1.2.0)*
 
 - **`kbagent update` and the startup auto-update run `uv tool install --reinstall --compile-bytecode --python <interpreter of the running kbagent> <spec>`.** Before, they ran `uv tool install --force --reinstall --compile-bytecode <spec>`. `upgrade_command` in `kbagent --json version` and the recovery command after a failed uv update have the same form. When kbagent finds no uv on `PATH`, or was installed with pip, these commands still contain `--force` and no `--python`.
 - **A failed download or build keeps the old version.** Before, a failed update could delete kbagent. With `--force`, uv 0.10.10 and newer builds a new tool environment and deletes it when the install fails. Without `--python`, uv could select a newly installed Python (for example 3.15 on Windows, where PyYAML has no prebuilt wheel and needs a C compiler) and build the environment again on it.
@@ -999,7 +999,7 @@ These lists keep `error`, because their entries are not failed items with an err
 
 ## Workspace create/delete and `storage file-delete` run as Storage jobs
 
-*(since vNEXT)*
+*(since 1.2.0)*
 
 - **`workspace create` (headless), `workspace from-transformation`,
   `workspace delete` / `workspace gc` and `storage file-delete` send
@@ -1987,7 +1987,7 @@ a `name_drift_warnings: [...]` array on the result envelope. The
 still runs, so a future operator who wants to audit can flip the flag off
 without losing data.
 
-*(updated vNEXT, CLI-54)* The dir that `sync pull` gives the second of two same-named configs, `<name>-<id8>` (or `<name>-<id8>-<n>`), is no drift. Before, push reported it on every run.
+*(updated 1.2.0, CLI-54)* The dir that `sync pull` gives the second of two same-named configs, `<name>-<id8>` (or `<name>-<id8>-<n>`), is no drift. Before, push reported it on every run.
 
 ## `sync` carries a data app's runtime type: pull records it, push and clone send it
 
@@ -2234,7 +2234,7 @@ under an active branch. `--branch` requires exactly one `--project`.
 
 ## `workspace create --governed` makes a workspace nobody can log in to
 
-*(since vNEXT)*
+*(since 1.2.0)*
 
 `workspace create --governed` requests `loginType: governed` (Snowflake or BigQuery, headless only). The workspace has no
 login: the result has no `private_key`, an empty `password` and `governed: true` / `login_type: "governed"`.
@@ -4666,7 +4666,7 @@ write descriptive metadata onto storage objects. Three behaviors are easy to mis
   `--prune-orphans`. **Migrated flat entries are DELETED** -- that is deliberate:
   leaving them would let the read fallback resurrect an old description after
   someone clears the column's text. `table-detail` reads with the precedence
-  native definition -> legacy flat key (since vNEXT; 0.88.0 to the release
+  native definition -> legacy flat key (since 1.2.0; 0.88.0 to the release
   before also consulted `columnMetadata` `KBC.description`), always returns `legacy_column_descriptions`, and warns in human mode when
   legacy keys remain (it never writes -- safe under a read-only token or
   `--deny-writes`). Its human-mode Columns table shows a `Description`
@@ -4677,7 +4677,7 @@ write descriptive metadata onto storage objects. Three behaviors are easy to mis
   flat write accepted typos silently. Bucket descriptions are unaffected:
   still `KBC.description` (provider=user) on the bucket's metadata. Table
   descriptions are native too (see the next bullet).
-- **Table descriptions are native** *(since vNEXT)*. `describe-table` (and the
+- **Table descriptions are native** *(since 1.2.0)*. `describe-table` (and the
   `tables:` section of `describe-batch`) write `definition.description` through
   `PUT .../tables/{id}/definition` with `isDescriptionSystemManaged: false` and
   create no `KBC.description` metadata row. The result has `status`:
@@ -4695,7 +4695,7 @@ write descriptive metadata onto storage objects. Three behaviors are easy to mis
   as a stale `KBC.description` row no longer appears; set it again with
   `describe-table`. On 0.99.x and older `describe-table` wrote the metadata row,
   which outranked later UI edits (DMD-2434).
-- **Column types of a typed table come from `definition`** *(since vNEXT)*.
+- **Column types of a typed table come from `definition`** *(since 1.2.0)*.
   `storage table-detail` `column_details[]` of a table with `isTyped: true`
   takes `type` (basetype), `native_type`, `length`, `nullable` and `default`
   from `definition.columns[]` and ignores `KBC.datatype.*`, so after a table
@@ -4723,7 +4723,7 @@ write descriptive metadata onto storage objects. Three behaviors are easy to mis
   value**: a bucket has no native description write, so all user updates flow
   through the metadata endpoint. `KBC.description` entries whose provider is not
   `user` (e.g. `system`) are ignored during read-back and the native field is
-  used as fallback. (`storage table-detail` does not follow this since vNEXT;
+  used as fallback. (`storage table-detail` does not follow this since 1.2.0;
   see "Table descriptions are native".)
 - **`storage bucket-detail` is dialect-aware** **. Output adapts
   to the bucket's backend:
@@ -7527,7 +7527,7 @@ The package was named `keboola-agent-cli` up to 0.62.0 and is named `keboola-cli
 
 ## Row-Level and Column-Level Security (RLS, CLS): targeted by default, never project scope
 
-*(since vNEXT)*
+*(since 1.2.0)*
 
 `kbagent rls` authors metastore `rls-policy` objects -- one per protected table. It never
 enforces anything itself: the actual SQL rewrite happens in the Query Service policy engine on a governed workspace
@@ -7555,7 +7555,7 @@ governed-workspace flow.
   query`). The MCP server's own workspace is created governed in a project with the
   `row-level-security` feature; it gets every policy unless bound (see `rls-workflow.md`, "The MCP server's
   workspace"). A Data App is bound by its configuration `runtime.workspace.rlsPolicies` / `clsPolicies`, not by `rls bind`.
-- **Rules select readers by `subjects` or `groups`, never by email (since vNEXT, schema 1.2.0).** A new
+- **Rules select readers by `subjects` or `groups`, never by email (since 1.2.0, schema 1.2.0).** A new
   `rls-policy` / `cls-policy` rule has exactly one of `subjects` (`<idp>|<sub>` entries, matched exactly)
   or `groups` (exact strings, any listed group matches); `["*"]` as the sole entry is every identified
   reader. `principal` / `principals` in `rls|cls create|update --rules` are refused with `INVALID_ARGUMENT`
@@ -7583,7 +7583,7 @@ governed-workspace flow.
   requires it (1.0.0) or one it could not read. `rls|cls update` with a changed `--target-project` writes the
   grants first; when the rules PATCH then fails the old grants are put back and the error says whether that
   worked.
-- **Wildcard `"*"` and default deny (since vNEXT).** `principal: "*"`, `principals: ["*"]` or `groups: ["*"]`
+- **Wildcard `"*"` and default deny (since 1.2.0).** `principal: "*"`, `principals: ["*"]` or `groups: ["*"]`
   (schema 1.1.0) matches every identified reader (never a reader with no identity); it must be the only entry
   of its list (`INVALID_RLS_POLICY` / `INVALID_CLS_POLICY` otherwise) and is refused against a metastore
   whose schema is older than 1.1.0, where `"*"` is a literal that matches nobody. In a governed workspace
@@ -7640,7 +7640,7 @@ governed-workspace flow.
 
 ## Policy bindings (`rls bind`): no binding means every policy; a wrong stack id fails silently
 
-*(since vNEXT)*
+*(since 1.2.0)*
 
 - A `policy-binding` restricts one governed workspace to some of the project's rls/cls policies. It is
   named by the workspace KID `KID:<stack>:project-<id>:workspace-<id>` (no branch segment). **No binding =

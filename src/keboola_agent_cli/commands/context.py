@@ -1676,7 +1676,7 @@ allow this query`. The identity that queries needs a matching rule.
     named by the KID `KID:<stack>:project-<id>:workspace-<id>`, printed). No
     binding = the workspace gets every policy of the project; a binding is an
     allowlist (a policy it leaves out stops applying, so it can loosen access; a
-    cls-only binding drops every rls-policy); Query Service re-reads it on every query (since vNEXT). Upsert:
+    cls-only binding drops every rls-policy); Query Service re-reads it on every query (since 1.2.0). Upsert:
     replaces both lists. --stack-id (env KBAGENT_STACK_ID) is required -- no
     API exposes it; it must equal Query Service's QUERY_RLS_STACK_ID (AWS dev:
     dev-keboola-aws-eu-west-1), or nothing reads the binding and the workspace
