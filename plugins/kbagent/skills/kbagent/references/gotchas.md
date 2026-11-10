@@ -993,6 +993,45 @@ These lists keep `error`, because their entries are not failed items with an err
   handle Keboola support traces an incident by was dropped on exactly the
   auth errors where the fault was server-side. Quote it when escalating.
 
+## Workspace create/delete and `storage file-delete` run as Storage jobs
+
+*(since vNEXT)*
+
+- **`workspace create` (headless), `workspace from-transformation`,
+  `workspace delete` / `workspace gc` and `storage file-delete` send
+  `?async=true` and wait for the Storage job.** The synchronous variants are
+  deprecated in the Storage API. A missing workspace or file is still a 404
+  on the request itself (the API checks existence before enqueueing).
+- **A job that fails is `STORAGE_JOB_FAILED` (exit 1), one that outlasts the
+  wait is `STORAGE_JOB_TIMEOUT` with `details.job_id`.** Workspace jobs wait
+  up to 5 minutes. A timed-out create is NOT retryable (`retryable: false`):
+  the job keeps running and may still produce a workspace, so its
+  `keboola.sandboxes` config is kept -- check `workspace list` before
+  retrying. A failed create job trashes the config like a refused request.
+- **A timed-out `workspace delete` (`STORAGE_JOB_TIMEOUT`, `retryable:
+  false`) still trashes the workspace's `keboola.sandboxes` config.** The drop
+  keeps running; follow it with the `storage job-detail --wait` command in the
+  message instead of deleting again. `details` carry `workspace_id`,
+  `sandbox_config_id` and `sandbox_config_trashed`; when the config could not
+  be trashed, `cleanup_command` is the `config delete` that removes it. If the
+  drop fails later, the workspace has no config, so `workspace gc` removes it.
+  A later `workspace delete` of the same workspace never purges the trashed
+  config.
+- **`storage file-delete` waits up to 60 s** for its job. The SDK's
+  `Files.delete` waits the same way and raises the same two codes.
+- **The create job's result omits the password** on Queue v2 projects
+  without the `workspace-create-show-password` feature. Snowflake is
+  unaffected (key-pair; the private key is generated locally). Other
+  password-login backends get the password by an immediate reset, so the
+  `password` field is still filled; if the reset fails, the workspace exists,
+  `password` is empty and `warnings[]` names the `workspace password`
+  command. BigQuery is never reset (its secret is a service-account key under
+  `connection.credentials`, which `workspace create` does not return).
+- **BigQuery `user` may now be filled.** When the job result omits the
+  secret, the API keeps `connection.user` (the public part of the
+  service-account JSON); a response that includes the secret drops it, so
+  `user` used to be empty on BigQuery.
+
 ## "No schedules found" never meant "no trigger"
 
 *(since 0.92.0, #714)*

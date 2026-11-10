@@ -160,7 +160,7 @@ def workspace_create(
 ) -> None:
     """Create a new workspace.
 
-    Default: fast headless mode via Storage API (~1s).
+    Default: headless mode via a Storage API job.
     With --ui: creates via Queue job (~15s), visible in Keboola UI Workspaces tab --
     only on stacks where keboola.sandboxes still provisions SQL workspaces.
     With --governed: a workspace without credentials that only Query Service can read.
@@ -773,6 +773,8 @@ def workspace_from_transformation(
                 ),
             ),
         )
+        for warning in result.get("warnings", []):
+            formatter.warning(warning)
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
         emit_api_error(formatter, exc)

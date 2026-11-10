@@ -4332,7 +4332,7 @@
       "kind": "command",
       "hidden": false,
       "category": "write",
-      "help": "Create a new workspace.\n\nDefault: fast headless mode via Storage API (~1s).\nWith --ui: creates via Queue job (~15s), visible in Keboola UI Workspaces tab --\nonly on stacks where keboola.sandboxes still provisions SQL workspaces.\nWith --governed: a workspace without credentials that only Query Service can read.",
+      "help": "Create a new workspace.\n\nDefault: headless mode via a Storage API job.\nWith --ui: creates via Queue job (~15s), visible in Keboola UI Workspaces tab --\nonly on stacks where keboola.sandboxes still provisions SQL workspaces.\nWith --governed: a workspace without credentials that only Query Service can read.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID to create the workspace in (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "name", "opts": ["--name", "-n"], "type": "text", "default": "", "help": "Name for the workspace (shown in Keboola UI)"},

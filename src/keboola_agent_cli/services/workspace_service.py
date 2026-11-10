@@ -34,6 +34,7 @@ from ..effective_branch import record_branch, resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError, request_outcome_unknown
 from ..models import ProjectConfig
 from ._storage_jobs import resolve_wait_timeout
+from ._workspace_delete import delete_workspace_and_config
 from ._workspace_load_plan import (
     LOAD_TYPE_CLONE,
     LOAD_TYPE_COPY,
@@ -46,11 +47,16 @@ from .base import BaseService, find_default_branch_id, item_failure
 
 logger = logging.getLogger(__name__)
 
-# Once the --ui create job is queued, only these errors prove that it made no
-# workspace: the job ended in error, or it finished with nothing attached to
-# the config. Any other error after the job exists (a wait timeout, a failed
-# poll, a failed workspace lookup after a green job) leaves the outcome unknown.
-_DEFINITE_JOB_ERRORS = frozenset({ErrorCode.QUEUE_JOB_FAILED, ErrorCode.WORKSPACE_NOT_FOUND})
+# Once a create job is queued (the --ui Queue job, or the headless Storage
+# workspaceCreate job), only these errors prove that it made no workspace: the
+# job ended in error, or it finished with nothing attached to the config. Any
+# other error after the job exists (a wait timeout, a failed poll, a failed
+# workspace lookup after a green job) leaves the outcome unknown. Should a
+# failed Storage job still leave a workspace behind, `workspace gc` finds it:
+# gc targets exactly a workspace whose sandbox config is gone.
+_DEFINITE_JOB_ERRORS = frozenset(
+    {ErrorCode.QUEUE_JOB_FAILED, ErrorCode.STORAGE_JOB_FAILED, ErrorCode.WORKSPACE_NOT_FOUND}
+)
 
 # The exact text of Query Service's 403 for a request that row-level security refuses.
 _RLS_DENIED_MESSAGE = "Row-level security does not allow this query"
@@ -67,10 +73,11 @@ def _create_outcome_unknown(exc: KeboolaApiError) -> bool:
     (``create_config_workspace`` headless, ``create_job`` for ``--ui``); it is
     classified by ``request_outcome_unknown``: a 4xx or a request proven
     undelivered is definite; a 5xx, a read/write timeout or
-    ``RETRY_EXHAUSTED`` is unknown. ``_create_workspace_via_job`` puts
-    ``job_id`` into the details of every error raised after the job exists.
-    An ungoverned workspace that ``--governed`` got back is known: it exists
-    until it is deleted, which ``workspace_rolled_back`` says.
+    ``RETRY_EXHAUSTED`` is unknown. ``_create_workspace_via_job`` and
+    ``create_config_workspace`` put ``job_id`` into the details of every error
+    raised after the job exists. An ungoverned workspace that ``--governed``
+    got back is known: it exists until it is deleted, which
+    ``workspace_rolled_back`` says.
     """
     if "workspace_rolled_back" in exc.details:
         return not exc.details["workspace_rolled_back"]
@@ -174,6 +181,47 @@ def _workspace_key_pair_for_backend(backend: str) -> SnowflakeWorkspaceKeyPair |
     if backend.lower() == "snowflake":
         return _generate_snowflake_workspace_key_pair()
     return None
+
+
+@dataclass(frozen=True)
+class WorkspacePassword:
+    """Password for a freshly created workspace, or why there is none."""
+
+    password: str
+    warning: str | None = None
+
+
+def _created_workspace_password(
+    client: Any,
+    ws_data: dict[str, Any],
+    *,
+    key_pair: SnowflakeWorkspaceKeyPair | None,
+    backend: str,
+    branch_id: int,
+    alias: str,
+) -> WorkspacePassword:
+    """Return the password of a workspace ``create_config_workspace`` just made.
+
+    The ``workspaceCreate`` job omits the secret on Queue v2 projects without
+    the ``workspace-create-show-password`` feature, so a password-login
+    workspace gets one by a reset (nobody has seen the original). A key-pair
+    workspace needs none. BigQuery is not reset: its secret is a
+    service-account key under ``connection.credentials``, never read here.
+    """
+    password = ws_data.get("connection", {}).get("password", "")
+    if password or key_pair is not None or backend.lower() == "bigquery":
+        return WorkspacePassword(password)
+    workspace_id = ws_data.get("id")
+    try:
+        reset = client.reset_workspace_password(workspace_id, branch_id=branch_id)
+    except KeboolaApiError as exc:
+        return WorkspacePassword(
+            "",
+            f"Workspace {workspace_id} was created, but its password could not be reset "
+            f"({exc.message}). Get a password with 'kbagent workspace password --project "
+            f"{alias} --workspace-id {workspace_id}'.",
+        )
+    return WorkspacePassword(reset.get("password", ""))
 
 
 def find_storage_workspace_for_sandbox_config(
@@ -376,12 +424,13 @@ class WorkspaceService(BaseService):
         """Create a new workspace.
 
         Two modes:
-        - Default (headless): fast (~1s) via Storage API. Not visible in Keboola UI.
+        - Default (headless): via a Storage API ``workspaceCreate`` job. Not visible in Keboola UI.
         - UI mode (--ui): slower (~15s) via Queue job. Visible in UI Workspaces tab.
 
         IMPORTANT: Credentials are only available on creation (headless mode).
         Snowflake returns a generated private key; password-based workspaces
-        return a password. In UI mode, password must be retrieved via
+        return a password (reset right after the create when the job result
+        omits it). In UI mode, password must be retrieved via
         'workspace password' command.
 
         Args:
@@ -534,7 +583,7 @@ class WorkspaceService(BaseService):
         read_only: bool,
         governed: bool,
     ) -> dict[str, Any]:
-        """Create workspace via Storage API (fast, headless)."""
+        """Create workspace via a Storage API job (headless)."""
         if governed:
             login_type: str | None = GOVERNED_WORKSPACE_LOGIN_TYPE
             key_pair = None
@@ -553,6 +602,19 @@ class WorkspaceService(BaseService):
         connection = ws_data.get("connection", {})
         if governed and connection.get("loginType") != GOVERNED_WORKSPACE_LOGIN_TYPE:
             raise self._ungoverned_workspace_error(client, alias, ws_data, branch_id)
+        # A governed workspace has no credentials, so there is no password to reset.
+        secret = (
+            WorkspacePassword("")
+            if governed
+            else _created_workspace_password(
+                client,
+                ws_data,
+                key_pair=key_pair,
+                backend=backend,
+                branch_id=branch_id,
+                alias=alias,
+            )
+        )
         if governed:
             message = (
                 f"Governed workspace '{name}' created in project '{alias}'. It has no credentials: "
@@ -576,7 +638,7 @@ class WorkspaceService(BaseService):
             "database": connection.get("database", ""),
             "schema": connection.get("schema", ""),
             "user": connection.get("user", ""),
-            "password": connection.get("password", ""),
+            "password": secret.password,
             "read_only": read_only,
             "ui_mode": False,
             "login_type": connection.get("loginType", ""),
@@ -585,6 +647,8 @@ class WorkspaceService(BaseService):
         }
         if key_pair is not None:
             result["private_key"] = key_pair.private_pem
+        if secret.warning is not None:
+            result["warnings"] = [secret.warning]
         return result
 
     @staticmethod
@@ -1031,7 +1095,9 @@ class WorkspaceService(BaseService):
 
         Raises:
             KeboolaApiError: If an API call fails; in a dry run also when the
-                workspace does not exist (NOT_FOUND).
+                workspace does not exist (NOT_FOUND). A drop that outlasts the
+                wait is ``STORAGE_JOB_TIMEOUT`` (``retryable=False``), raised
+                after the sandbox config was trashed (``_workspace_delete``).
         """
         projects = self.resolve_projects([alias])
         project = projects[alias]
@@ -1056,25 +1122,7 @@ class WorkspaceService(BaseService):
                 "message": f"Would delete workspace {workspace_id} from project '{alias}'.",
             }
         try:
-            # Get workspace details to find associated config
-            config_id = None
-            component = None
-            try:
-                ws_data = client.get_workspace(workspace_id, branch_id=branch_id)
-                component = ws_data.get("component")
-                config_id = ws_data.get("configurationId")
-            except KeboolaApiError:
-                pass  # Workspace might not exist, proceed with delete
-
-            # Delete the workspace
-            client.delete_workspace(workspace_id, branch_id=branch_id)
-
-            # Clean up associated sandboxes config (in the correct branch)
-            if config_id and component == "keboola.sandboxes":
-                try:
-                    client.delete_config("keboola.sandboxes", config_id, branch_id=branch_id)
-                except KeboolaApiError:
-                    logger.debug("Could not delete sandbox config %s", config_id)
+            delete_workspace_and_config(client, alias, workspace_id, branch_id)
         finally:
             client.close()
 
@@ -1572,6 +1620,14 @@ class WorkspaceService(BaseService):
             # create_config_workspace always returns an id for the new workspace
             assert workspace_id is not None
             connection = ws_data.get("connection", {})
+            secret = _created_workspace_password(
+                client,
+                ws_data,
+                key_pair=key_pair,
+                backend=effective_backend,
+                branch_id=branch_id,
+                alias=alias,
+            )
 
             # Build table load definitions from input mapping
             table_defs: list[dict[str, Any]] = []
@@ -1611,7 +1667,7 @@ class WorkspaceService(BaseService):
                 "database": connection.get("database", ""),
                 "schema": connection.get("schema", ""),
                 "user": connection.get("user", ""),
-                "password": connection.get("password", ""),
+                "password": secret.password,
                 "tables_loaded": source_tables,
                 "message": f"Workspace {workspace_id} created from transformation "
                 f"'{config_id}' with {len(source_tables)} table(s) loaded. "
@@ -1619,6 +1675,8 @@ class WorkspaceService(BaseService):
             }
             if key_pair is not None:
                 result["private_key"] = key_pair.private_pem
+            if secret.warning is not None:
+                result["warnings"] = [secret.warning]
             return result
         finally:
             client.close()

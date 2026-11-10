@@ -528,18 +528,21 @@ class TestClientHeaders:
         client.close()
 
 
+_CONFIG_WORKSPACES_URL = (
+    "https://connection.keboola.com/v2/storage/branch/123/components/"
+    "keboola.sandboxes/configs/cfg-1/workspaces?async=true"
+)
+
+
 class TestConfigWorkspaces:
     """Tests for config-tied workspace endpoints."""
 
     def test_create_config_workspace_includes_login_type_when_requested(self, httpx_mock) -> None:
         """Explicit loginType is included in the Storage API workspace payload."""
         httpx_mock.add_response(
-            url=(
-                "https://connection.keboola.com/v2/storage/branch/123/components/"
-                "keboola.sandboxes/configs/cfg-1/workspaces"
-            ),
-            json={"id": 42},
-            status_code=201,
+            url=_CONFIG_WORKSPACES_URL,
+            json={"id": 7, "status": "success", "results": {"id": 42}},
+            status_code=202,
         )
 
         client = KeboolaClient(
@@ -567,12 +570,9 @@ class TestConfigWorkspaces:
     def test_create_config_workspace_omits_login_type_when_default(self, httpx_mock) -> None:
         """A None login type is omitted so non-Snowflake backends keep Storage defaults."""
         httpx_mock.add_response(
-            url=(
-                "https://connection.keboola.com/v2/storage/branch/123/components/"
-                "keboola.sandboxes/configs/cfg-1/workspaces"
-            ),
-            json={"id": 42},
-            status_code=201,
+            url=_CONFIG_WORKSPACES_URL,
+            json={"id": 7, "status": "success", "results": {"id": 42}},
+            status_code=202,
         )
 
         client = KeboolaClient(
@@ -592,6 +592,184 @@ class TestConfigWorkspaces:
         request = httpx_mock.get_request()
         assert json.loads(request.content) == {"backend": "bigquery"}
         client.close()
+
+    @staticmethod
+    def _create(client: KeboolaClient, max_wait: float | None = None) -> dict[str, Any]:
+        return client.create_config_workspace(
+            branch_id=123,
+            component_id="keboola.sandboxes",
+            config_id="cfg-1",
+            backend="snowflake",
+            max_wait=max_wait,
+        )
+
+    def test_create_config_workspace_polls_job_and_returns_results(
+        self, httpx_mock, monkeypatch
+    ) -> None:
+        """A waiting workspaceCreate job is polled; the workspace is the job's results."""
+        monkeypatch.setattr("keboola_agent_cli.client._core.time.sleep", _noop_sleep)
+        httpx_mock.add_response(
+            url=_CONFIG_WORKSPACES_URL,
+            method="POST",
+            json={"id": 7, "status": "waiting"},
+            status_code=202,
+        )
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/jobs/7",
+            method="GET",
+            json={"id": 7, "status": "success", "results": {"id": 42, "connection": {}}},
+        )
+
+        with KeboolaClient(stack_url="https://connection.keboola.com", token="901-x-y") as client:
+            result = self._create(client)
+
+        assert result == {"id": 42, "connection": {}}
+
+    def test_create_config_workspace_failed_job_carries_job_id(self, httpx_mock) -> None:
+        """A failed job raises STORAGE_JOB_FAILED with job_id, so callers can classify it."""
+        httpx_mock.add_response(
+            url=_CONFIG_WORKSPACES_URL,
+            method="POST",
+            json={"id": 7, "status": "error", "error": {"message": "Backend quota exceeded"}},
+            status_code=202,
+        )
+
+        with (
+            KeboolaClient(stack_url="https://connection.keboola.com", token="901-x-y") as client,
+            pytest.raises(KeboolaApiError) as exc_info,
+        ):
+            self._create(client)
+
+        assert exc_info.value.error_code == ErrorCode.STORAGE_JOB_FAILED
+        assert exc_info.value.details["job_id"] == 7
+        assert "Backend quota exceeded" in exc_info.value.message
+
+    def test_create_config_workspace_failed_poll_carries_job_id(
+        self, httpx_mock, monkeypatch
+    ) -> None:
+        """A poll that fails after the job exists still names the job (outcome unknown)."""
+        monkeypatch.setattr("keboola_agent_cli.client._core.time.sleep", _noop_sleep)
+        httpx_mock.add_response(
+            url=_CONFIG_WORKSPACES_URL,
+            method="POST",
+            json={"id": 7, "status": "waiting"},
+            status_code=202,
+        )
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/jobs/7",
+            method="GET",
+            json={"error": "Job not found"},
+            status_code=404,
+        )
+
+        with (
+            KeboolaClient(stack_url="https://connection.keboola.com", token="901-x-y") as client,
+            pytest.raises(KeboolaApiError) as exc_info,
+        ):
+            self._create(client)
+
+        assert exc_info.value.status_code == 404
+        assert exc_info.value.details["job_id"] == 7
+
+    def test_create_config_workspace_timeout_is_not_retryable(self, httpx_mock) -> None:
+        """A timed-out create keeps running server-side; a retry would create a second one."""
+        httpx_mock.add_response(
+            url=_CONFIG_WORKSPACES_URL,
+            method="POST",
+            json={"id": 7, "status": "waiting"},
+            status_code=202,
+        )
+
+        with (
+            KeboolaClient(stack_url="https://connection.keboola.com", token="901-x-y") as client,
+            pytest.raises(KeboolaApiError) as exc_info,
+        ):
+            self._create(client, max_wait=0)
+
+        assert exc_info.value.error_code == ErrorCode.STORAGE_JOB_TIMEOUT
+        assert exc_info.value.retryable is False
+        assert exc_info.value.details["job_id"] == 7
+        assert "may still produce a workspace" in exc_info.value.message
+
+
+class TestDeleteWorkspaceClient:
+    """KeboolaClient.delete_workspace runs the drop as a Storage job."""
+
+    def test_delete_workspace_waits_for_drop_job(self, httpx_mock, monkeypatch) -> None:
+        """The DELETE sends async=true and the returned job is polled to success."""
+        monkeypatch.setattr("keboola_agent_cli.client._core.time.sleep", _noop_sleep)
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/branch/5/workspaces/42?async=true",
+            method="DELETE",
+            json={"id": 9, "status": "processing"},
+            status_code=202,
+        )
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/jobs/9",
+            method="GET",
+            json={"id": 9, "status": "success"},
+        )
+
+        with KeboolaClient(stack_url="https://connection.keboola.com", token="901-x-y") as client:
+            client.delete_workspace(42, branch_id=5)
+
+        assert len(httpx_mock.get_requests()) == 2
+
+    def test_delete_workspace_failed_job_raises(self, httpx_mock) -> None:
+        """A drop job that ends in error is not reported as a successful delete."""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/workspaces/42?async=true",
+            method="DELETE",
+            json={"id": 9, "status": "error", "error": {"message": "Drop failed"}},
+            status_code=202,
+        )
+
+        with (
+            KeboolaClient(stack_url="https://connection.keboola.com", token="901-x-y") as client,
+            pytest.raises(KeboolaApiError) as exc_info,
+        ):
+            client.delete_workspace(42)
+
+        assert exc_info.value.error_code == ErrorCode.STORAGE_JOB_FAILED
+
+    def test_delete_workspace_timeout_is_not_retryable(self, httpx_mock, monkeypatch) -> None:
+        """A drop that outlasts the wait keeps running server-side, so a retry is not offered."""
+        monkeypatch.setattr("keboola_agent_cli.client._core.time.sleep", _noop_sleep)
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/workspaces/42?async=true",
+            method="DELETE",
+            json={"id": 9, "status": "processing"},
+            status_code=202,
+        )
+
+        with (
+            KeboolaClient(stack_url="https://connection.keboola.com", token="901-x-y") as client,
+            pytest.raises(KeboolaApiError) as exc_info,
+        ):
+            client.delete_workspace(42, max_wait=0)
+
+        assert exc_info.value.error_code == ErrorCode.STORAGE_JOB_TIMEOUT
+        assert exc_info.value.retryable is False
+        assert exc_info.value.details["job_id"] == 9
+        assert "workspace drop keeps running server-side" in exc_info.value.message
+
+    def test_delete_missing_workspace_is_404_on_the_request(self, httpx_mock) -> None:
+        """Existence is checked before enqueueing, so NOT_FOUND comes from the DELETE."""
+        httpx_mock.add_response(
+            url="https://connection.keboola.com/v2/storage/workspaces/42?async=true",
+            method="DELETE",
+            json={"error": "Workspace not found", "code": "storage.workspace.notFound"},
+            status_code=404,
+        )
+
+        with (
+            KeboolaClient(stack_url="https://connection.keboola.com", token="901-x-y") as client,
+            pytest.raises(KeboolaApiError) as exc_info,
+        ):
+            client.delete_workspace(42)
+
+        assert exc_info.value.status_code == 404
+        assert len(httpx_mock.get_requests()) == 1
 
 
 class TestContextManager:

@@ -931,54 +931,6 @@ class _StorageTablesMixin(_CoreClient):
                 details={"job_id": job.get("id"), **exc.details, "file_id": file_id},
             ) from exc
 
-    def _wait_keeps_running(
-        self,
-        job: dict[str, Any],
-        *,
-        budget: float,
-        operation: str,
-        warning: str,
-        details: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        """Poll a job whose wait timeout must not be retried.
-
-        Giving up locally does not stop a Storage job. For an operation that
-        is not safe to repeat (an import, a create-from-source copy, a swap)
-        a retry would run it a second time next to the first, so the timeout
-        is re-raised NOT retryable, with ``job_id`` in the details. A caller
-        that knows the project alias appends the ``storage job-detail``
-        command (``services._storage_jobs``).
-
-        Args:
-            job: Initial job response from the enqueue request.
-            budget: Seconds to wait.
-            operation: What the job does, named in the message.
-            warning: Text that follows "keeps running server-side" in the
-                message: what a repeat of the operation would do.
-            details: Extra keys for the timeout's ``details``.
-
-        Raises:
-            KeboolaApiError: ``STORAGE_JOB_TIMEOUT`` (``retryable=False``) when
-                the budget runs out; any other wait failure unchanged.
-        """
-        try:
-            return self._wait_for_storage_job(job, max_wait=budget)
-        except KeboolaApiError as exc:
-            if exc.error_code != ErrorCode.STORAGE_JOB_TIMEOUT:
-                raise
-            job_id = exc.details.get("job_id", job.get("id"))
-            raise KeboolaApiError(
-                message=(
-                    f"Storage {operation} job {job_id} did not finish within {budget:g}s. "
-                    f"Waiting stopped locally; the {operation} keeps running server-side"
-                    f"{warning}"
-                ),
-                status_code=exc.status_code,
-                error_code=ErrorCode.STORAGE_JOB_TIMEOUT,
-                retryable=False,
-                details={**exc.details, "job_id": job_id, **(details or {})},
-            ) from exc
-
     def upload_table(
         self,
         table_id: str,
