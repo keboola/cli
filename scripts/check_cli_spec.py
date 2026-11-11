@@ -1374,9 +1374,7 @@ def r_route_permission_key(c: Context) -> Violations:
 
 
 def r_dry_run_parity(c: Context) -> Violations:
-    from fastapi.dependencies.utils import get_flat_dependant
-
-    from keboola_agent_cli.server.dependencies import _body_declares_dry_run
+    from keboola_agent_cli.server.dependencies import _body_declares_dry_run, flat_params
 
     commands = _serve_map()
     found = {}
@@ -1384,7 +1382,7 @@ def r_dry_run_parity(c: Context) -> Violations:
         leaf = c.tree.by_name.get(commands.get((method, path), ""))
         if leaf is None or "--dry-run" not in opt_names(leaf):
             continue
-        flat = get_flat_dependant(route.dependant)
+        flat = flat_params(route.dependant)
         in_query = any(p.alias == "dry_run" for p in flat.query_params)
         if not in_query and not _body_declares_dry_run(flat.body_params):
             found[f"{method} {path}"] = f"'{leaf.name}' has --dry-run, the route has no dry_run"
