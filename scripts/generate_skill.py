@@ -83,7 +83,7 @@ def _format_param(param: click.Parameter, *, shown: bool = False) -> str:
         opt_str = max(param.opts, key=lambda o: len(o))
         # Convert underscores to hyphens for display
         opt_str = opt_str.replace("_", "-")
-        human_name = param.human_readable_name.upper().replace("_", "-")
+        human_name = (param.name or "").upper().replace("_", "-")
         if getattr(param, "is_flag", False):
             return opt_str
         return f"{opt_str} {human_name}"

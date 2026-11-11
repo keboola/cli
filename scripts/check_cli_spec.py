@@ -60,7 +60,7 @@ from collections import Counter, defaultdict
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 
 import typer.main
 
@@ -377,9 +377,27 @@ def label(p: Any) -> str:
     return longs(p)[0] if longs(p) else (p.metavar or p.name.upper())
 
 
+# Click's names for the scalar types, kept so docs/cli-manifest.json does not change.
+_TYPE_NAMES: dict[Any, str] = {str: "text", int: "integer", float: "float", bool: "boolean"}
+
+
 def type_name(p: Any) -> str:
-    name = getattr(p.type, "name", str(p.type))
-    return "integer" if name == "integer range" else name
+    """Click's name for the type of ``p``: "text", "integer", "choice", "path", "file", ...
+
+    Typer 0.29 parameters keep their type in ``type_descriptor`` and have no ``p.type``.
+    """
+    desc = p.type_descriptor
+    if desc.is_choice:
+        return "choice"
+    if desc.is_path:
+        return desc.path_type
+    annotation = get_args(desc.annotation)[0] if desc.is_list else desc.annotation
+    return _TYPE_NAMES.get(annotation, getattr(annotation, "__name__", str(annotation)))
+
+
+def choices(p: Any) -> list[str]:
+    """The values a choice parameter accepts on the command line (an Enum member's value)."""
+    return [str(getattr(ch, "value", ch)) for ch in p.type_descriptor.choices or ()]
 
 
 def shape(p: Any) -> str:
@@ -1715,14 +1733,13 @@ def _jsonable(value: Any) -> Any:
 
 def _param_entry(p: Any) -> dict[str, Any]:
     """One parameter; keys with a false or empty value are left out to keep the file small."""
-    choices = getattr(p.type, "choices", None)
     entry: dict[str, Any] = {
         "kind": getattr(p, "param_type_name", ""),
         "name": p.name,
         "opts": list(p.opts),
         "secondary_opts": list(getattr(p, "secondary_opts", [])),
         "type": type_name(p),
-        "choices": [getattr(ch, "name", None) or str(ch) for ch in choices or ()],
+        "choices": choices(p),
         "required": bool(p.required),
         "multiple": bool(getattr(p, "multiple", False)),
         "is_flag": bool(getattr(p, "is_flag", False)),

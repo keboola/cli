@@ -32,6 +32,7 @@ from ._helpers import (
     _confirm_or_abort,
     check_cli_permission,
     emit_api_error,
+    existing_file_or_dash,
     finish_items,
     get_formatter,
     get_service,
@@ -523,9 +524,9 @@ def workspace_query(
         None,
         "--sql-file",
         help="Path to a .sql file to execute (- for stdin)",
-        exists=True,
         readable=True,
         allow_dash=True,
+        callback=existing_file_or_dash,
     ),
     transactional: bool = typer.Option(
         False,
