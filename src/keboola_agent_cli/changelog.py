@@ -28,6 +28,16 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "1.2.1": [
+        "Fix (#974): kbagent 1.x no longer crashes at startup with Typer 0.29 or later. Since "
+        "9 November, a new install or a self-update from PyPI or GitHub could get Typer 0.29, "
+        "and then every command failed with a `TypeError` about `type_descriptor`. kbagent now "
+        "requires Typer 0.29.1 or later. The Homebrew, Chocolatey, winget, apt and rpm packages "
+        "were not affected. A broken install cannot update itself: run "
+        "`uv tool install --reinstall 'keboola-cli[server]==1.2.1'`.",
+        "Fix (#973): `kbagent serve` starts with FastAPI 0.140 and later. With such a FastAPI, "
+        "it failed at startup with an `ImportError` about `get_flat_dependant`.",
+    ],
     "1.2.0": [
         "New (#778): `kbagent rls` and `kbagent cls` write row-level and column-level security "
         "policies for Storage tables. Query Service applies them when it reads a governed "
