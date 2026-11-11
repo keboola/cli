@@ -23,7 +23,6 @@ if importlib.util.find_spec("fastapi") is None:  # pragma: no cover
     )
 
 from fastapi import APIRouter, Body
-from fastapi.dependencies.utils import get_flat_dependant
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, Field
@@ -32,6 +31,7 @@ from keboola_agent_cli.server import create_app
 from keboola_agent_cli.server.dependencies import (
     _body_declares_dry_run,
     _is_false,
+    flat_params,
     get_registry,
 )
 from test_server_route_permissions import _iter_api_routes
@@ -69,7 +69,7 @@ def _mutating_routes(app: Any) -> list[tuple[str, Any]]:
 
 def _declares(route: Any, where: str) -> bool:
     """Whether ``route`` takes ``dry_run`` as a query parameter or a body field."""
-    flat = get_flat_dependant(route.dependant)
+    flat = flat_params(route.dependant)
     if where == "query":
         return any(p.alias == "dry_run" for p in flat.query_params)
     return _body_declares_dry_run(flat.body_params)
@@ -78,7 +78,7 @@ def _declares(route: Any, where: str) -> bool:
 def _is_form(route: Any) -> bool:
     return any(
         type(p.field_info).__name__ in ("Form", "File")
-        for p in get_flat_dependant(route.dependant).body_params
+        for p in flat_params(route.dependant).body_params
     )
 
 
@@ -369,7 +369,7 @@ def _body_params(endpoint: Any) -> list[Any]:
     router.post("/probe")(endpoint)
     route = router.routes[0]
     assert isinstance(route, APIRoute)
-    return get_flat_dependant(route.dependant).body_params
+    return flat_params(route.dependant).body_params
 
 
 def _optional_model(body: _WithDryRun | None = None) -> None: ...

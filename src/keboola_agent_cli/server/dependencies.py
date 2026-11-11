@@ -16,7 +16,6 @@ from dataclasses import dataclass, field
 from urllib.parse import parse_qsl, urlencode
 
 from fastapi import Depends, FastAPI, HTTPException, Request, params
-from fastapi.dependencies.utils import get_flat_dependant
 from fastapi.routing import APIRoute
 from pydantic import BaseModel
 
@@ -345,6 +344,29 @@ _FALSE_STRINGS = frozenset({"false", "0", "no", "off", "f", "n"})
 _MAX_UNREAD_BODY_BYTES = 1024 * 1024
 
 
+@dataclass(frozen=True)
+class FlatParams:
+    """The query and body parameters of a route, with those of its dependencies."""
+
+    query_params: list[typing.Any]
+    body_params: list[typing.Any]
+
+
+def flat_params(dependant: typing.Any) -> FlatParams:
+    """Collect the query and body parameters of ``dependant`` and of every dependency under it.
+
+    FastAPI 0.140 removed ``fastapi.dependencies.utils.get_flat_dependant``, so the
+    dependency tree is walked here (keboola/cli#966).
+    """
+    query_params = list(dependant.query_params)
+    body_params = list(dependant.body_params)
+    for sub in dependant.dependencies:
+        nested = flat_params(sub)
+        query_params += nested.query_params
+        body_params += nested.body_params
+    return FlatParams(query_params=query_params, body_params=body_params)
+
+
 async def reject_undeclared_dry_run(request: Request) -> None:
     """App-level dependency: refuse a ``dry_run`` that the matched mutating route does not declare.
 
@@ -373,7 +395,7 @@ async def reject_undeclared_dry_run(request: Request) -> None:
     route = request.scope.get("route")
     if not isinstance(route, APIRoute):
         return
-    flat = get_flat_dependant(route.dependant)
+    flat = flat_params(route.dependant)
     in_query = any(p.alias == "dry_run" for p in flat.query_params)
     in_body = _body_declares_dry_run(flat.body_params)
     where = f"{request.method.upper()} {route.path}"
