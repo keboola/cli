@@ -30,6 +30,8 @@ every child context inherits it.
 from __future__ import annotations
 
 import contextlib
+import copy
+import functools
 import inspect
 import sys
 import traceback
@@ -37,7 +39,7 @@ from collections import Counter
 from typing import Any
 
 import typer
-from typer.core import TyperCommand, TyperGroup, TyperOption
+from typer.core import TyperCommand, TyperGroup
 
 from . import telemetry
 from .commands._helpers import removed_argument, removed_form
@@ -81,18 +83,43 @@ def is_root_flag_copy(param: Any) -> bool:
     return (getattr(param, "name", None) or "").startswith(_COPY_PREFIX)
 
 
-def _root_flag_copies() -> list[Any]:
-    return [
-        TyperOption(
-            param_decls=[f"{_COPY_PREFIX}{name}", *opts],
-            is_flag=True,
-            default=False,
-            hidden=True,
-            expose_value=False,
-            help=f"Same as the root option {opts[0]}.",
+@functools.cache
+def _root_flag_templates() -> tuple[Any, ...]:
+    """The hidden root flag copies, built once by Typer itself from ``typer.Option``.
+
+    ``TyperOption``'s constructor is not stable across Typer releases (0.29
+    requires a ``type_descriptor`` from a private module, keboola/cli#970), so
+    the options come from a throwaway command through the public
+    ``typer.main.get_command``.
+    """
+    params = [
+        inspect.Parameter(
+            f"{_COPY_PREFIX}{name}",
+            inspect.Parameter.KEYWORD_ONLY,
+            default=typer.Option(
+                False,
+                *opts,
+                hidden=True,
+                expose_value=False,
+                help=f"Same as the root option {opts[0]}.",
+            ),
+            annotation=bool,
         )
         for name, opts in ROOT_FLAGS.items()
     ]
+
+    def flags() -> None:
+        """Carries the root flag copies."""
+
+    flags.__signature__ = inspect.Signature(params)  # ty: ignore[unresolved-attribute]
+    flags.__annotations__ = {param.name: bool for param in params}
+    app = typer.Typer(add_completion=False)
+    app.command()(flags)
+    return tuple(typer.main.get_command(app).params)
+
+
+def _root_flag_copies() -> list[Any]:
+    return [copy.copy(option) for option in _root_flag_templates()]
 
 
 def protected_args(ctx: Any) -> list[str]:

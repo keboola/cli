@@ -680,12 +680,17 @@ def test_short_flag_registry_is_pinned(tree: Any) -> None:
     assert not [s for s, why in found.items() if "not in SHORT_FLAGS" in why]
 
 
+def _descriptor(annotation: Any) -> Any:
+    """A Typer 0.29 ``type_descriptor`` of a plain scalar option."""
+    return SimpleNamespace(is_choice=False, is_path=False, is_list=False, annotation=annotation)
+
+
 def _option(opts: list[str], **attrs: Any) -> Any:
     fields = {
         "is_flag": False,
         "default": None,
         "secondary_opts": [],
-        "type": SimpleNamespace(name="text"),
+        "type_descriptor": _descriptor(str),
     }
     return SimpleNamespace(
         param_type_name="option", opts=opts, metavar=None, name=opts[0], help="", **(fields | attrs)
@@ -698,7 +703,7 @@ def test_boolean_flag_shape_finds_a_value_boolean_and_a_flag_that_stays_on() -> 
         _option(["--one-way"], is_flag=True, default=False),
         _option(["--pair"], is_flag=True, default=True, secondary_opts=["--no-pair"]),
         _option(["--stays-on"], is_flag=True, default=True),
-        _option(["--value"], type=SimpleNamespace(name="boolean")),
+        _option(["--value"], type_descriptor=_descriptor(bool)),
     )
     leaf = spec_check.Leaf(("demo", "cmd"), "write", params, None, "", False)
     ctx = spec_check.Context(spec_check.Tree(root=None, leaves=[leaf], groups=[]))

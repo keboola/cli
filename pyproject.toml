@@ -9,7 +9,7 @@ authors = [
     { name = "Keboola", email = "dev@keboola.com" },
 ]
 dependencies = [
-    "typer>=0.12",
+    "typer>=0.29.1",
     "rich>=13",
     # httpx 1.0 (only dev releases so far) is a rewrite without Timeout, Auth and the
     # exception classes that kbagent uses.
