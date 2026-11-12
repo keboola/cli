@@ -382,10 +382,22 @@ These lists keep `error`, because their entries are not failed items with an err
   remote deleted the row itself -- then it is kept, reported `skipped`, and `sync diff`
   lists it `remote_deleted`, so push never creates it again. Delete the folder yourself (or
   run `sync pull --theirs`, except under an ignored component) to drop it.
+- **A config DELETE is conditional** *(since vNEXT)*. `sync push --force` sends the config
+  version it read as `If-Match`. The Storage API deletes the config only while it is still
+  at that version; an edit of the config or of one of its rows raises the version. An edit
+  made in the UI after push read the config gives an `errors[]` entry with `SYNC_CONFLICT`
+  (exit 1): the config stays, with the edit and with its manifest entry. Run
+  `kbagent sync pull`, review the files, delete them again and push. A `deleted` config
+  change of `sync diff` carries that version as `remote_version`. On 1.0.0 to the last
+  version before this one, kbagent sent the DELETE with no precondition, so such an edit
+  was deleted with the config: there, check `sync diff` right before `sync push --force`.
+  The text of those versions said that the Storage API has no conditional delete. That was
+  wrong.
 - **Limits, not fixed:** an edit that changes ONLY an encrypted value (`KBC::...`) is
   invisible to the comparison, so such a config is still `deleted`; and the Storage API has
-  no conditional delete, so a UI edit made between `sync diff` and the DELETE is not
-  protected. Check `sync diff` right before `sync push --force`.
+  no precondition for a ROW delete, so a UI edit of a row made between the read and the
+  DELETE of that row is not protected (a row deleted together with its config is). Check
+  `sync diff` right before a `sync push --force` that deletes single rows.
 - **On an older version**: run `kbagent sync pull` before every `sync push --force`, and
   `sync diff` after it; check the UI for rows added since the last pull; copy edited
   folders aside before adding their component to `ignoredComponents`.

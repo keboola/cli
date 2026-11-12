@@ -2181,6 +2181,38 @@ class TestDeleteConfigBranch:
         ) as client:
             client.delete_config("keboola.sandboxes", "cfg-1", branch_id=200)
 
+    def test_delete_config_sends_no_precondition_by_default(self, httpx_mock) -> None:
+        httpx_mock.add_response(method="DELETE", status_code=204)
+
+        with KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
+        ) as client:
+            client.delete_config("keboola.sandboxes", "cfg-1")
+
+        assert "If-Match" not in httpx_mock.get_request().headers
+
+    def test_delete_config_sends_the_expected_version_as_if_match(self, httpx_mock) -> None:
+        """#934: the version is a strong entity tag, and a 412 is not retried."""
+        httpx_mock.add_response(
+            method="DELETE",
+            status_code=412,
+            json={"error": 'Configuration "cfg-1" is at version 6, expected version 5.'},
+        )
+
+        with (
+            KeboolaClient(
+                stack_url="https://connection.keboola.com",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
+            ) as client,
+            pytest.raises(KeboolaApiError) as exc_info,
+        ):
+            client.delete_config("keboola.sandboxes", "cfg-1", expected_version=5)
+
+        assert exc_info.value.status_code == 412
+        (request,) = httpx_mock.get_requests()
+        assert request.headers["If-Match"] == '"5"'
+
 
 class TestConfigRowMethods:
     """Tests for create_config_row / update_config_row / delete_config_row.

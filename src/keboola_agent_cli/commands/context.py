@@ -2442,6 +2442,8 @@ remain branch-aware because modifying a dev branch is the expected intent.
     (a config's rows included) or one without a trustworthy baseline -- it is a CONFLICT,
     listed with its next step in refused_deletions[]. sync diff lists rows added in the UI
     under remote_only_rows[] (push never creates or deletes them).
+    A config DELETE is conditional (If-Match on the version push read): a config edited in
+    the UI after that read is not deleted -- errors[] entry SYNC_CONFLICT, exit 1; pull first.
     Fails if encryption fails (plaintext secrets never pushed). Use escape hatch flag only if you know what you are doing.
     Every secret is encrypted BEFORE the first write (since 0.99.0, #792 F): an
     ENCRYPTION_FAILED stops the push before anything reaches the remote (message ends
