@@ -2650,9 +2650,12 @@ remain branch-aware because modifying a dev branch is the expected intent.
     production. The Target line names it. Each entry carries login_type, read_only, qs_compatible so callers can pick a
     Query-Service-compatible workspace without firing a probe query. --qs-compatible filters to RO +
     confirmed-whitelist loginType (canonical data-app shape), not governed ones. --orphaned shows orphaned workspaces.
+    Each entry also carries creator_token_id, creator_token_description, actor, last_activity_at, state,
+    warn_at, deactivate_at, delete_at (who created it, last use, retention dates; null when the stack omits them).
 
   workspace detail
-    Workspace connection details (no password). Includes login_type, read_only, qs_compatible.
+    Workspace connection details (no password). Includes login_type, read_only, qs_compatible and the
+    creator / last-activity / retention fields of workspace list.
     Without --branch uses the alias's active branch (`branch use`), else production.
 
   workspace delete

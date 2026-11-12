@@ -35,6 +35,7 @@ from ..errors import ConfigError, ErrorCode, KeboolaApiError, request_outcome_un
 from ..models import ProjectConfig
 from ._storage_jobs import resolve_wait_timeout
 from ._workspace_delete import delete_workspace_and_config
+from ._workspace_fields import workspace_provenance_fields
 from ._workspace_load_plan import (
     LOAD_TYPE_CLONE,
     LOAD_TYPE_COPY,
@@ -911,6 +912,7 @@ class WorkspaceService(BaseService):
                         "login_type": login_type,
                         "read_only": read_only,
                         "qs_compatible": _classify_qs_compatibility(login_type, backend),
+                        **workspace_provenance_fields(ws),
                     }
                     if orphaned_only:
                         if _is_orphaned_workspace(entry, config_names):
@@ -1078,6 +1080,7 @@ class WorkspaceService(BaseService):
             "qs_compatible": _classify_qs_compatibility(login_type, backend),
             "component_id": ws_data.get("component", "") or "",
             "config_id": ws_data.get("configurationId", "") or "",
+            **workspace_provenance_fields(ws_data),
         }
 
     def delete_workspace(

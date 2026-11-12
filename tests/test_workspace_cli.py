@@ -2032,3 +2032,38 @@ class TestWorkspaceDetailIssue304:
         assert data["login_type"] == "snowflake-service-keypair"
         assert data["read_only"] is True
         assert data["qs_compatible"] is True
+
+    def test_workspace_detail_human_shows_token_and_last_activity(self, tmp_path: Path) -> None:
+        """Human output of `workspace detail` names the creator token, last activity and state."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+
+        mock_ws = _make_workspace_mock()
+        mock_ws.get_workspace.return_value = {
+            "project_alias": "prod",
+            "workspace_id": 42,
+            "backend": "bigquery",
+            "host": "",
+            "schema": "WORKSPACE_42",
+            "user": "",
+            "creator_token_description": "local-mcp-token",
+            "last_activity_at": "2026-07-09T08:00:00+0200",
+            "state": "active",
+        }
+
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
+            patch("keboola_agent_cli.cli.WorkspaceService") as MockWsService,
+        ):
+            MockStore.return_value = store
+            MockWsService.return_value = mock_ws
+
+            result = runner.invoke(
+                app, ["workspace", "detail", "--project", "prod", "--workspace-id", "42"]
+            )
+
+        assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
+        assert "Created by token: local-mcp-token" in result.output
+        assert "Last activity: 2026-07-09T08:00:00+0200" in result.output
+        assert "State: active" in result.output

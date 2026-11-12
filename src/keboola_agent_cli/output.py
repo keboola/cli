@@ -1115,7 +1115,9 @@ def format_workspaces_table(console: Console, data: dict[str, Any]) -> None:
     table.add_column("Login Type", max_width=24)
     table.add_column("RO", justify="center")
     table.add_column("QS", justify="center")
+    table.add_column("Token", max_width=32)
     table.add_column("Created", style="dim")
+    table.add_column("Last activity", style="dim")
 
     prev_alias = None
     for ws in workspaces:
@@ -1145,7 +1147,9 @@ def format_workspaces_table(console: Console, data: dict[str, Any]) -> None:
             login_type,
             ro_cell,
             qs_cell,
+            ws.get("creator_token_description") or "",
             ws.get("created", ""),
+            ws.get("last_activity_at") or "",
         )
 
     console.print(table)
