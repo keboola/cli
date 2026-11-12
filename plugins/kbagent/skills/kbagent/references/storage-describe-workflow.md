@@ -59,9 +59,9 @@ descriptions are native fields on the table definition:
   component run's Output Mapping from overwriting a hand-authored description.
   The value is visible to the UI, to the MCP server, and in the Snowflake
   `COMMENT` / BigQuery column description. Read them back via `storage table-detail`
-  (`column_details[].description`). *(since vNEXT)* The result reports `status`
+  (`column_details[].description`). *(since 1.3.0)* The result reports `status`
   like `describe-table`: sending descriptions that are all stored already
-  succeeds with `status: "unchanged"` and `result: null`. Before vNEXT that
+  succeeds with `status: "unchanged"` and `result: null`. Before 1.3.0 that
   case failed with HTTP 400 "No table definition changes were provided".
 
 Descriptions are `upsert`: calling `describe-*` with a new text replaces
