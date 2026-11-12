@@ -593,6 +593,35 @@ class TestConfigWorkspaces:
         assert json.loads(request.content) == {"backend": "bigquery"}
         client.close()
 
+    @pytest.mark.parametrize("read_only", [True, False])
+    def test_create_config_workspace_sends_read_only_when_set(
+        self, httpx_mock, read_only: bool
+    ) -> None:
+        """An explicit read_only goes out as readOnlyStorageAccess (#835); None leaves it to Storage."""
+        httpx_mock.add_response(
+            url=_CONFIG_WORKSPACES_URL,
+            json={"id": 7, "status": "success", "results": {"id": 42}},
+            status_code=202,
+        )
+
+        client = KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
+        )
+        client.create_config_workspace(
+            branch_id=123,
+            component_id="keboola.sandboxes",
+            config_id="cfg-1",
+            backend="snowflake",
+            read_only=read_only,
+        )
+
+        assert json.loads(httpx_mock.get_request().content) == {
+            "backend": "snowflake",
+            "readOnlyStorageAccess": read_only,
+        }
+        client.close()
+
     @staticmethod
     def _create(client: KeboolaClient, max_wait: float | None = None) -> dict[str, Any]:
         return client.create_config_workspace(
@@ -2180,6 +2209,38 @@ class TestDeleteConfigBranch:
             token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
         ) as client:
             client.delete_config("keboola.sandboxes", "cfg-1", branch_id=200)
+
+    def test_delete_config_sends_no_precondition_by_default(self, httpx_mock) -> None:
+        httpx_mock.add_response(method="DELETE", status_code=204)
+
+        with KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
+        ) as client:
+            client.delete_config("keboola.sandboxes", "cfg-1")
+
+        assert "If-Match" not in httpx_mock.get_request().headers
+
+    def test_delete_config_sends_the_expected_version_as_if_match(self, httpx_mock) -> None:
+        """#934: the version is a strong entity tag, and a 412 is not retried."""
+        httpx_mock.add_response(
+            method="DELETE",
+            status_code=412,
+            json={"error": 'Configuration "cfg-1" is at version 6, expected version 5.'},
+        )
+
+        with (
+            KeboolaClient(
+                stack_url="https://connection.keboola.com",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
+            ) as client,
+            pytest.raises(KeboolaApiError) as exc_info,
+        ):
+            client.delete_config("keboola.sandboxes", "cfg-1", expected_version=5)
+
+        assert exc_info.value.status_code == 412
+        (request,) = httpx_mock.get_requests()
+        assert request.headers["If-Match"] == '"5"'
 
 
 class TestConfigRowMethods:

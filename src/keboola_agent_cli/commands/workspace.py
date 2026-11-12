@@ -136,7 +136,10 @@ def workspace_create(
     read_only: bool = typer.Option(
         True,
         "--read-only/--no-read-only",
-        help="Whether the workspace has read-only storage access",
+        help=(
+            "Whether the workspace has read-only storage access. --read-only (the default) "
+            "keeps the default of the project. --no-read-only cannot be combined with --ui"
+        ),
     ),
     ui: bool = typer.Option(
         False,

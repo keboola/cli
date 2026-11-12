@@ -499,11 +499,21 @@ The rows are listed on the config change as `covered_rows` (`--dry-run`,
 When the config DELETE fails (a 403, a timeout), its rows are not deleted one
 by one and its manifest entry stays, so the next `push --force` retries it.
 
+The config DELETE is conditional *(since vNEXT)*: push sends the config version
+it read as `If-Match`, and the Storage API deletes the config only while it is
+still at that version. An edit of the config or of one of its rows raises the
+version. When someone edits the config in the UI after push read it, the
+Storage API refuses the DELETE, and push reports it under `errors[]` with
+`SYNC_CONFLICT` and exits 1. The config stays, with the edit. Run
+`kbagent sync pull`, review the restored files, delete them again and push.
+Before, kbagent sent the DELETE with no precondition and such an edit was
+deleted with the config.
+
 Limits: an edit that changes ONLY an encrypted value is invisible to the
 comparison (ciphertexts compare equal), so such a delete is still `DELETED`;
-and the Storage API has no conditional delete, so a UI edit made between
-`sync diff` and the DELETE is not protected. Review `sync diff` right before
-`sync push --force`.
+and the Storage API has no precondition for a row delete, so a UI edit of a
+row made between the read and the DELETE of that single row is not protected.
+Review `sync diff` right before a `sync push --force` that deletes single rows.
 
 ### Rows across `sync pull --branch` and promote pushes
 

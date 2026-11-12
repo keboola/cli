@@ -263,7 +263,9 @@ class FakeApi:
         self.log.append(f"UPDATE {config_id} on {b}")
         return copy.deepcopy(cfg)
 
-    def _delete(self, component_id: str, config_id: str, branch_id: int | None = None) -> None:
+    def _delete(
+        self, component_id: str, config_id: str, branch_id: int | None = None, **_: Any
+    ) -> None:
         b = self._b(branch_id)
         self.remote[b].pop(config_id)
         self.log.append(f"DELETE {config_id} on {b}")

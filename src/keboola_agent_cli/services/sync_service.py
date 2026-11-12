@@ -1394,6 +1394,7 @@ class SyncService(BaseService):
                 row_bases=row_base_hashes,
                 target_row_keys=scope.target_tracked_row_keys,
                 remote_rows=remote_rows,
+                remote_raw=remote_raw,
             ),
             DeleteTarget(
                 branch_id=branch_id,

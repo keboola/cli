@@ -519,7 +519,9 @@ does not name is refused. With an `rls-policy` too, rows come from the `rls-poli
     Auto-normalize (0.28.0+; #245): parameters.blocks[].codes[].script
     strings are silently rewritten to arrays before pushing to Storage --
     SQL transformations split on statement boundaries (state machine
-    respects 'string' / "ident" / $$..$$ / -- / # / // / /* */); Python /
+    respects 'string' / "ident" / $$..$$ / -- / # / // / /* */; a
+    procedural block such as BEGIN..END or IF..END IF stays one
+    statement); Python /
     R / kds-team.app-custom-python wrap as [script]. The result envelope
     gains a normalizations: [{path, action, before_type, after_type,
     after_length}] field listing every change (empty when input was
@@ -2442,6 +2444,8 @@ remain branch-aware because modifying a dev branch is the expected intent.
     (a config's rows included) or one without a trustworthy baseline -- it is a CONFLICT,
     listed with its next step in refused_deletions[]. sync diff lists rows added in the UI
     under remote_only_rows[] (push never creates or deletes them).
+    A config DELETE is conditional (If-Match on the version push read): a config edited in
+    the UI after that read is not deleted -- errors[] entry SYNC_CONFLICT, exit 1; pull first.
     Fails if encryption fails (plaintext secrets never pushed). Use escape hatch flag only if you know what you are doing.
     Every secret is encrypted BEFORE the first write (since 0.99.0, #792 F): an
     ENCRYPTION_FAILED stops the push before anything reaches the remote (message ends
@@ -2644,6 +2648,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
     --governed: Snowflake or BigQuery, headless only. A workspace with no login and no credentials (loginType governed) that only Query Service reads, with the project's row/column policies applied; needs a stack whose Connection accepts it (workspace password / direct warehouse login are refused).
     --ui is BROKEN on current SaaS stacks (#755): the keboola.sandboxes create job no longer provisions SQL workspaces, so it ends in WORKSPACE_NOT_FOUND -- do not retry, use headless. A failed create (either mode) trashes the sandbox config it created; when the outcome is unknown (5xx / read-write TIMEOUT / RETRY_EXHAUSTED on the create POST, or any error after the --ui job was queued except QUEUE_JOB_FAILED / WORKSPACE_NOT_FOUND) it keeps the config (a workspace may exist -- check 'workspace list', then 'config delete' if nothing appears); --json error.details carries sandbox_config_id / sandbox_config_rolled_back / sandbox_config_kept_reason / job_id.
     Since 0.47.1, Snowflake headless creates return private_key and an empty password field; use key-pair auth.
+    --no-read-only: the workspace reads only its own schema and what is loaded into it (readOnlyStorageAccess false). --read-only (the default) keeps the default of the project (BigQuery: read-only access to all Storage; Snowflake: only with the project feature input-mapping-read-only-storage). The result's read_only is what Storage stored. --no-read-only cannot be combined with --ui.
 
   workspace list
     List workspaces. Without --branch uses each alias's active branch (`branch use`), else
