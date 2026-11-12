@@ -44,6 +44,7 @@ SAMPLE_TOKEN_VERIFY_BIGQUERY = TokenVerifyResponse(
 
 SAMPLE_WORKSPACE = {
     "id": 42,
+    "readOnlyStorageAccess": True,
     "connection": {
         "backend": "snowflake",
         "host": "account.snowflakecomputing.com",
@@ -155,6 +156,7 @@ class TestCreateWorkspace:
             backend="snowflake",
             login_type="snowflake-person-keypair",
             public_key=ANY,
+            read_only=None,
         )
         public_key = mock_client.create_config_workspace.call_args.kwargs["public_key"]
         assert public_key.startswith("-----BEGIN PUBLIC KEY-----")
@@ -176,6 +178,7 @@ class TestCreateWorkspace:
         mock_client.create_config_workspace.return_value = {
             "id": 77,
             "name": "gov-ws",
+            "readOnlyStorageAccess": read_only,
             "connection": {
                 "backend": backend.lower(),
                 "host": "account.snowflakecomputing.com",
@@ -199,6 +202,7 @@ class TestCreateWorkspace:
             backend=backend,
             login_type="governed",
             public_key=None,
+            read_only=None if read_only else False,
         )
         assert result["governed"] is True
         assert result["login_type"] == "governed"
@@ -282,6 +286,53 @@ class TestCreateWorkspace:
         mock_client.create_sandbox_config.assert_not_called()
         mock_client.create_config_workspace.assert_not_called()
 
+    @pytest.mark.parametrize(
+        ("requested", "stored"),
+        [(False, False), (False, True), (True, True), (True, False)],
+        ids=["no-read-only", "storage-overrides", "default-ro", "default-rw"],
+    )
+    def test_create_workspace_sends_read_only_and_reports_the_stored_value(
+        self, tmp_config_dir: Path, requested: bool, stored: bool
+    ) -> None:
+        """--no-read-only reaches Storage, --read-only sends nothing; the result says what Storage stored (#835)."""
+        mock_client = MagicMock()
+        mock_client.list_dev_branches.return_value = [{"id": 123, "isDefault": True}]
+        mock_client.create_sandbox_config.return_value = {"id": "cfg-123", "name": "ws"}
+        mock_client.create_config_workspace.return_value = {
+            **SAMPLE_WORKSPACE,
+            "readOnlyStorageAccess": stored,
+        }
+
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(config_store=store, client_factory=lambda url, token: mock_client)
+
+        result = svc.create_workspace(
+            alias="prod", name="ws", backend="snowflake", read_only=requested
+        )
+
+        sent = mock_client.create_config_workspace.call_args.kwargs["read_only"]
+        assert sent is (None if requested else False)
+        assert result["read_only"] is stored
+
+    def test_create_workspace_no_read_only_with_ui_refused_before_anything_is_created(
+        self, tmp_config_dir: Path
+    ) -> None:
+        """The Queue job cannot drop read-only access, so --no-read-only with --ui is a usage error."""
+        mock_client = MagicMock()
+        mock_client.list_dev_branches.return_value = [{"id": 123, "isDefault": True}]
+
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(config_store=store, client_factory=lambda url, token: mock_client)
+
+        with pytest.raises(KeboolaApiError, match="cannot be combined with --ui") as excinfo:
+            svc.create_workspace(
+                alias="prod", name="ws", backend="snowflake", read_only=False, ui_mode=True
+            )
+
+        assert excinfo.value.error_code == ErrorCode.INVALID_ARGUMENT
+        mock_client.create_sandbox_config.assert_not_called()
+        mock_client.create_job.assert_not_called()
+
     def test_create_workspace_unknown_project(self, tmp_config_dir: Path) -> None:
         """create_workspace raises ConfigError for an unknown alias."""
         store = setup_single_project(tmp_config_dir)
@@ -352,6 +403,7 @@ class TestCreateWorkspace:
             backend="snowflake",
             login_type="snowflake-person-keypair",
             public_key=ANY,
+            read_only=None,
         )
         public_key = mock_client.create_config_workspace.call_args.kwargs["public_key"]
         assert public_key.startswith("-----BEGIN PUBLIC KEY-----")
@@ -423,6 +475,7 @@ class TestAutoDetectBackend:
             backend="bigquery",
             login_type="default",
             public_key=None,
+            read_only=None,
         )
 
     def test_create_workspace_auto_detects_snowflake(self, tmp_config_dir: Path) -> None:
@@ -450,6 +503,7 @@ class TestAutoDetectBackend:
             backend="snowflake",
             login_type="snowflake-person-keypair",
             public_key=ANY,
+            read_only=None,
         )
         public_key = mock_client.create_config_workspace.call_args.kwargs["public_key"]
         assert public_key.startswith("-----BEGIN PUBLIC KEY-----")
@@ -486,6 +540,7 @@ class TestAutoDetectBackend:
             backend="bigquery",
             login_type="default",
             public_key=None,
+            read_only=None,
         )
 
     def test_explicit_backend_skips_auto_detect(self, tmp_config_dir: Path) -> None:

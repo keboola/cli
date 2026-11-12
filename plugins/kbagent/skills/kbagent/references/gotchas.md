@@ -2253,6 +2253,14 @@ local data-app development) is refused with `ACCESS_DENIED` when no policy rule 
 `FLATTEN`, `INFORMATION_SCHEMA`/`SHOW` or UDFs): Query Service sends the same text for both, so an administrator
 that a rule selects can still get it. `--qs-compatible` leaves governed workspaces out.
 
+## `workspace create --no-read-only` makes a workspace that cannot read all Storage
+
+*(since vNEXT)*
+
+`workspace create --no-read-only` sends `readOnlyStorageAccess: false`. The workspace reads only its own schema and what `workspace load` puts into it, for example tables loaded as views. Use this to give a SQL client access to a selected set of tables only. `--read-only` is the default and sends nothing, as before: the workspace gets the default of the project. On BigQuery that is read-only access to all project Storage. On Snowflake it is read-only access only when the project has the feature `input-mapping-read-only-storage`, otherwise no access to project Storage. The `read_only` key of the result is the value Storage stored, the same value that `workspace detail` shows. `--no-read-only` with `--ui` is `INVALID_ARGUMENT` (exit 2) and nothing is created, because the Queue job cannot request it. The REST route `POST /workspaces/{project}` takes `read_only: false` for the same effect as `--no-read-only`.
+
+Before vNEXT, kbagent never sent the flag. `--no-read-only` created a workspace with the default of the project, often read-only access to every bucket, and the result still said `read_only: false`. The result of `--read-only` and of a `--ui` create always said `read_only: true`. Check `workspace detail` for workspaces made that way.
+
 ## `workspace create --ui` cannot produce a UI-visible SQL workspace; a failed create no longer leaves a sandbox config behind
 
 Applies since 0.99.0 (issue #755). The `--ui` path queues a `keboola.sandboxes`
