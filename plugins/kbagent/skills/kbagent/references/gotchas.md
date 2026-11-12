@@ -439,6 +439,13 @@ These lists keep `error`, because their entries are not failed items with an err
   so its name, description, enabled state and any other change made there are kept. A
   config deleted there, or of a component you have since added to `ignoredComponents`,
   is dropped from the rewrite.
+- **A promote push reads the dev copy of every config it maps a reference to**
+  *(since vNEXT)*. A dev config or row that someone deleted on the dev branch is found also
+  when no change of the diff names it (its local folder is gone too): the reference stays
+  in its production form and pending. Before, such a reference was rewritten to the deleted
+  dev row id. A reference to a config that the dev branch held under the production id and
+  that was deleted there also stays pending when it selects no rows. Before, the pending
+  record was dropped. This costs at least one read per referenced dev config and push.
 - **A config created in `main/` and promoted** is no longer reported `removed` by the next
   production `sync pull`, which used to delete its folder. Pull keeps the folder and keeps
   the dev-branch record, and moves the record with the folder when production renames
