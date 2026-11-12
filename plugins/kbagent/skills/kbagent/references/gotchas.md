@@ -1733,6 +1733,17 @@ plain pull no longer re-creates it when the remote changed (diff/push already
 treated it as a change). To drop local edits, use `sync pull --theirs` or delete
 the whole config directory and pull.
 
+## A procedural SQL block stays one statement
+
+*(since vNEXT, #954)*
+
+kbagent splits SQL into one statement per `script[]` element in `config update` (the `sql_split` / `sql_resplit` normalizations), in `transformation create` / `edit` and in `sync push` (`transform.sql`). A procedural block now stays one element: `BEGIN ... END`, `IF ... THEN ... END IF`, `LOOP ... END LOOP`, `WHILE ... DO|LOOP ... END WHILE|LOOP`, `FOR ... DO|LOOP ... END FOR|LOOP`, `REPEAT ... UNTIL ... END REPEAT`, a `CASE ... END CASE` statement and the `BEGIN ... END` body of `CREATE ... PROCEDURE|FUNCTION|TRIGGER`. Before vNEXT every `;` inside the block was a boundary, and the fragments were invalid SQL. A BigQuery transformation failed at the next job run, also after a `config update` that changed only metadata (`--dry-run` showed an unrequested `parameters.blocks` change and a `sql_resplit` normalization).
+
+- A block counts only when its opener starts a statement and its closer comes later. `BEGIN TRANSACTION;`, `BEGIN;`, `BEGIN` with a transaction mode (`READ WRITE`, `ISOLATION LEVEL ...`, `IMMEDIATE`, ...), `CASE ... END` and `IF(...)` inside an expression are not blocks. T-SQL `IF` and `WHILE` without `THEN` / `DO` split as before.
+- A block that never closes splits on every `;`, as before, and so do the blocks after it.
+- In an existing `sync` tree, a config whose remote `script[]` element holds a whole block shows once as `remote_modified` in `sync diff`. The local and remote SQL are the same: only the stored baseline was computed with the old splitting. Run `sync pull` once to refresh the baseline. A config that an older kbagent pushed as fragments shows as a local change, and the next `sync push` writes the whole block back. A `sync pull` of such a config instead writes the fragments to `transform.sql` with `/* ===== STATEMENT ===== */` markers between them.
+- Snowflake Scripting `DECLARE ... BEGIN ... END` still splits the `DECLARE` section off. Wrap such a block in `EXECUTE IMMEDIATE $$ ... $$`.
+
 ## `sync push` no longer leaves phantom `REMOTE MODIFIED` drift; `transform.sql` carries statement boundaries
 
 *(since 0.91.0, #686)*

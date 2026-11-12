@@ -519,7 +519,9 @@ does not name is refused. With an `rls-policy` too, rows come from the `rls-poli
     Auto-normalize (0.28.0+; #245): parameters.blocks[].codes[].script
     strings are silently rewritten to arrays before pushing to Storage --
     SQL transformations split on statement boundaries (state machine
-    respects 'string' / "ident" / $$..$$ / -- / # / // / /* */); Python /
+    respects 'string' / "ident" / $$..$$ / -- / # / // / /* */; a
+    procedural block such as BEGIN..END or IF..END IF stays one
+    statement); Python /
     R / kds-team.app-custom-python wrap as [script]. The result envelope
     gains a normalizations: [{path, action, before_type, after_type,
     after_length}] field listing every change (empty when input was
