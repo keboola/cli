@@ -2973,6 +2973,152 @@ def test_recovery_never_rewrites_to_a_row_missing_on_dev() -> None:
 
 
 # ===========================================================================
+# #928: a target that is gone and is in no change of the diff
+# ===========================================================================
+
+
+def test_flow_selecting_a_promoted_row_deleted_on_both_sides_stays_pending(
+    tmp_path: Path,
+) -> None:
+    """The row folder is gone locally and d1 is gone on DEV: no row change names d1."""
+    v = VARIANTS["rows"]
+    w = World(tmp_path)
+    ext_id = w.api.seed(v)
+    (r1,) = [
+        r["id"] for r in w.api.get(PROD, v.component_id, ext_id)["rows"] if r["name"] == "Row 1"
+    ]
+    w.api.types["keboola.flow"] = "other"
+    w.init()
+    w.pull()
+    w.push(branch=DEV)  # P/r1 promoted as D/d1
+    dev_ext = _dev_id_of(w, v.component_id)
+    dev_rows = w.api.get(DEV, v.component_id, dev_ext)["rows"]
+    (d1,) = [r["id"] for r in dev_rows if r["name"] == "Row 1"]
+    dev_rows[:] = [r for r in dev_rows if r["id"] != d1]  # deleted on DEV
+
+    body = _flow_body(v.component_id, ext_id)
+    body["tasks"][0]["task"]["configRowIds"] = [r1]
+    w.api.remote[PROD][("keboola.flow", "cfg-flow")] = {
+        "id": "cfg-flow",
+        "name": "Nightly",
+        "description": "",
+        "configuration": body,
+        "rows": [],
+        "isDisabled": False,
+    }
+    w.pull()
+    (prod_entry,) = _entries(w, ext_id, PROD)
+    (row_path,) = [r.path for r in prod_entry.rows if r.id == r1]
+    shutil.rmtree(w.config_dir(ext_id) / row_path)  # and deleted locally
+    w.push(branch=DEV)
+
+    task = _dev_flow(w)["configuration"]["tasks"][0]["task"]
+    assert (task["configId"], task["configRowIds"]) == (ext_id, [r1])  # never D/[d1]
+    (flow_entry,) = [
+        c
+        for c in load_manifest(w.root).configurations
+        if c.component_id == "keboola.flow" and c.branch_id == DEV
+    ]
+    assert [v.component_id, ext_id, r1] in flow_entry.metadata["rebind_pending"]
+
+
+def test_row_created_in_the_push_is_held_although_the_cached_target_read_lacks_it() -> None:
+    """The row list of the promoted parent D was read before this push created d2 under it.
+
+    Without the created-rows carve-out the cached read makes d2 look missing, so the
+    task would stay in source form and pending. With it the task is rewritten to D / d2.
+    """
+    http = "keboola.ex-http"
+    dev_copy = ManifestConfiguration(
+        branchId=DEV,
+        componentId=http,
+        id="D",
+        path="extractor/keboola.ex-http/d",
+        metadata={"promoted_source": "P"},
+    )
+    manifest = _manifest((PROD, "main"), (DEV, "dev"), configurations=[dev_copy])
+    remap = PromoteRemap()
+    remap.row_reader = lambda component_id, config_id: {"d1"}  # d2 does not exist yet
+
+    def selecting(row_id: str) -> dict:
+        task = {"type": "job", "componentId": http, "configId": "P", "configRowIds": [row_id]}
+        return {"tasks": [{"id": "t", "task": task}]}
+
+    remap.refresh(manifest, DEV, {}, {("D", "r1"): "d1"})
+    assert remap.pending_refs("keboola.flow", selecting("r1")) == []  # caches D's rows: {d1}
+    remap.refresh(manifest, DEV, {}, {("D", "r1"): "d1", ("D", "r2"): "d2"})  # d2 created
+
+    assert remap.pending_refs("keboola.flow", selecting("r2")) == []
+    assert remap.apply("keboola.flow", selecting("r2")) == {
+        "tasks": [
+            {
+                "id": "t",
+                "task": {
+                    "type": "job",
+                    "componentId": http,
+                    "configId": "D",
+                    "configRowIds": ["d2"],
+                },
+            }
+        ]
+    }
+
+
+def test_flow_task_of_an_identity_parent_deleted_on_dev_keeps_its_id_and_is_reported_pending(
+    tmp_path: Path,
+) -> None:
+    """P is held on DEV under its own id and deleted there; the task selects no rows.
+
+    A normal push writes the task with the unchanged id P (nothing to remap), and
+    after the push the flow is marked pending for P, because the target no longer has P.
+    """
+    v = VARIANTS["rows"]
+    w = World(tmp_path)
+    ext_id = w.api.seed(v)
+    w.api.types["keboola.flow"] = "other"
+    w.api.branch_from_prod()  # DEV holds P under the production id
+    w.init()
+    w.pull()
+    semantic_edit(w.config_dir(ext_id) / CONFIG_FILE)
+    w.push(branch=DEV)  # the dev entry of P exists from here on
+    del w.api.remote[DEV][(v.component_id, ext_id)]  # deleted on DEV, not pulled
+    w.api.remote[PROD][("keboola.flow", "cfg-flow")] = {
+        "id": "cfg-flow",
+        "name": "Nightly",
+        "description": "",
+        "configuration": _flow_body(v.component_id, ext_id),
+        "rows": [],
+        "isDisabled": False,
+    }
+    w.pull()
+    w.push(branch=DEV)  # creates the flow on DEV
+
+    task = _dev_flow(w)["configuration"]["tasks"][0]["task"]
+    assert (task["configId"], task.get("configRowIds")) == (ext_id, None)
+    (flow_entry,) = [
+        c
+        for c in load_manifest(w.root).configurations
+        if c.component_id == "keboola.flow" and c.branch_id == DEV
+    ]
+    assert [v.component_id, ext_id] in flow_entry.metadata["rebind_pending"]
+
+
+def test_recovery_keeps_a_task_of_a_deleted_identity_parent_pending() -> None:
+    """DEV held P under the production id and P was deleted there; the task selects no rows."""
+    http = "keboola.ex-http"
+    refs = [[http, "P"]]
+    task = {"type": "job", "componentId": http, "configId": "P"}
+    pending = _pending_flow_on_dev(refs, task)
+    remap = PromoteRemap(configs={(http, "P"): "P"})
+    gone = KeboolaApiError("Configuration P not found", status_code=404)
+    client = _in_memory_target(pending.remote, {(http, "P"): gone})
+    recover_pending(client, pending.manifest, remap, "keboola.flow", "F", DEV, [])
+
+    client.update_config.assert_not_called()
+    assert pending.flow.metadata["rebind_pending"] == refs
+
+
+# ===========================================================================
 # PR #929 review (Devin)
 # ===========================================================================
 
