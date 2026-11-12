@@ -1218,9 +1218,9 @@ def storage_add_column(
 
     Mirrors ``create-table --column``: on a typed table ``name:TYPE(length)``
     creates a typed column and a bare ``name`` a STRING column. An untyped
-    table takes only a bare ``name`` (no type, --not-null or --default). The command waits
-    for the Storage job, so a following table-detail lists the column; a
-    failed job is reported as an error.
+    table takes only a bare ``name`` (no type, --not-null or --default).
+    The command waits for the Storage job, so a following table-detail lists
+    the column; a failed job is reported as an error.
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
