@@ -840,7 +840,11 @@ class _ConfigsMixin(_CoreClient):
         return resp.json()
 
     def delete_config(
-        self, component_id: str, config_id: str, branch_id: int | None = None
+        self,
+        component_id: str,
+        config_id: str,
+        branch_id: int | None = None,
+        expected_version: int | None = None,
     ) -> None:
         """Delete a component configuration -- NEVER retried at the HTTP layer.
 
@@ -863,12 +867,19 @@ class _ConfigsMixin(_CoreClient):
             component_id: Component ID.
             config_id: Configuration ID.
             branch_id: Branch ID. If provided, deletes config in that branch.
+            expected_version: The configuration version the caller decided on.
+                Sent as ``If-Match: "<version>"``: the Storage API deletes the
+                configuration only while it is still at that version and
+                answers 412 otherwise (a row change also raises the version).
+                ``None`` sends no precondition.
         """
         safe_component = quote(component_id, safe="")
         safe_config = quote(config_id, safe="")
         prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
+        headers = {} if expected_version is None else {"If-Match": f'"{expected_version}"'}
         self._request(
             "DELETE",
             f"{prefix}/components/{safe_component}/configs/{safe_config}",
             retry_safe=False,
+            headers=headers,
         )

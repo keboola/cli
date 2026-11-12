@@ -49,6 +49,7 @@ from typing import TYPE_CHECKING, Any
 from ..constants import ALWAYS_IGNORED_COMPONENTS
 from ..errors import ErrorCode, KeboolaApiError
 from ..sync.manifest import Manifest, load_manifest
+from ._sync_deletes import delete_config_if_unchanged
 from .base import find_default_branch_id
 
 if TYPE_CHECKING:
@@ -224,6 +225,11 @@ def _app_id(client: Any, config_id: str, branch_id: int | None) -> str | None:
     remote = client.get_config_detail(
         component_id=SANDBOXES_COMPONENT_ID, config_id=config_id, branch_id=branch_id
     )
+    return _app_id_of(remote)
+
+
+def _app_id_of(remote: Any) -> str | None:
+    """The ``parameters.id`` of the workspace config *remote*, or ``None``."""
     configuration = remote.get("configuration") if isinstance(remote, dict) else None
     parameters = configuration.get("parameters") if isinstance(configuration, dict) else None
     app_id = parameters.get("id") if isinstance(parameters, dict) else None
@@ -238,14 +244,39 @@ def _app_backed_message(config_id: str, app_id: str) -> str:
     )
 
 
-def _refuse_app_backed_workspace(client: Any, config_id: str, branch_id: int | None) -> None:
-    """Refuse to delete a workspace whose config points at a Data Science app."""
-    app_id = _app_id(client, config_id, branch_id)
+def _refuse_workspace_delete(client: Any, change: dict[str, Any], branch_id: int | None) -> None:
+    """Refuse to delete a workspace that is app-backed or changed since the diff (#934).
+
+    The remote config is read again right before the delete, so a failed read
+    raises and nothing is deleted. The version is compared here, before the
+    sessions are deleted: the conditional config DELETE comes after them, and
+    deleted sessions cannot be restored.
+    """
+    config_id = change["config_id"]
+    remote = client.get_config_detail(
+        component_id=SANDBOXES_COMPONENT_ID, config_id=config_id, branch_id=branch_id
+    )
+    app_id = _app_id_of(remote)
     if app_id:
         raise KeboolaApiError(
             message=_app_backed_message(config_id, app_id),
             status_code=0,
             error_code=ErrorCode.VALIDATION_ERROR,
+            retryable=False,
+        )
+    expected = change.get("remote_version")
+    version = remote.get("version") if isinstance(remote, dict) else None
+    if expected is not None and version != expected:
+        raise KeboolaApiError(
+            message=(
+                f"Workspace {config_id} was not deleted: it changed on the remote after this "
+                f"push read it (version {version}, expected version {expected}). No SQL editor "
+                "session was deleted. Run `kbagent sync pull` for this branch and review the "
+                "restored files; to delete the reviewed version, remove them again and run "
+                "`sync push --force`."
+            ),
+            status_code=0,
+            error_code=ErrorCode.SYNC_CONFLICT,
             retryable=False,
         )
 
@@ -288,16 +319,16 @@ def delete_remote_config(client: Any, change: dict[str, Any], branch_id: int | N
     component_id = change["component_id"]
     config_id = change["config_id"]
     if component_id != SANDBOXES_COMPONENT_ID:
-        client.delete_config(component_id=component_id, config_id=config_id, branch_id=branch_id)
+        delete_config_if_unchanged(client, change, branch_id)
         return
-    _refuse_app_backed_workspace(client, config_id, branch_id)
+    _refuse_workspace_delete(client, change, branch_id)
     session_ids = list_workspace_sessions(client, {config_id}, branch_id)[config_id]
     deleted: list[str] = []
     change["deleted_session_ids"] = deleted
     for session_id in session_ids:
         _delete_session(client, config_id, session_id, deleted)
     try:
-        client.delete_config(component_id=component_id, config_id=config_id, branch_id=branch_id)
+        delete_config_if_unchanged(client, change, branch_id)
     except KeboolaApiError as exc:
         # The change is not in pushed_details on a failure, so the error is the
         # only place that says which sessions are already gone.

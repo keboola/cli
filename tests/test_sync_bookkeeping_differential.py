@@ -175,6 +175,7 @@ class Api:
             "configuration": variant.body(),
             "rows": rows,
             "isDisabled": False,
+            "version": 1,
         }
         return cid
 
@@ -247,9 +248,15 @@ class Api:
             "configuration": copy.deepcopy(configuration),
             "rows": [],
             "isDisabled": bool(is_disabled),
+            "version": 1,
         }
         self.remote[self._b(branch_id)][(component_id, cid)] = cfg
         return copy.deepcopy(cfg)
+
+    def _bump(self, component_id: str, config_id: str, branch_id: int | None) -> None:
+        """Storage raises a config's version on every write to it or to one of its rows."""
+        cfg = self.remote[self._b(branch_id)][(component_id, config_id)]
+        cfg["version"] = cfg.get("version", 1) + 1
 
     def _update(
         self,
@@ -271,9 +278,23 @@ class Api:
             cfg["description"] = description
         if is_disabled is not None:
             cfg["isDisabled"] = bool(is_disabled)
+        self._bump(component_id, config_id, branch_id)
         return copy.deepcopy(cfg)
 
-    def _delete(self, component_id: str, config_id: str, branch_id: int | None = None) -> None:
+    def _delete(
+        self,
+        component_id: str,
+        config_id: str,
+        branch_id: int | None = None,
+        expected_version: int | None = None,
+    ) -> None:
+        version = self.remote[self._b(branch_id)][(component_id, config_id)].get("version")
+        if expected_version is not None and version != expected_version:  # If-Match
+            raise KeboolaApiError(
+                f'Configuration "{config_id}" is at version {version}, '
+                f"expected version {expected_version}.",
+                status_code=412,
+            )
         self.remote[self._b(branch_id)].pop((component_id, config_id))
 
     def _detail(
@@ -306,6 +327,7 @@ class Api:
             "isDisabled": bool(is_disabled),
         }
         self._rows_of(component_id, config_id, branch_id).append(row)
+        self._bump(component_id, config_id, branch_id)
         return copy.deepcopy(row)
 
     def _find_row(
@@ -335,6 +357,7 @@ class Api:
             row["description"] = description
         if is_disabled is not None:
             row["isDisabled"] = bool(is_disabled)
+        self._bump(component_id, config_id, branch_id)
         return copy.deepcopy(row)
 
     def _delete_row(
@@ -342,6 +365,7 @@ class Api:
     ) -> None:
         rows = self._rows_of(component_id, config_id, branch_id)
         rows[:] = [r for r in rows if r["id"] != row_id]
+        self._bump(component_id, config_id, branch_id)
 
     def _get_row(
         self,

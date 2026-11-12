@@ -27,17 +27,28 @@ successful push into errors (finding force-delete-row-errors). They are listed
 on the config change as ``covered_rows``. A failed or timed-out config DELETE
 therefore never falls back to deleting its rows one by one.
 
+A config DELETE is conditional (#934). The diff records the version of every
+config it calls ``deleted`` (:func:`stamp_delete_versions`), and push sends it
+as ``If-Match`` (:func:`delete_config_if_unchanged`). The Storage API deletes
+the config only while it is still at that version. An edit of the config or of
+one of its rows raises the version, so an edit that lands between the diff and
+the DELETE makes the Storage API answer 412, and push reports a conflict. Push
+never sends that DELETE again without the precondition.
+
 Limits (D9, documented, not fixed): encrypted values are compared through one
 placeholder, so a remote edit that changes ONLY an encrypted value is invisible
-to the comparison; and the Storage API has no conditional delete, so a remote
-edit that lands between the diff and the DELETE is not protected.
+to the comparison; and the Storage API has no precondition for a ROW delete, so
+an edit of a row that lands between the diff and the DELETE of that row is not
+protected.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from http import HTTPStatus
 from typing import Any
 
+from ..errors import ErrorCode, KeboolaApiError
 from ..sync.branch_scope import UNKNOWN_BASE_HASH, promote_source, promoted_from, same_branch
 from ..sync.diff_engine import ConfigChange, config_hash
 from ..sync.manifest import Manifest, ManifestConfiguration
@@ -109,6 +120,9 @@ class DeleteInputs:
         remote_rows: The target's rows, keyed like *row_bases*.
         remote_only_rows: Rows on the target that no local file or manifest
             entry accounts for (``remote_only_rows[]`` of the diff).
+        remote_raw: ``"{component}/{config}"`` -> the target's config as the
+            API listed it. Its ``version`` is the precondition of a config
+            DELETE (#934).
     """
 
     config_bases: dict[str, str]
@@ -116,6 +130,7 @@ class DeleteInputs:
     target_row_keys: set[str]
     remote_rows: dict[str, dict[str, Any]]
     remote_only_rows: list[dict[str, str]] = field(default_factory=list)
+    remote_raw: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 def _row_key(change: ConfigChange) -> str:
@@ -159,7 +174,10 @@ def _rows_changed(
 def settle_deletions(
     changes: list[ConfigChange], inputs: DeleteInputs, target: DeleteTarget
 ) -> None:
-    """Make every local delete in *changes* three-way, rows included (D1-D3). Mutates *changes*."""
+    """Make every local delete in *changes* three-way, rows included (D1-D3). Mutates *changes*.
+
+    A config delete that stays ``deleted`` gets the remote version the diff read (#934).
+    """
     for change in changes:
         if change.change_type == "deleted":
             _settle_one(change, inputs, target)
@@ -186,6 +204,50 @@ def settle_deletions(
             change.change_type, change.refused_delete = "conflict", True
             why = f"its configuration {parent[0]}/{parent[1]} cannot be deleted (see its conflict)"
             change.details = [delete_conflict_detail(target, _row_key(change), why)]
+    stamp_delete_versions(changes, inputs.remote_raw)
+
+
+def stamp_delete_versions(
+    changes: list[ConfigChange], remote_raw: dict[str, dict[str, Any]]
+) -> None:
+    """Record on every config ``deleted`` change the remote version the diff read (#934)."""
+    for change in changes:
+        if change.change_type == "deleted" and not change.is_row:
+            version = remote_raw.get(f"{change.component_id}/{change.config_id}", {}).get("version")
+            change.remote_version = version if isinstance(version, int) else None
+
+
+def delete_config_if_unchanged(client: Any, change: dict[str, Any], branch_id: int | None) -> None:
+    """DELETE a config only while it is at the version the diff read (#934).
+
+    A 412 from the Storage API means the config or one of its rows changed
+    after the diff read it. That is a conflict: the error says so, and the
+    caller keeps the manifest entry. A change without ``remote_version``
+    (the listing carried none) is deleted without a precondition, as before.
+    """
+    component_id, config_id = change["component_id"], change["config_id"]
+    try:
+        client.delete_config(
+            component_id=component_id,
+            config_id=config_id,
+            branch_id=branch_id,
+            expected_version=change.get("remote_version"),
+        )
+    except KeboolaApiError as exc:
+        if exc.status_code != HTTPStatus.PRECONDITION_FAILED:
+            raise
+        raise KeboolaApiError(
+            message=(
+                f"{component_id}/{config_id} was not deleted: it changed on the remote after "
+                f"this push read it at version {change.get('remote_version')} (the config or "
+                "one of its rows was edited). Run `kbagent sync pull` for this branch and "
+                "review the restored files; to delete the reviewed version, remove them again "
+                "and run `sync push --force`."
+            ),
+            status_code=exc.status_code,
+            error_code=ErrorCode.SYNC_CONFLICT,
+            retryable=False,
+        ) from exc
 
 
 def _deletion_records(entry: ManifestConfiguration) -> dict[str, str]:
