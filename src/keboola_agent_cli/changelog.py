@@ -28,6 +28,15 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "1.3.1": [
+        "Change (#986): kbagent starts faster, because a command imports only its own module and "
+        "the services it uses. Before, each call imported all command and service modules. In a "
+        "test on Linux, `kbagent --version` took 182 ms to import instead of 431 ms, and "
+        "`kbagent job list --help` took 242 ms instead of 440 ms. On Windows, Windows Defender "
+        "scans each imported file at each start, so fewer imports also mean less scanning. "
+        "`kbagent --help` still imports all command modules, because it shows the help of each "
+        "command. Commands, options, output and exit codes do not change.",
+    ],
     "1.3.0": [
         "BREAKING (#977): `sync push --force` does not delete a config that changed after the "
         "diff read it. It sends the version that `sync diff` read with the DELETE. A config at "
