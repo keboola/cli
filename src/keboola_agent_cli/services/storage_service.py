@@ -2505,7 +2505,8 @@ class StorageService(ColumnDescriptionsMixin):
         Returns:
             Dict with project_alias, applied, errors, applied_count, error_count.
             A ``tables:`` entry in ``applied`` carries the ``status`` of
-            ``describe_table`` (``"updated"`` or ``"unchanged"``).
+            ``describe_table`` and a ``columns:`` entry the ``status`` of
+            ``describe_columns`` (``"updated"`` or ``"unchanged"``).
         """
         branch_id = resolve_branch(self._config_store, alias, branch_id)
         from ._describe_batch_input import parse_describe_batch_file
@@ -2551,8 +2552,15 @@ class StorageService(ColumnDescriptionsMixin):
             if progress_callback is not None:
                 progress_callback("columns", table_id, current, total)
             try:
-                self.describe_columns(alias, table_id, col_map, branch_id=branch_id)
-                applied.append({"type": "columns", "id": table_id, "columns": col_map})
+                outcome = self.describe_columns(alias, table_id, col_map, branch_id=branch_id)
+                applied.append(
+                    {
+                        "type": "columns",
+                        "id": table_id,
+                        "columns": col_map,
+                        "status": outcome["status"],
+                    }
+                )
             except Exception as exc:
                 errors.append(item_failure(exc, type="columns", id=table_id))
 

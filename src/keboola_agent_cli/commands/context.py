@@ -2248,7 +2248,8 @@ remain branch-aware because modifying a dev branch is the expected intent.
     async storage job). Writes isDescriptionSystemManaged=false so the next component run's Output Mapping
     cannot overwrite the text, so the Keboola UI, the MCP server and the warehouse COMMENT all see it. Unknown column names fail fast before
     any write. Legacy flat KBC.column.*.description entries on the same table are migrated in the same write
-    (conflict/orphan entries skipped) and the migrated flat keys deleted.
+    (conflict/orphan entries skipped) and the migrated flat keys deleted. Result status is "updated" after a
+    write, "unchanged" (result null) when every column already holds the text; before vNEXT that case failed.
     Readable via table-detail --json .data.column_details[].description, and (since 0.89.0) in the
     human table-detail Columns table, which grows a Description column when any column has one.
 
