@@ -390,6 +390,7 @@ class _ConfigsMixin(_CoreClient):
         branch_id: int | None = None,
         is_disabled: bool = False,
         folder: str | None = None,
+        configuration_id: str | None = None,
     ) -> dict[str, Any]:
         """Create a new configuration for a component.
 
@@ -405,6 +406,10 @@ class _ConfigsMixin(_CoreClient):
                 state (mirrors ``create_config_row``).
             folder: UI folder of the new configuration. ``None`` sends no
                 ``folder`` field, so the configuration has no folder.
+            configuration_id: The id the new configuration gets. It must be
+                unique in the component on this branch: the Storage API
+                answers 400 (``configurationAlreadyExists``) when a live
+                configuration has it. ``None`` lets the API generate one.
 
         Returns:
             Created configuration dict including the assigned 'id'.
@@ -419,6 +424,8 @@ class _ConfigsMixin(_CoreClient):
             data["isDisabled"] = "1"
         if folder is not None:
             data["folder"] = folder
+        if configuration_id is not None:
+            data["configurationId"] = configuration_id
         resp = self._request(
             "POST",
             f"{prefix}/components/{quote(component_id)}/configs",
@@ -527,6 +534,7 @@ class _ConfigsMixin(_CoreClient):
         description: str = "",
         is_disabled: bool = False,
         branch_id: int | None = None,
+        row_id: str | None = None,
     ) -> dict[str, Any]:
         """Create a new configuration row.
 
@@ -541,6 +549,10 @@ class _ConfigsMixin(_CoreClient):
             is_disabled: When True, the row is created in disabled state and
                 excluded from job runs until re-enabled.
             branch_id: Optional dev branch ID.
+            row_id: The id the new row gets. It must be unique in the
+                configuration: the Storage API answers 400
+                (``configurationRowAlreadyExists``) when a live row has it.
+                ``None`` lets the API generate one.
 
         Returns:
             Created row dict including the assigned 'id'.
@@ -553,6 +565,8 @@ class _ConfigsMixin(_CoreClient):
         }
         if is_disabled:
             data["isDisabled"] = "1"
+        if row_id is not None:
+            data["rowId"] = row_id
         resp = self._request(
             "POST",
             f"{prefix}/components/{quote(component_id)}/configs/{quote(config_id)}/rows",

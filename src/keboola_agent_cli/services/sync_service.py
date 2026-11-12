@@ -1618,6 +1618,7 @@ class SyncService(BaseService):
                             ds_branch_id=ds_branch_id,
                             known_secrets=known_secrets,
                             remap=remap,
+                            checkpoint=checkpoint,
                         )
                         if result:
                             manifest_dirty = True

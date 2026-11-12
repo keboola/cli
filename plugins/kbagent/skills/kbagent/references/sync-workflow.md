@@ -598,6 +598,12 @@ wins and a `DESCRIPTION_SHADOWED` warning names both paths.
   (the message ends with `Nothing was pushed.`), so running the same push
   again after the fix is safe. Before, the push stopped after earlier configs
   were created, and the retry created them again
+- **Push does not create a config or row twice after a lost answer**
+  *(since vNEXT)*: push chooses the id of each new config and row, records it
+  in the manifest (`pending_creates`) and sends it with the create. After a
+  network failure, run the same push again: it finds the object by the recorded
+  id and tracks it, or sends the create again with the same id. Before, the
+  retry created the config or row a second time. A data app is not covered
 - **Push records the API's own view of what it wrote (since 0.91.0, #686)**: the
   manifest baseline (`pull_config_hash`) comes from the API response (or a
   read-back), never from the files on disk. Before 0.91.0 the two producers
