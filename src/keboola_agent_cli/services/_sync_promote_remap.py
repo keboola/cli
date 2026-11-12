@@ -129,6 +129,9 @@ class PromoteRemap:
     row_reader: Callable[[str, str], set[str] | None] | None = None
     _dev_rows: dict[tuple[str, str], set[str] | None] = field(default_factory=dict)
     _target_mode: bool = False
+    # Target ids this push created: they exist, whatever a cached read says.
+    _created_configs: set[str] = field(default_factory=set)
+    _created_rows: set[str] = field(default_factory=set)
 
     def use_target(self, client: Any, branch_id: int | None) -> None:
         """Read the rows of identity parents from *client*'s target branch (D33)."""
@@ -195,23 +198,26 @@ class PromoteRemap:
                 self.gone_configs.add((change["component_id"], str(change["config_id"])))
 
     def _target_held(self, component: str, parent: str, row_ids: list[str], *, read: bool) -> bool:
-        """True unless a target this unit maps to is known deleted or absent (risk 84).
+        """True unless a target this unit maps to is known deleted or absent (risk 84, #928).
 
-        Both modes know the deletions the diff found. TARGET mode (recovery)
-        also reads the target's copy of a parent the unit maps to (*read*),
-        cached: a parent the target answers 404 for, or a copy lacking a
-        selected row, is not held. An unreadable copy proves no absence.
+        A saved mapping does not prove that its target exists. The deletions
+        the diff found are known. In both modes the target's copy of a parent
+        the unit maps to (*read*) is also read, cached: a parent the target
+        answers 404 for, or a copy that lacks a selected row, is not held. A
+        row deleted on the target whose local folder is gone too is in no
+        change of the diff, so only this read finds it. A config or row this
+        push created exists. An unreadable copy proves no absence.
         """
         if (component, parent) in self.gone_configs or any(
             (parent, r) in self.gone_rows for r in row_ids
         ):
             return False
-        if not (self._target_mode and read):
+        if not read or parent in self._created_configs:
             return True
         existing = self._existing_rows(component, parent)
         if (component, parent) in self.gone_configs:
             return False
-        return existing is None or all(r in existing for r in row_ids)
+        return existing is None or all(r in existing or r in self._created_rows for r in row_ids)
 
     def pending_refs(self, component_id: str, original: dict[str, Any]) -> list[list[str]]:
         """The references of *original*'s units SOURCE mode cannot rewrite yet (D30, D31, D34)."""
@@ -239,7 +245,8 @@ class PromoteRemap:
         so a selection edited on the branch counts as it is now. An identity
         parent's unit (TARGET mode, D33/D34) stays open while any selected row
         is not on the target's copy, or that copy's rows cannot be read --
-        also a row that was never stored (risk 70).
+        also a row that was never stored (risk 70). It also stays open while
+        the target does not have the parent, with or without selected rows.
         """
         marked = {tuple(str(part) for part in ref) for ref in stored if isinstance(ref, list)}
         targets = self._targets()
@@ -252,9 +259,13 @@ class PromoteRemap:
             open_unit = (parent != config_id) or (
                 key not in self.configs and (key in self.expected or key in marked)
             )
-            if self._identity(key) and row_ids:
+            if self._identity(key):
+                # The read also finds a parent deleted on the target (#928): its
+                # unit stays open with or without selected rows.
                 existing = self._existing_rows(*key)
-                open_unit = existing is None or any(r not in existing for r in row_ids)
+                open_unit = key in self.gone_configs or (
+                    bool(row_ids) and (existing is None or any(r not in existing for r in row_ids))
+                )
             else:
                 open_unit = open_unit or any(
                     (parent, r) in self.rows
@@ -359,6 +370,8 @@ class PromoteRemap:
         configs.update(created_configs)
         rows.update(created_rows)
         self.configs, self.rows = configs, rows
+        self._created_configs = set(created_configs.values())
+        self._created_rows = set(created_rows.values())
 
     def apply(
         self, component_id: str, configuration: dict[str, Any], *, target: bool = False

@@ -286,6 +286,24 @@ git diff <base_branch>...HEAD -- docs/cli-manifest.json scripts/cli_spec_baselin
 - A breaking change (spec C1) that neither follows the deprecation window
   (C3) nor may ship at once (C4) → BLOCKING. The PR description names every
   breaking change, so that the release PR writes its `BREAKING:` bullet (C2).
+- Check the `## Interface changes` section of the PR description (spec C10,
+  `docs/cli-interface-spec.md#C10`):
+
+  ```bash
+  gh pr view <pr_number> --json body --jq .body > /tmp/pr_body.md
+  python3 scripts/check_pr_interface.py --base origin/main --body-file /tmp/pr_body.md
+  ```
+
+  Use the base branch of the PR in `--base`. A non-zero exit → BLOCKING. Cite
+  each `::error::` line. The CI workflow `pr-description.yml` runs the same
+  check.
+- Then verify each consistency claim of the section against the tree. For each
+  command or option that the section says it compared the change with, open
+  its entry in `docs/cli-manifest.json` and check the claim: the same long name
+  has the same meaning and shape (A1), the verb (N2), the `status` values (R6),
+  the error code (E8), `snake_case` keys (O5), the help states the default
+  (H7). A wrong or missing comparison → BLOCKING when the rule is a MUST rule,
+  NON-BLOCKING when it is a SHOULD rule.
 
 ---
 

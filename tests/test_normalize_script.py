@@ -289,6 +289,22 @@ class TestNormalizeBlocksCodesScript:
         assert len(out["parameters"]["blocks"][0]["codes"][0]["script"]) == 2
         assert norms[0]["action"] == "sql_split"
 
+    def test_bigquery_block_element_is_not_resplit(self) -> None:
+        """A script[] element holding a procedural block stays whole: no sql_resplit (#954)."""
+        block = (
+            "IF d > 1 THEN\n  CREATE TEMP TABLE t AS SELECT 1 AS x;\n  SELECT * FROM t;\nEND IF;"
+        )
+        cfg = {
+            "parameters": {
+                "blocks": [{"name": "B", "codes": [{"name": "c", "script": [block, "SELECT 2;"]}]}]
+            }
+        }
+        out, norms = normalize_blocks_codes_script(
+            "keboola.google-bigquery-transformation", copy.deepcopy(cfg)
+        )
+        assert out["parameters"]["blocks"][0]["codes"][0]["script"] == [block, "SELECT 2;"]
+        assert norms == []
+
     def test_duckdb_uses_sql_split(self) -> None:
         cfg = {
             "parameters": {

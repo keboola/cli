@@ -1394,6 +1394,7 @@ class SyncService(BaseService):
                 row_bases=row_base_hashes,
                 target_row_keys=scope.target_tracked_row_keys,
                 remote_rows=remote_rows,
+                remote_raw=remote_raw,
             ),
             DeleteTarget(
                 branch_id=branch_id,
@@ -1617,6 +1618,7 @@ class SyncService(BaseService):
                             ds_branch_id=ds_branch_id,
                             known_secrets=known_secrets,
                             remap=remap,
+                            checkpoint=checkpoint,
                         )
                         if result:
                             manifest_dirty = True

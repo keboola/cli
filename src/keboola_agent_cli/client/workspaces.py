@@ -116,6 +116,7 @@ class _WorkspacesMixin(_CoreClient):
         backend: str = "snowflake",
         login_type: str | None = None,
         public_key: str | None = None,
+        read_only: bool | None = None,
         max_wait: float | None = None,
     ) -> dict[str, Any]:
         """Create a workspace tied to a configuration through a ``workspaceCreate`` job.
@@ -133,6 +134,9 @@ class _WorkspacesMixin(_CoreClient):
             backend: Workspace backend.
             login_type: Optional Storage API loginType. Omitted when None.
             public_key: Optional public key for key-pair workspaces. Omitted when None.
+            read_only: ``readOnlyStorageAccess``. Omitted when None: Storage then
+                decides (BigQuery: on; Snowflake: on only with the project feature
+                ``input-mapping-read-only-storage``).
             max_wait: Seconds to poll the job. ``None`` means ``WORKSPACE_JOB_MAX_WAIT``.
 
         Returns:
@@ -151,6 +155,8 @@ class _WorkspacesMixin(_CoreClient):
             payload["loginType"] = login_type
         if public_key is not None:
             payload["publicKey"] = public_key
+        if read_only is not None:
+            payload["readOnlyStorageAccess"] = read_only
 
         response = self._request(
             "POST",

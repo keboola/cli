@@ -177,7 +177,12 @@ def resolve_transformation_links(
             result.targets,
             referenced=referenced,
             fresh_rows=set(created_row_id_map.values()),
-            pinned=set().union(*(_fallback_targets(e) for e in entries.values())),
+            pinned=set().union(
+                *(
+                    _fallback_targets(entries[config_id], remotes[config_id])
+                    for config_id in entries
+                )
+            ),
         )
     )
     for created in configs:
@@ -193,10 +198,21 @@ def resolve_transformation_links(
     return result
 
 
-def _fallback_targets(entry: ManifestConfiguration | None) -> set[tuple[str, str]]:
-    """``(component_id, config id)`` of every config a transformation's ``fallback_links`` chose."""
+def _fallback_targets(
+    entry: ManifestConfiguration | None, remote: dict[str, Any] | None
+) -> set[tuple[str, str]]:
+    """``(component_id, config id)`` of the ``fallback_links`` choices *remote* still needs.
+
+    A choice is needed only while the remote configuration still names the id
+    the choice was recorded for. After a repair in the UI the remote names
+    another config, and the old choice is not read: a choice that was deleted
+    since must not report an error for a link that no longer exists (#932).
+    """
     links = (entry.metadata.get(FALLBACK_LINKS_KEY) if entry is not None else None) or {}
-    return {(str(k).split("/", 1)[0], str(t)) for k, t in links.items() if "/" in str(k)}
+    if not links or remote is None:
+        return set()
+    named = f"{VARIABLES_COMPONENT_ID}/{remote['configuration'].get('variables_id')}"
+    return {(VARIABLES_COMPONENT_ID, str(target)) for key, target in links.items() if key == named}
 
 
 def _with_fallbacks(maps: LinkMaps, entry: ManifestConfiguration | None) -> LinkMaps:

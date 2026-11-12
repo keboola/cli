@@ -226,7 +226,8 @@ These lists keep `error`, because their entries are not failed items with an err
   `_keboola.row_id` in its file, as a pull writes it (not on `--branch` from `main/`), so a
   later `sync pull` finds it by id instead of writing a second copy. A create whose response was lost (the
   server created it, kbagent never saw the id) can still be created twice; check the
-  remote before re-running after a network failure.
+  remote before re-running after a network failure. (Not since vNEXT: see "`sync push`
+  does not create a config or row twice after a lost answer".)
 - **Rows under a folder adopted by its config id** (no manifest entry, the file carries an
   existing config id) are compared by row id. A row that differs from the remote, or a
   remote row with no file, is a `conflict` -- never an update or a delete, because nothing
@@ -301,7 +302,10 @@ These lists keep `error`, because their entries are not failed items with an err
   the row finishes the link -- unless the chosen config is gone or cannot be read by
   then (also after a `sync pull` dropped that config's entry): nothing is written, the
   link stays pending and the record is kept. An ambiguous
-  row id is never resolved through that fallback either.
+  row id is never resolved through that fallback either. A recorded choice is read only
+  while the transformation on the remote still names the id it was recorded for
+  *(since vNEXT)*: after the link was repaired in the UI, a choice whose config was deleted since
+  no longer gives a `LINK_UNRESOLVED` error (exit 1) for a link that no longer exists.
 - **A transformation created in the same push as its variables values row or shared-code
   row** keeps `link_pending` the same way while that row is missing: the push that creates
   the row also sets `variables_values_id` / `shared_code_row_ids` and the `{{<row id>}}`
@@ -382,10 +386,22 @@ These lists keep `error`, because their entries are not failed items with an err
   remote deleted the row itself -- then it is kept, reported `skipped`, and `sync diff`
   lists it `remote_deleted`, so push never creates it again. Delete the folder yourself (or
   run `sync pull --theirs`, except under an ignored component) to drop it.
+- **A config DELETE is conditional** *(since vNEXT)*. `sync push --force` sends the config
+  version it read as `If-Match`. The Storage API deletes the config only while it is still
+  at that version; an edit of the config or of one of its rows raises the version. An edit
+  made in the UI after push read the config gives an `errors[]` entry with `SYNC_CONFLICT`
+  (exit 1): the config stays, with the edit and with its manifest entry. Run
+  `kbagent sync pull`, review the files, delete them again and push. A `deleted` config
+  change of `sync diff` carries that version as `remote_version`. On 1.0.0 to the last
+  version before this one, kbagent sent the DELETE with no precondition, so such an edit
+  was deleted with the config: there, check `sync diff` right before `sync push --force`.
+  The text of those versions said that the Storage API has no conditional delete. That was
+  wrong.
 - **Limits, not fixed:** an edit that changes ONLY an encrypted value (`KBC::...`) is
   invisible to the comparison, so such a config is still `deleted`; and the Storage API has
-  no conditional delete, so a UI edit made between `sync diff` and the DELETE is not
-  protected. Check `sync diff` right before `sync push --force`.
+  no precondition for a ROW delete, so a UI edit of a row made between the read and the
+  DELETE of that row is not protected (a row deleted together with its config is). Check
+  `sync diff` right before a `sync push --force` that deletes single rows.
 - **On an older version**: run `kbagent sync pull` before every `sync push --force`, and
   `sync diff` after it; check the UI for rows added since the last pull; copy edited
   folders aside before adding their component to `ignoredComponents`.
@@ -439,6 +455,13 @@ These lists keep `error`, because their entries are not failed items with an err
   so its name, description, enabled state and any other change made there are kept. A
   config deleted there, or of a component you have since added to `ignoredComponents`,
   is dropped from the rewrite.
+- **A promote push reads the dev copy of every config it maps a reference to**
+  *(since vNEXT)*. A dev config or row that someone deleted on the dev branch is found also
+  when no change of the diff names it (its local folder is gone too): the reference stays
+  in its production form and pending. Before, such a reference was rewritten to the deleted
+  dev row id. A reference to a config that the dev branch held under the production id and
+  that was deleted there also stays pending when it selects no rows. Before, the pending
+  record was dropped. This costs at least one read per referenced dev config and push.
 - **A config created in `main/` and promoted** is no longer reported `removed` by the next
   production `sync pull`, which used to delete its folder. Pull keeps the folder and keeps
   the dev-branch record, and moves the record with the folder when production renames
@@ -484,7 +507,8 @@ These lists keep `error`, because their entries are not failed items with an err
   with `CONFIG_ERROR` (exit 5) naming the config it created; fix the cause before the
   next push. The manifest keeps an existing file's mode; a new one gets the mode a
   normal file write gives under your umask. A create whose response was lost (the
-  server created it, kbagent never saw the id) can still be created twice.
+  server created it, kbagent never saw the id) can still be created twice. (Not since
+  vNEXT: see "`sync push` does not create a config or row twice after a lost answer".)
 - **`sync pull` reads only the records of the branch it pulls.** After
   `sync pull --branch <dev>`, a plain `sync pull` no longer judges `main/` by the dev
   branch's baselines (a false "locally modified") and no longer reuses a folder name the
@@ -1733,6 +1757,17 @@ plain pull no longer re-creates it when the remote changed (diff/push already
 treated it as a change). To drop local edits, use `sync pull --theirs` or delete
 the whole config directory and pull.
 
+## A procedural SQL block stays one statement
+
+*(since vNEXT, #954)*
+
+kbagent splits SQL into one statement per `script[]` element in `config update` (the `sql_split` / `sql_resplit` normalizations), in `transformation create` / `edit` and in `sync push` (`transform.sql`). A procedural block now stays one element: `BEGIN ... END`, `IF ... THEN ... END IF`, `LOOP ... END LOOP`, `WHILE ... DO|LOOP ... END WHILE|LOOP`, `FOR ... DO|LOOP ... END FOR|LOOP`, `REPEAT ... UNTIL ... END REPEAT`, a `CASE ... END CASE` statement and the `BEGIN ... END` body of `CREATE ... PROCEDURE|FUNCTION|TRIGGER`. Before vNEXT every `;` inside the block was a boundary, and the fragments were invalid SQL. A BigQuery transformation failed at the next job run, also after a `config update` that changed only metadata (`--dry-run` showed an unrequested `parameters.blocks` change and a `sql_resplit` normalization).
+
+- A block counts only when its opener starts a statement and its closer comes later. `BEGIN TRANSACTION;`, `BEGIN;`, `BEGIN` with a transaction mode (`READ WRITE`, `ISOLATION LEVEL ...`, `IMMEDIATE`, ...), `CASE ... END` and `IF(...)` inside an expression are not blocks. T-SQL `IF` and `WHILE` without `THEN` / `DO` split as before.
+- A block that never closes splits on every `;`, as before, and so do the blocks after it.
+- In an existing `sync` tree, a config whose remote `script[]` element holds a whole block shows once as `remote_modified` in `sync diff`. The local and remote SQL are the same: only the stored baseline was computed with the old splitting. Run `sync pull` once to refresh the baseline. A config that an older kbagent pushed as fragments shows as a local change, and the next `sync push` writes the whole block back. A `sync pull` of such a config instead writes the fragments to `transform.sql` with `/* ===== STATEMENT ===== */` markers between them.
+- Snowflake Scripting `DECLARE ... BEGIN ... END` still splits the `DECLARE` section off. Wrap such a block in `EXECUTE IMMEDIATE $$ ... $$`.
+
 ## `sync push` no longer leaves phantom `REMOTE MODIFIED` drift; `transform.sql` carries statement boundaries
 
 *(since 0.91.0, #686)*
@@ -2281,6 +2316,14 @@ local data-app development) is refused with `ACCESS_DENIED` when no policy rule 
 `keboola|<adminId>`, and also when the query is not one plain `SELECT` on Storage bucket tables (no writes,
 `FLATTEN`, `INFORMATION_SCHEMA`/`SHOW` or UDFs): Query Service sends the same text for both, so an administrator
 that a rule selects can still get it. `--qs-compatible` leaves governed workspaces out.
+
+## `workspace create --no-read-only` makes a workspace that cannot read all Storage
+
+*(since vNEXT)*
+
+`workspace create --no-read-only` sends `readOnlyStorageAccess: false`. The workspace reads only its own schema and what `workspace load` puts into it, for example tables loaded as views. Use this to give a SQL client access to a selected set of tables only. `--read-only` is the default and sends nothing, as before: the workspace gets the default of the project. On BigQuery that is read-only access to all project Storage. On Snowflake it is read-only access only when the project has the feature `input-mapping-read-only-storage`, otherwise no access to project Storage. The `read_only` key of the result is the value Storage stored, the same value that `workspace detail` shows. `--no-read-only` with `--ui` is `INVALID_ARGUMENT` (exit 2) and nothing is created, because the Queue job cannot request it. The REST route `POST /workspaces/{project}` takes `read_only: false` for the same effect as `--no-read-only`.
+
+Before vNEXT, kbagent never sent the flag. `--no-read-only` created a workspace with the default of the project, often read-only access to every bucket, and the result still said `read_only: false`. The result of `--read-only` and of a `--ui` create always said `read_only: true`. Check `workspace detail` for workspaces made that way.
 
 ## `workspace create --ui` cannot produce a UI-visible SQL workspace; a failed create no longer leaves a sandbox config behind
 
@@ -3053,6 +3096,35 @@ config, the retry fires, and the retry destroys it for good.
   client against the Storage API, disable transport-level retry for a config
   DELETE specifically; idempotency here is a property of the endpoint, not
   of the method.
+
+## `sync push` does not create a config or row twice after a lost answer
+
+*(since vNEXT)*
+
+- **Push chooses the id of a new config or row.** It sends the id with the create
+  (`configurationId`, `rowId`) and records it in `.keboola/manifest.json`
+  (`pending_creates`) before the request. Before, the Storage API chose the id, and a
+  create whose answer was lost (a read timeout, a killed process) was created again by the
+  next push.
+- **Run the same push again after a network failure.** The next push reads the recorded id
+  on the remote. When the config or row is there, push tracks it and sends no second
+  create. When it is not there, push sends the create again with the same id.
+- **A local edit made before the retry is pushed.** When the config or row is there
+  unchanged (version 1) and your local file changed after the failed push, push sends the
+  file as an update of that object.
+- **A config or row that changed on the remote before the retry is not tracked
+  automatically.** Push reports `SYNC_CONFLICT` for it (exit 1) and creates nothing. Run
+  `kbagent sync pull`: it fetches the remote object into its own folder. Move your changes
+  there and delete the old folder.
+- **A branch that `.keboola/manifest.json` does not list** (for example production in an
+  old or hand-written manifest) has no place for the records of its new configs. Push then
+  creates a new config there without an id, as before. New rows are always covered.
+- **When the manifest cannot be saved, push stops before the first create**
+  (`CONFIG_ERROR`, exit 5, "Nothing was created"). Before, it stopped after the first one.
+- **Not covered:** a data app (`keboola.data-apps`). The Data Science API creates its
+  config and chooses the id.
+- **On an older version:** after a failed push, check the remote for the new config or row
+  before you push again.
 
 ## Repeated `flow delete`, `job run --idempotency-key` and `merge-request merge` no longer do damage
 

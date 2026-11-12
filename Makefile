@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help install install-server sync test test-unit test-integration test-e2e test-e2e-local test-e2e-invite test-e2e-feature test-e2e-stream test-e2e-auth test-file test-cov lint lint-fix format format-check typecheck typecheck-warn audit skill-check skill-gen version-sync version-check version-gate-check vnext-check vnext-resolve gate-floor-report release-scope-check changelog changelog-check check-error-codes check-sentinel-guards loc-check loc-report loc-baseline command-sync-check cli-spec-rules cli-spec-check cli-spec-baseline cli-spec-report cli-manifest gen-command-reference endpoints-gen endpoints-check check clean hooks web-install web-dev-backend web-dev-frontend web-build web-clean
+.PHONY: help install install-server sync test test-unit test-integration test-e2e test-e2e-local test-e2e-invite test-e2e-feature test-e2e-stream test-e2e-auth test-file test-cov lint lint-fix format format-check typecheck typecheck-warn audit skill-check skill-gen version-sync version-check version-gate-check vnext-check vnext-resolve gate-floor-report release-scope-check changelog changelog-check check-error-codes check-sentinel-guards loc-check loc-report loc-baseline command-sync-check cli-spec-rules cli-spec-check cli-spec-baseline cli-spec-report cli-manifest pr-interface-check pr-interface-skeleton gen-command-reference endpoints-gen endpoints-check check clean hooks web-install web-dev-backend web-dev-frontend web-build web-clean
 
 help: ## Show this help message
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -136,6 +136,18 @@ cli-spec-report: ## Print the per-command spec inventory: category, --project sh
 
 cli-manifest: ## Regenerate docs/cli-manifest.json (commands, options, help texts) from the live Typer app
 	uv run --extra server python scripts/check_cli_spec.py --write-manifest
+
+# Spec rule C10: the `## Interface changes` section of a pull request description.
+# Not part of `check`: a local run has no pull request description. CI runs it in
+# .github/workflows/pr-description.yml.
+BASE ?= origin/main
+
+pr-interface-check: ## Check a PR description's Interface changes section (BODY=path, BASE=origin/main)
+	@test -n "$(BODY)" || { echo "usage: make pr-interface-check BODY=path/to/body.md [BASE=origin/main]"; exit 2; }
+	python3 scripts/check_pr_interface.py --base $(BASE) --body-file $(BODY)
+
+pr-interface-skeleton: ## Print an Interface changes section for the changes against BASE (default origin/main)
+	@python3 scripts/check_pr_interface.py --base $(BASE) --skeleton
 
 version-gate-check: ## Reject a (since vX.Y.Z) / X.Y.Z+ marker naming an unreleased version
 	uv run python scripts/check_version_gates.py
