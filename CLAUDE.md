@@ -30,6 +30,8 @@ make lint           # run ruff linter
 make format         # format code
 make check          # lint + format-check + changelog-check + test (CI-like)
 make hooks          # install pre-commit hook
+make pr-interface-skeleton            # print an `## Interface changes` section for this branch (spec C10)
+make pr-interface-check BODY=body.md  # check a PR description before `gh pr create`
 make clean          # remove caches and build artifacts
 ```
 
@@ -330,6 +332,13 @@ Full author checklist: see `CONTRIBUTING.md` > "Releasing a beta (pre-release) v
     agents to pass `--project` on every command anyway.
 
 21. **The CLI interface spec is binding.** Every change to the command-line interface or the `kbagent serve` REST API follows [`docs/cli-interface-spec.md`](docs/cli-interface-spec.md); `make cli-spec-check` enforces the rules that a machine can check.
+
+22. **Every PR that can change the interface has `## Interface changes` in its description** ([spec C10](docs/cli-interface-spec.md#C10)).
+    Start the section with `make pr-interface-skeleton`, which lists the commands, options, error codes, routes and environment variables that the branch changes.
+    For each item, say what changed, the spec rules, additive or breaking (C1, with `BREAKING` and C3 or C4), and the R1 class of a command that is not `read`.
+    The assessment names the existing commands and options that you compared the change with, and says that it matches them or why it differs.
+    Run `make pr-interface-check BODY=body.md` before `gh pr create`.
+    The workflow `.github/workflows/pr-description.yml` runs the same check on every PR and again after each edit of the description.
 
 ## Claude Code Plugin
 

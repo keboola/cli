@@ -1706,6 +1706,7 @@ CONTRACT_RULES: dict[str, str] = {
     "target.targets-reported": "tests/test_target_selection.py",
     "serve.targets-reported": "tests/test_server_response_meta.py",
     "output.multi-item-headline": "tests/test_cli_contract.py",
+    "pr.interface-section": "scripts/check_pr_interface.py (workflow pr-description.yml)",
 }
 DEFERRED_RULES: dict[str, str] = {
     "args.global-option-one-shape": "the GLOBAL_OPTIONS registry is not reviewed yet (A1)",

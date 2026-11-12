@@ -151,6 +151,7 @@ Every rule with its level, the version from which it applies, and how it is chec
 | [C7](#C7) | MUST | now | `tests/test_check_cli_spec.py` |
 | [C8](#C8) | MUST | now | review |
 | [C9](#C9) | MUST | 0.100.0 | updater contract tests |
+| [C10](#C10) | MUST | now | `pr.interface-section`, review |
 | [HO1](#HO1) | MUST | now | `output.no-direct-print` |
 | [HO2](#HO2) | MUST | now for new commands; 1.0.0 for existing ones | `output.multi-item-headline`, review |
 | [HO3](#HO3) | MUST | now | review |
@@ -798,6 +799,20 @@ The 0.x line, until T0, ships only bug, security and data-loss fixes (C4), the m
 **C9 · MUST · 0.100.0.** An installed client of major N moves to major N+1 by itself 28 days after the `published_at` of the GitHub release `vN+1.0.0`. The client reads the date from GitHub and never hardcodes it. New installs get the newest major at once. Tags keep the `v` prefix. Before 0.100.0, the updater installs any newer version.
 
 - Checked by: updater contract tests.
+
+<a id="C10"></a><a id="pr.interface-section"></a>
+**C10 · MUST · now.** Every pull request that can change the interface has a section `## Interface changes` in its description. A pull request can change the interface when it changes `src/keboola_agent_cli/` (not `_ui_dist/`), `docs/cli-manifest.json`, `docs/error-codes.md`, `docs/web-server-endpoints.md` or `scripts/cli_spec_baseline.json`. When nothing in the interface changes, the section says `None.`. The section has one bullet per changed item (a command, an option, a JSON key, an error code, a route, an environment variable). Each bullet names the item in backticks and says:
+
+- What changed.
+- The spec rules that the change touches.
+- If the change is additive or breaking (C1). A breaking change has the word `BREAKING` and names `C3` (deprecation window) or `C4` (ships at once), with the reason.
+- For a command that is not `read`, its repeatability class (R1): `converges`, `guarded` or `duplicates`.
+- How it fits the rest of the tree. The bullet names the existing commands, options, JSON keys or error codes that the change was compared with, and says that it matches them or why it differs. Compare these points: the same long name has the same meaning and shape (A1), the verb of a new command (N2), the `status` values of a mutating command (R6), the error code that the fix of the user selects (E8), `snake_case` JSON keys (O5), and a help text that states the default (H7).
+
+`make pr-interface-skeleton` prints a section for the items that the branch changes. `make pr-interface-check BODY=path` checks a description before `gh pr create`.
+
+- Why: the release PR writes its `BREAKING:` bullets (C2) from these sections, and the comparison keeps the 1.x tree uniform.
+- Checked by: `pr.interface-section` (`scripts/check_pr_interface.py`, workflow `.github/workflows/pr-description.yml`) for presence, coverage, `BREAKING` and R1. Review checks the assessment.
 
 ## 14. Human output
 
