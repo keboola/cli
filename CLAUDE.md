@@ -1102,6 +1102,10 @@ kbagent merge-request resolve --component-id C --config-id I (--take ours|theirs
 #   its hint-next respects it.
 
 kbagent workspace create [--project ALIAS] [--name NAME] [--backend TYPE] [--ui] [--read-only/--no-read-only] [--governed]
+# workspace create --no-read-only (#835): sent as readOnlyStorageAccess false. --read-only (the default) sends
+#   nothing: the project default applies (BigQuery read-only; Snowflake read-only only with
+#   input-mapping-read-only-storage). The result's read_only is the stored value, never the requested one.
+#   --no-read-only with --ui is INVALID_ARGUMENT, exit 2. Before, the flag was never sent. Version gate in gotchas.md.
 # workspace create --governed (AJDA-3460): requests loginType `governed` -- a Snowflake or BigQuery workspace with no login
 #   and no credentials (no private_key, empty password) that only Query Service reads, with the
 #   project's row- and column-level policies applied. Snowflake or BigQuery and headless only (`--governed` with `--ui`

@@ -120,8 +120,8 @@ def _classify_qs_compatibility(login_type: str, backend: str) -> bool:
     return login_type in QUERY_SERVICE_COMPATIBLE_LOGIN_TYPES
 
 
-def _governed_usage_error(message: str) -> KeboolaApiError:
-    """A `--governed` combination that cannot work: a usage error (exit 2), refused before anything is created."""
+def _create_usage_error(message: str) -> KeboolaApiError:
+    """A `workspace create` flag combination that cannot work: a usage error (exit 2), refused before anything is created."""
     return KeboolaApiError(
         message=message,
         status_code=0,
@@ -437,7 +437,11 @@ class WorkspaceService(BaseService):
             alias: Project alias.
             name: Human-readable name for the workspace.
             backend: Workspace backend. Auto-detected from project if None.
-            read_only: Whether the workspace has read-only storage access.
+            read_only: False asks Storage for a workspace without read-only access to
+                project Storage. True asks for nothing, so the workspace gets the project
+                default (BigQuery: read-only; Snowflake: read-only only with the project
+                feature ``input-mapping-read-only-storage``). The result reports what
+                Storage stored, not this value.
             ui_mode: If True, create via Queue job (visible in Keboola UI).
             governed: If True, create a governed workspace (Snowflake or BigQuery, headless only):
                 it has no login and no credentials, only Query Service reads it.
@@ -447,13 +451,18 @@ class WorkspaceService(BaseService):
             governed workspace).
 
         Raises:
-            KeboolaApiError: INVALID_ARGUMENT for ``governed`` with ``ui_mode`` or on a backend
-                other than Snowflake and BigQuery.
+            KeboolaApiError: INVALID_ARGUMENT for ``governed`` or ``read_only=False`` with
+                ``ui_mode``, or ``governed`` on a backend other than Snowflake and BigQuery.
         """
         if governed and ui_mode:
-            raise _governed_usage_error(
+            raise _create_usage_error(
                 "--governed cannot be combined with --ui: the Queue job path cannot "
                 "request a loginType."
+            )
+        if not read_only and ui_mode:
+            raise _create_usage_error(
+                "--no-read-only cannot be combined with --ui: the Queue job path cannot "
+                "request a workspace without read-only storage access. Leave out --ui."
             )
         projects = self.resolve_projects([alias])
         project = projects[alias]
@@ -465,7 +474,7 @@ class WorkspaceService(BaseService):
             effective_backend = backend or self._detect_backend(client)
             if governed and effective_backend.lower() not in GOVERNED_WORKSPACE_BACKENDS:
                 # Before the sandbox config exists, so nothing is left to roll back.
-                raise _governed_usage_error(
+                raise _create_usage_error(
                     "--governed is supported only on Snowflake and BigQuery; "
                     f"the backend is '{effective_backend}'."
                 )
@@ -597,6 +606,9 @@ class WorkspaceService(BaseService):
             backend=backend,
             login_type=login_type,
             public_key=key_pair.public_pem if key_pair else None,
+            # Only the opt-out is sent: an explicit true would be stored also where the
+            # project cannot grant read-only access (Snowflake without the feature).
+            read_only=None if read_only else False,
         )
 
         connection = ws_data.get("connection", {})
@@ -639,7 +651,8 @@ class WorkspaceService(BaseService):
             "schema": connection.get("schema", ""),
             "user": connection.get("user", ""),
             "password": secret.password,
-            "read_only": read_only,
+            # What Storage stored, not what was asked for (issue #835).
+            "read_only": bool(ws_data.get("readOnlyStorageAccess", False)),
             "ui_mode": False,
             "login_type": connection.get("loginType", ""),
             "governed": governed,
@@ -783,7 +796,7 @@ class WorkspaceService(BaseService):
             "schema": connection.get("schema", ""),
             "user": connection.get("user", ""),
             "password": password,
-            "read_only": True,
+            "read_only": bool(ws_data.get("readOnlyStorageAccess", False)),
             "ui_mode": True,
             "message": (
                 f"Workspace '{name}' ({workspace_id}) created in project '{alias}' (visible in UI). "

@@ -593,6 +593,35 @@ class TestConfigWorkspaces:
         assert json.loads(request.content) == {"backend": "bigquery"}
         client.close()
 
+    @pytest.mark.parametrize("read_only", [True, False])
+    def test_create_config_workspace_sends_read_only_when_set(
+        self, httpx_mock, read_only: bool
+    ) -> None:
+        """An explicit read_only goes out as readOnlyStorageAccess (#835); None leaves it to Storage."""
+        httpx_mock.add_response(
+            url=_CONFIG_WORKSPACES_URL,
+            json={"id": 7, "status": "success", "results": {"id": 42}},
+            status_code=202,
+        )
+
+        client = KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
+        )
+        client.create_config_workspace(
+            branch_id=123,
+            component_id="keboola.sandboxes",
+            config_id="cfg-1",
+            backend="snowflake",
+            read_only=read_only,
+        )
+
+        assert json.loads(httpx_mock.get_request().content) == {
+            "backend": "snowflake",
+            "readOnlyStorageAccess": read_only,
+        }
+        client.close()
+
     @staticmethod
     def _create(client: KeboolaClient, max_wait: float | None = None) -> dict[str, Any]:
         return client.create_config_workspace(
