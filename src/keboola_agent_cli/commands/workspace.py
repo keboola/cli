@@ -314,6 +314,15 @@ def workspace_detail(
                     f"{'[green]yes[/green]' if d.get('qs_compatible') else '[yellow]no (loginType not on the confirmed whitelist; query may still work, try `kbagent workspace query`)[/yellow]'}"
                 ),
                 c.print(f"[bold]Created:[/bold] {d.get('created', '')}"),
+                c.print(
+                    f"[bold]Created by token:[/bold] "
+                    f"{d.get('creator_token_description') or '[dim](unknown)[/dim]'}"
+                ),
+                c.print(
+                    f"[bold]Last activity:[/bold] "
+                    f"{d.get('last_activity_at') or '[dim](unknown)[/dim]'}"
+                ),
+                c.print(f"[bold]State:[/bold] {d.get('state') or '[dim](unknown)[/dim]'}"),
             ),
         )
     except KeboolaApiError as exc:

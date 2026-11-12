@@ -8308,6 +8308,8 @@ class TestE2EIssue304WorkspaceDiscoverability:
         assert isinstance(entry["login_type"], str)
         assert isinstance(entry["read_only"], bool)
         assert isinstance(entry["qs_compatible"], bool)
+        for key in ("creator_token_id", "creator_token_description", "last_activity_at", "state"):
+            assert key in entry, f"missing {key}: {entry.keys()}"
         assert entry["read_only"] is True, (
             "RO sandboxes created via `workspace create` MUST be read-only"
         )
@@ -8320,6 +8322,7 @@ class TestE2EIssue304WorkspaceDiscoverability:
         assert d.get("login_type") == entry["login_type"]
         assert d.get("read_only") is True
         assert d.get("qs_compatible") == entry["qs_compatible"]
+        assert d.get("creator_token_id") == entry["creator_token_id"]
 
         _step(4, "workspace list --qs-compatible -- filter is consistent with the entry's flag")
         qs_data = self._run_ok("workspace", "list", "--project", self.alias, "--qs-compatible")

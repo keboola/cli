@@ -2120,6 +2120,35 @@ record per member. Consequences an agent must internalize:
   `parent_code` resolving to some member `account_code`). That stays an
   app/sync-layer concern.
 
+## `workspace list` / `workspace detail` expose the creator token, last activity and retention dates
+
+*(since vNEXT)*
+
+The Storage workspace endpoints return who created a workspace and when it
+was last used; kbagent dropped those keys when it normalised the response.
+Both commands now pass them through, with no extra API call:
+
+| Key | Storage API field | Meaning |
+|---|---|---|
+| `creator_token_id`, `creator_token_description` | `creatorToken.id`, `.description` | Token that created the workspace. `id` is `0` when the creator is not backed by a token. |
+| `actor` | `actor` | Who created it (`type`, `id`, `name`, `adminId`), verbatim; `null` when no creator is recorded. |
+| `last_activity_at` | `lastActivityAt` | Last observed use (backend login or Storage job). |
+| `state` | `state` | `active` or `deactivated`. |
+| `warn_at`, `deactivate_at`, `delete_at` | `warnAt`, `deactivateAt`, `deleteAt` | Workspace retention dates. |
+
+- Every key is `null` when the stack does not return it (an older Connection).
+- `last_activity_at` can be a seeded floor for a workspace that was never
+  used, and `null` when unknown. It is not proof of a real login.
+- `deactivate_at` is `null` unless the owner was warned; `delete_at` is
+  `null` unless the workspace is deactivated.
+- A workspace without `component_id` / `config_id` was created by a direct
+  Storage API call; `creator_token_description` names the token that did it.
+- Human mode: `workspace list` adds `Token` and `Last activity` columns,
+  `workspace detail` adds `Created by token:`, `Last activity:`, `State:`.
+  The retention dates and `actor` are `--json` only.
+- On older versions these keys are absent; read them from
+  `GET /v2/storage/branch/{id}/workspaces`.
+
 ## `workspace list` / `workspace detail` now expose loginType + RO + qs_compatible (since v0.42.0, closes #304)
 
 Before v0.42.0 the Storage workspace endpoint already returned

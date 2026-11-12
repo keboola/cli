@@ -1138,6 +1138,10 @@ kbagent workspace create [--project ALIAS] [--name NAME] [--backend TYPE] [--ui]
 #   gate for this entry lives in gotchas.md (these `# ` lines parse as ATX headings).
 kbagent workspace list [--project NAME ... | --all-projects] [--orphaned] [--branch ID] [--qs-compatible]
 kbagent workspace detail [--project ALIAS] --workspace-id ID [--branch ID]
+# workspace list / detail: each workspace also carries creator_token_id, creator_token_description, actor,
+#   last_activity_at, state, warn_at, deactivate_at, delete_at -- passed through from the Storage API
+#   (services/_workspace_fields.py), null when the stack omits them. Human mode: Token / Last activity
+#   columns in list, three rows in detail. Version gate lives in gotchas.md.
 kbagent workspace delete [--project ALIAS] --workspace-id ID [--dry-run] [--yes]
 kbagent workspace password [--project ALIAS] --workspace-id ID
 kbagent workspace load [--project ALIAS] --workspace-id ID --table-id TABLE_ID [--table-id ...] [--preserve] [--load-type clone|copy|view] [--force] [--timeout SECONDS]
