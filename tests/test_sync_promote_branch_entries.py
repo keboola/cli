@@ -23,6 +23,7 @@ import yaml
 
 from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 from keboola_agent_cli.services import _sync_push_create
+from keboola_agent_cli.services import _sync_push_create as sync_push_create
 from keboola_agent_cli.services._sync_bindings import _refresh_binding_hashes
 from keboola_agent_cli.services._sync_models import CreatedConfig
 from keboola_agent_cli.services._sync_promote_remap import (
@@ -56,6 +57,7 @@ from test_sync_bookkeeping_differential import (
     PROD,
     TOKEN,
     VARIANTS,
+    Variant,
     World,
     _rows,
     _seeded,
@@ -1097,6 +1099,44 @@ def test_transformation_promoted_with_variables_and_shared_code_gets_both_dev_id
 # -- risk 29 / D25: a checkpoint that cannot be written stops the push ------
 
 
+def _manifest_save_fails_after(
+    monkeypatch: pytest.MonkeyPatch, successes: int, message: str = "manifest is read-only"
+) -> None:
+    """The manifest saves of a push work *successes* times, then fail."""
+    real = sync_push_create.save_manifest
+    calls: list[int] = []
+
+    def save(*args: Any, **kwargs: Any) -> None:
+        calls.append(1)
+        if len(calls) > successes:
+            raise PermissionError(message)
+        real(*args, **kwargs)
+
+    monkeypatch.setattr(sync_push_create, "save_manifest", save)
+
+
+def test_manifest_that_cannot_be_saved_stops_the_push_before_the_first_create(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#926: the id of a create is saved before its POST, so a failed save creates nothing."""
+    v = VARIANTS["extractor"]
+    w = World(tmp_path)
+    w.api.types[v.component_id] = v.component_type
+    w.init()
+    w.pull()
+    author_config(w.root / "main", v, "First")
+    author_config(w.root / "main", v, "Second")
+
+    _manifest_save_fails_after(monkeypatch, 0)
+    with pytest.raises(ManifestCheckpointError) as raised:
+        w.svc.push(alias="prod", project_root=w.root)
+    assert w.api.remote[PROD] == {}
+    assert "Nothing was created" in raised.value.message
+    monkeypatch.undo()
+    w.push()  # the retry
+    assert len(w.api.remote[PROD]) == 2
+
+
 def test_failed_checkpoint_stops_the_push_and_the_retry_creates_nothing_twice(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1108,17 +1148,315 @@ def test_failed_checkpoint_stops_the_push_and_the_retry_creates_nothing_twice(
     author_config(w.root / "main", v, "First")
     author_config(w.root / "main", v, "Second")
 
-    def save_fails(*_: Any, **__: Any) -> None:
-        raise PermissionError("manifest is read-only")
-
-    monkeypatch.setattr("keboola_agent_cli.services._sync_push_create.save_manifest", save_fails)
+    _manifest_save_fails_after(monkeypatch, 1)  # the id is recorded, the create is not
     with pytest.raises(ManifestCheckpointError) as raised:
         w.svc.push(alias="prod", project_root=w.root)
     ((_, created),) = w.api.remote[PROD]
     assert created in raised.value.message  # names the config it created
     monkeypatch.undo()
-    w.push()  # the retry
+    w.push()  # the retry finds the created config by its recorded id (#926)
     assert len(w.api.remote[PROD]) == 2
+    assert w.diff()["changes"] == []
+
+
+# -- #926: a create whose answer is lost is not created again ------------------
+
+
+def _lose_the_answer_once(
+    monkeypatch: pytest.MonkeyPatch, w: World, attribute: str, *, delivered: bool
+) -> None:
+    """The next call of the API's *attribute* times out, after (or without) doing its work."""
+    real = getattr(w.api, attribute)
+    calls: list[int] = []
+
+    def lossy(*args: Any, **kwargs: Any) -> Any:
+        calls.append(1)
+        if len(calls) > 1:
+            return real(*args, **kwargs)
+        if delivered:
+            real(*args, **kwargs)
+        raise KeboolaApiError("Read timed out", 0, ErrorCode.TIMEOUT)
+
+    monkeypatch.setattr(w.api, attribute, lossy)
+
+
+def _count_calls(monkeypatch: pytest.MonkeyPatch, w: World, attribute: str) -> list[int]:
+    """Record each later call of the API's *attribute* in the returned list."""
+    real = getattr(w.api, attribute)
+    calls: list[int] = []
+
+    def counted(*args: Any, **kwargs: Any) -> Any:
+        calls.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(w.api, attribute, counted)
+    return calls
+
+
+def _authored(tmp_path: Path, variant: str) -> World:
+    v = VARIANTS[variant]
+    w = World(tmp_path)
+    w.api.types[v.component_id] = v.component_type
+    w.init()
+    w.pull()
+    author_config(w.root / "main", v)
+    return w
+
+
+def _pending_creates(w: World) -> list[Any]:
+    manifest = load_manifest(w.root)
+    holders = [b.metadata for b in manifest.branches] + [
+        c.metadata for c in manifest.configurations
+    ]
+    return [h["pending_creates"] for h in holders if "pending_creates" in h]
+
+
+@pytest.mark.parametrize("delivered", [True, False], ids=["answer-lost", "request-lost"])
+@pytest.mark.parametrize("branch", [None, DEV], ids=["production", "promote"])
+def test_config_create_whose_answer_is_lost_is_not_created_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, delivered: bool, branch: int | None
+) -> None:
+    w = _authored(tmp_path, "extractor")
+    _lose_the_answer_once(monkeypatch, w, "_create", delivered=delivered)
+
+    first = w.svc.push(alias="prod", project_root=w.root, branch_override=branch)
+    (recorded,) = _pending_creates(w)
+    updates = _count_calls(monkeypatch, w, "_update")
+    w.push(branch=branch)  # the retry
+
+    assert [e["error_code"] for e in first["errors"]] == ["TIMEOUT"]
+    assert updates == []  # the local file is unchanged: nothing to update
+    ((_, created),) = w.api.remote[branch or PROD]  # one config, never two
+    assert list(recorded.values()) == [created]  # under the id recorded before the POST
+    assert _pending_creates(w) == []
+    assert w.diff(branch)["changes"] == []
+
+
+def test_row_create_whose_answer_is_lost_is_not_created_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    w = _authored(tmp_path, "rows")
+    _lose_the_answer_once(monkeypatch, w, "_create_row", delivered=True)
+
+    first = w.svc.push(alias="prod", project_root=w.root)
+    updates = _count_calls(monkeypatch, w, "_update_row")
+    w.push()  # the retry
+
+    assert [e["error_code"] for e in first["errors"]] == ["TIMEOUT"]
+    assert updates == []  # the local file is unchanged: nothing to update
+    (config,) = w.api.remote[PROD].values()
+    assert sorted(r["name"] for r in config["rows"]) == sorted(
+        r["name"] for r in VARIANTS["rows"].rows()
+    )
+    assert _pending_creates(w) == []
+    assert w.diff()["changes"] == []
+
+
+def test_config_created_by_a_lost_answer_and_changed_since_is_never_overwritten(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Someone edits the created config before the retry: no baseline is known for it."""
+    w = _authored(tmp_path, "extractor")
+    _lose_the_answer_once(monkeypatch, w, "_create", delivered=True)
+    w.svc.push(alias="prod", project_root=w.root)
+    ((key, config),) = w.api.remote[PROD].items()
+    config["description"] = "edited in the UI"
+    config["version"] = 2  # Storage raises the version on every write
+
+    second = w.svc.push(alias="prod", project_root=w.root)
+
+    (error,) = second["errors"]
+    assert error["error_code"] == "SYNC_CONFLICT"
+    assert key[1] in error["message"]
+    assert len(w.api.remote[PROD]) == 1  # no second config
+    assert w.api.remote[PROD][key]["description"] == "edited in the UI"
+    assert len(_pending_creates(w)) == 1  # the record stays
+
+
+def test_config_created_by_a_lost_answer_gets_the_local_edit_made_before_the_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Version 1: nobody changed the created config, so the edited local file wins."""
+    w = _authored(tmp_path, "extractor")
+    _lose_the_answer_once(monkeypatch, w, "_create", delivered=True)
+    w.svc.push(alias="prod", project_root=w.root)
+    v = VARIANTS["extractor"]
+    semantic_edit(w.root / "main" / v.component_type / v.component_id / "authored" / CONFIG_FILE)
+
+    w.push()  # the retry
+
+    ((_, config),) = w.api.remote[PROD].items()  # one config, never two
+    assert config["configuration"]["parameters"]["edit_marker"] == 1
+    assert _pending_creates(w) == []
+    assert w.diff()["changes"] == []
+
+
+def test_row_created_by_a_lost_answer_gets_the_local_edit_made_before_the_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    w = _authored(tmp_path, "rows")
+    _lose_the_answer_once(monkeypatch, w, "_create_row", delivered=True)
+    w.svc.push(alias="prod", project_root=w.root)
+    manifest = load_manifest(w.root)
+    (entry,) = manifest.configurations
+    ((row_path, row_id),) = entry.metadata["pending_creates"].items()
+    semantic_edit(w.root / "main" / entry.path / row_path / CONFIG_FILE)
+
+    w.push()  # the retry
+
+    (config,) = w.api.remote[PROD].values()
+    assert len(config["rows"]) == len(VARIANTS["rows"].rows())  # no second row
+    (row,) = [r for r in config["rows"] if r["id"] == row_id]
+    assert row["configuration"]["parameters"]["edit_marker"] == 1
+    assert _pending_creates(w) == []
+    assert w.diff()["changes"] == []
+
+
+def test_pending_create_of_a_removed_folder_is_forgotten(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    w = _authored(tmp_path, "extractor")
+    _lose_the_answer_once(monkeypatch, w, "_create", delivered=False)
+    w.svc.push(alias="prod", project_root=w.root)
+    assert len(_pending_creates(w)) == 1
+    v = VARIANTS["extractor"]
+    shutil.rmtree(w.root / "main" / v.component_type / v.component_id / "authored")
+    author_config(w.root / "main", v, "Other")
+
+    w.push()
+
+    assert _pending_creates(w) == []
+    assert [c["name"] for c in w.api.remote[PROD].values()] == ["Other"]
+
+
+def test_pending_create_of_a_config_a_pull_tracked_is_forgotten(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The answer arrived, the checkpoint after it failed, and a pull tracked the config."""
+    w = _authored(tmp_path, "extractor")
+    _manifest_save_fails_after(monkeypatch, 1)
+    with pytest.raises(ManifestCheckpointError):
+        w.svc.push(alias="prod", project_root=w.root)
+    monkeypatch.undo()
+    w.pull()
+    assert len(_pending_creates(w)) == 1
+    semantic_edit(w.config_dir(w.api.only(PROD)[1]) / CONFIG_FILE)  # a push that writes
+
+    w.push()
+
+    assert _pending_creates(w) == []
+    assert len(w.api.remote[PROD]) == 1
+
+
+def test_pending_create_of_a_removed_row_folder_is_forgotten(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    w = _authored(tmp_path, "rows")
+    _lose_the_answer_once(monkeypatch, w, "_create_row", delivered=False)
+    w.svc.push(alias="prod", project_root=w.root)
+    (entry,) = load_manifest(w.root).configurations
+    ((row_path, _),) = entry.metadata["pending_creates"].items()
+    shutil.rmtree(w.root / "main" / entry.path / row_path)
+    semantic_edit(w.root / "main" / entry.path / CONFIG_FILE)  # a push that writes
+
+    w.push()
+
+    assert _pending_creates(w) == []
+    (config,) = w.api.remote[PROD].values()
+    assert len(config["rows"]) == len(VARIANTS["rows"].rows()) - 1
+
+
+def test_pending_create_of_a_row_the_manifest_tracks_is_forgotten(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    w = _authored(tmp_path, "rows")
+    _lose_the_answer_once(monkeypatch, w, "_create_row", delivered=True)
+    w.svc.push(alias="prod", project_root=w.root)
+    manifest = load_manifest(w.root)
+    (entry,) = manifest.configurations
+    ((row_path, row_id),) = entry.metadata["pending_creates"].items()
+    entry.rows.append(ManifestConfigRow(id=row_id, path=row_path))
+    save_manifest(w.root, manifest)
+    semantic_edit(w.root / "main" / entry.path / CONFIG_FILE)  # a push that writes
+
+    w.svc.push(alias="prod", project_root=w.root)
+
+    assert _pending_creates(w) == []
+    (config,) = w.api.remote[PROD].values()
+    assert len(config["rows"]) == len(VARIANTS["rows"].rows())  # no second row
+
+
+def test_pending_create_whose_lookup_fails_sends_nothing_and_keeps_the_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only a 404 says the earlier POST created nothing; any other failure decides nothing."""
+    w = _authored(tmp_path, "extractor")
+    _lose_the_answer_once(monkeypatch, w, "_create", delivered=False)
+    w.svc.push(alias="prod", project_root=w.root)
+    (recorded,) = _pending_creates(w)
+
+    def lookup_fails(*_: Any, **__: Any) -> dict[str, Any]:
+        raise KeboolaApiError("Internal Server Error", status_code=500)
+
+    monkeypatch.setattr(w.api, "_detail", lookup_fails)
+    creates = _count_calls(monkeypatch, w, "_create")
+    second = w.svc.push(alias="prod", project_root=w.root)
+
+    assert len(second["errors"]) == 1
+    assert creates == []
+    assert w.api.remote[PROD] == {}
+    assert _pending_creates(w) == [recorded]
+
+
+def test_pending_create_whose_object_is_not_found_is_sent_again_with_the_same_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    w = _authored(tmp_path, "extractor")
+    _lose_the_answer_once(monkeypatch, w, "_create", delivered=False)
+    w.svc.push(alias="prod", project_root=w.root)
+    ((_, recorded_id),) = _pending_creates(w)[0].items()
+    sent: list[str | None] = []
+    real = w.api._create
+
+    def create(*args: Any, **kwargs: Any) -> Any:
+        sent.append(kwargs.get("configuration_id"))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(w.api, "_create", create)
+    w.push()
+
+    assert sent == [recorded_id]
+    assert list(w.api.remote[PROD]) == [(VARIANTS["extractor"].component_id, recorded_id)]
+
+
+def test_data_app_create_sends_no_id_and_records_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Data Science API chooses a data app's id, so its create is not covered (#926)."""
+    app = Variant("data-app", "keboola.data-apps", "other", lambda: {"parameters": {}})
+    w = World(tmp_path)
+    w.api.types[app.component_id] = app.component_type
+    w.init()
+    w.pull()
+    author_config(w.root / "main", app, "Dash")
+    real = w.api._create
+    ds = MagicMock()
+
+    def create_app(
+        *, type_: str, name: str, description: str, config: dict, branch_id: Any
+    ) -> dict:
+        created = real(app.component_id, name, config, branch_id=branch_id)
+        return {"id": "app-1", "configId": created["id"]}
+
+    ds.create_app.side_effect = create_app
+    w.svc._ds_client_factory = lambda url, token: ds
+    storage_creates = _count_calls(monkeypatch, w, "_create")
+    w.push()
+
+    assert ds.create_app.call_count == 1
+    assert storage_creates == []  # no Storage create, so no configurationId
+    assert len(w.api.remote[PROD]) == 1
+    assert _pending_creates(w) == []
 
 
 def test_manifest_save_is_atomic(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1367,7 +1705,7 @@ def test_secondary_writeback_failure_never_masks_the_checkpoint_error(
     def disk_full(*_: Any, **__: Any) -> None:
         raise PermissionError("no space left on device")
 
-    monkeypatch.setattr("keboola_agent_cli.services._sync_push_create.save_manifest", disk_full)
+    _manifest_save_fails_after(monkeypatch, 1, "no space left on device")
     monkeypatch.setattr(
         "keboola_agent_cli.services._sync_push_create.writeback_after_push", disk_full
     )
@@ -3007,10 +3345,7 @@ def test_failed_promote_checkpoint_names_the_dev_pull_that_recovers_it(
     w.pull()
     author_config(w.root / "main", v)
 
-    def save_fails(*_: Any, **__: Any) -> None:
-        raise PermissionError("manifest is read-only")
-
-    monkeypatch.setattr("keboola_agent_cli.services._sync_push_create.save_manifest", save_fails)
+    _manifest_save_fails_after(monkeypatch, 1)  # the id is recorded, the create is not
     with pytest.raises(ManifestCheckpointError) as raised:
         w.svc.push(alias="prod", project_root=w.root, branch_override=DEV)
     monkeypatch.undo()
@@ -3021,6 +3356,30 @@ def test_failed_promote_checkpoint_names_the_dev_pull_that_recovers_it(
     w.pull(branch=DEV)  # the recovery the message names
     w.push(branch=DEV)
     assert list(w.api.remote[DEV]) == [(v.component_id, dev_id)]  # no duplicate
+
+
+def test_failed_promote_checkpoint_is_recovered_by_the_next_push_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#926: without the pull, the next promote push finds the config by its recorded id."""
+    v = VARIANTS["extractor"]
+    w = World(tmp_path)
+    w.api.types[v.component_id] = v.component_type
+    w.init()
+    w.pull()
+    author_config(w.root / "main", v)
+
+    _manifest_save_fails_after(monkeypatch, 1)
+    with pytest.raises(ManifestCheckpointError):
+        w.svc.push(alias="prod", project_root=w.root, branch_override=DEV)
+    monkeypatch.undo()
+    dev_id = _dev_id_of(w, v.component_id)
+
+    w.push(branch=DEV)
+
+    assert list(w.api.remote[DEV]) == [(v.component_id, dev_id)]  # no duplicate
+    (entry,) = _entries(w, dev_id, DEV)
+    assert entry.metadata["promoted_from"]["tree"] == "main"
 
 
 # -- 4396491252: an untracked row dir carrying a row id is adopted -------------

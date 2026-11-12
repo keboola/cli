@@ -49,6 +49,12 @@ from ._sync_disabled import (
     record_disabled,
 )
 from ._sync_models import AUTHORED_ROW_KEY, CREATED_FROM_KEY, PROMOTED_ROW_KEY, CreateOutcome
+from ._sync_push_create import (
+    differs_from_local,
+    pending_config_creates,
+    plan_create,
+    settle_create,
+)
 from ._sync_workspace import SANDBOXES_COMPONENT_ID, warn_on_backend_size_change
 from ._sync_writeback import (
     link_promote_rows,
@@ -498,7 +504,7 @@ def push_row_change(
     allow_plaintext_fallback: bool = False,
     warnings: list[dict[str, Any]] | None = None,
     known_secrets: SecretCache | None = None,
-    checkpoint: Callable[[str], None] | None = None,
+    checkpoint: Callable[..., None] | None = None,
     remap: PromoteRemap | None = None,
     source_row_id: str = "",
 ) -> str | None:
@@ -632,7 +638,7 @@ def _push_create_row(
     known_secrets: SecretCache | None = None,
     source_row_id: str = "",
     created_from: str = "",
-    checkpoint: Callable[[str], None] | None = None,
+    checkpoint: Callable[..., None] | None = None,
     remap: PromoteRemap | None = None,
     link_rows_in: Manifest | None = None,
     source_tree: str = "",
@@ -667,15 +673,59 @@ def _push_create_row(
         known=known_secrets,
     )
 
-    result = client.create_config_row(
-        component_id=component_id,
-        config_id=parent_config_id,
-        name=name,
-        configuration=configuration,
-        description=description,
-        is_disabled=bool(local_data.get("is_disabled", False)),
-        branch_id=branch_id,
+    def read_row(row_id: str) -> dict[str, Any]:
+        return client.get_config_row(
+            component_id=component_id,
+            config_id=parent_config_id,
+            row_id=row_id,
+            branch_id=branch_id,
+        )
+
+    # The row id is chosen and recorded before the POST (#926): a create whose
+    # answer is lost is found by that id and tracked, never created again.
+    planned = (
+        plan_create(
+            parent.metadata,
+            row_path_str,
+            read=read_row,
+            checkpoint=checkpoint,
+            what=f"Row {component_id}/{parent_config_id}/{row_path_str}",
+        )
+        if checkpoint is not None
+        else None
     )
+    is_disabled = bool(local_data.get("is_disabled", False))
+    if planned is not None and planned.existing is not None:
+        result = planned.existing
+        if differs_from_local(
+            result,
+            name=name,
+            description=description,
+            configuration=configuration,
+            is_disabled=is_disabled,
+        ):  # nobody changed it since the lost POST: the local edit wins
+            result = client.update_config_row(
+                component_id=component_id,
+                config_id=parent_config_id,
+                row_id=planned.object_id,
+                name=name,
+                configuration=configuration,
+                description=description,
+                change_description="Updated via kbagent sync push",
+                is_disabled=is_disabled,
+                branch_id=branch_id,
+            )
+    else:
+        result = client.create_config_row(
+            component_id=component_id,
+            config_id=parent_config_id,
+            name=name,
+            configuration=configuration,
+            description=description,
+            is_disabled=is_disabled,
+            branch_id=branch_id,
+            row_id=planned.object_id if planned is not None else None,
+        )
     new_row_id = str(result.get("id", ""))
     logger.info("Created row %s/%s/%s", component_id, parent_config_id, new_row_id)
     row_entry = writeback_create_row_in_manifest(
@@ -689,6 +739,7 @@ def _push_create_row(
         row_entry.metadata[CREATED_FROM_KEY] = created_from
     if link_rows_in is not None:
         link_promote_rows(link_rows_in, tree=source_tree, source=parent)
+    settle_create(parent.metadata, row_path_str)  # the row entry records it now
     if checkpoint is not None:
         checkpoint(f"{component_id}/{parent_config_id}/rows/{new_row_id}")
 
@@ -849,8 +900,14 @@ def push_create(
     ds_client: Any = None,
     ds_branch_id: int | None = None,
     remap: PromoteRemap | None = None,
+    checkpoint: Callable[..., None] | None = None,
 ) -> CreateOutcome | None:
     """Create a new config from a local _config.yml file.
+
+    With *checkpoint* the config id is chosen and recorded before the POST
+    (#926, :func:`plan_create`): a config an earlier push created without
+    seeing the answer is found by that id and returned as created, with no
+    second POST. A data app is not covered: the Data Science API chooses its id.
 
     Returns what was created; the caller records it in the manifest BEFORE the
     local file is written back (D25). *remap* is given on the promote path
@@ -951,15 +1008,55 @@ def push_create(
             if isinstance(pristine_params, dict):
                 pristine_params["id"] = new_app_id
     else:
-        result = client.create_config(
-            component_id=component_id,
-            name=name,
-            configuration=configuration,
-            description=description,
-            branch_id=branch_id,
-            is_disabled=bool(local_data.get("is_disabled", False)),
-            folder=folder,
+
+        def read_config(config_id: str) -> dict[str, Any]:
+            return client.get_config_detail(
+                component_id=component_id, config_id=config_id, branch_id=branch_id
+            )
+
+        holder = pending_config_creates(manifest, branch_id) if checkpoint is not None else None
+        planned = (
+            plan_create(
+                holder,
+                f"{component_id}/{config_path_str}",
+                read=read_config,
+                checkpoint=checkpoint,
+                what=f"Config {component_id} at {config_path_str}",
+            )
+            if holder is not None and checkpoint is not None
+            else None
         )
+        is_disabled = bool(local_data.get("is_disabled", False))
+        if planned is not None and planned.existing is not None:
+            result = planned.existing
+            if differs_from_local(
+                result,
+                name=name,
+                description=description,
+                configuration=configuration,
+                is_disabled=is_disabled,
+            ):  # nobody changed it since the lost POST: the local edit wins
+                result = client.update_config(
+                    component_id=component_id,
+                    config_id=planned.object_id,
+                    name=name,
+                    configuration=configuration,
+                    description=description,
+                    change_description="Updated via kbagent sync push",
+                    is_disabled=is_disabled,
+                    branch_id=branch_id,
+                )
+        else:
+            result = client.create_config(
+                component_id=component_id,
+                name=name,
+                configuration=configuration,
+                description=description,
+                branch_id=branch_id,
+                is_disabled=is_disabled,
+                folder=folder,
+                configuration_id=planned.object_id if planned is not None else None,
+            )
     new_config_id = result.get("id", "")
     logger.info("Created config %s/%s (ID: %s)", component_id, name, new_config_id)
     if folder and "folder" not in result and warnings is not None:

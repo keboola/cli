@@ -226,7 +226,8 @@ These lists keep `error`, because their entries are not failed items with an err
   `_keboola.row_id` in its file, as a pull writes it (not on `--branch` from `main/`), so a
   later `sync pull` finds it by id instead of writing a second copy. A create whose response was lost (the
   server created it, kbagent never saw the id) can still be created twice; check the
-  remote before re-running after a network failure.
+  remote before re-running after a network failure. (Not since vNEXT: see "`sync push`
+  does not create a config or row twice after a lost answer".)
 - **Rows under a folder adopted by its config id** (no manifest entry, the file carries an
   existing config id) are compared by row id. A row that differs from the remote, or a
   remote row with no file, is a `conflict` -- never an update or a delete, because nothing
@@ -484,7 +485,8 @@ These lists keep `error`, because their entries are not failed items with an err
   with `CONFIG_ERROR` (exit 5) naming the config it created; fix the cause before the
   next push. The manifest keeps an existing file's mode; a new one gets the mode a
   normal file write gives under your umask. A create whose response was lost (the
-  server created it, kbagent never saw the id) can still be created twice.
+  server created it, kbagent never saw the id) can still be created twice. (Not since
+  vNEXT: see "`sync push` does not create a config or row twice after a lost answer".)
 - **`sync pull` reads only the records of the branch it pulls.** After
   `sync pull --branch <dev>`, a plain `sync pull` no longer judges `main/` by the dev
   branch's baselines (a false "locally modified") and no longer reuses a folder name the
@@ -3024,6 +3026,35 @@ config, the retry fires, and the retry destroys it for good.
   client against the Storage API, disable transport-level retry for a config
   DELETE specifically; idempotency here is a property of the endpoint, not
   of the method.
+
+## `sync push` does not create a config or row twice after a lost answer
+
+*(since vNEXT)*
+
+- **Push chooses the id of a new config or row.** It sends the id with the create
+  (`configurationId`, `rowId`) and records it in `.keboola/manifest.json`
+  (`pending_creates`) before the request. Before, the Storage API chose the id, and a
+  create whose answer was lost (a read timeout, a killed process) was created again by the
+  next push.
+- **Run the same push again after a network failure.** The next push reads the recorded id
+  on the remote. When the config or row is there, push tracks it and sends no second
+  create. When it is not there, push sends the create again with the same id.
+- **A local edit made before the retry is pushed.** When the config or row is there
+  unchanged (version 1) and your local file changed after the failed push, push sends the
+  file as an update of that object.
+- **A config or row that changed on the remote before the retry is not tracked
+  automatically.** Push reports `SYNC_CONFLICT` for it (exit 1) and creates nothing. Run
+  `kbagent sync pull`: it fetches the remote object into its own folder. Move your changes
+  there and delete the old folder.
+- **A branch that `.keboola/manifest.json` does not list** (for example production in an
+  old or hand-written manifest) has no place for the records of its new configs. Push then
+  creates a new config there without an id, as before. New rows are always covered.
+- **When the manifest cannot be saved, push stops before the first create**
+  (`CONFIG_ERROR`, exit 5, "Nothing was created"). Before, it stopped after the first one.
+- **Not covered:** a data app (`keboola.data-apps`). The Data Science API creates its
+  config and chooses the id.
+- **On an older version:** after a failed push, check the remote for the new config or row
+  before you push again.
 
 ## Repeated `flow delete`, `job run --idempotency-key` and `merge-request merge` no longer do damage
 

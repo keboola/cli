@@ -189,6 +189,7 @@ class FakeApi:
         branch_id: int | None = None,
         is_disabled: bool = False,
         folder: str | None = None,
+        configuration_id: str | None = None,
     ) -> dict[str, Any]:
         config: dict[str, Any] = {
             "id": "cfg-new",
@@ -218,6 +219,7 @@ class FakeApi:
         description: str = "",
         is_disabled: bool = False,
         branch_id: int | None = None,
+        row_id: str | None = None,
     ) -> dict[str, Any]:
         parent = self._find(component_id, config_id)
         row: dict[str, Any] = {

@@ -237,9 +237,12 @@ class Api:
         description: str = "",
         branch_id: int | None = None,
         is_disabled: bool = False,
+        configuration_id: str | None = None,
         **_: Any,
     ) -> dict:
-        cid = f"cfg-{next(self._ids)}"
+        cid = configuration_id or f"cfg-{next(self._ids)}"
+        if (component_id, cid) in self.remote[self._b(branch_id)]:  # like Storage
+            raise KeboolaApiError(f"Configuration {cid} already exists", status_code=400)
         cfg = {
             "id": cid,
             "name": name,
@@ -247,6 +250,7 @@ class Api:
             "configuration": copy.deepcopy(configuration),
             "rows": [],
             "isDisabled": bool(is_disabled),
+            "version": 1,
         }
         self.remote[self._b(branch_id)][(component_id, cid)] = cfg
         return copy.deepcopy(cfg)
@@ -296,16 +300,21 @@ class Api:
         description: str = "",
         is_disabled: bool = False,
         branch_id: int | None = None,
+        row_id: str | None = None,
         **_: Any,
     ) -> dict:
+        rows = self._rows_of(component_id, config_id, branch_id)
+        if row_id and any(r["id"] == row_id for r in rows):  # like Storage
+            raise KeboolaApiError(f"Row {row_id} already exists", status_code=400)
         row = {
-            "id": f"row-{next(self._ids)}",
+            "id": row_id or f"row-{next(self._ids)}",
             "name": name,
             "description": description or "",
             "configuration": copy.deepcopy(configuration or {}),
             "isDisabled": bool(is_disabled),
+            "version": 1,
         }
-        self._rows_of(component_id, config_id, branch_id).append(row)
+        rows.append(row)
         return copy.deepcopy(row)
 
     def _find_row(
@@ -351,7 +360,10 @@ class Api:
         branch_id: int | None = None,
         **_: Any,
     ) -> dict:
-        return copy.deepcopy(self._find_row(component_id, config_id, row_id, branch_id))
+        rows = [r for r in self._rows_of(component_id, config_id, branch_id) if r["id"] == row_id]
+        if not rows:  # Storage answers 404 for a row it does not have
+            raise KeboolaApiError(f"Row {row_id} not found", status_code=404)
+        return copy.deepcopy(rows[0])
 
 
 class World:

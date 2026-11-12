@@ -4521,6 +4521,40 @@ class TestConfigFolderWireFormat:
 
         assert "folder" not in self._form(httpx_mock.get_request())
 
+    def test_create_config_sends_the_chosen_configuration_id(self, httpx_mock) -> None:
+        """#926: push chooses the id of a new config and sends it as ``configurationId``."""
+        httpx_mock.add_response(method="POST", url=self.CONFIGS, json={"id": "01abc"})
+        client = KeboolaClient(stack_url=self.STACK, token=self.TOKEN)
+        client.create_config("keboola.ex-db", name="A", configuration={}, configuration_id="01abc")
+        client.close()
+
+        assert self._form(httpx_mock.get_request())["configurationId"] == ["01abc"]
+
+    def test_create_config_without_configuration_id_sends_no_field(self, httpx_mock) -> None:
+        httpx_mock.add_response(method="POST", url=self.CONFIGS, json={"id": "1"})
+        client = KeboolaClient(stack_url=self.STACK, token=self.TOKEN)
+        client.create_config("keboola.ex-db", name="A", configuration={})
+        client.close()
+
+        assert "configurationId" not in self._form(httpx_mock.get_request())
+
+    def test_create_config_row_sends_the_chosen_row_id(self, httpx_mock) -> None:
+        """#926: push chooses the id of a new row and sends it as ``rowId``."""
+        httpx_mock.add_response(method="POST", url=f"{self.CONFIGS}/42/rows", json={"id": "01r"})
+        client = KeboolaClient(stack_url=self.STACK, token=self.TOKEN)
+        client.create_config_row("keboola.ex-db", "42", name="R", configuration={}, row_id="01r")
+        client.close()
+
+        assert self._form(httpx_mock.get_request())["rowId"] == ["01r"]
+
+    def test_create_config_row_without_row_id_sends_no_field(self, httpx_mock) -> None:
+        httpx_mock.add_response(method="POST", url=f"{self.CONFIGS}/42/rows", json={"id": "7"})
+        client = KeboolaClient(stack_url=self.STACK, token=self.TOKEN)
+        client.create_config_row("keboola.ex-db", "42", name="R", configuration={})
+        client.close()
+
+        assert "rowId" not in self._form(httpx_mock.get_request())
+
     def test_update_config_sends_empty_folder_to_clear(self, httpx_mock) -> None:
         httpx_mock.add_response(
             method="PUT", url=f"{self.CONFIGS}/42", json={"id": "42", "folder": None}
