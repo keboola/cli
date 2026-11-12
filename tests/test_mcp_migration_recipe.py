@@ -9,6 +9,7 @@ than no recipe, and nothing was checking that the docs matched the CLI.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -33,7 +34,7 @@ def _options_of(*command: str) -> set[str]:
         # Duck-typed rather than isinstance(click.Group): Typer builds its own
         # Command/Group subclasses, so a click.Group check is False at runtime.
         subcommands = getattr(node, "commands", None)
-        assert isinstance(subcommands, dict), f"{name!r} is not under a command group"
+        assert isinstance(subcommands, Mapping), f"{name!r} is not under a command group"
         assert name in subcommands, f"no such command: {' '.join(command)}"
         node = subcommands[name]
     return {opt for param in node.params for opt in param.opts if opt.startswith("--")}

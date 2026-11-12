@@ -1,9 +1,9 @@
 """The root command class of the 1.x command tree (keboola/cli#791, CLI-44).
 
-:class:`RootGroup` is the class of the root command group. Typer builds it
-last, with every command already built, so its constructor walks the tree once
-and gives every group the class :class:`CommandGroup` and every command the
-class :class:`LeafCommand`. Together they hold these rules of
+:class:`RootGroup` is the class of the root command group. Its top-level
+commands are the table :data:`COMMANDS`; the first read of one imports its
+module (#801) and gives every group under it the class :class:`CommandGroup`
+and every command the class :class:`LeafCommand`. Together they hold these rules of
 ``docs/cli-interface-spec.md``:
 
 - O1: with ``--json``, stdout holds one JSON document for every exit code. A
@@ -32,10 +32,11 @@ from __future__ import annotations
 import contextlib
 import copy
 import functools
+import importlib
 import inspect
 import sys
 import traceback
-from collections import Counter
+from collections import Counter, UserDict
 from typing import Any
 
 import typer
@@ -43,7 +44,7 @@ from typer.core import TyperCommand, TyperGroup
 
 from . import telemetry
 from .commands._helpers import removed_argument, removed_form
-from .commands._project_ref import ProjectRefGroup, use_active_project
+from .commands._project_ref import ProjectRefGroup, add_project_ref_callbacks, use_active_project
 from .errors import ErrorCode
 from .output import OutputFormatter
 from .permissions import OPERATION_REGISTRY
@@ -261,12 +262,102 @@ def _report_repeated_options(command: LeafCommand, ctx: Any, args: list[str]) ->
         )
 
 
+_SETUP = "Setup & Info"
+_PROJ = "Project Management"
+_BROWSE = "Browse & Inspect"
+_FLOWS = "Flows"
+_DEV = "Development"
+
+# The top-level commands in the order of `kbagent --help`: name -> ("module:attribute"
+# in commands/, help panel, other options of `Typer.command` / `Typer.add_typer`).
+COMMANDS: dict[str, tuple[str, str, dict[str, Any]]] = {
+    "init": ("init:init_command", _SETUP, {}),
+    "doctor": ("doctor:doctor_command", _SETUP, {}),
+    "version": ("version:version_command", _SETUP, {}),
+    "update": ("version:update_command", _SETUP, {}),
+    "changelog": ("changelog:changelog_command", _SETUP, {}),
+    "context": ("context:context_command", _SETUP, {}),
+    "repl": ("repl:repl_command", _SETUP, {}),
+    "serve": ("serve:serve_command", _SETUP, {}),
+    "search": (
+        "search:search_command",
+        _BROWSE,
+        {
+            "help": "Search for items (tables, buckets, configs, flows, …) by name or content.",
+            "no_args_is_help": True,
+        },
+    ),
+    "permissions": ("permissions:permissions_app", _SETUP, {}),
+    "auth": ("auth:auth_app", _SETUP, {}),
+    "project": ("project:project_app", _PROJ, {}),
+    "org": ("org:org_app", _PROJ, {}),
+    "feature": ("feature:feature_app", _PROJ, {}),
+    "token": ("token:token_app", _PROJ, {}),
+    "billing": ("billing:billing_app", _PROJ, {}),
+    "component": ("component:component_app", _BROWSE, {}),
+    "config": ("config:config_app", _BROWSE, {}),
+    "data-app": ("data_app:data_app_app", _BROWSE, {}),
+    "job": ("job:job_app", _BROWSE, {}),
+    "storage": ("storage:storage_app", _BROWSE, {}),
+    "stream": ("stream:stream_app", _BROWSE, {}),
+    "sharing": ("sharing:sharing_app", _BROWSE, {}),
+    "lineage": ("lineage:lineage_app", _BROWSE, {}),
+    "kai": ("kai:kai_app", _BROWSE, {}),
+    "docs": ("docs:docs_app", _BROWSE, {}),
+    "transformation": ("transformation:transformation_app", _BROWSE, {}),
+    "flow": ("flow:flow_app", _FLOWS, {}),
+    "schedule": ("schedule:schedule_app", _FLOWS, {}),
+    "notification": ("notification:notification_app", _FLOWS, {}),
+    "branch": ("branch:branch_app", _DEV, {}),
+    "merge-request": ("merge_request:merge_request_app", _DEV, {}),
+    "mr": ("merge_request:merge_request_app", _DEV, {"hidden": True}),
+    "workspace": ("workspace:workspace_app", _DEV, {}),
+    "sync": ("sync:sync_app", _DEV, {}),
+    "encrypt": ("encrypt:encrypt_app", _DEV, {}),
+    "semantic-layer": ("semantic_layer:semantic_layer_app", _DEV, {}),
+    "sl": ("semantic_layer:semantic_layer_app", _DEV, {"hidden": True}),
+    "rls": ("rls:rls_app", _DEV, {}),
+    "cls": ("cls:cls_app", _DEV, {}),
+    "http": ("http_client:http_app", _DEV, {}),
+    "agent": ("agent:agent_app", _DEV, {}),
+    "dev-portal": ("dev_portal:dev_portal_app", _DEV, {}),
+}
+
+
+def _build_command(name: str) -> Any:
+    """Import the module of a top-level command and build the command as Typer does."""
+    target, panel, options = COMMANDS[name]
+    module, attribute = target.split(":")
+    value = getattr(importlib.import_module(f".commands.{module}", __package__), attribute)
+    parent = typer.Typer()
+    if isinstance(value, typer.Typer):
+        parent.add_typer(value, name=name, rich_help_panel=panel, **options)
+    else:
+        parent.command(name, rich_help_panel=panel, **options)(value)
+    group = typer.main.get_group(parent)
+    add_project_ref_callbacks(group)
+    # A hidden alias (`mr`, `sl`) gets the operation keys of the command it aliases.
+    mount = next(other for other, entry in COMMANDS.items() if entry[0] == target)
+    _apply(group.commands[name], (mount,))
+    return group.commands[name]
+
+
+class LazyCommands(UserDict[str, Any]):
+    """The top-level commands by name. The first read of a command imports its module."""
+
+    def __getitem__(self, key: str) -> Any:
+        if self.data[key] is None:
+            self.data[key] = _build_command(key)
+        return self.data[key]
+
+
 class RootGroup(ProjectRefGroup):
     """The root command group: one JSON document for every exit code, root flags anywhere."""
 
     def __init__(self, **attrs: Any) -> None:
         super().__init__(**attrs)
         apply_command_classes(self)
+        self.commands = LazyCommands({**dict.fromkeys(COMMANDS), **self.commands})
 
     def make_context(
         self, info_name: str | None, args: list[str], parent: Any = None, **extra: Any

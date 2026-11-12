@@ -66,7 +66,7 @@ src/keboola_agent_cli/
                         #   populate_by_name); the semver-stable shapes consumers type against (issue #428).
   py.typed              # PEP 561 marker -- ships in the wheel so downstream mypy/ty treat the SDK as typed.
   __main__.py           # python -m support
-  cli.py                # Typer root app, global options, subcommand wiring
+  cli.py                # Typer root app, global options; ctx.obj builds a service on first use
   constants.py          # Shared constants + dynamic APP_NAME resolution (retry params, timeouts, defaults)
   json_utils.py         # Deep-merge, set_nested_value, compute_diff utilities
   models.py             # Pydantic models shared across layers
@@ -77,6 +77,7 @@ src/keboola_agent_cli/
   output.py             # OutputFormatter: JSON vs Rich dual-mode output
   root_command.py       # RootGroup: one --json document per exit, root flags after the subcommand,
                         #   -h, the repeated-option check (#791 O1/O7/A6/H5)
+                        #   COMMANDS: the top-level commands; a module is imported on first use (#801)
   errors.py             # KeboolaApiError, ConfigError, ErrorCode enum, mask_token()
   config_store.py       # JSON persistence for config.json (0600 permissions)
   permissions.py        # PermissionEngine (--deny-writes / --deny-destructive session firewall)
