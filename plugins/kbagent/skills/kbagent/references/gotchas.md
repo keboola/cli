@@ -301,7 +301,10 @@ These lists keep `error`, because their entries are not failed items with an err
   the row finishes the link -- unless the chosen config is gone or cannot be read by
   then (also after a `sync pull` dropped that config's entry): nothing is written, the
   link stays pending and the record is kept. An ambiguous
-  row id is never resolved through that fallback either.
+  row id is never resolved through that fallback either. A recorded choice is read only
+  while the transformation on the remote still names the id it was recorded for
+  *(since vNEXT)*: after the link was repaired in the UI, a choice whose config was deleted since
+  no longer gives a `LINK_UNRESOLVED` error (exit 1) for a link that no longer exists.
 - **A transformation created in the same push as its variables values row or shared-code
   row** keeps `link_pending` the same way while that row is missing: the push that creates
   the row also sets `variables_values_id` / `shared_code_row_ids` and the `{{<row id>}}`
