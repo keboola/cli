@@ -1,6 +1,6 @@
 {
   "name": "kbagent",
-  "version": "1.2.1",
+  "version": "1.3.0",
   "description": "AI-friendly interface to Keboola Connection projects — explore configs, jobs, lineage, sync configs as files, manage dev branches, and debug SQL in workspaces",
   "author": {
     "name": "Keboola",

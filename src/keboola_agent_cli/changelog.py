@@ -28,6 +28,57 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "1.3.0": [
+        "BREAKING (#977): `sync push --force` does not delete a config that changed after the "
+        "diff read it. It sends the version that `sync diff` read with the DELETE. A config at "
+        "another version gets an `errors[]` entry with `SYNC_CONFLICT` (exit 1), and the config "
+        "and its manifest entry stay. Before, an edit made in the UI after the diff was deleted "
+        "with the config. Run `sync pull`, check the change, then push again. `sync diff --json` "
+        "adds `remote_version` to a deleted config. A row delete has no such check.",
+        "BREAKING (#979): `sync push` does not create a config or row twice after a lost answer. "
+        "Push generates the ID of a new config or row and records it in `.keboola/manifest.json` "
+        "(`pending_creates`) before the request. The next push reads each recorded ID: it sends "
+        "the create again when the object is missing, and tracks the object when it exists at "
+        "version 1. An object found at another version is a new refusal: `SYNC_CONFLICT` "
+        "(exit 1), nothing is created. Run `sync pull` to track it. A manifest that cannot be "
+        "saved stops push before the first create (`CONFIG_ERROR`, exit 5). Data apps are not "
+        "covered.",
+        "BREAKING (#980): `workspace create --no-read-only` now reaches Storage, and with `--ui` "
+        "it is refused. Before, kbagent did not send the option, so the workspace got the "
+        "default of the project. Now the workspace reads only its own schema and what "
+        "`workspace load` puts into it. `--no-read-only` with `--ui` is `INVALID_ARGUMENT` "
+        "(exit 2) before anything is created: leave out `--ui`. `read_only` in the result is "
+        "the value that Storage stored. `POST /workspaces/{project}` takes `read_only: false`.",
+        "New (#982): `workspace list` and `workspace detail` show which token created a "
+        "workspace and when it was last used. The JSON output adds `creator_token_id`, "
+        "`creator_token_description`, `actor`, `last_activity_at`, `state`, `warn_at`, "
+        "`deactivate_at` and `delete_at`, as the Storage API reports them. A key that the stack "
+        "does not return is `null`. The table of `workspace list` adds the columns `Token` and "
+        "`Last activity`. `GET /workspaces` of `kbagent serve` returns the same keys.",
+        "Fix (#981): kbagent keeps a procedural SQL block as one statement when it splits SQL. "
+        "Before, it cut at every `;` inside `BEGIN ... END`, `IF`, `LOOP`, `WHILE`, `FOR`, "
+        "`REPEAT`, `CASE` and procedure bodies, and a BigQuery transformation then failed at "
+        "the next job run. This applies to `config update`, `transformation create`, "
+        "`transformation edit` and `sync push`. In an existing `sync` tree, a config whose "
+        "remote script holds a whole block shows once as `remote_modified`, until the next "
+        "`sync pull`.",
+        "Fix (#965): `storage describe-column` no longer fails when every description is "
+        "already stored. The result has `status`: `updated` after a write, `unchanged` when "
+        "Storage changed nothing. The `columns:` entries of `storage describe-batch` carry the "
+        "same `status`. In human mode, an unchanged description prints `Success: No change: ...`.",
+        "Fix (#976): `sync push` no longer reports `LINK_UNRESOLVED` for a variables link that "
+        "was repaired in the UI. A fallback choice recorded in the manifest now applies only "
+        "while the remote transformation still names the variables ID it was recorded for.",
+        "Fix (#978): `sync push --branch` no longer writes a reference to a dev config or row "
+        "that was deleted. The reference stays in its source form in `rebind_pending`, and a "
+        "later push writes it when the copy exists. This costs at least one read per referenced "
+        "dev config.",
+        "Note (#983): a pull request that changes the interface must have an "
+        "`## Interface changes` section. CI checks it against the generated command manifest, "
+        "error codes and REST routes. No user-facing change.",
+        "Note (#888, #897, #904, #907, #908, #909, #952, #959): housekeeping with no user-facing "
+        "change. It updates build and test packages of the web UI.",
+    ],
     "1.2.1": [
         "Fix (#974): kbagent 1.x no longer crashes at startup with Typer 0.29 or later. Since "
         "9 November, a new install or a self-update from PyPI or GitHub could get Typer 0.29, "

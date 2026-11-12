@@ -226,7 +226,7 @@ These lists keep `error`, because their entries are not failed items with an err
   `_keboola.row_id` in its file, as a pull writes it (not on `--branch` from `main/`), so a
   later `sync pull` finds it by id instead of writing a second copy. A create whose response was lost (the
   server created it, kbagent never saw the id) can still be created twice; check the
-  remote before re-running after a network failure. (Not since vNEXT: see "`sync push`
+  remote before re-running after a network failure. (Not since 1.3.0: see "`sync push`
   does not create a config or row twice after a lost answer".)
 - **Rows under a folder adopted by its config id** (no manifest entry, the file carries an
   existing config id) are compared by row id. A row that differs from the remote, or a
@@ -304,7 +304,7 @@ These lists keep `error`, because their entries are not failed items with an err
   link stays pending and the record is kept. An ambiguous
   row id is never resolved through that fallback either. A recorded choice is read only
   while the transformation on the remote still names the id it was recorded for
-  *(since vNEXT)*: after the link was repaired in the UI, a choice whose config was deleted since
+  *(since 1.3.0)*: after the link was repaired in the UI, a choice whose config was deleted since
   no longer gives a `LINK_UNRESOLVED` error (exit 1) for a link that no longer exists.
 - **A transformation created in the same push as its variables values row or shared-code
   row** keeps `link_pending` the same way while that row is missing: the push that creates
@@ -386,7 +386,7 @@ These lists keep `error`, because their entries are not failed items with an err
   remote deleted the row itself -- then it is kept, reported `skipped`, and `sync diff`
   lists it `remote_deleted`, so push never creates it again. Delete the folder yourself (or
   run `sync pull --theirs`, except under an ignored component) to drop it.
-- **A config DELETE is conditional** *(since vNEXT)*. `sync push --force` sends the config
+- **A config DELETE is conditional** *(since 1.3.0)*. `sync push --force` sends the config
   version it read as `If-Match`. The Storage API deletes the config only while it is still
   at that version; an edit of the config or of one of its rows raises the version. An edit
   made in the UI after push read the config gives an `errors[]` entry with `SYNC_CONFLICT`
@@ -456,7 +456,7 @@ These lists keep `error`, because their entries are not failed items with an err
   config deleted there, or of a component you have since added to `ignoredComponents`,
   is dropped from the rewrite.
 - **A promote push reads the dev copy of every config it maps a reference to**
-  *(since vNEXT)*. A dev config or row that someone deleted on the dev branch is found also
+  *(since 1.3.0)*. A dev config or row that someone deleted on the dev branch is found also
   when no change of the diff names it (its local folder is gone too): the reference stays
   in its production form and pending. Before, such a reference was rewritten to the deleted
   dev row id. A reference to a config that the dev branch held under the production id and
@@ -508,7 +508,7 @@ These lists keep `error`, because their entries are not failed items with an err
   next push. The manifest keeps an existing file's mode; a new one gets the mode a
   normal file write gives under your umask. A create whose response was lost (the
   server created it, kbagent never saw the id) can still be created twice. (Not since
-  vNEXT: see "`sync push` does not create a config or row twice after a lost answer".)
+  1.3.0: see "`sync push` does not create a config or row twice after a lost answer".)
 - **`sync pull` reads only the records of the branch it pulls.** After
   `sync pull --branch <dev>`, a plain `sync pull` no longer judges `main/` by the dev
   branch's baselines (a false "locally modified") and no longer reuses a folder name the
@@ -1759,9 +1759,9 @@ the whole config directory and pull.
 
 ## A procedural SQL block stays one statement
 
-*(since vNEXT, #954)*
+*(since 1.3.0, #954)*
 
-kbagent splits SQL into one statement per `script[]` element in `config update` (the `sql_split` / `sql_resplit` normalizations), in `transformation create` / `edit` and in `sync push` (`transform.sql`). A procedural block now stays one element: `BEGIN ... END`, `IF ... THEN ... END IF`, `LOOP ... END LOOP`, `WHILE ... DO|LOOP ... END WHILE|LOOP`, `FOR ... DO|LOOP ... END FOR|LOOP`, `REPEAT ... UNTIL ... END REPEAT`, a `CASE ... END CASE` statement and the `BEGIN ... END` body of `CREATE ... PROCEDURE|FUNCTION|TRIGGER`. Before vNEXT every `;` inside the block was a boundary, and the fragments were invalid SQL. A BigQuery transformation failed at the next job run, also after a `config update` that changed only metadata (`--dry-run` showed an unrequested `parameters.blocks` change and a `sql_resplit` normalization).
+kbagent splits SQL into one statement per `script[]` element in `config update` (the `sql_split` / `sql_resplit` normalizations), in `transformation create` / `edit` and in `sync push` (`transform.sql`). A procedural block now stays one element: `BEGIN ... END`, `IF ... THEN ... END IF`, `LOOP ... END LOOP`, `WHILE ... DO|LOOP ... END WHILE|LOOP`, `FOR ... DO|LOOP ... END FOR|LOOP`, `REPEAT ... UNTIL ... END REPEAT`, a `CASE ... END CASE` statement and the `BEGIN ... END` body of `CREATE ... PROCEDURE|FUNCTION|TRIGGER`. Before 1.3.0 every `;` inside the block was a boundary, and the fragments were invalid SQL. A BigQuery transformation failed at the next job run, also after a `config update` that changed only metadata (`--dry-run` showed an unrequested `parameters.blocks` change and a `sql_resplit` normalization).
 
 - A block counts only when its opener starts a statement and its closer comes later. `BEGIN TRANSACTION;`, `BEGIN;`, `BEGIN` with a transaction mode (`READ WRITE`, `ISOLATION LEVEL ...`, `IMMEDIATE`, ...), `CASE ... END` and `IF(...)` inside an expression are not blocks. T-SQL `IF` and `WHILE` without `THEN` / `DO` split as before.
 - A block that never closes splits on every `;`, as before, and so do the blocks after it.
@@ -2122,7 +2122,7 @@ record per member. Consequences an agent must internalize:
 
 ## `workspace list` / `workspace detail` expose the creator token, last activity and retention dates
 
-*(since vNEXT)*
+*(since 1.3.0)*
 
 The Storage workspace endpoints return who created a workspace and when it
 was last used; kbagent dropped those keys when it normalised the response.
@@ -2319,11 +2319,11 @@ that a rule selects can still get it. `--qs-compatible` leaves governed workspac
 
 ## `workspace create --no-read-only` makes a workspace that cannot read all Storage
 
-*(since vNEXT)*
+*(since 1.3.0)*
 
 `workspace create --no-read-only` sends `readOnlyStorageAccess: false`. The workspace reads only its own schema and what `workspace load` puts into it, for example tables loaded as views. Use this to give a SQL client access to a selected set of tables only. `--read-only` is the default and sends nothing, as before: the workspace gets the default of the project. On BigQuery that is read-only access to all project Storage. On Snowflake it is read-only access only when the project has the feature `input-mapping-read-only-storage`, otherwise no access to project Storage. The `read_only` key of the result is the value Storage stored, the same value that `workspace detail` shows. `--no-read-only` with `--ui` is `INVALID_ARGUMENT` (exit 2) and nothing is created, because the Queue job cannot request it. The REST route `POST /workspaces/{project}` takes `read_only: false` for the same effect as `--no-read-only`.
 
-Before vNEXT, kbagent never sent the flag. `--no-read-only` created a workspace with the default of the project, often read-only access to every bucket, and the result still said `read_only: false`. The result of `--read-only` and of a `--ui` create always said `read_only: true`. Check `workspace detail` for workspaces made that way.
+Before 1.3.0, kbagent never sent the flag. `--no-read-only` created a workspace with the default of the project, often read-only access to every bucket, and the result still said `read_only: false`. The result of `--read-only` and of a `--ui` create always said `read_only: true`. Check `workspace detail` for workspaces made that way.
 
 ## `workspace create --ui` cannot produce a UI-visible SQL workspace; a failed create no longer leaves a sandbox config behind
 
@@ -3099,7 +3099,7 @@ config, the retry fires, and the retry destroys it for good.
 
 ## `sync push` does not create a config or row twice after a lost answer
 
-*(since vNEXT)*
+*(since 1.3.0)*
 
 - **Push chooses the id of a new config or row.** It sends the id with the create
   (`configurationId`, `rowId`) and records it in `.keboola/manifest.json`
@@ -4796,7 +4796,7 @@ write descriptive metadata onto storage objects. Three behaviors are easy to mis
   as a stale `KBC.description` row no longer appears; set it again with
   `describe-table`. On 0.99.x and older `describe-table` wrote the metadata row,
   which outranked later UI edits (DMD-2434).
-- **Repeating a column description succeeds** *(since vNEXT)*.
+- **Repeating a column description succeeds** *(since 1.3.0)*.
   `describe-column` and the `columns:` section of `describe-batch` report
   `status` the same way as `describe-table`: `"updated"` after a write,
   `"unchanged"` (with `result: null`; human output "Success: No change: ...")
@@ -4804,7 +4804,7 @@ write descriptive metadata onto storage objects. Three behaviors are easy to mis
   `storage.tables.definitionUpdateValidationFailed` and a re-read shows every
   requested text. Any other 400 is raised. When the same write deleted a
   legacy `KBC.column.*.description` key, the status is `"updated"`. From
-  0.88.0 up to vNEXT, sending a column description that was already stored
+  0.88.0 up to 1.3.0, sending a column description that was already stored
   failed with that HTTP 400.
 - **Column types of a typed table come from `definition`** *(since 1.2.0)*.
   `storage table-detail` `column_details[]` of a table with `isTyped: true`

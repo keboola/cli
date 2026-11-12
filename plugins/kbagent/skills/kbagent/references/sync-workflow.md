@@ -499,7 +499,7 @@ The rows are listed on the config change as `covered_rows` (`--dry-run`,
 When the config DELETE fails (a 403, a timeout), its rows are not deleted one
 by one and its manifest entry stays, so the next `push --force` retries it.
 
-The config DELETE is conditional *(since vNEXT)*: push sends the config version
+The config DELETE is conditional *(since 1.3.0)*: push sends the config version
 it read as `If-Match`, and the Storage API deletes the config only while it is
 still at that version. An edit of the config or of one of its rows raises the
 version. When someone edits the config in the UI after push read it, the
@@ -599,7 +599,7 @@ wins and a `DESCRIPTION_SHADOWED` warning names both paths.
   again after the fix is safe. Before, the push stopped after earlier configs
   were created, and the retry created them again
 - **Push does not create a config or row twice after a lost answer**
-  *(since vNEXT)*: push chooses the id of each new config and row, records it
+  *(since 1.3.0)*: push chooses the id of each new config and row, records it
   in the manifest (`pending_creates`) and sends it with the create. After a
   network failure, run the same push again: it finds the object by the recorded
   id and tracks it, or sends the create again with the same id. Before, the
