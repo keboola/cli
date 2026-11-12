@@ -37,7 +37,7 @@ Bucket descriptions are a metadata entry on the bucket; table and column
 descriptions are native fields on the table definition:
 
 - **Bucket description** -- `KBC.description` (provider=user) on bucket metadata
-- **Table description** *(since vNEXT)* -- `definition.description`, written
+- **Table description** *(since 1.2.0)* -- `definition.description`, written
   through the same `PUT .../tables/{table_id}/definition` call as column
   descriptions, with `isDescriptionSystemManaged: false`. No `KBC.description`
   metadata row is created. The result reports `status: "updated"` after a
@@ -48,7 +48,7 @@ descriptions are native fields on the table definition:
   text. Storage uses that code for other validation failures too, so a 400
   whose stored text differs is raised. The definition endpoint
   supports Snowflake and BigQuery only, so `describe-table` fails on tables of
-  other backends. Before vNEXT the table
+  other backends. Before 1.2.0 the table
   description was a `KBC.description` (provider=user) metadata row, which
   outranked later UI edits (DMD-2434).
 - **Column description** *(since v0.88.0)* -- written through
@@ -87,7 +87,7 @@ read fallback resurrecting the old value.
 ### Read precedence (`storage table-detail`)
 
 The table description is `definition.description`. `KBC.description` metadata
-and the top-level `description` are not read *(since vNEXT)*.
+and the top-level `description` are not read *(since 1.2.0)*.
 
 For each column, the description is resolved in this order:
 
@@ -95,12 +95,12 @@ For each column, the description is resolved in this order:
    table without a definition of its own reads the source table's)
 2. the legacy flat `KBC.column.{column}.description` table-metadata entry
 
-`columnMetadata` `KBC.description` is not read *(since vNEXT)*; a description
+`columnMetadata` `KBC.description` is not read *(since 1.2.0)*; a description
 that exists only there no longer appears.
 
 ### Column types (`storage table-detail`)
 
-*(since vNEXT)* For a typed table (`isTyped: true`) `column_details[]` takes
+*(since 1.2.0)* For a typed table (`isTyped: true`) `column_details[]` takes
 `type` (the basetype), `native_type`, `length`, `nullable` and `default` from
 `definition.columns[]` and never reads `KBC.datatype.*`; after a table swap the
 types therefore match `definition`. A non-typed table has no types in its
@@ -387,7 +387,7 @@ components) are filtered out on read-back -- only entries with
 ## Key behaviors
 
 - `describe-*` is **upsert** -- no append mode; re-running replaces the value.
-- Table descriptions *(since vNEXT)* and column descriptions *(since v0.88.0)*
+- Table descriptions *(since 1.2.0)* and column descriptions *(since v0.88.0)*
   go through the native `.../tables/{id}/definition` endpoint with
   `isDescriptionSystemManaged: false`, so the UI, the MCP server and the
   warehouse all see them. Legacy flat

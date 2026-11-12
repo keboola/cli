@@ -187,10 +187,9 @@ def _format_state_get(formatter: Any, result: dict) -> None:
 
 def _format_state_set(formatter: Any, result: dict) -> None:
     branch_info = f" (branch {result['branch_id']})" if result.get("branch_id") else ""
-    if not result.get("changed", True):
-        formatter.console.print(
-            f"[yellow]No change:[/yellow] state for {_format_state_target(result)} "
-            f"already matches{branch_info}."
+    if result.get("status") == "unchanged":
+        formatter.success(
+            f"No change: state for {_format_state_target(result)} already matches{branch_info}."
         )
         return
     formatter.success(f"Updated state for {_format_state_target(result)}{branch_info}")

@@ -247,7 +247,16 @@ class Files:
             return out.read_bytes()
 
     def delete(self, file_id: int) -> None:
-        """Delete a Storage File."""
+        """Delete a Storage File through a Storage job and wait for it.
+
+        Waits up to ``STORAGE_JOB_MAX_WAIT`` (60 s). A missing file is a 404 on
+        the request itself.
+
+        Raises:
+            KeboolaApiError: ``STORAGE_JOB_FAILED`` if the delete job fails, or
+                ``STORAGE_JOB_TIMEOUT`` (``details["job_id"]``) if it outlasts
+                the wait; the delete keeps running server-side.
+        """
         self._client.delete_file(file_id, branch_id=self._branch_id)
 
 

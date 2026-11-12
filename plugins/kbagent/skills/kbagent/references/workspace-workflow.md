@@ -109,7 +109,7 @@ kbagent --json workspace query \
 
 ## Governed workspace
 
-*(since vNEXT)*
+*(since 1.2.0)*
 
 A workspace with no credentials that only Query Service reads, with the project's row- and column-level policies:
 

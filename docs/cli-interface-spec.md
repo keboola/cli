@@ -119,6 +119,7 @@ Every rule with its level, the version from which it applies, and how it is chec
 | [R3](#R3) | MUST | now | review, unit tests |
 | [R4](#R4) | SHOULD | now | review |
 | [R5](#R5) | MUST | now | `tests/test_job_idempotency_store.py`, review, unit tests |
+| [R6](#R6) | MUST | now for new and changed commands | `tests/test_config_set_default_bucket.py`, `tests/test_config_state.py`, review, unit tests |
 | [L1](#L1) | note | – | – |
 | [L2](#L2) | MUST | now for new commands; existing lists after 1.0.0 | review |
 | [L3](#L3) | MUST | now for new commands; existing commands after 1.0.0 | review, unit tests |
@@ -150,6 +151,7 @@ Every rule with its level, the version from which it applies, and how it is chec
 | [C7](#C7) | MUST | now | `tests/test_check_cli_spec.py` |
 | [C8](#C8) | MUST | now | review |
 | [C9](#C9) | MUST | 0.100.0 | updater contract tests |
+| [C10](#C10) | MUST | now | `pr.interface-section`, review |
 | [HO1](#HO1) | MUST | now | `output.no-direct-print` |
 | [HO2](#HO2) | MUST | now for new commands; 1.0.0 for existing ones | `output.multi-item-headline`, review |
 | [HO3](#HO3) | MUST | now | review |
@@ -627,6 +629,12 @@ A flag that raises the class is in `FLAG_ESCALATIONS` and is checked where the f
 
 - Checked by: review and unit tests (`tests/test_job_idempotency_store.py`).
 
+<a id="R6"></a>
+**R6 · MUST · now for new and changed commands.** A mutating command that can finish without a change (class `converges`, R1) reports its outcome in `data.status`. When the command changed something, the value is a verb in the past tense (`updated`, `deleted`, `switched`, `merged`). When the command changed nothing, the value is `unchanged`, or `already_<state>` when the state has a name (`already_in_trash`, `already_merged`). The exit code is 0 in both cases. A `--dry-run` preview is not an outcome, and this rule does not cover it. An existing command gets `status` when a pull request changes it. These commands follow the rule: `config delete`, `flow delete`, `merge-request merge`, `data-app git-auth-set`, `config set-default-bucket` and `config state-set`. `config set-default-bucket` and `config state-set` also keep the older boolean key `changed` for compatibility. Existing outliers: `storage create-table --if-not-exists` (`action: "skipped"`) and the per-item `action` of `sync`.
+
+- Why: an agent that repeats a `converges` command (R1) reads one key to know if the repeat wrote something. Before this rule, the commands used `status`, `changed: false` or `action: "skipped"`.
+- Checked by: review and unit tests (`tests/test_config_set_default_bucket.py`, `tests/test_config_state.py`).
+
 ## 10. Lists
 
 <a id="L1"></a>
@@ -791,6 +799,20 @@ The 0.x line, until T0, ships only bug, security and data-loss fixes (C4), the m
 **C9 · MUST · 0.100.0.** An installed client of major N moves to major N+1 by itself 28 days after the `published_at` of the GitHub release `vN+1.0.0`. The client reads the date from GitHub and never hardcodes it. New installs get the newest major at once. Tags keep the `v` prefix. Before 0.100.0, the updater installs any newer version.
 
 - Checked by: updater contract tests.
+
+<a id="C10"></a><a id="pr.interface-section"></a>
+**C10 · MUST · now.** Every pull request that can change the interface has a section `## Interface changes` in its description. A pull request can change the interface when it changes `src/keboola_agent_cli/` (not `_ui_dist/`), `docs/cli-manifest.json`, `docs/error-codes.md`, `docs/web-server-endpoints.md` or `scripts/cli_spec_baseline.json`. When nothing in the interface changes, the section says `None.`. The section has one bullet per changed item (a command, an option, a JSON key, an error code, a route, an environment variable). Each bullet names the item in backticks and says:
+
+- What changed.
+- The spec rules that the change touches.
+- If the change is additive or breaking (C1). A breaking change has the word `BREAKING` and names `C3` (deprecation window) or `C4` (ships at once), with the reason.
+- For a command that is not `read`, its repeatability class (R1): `converges`, `guarded` or `duplicates`.
+- How it fits the rest of the tree. The bullet names the existing commands, options, JSON keys or error codes that the change was compared with, and says that it matches them or why it differs. Compare these points: the same long name has the same meaning and shape (A1), the verb of a new command (N2), the `status` values of a mutating command (R6), the error code that the fix of the user selects (E8), `snake_case` JSON keys (O5), and a help text that states the default (H7).
+
+`make pr-interface-skeleton` prints a section for the items that the branch changes. `make pr-interface-check BODY=path` checks a description before `gh pr create`.
+
+- Why: the release PR writes its `BREAKING:` bullets (C2) from these sections, and the comparison keeps the 1.x tree uniform.
+- Checked by: `pr.interface-section` (`scripts/check_pr_interface.py`, workflow `.github/workflows/pr-description.yml`) for presence, coverage, `BREAKING` and R1. Review checks the assessment.
 
 ## 14. Human output
 

@@ -2948,6 +2948,22 @@ def test_workspace_create_route_forwards_governed(
     )
 
 
+@pytest.mark.parametrize("read_only", [True, False])
+def test_workspace_create_route_forwards_read_only(tmp_path: Path, read_only: bool) -> None:
+    """POST /workspaces/{project} passes an explicit read_only to the service (#835)."""
+    ws_svc = MagicMock()
+    ws_svc.create_workspace.return_value = {"workspace_id": 7, "read_only": read_only}
+    app = _make_app_with_registry(tmp_path, _mock_registry(workspace=ws_svc))
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/workspaces/{PROJECT}", json={"name": "ws", "read_only": read_only}, headers=AUTH
+        )
+
+    assert res.status_code == 200, res.text
+    assert ws_svc.create_workspace.call_args.kwargs["read_only"] is read_only
+
+
 def test_workspace_load_route_defaults(tmp_path: Path) -> None:
     """POST .../load forwards the auto defaults and never passes a guard prompt.
 

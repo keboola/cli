@@ -227,6 +227,11 @@ TABLE_DATA_JOB_MAX_WAIT: float = 300.0  # 5 min default for data-moving table jo
 # perfectly healthy load routinely surfaced as a timeout. A zero-copy CLONE
 # finishes in seconds; a COPY of a multi-GB table can take minutes.
 WORKSPACE_LOAD_JOB_MAX_WAIT: float = 300.0  # 5 min default wait for workspace-load jobs
+# Workspace create/delete run as Storage jobs (workspaceCreate / workspaceDrop).
+# Both provision or drop a backend user + schema, which can outlast the 60s
+# metadata-job default under queue load; a create that times out locally keeps
+# running and leaves a workspace kbagent never reported.
+WORKSPACE_JOB_MAX_WAIT: float = 300.0  # 5 min default wait for workspace create/delete jobs
 # Above this on-disk size, a COPY (physical data movement, billed warehouse
 # time) needs an explicit confirmation or --force. CLONE is zero-copy and is
 # never guarded.

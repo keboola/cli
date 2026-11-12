@@ -156,6 +156,7 @@ class TestConfigServiceSetDefaultBucket:
         )
 
         assert result == {
+            "status": "unchanged",
             "changed": False,
             "project_alias": "prod",
             "component_id": "keboola.ex-db-snowflake",
@@ -255,6 +256,7 @@ class TestConfigServiceSetDefaultBucket:
             bucket="in.c-same",
         )
 
+        assert result["status"] == "unchanged"
         assert result["changed"] is False
         assert result["default_bucket"] == "in.c-same"
         client.update_config.assert_not_called()
@@ -434,6 +436,7 @@ class TestConfigSetDefaultBucketCli:
 
         assert result.exit_code == 0, result.output
         payload = json.loads(result.output)
+        assert payload["data"]["status"] == "updated"
         assert payload["data"]["default_bucket"] == "in.c-preferred"
         assert payload["data"]["project_alias"] == "prod"
 
@@ -460,6 +463,7 @@ class TestConfigSetDefaultBucketCli:
 
         assert result.exit_code == 0, result.output
         payload = json.loads(result.output)
+        assert payload["data"]["status"] == "updated"
         assert payload["data"]["default_bucket"] is None
 
     def test_dry_run_json_output(self, tmp_config_dir: Path) -> None:
@@ -487,8 +491,46 @@ class TestConfigSetDefaultBucketCli:
         assert result.exit_code == 0, result.output
         payload = json.loads(result.output)
         assert payload["data"]["dry_run"] is True
+        assert "status" not in payload["data"]
         assert any("default_bucket" in c for c in payload["data"]["changes"])
         mock_client.update_config.assert_not_called()
+
+    @pytest.mark.parametrize("json_mode", [True, False])
+    def test_same_value_reports_unchanged(self, tmp_config_dir: Path, json_mode: bool) -> None:
+        """A repeat with the current value writes nothing and exits 0 (spec R6)."""
+        store = setup_single_project(tmp_config_dir)
+        mock_client = MagicMock()
+        mock_client.get_config_detail.return_value = _detail_with("in.c-same")
+
+        with pytest.MonkeyPatch.context() as mp:
+            self._patch_service(mp, store, mock_client)
+            result = self._invoke(
+                tmp_config_dir,
+                [
+                    "--project",
+                    "prod",
+                    "--component-id",
+                    "keboola.ex-db-snowflake",
+                    "--config-id",
+                    "cfg-001",
+                    "--bucket",
+                    "in.c-same",
+                ],
+                json_mode=json_mode,
+            )
+
+        assert result.exit_code == 0, result.output
+        mock_client.update_config.assert_not_called()
+        if json_mode:
+            payload = json.loads(result.output)
+            assert payload["data"]["status"] == "unchanged"
+            assert payload["data"]["changed"] is False
+            assert "warnings" not in payload
+        else:
+            assert (
+                "No change: default_bucket on keboola.ex-db-snowflake/cfg-001 was already "
+                "'in.c-same'." in result.output
+            )
 
     def test_mutual_exclusion(self, tmp_config_dir: Path) -> None:
         result = self._invoke(

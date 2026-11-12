@@ -44,6 +44,7 @@ SAMPLE_TOKEN_VERIFY_BIGQUERY = TokenVerifyResponse(
 
 SAMPLE_WORKSPACE = {
     "id": 42,
+    "readOnlyStorageAccess": True,
     "connection": {
         "backend": "snowflake",
         "host": "account.snowflakecomputing.com",
@@ -155,6 +156,7 @@ class TestCreateWorkspace:
             backend="snowflake",
             login_type="snowflake-person-keypair",
             public_key=ANY,
+            read_only=None,
         )
         public_key = mock_client.create_config_workspace.call_args.kwargs["public_key"]
         assert public_key.startswith("-----BEGIN PUBLIC KEY-----")
@@ -176,6 +178,7 @@ class TestCreateWorkspace:
         mock_client.create_config_workspace.return_value = {
             "id": 77,
             "name": "gov-ws",
+            "readOnlyStorageAccess": read_only,
             "connection": {
                 "backend": backend.lower(),
                 "host": "account.snowflakecomputing.com",
@@ -199,6 +202,7 @@ class TestCreateWorkspace:
             backend=backend,
             login_type="governed",
             public_key=None,
+            read_only=None if read_only else False,
         )
         assert result["governed"] is True
         assert result["login_type"] == "governed"
@@ -282,6 +286,53 @@ class TestCreateWorkspace:
         mock_client.create_sandbox_config.assert_not_called()
         mock_client.create_config_workspace.assert_not_called()
 
+    @pytest.mark.parametrize(
+        ("requested", "stored"),
+        [(False, False), (False, True), (True, True), (True, False)],
+        ids=["no-read-only", "storage-overrides", "default-ro", "default-rw"],
+    )
+    def test_create_workspace_sends_read_only_and_reports_the_stored_value(
+        self, tmp_config_dir: Path, requested: bool, stored: bool
+    ) -> None:
+        """--no-read-only reaches Storage, --read-only sends nothing; the result says what Storage stored (#835)."""
+        mock_client = MagicMock()
+        mock_client.list_dev_branches.return_value = [{"id": 123, "isDefault": True}]
+        mock_client.create_sandbox_config.return_value = {"id": "cfg-123", "name": "ws"}
+        mock_client.create_config_workspace.return_value = {
+            **SAMPLE_WORKSPACE,
+            "readOnlyStorageAccess": stored,
+        }
+
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(config_store=store, client_factory=lambda url, token: mock_client)
+
+        result = svc.create_workspace(
+            alias="prod", name="ws", backend="snowflake", read_only=requested
+        )
+
+        sent = mock_client.create_config_workspace.call_args.kwargs["read_only"]
+        assert sent is (None if requested else False)
+        assert result["read_only"] is stored
+
+    def test_create_workspace_no_read_only_with_ui_refused_before_anything_is_created(
+        self, tmp_config_dir: Path
+    ) -> None:
+        """The Queue job cannot drop read-only access, so --no-read-only with --ui is a usage error."""
+        mock_client = MagicMock()
+        mock_client.list_dev_branches.return_value = [{"id": 123, "isDefault": True}]
+
+        store = setup_single_project(tmp_config_dir)
+        svc = WorkspaceService(config_store=store, client_factory=lambda url, token: mock_client)
+
+        with pytest.raises(KeboolaApiError, match="cannot be combined with --ui") as excinfo:
+            svc.create_workspace(
+                alias="prod", name="ws", backend="snowflake", read_only=False, ui_mode=True
+            )
+
+        assert excinfo.value.error_code == ErrorCode.INVALID_ARGUMENT
+        mock_client.create_sandbox_config.assert_not_called()
+        mock_client.create_job.assert_not_called()
+
     def test_create_workspace_unknown_project(self, tmp_config_dir: Path) -> None:
         """create_workspace raises ConfigError for an unknown alias."""
         store = setup_single_project(tmp_config_dir)
@@ -352,6 +403,7 @@ class TestCreateWorkspace:
             backend="snowflake",
             login_type="snowflake-person-keypair",
             public_key=ANY,
+            read_only=None,
         )
         public_key = mock_client.create_config_workspace.call_args.kwargs["public_key"]
         assert public_key.startswith("-----BEGIN PUBLIC KEY-----")
@@ -423,6 +475,7 @@ class TestAutoDetectBackend:
             backend="bigquery",
             login_type="default",
             public_key=None,
+            read_only=None,
         )
 
     def test_create_workspace_auto_detects_snowflake(self, tmp_config_dir: Path) -> None:
@@ -450,6 +503,7 @@ class TestAutoDetectBackend:
             backend="snowflake",
             login_type="snowflake-person-keypair",
             public_key=ANY,
+            read_only=None,
         )
         public_key = mock_client.create_config_workspace.call_args.kwargs["public_key"]
         assert public_key.startswith("-----BEGIN PUBLIC KEY-----")
@@ -486,6 +540,7 @@ class TestAutoDetectBackend:
             backend="bigquery",
             login_type="default",
             public_key=None,
+            read_only=None,
         )
 
     def test_explicit_backend_skips_auto_detect(self, tmp_config_dir: Path) -> None:
@@ -921,6 +976,123 @@ class TestDeleteWorkspace:
         mock_client.delete_config.assert_called_once_with(
             "keboola.sandboxes", "cfg-789", branch_id=200
         )
+
+
+def _drop_timeout() -> KeboolaApiError:
+    """The client's wait timeout on a ``workspaceDrop`` job."""
+    return KeboolaApiError(
+        message="Storage workspace drop job 77 did not finish within 300s.",
+        error_code=ErrorCode.STORAGE_JOB_TIMEOUT,
+        status_code=504,
+        retryable=False,
+        details={"job_id": 77},
+    )
+
+
+def _not_found(message: str) -> KeboolaApiError:
+    return KeboolaApiError(
+        message=message, error_code=ErrorCode.NOT_FOUND, status_code=404, retryable=False
+    )
+
+
+class TestDeleteWorkspaceDropTimeout:
+    """A drop job that outlasts the wait must not leave the sandbox config behind."""
+
+    @staticmethod
+    def _service(tmp_config_dir: Path, mock_client: MagicMock) -> WorkspaceService:
+        mock_client.list_dev_branches.return_value = [{"id": 123, "isDefault": True}]
+        mock_client.get_workspace.return_value = {
+            "component": "keboola.sandboxes",
+            "configurationId": "cfg-123",
+        }
+        mock_client.delete_workspace.side_effect = _drop_timeout()
+        return WorkspaceService(
+            config_store=setup_single_project(tmp_config_dir),
+            client_factory=lambda url, token: mock_client,
+        )
+
+    def test_timeout_trashes_config_and_reports_job(self, tmp_config_dir: Path) -> None:
+        """The config goes to the trash; the error names the job and is not retryable."""
+        mock_client = MagicMock()
+        mock_client.get_config_detail.return_value = {"id": "cfg-123", "isDeleted": False}
+        svc = self._service(tmp_config_dir, mock_client)
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            svc.delete_workspace(alias="prod", workspace_id=42)
+
+        exc = exc_info.value
+        assert exc.error_code == ErrorCode.STORAGE_JOB_TIMEOUT
+        assert exc.retryable is False
+        assert exc.details["job_id"] == 77
+        assert exc.details["workspace_id"] == 42
+        assert exc.details["branch_id"] == 123
+        assert exc.details["sandbox_config_id"] == "cfg-123"
+        assert exc.details["sandbox_config_trashed"] is True
+        assert "cleanup_command" not in exc.details
+        assert "kbagent storage job-detail --project prod --job-id 77 --wait" in exc.message
+        assert "workspace gc" in exc.message
+        mock_client.delete_config.assert_called_once_with(
+            "keboola.sandboxes", "cfg-123", branch_id=123
+        )
+
+    def test_timeout_with_failed_config_trash_names_cleanup(self, tmp_config_dir: Path) -> None:
+        """A config that could not be trashed is named with the command that removes it."""
+        mock_client = MagicMock()
+        mock_client.get_config_detail.return_value = {"id": "cfg-123"}
+        mock_client.delete_config.side_effect = KeboolaApiError(
+            message="Service unavailable",
+            error_code=ErrorCode.API_ERROR,
+            status_code=503,
+            retryable=True,
+        )
+        svc = self._service(tmp_config_dir, mock_client)
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            svc.delete_workspace(alias="prod", workspace_id=42)
+
+        exc = exc_info.value
+        assert exc.error_code == ErrorCode.STORAGE_JOB_TIMEOUT
+        assert exc.details["sandbox_config_trashed"] is False
+        command = (
+            "kbagent config delete --project prod --component-id keboola.sandboxes "
+            "--config-id cfg-123 --branch 123"
+        )
+        assert exc.details["cleanup_command"] == command
+        assert command in exc.message
+
+    def test_rerun_never_deletes_a_trashed_config_again(self, tmp_config_dir: Path) -> None:
+        """A re-run after the timeout finds the config in the trash and sends no DELETE.
+
+        A second DELETE on a trashed configuration purges it permanently.
+        """
+        mock_client = MagicMock()
+        mock_client.get_config_detail.side_effect = _not_found("Configuration not found")
+        mock_client.list_deleted_configs.return_value = [{"id": "cfg-123"}]
+        svc = self._service(tmp_config_dir, mock_client)
+        mock_client.delete_workspace.side_effect = None
+
+        svc.delete_workspace(alias="prod", workspace_id=42)
+
+        mock_client.delete_workspace.assert_called_once_with(42, branch_id=123)
+        mock_client.delete_config.assert_not_called()
+
+    def test_timeout_on_non_sandbox_workspace_has_no_config_keys(
+        self, tmp_config_dir: Path
+    ) -> None:
+        """A workspace without a sandbox config only gets the job hint."""
+        mock_client = MagicMock()
+        svc = self._service(tmp_config_dir, mock_client)
+        mock_client.get_workspace.return_value = {
+            "component": "keboola.snowflake-transformation",
+            "configurationId": "tr-1",
+        }
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            svc.delete_workspace(alias="prod", workspace_id=42)
+
+        assert exc_info.value.error_code == ErrorCode.STORAGE_JOB_TIMEOUT
+        assert "sandbox_config_id" not in exc_info.value.details
+        mock_client.delete_config.assert_not_called()
 
 
 class TestResetPassword:
@@ -2955,6 +3127,85 @@ def _api_error(status_code: int, error_code: ErrorCode, retryable: bool = False)
     )
 
 
+class TestCreatedWorkspacePassword:
+    """The workspaceCreate job may omit the secret; password logins get a reset."""
+
+    @staticmethod
+    def _password(
+        mock_client: MagicMock, ws_data: dict, backend: str, key_pair: bool = False
+    ) -> workspace_service_module.WorkspacePassword:
+        return workspace_service_module._created_workspace_password(
+            mock_client,
+            ws_data,
+            key_pair=MagicMock() if key_pair else None,
+            backend=backend,
+            branch_id=123,
+            alias="prod",
+        )
+
+    def test_password_in_job_result_is_used_as_is(self) -> None:
+        mock_client = MagicMock()
+
+        secret = self._password(mock_client, SAMPLE_WORKSPACE, backend="redshift")
+
+        assert secret.password == "s3cret!Passw0rd"
+        assert secret.warning is None
+        mock_client.reset_workspace_password.assert_not_called()
+
+    def test_missing_password_is_reset(self) -> None:
+        mock_client = MagicMock()
+        mock_client.reset_workspace_password.return_value = {"password": "fresh"}
+
+        secret = self._password(mock_client, SAMPLE_WORKSPACE_NO_PASSWORD, backend="redshift")
+
+        assert secret.password == "fresh"
+        assert secret.warning is None
+        mock_client.reset_workspace_password.assert_called_once_with(42, branch_id=123)
+
+    @pytest.mark.parametrize(
+        ("backend", "key_pair"),
+        [("snowflake", True), ("bigquery", False), ("BigQuery", False)],
+        ids=["key-pair", "bigquery", "bigquery-case"],
+    )
+    def test_no_reset_when_no_password_is_expected(self, backend: str, key_pair: bool) -> None:
+        mock_client = MagicMock()
+
+        secret = self._password(
+            mock_client, SAMPLE_WORKSPACE_NO_PASSWORD, backend=backend, key_pair=key_pair
+        )
+
+        assert secret.password == ""
+        assert secret.warning is None
+        mock_client.reset_workspace_password.assert_not_called()
+
+    def test_failed_reset_becomes_a_warning(self) -> None:
+        mock_client = MagicMock()
+        mock_client.reset_workspace_password.side_effect = _api_error(403, ErrorCode.ACCESS_DENIED)
+
+        secret = self._password(mock_client, SAMPLE_WORKSPACE_NO_PASSWORD, backend="redshift")
+
+        assert secret.password == ""
+        assert secret.warning is not None
+        assert "kbagent workspace password --project prod --workspace-id 42" in secret.warning
+
+    def test_create_workspace_surfaces_reset_password(self, tmp_config_dir: Path) -> None:
+        """End to end through the service: the reset password reaches the result."""
+        mock_client = MagicMock()
+        mock_client.list_dev_branches.return_value = [{"id": 123, "isDefault": True}]
+        mock_client.create_sandbox_config.return_value = {"id": "cfg-1", "name": "ws"}
+        mock_client.create_config_workspace.return_value = SAMPLE_WORKSPACE_NO_PASSWORD
+        mock_client.reset_workspace_password.return_value = {"password": "fresh"}
+        svc = WorkspaceService(
+            config_store=setup_single_project(tmp_config_dir),
+            client_factory=lambda url, token: mock_client,
+        )
+
+        result = svc.create_workspace(alias="prod", name="ws", backend="redshift")
+
+        assert result["password"] == "fresh"
+        assert "warnings" not in result
+
+
 class TestCreateWorkspaceOutcomeRule:
     """Which step-2 errors trash the sandbox config and which keep it (#755).
 
@@ -3056,6 +3307,59 @@ class TestCreateWorkspaceOutcomeRule:
         if not rolled_back:
             assert exc.details["sandbox_config_kept_reason"] == "outcome_unknown"
             assert "the outcome of job j1 is unknown" in exc.message
+
+    @pytest.mark.parametrize(
+        ("error", "rolled_back"),
+        [
+            pytest.param(
+                _api_error(500, ErrorCode.STORAGE_JOB_FAILED), True, id="job-failed-rolled-back"
+            ),
+            pytest.param(_api_error(504, ErrorCode.STORAGE_JOB_TIMEOUT), False, id="timeout-kept"),
+            pytest.param(_api_error(503, ErrorCode.API_ERROR), False, id="poll-5xx-kept"),
+        ],
+    )
+    def test_headless_error_after_storage_job_was_queued(
+        self, tmp_config_dir: Path, error: KeboolaApiError, rolled_back: bool
+    ) -> None:
+        """A failed workspaceCreate job is definite; a timed-out or unreadable one is not."""
+        error.details["job_id"] = 7
+        mock_client = self._client()
+        mock_client.create_config_workspace.side_effect = error
+
+        exc = self._create(tmp_config_dir, mock_client, ui_mode=False)
+
+        assert exc.details["sandbox_config_rolled_back"] is rolled_back
+        assert mock_client.delete_config.called is rolled_back
+        if not rolled_back:
+            assert "the outcome of job 7 is unknown" in exc.message
+
+    def test_headless_failed_poll_keeps_config_end_to_end(
+        self, tmp_config_dir: Path, httpx_mock, monkeypatch
+    ) -> None:
+        """Real client: a 404 on the job poll is unknown (job exists), not a refused POST."""
+        monkeypatch.setattr("keboola_agent_cli.client._core.time.sleep", lambda _s: None)
+        base = "https://connection.keboola.com/v2/storage"
+        httpx_mock.add_response(
+            url=f"{base}/branch/123/components/keboola.sandboxes/configs/cfg-1/workspaces?async=true",
+            method="POST",
+            json={"id": 7, "status": "waiting"},
+            status_code=202,
+        )
+        httpx_mock.add_response(
+            url=f"{base}/jobs/7", method="GET", json={"error": "nope"}, status_code=404
+        )
+        real_client = client_module.KeboolaClient(
+            stack_url="https://connection.keboola.com", token="901-x-y"
+        )
+        mock_client = self._client()
+        mock_client.create_config_workspace.side_effect = real_client.create_config_workspace
+
+        exc = self._create(tmp_config_dir, mock_client, ui_mode=False)
+        real_client.close()
+
+        assert exc.details["job_id"] == 7
+        assert exc.details["sandbox_config_rolled_back"] is False
+        mock_client.delete_config.assert_not_called()
 
     def test_transport_error_after_send_keeps_config(self, tmp_config_dir: Path) -> None:
         """A dropped connection mid-POST is not mapped by ``_request``; the config stays."""

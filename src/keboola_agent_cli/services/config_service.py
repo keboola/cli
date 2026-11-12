@@ -876,10 +876,10 @@ class ConfigService(BaseService):
                 active branch when None.
 
         Returns:
-            On a real write: the API response with ``project_alias`` and
-            ``branch_id`` annotations attached.
+            On a real write: the API response with ``project_alias``,
+            ``branch_id`` and ``status: "updated"`` attached.
             On a no-op (set with same value, clear when key absent):
-            ``{"changed": False, ...}`` -- no API write.
+            ``{"status": "unchanged", "changed": False, ...}`` -- no API write.
             On dry_run: ``{"dry_run": True, "changes": [...], ...}``
             mirroring :py:meth:`update_config`'s dry-run shape.
 
@@ -931,6 +931,7 @@ class ConfigService(BaseService):
             target = None if clear else bucket
             if existing == target:
                 return {
+                    "status": "unchanged",
                     "changed": False,
                     "project_alias": alias,
                     "component_id": component_id,
@@ -982,6 +983,7 @@ class ConfigService(BaseService):
         result["project_alias"] = alias
         result["branch_id"] = effective_branch_id
         result["default_bucket"] = target
+        result["status"] = "updated"
         return result
 
     @staticmethod
@@ -1108,9 +1110,10 @@ class ConfigService(BaseService):
 
         Returns:
             On a real write: ``{"project_alias", "component_id", "config_id",
-            "row_id", "branch_id", "state", "changed": True}``.
+            "row_id", "branch_id", "state", "status": "updated",
+            "changed": True}``.
             On a no-op (new state == current state): same shape with
-            ``"changed": False`` -- no API write.
+            ``"status": "unchanged"`` and ``"changed": False`` -- no API write.
             On dry_run: ``{"dry_run": True, "project_alias", "component_id",
             "config_id", "row_id", "branch_id", "changes", "old_state",
             "new_state"}`` mirroring ``set_default_bucket``'s dry-run shape.
@@ -1145,7 +1148,7 @@ class ConfigService(BaseService):
 
             # Semantic no-op: short-circuit before any write.
             if current_state == state:
-                return base | {"state": current_state, "changed": False}
+                return base | {"state": current_state, "status": "unchanged", "changed": False}
 
             if dry_run:
                 return base | {
@@ -1175,7 +1178,7 @@ class ConfigService(BaseService):
         # by the live E2E run against project 5946; mock-based tests could not
         # see it, since the mocks returned the assumed shape, not the real one.
         new_state = self._extract_state(result, None, component_id, config_id)
-        return base | {"state": new_state, "changed": True}
+        return base | {"state": new_state, "status": "updated", "changed": True}
 
     def delete_config(
         self,

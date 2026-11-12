@@ -39,6 +39,7 @@ import argparse
 import enum
 import re
 import sys
+import typing
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -64,12 +65,36 @@ def _short_help(cmd: click.Command, limit: int = 120) -> str:
     return cmd.get_short_help_str(limit=limit)
 
 
-def _metavar(param: click.Parameter, ctx: click.Context) -> str:
-    """make_metavar across Click lineages (newer requires ctx, older forbids it)."""
-    try:
-        return param.make_metavar(ctx)  # type: ignore[call-arg]
-    except TypeError:
-        return param.make_metavar()  # ty: ignore[missing-argument]
+def _argument_metavar(param: click.Parameter) -> str:
+    """``NAME``, ``[NAME]`` when optional, with ``...`` when it takes several values.
+
+    Built here because Typer 0.29 parameters have no ``make_metavar()``.
+    """
+    metavar = param.metavar or (param.name or "").upper()
+    if not param.required:
+        metavar = f"[{metavar}]"
+    if param.nargs != 1:
+        metavar += "..."
+    return metavar
+
+
+def _click_type(param: click.Parameter) -> click.ParamType:
+    """The Click type of ``param``.
+
+    Typer 0.29 parameters keep their type in ``type_descriptor`` and have no
+    ``param.type``, so the Click type is built from the descriptor. A plain
+    Click parameter (the unit tests build them) has ``param.type``.
+    """
+    desc = getattr(param, "type_descriptor", None)
+    if desc is None:
+        return param.type
+    if desc.is_choice:
+        return click.Choice([str(getattr(choice, "value", choice)) for choice in desc.choices])
+    if desc.is_path:
+        info = desc.parameter_info
+        return click.Path(file_okay=info.file_okay, dir_okay=info.dir_okay)
+    annotation = typing.get_args(desc.annotation)[0] if desc.is_list else desc.annotation
+    return click.types.convert_type(annotation)
 
 
 # Click's ``ParamType.name`` is a version-stable token; ``make_metavar()`` output
@@ -153,7 +178,7 @@ def _stable_option_metavar(param: click.Parameter) -> str:
     explicit = getattr(param, "metavar", None)
     if explicit:
         return f"<{_sanitize_token(explicit.lower())}>"
-    ptype = param.type
+    ptype = _click_type(param)
     token = _stable_type_token(ptype)
     # Click sets nargs == len(types) for a composite, which the token already
     # spells out -- only repeat for a scalar type consuming several values.
@@ -186,7 +211,7 @@ def _format_param(param: click.Parameter, ctx: click.Context) -> str | None:
         return f"| {names}{metavar} | {required} | {help_text} |"
     if kind == "argument":
         required = "yes" if param.required else ""
-        return f"| `{_metavar(param, ctx)}` (positional) | {required} | |"
+        return f"| `{_argument_metavar(param)}` (positional) | {required} | |"
     return None
 
 

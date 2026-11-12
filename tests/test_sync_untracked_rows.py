@@ -2067,6 +2067,31 @@ def test_a_fallback_choice_deleted_on_the_remote_is_never_written(
     assert metadata.get("fallback_links")
 
 
+def test_a_stale_fallback_choice_reports_nothing_after_a_repair_in_the_ui(
+    tmp_path: Path,
+) -> None:
+    """#932: T was repaired in the UI, then the old fallback choice A was deleted -- no error."""
+    w = _fallback_over_ambiguous_rows(tmp_path)
+    w.svc.push(alias="prod", project_root=w.root)
+    assert _entry_of(w, "New step").get("fallback_links")
+    a_id = _remote_named(w, "A vars")["id"]
+    repaired = _remote_named(w, "New step")["configuration"]
+    repaired["variables_id"] = "existing-prod-vars"
+    repaired["variables_values_id"] = "existing-prod-row"
+    del w.api.remote[PROD][(VARS, a_id)]
+    w.pull()
+
+    result = w.svc.push(alias="prod", project_root=w.root)
+
+    assert result.get("errors", []) == []
+    configuration = _remote_named(w, "New step")["configuration"]
+    assert configuration["variables_id"] == "existing-prod-vars"
+    assert configuration["variables_values_id"] == "existing-prod-row"
+    metadata = _entry_of(w, "New step")
+    assert "link_pending" not in metadata
+    assert "fallback_links" not in metadata
+
+
 def test_a_fallback_parent_never_resolves_an_ambiguous_row(tmp_path: Path) -> None:
     """Astra P1: Prod fails, Test survives -- the ambiguous "dup-row" does not become Test."""
     w = _fallback_over_ambiguous_rows(tmp_path)

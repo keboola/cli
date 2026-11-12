@@ -32,6 +32,7 @@ from ._helpers import (
     _confirm_or_abort,
     check_cli_permission,
     emit_api_error,
+    existing_file_or_dash,
     finish_items,
     get_formatter,
     get_service,
@@ -135,7 +136,10 @@ def workspace_create(
     read_only: bool = typer.Option(
         True,
         "--read-only/--no-read-only",
-        help="Whether the workspace has read-only storage access",
+        help=(
+            "Whether the workspace has read-only storage access. --read-only (the default) "
+            "keeps the default of the project. --no-read-only cannot be combined with --ui"
+        ),
     ),
     ui: bool = typer.Option(
         False,
@@ -160,7 +164,7 @@ def workspace_create(
 ) -> None:
     """Create a new workspace.
 
-    Default: fast headless mode via Storage API (~1s).
+    Default: headless mode via a Storage API job.
     With --ui: creates via Queue job (~15s), visible in Keboola UI Workspaces tab --
     only on stacks where keboola.sandboxes still provisions SQL workspaces.
     With --governed: a workspace without credentials that only Query Service can read.
@@ -523,9 +527,9 @@ def workspace_query(
         None,
         "--sql-file",
         help="Path to a .sql file to execute (- for stdin)",
-        exists=True,
         readable=True,
         allow_dash=True,
+        callback=existing_file_or_dash,
     ),
     transactional: bool = typer.Option(
         False,
@@ -773,6 +777,8 @@ def workspace_from_transformation(
                 ),
             ),
         )
+        for warning in result.get("warnings", []):
+            formatter.warning(warning)
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
         emit_api_error(formatter, exc)

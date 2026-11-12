@@ -44,6 +44,7 @@ from ._helpers import (
     _confirm_or_abort,
     check_cli_permission,
     emit_api_error,
+    existing_file_or_dash,
     get_formatter,
     get_service,
     map_error_to_exit_code,
@@ -268,9 +269,9 @@ def data_app_create(
         None,
         "--description-file",
         help="Read description from a file (- for stdin). Mutually exclusive with --description.",
-        exists=True,
         readable=True,
         allow_dash=True,
+        callback=existing_file_or_dash,
     ),
     slug: str = typer.Option(
         ..., "--slug", help="URL slug (lowercase alphanumeric, hyphens; 2-64 chars)"

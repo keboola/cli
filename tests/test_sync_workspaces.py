@@ -757,12 +757,52 @@ class TestPushDelete:
             call.delete_editor_session("s-mine"),
             call.delete_editor_session("s-other-user"),
             call.delete_config(
-                component_id=SANDBOXES_COMPONENT_ID, config_id="ws-shared", branch_id=BRANCH_ID
+                component_id=SANDBOXES_COMPONENT_ID,
+                config_id="ws-shared",
+                branch_id=BRANCH_ID,
+                expected_version=None,
             ),
         ]
         assert result["pushed_details"][0]["deleted_session_ids"] == ["s-mine", "s-other-user"]
         assert _tracked(root) == set()
         _assert_no_credentials(result)
+
+    def test_force_delete_sends_the_version_the_diff_read(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """#934: the config DELETE carries the listed version as its precondition."""
+        root = tmp_path / "project"
+        root.mkdir()
+        store = _pulled_then_deleted_locally(tmp_config_dir, root)
+        versioned = {**SHARED_SQL, "version": 4}
+        client = _client(_remote(versioned))
+        client.get_config_detail.return_value = copy.deepcopy(versioned)
+
+        result = _svc(store, client).push(alias="prod", project_root=root, force=True)
+
+        assert result["deleted"] == 1, result
+        assert client.delete_config.call_args.kwargs["expected_version"] == 4
+
+    def test_workspace_changed_after_the_diff_keeps_its_sessions(
+        self, tmp_config_dir: Path, tmp_path: Path
+    ) -> None:
+        """#934: a newer version right before the delete -- no session and no config is deleted."""
+        root = tmp_path / "project"
+        root.mkdir()
+        store = _pulled_then_deleted_locally(tmp_config_dir, root)
+        client = _client(_remote({**SHARED_SQL, "version": 4}))
+        client.get_config_detail.return_value = {**copy.deepcopy(SHARED_SQL), "version": 5}
+        client.list_editor_sessions.return_value = _sessions()
+
+        result = _svc(store, client).push(alias="prod", project_root=root, force=True)
+
+        client.delete_editor_session.assert_not_called()
+        client.delete_config.assert_not_called()
+        assert result["deleted"] == 0
+        error = result["errors"][0]
+        assert (error["config_id"], error["error_code"]) == ("ws-shared", "SYNC_CONFLICT")
+        assert "version 5, expected version 4" in error["message"]
+        assert _tracked(root) == {"ws-shared"}
 
     def test_session_list_failure_keeps_config(self, tmp_config_dir: Path, tmp_path: Path) -> None:
         root = tmp_path / "project"
