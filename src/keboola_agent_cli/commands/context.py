@@ -519,7 +519,9 @@ does not name is refused. With an `rls-policy` too, rows come from the `rls-poli
     Auto-normalize (0.28.0+; #245): parameters.blocks[].codes[].script
     strings are silently rewritten to arrays before pushing to Storage --
     SQL transformations split on statement boundaries (state machine
-    respects 'string' / "ident" / $$..$$ / -- / # / // / /* */); Python /
+    respects 'string' / "ident" / $$..$$ / -- / # / // / /* */; a
+    procedural block such as BEGIN..END or IF..END IF stays one
+    statement); Python /
     R / kds-team.app-custom-python wrap as [script]. The result envelope
     gains a normalizations: [{path, action, before_type, after_type,
     after_length}] field listing every change (empty when input was
@@ -530,7 +532,8 @@ does not name is refused. With an `rls-policy` too, rows come from the `rls-poli
     Set or clear configuration.storage.output.default_bucket on a config without
     raw-mode JSON edits. --bucket/--clear are mutually exclusive. Read-modify-write
     that preserves sibling keys under storage.output and the rest of the config.
-    No-op (with changed=false) when the value is already what you'd be setting.
+    status is "updated" after a write, or "unchanged" (no write, exit 0) when the
+    value is already what you'd be setting. The older changed=false stays.
 
   config rename
     Rename a configuration. Updates name via API. If a local sync directory
@@ -646,8 +649,9 @@ does not name is refused. With an `rls-policy` too, rows come from the `rls-poli
     Write a configuration's runtime state via the dedicated PUT .../state
     endpoint (branch-scoped). --state must be a JSON object under 4 MB.
     --row-id targets a row's state instead of the root. --dry-run previews
-    the current-vs-new diff without writing; no-op (changed=false) when the
-    new state equals the current one. Guarded write: prompts for
+    the current-vs-new diff without writing. status is "updated" after a
+    write, or "unchanged" (no write, exit 0) when the new state equals the
+    current one; the older changed key stays. Guarded write: prompts for
     confirmation unless --yes or --json. Use this to seed/reset/backfill
     state (e.g. seeding a dev branch's lastImportId before testing
     changed_since: adaptive) -- `config update --set 'state...'` does NOT
@@ -1674,7 +1678,7 @@ allow this query`. The identity that queries needs a matching rule.
     named by the KID `KID:<stack>:project-<id>:workspace-<id>`, printed). No
     binding = the workspace gets every policy of the project; a binding is an
     allowlist (a policy it leaves out stops applying, so it can loosen access; a
-    cls-only binding drops every rls-policy); Query Service re-reads it on every query (since vNEXT). Upsert:
+    cls-only binding drops every rls-policy); Query Service re-reads it on every query (since 1.2.0). Upsert:
     replaces both lists. --stack-id (env KBAGENT_STACK_ID) is required -- no
     API exposes it; it must equal Query Service's QUERY_RLS_STACK_ID (AWS dev:
     dev-keboola-aws-eu-west-1), or nothing reads the binding and the workspace
@@ -2236,13 +2240,14 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Set the KBC.description metadata on a bucket (upsert). Visible in bucket-detail.
 
   storage describe-table
-    Set the KBC.description metadata on a table (upsert). Readable via table-detail --json .data.description.
+    Set the native table description through PUT .../tables/{id}/definition (upsert, async storage job) with
+    isDescriptionSystemManaged=false; no KBC.description metadata row is created. Result status is "updated"
+    after a write, "unchanged" (result null) when the table already holds the text. Readable via table-detail --json .data.description (definition.description).
 
   storage describe-column
     Set per-column descriptions via the native PUT .../tables/{id}/definition endpoint (0.88.0+, upsert,
     async storage job). Writes isDescriptionSystemManaged=false so the next component run's Output Mapping
-    cannot overwrite the text; the backend mirrors the value into columnMetadata KBC.description, so the
-    Keboola UI, the MCP server and the warehouse COMMENT all see it. Unknown column names fail fast before
+    cannot overwrite the text, so the Keboola UI, the MCP server and the warehouse COMMENT all see it. Unknown column names fail fast before
     any write. Legacy flat KBC.column.*.description entries on the same table are migrated in the same write
     (conflict/orphan entries skipped) and the migrated flat keys deleted.
     Readable via table-detail --json .data.column_details[].description, and (since 0.89.0) in the
@@ -2440,6 +2445,8 @@ remain branch-aware because modifying a dev branch is the expected intent.
     (a config's rows included) or one without a trustworthy baseline -- it is a CONFLICT,
     listed with its next step in refused_deletions[]. sync diff lists rows added in the UI
     under remote_only_rows[] (push never creates or deletes them).
+    A config DELETE is conditional (If-Match on the version push read): a config edited in
+    the UI after that read is not deleted -- errors[] entry SYNC_CONFLICT, exit 1; pull first.
     Fails if encryption fails (plaintext secrets never pushed). Use escape hatch flag only if you know what you are doing.
     Every secret is encrypted BEFORE the first write (since 0.99.0, #792 F): an
     ENCRYPTION_FAILED stops the push before anything reaches the remote (message ends
@@ -2638,10 +2645,11 @@ remain branch-aware because modifying a dev branch is the expected intent.
 #### Workspaces (SQL Debugging)
 
   workspace create
-    Create workspace. Backend auto-detected from project (or override with --backend). Default: headless (~1s). --ui: visible in KBC UI (~15s).
+    Create workspace. Backend auto-detected from project (or override with --backend). Default: headless (Storage API job). --ui: visible in KBC UI (~15s).
     --governed: Snowflake or BigQuery, headless only. A workspace with no login and no credentials (loginType governed) that only Query Service reads, with the project's row/column policies applied; needs a stack whose Connection accepts it (workspace password / direct warehouse login are refused).
     --ui is BROKEN on current SaaS stacks (#755): the keboola.sandboxes create job no longer provisions SQL workspaces, so it ends in WORKSPACE_NOT_FOUND -- do not retry, use headless. A failed create (either mode) trashes the sandbox config it created; when the outcome is unknown (5xx / read-write TIMEOUT / RETRY_EXHAUSTED on the create POST, or any error after the --ui job was queued except QUEUE_JOB_FAILED / WORKSPACE_NOT_FOUND) it keeps the config (a workspace may exist -- check 'workspace list', then 'config delete' if nothing appears); --json error.details carries sandbox_config_id / sandbox_config_rolled_back / sandbox_config_kept_reason / job_id.
     Since 0.47.1, Snowflake headless creates return private_key and an empty password field; use key-pair auth.
+    --no-read-only: the workspace reads only its own schema and what is loaded into it (readOnlyStorageAccess false). --read-only (the default) keeps the default of the project (BigQuery: read-only access to all Storage; Snowflake: only with the project feature input-mapping-read-only-storage). The result's read_only is what Storage stored. --no-read-only cannot be combined with --ui.
 
   workspace list
     List workspaces. Without --branch uses each alias's active branch (`branch use`), else

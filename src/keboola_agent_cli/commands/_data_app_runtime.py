@@ -24,6 +24,7 @@ from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ._helpers import (
     _confirm_or_abort,
     emit_api_error,
+    existing_file_or_dash,
     get_formatter,
     get_service,
     map_error_to_exit_code,
@@ -96,10 +97,10 @@ def data_app_secrets_set(
         None,
         "--secret-file",
         help="Read a JSON object mapping '#KEY' -> 'plaintext value' from a file (- for stdin).",
-        exists=True,
         readable=True,
         dir_okay=False,
         allow_dash=True,
+        callback=existing_file_or_dash,
     ),
     branch: int | None = typer.Option(
         None,

@@ -708,6 +708,91 @@ class TestPull:
         assert renamed_details[0]["old_path"] == "extractor/keboola.ex-http/my-http-extractor"
         assert renamed_details[0]["path"] == "extractor/keboola.ex-http/renamed-http-extractor"
 
+    @staticmethod
+    def _same_named_schedules(*, reverse: bool = False) -> list[dict[str, Any]]:
+        """Two configs of one component that share a name (CLI-54)."""
+        configs = [
+            {
+                "id": config_id,
+                "name": "Schedule for flow",
+                "configuration": {"schedule": {"cronTab": "0 6 * * *"}},
+                "rows": [],
+            }
+            for config_id in ("aaaa1111-first", "bbbb2222-second")
+        ]
+        if reverse:
+            configs.reverse()
+        return [{"id": "keboola.scheduler", "type": "other", "configurations": configs}]
+
+    def _pull(self, store: ConfigStore, project_root: Path, *, reverse: bool) -> dict[str, Any]:
+        client = _make_sync_mock_client(
+            components_response=self._same_named_schedules(reverse=reverse)
+        )
+        svc = SyncService(config_store=store, client_factory=lambda url, token: client)
+        return svc.pull(alias="prod", project_root=project_root, theirs=True, no_jobs=True)
+
+    @staticmethod
+    def _paths(project_root: Path) -> dict[str, str]:
+        return {c.id: c.path for c in load_manifest(project_root).configurations}
+
+    @pytest.mark.parametrize("reverse", [False, True], ids=["first-listed-first", "second-first"])
+    def test_pull_keeps_dirs_of_same_named_configs(
+        self, tmp_config_dir: Path, tmp_path: Path, reverse: bool
+    ) -> None:
+        """A config whose dir has the id suffix keeps it on every later pull (CLI-54).
+
+        Before the fix the second config moved to ``<name>-<id8>-2`` on one pull
+        and back to ``<name>-<id8>`` on the next, whatever order the remote listed.
+        """
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        store = self._init_project(tmp_config_dir, project_root)
+
+        self._pull(store, project_root, reverse=reverse)
+        first = self._paths(project_root)
+        plain, suffixed = (
+            ("bbbb2222-second", "aaaa1111-first")
+            if reverse
+            else ("aaaa1111-first", "bbbb2222-second")
+        )
+        assert first[plain] == "other/keboola.scheduler/schedule-for-flow"
+        assert first[suffixed] == f"other/keboola.scheduler/schedule-for-flow-{suffixed[:8]}"
+
+        for later in (not reverse, reverse):
+            result = self._pull(store, project_root, reverse=later)
+            assert [d for d in result["details"] if d["action"] == "renamed"] == []
+            assert self._paths(project_root) == first
+        for path in first.values():
+            assert (project_root / "main" / path / CONFIG_FILENAME).exists()
+
+    def test_pull_moves_a_flipped_dir_back_once(self, tmp_config_dir: Path, tmp_path: Path) -> None:
+        """A dir left at ``<name>-<id8>-2`` by an affected version moves to ``<name>-<id8>``.
+
+        It moves once, and the next pull leaves it there (CLI-54).
+        """
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        store = self._init_project(tmp_config_dir, project_root)
+        self._pull(store, project_root, reverse=False)
+
+        base = "other/keboola.scheduler/schedule-for-flow-bbbb2222"
+        (project_root / "main" / base).rename(project_root / "main" / f"{base}-2")
+        manifest_path = project_root / ".keboola" / "manifest.json"
+        manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        for entry in manifest_data["configurations"]:
+            if entry["path"] == base:
+                entry["path"] = f"{base}-2"
+        manifest_path.write_text(json.dumps(manifest_data), encoding="utf-8")
+
+        result = self._pull(store, project_root, reverse=False)
+        renamed = [d for d in result["details"] if d["action"] == "renamed"]
+        assert [(d["old_path"], d["path"]) for d in renamed] == [(f"{base}-2", base)]
+        assert self._paths(project_root)["bbbb2222-second"] == base
+
+        result = self._pull(store, project_root, reverse=False)
+        assert [d for d in result["details"] if d["action"] == "renamed"] == []
+        assert self._paths(project_root)["bbbb2222-second"] == base
+
     def test_pull_dev_branch_writes_rows(self, tmp_config_dir: Path, tmp_path: Path) -> None:
         """Regression: first pull of a new dev branch must write config rows (issue #193).
 

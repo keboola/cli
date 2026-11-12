@@ -8,7 +8,7 @@ REST API is covered in ``test_server_project_ref.py``.
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -190,12 +190,12 @@ def _leaf_commands(group: Any, path: tuple[str, ...] = ()) -> dict[tuple[str, ..
 
 def _dummy_value(param: Any, existing_file: Path) -> str:
     """A value Click accepts for ``param`` (the command body never runs)."""
-    type_name = type(param.type).__name__
-    if type_name in ("TyperChoice", "Choice"):
-        return str(param.type.choices[0])
-    if type_name == "TyperPath":
+    desc = param.type_descriptor
+    if desc.is_choice:
+        return str(getattr(desc.choices[0], "value", desc.choices[0]))
+    if desc.is_path:
         return str(existing_file)
-    if type_name == "IntParamType":
+    if (get_args(desc.annotation)[0] if desc.is_list else desc.annotation) is int:
         return "1"
     return "x"
 

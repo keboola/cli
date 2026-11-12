@@ -101,6 +101,17 @@ def read_input_file(path: str | Path, *, label: str) -> str:
         raise ValueError(f"{label}: cannot read file {file_path}: {exc}") from exc
 
 
+def existing_file_or_dash(value: Path | None) -> Path | None:
+    """Option callback: ``value`` is ``-`` (stdin) or an existing path.
+
+    Replaces ``exists=True`` on an option with ``allow_dash=True``: Typer 0.29
+    refuses ``-`` when both are set (keboola/cli#970).
+    """
+    if value is not None and str(value) != "-" and not value.exists():
+        raise typer.BadParameter(f"File '{value}' does not exist.")
+    return value
+
+
 def _loads(text: str, *, label: str, allow_yaml: bool) -> Any:
     loads: Callable[[str], Any] = yaml.safe_load if allow_yaml else json.loads
     try:

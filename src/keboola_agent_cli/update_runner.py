@@ -4,10 +4,13 @@ Both self-update entry points -- the startup hook in :mod:`.auto_update` and
 the explicit ``kbagent update`` command -- ultimately run one install command.
 *Where* that command runs is a correctness question, not a detail:
 
-``uv tool install`` recreates a tool environment by **removing** it and then
-creating a fresh venv at the same path (``uv-tool/src/lib.rs``:
+``uv tool install`` replaces the files of the tool environment the running
+kbagent comes from. With ``--force`` it **removes** the environment and then
+creates a fresh venv at the same path (``uv-tool/src/lib.rs``:
 ``create_environment`` -> *"Remove any existing environment"* -> ``create_venv``).
-The removal is neither atomic nor rollback-able. On POSIX that is harmless --
+Without ``--force`` (the self-update command) it uninstalls every package of
+the environment (``--reinstall``) and then installs the new ones.
+Neither is atomic or rollback-able. On POSIX that is harmless --
 unlinking a file another process holds open leaves that process's inode intact,
 so a running kbagent survives having its own venv replaced under it. On Windows
 it is fatal: uv's trampoline (``kbagent.exe``) loads the tool venv's interpreter

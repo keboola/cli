@@ -376,7 +376,7 @@ class StorageFake:
         for row in self.find(component_id, config_id)["rows"]:
             if str(row["id"]) == str(row_id):
                 return copy.deepcopy(row)
-        raise KeyError(row_id)
+        raise KeboolaApiError(f"Row {row_id} not found", status_code=404)  # like Storage
 
     def create_config(
         self,
@@ -387,6 +387,7 @@ class StorageFake:
         branch_id: int | None = None,
         is_disabled: bool = False,
         folder: str | None = None,
+        configuration_id: str | None = None,
     ) -> dict[str, Any]:
         if name in self.fail_config_names:
             raise KeboolaApiError("Storage refused the configuration", status_code=500)
@@ -432,6 +433,7 @@ class StorageFake:
         description: str = "",
         is_disabled: bool = False,
         branch_id: int | None = None,
+        row_id: str | None = None,
     ) -> dict[str, Any]:
         if name in self.fail_row_names:
             raise KeboolaApiError("Storage refused the row", status_code=500)

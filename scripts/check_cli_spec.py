@@ -60,7 +60,7 @@ from collections import Counter, defaultdict
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 
 import typer.main
 
@@ -377,9 +377,27 @@ def label(p: Any) -> str:
     return longs(p)[0] if longs(p) else (p.metavar or p.name.upper())
 
 
+# Click's names for the scalar types, kept so docs/cli-manifest.json does not change.
+_TYPE_NAMES: dict[Any, str] = {str: "text", int: "integer", float: "float", bool: "boolean"}
+
+
 def type_name(p: Any) -> str:
-    name = getattr(p.type, "name", str(p.type))
-    return "integer" if name == "integer range" else name
+    """Click's name for the type of ``p``: "text", "integer", "choice", "path", "file", ...
+
+    Typer 0.29 parameters keep their type in ``type_descriptor`` and have no ``p.type``.
+    """
+    desc = p.type_descriptor
+    if desc.is_choice:
+        return "choice"
+    if desc.is_path:
+        return desc.path_type
+    annotation = get_args(desc.annotation)[0] if desc.is_list else desc.annotation
+    return _TYPE_NAMES.get(annotation, getattr(annotation, "__name__", str(annotation)))
+
+
+def choices(p: Any) -> list[str]:
+    """The values a choice parameter accepts on the command line (an Enum member's value)."""
+    return [str(getattr(ch, "value", ch)) for ch in p.type_descriptor.choices or ()]
 
 
 def shape(p: Any) -> str:
@@ -1374,9 +1392,7 @@ def r_route_permission_key(c: Context) -> Violations:
 
 
 def r_dry_run_parity(c: Context) -> Violations:
-    from fastapi.dependencies.utils import get_flat_dependant
-
-    from keboola_agent_cli.server.dependencies import _body_declares_dry_run
+    from keboola_agent_cli.server.dependencies import _body_declares_dry_run, flat_params
 
     commands = _serve_map()
     found = {}
@@ -1384,7 +1400,7 @@ def r_dry_run_parity(c: Context) -> Violations:
         leaf = c.tree.by_name.get(commands.get((method, path), ""))
         if leaf is None or "--dry-run" not in opt_names(leaf):
             continue
-        flat = get_flat_dependant(route.dependant)
+        flat = flat_params(route.dependant)
         in_query = any(p.alias == "dry_run" for p in flat.query_params)
         if not in_query and not _body_declares_dry_run(flat.body_params):
             found[f"{method} {path}"] = f"'{leaf.name}' has --dry-run, the route has no dry_run"
@@ -1690,6 +1706,7 @@ CONTRACT_RULES: dict[str, str] = {
     "target.targets-reported": "tests/test_target_selection.py",
     "serve.targets-reported": "tests/test_server_response_meta.py",
     "output.multi-item-headline": "tests/test_cli_contract.py",
+    "pr.interface-section": "scripts/check_pr_interface.py (workflow pr-description.yml)",
 }
 DEFERRED_RULES: dict[str, str] = {
     "args.global-option-one-shape": "the GLOBAL_OPTIONS registry is not reviewed yet (A1)",
@@ -1717,14 +1734,13 @@ def _jsonable(value: Any) -> Any:
 
 def _param_entry(p: Any) -> dict[str, Any]:
     """One parameter; keys with a false or empty value are left out to keep the file small."""
-    choices = getattr(p.type, "choices", None)
     entry: dict[str, Any] = {
         "kind": getattr(p, "param_type_name", ""),
         "name": p.name,
         "opts": list(p.opts),
         "secondary_opts": list(getattr(p, "secondary_opts", [])),
         "type": type_name(p),
-        "choices": [getattr(ch, "name", None) or str(ch) for ch in choices or ()],
+        "choices": choices(p),
         "required": bool(p.required),
         "multiple": bool(getattr(p, "multiple", False)),
         "is_flag": bool(getattr(p, "is_flag", False)),

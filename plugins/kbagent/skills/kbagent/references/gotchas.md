@@ -226,7 +226,8 @@ These lists keep `error`, because their entries are not failed items with an err
   `_keboola.row_id` in its file, as a pull writes it (not on `--branch` from `main/`), so a
   later `sync pull` finds it by id instead of writing a second copy. A create whose response was lost (the
   server created it, kbagent never saw the id) can still be created twice; check the
-  remote before re-running after a network failure.
+  remote before re-running after a network failure. (Not since vNEXT: see "`sync push`
+  does not create a config or row twice after a lost answer".)
 - **Rows under a folder adopted by its config id** (no manifest entry, the file carries an
   existing config id) are compared by row id. A row that differs from the remote, or a
   remote row with no file, is a `conflict` -- never an update or a delete, because nothing
@@ -301,7 +302,10 @@ These lists keep `error`, because their entries are not failed items with an err
   the row finishes the link -- unless the chosen config is gone or cannot be read by
   then (also after a `sync pull` dropped that config's entry): nothing is written, the
   link stays pending and the record is kept. An ambiguous
-  row id is never resolved through that fallback either.
+  row id is never resolved through that fallback either. A recorded choice is read only
+  while the transformation on the remote still names the id it was recorded for
+  *(since vNEXT)*: after the link was repaired in the UI, a choice whose config was deleted since
+  no longer gives a `LINK_UNRESOLVED` error (exit 1) for a link that no longer exists.
 - **A transformation created in the same push as its variables values row or shared-code
   row** keeps `link_pending` the same way while that row is missing: the push that creates
   the row also sets `variables_values_id` / `shared_code_row_ids` and the `{{<row id>}}`
@@ -382,10 +386,22 @@ These lists keep `error`, because their entries are not failed items with an err
   remote deleted the row itself -- then it is kept, reported `skipped`, and `sync diff`
   lists it `remote_deleted`, so push never creates it again. Delete the folder yourself (or
   run `sync pull --theirs`, except under an ignored component) to drop it.
+- **A config DELETE is conditional** *(since vNEXT)*. `sync push --force` sends the config
+  version it read as `If-Match`. The Storage API deletes the config only while it is still
+  at that version; an edit of the config or of one of its rows raises the version. An edit
+  made in the UI after push read the config gives an `errors[]` entry with `SYNC_CONFLICT`
+  (exit 1): the config stays, with the edit and with its manifest entry. Run
+  `kbagent sync pull`, review the files, delete them again and push. A `deleted` config
+  change of `sync diff` carries that version as `remote_version`. On 1.0.0 to the last
+  version before this one, kbagent sent the DELETE with no precondition, so such an edit
+  was deleted with the config: there, check `sync diff` right before `sync push --force`.
+  The text of those versions said that the Storage API has no conditional delete. That was
+  wrong.
 - **Limits, not fixed:** an edit that changes ONLY an encrypted value (`KBC::...`) is
   invisible to the comparison, so such a config is still `deleted`; and the Storage API has
-  no conditional delete, so a UI edit made between `sync diff` and the DELETE is not
-  protected. Check `sync diff` right before `sync push --force`.
+  no precondition for a ROW delete, so a UI edit of a row made between the read and the
+  DELETE of that row is not protected (a row deleted together with its config is). Check
+  `sync diff` right before a `sync push --force` that deletes single rows.
 - **On an older version**: run `kbagent sync pull` before every `sync push --force`, and
   `sync diff` after it; check the UI for rows added since the last pull; copy edited
   folders aside before adding their component to `ignoredComponents`.
@@ -439,6 +455,13 @@ These lists keep `error`, because their entries are not failed items with an err
   so its name, description, enabled state and any other change made there are kept. A
   config deleted there, or of a component you have since added to `ignoredComponents`,
   is dropped from the rewrite.
+- **A promote push reads the dev copy of every config it maps a reference to**
+  *(since vNEXT)*. A dev config or row that someone deleted on the dev branch is found also
+  when no change of the diff names it (its local folder is gone too): the reference stays
+  in its production form and pending. Before, such a reference was rewritten to the deleted
+  dev row id. A reference to a config that the dev branch held under the production id and
+  that was deleted there also stays pending when it selects no rows. Before, the pending
+  record was dropped. This costs at least one read per referenced dev config and push.
 - **A config created in `main/` and promoted** is no longer reported `removed` by the next
   production `sync pull`, which used to delete its folder. Pull keeps the folder and keeps
   the dev-branch record, and moves the record with the folder when production renames
@@ -484,7 +507,8 @@ These lists keep `error`, because their entries are not failed items with an err
   with `CONFIG_ERROR` (exit 5) naming the config it created; fix the cause before the
   next push. The manifest keeps an existing file's mode; a new one gets the mode a
   normal file write gives under your umask. A create whose response was lost (the
-  server created it, kbagent never saw the id) can still be created twice.
+  server created it, kbagent never saw the id) can still be created twice. (Not since
+  vNEXT: see "`sync push` does not create a config or row twice after a lost answer".)
 - **`sync pull` reads only the records of the branch it pulls.** After
   `sync pull --branch <dev>`, a plain `sync pull` no longer judges `main/` by the dev
   branch's baselines (a false "locally modified") and no longer reuses a folder name the
@@ -508,6 +532,10 @@ These lists keep `error`, because their entries are not failed items with an err
   Before, a new remote config named like an existing one could be written into that
   folder. The new one gets a `<name>-<id>` folder (`<name>-<id>-2`, ... when that one is
   taken too).
+  - *(updated 1.2.0, CLI-54)* In 1.0.0 to 1.1.0, every `sync pull` moved such a
+    `<name>-<id>` folder to `<name>-<id>-2` and back, and changed its path in the
+    manifest. The config did not change. Now the folder stays where it is. A folder left
+    at `<name>-<id>-2` moves back to `<name>-<id>` once, on the next pull.
 - **`sync pull --branch <other dev>` keeps the record of a promote to another dev
   branch**, so the next `sync push --branch <dev>` still updates the config it created
   there. Before, pulling a third branch dropped it and the next promote created the
@@ -706,6 +734,15 @@ These lists keep `error`, because their entries are not failed items with an err
 - **`kbagent serve` without the `[server]` extras** prints `uv tool install --force 'keboola-cli[server]==<running version>'` (from PyPI), or `'keboola-cli[server]'` without a version for a development build. Before, it printed an untagged git install.
 - **Standalone binary from a hand-unpacked archive:** `upgrade_hint` now names the releases list (`https://github.com/keboola/cli/releases`), not `/releases/latest`, which names the previous major until the migration date.
 - **For agents:** never install kbagent from git without `@v<version>`.
+
+## The self-update keeps the Python and the tool environment
+
+*(since 1.2.0)*
+
+- **`kbagent update` and the startup auto-update run `uv tool install --reinstall --compile-bytecode --python <interpreter of the running kbagent> <spec>`.** Before, they ran `uv tool install --force --reinstall --compile-bytecode <spec>`. `upgrade_command` in `kbagent --json version` and the recovery command after a failed uv update have the same form. When kbagent finds no uv on `PATH`, or was installed with pip, these commands still contain `--force` and no `--python`.
+- **A failed download or build keeps the old version.** Before, a failed update could delete kbagent. With `--force`, uv 0.10.10 and newer builds a new tool environment and deletes it when the install fails. Without `--python`, uv could select a newly installed Python (for example 3.15 on Windows, where PyYAML has no prebuilt wheel and needs a C compiler) and build the environment again on it.
+- **kbagent stays on the Python it was installed with.** To move it to another Python, install it again with `install.sh` or the PowerShell commands in the README.
+- **A kbagent that runs from the legacy `keboola-agent-cli` tool** still uses `--force`: its update installs the new tool `keboola-cli`, which takes over the `kbagent` executable of the old tool.
 
 ## `--all-projects` on the fan-out reads, and a top-level `warnings[]` in `--json`
 
@@ -983,6 +1020,45 @@ These lists keep `error`, because their entries are not failed items with an err
   before the id was appended (it reached only 5xx messages), so the one
   handle Keboola support traces an incident by was dropped on exactly the
   auth errors where the fault was server-side. Quote it when escalating.
+
+## Workspace create/delete and `storage file-delete` run as Storage jobs
+
+*(since 1.2.0)*
+
+- **`workspace create` (headless), `workspace from-transformation`,
+  `workspace delete` / `workspace gc` and `storage file-delete` send
+  `?async=true` and wait for the Storage job.** The synchronous variants are
+  deprecated in the Storage API. A missing workspace or file is still a 404
+  on the request itself (the API checks existence before enqueueing).
+- **A job that fails is `STORAGE_JOB_FAILED` (exit 1), one that outlasts the
+  wait is `STORAGE_JOB_TIMEOUT` with `details.job_id`.** Workspace jobs wait
+  up to 5 minutes. A timed-out create is NOT retryable (`retryable: false`):
+  the job keeps running and may still produce a workspace, so its
+  `keboola.sandboxes` config is kept -- check `workspace list` before
+  retrying. A failed create job trashes the config like a refused request.
+- **A timed-out `workspace delete` (`STORAGE_JOB_TIMEOUT`, `retryable:
+  false`) still trashes the workspace's `keboola.sandboxes` config.** The drop
+  keeps running; follow it with the `storage job-detail --wait` command in the
+  message instead of deleting again. `details` carry `workspace_id`,
+  `sandbox_config_id` and `sandbox_config_trashed`; when the config could not
+  be trashed, `cleanup_command` is the `config delete` that removes it. If the
+  drop fails later, the workspace has no config, so `workspace gc` removes it.
+  A later `workspace delete` of the same workspace never purges the trashed
+  config.
+- **`storage file-delete` waits up to 60 s** for its job. The SDK's
+  `Files.delete` waits the same way and raises the same two codes.
+- **The create job's result omits the password** on Queue v2 projects
+  without the `workspace-create-show-password` feature. Snowflake is
+  unaffected (key-pair; the private key is generated locally). Other
+  password-login backends get the password by an immediate reset, so the
+  `password` field is still filled; if the reset fails, the workspace exists,
+  `password` is empty and `warnings[]` names the `workspace password`
+  command. BigQuery is never reset (its secret is a service-account key under
+  `connection.credentials`, which `workspace create` does not return).
+- **BigQuery `user` may now be filled.** When the job result omits the
+  secret, the API keeps `connection.user` (the public part of the
+  service-account JSON); a response that includes the secret drops it, so
+  `user` used to be empty on BigQuery.
 
 ## "No schedules found" never meant "no trigger"
 
@@ -1681,6 +1757,17 @@ plain pull no longer re-creates it when the remote changed (diff/push already
 treated it as a change). To drop local edits, use `sync pull --theirs` or delete
 the whole config directory and pull.
 
+## A procedural SQL block stays one statement
+
+*(since vNEXT, #954)*
+
+kbagent splits SQL into one statement per `script[]` element in `config update` (the `sql_split` / `sql_resplit` normalizations), in `transformation create` / `edit` and in `sync push` (`transform.sql`). A procedural block now stays one element: `BEGIN ... END`, `IF ... THEN ... END IF`, `LOOP ... END LOOP`, `WHILE ... DO|LOOP ... END WHILE|LOOP`, `FOR ... DO|LOOP ... END FOR|LOOP`, `REPEAT ... UNTIL ... END REPEAT`, a `CASE ... END CASE` statement and the `BEGIN ... END` body of `CREATE ... PROCEDURE|FUNCTION|TRIGGER`. Before vNEXT every `;` inside the block was a boundary, and the fragments were invalid SQL. A BigQuery transformation failed at the next job run, also after a `config update` that changed only metadata (`--dry-run` showed an unrequested `parameters.blocks` change and a `sql_resplit` normalization).
+
+- A block counts only when its opener starts a statement and its closer comes later. `BEGIN TRANSACTION;`, `BEGIN;`, `BEGIN` with a transaction mode (`READ WRITE`, `ISOLATION LEVEL ...`, `IMMEDIATE`, ...), `CASE ... END` and `IF(...)` inside an expression are not blocks. T-SQL `IF` and `WHILE` without `THEN` / `DO` split as before.
+- A block that never closes splits on every `;`, as before, and so do the blocks after it.
+- In an existing `sync` tree, a config whose remote `script[]` element holds a whole block shows once as `remote_modified` in `sync diff`. The local and remote SQL are the same: only the stored baseline was computed with the old splitting. Run `sync pull` once to refresh the baseline. A config that an older kbagent pushed as fragments shows as a local change, and the next `sync push` writes the whole block back. A `sync pull` of such a config instead writes the fragments to `transform.sql` with `/* ===== STATEMENT ===== */` markers between them.
+- Snowflake Scripting `DECLARE ... BEGIN ... END` still splits the `DECLARE` section off. Wrap such a block in `EXECUTE IMMEDIATE $$ ... $$`.
+
 ## `sync push` no longer leaves phantom `REMOTE MODIFIED` drift; `transform.sql` carries statement boundaries
 
 *(since 0.91.0, #686)*
@@ -1935,6 +2022,8 @@ a `name_drift_warnings: [...]` array on the result envelope. The
 still runs, so a future operator who wants to audit can flip the flag off
 without losing data.
 
+*(updated 1.2.0, CLI-54)* The dir that `sync pull` gives the second of two same-named configs, `<name>-<id8>` (or `<name>-<id8>-<n>`), is no drift. Before, push reported it on every run.
+
 ## `sync` carries a data app's runtime type: pull records it, push and clone send it
 
 A `keboola.data-apps` config's runtime type (`python-js` / `streamlit` / ...) lives only on the Data Science `/apps` record, never in the Storage config body. So `sync pull` used to drop it, and `sync push` / `sync clone` recreated the config through the Storage API alone. A cloned `python-js` app then deployed under the platform default, `streamlit` (since 0.94.0).
@@ -2180,7 +2269,7 @@ under an active branch. `--branch` requires exactly one `--project`.
 
 ## `workspace create --governed` makes a workspace nobody can log in to
 
-*(since vNEXT)*
+*(since 1.2.0)*
 
 `workspace create --governed` requests `loginType: governed` (Snowflake or BigQuery, headless only). The workspace has no
 login: the result has no `private_key`, an empty `password` and `governed: true` / `login_type: "governed"`.
@@ -2198,6 +2287,14 @@ local data-app development) is refused with `ACCESS_DENIED` when no policy rule 
 `keboola|<adminId>`, and also when the query is not one plain `SELECT` on Storage bucket tables (no writes,
 `FLATTEN`, `INFORMATION_SCHEMA`/`SHOW` or UDFs): Query Service sends the same text for both, so an administrator
 that a rule selects can still get it. `--qs-compatible` leaves governed workspaces out.
+
+## `workspace create --no-read-only` makes a workspace that cannot read all Storage
+
+*(since vNEXT)*
+
+`workspace create --no-read-only` sends `readOnlyStorageAccess: false`. The workspace reads only its own schema and what `workspace load` puts into it, for example tables loaded as views. Use this to give a SQL client access to a selected set of tables only. `--read-only` is the default and sends nothing, as before: the workspace gets the default of the project. On BigQuery that is read-only access to all project Storage. On Snowflake it is read-only access only when the project has the feature `input-mapping-read-only-storage`, otherwise no access to project Storage. The `read_only` key of the result is the value Storage stored, the same value that `workspace detail` shows. `--no-read-only` with `--ui` is `INVALID_ARGUMENT` (exit 2) and nothing is created, because the Queue job cannot request it. The REST route `POST /workspaces/{project}` takes `read_only: false` for the same effect as `--no-read-only`.
+
+Before vNEXT, kbagent never sent the flag. `--no-read-only` created a workspace with the default of the project, often read-only access to every bucket, and the result still said `read_only: false`. The result of `--read-only` and of a `--ui` create always said `read_only: true`. Check `workspace detail` for workspaces made that way.
 
 ## `workspace create --ui` cannot produce a UI-visible SQL workspace; a failed create no longer leaves a sandbox config behind
 
@@ -2971,6 +3068,35 @@ config, the retry fires, and the retry destroys it for good.
   DELETE specifically; idempotency here is a property of the endpoint, not
   of the method.
 
+## `sync push` does not create a config or row twice after a lost answer
+
+*(since vNEXT)*
+
+- **Push chooses the id of a new config or row.** It sends the id with the create
+  (`configurationId`, `rowId`) and records it in `.keboola/manifest.json`
+  (`pending_creates`) before the request. Before, the Storage API chose the id, and a
+  create whose answer was lost (a read timeout, a killed process) was created again by the
+  next push.
+- **Run the same push again after a network failure.** The next push reads the recorded id
+  on the remote. When the config or row is there, push tracks it and sends no second
+  create. When it is not there, push sends the create again with the same id.
+- **A local edit made before the retry is pushed.** When the config or row is there
+  unchanged (version 1) and your local file changed after the failed push, push sends the
+  file as an update of that object.
+- **A config or row that changed on the remote before the retry is not tracked
+  automatically.** Push reports `SYNC_CONFLICT` for it (exit 1) and creates nothing. Run
+  `kbagent sync pull`: it fetches the remote object into its own folder. Move your changes
+  there and delete the old folder.
+- **A branch that `.keboola/manifest.json` does not list** (for example production in an
+  old or hand-written manifest) has no place for the records of its new configs. Push then
+  creates a new config there without an id, as before. New rows are always covered.
+- **When the manifest cannot be saved, push stops before the first create**
+  (`CONFIG_ERROR`, exit 5, "Nothing was created"). Before, it stopped after the first one.
+- **Not covered:** a data app (`keboola.data-apps`). The Data Science API creates its
+  config and chooses the id.
+- **On an older version:** after a failed push, check the remote for the new config or row
+  before you push again.
+
 ## Repeated `flow delete`, `job run --idempotency-key` and `merge-request merge` no longer do damage
 
 *(since 0.100.0)*
@@ -3080,7 +3206,8 @@ response. Now:
   anything is mutated, the reinstall is an exact-version full reinstall
   (`uv tool install --force --reinstall` for uv tools), and it re-executes the
   original command immediately afterwards. A failed or timed-out reinstall
-  prints a copy-paste recovery command (#528/#530, v0.76.2).
+  prints a copy-paste recovery command (#528/#530, v0.76.2). The current
+  command is in "The self-update keeps the Python and the tool environment".
 
 ## `storage delete-bucket --force` keeps shared buckets, and two delete commands ask on a terminal
 
@@ -4611,16 +4738,42 @@ write descriptive metadata onto storage objects. Three behaviors are easy to mis
   `--prune-orphans`. **Migrated flat entries are DELETED** -- that is deliberate:
   leaving them would let the read fallback resurrect an old description after
   someone clears the column's text. `table-detail` reads with the precedence
-  native definition -> `columnMetadata` `KBC.description` -> legacy flat key,
-  always returns `legacy_column_descriptions`, and warns in human mode when
+  native definition -> legacy flat key (since 1.2.0; 0.88.0 to the release
+  before also consulted `columnMetadata` `KBC.description`), always returns `legacy_column_descriptions`, and warns in human mode when
   legacy keys remain (it never writes -- safe under a read-only token or
   `--deny-writes`). Its human-mode Columns table shows a `Description`
   column *(since v0.89.0)*. On 0.88.0 it did NOT -- there the descriptions were
   readable only through `--json` `column_details[].description`, so a
   blank-looking terminal table on that version does not mean the write failed.
   Unknown column names now fail fast BEFORE any write; the old
-  flat write accepted typos silently. Table and bucket descriptions are
-  unaffected: still `KBC.description` (provider=user) on the object's metadata.
+  flat write accepted typos silently. Bucket descriptions are unaffected:
+  still `KBC.description` (provider=user) on the bucket's metadata. Table
+  descriptions are native too (see the next bullet).
+- **Table descriptions are native** *(since 1.2.0)*. `describe-table` (and the
+  `tables:` section of `describe-batch`) write `definition.description` through
+  `PUT .../tables/{id}/definition` with `isDescriptionSystemManaged: false` and
+  create no `KBC.description` metadata row. The result has `status`:
+  `"updated"` after a write, `"unchanged"` (with `result: null`; human output
+  "Description unchanged") when the table already holds the text. Storage
+  rejects such a no-op PUT with HTTP 400 code
+  `storage.tables.definitionUpdateValidationFailed`, which it also uses for other
+  validation failures, so kbagent reads the table again and reports `unchanged`
+  only when the stored description equals the requested text; otherwise the
+  400 is raised. `describe-batch` `applied[]` entries of the `tables:` section
+  carry the same `status`. `storage table-detail` reads the table description
+  from `definition.description` only -- not from `KBC.description` metadata, not
+  from the top-level `description`, and with no `provider == "user"`
+  preference -- so it shows what the UI shows. A description that exists only
+  as a stale `KBC.description` row no longer appears; set it again with
+  `describe-table`. On 0.99.x and older `describe-table` wrote the metadata row,
+  which outranked later UI edits (DMD-2434).
+- **Column types of a typed table come from `definition`** *(since 1.2.0)*.
+  `storage table-detail` `column_details[]` of a table with `isTyped: true`
+  takes `type` (basetype), `native_type`, `length`, `nullable` and `default`
+  from `definition.columns[]` and ignores `KBC.datatype.*`, so after a table
+  swap it matches `definition` (on older versions it showed the pre-swap
+  types). A non-typed table keeps `KBC.datatype.*` from `columnMetadata`. A
+  typed table whose definition lacks a column reports no type for it.
 - **`describe-batch` is partial-failure-tolerant.** Item-level errors are
   collected into `result.errors[]` but the batch keeps processing the remaining
   items. The CLI exits non-zero only if `error_count > 0`, so in scripts always
@@ -4636,14 +4789,14 @@ write descriptive metadata onto storage objects. Three behaviors are easy to mis
   actual type. Nothing is half-applied. On 0.88.0 and earlier the same input
   raised an `AttributeError` traceback partway through, after some items had
   already been applied.
-- **Description-field precedence: metadata wins.** When both the native Storage
+- **Bucket description precedence: metadata wins.** When both the native Storage
   API `description` field and a user-provided `KBC.description` (provider=user)
-  metadata entry are present, `storage bucket-detail` / `storage table-detail`
-  surface the **metadata value**. The native field is only settable at object
-  creation time via the Storage API; all user updates flow through the metadata
-  endpoint, so the metadata entry is the authoritative source. `KBC.description`
-  entries whose provider is not `user` (e.g. `system`) are ignored during
-  read-back and the native field is used as fallback.
+  metadata entry are present, `storage bucket-detail` surfaces the **metadata
+  value**: a bucket has no native description write, so all user updates flow
+  through the metadata endpoint. `KBC.description` entries whose provider is not
+  `user` (e.g. `system`) are ignored during read-back and the native field is
+  used as fallback. (`storage table-detail` does not follow this since 1.2.0;
+  see "Table descriptions are native".)
 - **`storage bucket-detail` is dialect-aware** **. Output adapts
   to the bucket's backend:
   - **Snowflake**: `snowflake_database` / `snowflake_schema` and per-table
@@ -7458,7 +7611,7 @@ The package was named `keboola-agent-cli` up to 0.62.0 and is named `keboola-cli
 
 ## Row-Level and Column-Level Security (RLS, CLS): targeted by default, never project scope
 
-*(since vNEXT)*
+*(since 1.2.0)*
 
 `kbagent rls` authors metastore `rls-policy` objects -- one per protected table. It never
 enforces anything itself: the actual SQL rewrite happens in the Query Service policy engine on a governed workspace
@@ -7486,7 +7639,7 @@ governed-workspace flow.
   query`). The MCP server's own workspace is created governed in a project with the
   `row-level-security` feature; it gets every policy unless bound (see `rls-workflow.md`, "The MCP server's
   workspace"). A Data App is bound by its configuration `runtime.workspace.rlsPolicies` / `clsPolicies`, not by `rls bind`.
-- **Rules select readers by `subjects` or `groups`, never by email (since vNEXT, schema 1.2.0).** A new
+- **Rules select readers by `subjects` or `groups`, never by email (since 1.2.0, schema 1.2.0).** A new
   `rls-policy` / `cls-policy` rule has exactly one of `subjects` (`<idp>|<sub>` entries, matched exactly)
   or `groups` (exact strings, any listed group matches); `["*"]` as the sole entry is every identified
   reader. `principal` / `principals` in `rls|cls create|update --rules` are refused with `INVALID_ARGUMENT`
@@ -7514,7 +7667,7 @@ governed-workspace flow.
   requires it (1.0.0) or one it could not read. `rls|cls update` with a changed `--target-project` writes the
   grants first; when the rules PATCH then fails the old grants are put back and the error says whether that
   worked.
-- **Wildcard `"*"` and default deny (since vNEXT).** `principal: "*"`, `principals: ["*"]` or `groups: ["*"]`
+- **Wildcard `"*"` and default deny (since 1.2.0).** `principal: "*"`, `principals: ["*"]` or `groups: ["*"]`
   (schema 1.1.0) matches every identified reader (never a reader with no identity); it must be the only entry
   of its list (`INVALID_RLS_POLICY` / `INVALID_CLS_POLICY` otherwise) and is refused against a metastore
   whose schema is older than 1.1.0, where `"*"` is a literal that matches nobody. In a governed workspace
@@ -7571,7 +7724,7 @@ governed-workspace flow.
 
 ## Policy bindings (`rls bind`): no binding means every policy; a wrong stack id fails silently
 
-*(since vNEXT)*
+*(since 1.2.0)*
 
 - A `policy-binding` restricts one governed workspace to some of the project's rls/cls policies. It is
   named by the workspace KID `KID:<stack>:project-<id>:workspace-<id>` (no branch segment). **No binding =

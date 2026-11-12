@@ -1,0 +1,46 @@
+name: PR description
+
+# Spec rule C10 (docs/cli-interface-spec.md#C10): a pull request that can change
+# the kbagent interface describes each change in a `## Interface changes`
+# section of its description. scripts/check_pr_interface.py finds the changed
+# commands, options, error codes, routes and environment variables in the
+# generated docs and checks that the section names each one.
+#
+# This workflow is separate from ci.yml because it also runs when only the
+# description changes (`edited`). An edit of the description must not start
+# the full CI again, and a fixed description must not wait for it. The script
+# uses only the standard library, so the job needs no `uv sync`.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+    branches: [main, "release/[0-9]+.[0-9]+"]
+
+# One run per PR. A new push or a new edit of the description cancels the
+# run that is still in progress.
+concurrency:
+  group: pr-description-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  interface-changes:
+    runs-on: ubuntu-latest
+    steps:
+      # The checkout is the merge commit of the PR. Its first parent is the base
+      # commit that GitHub merged with, so `HEAD^1..HEAD` is exactly the PR's
+      # change. A fresh fetch of the base branch could be newer than that
+      # commit, and its newer changes would show up as reversed items.
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 2
+
+      - name: Check the Interface changes section
+        env:
+          # The body goes through an environment variable, never into the
+          # script text, so that its content cannot run as shell code.
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          printf '%s\n' "$PR_BODY" > "$RUNNER_TEMP/pr_body.md"
+          python3 scripts/check_pr_interface.py --base HEAD^1 --body-file "$RUNNER_TEMP/pr_body.md"

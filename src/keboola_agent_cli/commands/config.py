@@ -929,7 +929,7 @@ def config_set_default_bucket(
         return
 
     target = f"{component_id}/{config_id}"
-    if result.get("changed") is False:
+    if result.get("status") == "unchanged":
         existing = result.get("default_bucket")
         if clear:
             formatter.success(f"No change: default_bucket was already absent on {target}.")

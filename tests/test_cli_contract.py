@@ -514,7 +514,7 @@ def _repeatable_case(root: Any, path: tuple[str, ...]) -> tuple[str, list[str]] 
         name = next((o for o in param.opts if o.startswith("--")), param.opts[0])
         if getattr(param, "is_flag", False):
             return name, [param.opts[0], param.secondary_opts[0]]
-        choices = getattr(param.type, "choices", None)
+        choices = param.type_descriptor.choices
         value = str(getattr(choices[0], "value", choices[0])) if choices else "1"
         values = [value] * max(int(getattr(param, "nargs", 1) or 1), 1)
         return name, [param.opts[0], *values, param.opts[0], *values]

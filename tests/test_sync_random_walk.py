@@ -193,7 +193,9 @@ class FakeApi:
             cfg["isDisabled"] = bool(is_disabled)
         return copy.deepcopy(cfg)
 
-    def _delete(self, component_id: str, config_id: str, branch_id: int | None = None) -> None:
+    def _delete(
+        self, component_id: str, config_id: str, branch_id: int | None = None, **_: Any
+    ) -> None:
         self._cfg(component_id, config_id, branch_id)
         self.remote[self._b(branch_id)].pop((component_id, str(config_id)))
 

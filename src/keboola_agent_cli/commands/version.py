@@ -84,13 +84,14 @@ def update_command(
 ) -> None:
     """Update kbagent to the latest version.
 
-    Runs ``uv tool install --force --reinstall`` from an exact release wheel
-    or Git tag. This recreates the whole tool environment and preserves
-    ``[server]`` extras. On a failure the result includes a copy/paste
-    recovery command.
+    Runs ``uv tool install --reinstall`` from an exact release wheel or Git
+    tag, on the Python that runs kbagent now. This updates the tool
+    environment in place, keeps the old version when a download or a build
+    fails, and preserves ``[server]`` extras. On a failure the result includes
+    a copy/paste recovery command.
 
     On Windows the install is **scheduled, not run here** (issue #528).
-    ``uv tool install`` removes the tool environment before recreating it, so
+    ``uv tool install`` replaces the files of the tool environment, so
     running it from inside that environment deletes files the live process has
     locked and aborts half-way. A detached helper waits until every kbagent has
     exited and installs then; ``deferred: true`` marks that in JSON and the next

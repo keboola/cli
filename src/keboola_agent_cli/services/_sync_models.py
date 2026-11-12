@@ -90,6 +90,13 @@ DELETED_ROWS_KEY = "deleted_rows"
 # such a row by it (D6): a row the remote deleted meanwhile is removed (or
 # kept and reported when edited), never left behind for push to create again.
 RETIRED_ROWS_KEY = "retired_rows"
+# The ids of the creates a push sent and has not recorded yet (#926). In a
+# branch's metadata: ``"{component}/{config dir path}"`` -> the config id. In a
+# config entry's metadata: ``"{row dir path}"`` -> the row id. A record is
+# written and saved BEFORE the POST, and removed with the checkpoint that
+# records the created object. A push that finds one reads that id on the
+# target: the object exists (the answer of the earlier POST was lost) or not.
+PENDING_CREATES_KEY = "pending_creates"
 # A ``retired_rows`` record that carries a ``deleted_rows`` entry (D7) of the
 # dropped config, not a row file: the next pull of the tree only puts it back
 # into the rebuilt entry's ``deleted_rows`` (never a detail, never a delete).

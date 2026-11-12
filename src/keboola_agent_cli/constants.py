@@ -227,6 +227,11 @@ TABLE_DATA_JOB_MAX_WAIT: float = 300.0  # 5 min default for data-moving table jo
 # perfectly healthy load routinely surfaced as a timeout. A zero-copy CLONE
 # finishes in seconds; a COPY of a multi-GB table can take minutes.
 WORKSPACE_LOAD_JOB_MAX_WAIT: float = 300.0  # 5 min default wait for workspace-load jobs
+# Workspace create/delete run as Storage jobs (workspaceCreate / workspaceDrop).
+# Both provision or drop a backend user + schema, which can outlast the 60s
+# metadata-job default under queue load; a create that times out locally keeps
+# running and leaves a workspace kbagent never reported.
+WORKSPACE_JOB_MAX_WAIT: float = 300.0  # 5 min default wait for workspace create/delete jobs
 # Above this on-disk size, a COPY (physical data movement, billed warehouse
 # time) needs an explicit confirmation or --force. CLONE is zero-copy and is
 # never guarded.
@@ -636,6 +641,12 @@ OTLP_SINK_COLUMNS: tuple[dict[str, str], ...] = (
 # projects so callers know the materialized bucket will be unused by the runner.
 # See plugins/kbagent/skills/kbagent/references/storage-types-workflow.md.
 STORAGE_BRANCHES_FEATURE: str = "storage-branches"
+
+# Error `code` of the HTTP 400 Storage answers when a table-definition PUT
+# fails validation. Storage uses it for a PUT that changes nothing (e.g. the
+# stored description sent again) and for other validation failures, so the
+# code alone does not prove the request was a no-op.
+DEFINITION_VALIDATION_ERROR_CODE: str = "storage.tables.definitionUpdateValidationFailed"
 
 # --- Merge Requests (Branches 2.0) ---
 # Feature flag gating the non-SOX merge-request flow. Layer 3

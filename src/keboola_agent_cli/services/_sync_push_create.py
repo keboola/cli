@@ -11,19 +11,31 @@ there (D19), so the manifest entry is the only local record that a config was
 created on the dev branch. A crash between that create and the end of the push
 used to leave nothing behind, and the retry created the config again. A
 checkpoint that cannot be written stops the push (:class:`ManifestCheckpointError`):
-nothing else is sent. A lost response (the server created the config, the
-client never saw the id) is still not recoverable: no server-side idempotency
-is used.
+nothing else is sent.
+
+A create whose answer is lost is not created again (#926). The Storage API
+accepts the id of a new config (``configurationId``) and of a new row
+(``rowId``). Push chooses the id, records it in the manifest
+(``pending_creates``) and saves the manifest BEFORE the POST
+(:func:`plan_create`). When the answer is lost -- a read timeout, a killed
+process, a checkpoint that cannot be written -- the record stays. The next
+push reads that id on the target: an object found there is the one the earlier
+POST created, and push tracks it instead of creating a second one. A data app
+is created by the Data Science API, which chooses the id, so it is not covered.
 """
 
 from __future__ import annotations
 
 import logging
+import secrets
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from http import HTTPStatus
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from ..constants import CONFIG_HASH_VERSION, CONFIG_HASH_VERSION_KEY
+from ..constants import CONFIG_FILENAME, CONFIG_HASH_VERSION, CONFIG_HASH_VERSION_KEY
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..sync.branch_scope import (
     PROMOTED_FROM_KEY,
@@ -43,6 +55,7 @@ from ._sync_models import (
     AMBIGUOUS_ROW_PLACEHOLDERS_KEY,
     CREATED_FROM_KEY,
     LINK_PENDING_KEY,
+    PENDING_CREATES_KEY,
     REBIND_PENDING_KEY,
     RUN_TARGET_COMPONENTS,
     CreatedConfig,
@@ -88,16 +101,26 @@ def checkpoint_manifest(
     created: str,
     *,
     promote_branch_id: int | None = None,
+    planned: bool = False,
 ) -> None:
     """Save the manifest after the create of *created*, or stop the push.
 
     On the promote path (*promote_branch_id*) the source file keeps its
     source id, so only the manifest knew the new id: the message names the
     pull that tracks the created config in the branch's own tree instead.
+
+    With *planned* the save comes BEFORE the POST and records the id the
+    create will send (#926): a failed save stops the push with nothing created.
     """
     try:
         save_manifest(project_root, manifest)
     except OSError as exc:
+        if planned:
+            raise ManifestCheckpointError(
+                f"The manifest could not be saved ({exc}) before the create of {created}. "
+                "Nothing was created for it. Push stopped before any further write. Fix the "
+                "cause (permissions, disk space) and run the push again."
+            ) from exc
         if promote_branch_id is not None:
             recovery = (
                 f"{created} exists on dev branch {promote_branch_id}, but main/ keeps the "
@@ -116,6 +139,145 @@ def checkpoint_manifest(
             f"{created} was created, but the manifest could not be saved ({exc}). Push "
             f"stopped before any further write. {recovery}"
         ) from exc
+
+
+_ULID_ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz"
+
+
+def new_object_id() -> str:
+    """A new config or row id: a lowercase ULID, the form the Storage API generates itself."""
+    value = (time.time_ns() // 1_000_000) << 80 | secrets.randbits(80)
+    return "".join(_ULID_ALPHABET[(value >> shift) & 31] for shift in range(125, -1, -5))
+
+
+@dataclass(frozen=True)
+class PlannedCreate:
+    """The id one create sends, and what an earlier push already created under it (#926).
+
+    Attributes:
+        object_id: The config or row id of the POST.
+        existing: The object the target already has under that id: an earlier
+            push created it and never saw the answer. ``None`` = send the POST.
+    """
+
+    object_id: str
+    existing: dict[str, Any] | None = None
+
+
+def plan_create(
+    holder: dict[str, Any],
+    key: str,
+    *,
+    read: Callable[[str], dict[str, Any]],
+    checkpoint: Callable[..., None],
+    what: str,
+) -> PlannedCreate:
+    """Choose the id of a create and record it before the POST (#926).
+
+    *holder* is the manifest metadata that keeps the records
+    (``pending_creates``): a branch's for configs, a config entry's for its
+    rows. A new record is saved (*checkpoint*) before this returns, so the id
+    is on disk before the POST leaves.
+
+    A record that is already there is a create an earlier push sent without
+    recording its result. *read* reads that id on the target:
+
+    - 404: the earlier POST did not create it. The same id is sent again.
+    - found at version 1: the earlier POST created it, and nothing changed it
+      since. It is returned as ``existing``, and the caller tracks it. When the
+      local file changed since that POST, the caller sends it as an update
+      (:func:`differs_from_local`).
+    - found at another version: it changed on the remote since, so no
+      baseline is known. The create is refused, and the record stays.
+    """
+    records = holder.setdefault(PENDING_CREATES_KEY, {})
+    recorded = records.get(key)
+    if not recorded:
+        planned = new_object_id()
+        records[key] = planned
+        checkpoint(what, planned=True)
+        return PlannedCreate(planned)
+    try:
+        existing = read(str(recorded))
+    except KeboolaApiError as exc:
+        if exc.status_code != HTTPStatus.NOT_FOUND:
+            raise
+        return PlannedCreate(str(recorded))
+    if existing.get("version") != 1:
+        raise KeboolaApiError(
+            message=(
+                f"{what} was not created: an earlier push already created it as {recorded} "
+                "(its answer was lost), and it changed on the remote since. Run `kbagent "
+                "sync pull` for this branch: it fetches that object into its own folder. "
+                "Move your changes there and delete this folder."
+            ),
+            status_code=0,
+            error_code=ErrorCode.SYNC_CONFLICT,
+            retryable=False,
+        )
+    return PlannedCreate(str(recorded), existing)
+
+
+def differs_from_local(
+    existing: dict[str, Any],
+    *,
+    name: str,
+    description: str,
+    configuration: dict[str, Any],
+    is_disabled: bool,
+) -> bool:
+    """True when an adopted object (#926) differs from the payload the create would send.
+
+    Version 1 means nobody changed the object since the earlier push created
+    it, so the local file wins: the caller sends the payload as an update.
+    """
+    return (
+        existing.get("name") != name
+        or (existing.get("description") or "") != (description or "")
+        or existing.get("configuration") != configuration
+        or bool(existing.get("isDisabled")) != is_disabled
+    )
+
+
+def settle_create(holder: dict[str, Any], key: str) -> None:
+    """Drop the record of a create whose result the manifest now holds (#926)."""
+    records = holder.get(PENDING_CREATES_KEY) or {}
+    records.pop(key, None)
+    if not records:
+        holder.pop(PENDING_CREATES_KEY, None)
+
+
+def pending_config_creates(manifest: Manifest, branch_id: int | None) -> dict[str, Any] | None:
+    """The metadata of *branch_id* that holds its config ``pending_creates``, or ``None``."""
+    for branch in manifest.branches:
+        if same_branch(manifest, branch.id, branch_id):
+            return branch.metadata
+    return None
+
+
+def prune_pending_creates(manifest: Manifest, target: CreateTarget) -> None:
+    """Drop the ``pending_creates`` records that no create needs any more (#926).
+
+    A record goes when its folder is gone from the source tree, or when the
+    manifest already tracks an object at that path: the POST answer arrived,
+    the checkpoint after it failed, and a later writeback (a pull) recorded it.
+    """
+    tree = target.project_root / target.branch_path
+    entries = [
+        e for e in manifest.configurations if same_branch(manifest, e.branch_id, target.branch_id)
+    ]
+    tracked = {f"{e.component_id}/{e.path}" for e in entries}
+    holder = pending_config_creates(manifest, target.branch_id)
+    for key in list((holder or {}).get(PENDING_CREATES_KEY) or {}):
+        gone = not (tree / key.split("/", 1)[1] / CONFIG_FILENAME).is_file()
+        if holder is not None and (gone or key in tracked):
+            settle_create(holder, key)
+    for entry in entries:
+        tracked_rows = {row.path for row in entry.rows}
+        for row_path in list(entry.metadata.get(PENDING_CREATES_KEY) or {}):
+            gone = not (tree / entry.path / row_path / CONFIG_FILENAME).is_file()
+            if gone or row_path in tracked_rows:
+                settle_create(entry.metadata, row_path)
 
 
 @dataclass
@@ -187,6 +349,7 @@ class CreateLedger:
         same way, scoped by their parent (:func:`_plan_rows`).
         """
         ledger = cls()
+        prune_pending_creates(manifest, target)
         if target.branch_path != branch_tree_path(manifest, target.branch_id):
             return ledger  # the promote path maps by source ids (D24)
         owned = {(e.component_id, e.id) for e in manifest.configurations} | {
@@ -331,6 +494,9 @@ def record_created_config(
             config_id=new_id,
         )
         link_promote_rows(manifest, tree=target.branch_path, source=entry)
+    holder = pending_config_creates(manifest, branch_id)
+    if holder is not None:  # the entry records the create now (#926)
+        settle_create(holder, f"{component_id}/{config_path_str}")
     try:
         checkpoint_manifest(
             target.project_root,

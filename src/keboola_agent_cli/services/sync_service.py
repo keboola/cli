@@ -706,15 +706,16 @@ class SyncService(BaseService):
                         config_name,
                     )
                     if rel_path != expected_path and not dry_run:
-                        rename_target = expected_path
-                        # Collision: if target already used, add suffix
+                        # Collision: if target already used, add suffix. The
+                        # config's own dir is not taken: a same-named config
+                        # already at ``<name>-<id8>`` stays there (CLI-54).
                         rename_target = free_path(
-                            rename_target, config_id[:8], used_paths | reserved
+                            expected_path, config_id[:8], used_paths | (reserved - {rel_path})
                         )
 
                         old_dir = branch_dir / rel_path
                         new_dir = branch_dir / rename_target
-                        if old_dir.exists() and not new_dir.exists():
+                        if rename_target != rel_path and old_dir.exists() and not new_dir.exists():
                             self._rename_directory(old_dir, new_dir)
                             pull_details.append(
                                 {
@@ -1393,6 +1394,7 @@ class SyncService(BaseService):
                 row_bases=row_base_hashes,
                 target_row_keys=scope.target_tracked_row_keys,
                 remote_rows=remote_rows,
+                remote_raw=remote_raw,
             ),
             DeleteTarget(
                 branch_id=branch_id,
@@ -1616,6 +1618,7 @@ class SyncService(BaseService):
                             ds_branch_id=ds_branch_id,
                             known_secrets=known_secrets,
                             remap=remap,
+                            checkpoint=checkpoint,
                         )
                         if result:
                             manifest_dirty = True

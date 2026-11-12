@@ -131,8 +131,11 @@ def register(app: typer.Typer) -> None:
     ) -> None:
         """Set the description on a storage table.
 
-        Stores the description as KBC.description in table metadata (upsert).
-        Provide the text via --description or --description-file (exactly one).
+        Writes the native table description (the one the web UI shows) through
+        the table-definition endpoint and marks it user-authored, so the next
+        Output Mapping run keeps it. Provide the text via --description or
+        --description-file (exactly one). The result reports status 'updated'
+        after a write, or 'unchanged' when the table already has the text.
         """
         formatter = get_formatter(ctx)
         service = get_service(ctx, "storage_service")
@@ -163,6 +166,9 @@ def register(app: typer.Typer) -> None:
 
         if formatter.json_mode:
             formatter.output(result)
+        elif result.get("status") == "unchanged":
+            formatter.console.print(f"[yellow]Description unchanged:[/yellow] {table_id}")
+            formatter.console.print(f"  {escape(description[:120])}")
         else:
             formatter.console.print(f"[bold green]Description set:[/bold green] {table_id}")
             formatter.console.print(f"  {escape(description[:120])}")
@@ -392,6 +398,8 @@ def register(app: typer.Typer) -> None:
                 if obj_type == "columns":
                     n = len(item.get("columns", {}))
                     formatter.console.print(f"  [green]✓[/green] {obj_type} {obj_id} ({n} cols)")
+                elif item.get("status") == "unchanged":
+                    formatter.console.print(f"  [green]✓[/green] {obj_type} {obj_id} (unchanged)")
                 else:
                     formatter.console.print(f"  [green]✓[/green] {obj_type} {obj_id}")
             for item in result["errors"]:

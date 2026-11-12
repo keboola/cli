@@ -518,6 +518,47 @@ to catch this before the change ships.
 
 For reference on commit style: https://github.com/padak/claude-code-kit/blob/main/CLAUDE.md
 
+## Pull request description
+
+A pull request description has these sections. `.github/pull_request_template.md` gives them to a new pull request.
+
+- `## Why`: what was wrong or missing, as a list of facts.
+- `## What changes`: what the pull request changes.
+- `## Interface changes`: required by [spec rule C10](docs/cli-interface-spec.md#C10) when the pull request changes `src/keboola_agent_cli/` (not `_ui_dist/`), `docs/cli-manifest.json`, `docs/error-codes.md`, `docs/web-server-endpoints.md` or `scripts/cli_spec_baseline.json`. Write `None.` when nothing in the interface changes.
+- `## Tests`: what the tests cover and how you checked the change.
+
+### The `## Interface changes` section
+
+One bullet per changed item: a command, an option, a JSON key, an error code, a `kbagent serve` route or an environment variable. Each bullet:
+
+- Names the item in backticks. A command by its path (`workspace create`), an option by its long flag on a line that also names its command (`workspace create --read-only`), an error code, a route path or a variable by its name.
+- Says what changed and which spec rules it touches.
+- Says if the change is additive or breaking ([C1](docs/cli-interface-spec.md#C1)). A breaking change has the word `BREAKING` and names [C3](docs/cli-interface-spec.md#C3) (deprecation window) or [C4](docs/cli-interface-spec.md#C4) (ships at once), with the reason.
+- Gives the repeatability class ([R1](docs/cli-interface-spec.md#R1)) of a command that is not `read`: `converges`, `guarded` or `duplicates`.
+- Says how the change fits the rest of the tree. Name the existing commands, options, JSON keys or error codes that you compared it with, and say that it matches them or why it differs: the same long name has the same meaning and shape (A1), the verb of a new command (N2), the `status` values (R6), the error code (E8), `snake_case` keys (O5), the help states the default (H7).
+
+Example for a fictional change:
+
+```markdown
+## Interface changes
+
+- `storage export-table --format`: new option, additive (C1). It takes `csv` or `parquet`, default `csv`, so the output does not change without the option. Rules: A1, A7, H7. Compared with `storage unload-table --file-type`, which has the same two values. The name follows `lineage show --format` and `merge-request diff --format`, which also take a fixed set of values. The help states the default (H7).
+- `storage export-table`: R1 class `converges`. A repeat writes the same file again.
+- `EXPORT_FORMAT_UNSUPPORTED`: new error code, exit 2, additive. It names the option and its values (E7). Compared with `INVALID_ARGUMENT`: the new code exists because the fix is different (E8). A parquet export needs a backend that supports it.
+```
+
+`scripts/check_pr_interface.py` reads the changed commands, options, error codes, routes and environment variables from `docs/cli-manifest.json`, `docs/error-codes.md`, `docs/web-server-endpoints.md` and `src/keboola_agent_cli/env_vars.py`. It fails when the section is missing or empty, when it does not name a changed item, when a breaking item has no `BREAKING` with C3 or C4, when a changed command that is not `read` has no R1 class, when the section says only `None` although items changed, or when a `TODO` of the skeleton is left. The reviewer checks the comparisons.
+
+Local commands:
+
+```bash
+make pr-interface-skeleton                  # print a section for the items that this branch changes
+make pr-interface-check BODY=pr-body.md     # check the description before `gh pr create`
+gh pr view 123 --json body --jq .body | python3 scripts/check_pr_interface.py --body-file -
+```
+
+The workflow `.github/workflows/pr-description.yml` runs the check on every pull request to `main` or a `release/X.Y` branch. It runs again after each edit of the description, without the full CI.
+
 ## Self-review before tagging a human reviewer
 
 Before you ping a maintainer, **run the `/kbagent:review` slash command
@@ -1040,7 +1081,7 @@ Always run `make check` before pushing. The PR won't pass CI if lint or tests fa
 
 ## CI workflows
 
-Two GitHub Actions workflows guard the repo:
+Three GitHub Actions workflows guard the repo:
 
 ### `.github/workflows/ci.yml` -- per-PR gate (push + pull_request to main)
 
@@ -1142,6 +1183,10 @@ subtracts before that dead-key check; otherwise it fails CI as if the command
 had been renamed or removed. This is the deterministic half of the "Plugin
 synchronization map" -- the judgement half (is a behaviour change worth a new
 gotcha? is the `(since vX.Y.Z)` tag right?) is left to `/kbagent:review`.
+
+### `.github/workflows/pr-description.yml` -- the PR description (spec C10)
+
+One job runs `scripts/check_pr_interface.py` against the base branch and the PR description. It checks the `## Interface changes` section (see [Pull request description](#pull-request-description)). It runs on `opened`, `edited`, `synchronize`, `reopened` and `ready_for_review`, so a fixed description is checked again at once. It is separate from `ci.yml`, so an edit of the description does not start the full CI. The script uses only the standard library and needs no `uv sync`.
 
 ### `.github/workflows/e2e.yml` -- nightly + on-demand (NOT per-PR)
 

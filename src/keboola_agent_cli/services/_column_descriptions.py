@@ -1,11 +1,11 @@
 """Column-description helpers shared by the storage service (issue #624).
 
 Everything here is about ONE question: where does a column description live?
-Three conventions coexist, and this module is the single place that knows their
-precedence -- native ``definition`` field (what the Keboola UI writes and shows)
-first, then the ``KBC.description`` entry the backend mirrors it into (the only
-one the MCP server reads), then the flat ``KBC.column.{name}.description`` table
-metadata key kbagent wrote before 0.88.0 and nothing else ever read.
+The native ``definition`` field is the source of truth -- what the Keboola UI
+writes and shows. The only other convention still understood is the flat
+``KBC.column.{name}.description`` table metadata key kbagent wrote before
+0.88.0 and nothing else ever read; it is kept only as a read fallback and as
+the input of ``describe-migrate``.
 
 Lives in a private module because ``services/storage_service.py`` is already
 past its CONTRIBUTING.md size ceiling; the functions take an explicit client so
@@ -16,7 +16,9 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
+from ..constants import DEFINITION_VALIDATION_ERROR_CODE
 from ..effective_branch import resolve_branch
+from ..errors import KeboolaApiError
 from .base import BaseService, item_failure
 
 logger = logging.getLogger(__name__)
@@ -28,10 +30,6 @@ logger = logging.getLogger(__name__)
 # still find and convert old entries.
 LEGACY_COLUMN_KEY_PREFIX = "KBC.column."
 LEGACY_COLUMN_KEY_SUFFIX = ".description"
-
-# Key the backend mirrors a native column description into. Written by the
-# platform, not by us; the single place UI/MCP/kbagent all agree on for reads.
-COLUMN_DESCRIPTION_METADATA_KEY = "KBC.description"
 
 
 def collect_legacy_column_entries(
@@ -47,53 +45,80 @@ def collect_legacy_column_entries(
     return out
 
 
-def description_from_column_meta(meta: list[dict[str, Any]]) -> str | None:
-    """Return the ``KBC.description`` value from one column's metadata list."""
-    for m in meta:
-        if m.get("key") == COLUMN_DESCRIPTION_METADATA_KEY:
-            return m.get("value") or None
-    return None
+def effective_definition(table: dict[str, Any]) -> dict[str, Any]:
+    """Return the native ``definition`` block of a table resource, or ``{}``.
+
+    Storage has served a non-object (``[]``) in place of an empty definition,
+    so anything but a dict counts as absent. An alias carries no definition of
+    its own and inherits the source table's, which is where the UI reads it.
+    """
+    definition = table.get("definition")
+    if isinstance(definition, dict) and definition:
+        return definition
+    if table.get("isAlias"):
+        source_definition = (table.get("sourceTable") or {}).get("definition")
+        if isinstance(source_definition, dict):
+            return source_definition
+    return {}
+
+
+def is_unchanged_description(
+    client: Any,
+    error: KeboolaApiError,
+    table_id: str,
+    description: str,
+    branch_id: int | None,
+) -> bool:
+    """Whether a rejected table-description write left the requested text in place.
+
+    Storage answers a definition PUT that changes nothing with HTTP 400 and
+    ``DEFINITION_VALIDATION_ERROR_CODE``, but uses the same code for other
+    validation failures. The table is read again and only a stored
+    ``definition.description`` equal to ``description`` counts as unchanged.
+    A failed re-read counts as not unchanged, so the caller raises the
+    original error.
+    """
+    if error.status_code != 400:
+        return False
+    if error.details.get("api_error_code") != DEFINITION_VALIDATION_ERROR_CODE:
+        return False
+    try:
+        table = client.get_table_detail(table_id, branch_id=branch_id)
+    except KeboolaApiError:
+        logger.debug(
+            "describe_table %s: re-read after a rejected write failed", table_id, exc_info=True
+        )
+        return False
+    return (effective_definition(table).get("description") or "") == description
+
+
+def column_definition(column: Any) -> dict[str, Any]:
+    """Return one ``definition.columns[]`` entry's inner ``definition``, or ``{}``.
+
+    The inner value is ``[]`` for a non-typed column on some Storage versions.
+    """
+    inner = column.get("definition") if isinstance(column, dict) else None
+    return inner if isinstance(inner, dict) else {}
 
 
 def native_column_descriptions(table: dict[str, Any]) -> dict[str, str]:
-    """Map column name -> description from the native ``definition`` block.
-
-    Alias tables carry no definition of their own; they inherit the source
-    table's, which is where the UI reads them from too.
-    """
-    definition = table.get("definition") or {}
-    if not definition and table.get("isAlias"):
-        definition = (table.get("sourceTable") or {}).get("definition") or {}
+    """Map column name -> description from the native ``definition`` block."""
     out: dict[str, str] = {}
-    for col in definition.get("columns") or []:
-        name = col.get("name")
-        desc = (col.get("definition") or {}).get("description")
+    for col in effective_definition(table).get("columns") or []:
+        name = col.get("name") if isinstance(col, dict) else None
+        desc = column_definition(col).get("description")
         if name and desc:
             out[name] = desc
     return out
 
 
 def visible_column_descriptions(table: dict[str, Any]) -> dict[str, str]:
-    """Resolve the description each column shows today (native, then metadata).
+    """Resolve the description each column shows today (native definition).
 
-    Precedence mirrors the read path in ``get_table_detail`` minus the legacy
-    tier -- it answers "would migrating this legacy value overwrite something
-    a user can already see?".
+    It answers "would migrating this legacy value overwrite something a user
+    can already see?".
     """
-    resolved = dict(native_column_descriptions(table))
-    column_metadata: dict[str, list[dict[str, Any]]] = table.get("columnMetadata") or {}
-    source_column_metadata: dict[str, list[dict[str, Any]]] = (
-        (table.get("sourceTable") or {}).get("columnMetadata") or {} if table.get("isAlias") else {}
-    )
-    for col in table.get("columns") or []:
-        if col in resolved:
-            continue
-        meta_desc = description_from_column_meta(column_metadata.get(col, []))
-        if meta_desc is None:
-            meta_desc = description_from_column_meta(source_column_metadata.get(col, []))
-        if meta_desc:
-            resolved[col] = meta_desc
-    return resolved
+    return dict(native_column_descriptions(table))
 
 
 def plan_column_migration(
@@ -103,8 +128,8 @@ def plan_column_migration(
 
     Rules (#624):
     - orphan (column no longer on the table)  -> skip, reason "orphan", entry NOT deleted
-    - target already has a description (native definition or columnMetadata
-      KBC.description) that differs                 -> skip, reason "conflict", NOT deleted
+    - target already has a native description that differs
+                                                    -> skip, reason "conflict", NOT deleted
     - target has the IDENTICAL description          -> nothing to write, entry IS deleted
     - otherwise                                     -> migrate, entry deleted after the write
     """

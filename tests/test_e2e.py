@@ -4221,7 +4221,7 @@ class TestFullE2E:
         )
         assert data["data"]["description"] == "E2E bucket description"
 
-        # describe-table: set KBC.description, verify via table-detail
+        # describe-table: set the native definition.description, verify via table-detail
         data = self._run_ok(
             "storage",
             "describe-table",
@@ -4234,11 +4234,33 @@ class TestFullE2E:
         )
         assert data["data"]["table_id"] == table_id
         assert data["data"]["description"] == "E2E table description"
+        assert data["data"]["status"] == "updated"
+
+        # Sending the stored text again: Storage rejects the PUT, kbagent re-reads
+        # the table and reports the description as unchanged.
+        data = self._run_ok(
+            "storage",
+            "describe-table",
+            "--project",
+            self.alias,
+            "--table-id",
+            table_id,
+            "--description",
+            "E2E table description",
+        )
+        assert data["data"]["status"] == "unchanged"
+        assert data["data"]["result"] is None
 
         data = self._run_ok(
             "storage", "table-detail", "--project", self.alias, "--table-id", table_id
         )
         assert data["data"]["description"] == "E2E table description"
+        assert data["data"]["definition"]["description"] == "E2E table description"
+        assert not [
+            m
+            for m in data["data"]["metadata"]
+            if m.get("key") == "KBC.description" and m.get("provider") == "user"
+        ]
 
         # describe-column: set per-column descriptions, verify via table-detail column_details
         data = self._run_ok(

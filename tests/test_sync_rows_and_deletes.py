@@ -38,6 +38,8 @@ from keboola_agent_cli.services.project_service import ProjectService
 from keboola_agent_cli.sync.config_format import api_config_to_local
 from keboola_agent_cli.sync.diff_engine import config_hash
 from keboola_agent_cli.sync.manifest import load_manifest, save_manifest
+from test_sync_bookkeeping_differential import VARIANTS
+from test_sync_bookkeeping_differential import World as DiffWorld
 from test_sync_random_walk import (
     DEV,
     HTTP,
@@ -288,7 +290,7 @@ def test_failed_config_delete_deletes_no_rows_and_keeps_the_entry(
     before = _entry(sim, "1003")
     deletes = _spy_row_deletes(sim, monkeypatch)
 
-    def refuse(component_id: str, config_id: str, branch_id: int | None = None) -> None:
+    def refuse(component_id: str, config_id: str, branch_id: int | None = None, **_: Any) -> None:
         raise error
 
     monkeypatch.setattr(sim.api, "_delete", refuse)
@@ -312,7 +314,7 @@ def test_retry_after_a_partial_force_push(tmp_path: Path, monkeypatch: pytest.Mo
     real = sim.api._delete
     failed: list[str] = []
 
-    def flaky(component_id: str, config_id: str, branch_id: int | None = None) -> None:
+    def flaky(component_id: str, config_id: str, branch_id: int | None = None, **_: Any) -> None:
         if config_id == "1000" and not failed:
             failed.append(config_id)
             raise KeboolaApiError("Server error", 503, ErrorCode.API_ERROR)
@@ -339,7 +341,9 @@ def test_retry_after_a_delete_whose_answer_was_lost(
     shutil.rmtree(_dir(sim, HTTP_2_DIR))
     real = sim.api._delete
 
-    def lost_answer(component_id: str, config_id: str, branch_id: int | None = None) -> None:
+    def lost_answer(
+        component_id: str, config_id: str, branch_id: int | None = None, **_: Any
+    ) -> None:
         real(component_id, config_id, branch_id)
         raise KeboolaApiError("Read timed out", 0, ErrorCode.TIMEOUT)
 
@@ -1004,3 +1008,70 @@ def test_a_retarget_keeps_the_record_of_rows_production_deleted(tmp_path: Path) 
     assert all(r["row_id"] != row_id for r in diff["remote_only_rows"])
     assert [d["config_id"] for d in result["skipped_deletions"]] == [row_id]
     assert any(r["id"] == row_id for r in sim.api.remote[DEV][HTTP_1]["rows"])
+
+
+# ===========================================================================
+# #934: the config DELETE is conditional on the version the diff read
+# ===========================================================================
+
+
+def _deleted_locally(tmp_path: Path, variant: str) -> tuple[DiffWorld, tuple[str, str]]:
+    """A pulled config whose local dir was removed; returns the world and its remote key."""
+    w = DiffWorld(tmp_path)
+    config_id = w.api.seed(VARIANTS[variant])
+    w.init()
+    w.pull()
+    shutil.rmtree(w.config_dir(config_id))
+    return w, (VARIANTS[variant].component_id, config_id)
+
+
+def test_force_delete_sends_the_version_the_diff_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    w, key = _deleted_locally(tmp_path, "extractor")
+    w.api.remote[PROD][key]["version"] = 7
+    real = w.api._delete
+    sent: list[Any] = []
+
+    def spy(*args: Any, **kwargs: Any) -> None:
+        sent.append(kwargs.get("expected_version"))
+        real(*args, **kwargs)
+
+    monkeypatch.setattr(w.api, "_delete", spy)
+    (change,) = [c for c in w.diff()["changes"] if c["change_type"] == "deleted"]
+    result = w.push(force=True)
+
+    assert change["remote_version"] == 7
+    assert (sent, result["deleted"]) == ([7], 1)
+    assert key not in w.api.remote[PROD]
+
+
+@pytest.mark.parametrize("edit", ["config", "row"])
+def test_force_delete_refuses_a_config_edited_after_the_diff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, edit: str
+) -> None:
+    """A UI edit lands between the push's read and its DELETE: the config stays, with the edit."""
+    w, key = _deleted_locally(tmp_path, "rows")
+    real = w.api._delete
+
+    def edited_first(*args: Any, **kwargs: Any) -> None:
+        remote = w.api.remote[PROD][key]
+        target = remote if edit == "config" else remote["rows"][0]
+        target["description"] = "edited in the UI"
+        w.api._bump(*key, None)
+        real(*args, **kwargs)
+
+    monkeypatch.setattr(w.api, "_delete", edited_first)
+    first = w.svc.push(alias="prod", project_root=w.root, force=True)
+    monkeypatch.setattr(w.api, "_delete", real)
+    second = w.svc.push(alias="prod", project_root=w.root, force=True)
+
+    assert "edited in the UI" in str(w.api.remote[PROD][key])
+    (error,) = first["errors"]
+    assert (error["config_id"], error["error_code"]) == (key[1], "SYNC_CONFLICT")
+    assert "changed on the remote after this push read it" in error["message"]
+    assert first["deleted"] == 0
+    assert [c.id for c in load_manifest(w.root).configurations] == [key[1]]
+    # The next push finds the edit in its diff and refuses the delete there.
+    assert second["deleted"] == 0
+    assert key[1] in {r["config_id"] for r in second["refused_deletions"]}

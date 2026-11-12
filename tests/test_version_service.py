@@ -1,6 +1,7 @@
 """Tests for VersionService - version detection and update checks."""
 
 import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -27,6 +28,8 @@ from keboola_agent_cli.services.version_service import (
 from keboola_agent_cli.update_runner import DeferredUpdateRequest, InstallRun, InstallStatus
 
 VS = "keboola_agent_cli.services.version_service"
+# The interpreter the self-update passes to `uv tool install --python`.
+BASE_PYTHON = getattr(sys, "_base_executable", sys.executable)
 
 
 def _gated(version: str | None) -> GatedRelease:
@@ -572,9 +575,10 @@ class TestBuildKbagentWheelInstall:
             "/usr/bin/uv",
             "tool",
             "install",
-            "--force",
             "--reinstall",
             "--compile-bytecode",
+            "--python",
+            BASE_PYTHON,
             f"keboola-cli[server] @ {self.WHEEL}",
         ]
         # The wheel path uses a PEP 508 direct ref -- no git+ source, no --with.
@@ -592,9 +596,10 @@ class TestBuildKbagentWheelInstall:
             "/usr/bin/uv",
             "tool",
             "install",
-            "--force",
             "--reinstall",
             "--compile-bytecode",
+            "--python",
+            BASE_PYTHON,
             f"keboola-cli @ {self.WHEEL}",
         ]
 
@@ -691,8 +696,42 @@ class TestBuildKbagentUpgradeCommand:
 
         assert cmd is not None
         assert cmd[-1].endswith("@v0.43.3")
-        assert "--force" in cmd
         assert "--reinstall" in cmd
+
+    def test_uv_update_keeps_the_running_python_and_environment(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The update runs on the interpreter of this kbagent and leaves out --force.
+
+        Without --python uv picked a newly installed Python 3.15 and built the
+        environment again; PyYAML had no 3.15 wheel and the build failed. With
+        --force, uv 0.10.10+ always builds a new environment and deletes it on
+        a failed install. Both deleted kbagent.
+        """
+        monkeypatch.setattr(f"{VS}.has_server_extras", _no_server_extras)
+        monkeypatch.setattr(f"{VS}.shutil.which", _which_uv_only)
+
+        cmd = build_kbagent_upgrade_command(target_version="1.2.3")
+
+        assert cmd is not None
+        assert "--force" not in cmd
+        python_at = cmd.index("--python")
+        assert cmd[python_at + 1] == BASE_PYTHON
+
+    def test_legacy_distribution_keeps_force(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Under ``keboola-agent-cli`` the update installs the new tool ``keboola-cli``.
+
+        That tool takes over the ``kbagent`` executable of the old one, which
+        uv allows only with --force.
+        """
+        monkeypatch.setattr(f"{VS}.APP_NAME", "keboola-agent-cli")
+        monkeypatch.setattr(f"{VS}.has_server_extras", _no_server_extras)
+        monkeypatch.setattr(f"{VS}.shutil.which", _which_uv_only)
+
+        cmd = build_kbagent_upgrade_command(target_version="1.2.3")
+
+        assert cmd is not None
+        assert "--force" in cmd
 
     def test_windows_uv_executable_keeps_exact_beta_recovery_command(
         self, monkeypatch: pytest.MonkeyPatch
@@ -752,9 +791,10 @@ class TestWindowsUvLinkMode:
             r"C:\uv\uv.exe",
             "tool",
             "install",
-            "--force",
             "--reinstall",
             "--compile-bytecode",
+            "--python",
+            BASE_PYTHON,
             f"keboola-cli @ {self.WHEEL}",
         ]
 
@@ -805,10 +845,8 @@ class TestWindowsUvLinkMode:
         assert cmd is not None
         recovery = _recovery_command(tuple(cmd), "1.2.3")
         assert recovery is not None
-        assert recovery.startswith(
-            "uv tool install --force --reinstall --compile-bytecode --link-mode copy "
-        )
-        assert recovery.count("--link-mode") == 1
+        assert recovery.startswith("uv tool install --reinstall --compile-bytecode --python ")
+        assert recovery.count("--link-mode copy") == 1
 
     def test_recovery_from_pip_command_uses_copy_mode(self, windows: None) -> None:
         pip_cmd = ("C:\\py\\pip.exe", "install", "--upgrade", f"keboola-cli @ {self.WHEEL}")

@@ -300,6 +300,8 @@ raw_bytes = kbc.files.read_bytes(meta.id)
 kbc.files.delete(meta.id)
 ```
 
+`delete` (`1.2.0+`) runs as an async Storage job (`DELETE /v2/storage/files/{id}?async=true`) and waits for it, up to 60 s. A job that fails raises `KeboolaApiError` `STORAGE_JOB_FAILED`; a wait that runs out raises `STORAGE_JOB_TIMEOUT` with `details={"job_id"}` -- the delete keeps running server-side, follow it with `Client.storage_job(job_id, wait=True)` instead of deleting again. A missing file is still a 404 on the request itself.
+
 `FileEntry` fields: `id`, `name`, `tags`, `created`, `size_bytes`, `is_permanent`, and `raw` (the untouched API dict for anything the facade doesn't surface).
 
 **Memory note:** `read_bytes` holds the whole payload in RAM — fine for results, manifests, and small exports. For multi-GB tables, stream to disk via `Client.raw` instead.

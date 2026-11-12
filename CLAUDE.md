@@ -30,6 +30,8 @@ make lint           # run ruff linter
 make format         # format code
 make check          # lint + format-check + changelog-check + test (CI-like)
 make hooks          # install pre-commit hook
+make pr-interface-skeleton            # print an `## Interface changes` section for this branch (spec C10)
+make pr-interface-check BODY=body.md  # check a PR description before `gh pr create`
 make clean          # remove caches and build artifacts
 ```
 
@@ -331,6 +333,13 @@ Full author checklist: see `CONTRIBUTING.md` > "Releasing a beta (pre-release) v
 
 21. **The CLI interface spec is binding.** Every change to the command-line interface or the `kbagent serve` REST API follows [`docs/cli-interface-spec.md`](docs/cli-interface-spec.md); `make cli-spec-check` enforces the rules that a machine can check.
 
+22. **Every PR that can change the interface has `## Interface changes` in its description** ([spec C10](docs/cli-interface-spec.md#C10)).
+    Start the section with `make pr-interface-skeleton`, which lists the commands, options, error codes, routes and environment variables that the branch changes.
+    For each item, say what changed, the spec rules, additive or breaking (C1, with `BREAKING` and C3 or C4), and the R1 class of a command that is not `read`.
+    The assessment names the existing commands and options that you compared the change with, and says that it matches them or why it differs.
+    Run `make pr-interface-check BODY=body.md` before `gh pr create`.
+    The workflow `.github/workflows/pr-description.yml` runs the same check on every PR and again after each edit of the description.
+
 ## Claude Code Plugin
 
 The plugin lives here in `plugins/kbagent/` and is **published through `keboola/ai-kit`**. It exposes: a CLI (`kbagent`), three skills (`kbagent`, `kbagent-cicd-migration`, `kbagent-promotion-pipeline`), three slash commands (`/kbagent:setup`, `/keboola`, `/kbagent:review`), and two specialist subagents (`keboola-expert`, `kbagent-pr-reviewer`). All are namespaced under `kbagent:`. `/kbagent:setup` is the documented one-command first-run path (install CLI -> connect project -> `doctor`); it runs in the main context and spawns no subagent.
@@ -603,6 +612,9 @@ kbagent config detail [--project NAME] [--project NAME ...] --component-id ID [-
 kbagent config search --query PATTERN [--project NAME | --all-projects] [--component-type TYPE] [--ignore-case] [--regex] [--branch ID]
 kbagent config update [--project NAME] --component-id ID --config-id ID [--name N] [--description D] [--configuration JSON | --configuration-file PATH] [--set PATH=VALUE ...] [--merge] [--change-description TEXT] [--dry-run] [--branch ID] [--allow-plaintext-on-encrypt-failure]
 kbagent config set-default-bucket [--project NAME] --component-id ID --config-id ID (--bucket BUCKET_ID | --clear) [--dry-run] [--branch ID]
+# set-default-bucket / state-set (since 1.2.0, spec R6): `status` is "updated" after a write, or
+#   "unchanged" when the value or state already matches (no write, exit 0). The older boolean
+#   `changed` stays for compatibility; read `status`.
 kbagent config rename [--project NAME] --component-id ID --config-id ID --name "New Name" [--branch ID] [--directory DIR]
 kbagent config delete [--project NAME] --component-id ID --config-id ID [--branch ID] [--dry-run]
 kbagent config restore [--project NAME] --component-id ID --config-id ID [--branch ID]
@@ -803,6 +815,16 @@ kbagent storage describe-table [--project NAME] --table-id ID (--description STR
 kbagent storage describe-column [--project NAME] --table-id ID --column NAME=DESC [--column ...] [--branch ID]
 kbagent storage describe-batch [--project NAME] --file YAML [--branch ID]
 kbagent storage describe-migrate [--project ALIAS] [--table-id ID ...] [--bucket-id ID] [--prune-orphans] [--dry-run] [--yes] [--branch ID]
+# Table descriptions and column types (since 1.2.0, DMD-2439): describe-table (and describe-batch `tables:`)
+#   write `definition.description` through the same definition PUT as describe-column, with
+#   isDescriptionSystemManaged=false and no KBC.description row; the result reports status "updated", or
+#   "unchanged" (result null, human "Description unchanged") when Storage rejects the PUT with code
+#   storage.tables.definitionUpdateValidationFailed AND a re-read shows the same text; any other 400
+#   (same code, different stored text) is raised. table-detail reads the table description from `definition.description` only, column
+#   descriptions from `definition.columns[]` then the legacy flat key (columnMetadata KBC.description is
+#   not read), and the column types of a typed table (isTyped) from `definition.columns[]` + `basetype`;
+#   a non-typed table keeps KBC.datatype.*. Bucket descriptions stay on bucket metadata. Version gate in
+#   gotchas.md.
 # Column descriptions (0.88.0+, #624): describe-column/describe-batch write through the native
 #   `PUT .../tables/{id}/definition` endpoint (async job) with `isDescriptionSystemManaged: false`
 #   (stops the next Output Mapping run from overwriting the text). The backend mirrors the value into
@@ -1089,6 +1111,10 @@ kbagent merge-request resolve --component-id C --config-id I (--take ours|theirs
 #   its hint-next respects it.
 
 kbagent workspace create [--project ALIAS] [--name NAME] [--backend TYPE] [--ui] [--read-only/--no-read-only] [--governed]
+# workspace create --no-read-only (#835): sent as readOnlyStorageAccess false. --read-only (the default) sends
+#   nothing: the project default applies (BigQuery read-only; Snowflake read-only only with
+#   input-mapping-read-only-storage). The result's read_only is the stored value, never the requested one.
+#   --no-read-only with --ui is INVALID_ARGUMENT, exit 2. Before, the flag was never sent. Version gate in gotchas.md.
 # workspace create --governed (AJDA-3460): requests loginType `governed` -- a Snowflake or BigQuery workspace with no login
 #   and no credentials (no private_key, empty password) that only Query Service reads, with the
 #   project's row- and column-level policies applied. Snowflake or BigQuery and headless only (`--governed` with `--ui`
