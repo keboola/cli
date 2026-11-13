@@ -390,3 +390,6 @@ kbagent storage job-detail --project prod --job-id <ID> --wait
 Then run step 3. Never re-issue the command: repeating a swap that already
 landed swaps the tables straight back, and repeating the create starts a
 second copy.
+
+For a production conversion (preflight, validation, rollback), follow the
+sibling skill [kbagent-bigquery-repartition](../../kbagent-bigquery-repartition/SKILL.md).
