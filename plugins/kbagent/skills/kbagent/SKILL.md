@@ -480,6 +480,7 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | **GitOps / CI/CD deploy pipeline** (headless `__env__`, `--branch` everywhere, pinned version, reading results, per-version pitfalls and workarounds) | [gitops-cicd-workflow](references/gitops-cicd-workflow.md) |
 | **Promote configs source -> destination project** (from-scratch GitHub Actions pull -> validate -> push pipeline built on `sync`; PR-gated, cross-project dry-run diff) -- a **separate skill**, not a reference doc | [kbagent-promotion-pipeline](../kbagent-promotion-pipeline/SKILL.md) |
 | **Migrating a `kbc` (keboola-as-code) GitHub CI/CD pipeline to kbagent sync** | [kbagent-cicd-migration](../kbagent-cicd-migration/SKILL.md) (sibling skill) |
+| **Convert a BigQuery table to a partitioned / clustered layout** (preflight, copy or type change, validate, swap, rollback) | [kbagent-bigquery-repartition](../kbagent-bigquery-repartition/SKILL.md) (sibling skill) |
 | **Variables (attach to any config)** | [variables-workflow](references/variables-workflow.md) |
 | Reading synced data | [reading-synced-data](references/reading-synced-data.md) |
 | SQL migration (input mapping removal) | [sql-migration-workflow](references/sql-migration-workflow.md) |

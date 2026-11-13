@@ -343,7 +343,7 @@ Full author checklist: see `CONTRIBUTING.md` > "Releasing a beta (pre-release) v
 
 ## Claude Code Plugin
 
-The plugin lives here in `plugins/kbagent/` and is **published through `keboola/ai-kit`**. It exposes: a CLI (`kbagent`), three skills (`kbagent`, `kbagent-cicd-migration`, `kbagent-promotion-pipeline`), three slash commands (`/kbagent:setup`, `/keboola`, `/kbagent:review`), and two specialist subagents (`keboola-expert`, `kbagent-pr-reviewer`). All are namespaced under `kbagent:`. `/kbagent:setup` is the documented one-command first-run path (install CLI -> connect project -> `doctor`); it runs in the main context and spawns no subagent.
+The plugin lives here in `plugins/kbagent/` and is **published through `keboola/ai-kit`**. It exposes: a CLI (`kbagent`), four skills (`kbagent`, `kbagent-cicd-migration`, `kbagent-promotion-pipeline`, `kbagent-bigquery-repartition`), three slash commands (`/kbagent:setup`, `/keboola`, `/kbagent:review`), and two specialist subagents (`keboola-expert`, `kbagent-pr-reviewer`). All are namespaced under `kbagent:`. `/kbagent:setup` is the documented one-command first-run path (install CLI -> connect project -> `doctor`); it runs in the main context and spawns no subagent.
 
 **Source here, publication there.** The source stays in this repo because four CI gates validate it against the live command tree (`make skill-gen` / `make skill-check`, `scripts/sync_version.py`, `scripts/check_command_sync.py`, `make version-check`) -- none of which exist in ai-kit. What ai-kit owns is the *catalogue*: its `keboola-claude-kit` marketplace carries an external `git-subdir` entry pointing at `plugins/kbagent` in this repo, pinned to a release tag. Keboola has ONE Claude Code marketplace, and it is not this one.
 
@@ -383,6 +383,7 @@ plugins/kbagent/
         <topic>-workflow.md                            # One file per workflow (workspace, branch, sync, ...)
     kbagent-cicd-migration/                            # CI/CD migration skill
     kbagent-promotion-pipeline/                        # Promotion-pipeline skill
+    kbagent-bigquery-repartition/                          # BigQuery partition/cluster conversion skill (runbook)
 ```
 
 `SKILL.md` instructs Claude to run `kbagent context` as its first step, which dynamically loads the full CLI documentation. That keeps command *signatures* in sync automatically -- but it does **not** save the agent's tool-selection matrix, the gotchas log, or the version-gate examples in `keboola-expert.md`. Those are static and must be updated by hand whenever the CLI changes.
