@@ -7819,3 +7819,23 @@ the same way. Now a dev branch id is sent as a string (`"branchId": "12345"`);
 production and `--branch 0` stay `null`. The `--dry-run` body of `data-app
 create` shows the same string. On an older version, create the app in
 production or in the Keboola UI.
+
+## `--import-method` chooses how a Snowflake import writes the table
+
+*(since vNEXT)*
+
+`storage upload-table` and `storage load-file` take `--import-method auto|single_statement|multi_statement`
+(serve: `import_method` on the upload form and the load-to-table body). `auto`, the default, sends
+nothing and keeps the platform default. Details and the output-mapping key `import_method`:
+`import-method-workflow.md`.
+
+- **Snowflake only.** Another value than `auto` on a table of another backend is refused by Storage
+  (HTTP 400 `storage.tables.importMethodNotSupported`); kbagent reports it as `INVALID_ARGUMENT`, exit 2
+  (HTTP 400 over serve), and nothing is imported. Run the import again without the option.
+- **After `upload-table` the file is already in Storage.** The refusal names the `storage load-file`
+  command that imports it without the method; use it instead of uploading again.
+- **The result echoes what you asked for, not what ran.** `import_method` in the result is the
+  requested value. The `tableImportDone` event of the table has the method Storage used
+  (`importMethod`) and why (`importMethodSource`: `request`, `projectFeature` or `default`).
+- **A stack without the parameter.** Storage stacks deployed before the import-method API ignore or
+  reject `importMethod`; if an explicit value fails with another 400, run the import without it.

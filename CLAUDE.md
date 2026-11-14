@@ -744,7 +744,7 @@ kbagent storage table-detail [--project NAME] --table-id ID [--branch ID]
 kbagent storage create-bucket [--project NAME] --stage STAGE --name NAME [--description D] [--backend B] [--branch ID]
 kbagent storage create-table [--project NAME] --bucket-id ID --name NAME [--column COL:TYPE[(length)] ...] [--primary-key COL] [--not-null-column COL ...] [--default NAME=VALUE ...] [--source-table-id ID] [--source-branch-id N] [--time-partitioning-type DAY|HOUR|MONTH|YEAR] [--time-partitioning-field COL] [--time-partitioning-expiration-ms MS] [--range-partitioning-field COL --range-partitioning-start S --range-partitioning-end E --range-partitioning-interval I] [--clustering-field COL ...] [--branch ID] [--if-not-exists] [--timeout SECONDS]
 # --column XOR --source-table-id (0.66.0+, BigQuery only): --source-table-id copies an existing table's data into the requested partition/clustering layout (schema derived from source) -> swap into place with swap-tables. Partition/clustering flags work in both modes (BigQuery only); time vs range partitioning are mutually exclusive. A non-BigQuery project fails fast (pre-flight backend check).
-kbagent storage upload-table [--project NAME] --table-id ID --file PATH [--incremental] [--delimiter D] [--enclosure E] [--no-auto-create] [--wait/--no-wait] [--timeout SECONDS] [--branch ID] [--progress]
+kbagent storage upload-table [--project NAME] --table-id ID --file PATH [--incremental] [--delimiter D] [--enclosure E] [--no-auto-create] [--import-method auto|single_statement|multi_statement] [--wait/--no-wait] [--timeout SECONDS] [--branch ID] [--progress]
 # upload-table / file-upload cloud upload (#834): on AWS stacks a file above 64 MiB goes up as an S3
 #   MULTIPART upload -- 64 MiB parts (auto-scaled so the file fits in 10,000 parts), 4 in parallel,
 #   per-part retry on 429/5xx/transport errors, peak memory ~4 x part size. Before, the whole file was
@@ -860,7 +860,14 @@ kbagent storage file-download [--project NAME] [--file-id ID | --tag TAG ...] [-
 kbagent storage file-detail [--project NAME] --file-id ID
 kbagent storage file-delete [--project NAME] --file-id ID [--file-id ...] [--dry-run] [--yes]
 kbagent storage file-tag [--project NAME] --file-id ID [--add TAG ...] [--remove TAG ...]
-kbagent storage load-file [--project NAME] --file-id ID --table-id ID [--incremental] [--delimiter D] [--enclosure E] [--wait/--no-wait] [--timeout SECONDS] [--branch ID]
+kbagent storage load-file [--project NAME] --file-id ID --table-id ID [--incremental] [--delimiter D] [--enclosure E] [--import-method auto|single_statement|multi_statement] [--wait/--no-wait] [--timeout SECONDS] [--branch ID]
+# --import-method on upload-table / load-file (DMD-2856): sent to import-async as importMethod, except auto (the
+#   default: nothing is sent, the platform default applies). single_statement = one MERGE / INSERT OVERWRITE,
+#   multi_statement = deduplication table + separate statements. Snowflake only: Storage answers another value on a
+#   non-Snowflake table with 400 storage.tables.importMethodNotSupported, mapped to INVALID_ARGUMENT (exit 2, HTTP 400
+#   over serve; services/_storage_jobs.py), whose load-file recovery command leaves the method out. The result carries
+#   import_method. serve: import_method form field (upload) / body field (load-to-table). Output-mapping key
+#   import_method: plugins/kbagent/skills/kbagent/references/import-method-workflow.md. Version gate in gotchas.md.
 kbagent storage job-detail [--project NAME] --job-id ID [--wait] [--timeout SECONDS]
 # storage job-detail (#834): read-class; shows a Storage API job (status, operation_name, table_id,
 #   file_id, times, imported_rows, warnings, results, error). Exit 0 success/waiting/processing, exit 1

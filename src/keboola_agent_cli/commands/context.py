@@ -2160,6 +2160,10 @@ remain branch-aware because modifying a dev branch is the expected intent.
     a terminal, else one line every 10 s + a final line, e.g.
     `upload big.csv: 42.0% 4.20/10.00 GiB, 67.30 MiB/s, elapsed 0:01:03, ETA 0:01:27`. stdout stays clean JSON.
     For long runs: `kbagent --json storage upload-table --project P ... --progress 2>progress.log`, then read the log.
+    --import-method auto|single_statement|multi_statement: how a Snowflake import writes the table (one MERGE /
+    INSERT OVERWRITE, or a deduplication table + separate statements). auto (default) sends nothing. Another value
+    on a non-Snowflake table: INVALID_ARGUMENT, exit 2, nothing imported -- re-run without it (the error names the
+    load-file command for the uploaded file). Output-mapping key import_method: see import-method-workflow.
 
   storage download-table
     Export table data to a local CSV file. Async export with streaming download.
@@ -2301,6 +2305,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
     and the recovery path after a failed upload-table import (no re-upload). --incremental to append rows.
     Since 0.98.0: --wait/--no-wait + --timeout SECONDS (default 600) behave exactly as on upload-table
     (--no-wait returns job_id; a wait timeout is STORAGE_JOB_TIMEOUT, exit 4, the import keeps running). Branch-aware.
+    --import-method: as on upload-table (Snowflake only; auto sends nothing).
 
   storage job-detail
     imported_rows, warnings, results, error. --wait polls until the job finishes (--timeout budget).

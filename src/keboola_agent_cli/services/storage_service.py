@@ -13,7 +13,7 @@ from typing import Any
 from ..constants import STORAGE_BRANCHES_FEATURE, TABLE_DATA_JOB_MAX_WAIT
 from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
-from ..models import ProjectConfig
+from ..models import ImportMethod, ProjectConfig
 from ._column_descriptions import ColumnDescriptionsMixin, is_unchanged_description
 from ._storage_downloads import (
     DownloadProgress,
@@ -919,6 +919,7 @@ class StorageService(ColumnDescriptionsMixin):
         wait: bool = True,
         timeout: float | None = None,
         on_progress: Callable[[int, int], None] | None = None,
+        import_method: ImportMethod = ImportMethod.auto,
     ) -> dict[str, Any]:
         """Upload a CSV file into a storage table.
 
@@ -939,6 +940,8 @@ class StorageService(ColumnDescriptionsMixin):
                 upload is always awaited); ``imported_rows`` is then None.
             timeout: Import wait budget in seconds (None = IMPORT_JOB_MAX_WAIT).
             on_progress: ``(bytes_sent, total_bytes)`` callback for the upload.
+            import_method: How a Snowflake import writes the table; ``auto``
+                sends nothing (platform default).
 
         Returns:
             Dict with import results, ``file_id`` / ``job_id`` / ``job_status``,
@@ -1013,6 +1016,7 @@ class StorageService(ColumnDescriptionsMixin):
                 wait=wait,
                 max_wait=timeout,
                 on_progress=on_progress,
+                import_method=import_method,
             )
         except KeboolaApiError as exc:
             options = ImportOptions(
@@ -1020,6 +1024,7 @@ class StorageService(ColumnDescriptionsMixin):
                 delimiter=delimiter,
                 enclosure=enclosure,
                 branch_id=branch_id,
+                import_method=import_method,
             )
             raise with_import_hint(exc, alias, table_id, options) from exc
         finally:
@@ -1029,6 +1034,7 @@ class StorageService(ColumnDescriptionsMixin):
             "project_alias": alias,
             "table_id": table_id,
             "incremental": incremental,
+            "import_method": import_method.value,
             "file_size_bytes": file_size_bytes,
             "file_id": outcome.file_id,
             **import_job_fields(outcome.job, outcome.file_id),
@@ -2099,6 +2105,7 @@ class StorageService(ColumnDescriptionsMixin):
         *,
         wait: bool = True,
         timeout: float | None = None,
+        import_method: ImportMethod = ImportMethod.auto,
     ) -> dict[str, Any]:
         """Load an existing Storage File into a table.
 
@@ -2115,6 +2122,8 @@ class StorageService(ColumnDescriptionsMixin):
             branch_id: If set, target a specific dev branch.
             wait: If False, return once the import job is queued.
             timeout: Import wait budget in seconds (None = IMPORT_JOB_MAX_WAIT).
+            import_method: How a Snowflake import writes the table; ``auto``
+                sends nothing (platform default).
 
         Returns:
             Dict with import results plus ``job_id`` / ``job_status``.
@@ -2135,6 +2144,7 @@ class StorageService(ColumnDescriptionsMixin):
                 branch_id=branch_id,
                 wait=wait,
                 max_wait=timeout,
+                import_method=import_method,
             )
         except KeboolaApiError as exc:
             options = ImportOptions(
@@ -2142,6 +2152,7 @@ class StorageService(ColumnDescriptionsMixin):
                 delimiter=delimiter,
                 enclosure=enclosure,
                 branch_id=branch_id,
+                import_method=import_method,
             )
             raise with_import_hint(exc, alias, table_id, options) from exc
         finally:
@@ -2152,6 +2163,7 @@ class StorageService(ColumnDescriptionsMixin):
             "file_id": file_id,
             "table_id": table_id,
             "incremental": incremental,
+            "import_method": import_method.value,
             **import_job_fields(job, file_id),
         }
 
