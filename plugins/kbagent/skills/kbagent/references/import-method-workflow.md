@@ -41,6 +41,8 @@ kbagent --json storage load-file --project P --file-id 123 \
   import again without `--import-method`. After `upload-table` the file is
   already in Storage: the error names the `storage load-file` command that
   imports it without the method -- use it instead of uploading again.
+  A bucket or table that `upload-table` auto-created before the refusal stays,
+  empty; the message names it.
 - Over `kbagent serve`: the form field `import_method` on
   `POST /storage/tables/{project}/upload` and the body field `import_method`
   on `POST /storage/files/{project}/load-to-table`. A refusal is HTTP 400

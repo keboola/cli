@@ -332,6 +332,34 @@ def with_import_hint(
     return _with_hint(exc, hint)
 
 
+def with_auto_created_note(
+    exc: KeboolaApiError, table_id: str, *, bucket: bool, table: bool
+) -> KeboolaApiError:
+    """Say what ``upload-table`` auto-created before Storage refused the import method.
+
+    Auto-create runs before the import, so a refused ``--import-method`` can
+    leave a new, empty bucket or table behind. Any other error comes back
+    unchanged.
+    """
+    refused = (
+        exc.error_code == ErrorCode.INVALID_ARGUMENT
+        and exc.details.get("api_error_code") == IMPORT_METHOD_NOT_SUPPORTED_CODE
+    )
+    created = []
+    if bucket:
+        created.append(f"bucket {table_id.rsplit('.', 1)[0]}")
+    if table:
+        created.append(f"table {table_id}")
+    if not refused or not created:
+        return exc
+    return _with_hint(
+        exc,
+        f" This command created the {' and the '.join(created)} before the import was "
+        f"refused. Nothing was imported; the import without --import-method uses "
+        f"{'them' if len(created) > 1 else 'it'}.",
+    )
+
+
 def read_csv_header(file_path: str, delimiter: str = ",", enclosure: str = '"') -> list[str]:
     """Return column names from the first row of a CSV or gzipped CSV file.
 

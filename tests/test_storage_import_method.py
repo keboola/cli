@@ -178,6 +178,37 @@ class TestNonSnowflakeRefusal:
             "--incremental --branch 0"
         )
 
+    def test_refusal_names_the_auto_created_table(self, tmp_path: Path) -> None:
+        client = MagicMock()
+        client.get_bucket_detail.return_value = {"id": "in.c-b"}
+        client.list_tables.return_value = []
+        client.upload_table_with_outcome.side_effect = KeboolaApiError(
+            "API error 400",
+            status_code=400,
+            error_code=ErrorCode.API_ERROR,
+            details={
+                "api_error_code": "storage.tables.importMethodNotSupported",
+                "file_id": 100,
+            },
+        )
+        service = StorageService(
+            config_store=_make_store(tmp_path), client_factory=lambda url, token: client
+        )
+        with pytest.raises(KeboolaApiError) as exc_info:
+            service.upload_table(
+                alias="test",
+                table_id=_TABLE,
+                file_path=str(_csv(tmp_path)),
+                import_method=ImportMethod.single_statement,
+            )
+        exc = exc_info.value
+        assert exc.error_code == ErrorCode.INVALID_ARGUMENT
+        client.create_table.assert_called_once()
+        assert exc.message.endswith(
+            "This command created the table in.c-b.users before the import was refused. "
+            "Nothing was imported; the import without --import-method uses it."
+        )
+
     def test_load_file_refusal_is_invalid_argument_without_hint(
         self, httpx_mock, tmp_path: Path
     ) -> None:

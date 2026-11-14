@@ -29,6 +29,7 @@ from ._storage_jobs import (
     resolve_wait_timeout,
     summarize_storage_job,
     validate_wait_timeout,
+    with_auto_created_note,
     with_import_hint,
     with_job_timeout_hint,
 )
@@ -1026,7 +1027,10 @@ class StorageService(ColumnDescriptionsMixin):
                 branch_id=branch_id,
                 import_method=import_method,
             )
-            raise with_import_hint(exc, alias, table_id, options) from exc
+            hinted = with_import_hint(exc, alias, table_id, options)
+            raise with_auto_created_note(
+                hinted, table_id, bucket=auto_created_bucket, table=auto_created_table
+            ) from exc
         finally:
             client.close()
 

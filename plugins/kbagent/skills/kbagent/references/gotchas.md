@@ -7834,8 +7834,7 @@ nothing and keeps the platform default. Details and the output-mapping key `impo
   (HTTP 400 over serve), and nothing is imported. Run the import again without the option.
 - **After `upload-table` the file is already in Storage.** The refusal names the `storage load-file`
   command that imports it without the method; use it instead of uploading again.
+  A table or bucket that `upload-table` auto-created before the refusal stays (empty); the message names it.
 - **The result echoes what you asked for, not what ran.** `import_method` in the result is the
   requested value. The `tableImportDone` event of the table has the method Storage used
   (`importMethod`) and why (`importMethodSource`: `request`, `projectFeature` or `default`).
-- **A stack without the parameter.** Storage stacks deployed before the import-method API ignore or
-  reject `importMethod`; if an explicit value fails with another 400, run the import without it.
