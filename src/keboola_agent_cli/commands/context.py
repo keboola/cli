@@ -1305,7 +1305,8 @@ explicit Storage config version, never the empty shell the create writes.
   Errors: FEATURE_NOT_ENABLED (exit 5) from any command whose target was resolved implicitly
   on a project without the feature; MR_MERGE_CONFLICT / MR_NOT_READY_TO_MERGE from merge;
   a scoped token 403s on everything but list. Every result may carry warnings[].
-  A merge repeated after an earlier merge already landed answers status "already_merged", exit 0.
+  A merge repeated after an earlier merge already landed answers status "already_merged", exit 0;
+  repeated while that merge still runs, it answers status "already_in_merge", exit 0.
 """,
     "notification": """\
 #### Notification Subscriptions (Flow Notifications Tab)

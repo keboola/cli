@@ -135,6 +135,11 @@ class TestDeriveMergeBlockers:
         mr = _mr("development", mergeBlockers=["approvals"])
         assert derive_merge_blockers(mr, conflicts=[]) == ["approvals"]
 
+    def test_unknown_or_missing_state_is_never_mergeable(self) -> None:
+        # Parity with the MCP server: when unsure, the answer is "not mergeable".
+        assert derive_merge_blockers(_mr("some_future_state"), conflicts=[]) == ["state"]
+        assert derive_merge_blockers({"id": 7}, conflicts=[]) == ["state"]
+
 
 class TestDeriveAllowedActions:
     def test_development_offers_submit_and_direct_merge(self) -> None:
@@ -619,12 +624,40 @@ class TestMerge:
         factory, mock = client_factory
         mock.merge_requests.get.side_effect = [
             _wire_mr(7, "approved"),
-            _wire_mr(7, "in_merge"),
+            _wire_mr(7, "approved"),
         ]
         mock.merge_requests.merge.side_effect = self._not_ready()
         with pytest.raises(KeboolaApiError) as exc_info:
             _svc(store, factory).merge(ALIAS, 7)
         assert exc_info.value.error_code == ErrorCode.MR_NOT_READY_TO_MERGE
+
+    def test_not_ready_while_the_merge_runs_reports_already_in_merge(
+        self, store, client_factory, monkeypatch
+    ) -> None:
+        """A merge that started (lost response, or a concurrent call) is not a
+        refusal: the result says it is running, and no local cleanup runs
+        because the merge can still fail and keep the source branch."""
+        factory, mock = client_factory
+        mock.merge_requests.get.side_effect = [
+            _wire_mr(7, "approved", branch_from=123),
+            _wire_mr(7, "in_merge", branch_from=123),
+        ]
+        mock.merge_requests.merge.side_effect = self._not_ready()
+        unlinked: list[int] = []
+        monkeypatch.setattr(
+            "keboola_agent_cli.sync.branch_mapping.cleanup_branch_id_from_mapping",
+            unlinked.append,
+        )
+        store.set_project_branch(ALIAS, 123)
+        result = _svc(store, factory).merge(ALIAS, 7)
+        assert result["status"] == "already_in_merge"
+        assert result["state"] == "in_merge"
+        assert result["derived_state"] == "in_merge"
+        assert result["job"] is None
+        assert result["was_active"] is True
+        mock.merge_requests.merge.assert_called_once()
+        assert store.get_project(ALIAS).active_branch_id == 123
+        assert unlinked == []
 
     def test_not_ready_with_a_failed_read_reports_the_409(self, store, client_factory) -> None:
         factory, mock = client_factory

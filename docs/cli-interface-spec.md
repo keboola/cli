@@ -615,7 +615,7 @@ A flag that raises the class is in `FLAG_ESCALATIONS` and is checked where the f
 - Checked by: review and unit tests.
 
 <a id="R3"></a>
-**R3 · MUST · now.** POST and PATCH are not repeated after a 5xx or a read timeout. PUT and DELETE are repeated, unless the endpoint is a state transition or changes meaning after success (`retry_safe=False`). When `merge-request merge` gets `MR_NOT_READY_TO_MERGE`, it reads the merge request: if it is merged, the command runs the local cleanup and returns `already_merged` with exit 0.
+**R3 · MUST · now.** POST and PATCH are not repeated after a 5xx or a read timeout. PUT and DELETE are repeated, unless the endpoint is a state transition or changes meaning after success (`retry_safe=False`). When `merge-request merge` gets `MR_NOT_READY_TO_MERGE`, it reads the merge request: if it is merged, the command runs the local cleanup and returns `already_merged` with exit 0; if it is `in_merge`, the command returns `already_in_merge` with exit 0 and runs no cleanup.
 
 - Checked by: review and unit tests.
 

@@ -7019,6 +7019,8 @@ It carries the command name, the outcome, and the duration -- never argument val
   `MR_NOT_READY_TO_MERGE` rather than start a second merge, so the retry is harmless. Wait
   and re-check with `merge-request detail` (state `in_merge` -> `merged`) before retrying.
   A retry after the merge finished answers `status: "already_merged"`, exit 0 (since 0.100.0).
+  A retry while the merge job still runs answers `status: "already_in_merge"`, exit 0, and
+  leaves the local cleanup undone -- the merge can still fail (since vNEXT).
 - **Every result may carry `warnings[]`** (post-merge cleanup failure, a dropped
   `--change-description` on a delete resolution). A truncated conflict list inside
   `MR_MERGE_CONFLICT` carries `details.api_error_params_truncated: true` -- run `conflicts`.
