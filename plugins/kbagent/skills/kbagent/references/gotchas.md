@@ -6361,7 +6361,7 @@ the web UI.
 
   ```json
   "runtime": {
-    "backend":   {"size": "small", "type": "e2bSandbox"},
+    "backend":   {"size": "small"},
     "workspace": {"enabled": true}
   }
   ```
