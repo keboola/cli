@@ -68,7 +68,7 @@ These lists keep `error`, because their entries are not failed items with an err
 - **A blank `--task-id " "` is `INVALID_ARGUMENT`, never a whole-flow run**; over REST `task_ids: []` is HTTP 400 (`null` = no selector).
 - **A `--timeout` never stops the job** (unlike `job run --wait`, which kills it and exits 7): `QUEUE_JOB_TIMEOUT`, exit 4, `retryable: false`; follow it with `kbagent job detail --project P --job-id ID`.
 - **`job run --wait` and `flow run --wait`: a `QUEUE_JOB_FAILED` error now carries `details.job_id`** (additive), so the failed job can be read with `job detail` without parsing the message.
-- **Permission key `flow.run` (write) also needs `job.run`.** `flow run` creates a Queue job like `job run`, so a policy that denies `job.run` (or `job.*`) blocks `flow run` too, exit 6 / HTTP 403, also `--dry-run`; the message names `job.run`. An allow-list policy (`--mode deny`) must allow both `flow.run` and `job.run`. Before vNEXT a `job.run` deny did not stop `flow run`.
+- **Permission key `flow.run` (write) also needs `job.run`** *(since vNEXT)*. `flow run` creates a Queue job like `job run`, so a policy that denies `job.run` (or `job.*`) blocks `flow run` too, exit 6 / HTTP 403, also `--dry-run`; the message names `job.run`. An allow-list policy (`--mode deny`) must allow both `flow.run` and `job.run`. Before vNEXT a `job.run` deny did not stop `flow run`.
 
 ## `job run --wait` / `flow run --wait`: a failure while polling is not retryable
 

@@ -322,6 +322,10 @@ def raw_poll_error(exc: Exception) -> KeboolaApiError:
     transport error (a reset connection, a protocol error) or an unreadable
     poll response reaches the caller untranslated.
     """
+    # ValueError / TypeError / AttributeError can also be a bug in kbagent
+    # itself; keep the traceback in the debug log (`--verbose`), the error
+    # keeps it as ``__cause__``.
+    logger.debug("Untranslated error while polling a Queue job", exc_info=exc)
     if isinstance(exc, httpx.TransportError):
         return KeboolaApiError(
             message=f"Lost the connection to the Queue API while polling the job: {exc}",
