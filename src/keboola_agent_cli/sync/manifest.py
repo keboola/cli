@@ -170,6 +170,11 @@ class ManifestPendingRemoval(BaseModel):
         tree: The branch tree, relative to the project root (``main``).
         path: The directory, relative to *tree*.
         kind: ``config`` or ``row``.
+        row_path: For a row, its folder relative to its configuration's folder.
+            The row's current path is its configuration's current path plus
+            this, so the record follows every move of the configuration (a
+            pull rename, a hand move) -- ``path`` is only where it was when
+            last saved (#827 D1, D2).
         file_hash: SHA-256 of its ``_config.yml`` when pull decided ("" if none).
         tree_hash: Digest of every file below *path* when pull decided.
     """
@@ -182,20 +187,24 @@ class ManifestPendingRemoval(BaseModel):
     component_id: str = Field(default="", alias="componentId")
     config_id: str = Field(default="", alias="configId")
     row_id: str = Field(default="", alias="rowId")
+    row_path: str = Field(default="", alias="rowPath")
     file_hash: str = Field(default="", alias="fileHash")
     tree_hash: str = Field(default="", alias="treeHash")
 
     # Why the record is unsafe to act on, decided at load (F1). Never written.
     _problem: str | None = PrivateAttr(default=None)
 
-    @field_validator("tree", "path")
+    @field_validator("tree", "path", "row_path")
     @classmethod
     def _normalise_path(cls, value: str) -> str:
         return _posix_path(value)
 
     @model_validator(mode="after")
     def _check_paths(self) -> ManifestPendingRemoval:
-        for label, value in (("tree", self.tree), ("path", self.path)):
+        checks = [("tree", self.tree), ("path", self.path)]
+        if self.row_path:
+            checks.append(("row path", self.row_path))
+        for label, value in checks:
             problem = relative_path_problem(value)
             if problem is not None:
                 self._problem = f"its {label} {value!r} is refused: {problem}"

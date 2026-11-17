@@ -400,18 +400,27 @@ def scan_config_dirs(
     return found
 
 
-def without_pending(dirs: IdDirs, pending: PendingPaths, config_path: str) -> IdDirs:
+def without_pending(
+    dirs: IdDirs,
+    pending: PendingPaths,
+    config_path: str,
+    hidden_rows: frozenset[str] = frozenset(),
+) -> IdDirs:
     """*dirs* (row folders of *config_path*) with every pending one kept reserved only (#827, F5).
 
     Such a folder is one an interrupted pull has not finished deleting: it is
     never adopted by the id it carries nor taken for a moved row, but no new
     row is written into it either. Judged on the tree-relative path, so the
     tracked folders' exemptions apply exactly as in diff and push (H1, I1).
+    *hidden_rows* are this configuration's pending row folders by identity
+    (relative to it), hidden wherever the configuration is now (D1).
     """
-    if not pending.paths:
+    if not pending.paths and not hidden_rows:
         return dirs
 
     def hidden(row_path: str) -> bool:
+        if any(row_path == h or row_path.startswith(f"{h}/") for h in hidden_rows):
+            return True
         return under_pending(f"{config_path}/{row_path}", pending)
 
     out = IdDirs(paths=set(dirs.paths))
@@ -569,7 +578,12 @@ def pull_config_rows(
     result = RowPullResult(rows=[])
     dirs = scan_row_dirs(service, ctx.config_dir)
     if ctx.journal is not None:  # a pending row dir is reserved, never adopted (F5)
-        dirs = without_pending(dirs, ctx.journal.pending, ctx.rel_path)
+        dirs = without_pending(
+            dirs,
+            ctx.journal.pending,
+            ctx.rel_path,
+            ctx.journal.rows_hidden(ctx.component_id, ctx.config_id),
+        )
     warnings += ambiguous_id_warnings(dirs, parent=f"{ctx.component_id}/{ctx.config_id}")
     # A row dir carrying an id is adopted by that id under a tracked parent
     # too, unless a manifest row owns its path (D22 guards a differing file).

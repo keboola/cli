@@ -47,7 +47,13 @@ from pathlib import Path
 from typing import Any
 
 from ..constants import CONFIG_FILENAME
-from .manifest import Manifest, ManifestConfiguration, PendingPaths, under_pending
+from .manifest import (
+    Manifest,
+    ManifestConfiguration,
+    ManifestPendingRemoval,
+    PendingPaths,
+    under_pending,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -229,12 +235,40 @@ def pending_removal_paths(manifest: Manifest, tree: str) -> PendingPaths:
         tracked.update(f"{cfg.path}/{row.path}" for row in cfg.rows if row.path)
     return PendingPaths(
         frozenset(
-            item.path
+            resolve_removal(manifest, item).path
             for item in manifest.pending_removals
             if item.tree == tree and item.problem is None
         ),
         frozenset(tracked),
     )
+
+
+def resolve_removal(
+    manifest: Manifest,
+    item: ManifestPendingRemoval,
+    live: list[ManifestConfiguration] | tuple[ManifestConfiguration, ...] = (),
+) -> ManifestPendingRemoval:
+    """*item* at its configuration's CURRENT folder (#827, D1/D2).
+
+    A row record names its configuration (component, id, tree) and its folder
+    relative to it (``row_path``); its path is that configuration's current
+    path plus ``row_path`` -- *live* (the entries a running pull wrote) first,
+    then *manifest*. So a row whose delete is pending follows a rename or a
+    move of its configuration. Any other record, or a row whose configuration
+    has no entry, keeps its recorded path.
+    """
+    if item.kind != "row" or not item.row_path or item.problem is not None:
+        return item
+    for cfg in [*live, *manifest.configurations]:
+        if (
+            cfg.component_id == item.component_id
+            and cfg.id == item.config_id
+            and cfg.path
+            and entry_tree(manifest, cfg) == item.tree
+        ):
+            path = f"{cfg.path}/{item.row_path}"
+            return item if path == item.path else item.model_copy(update={"path": path})
+    return item
 
 
 def find_branch_entry(

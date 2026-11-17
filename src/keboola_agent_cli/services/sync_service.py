@@ -131,7 +131,7 @@ from ._sync_link_recovery import resolve_transformation_links
 from ._sync_local_files import check_local_files, drop_held, load_config_yaml
 from ._sync_models import LocalConfigHashes
 from ._sync_moves import move_fields, persist_moves, relocate, settle_moves, status_moves
-from ._sync_pending_removals import RemovalJournal, recover_pending_removals
+from ._sync_pending_removals import RemovalJournal, recover_pending_removals, relocate_records
 from ._sync_project_guard import adopt_existing_manifest, load_project_manifest
 from ._sync_promote_remap import (
     PromoteRemap,
@@ -950,7 +950,9 @@ class SyncService(BaseService):
             )
             entries.retire(manifest, project_root, branch_dir_name, new_configurations)
             # Records an earlier pull left, plus this pull's failed or kept ones (F2, G1).
-            manifest.pending_removals = [*manifest.pending_removals, *journal.retained]
+            manifest.pending_removals = relocate_records(
+                manifest, [*manifest.pending_removals, *journal.retained]
+            )
             save_manifest(project_root, manifest)
 
         return {

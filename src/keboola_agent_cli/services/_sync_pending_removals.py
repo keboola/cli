@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 
 from ..constants import CONFIG_FILENAME
-from ..sync.branch_scope import entry_tree, pending_removal_paths
+from ..sync.branch_scope import entry_tree, pending_removal_paths, resolve_removal
 from ..sync.manifest import (
     Manifest,
     ManifestConfiguration,
@@ -94,6 +94,10 @@ class RemovalJournal:
         pending: Paths (relative to *tree*) still recorded by an earlier pull
             after the recovery -- their delete failed again. Pull reserves
             them and never adopts a row from them (F5).
+        pending_rows: ``(component_id, config_id, row folder)`` of those
+            records that are rows: pull hides the row folder by its
+            configuration's identity, wherever this pull puts that
+            configuration (a rename in the same pull, D1).
         planned: Records of the directories to delete, in planning order.
         retained: Records still recorded after the commit -- a delete that
             failed, or a folder kept because it changed (G1); the final save
@@ -105,6 +109,7 @@ class RemovalJournal:
     project_root: Path
     tree: str
     pending: PendingPaths = field(default_factory=PendingPaths)
+    pending_rows: frozenset[tuple[str, str, str]] = frozenset()
     planned: list[ManifestPendingRemoval] = field(default_factory=list)
     retained: list[ManifestPendingRemoval] = field(default_factory=list)
     warnings: list[dict[str, Any]] = field(default_factory=list)
@@ -112,12 +117,36 @@ class RemovalJournal:
     @classmethod
     def for_pull(cls, project_root: Path, manifest: Manifest, tree: str) -> RemovalJournal:
         """The journal of a pull of *tree*, after the recovery ran."""
-        return cls(project_root, tree, pending=pending_removal_paths(manifest, tree))
+        rows = frozenset(
+            (item.component_id, item.config_id, item.row_path)
+            for item in manifest.pending_removals
+            if item.tree == tree and item.kind == "row" and item.row_path and item.problem is None
+        )
+        return cls(
+            project_root, tree, pending=pending_removal_paths(manifest, tree), pending_rows=rows
+        )
+
+    def rows_hidden(self, component_id: str, config_id: str) -> frozenset[str]:
+        """Row folders (relative to the configuration) whose delete is still pending (D1)."""
+        return frozenset(
+            row for comp, cid, row in self.pending_rows if (comp, cid) == (component_id, config_id)
+        )
 
     def plan(
-        self, path: str, kind: str, *, component_id: str, config_id: str, row_id: str = ""
+        self,
+        path: str,
+        kind: str,
+        *,
+        component_id: str,
+        config_id: str,
+        row_id: str = "",
+        row_path: str = "",
     ) -> None:
-        """Record *path* (relative to the tree) for deletion; nothing is deleted yet."""
+        """Record *path* (relative to the tree) for deletion; nothing is deleted yet.
+
+        A row also records *row_path*, its folder relative to its
+        configuration: the record then follows the configuration's moves.
+        """
         directory = self.project_root / self.tree / path
         if not directory.is_dir():
             return
@@ -129,6 +158,7 @@ class RemovalJournal:
                 componentId=component_id,
                 configId=config_id,
                 rowId=row_id,
+                rowPath=row_path,
                 fileHash=_file_hash(directory),
                 treeHash=tree_digest(directory),
             )
@@ -143,11 +173,16 @@ class RemovalJournal:
         is checked again (F6): an unsafe path, a symbolic link, a tracked
         config or row inside -- *live* holds the entries this pull wrote --
         or any change since it was planned keeps it, with a warning. A folder
-        inside another planned one goes with it (G1, :func:`_settle`).
+        inside another planned one goes with it (G1, :func:`_settle`). The
+        checkpoint also takes the folders this pull already moved (renames):
+        only the ``path`` of those entries, no other work of the pull -- so
+        every row record validates against the checkpoint alone after a
+        restart (D2).
         """
         if not self.planned:
             return
         checkpoint = manifest.model_copy(deep=True)
+        _take_moves(checkpoint, live or [], self.tree)
         for item in self.planned:
             _drop_tracked(checkpoint, item)
         checkpoint.pending_removals = [*checkpoint.pending_removals, *self.planned]
@@ -155,6 +190,24 @@ class RemovalJournal:
         settled = _settle(self.project_root, checkpoint, self.planned, live or [])
         self.retained += settled.retained
         self.warnings += settled.warnings
+
+
+def _take_moves(checkpoint: Manifest, live: list[ManifestConfiguration], tree: str) -> None:
+    """Give each entry of *tree* the path this pull already moved its folder to (D2)."""
+    moved = {(c.component_id, c.id): c.path for c in live if entry_tree(checkpoint, c) == tree}
+    for cfg in checkpoint.configurations:
+        if entry_tree(checkpoint, cfg) != tree:
+            continue
+        path = moved.get((cfg.component_id, cfg.id))
+        if path and path != cfg.path:
+            cfg.path = path
+
+
+def relocate_records(
+    manifest: Manifest, records: list[ManifestPendingRemoval]
+) -> list[ManifestPendingRemoval]:
+    """*records* at their configurations' current folders in *manifest* (D1), for a save."""
+    return [resolve_removal(manifest, item) for item in records]
 
 
 def _drop_tracked(manifest: Manifest, item: ManifestPendingRemoval) -> None:
@@ -378,6 +431,7 @@ def _settle(
     """
     out = Settled()
     deleted: list[ManifestPendingRemoval] = []
+    items = [resolve_removal(manifest, item, live) for item in items]  # D1, D2
     for item in sorted(items, key=lambda i: (i.tree, i.path.count("/"), i.path)):
         if any(d.tree == item.tree and item.path.startswith(f"{d.path}/") for d in deleted):
             continue  # removed with its outer folder

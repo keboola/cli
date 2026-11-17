@@ -806,3 +806,89 @@ def test_pull_row_discovery_honours_tracked_exemptions() -> None:
         dirs(), PendingPaths(frozenset({"c", "c/rows/gone"}), frozenset({"c"})), "c"
     )
     assert lifted.by_id == {"500": "rows/kept"}
+
+
+# ------------------------------------------------------------------- Devin D1, D2
+
+
+def _refuse(*_: Any, **__: Any) -> None:
+    raise PermissionError("busy")
+
+
+def test_a_pending_row_follows_its_renamed_configuration(
+    ws: Workspace, api: FakeStorage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D1: delete fails twice, the parent is renamed in between; push creates no row."""
+    cid = api.add("Orders", ["SELECT 1;"])
+    api.configs[cid]["rows"].append(dict(ROW))
+    ws.init_and_pull()
+    api.configs[cid]["rows"] = []
+    _rmtree_via(monkeypatch, _refuse)
+    ws.pull()  # the row delete fails: recorded
+    (first,) = ws.manifest().pending_removals
+    assert first.row_path and first.path.endswith(first.row_path)
+    api.ui_rename(cid, "Orders renamed")
+    ws.pull()  # recovery fails again, and the parent folder is renamed
+    monkeypatch.undo()
+
+    entry = ws.entry(cid)
+    assert entry is not None and entry.path.endswith("orders-renamed")
+    (record,) = ws.manifest().pending_removals
+    assert record.path == f"{entry.path}/{record.row_path}"
+    assert (ws.root / "main" / record.path / CONFIG_FILENAME).is_file()
+    assert not [c for c in ws.diff()["changes"] if c.get("is_row")]
+    ws.push()
+    assert ("create_config_row", "500") not in api.calls
+    assert not [c for c in api.calls if c[0] == "create_config_row"]
+
+
+def test_a_row_journaled_after_a_rename_in_the_same_pull_survives_a_restart(
+    ws: Workspace, api: FakeStorage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D2: rename + row removal in one pull, crash before rmtree; the restart deletes the row."""
+    cid = api.add("Orders", ["SELECT 1;"])
+    api.configs[cid]["rows"].append(dict(ROW))
+    ws.init_and_pull()
+    api.configs[cid]["rows"] = []
+    api.ui_rename(cid, "Orders renamed")
+    _rmtree_via(monkeypatch, _die)
+    with pytest.raises(Crash):
+        ws.pull()
+    monkeypatch.undo()
+    entry = ws.entry(cid)
+    assert entry is not None and entry.path.endswith("orders-renamed")  # checkpoint took the move
+    (record,) = ws.manifest().pending_removals
+    row_dir = ws.root / "main" / record.path
+    assert row_dir.is_dir() and record.path.startswith(f"{entry.path}/")
+
+    result = ws.pull()
+
+    assert "PENDING_REMOVAL_INVALID" not in [w.get("code") for w in result.get("warnings", [])]
+    assert not row_dir.exists()
+    assert ws.manifest().pending_removals == []
+    ws.push()
+    assert not [c for c in api.calls if c[0] == "create_config_row"]
+
+
+def test_resolve_removal_follows_the_configuration_entry() -> None:
+    from keboola_agent_cli.sync.branch_scope import resolve_removal
+    from keboola_agent_cli.sync.manifest import (
+        ManifestBranch,
+        ManifestConfiguration,
+        ManifestNaming,
+        ManifestProject,
+    )
+
+    manifest = Manifest(
+        project=ManifestProject(id=1, apiHost="h"),
+        naming=ManifestNaming(),
+        branches=[ManifestBranch(id=1, path="main")],
+        configurations=[ManifestConfiguration(branchId=1, componentId="c", id="9", path="new")],
+    )
+    row = ManifestPendingRemoval(
+        tree="main", path="old/rows/r", kind="row", componentId="c", configId="9", rowPath="rows/r"
+    )
+    assert resolve_removal(manifest, row).path == "new/rows/r"
+    legacy = row.model_copy(update={"row_path": ""})
+    assert resolve_removal(manifest, legacy).path == "old/rows/r"
+    assert ManifestPendingRemoval(tree="main", path="x", kind="row", rowPath="../x").problem

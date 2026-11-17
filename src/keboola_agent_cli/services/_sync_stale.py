@@ -586,5 +586,6 @@ def sweep_stale_rows(
                 component_id=component_id,
                 config_id=config_id,
                 row_id=row_id,
+                row_path=tracked["path"],
             )
     return kept
