@@ -218,7 +218,14 @@ def relocate_records(
 
 
 def _drop_tracked(manifest: Manifest, item: ManifestPendingRemoval) -> None:
-    """Remove the entry (or the row) *item* records from *manifest*."""
+    """Remove the entry (or the row) *item* records from *manifest*.
+
+    A config's folder also takes every promote entry whose files it is (a
+    dev-branch config promoted from it, ``promoted_from``): with its source
+    folder gone such an entry would read as a local delete, and a
+    ``push --branch DEV --force`` after a crash would delete the dev config
+    (#1005 K1). The final save of a pull drops it the same way.
+    """
     in_tree = [c for c in manifest.configurations if entry_tree(manifest, c) == item.tree]
     if item.kind == "row":
         for cfg in in_tree:
@@ -228,7 +235,11 @@ def _drop_tracked(manifest: Manifest, item: ManifestPendingRemoval) -> None:
     drop = {
         id(c)
         for c in in_tree
-        if c.component_id == item.component_id and c.id == item.config_id and c.path == item.path
+        if (c.component_id == item.component_id and c.id == item.config_id and c.path == item.path)
+        or (
+            promoted_from(c) is not None
+            and (c.path == item.path or c.path.startswith(f"{item.path}/"))
+        )
     }
     manifest.configurations = [c for c in manifest.configurations if id(c) not in drop]
 
@@ -299,9 +310,50 @@ class QuarantineNotEmptied(OSError):
     """The folder left its tree, but deleting it from the quarantine failed (#1005)."""
 
 
+QUARANTINE_IGNORE = ".gitignore"
+
+
+class QuarantineUnsafe(OSError):
+    """The quarantine is not a plain folder of the project; nothing is moved into it (K2)."""
+
+
 def quarantine_dir(project_root: Path) -> Path:
     """Where pull moves a folder right before deleting it: ``.keboola/removing`` (#1005)."""
     return project_root / KEBOOLA_DIR_NAME / QUARANTINE_DIR
+
+
+def quarantine_problem(project_root: Path) -> str | None:
+    """Why the quarantine must not be used, or ``None`` (#1005 K2).
+
+    ``.keboola`` and ``.keboola/removing`` must each be a real directory (or
+    not exist yet) -- never a symbolic link, never anything else -- and
+    resolve inside the project: a linked quarantine would make a pull move
+    folders out of the project or delete unrelated files.
+    """
+    current = project_root
+    for part in (KEBOOLA_DIR_NAME, QUARANTINE_DIR):
+        current = current / part
+        if current.is_symlink():
+            return f"{current.relative_to(project_root).as_posix()} is a symbolic link"
+        if current.exists() and not current.is_dir():
+            return f"{current.relative_to(project_root).as_posix()} is not a folder"
+    root = project_root.resolve()
+    if root not in quarantine_dir(project_root).resolve().parents:
+        return f"{KEBOOLA_DIR_NAME}/{QUARANTINE_DIR} resolves outside the project"
+    return None
+
+
+def _ensure_quarantine(project_root: Path) -> Path:
+    """The checked quarantine folder, created with a self-ignoring ``.gitignore`` (K2, K3)."""
+    problem = quarantine_problem(project_root)
+    if problem is not None:
+        raise QuarantineUnsafe(f"the removal quarantine is not usable: {problem}")
+    root = quarantine_dir(project_root)
+    root.mkdir(parents=True, exist_ok=True)
+    ignore = root / QUARANTINE_IGNORE
+    if not ignore.exists():
+        ignore.write_text("*\n", encoding="utf-8")  # nothing in it is ever committed
+    return root
 
 
 def _move_aside(directory: Path, target: Path) -> None:
@@ -318,14 +370,16 @@ def _remove(project_root: Path, item: ManifestPendingRemoval) -> None:
     leaves a partly deleted folder that the next pull takes for an edit and
     keeps forever. A failed rename leaves the folder whole (``OSError``); a
     failed delete in the quarantine raises :class:`QuarantineNotEmptied` --
-    the next pull empties the quarantine (:func:`empty_quarantine`).
+    the next pull empties the quarantine (:func:`empty_quarantine`). An
+    unusable quarantine (a link, outside the project) refuses before any move
+    (:class:`QuarantineUnsafe`): the folder stays whole and recorded. So does
+    a folder on another file system, which cannot be renamed into it.
     """
     tree_dir = project_root / item.tree
     directory = tree_dir / item.path
     if not directory.is_dir():
         return
-    target = quarantine_dir(project_root) / uuid.uuid4().hex
-    target.parent.mkdir(parents=True, exist_ok=True)
+    target = _ensure_quarantine(project_root) / uuid.uuid4().hex
     _move_aside(directory, target)
     logger.info("Removed directory: %s", directory)
     if item.kind != "row":
@@ -345,13 +399,28 @@ def empty_quarantine(project_root: Path) -> list[dict[str, Any]]:
     Everything in the quarantine is a folder pull itself moved out of a tree
     after every check -- never a user's folder -- so it is deleted as it is.
     A folder that still cannot be deleted is reported and tried again by the
-    next pull.
+    next pull. A quarantine that is a link or resolves outside the project is
+    never touched (K2); its ``.gitignore`` stays (K3).
     """
     root = quarantine_dir(project_root)
-    if not root.is_dir():
+    if not root.exists() and not root.is_symlink():
         return []
+    problem = quarantine_problem(project_root)
+    if problem is not None:
+        return [
+            {
+                "code": "PENDING_REMOVAL_FAILED",
+                "path": f"{KEBOOLA_DIR_NAME}/{QUARANTINE_DIR}",
+                "message": (
+                    f"The removal quarantine was not emptied: {problem}. Nothing in it or "
+                    "behind it was touched; fix the folder by hand."
+                ),
+            }
+        ]
     warnings: list[dict[str, Any]] = []
     for leftover in sorted(root.iterdir()):
+        if leftover.name == QUARANTINE_IGNORE:
+            continue
         try:
             if leftover.is_dir() and not leftover.is_symlink():
                 shutil.rmtree(leftover)
