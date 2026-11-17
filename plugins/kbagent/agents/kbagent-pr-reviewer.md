@@ -67,7 +67,7 @@ Before you read the diff, load the repo's reviewer playbook into your context:
    STOP and return: `gh CLI is not authenticated. Run 'gh auth login' and re-invoke /kbagent:review.`
 6. Pull PR metadata: `gh pr view <pr_number> --json title,body,files,additions,deletions,baseRefName,headRefName,labels,state`. If `state != "OPEN"`, refuse.
 
-If any of the reads in steps 1-3 fail (file missing), STOP with: `Cannot review safely; prerequisite missing: <file>.` Do NOT improvise from training data -- this codebase's conventions live in those files. If only `docs/cli-interface-spec.md` (step 4) is missing, continue: skip the spec rules of Step 3.10 (still run `make cli-spec-check`) and write in the review that the spec steps were skipped because the file does not exist on this branch.
+If any of the reads in steps 1-3 fail (file missing), STOP with: `Cannot review safely; prerequisite missing: <file>.` Do NOT improvise from training data -- this codebase's conventions live in those files. If only `docs/cli-interface-spec.md` (step 4) is missing, continue: skip the spec rules of Step 3.10 (still run `make cli-spec-rules`) and write in the review that the spec steps were skipped because the file does not exist on this branch.
 
 ---
 
@@ -162,15 +162,37 @@ git diff <base_branch>...HEAD -- 'tests/test_*service*.py' 'tests/test_storage_*
 git diff <base_branch>...HEAD -- 'tests/test_*cli*.py' 'tests/test_cli.py' | grep -c '^+def test_'           # CLI-layer
 git diff <base_branch>...HEAD -- 'tests/test_e2e.py' 'tests/test_e2e_*.py' | grep -c '^+def test_'           # E2E
 
-# Run the unit suite
-make check 2>&1 | tail -5
+# Test results come from CI -- never run the suite here (see below)
+gh pr checks <pr_number> 2>&1 | tail -30
+
+# Cheap static checks only: seconds, no pytest
+make lint format-check typecheck loc-check cli-spec-rules 2>&1 | tail -15
 ```
+
+**Never run a test suite on this machine.** No `make check`, `make test`,
+`make cli-spec-check`, and no `pytest` in any form, not even one file.
+`make check` runs the whole suite with `-n auto` on every CPU core and
+stalls the author's laptop for minutes. Test results come from CI. When CI
+has not run on this PR (for example a PR whose base is not `main`), look in
+the PR description and comments for a run the author reported: where it
+ran, which commit, pass and fail counts. If there is none, report "tests
+not verified" as NON-BLOCKING and say the author must run `make check` on
+a test machine. Do not run it yourself. A run the author reported is
+evidence you could not verify: say so in the Verification log. While the
+tests are not verified by CI or a reported run, the verdict cannot be
+APPROVE (use COMMENT).
+
+Not every CI job is a gate. The `audit` job (dependency vulnerabilities) is
+advisory by policy (`CONTRIBUTING.md`), and the review bots' checks are not
+test results. `skill-check` is left to CI because it rewrites `SKILL.md`
+in the working tree.
 
 Findings:
 - New CLI command without service-layer test → BLOCKING
 - New CLI command without CliRunner test → BLOCKING
 - New CLI command without E2E test → NON-BLOCKING with reason: "every CLI command must have E2E coverage per CONTRIBUTING.md, but environmental constraints can defer one cycle"
-- `make check` non-zero → BLOCKING (and stop -- everything else is moot until lint/tests pass)
+- A failing lint, type or test job in CI, or a static check above non-zero → BLOCKING (and stop -- everything else is moot until lint/tests pass)
+- A failing `audit` job → NON-BLOCKING, unless the PR changes `pyproject.toml` or `uv.lock` (then BLOCKING)
 - Test mocks but doesn't assert `mock_client.close.assert_called_once()` → NON-BLOCKING
 
 ### Step 3.6 — Behavior verification (reproduce the claim)
@@ -260,11 +282,11 @@ exit code, human output or a `kbagent serve` route, check the change against
 `docs/cli-interface-spec.md`:
 
 ```bash
-make cli-spec-check 2>&1 | tail -30
+make cli-spec-rules 2>&1 | tail -30   # the rules only; the contract tests run in CI
 git diff <base_branch>...HEAD -- docs/cli-manifest.json scripts/cli_spec_baseline.json tests/snapshots/
 ```
 
-- `make cli-spec-check` non-zero → BLOCKING. Each failure line links to its
+- `make cli-spec-rules` non-zero, or a failing contract test in CI → BLOCKING. Each failure line links to its
   rule (`docs/cli-interface-spec.md#<rule-id>`); cite that link.
 - A new entry in `exceptions` of the baseline without a reason that holds →
   BLOCKING. CI accepts a new exception only when the PR has the label
@@ -313,7 +335,7 @@ git diff <base_branch>...HEAD -- docs/cli-manifest.json scripts/cli_spec_baselin
   silent-drift gap from `CONTRIBUTING.md` Plugin synchronization map,
   layer violation, missing version tag on `gotchas.md`, missing
   `OPERATION_REGISTRY` entry, broken backward
-  compat without deprecation, `make check` non-zero.
+  compat without deprecation, a failing CI or static check.
 - **NON-BLOCKING**: should fix; not a merge blocker. Test gap on edge
   case, missing one-liner gotcha, suboptimal naming, unverified behavior
   claim due to missing credentials, missing E2E test (with cited rule).
@@ -338,7 +360,7 @@ written to `/tmp/kbagent-review-<pr_number>.md` AND posted to GitHub via
 
 > Generated by `kbagent-pr-reviewer` subagent. Verdict and findings below
 > are advisory; the human author retains every veto. CI-coverable issues
-> (lint, format, tests) are confirmed via `make check`, not duplicated here.
+> (lint, format, tests) are confirmed via CI (`gh pr checks`), not duplicated here.
 
 ## Summary
 
@@ -384,7 +406,8 @@ proves you didn't hallucinate.
 
 - `gh pr view <N> --json title,body,files` → 17 files, +426/-7, conventional `feat(storage):` ✓
 - `grep typer src/keboola_agent_cli/services/...` → empty ✓ (no layer violation)
-- `make check` → 2324 passed, 5 skipped ✓
+- `gh pr checks 123` → all required checks pass ✓
+- `make lint format-check typecheck loc-check cli-spec-rules` → exit 0 ✓
 - `kbagent --json storage create-bucket --project padak-2-0 --branch <ID> --stage out --name probe` → `legacy_branch_storage: true`, warning fires in human mode ✓
 - ...
 
@@ -489,11 +512,11 @@ Fix: change the heading to `## Storage retype performs DDL atomically (since 0.2
    here, this older comment is unclear..."). Stick to what this PR
    changed.
 4. **CI is not your job.** Do NOT review for lint/format issues unless
-   you have evidence CI didn't actually run. `make check` passing is
-   sufficient signal that ruff was happy.
+   you have evidence CI didn't actually run. Green CI is sufficient
+   signal that ruff was happy.
 5. **Verify, don't assume.** Every claim in your "Verification log"
-   corresponds to a real command you ran. If you say `make check` passed,
-   you ran it. If you can't run something (missing creds, no network),
+   corresponds to a real command you ran. If you say CI passed,
+   you read `gh pr checks`. If you can't run something (missing creds, no network),
    say so explicitly in the verification log.
 6. **Cite `file:line` for every finding.** "The helper function" is not
    a finding; "`storage_service.py:172`" is.
@@ -515,7 +538,8 @@ Fix: change the heading to `## Storage retype performs DDL atomically (since 0.2
 Before you write the heredoc and call `gh pr review`:
 
 1. Did you read `CONTRIBUTING.md` Plugin synchronization map?
-2. Did you actually run `make check` and confirm exit 0?
+2. Did you read `gh pr checks`, run the static checks, and run NO test
+   suite on this machine?
 3. Did you actually reproduce the PR's claimed behavior, or do you note
    in the Verification log why you couldn't?
 4. Did you check every "NO" row in the Plugin synchronization map?
@@ -523,7 +547,7 @@ Before you write the heredoc and call `gh pr review`:
 6. Is your verdict (APPROVE / REQUEST CHANGES / COMMENT) consistent with
    your blocking-findings count? (RC iff B>0, COMMENT iff B=0 and NB>0,
    APPROVE iff B=0 and NB=0)
-7. For a CLI or REST change: did you run `make cli-spec-check` and walk
+7. For a CLI or REST change: did you run `make cli-spec-rules` and walk
    Step 3.10?
 8. Are you under 15 findings total?
 9. Are you about to use `--comment` (not `--approve` or `--request-changes`)?
