@@ -254,6 +254,19 @@ nothing was deleted and nothing needs rolling back -- the item is exactly as it
 was (the envelope's `rollback` field is always `null`). Items keep their id,
 scope and revision history across an edit.
 
+What an edit does NOT protect against *(since vNEXT)*:
+
+- Two edits of the SAME key at the same time: the last one wins.
+- Two concurrent renames of one metric, or a constraint that starts referencing
+  the metric while the rename runs (the cascade misses it). Run
+  `kbagent semantic-layer validate` after every metric rename.
+- A `PATCH` that failed with a 5xx or a read timeout is not retried and may have
+  been applied. Re-read with `kbagent semantic-layer show` before you repeat it.
+- An `edit` with no `--new-*` option writes nothing (no new revision); a value
+  you pass is written even when it equals the stored one.
+- `import --overwrite` and `promote` still replace the whole item (`PUT`): do
+  not run them while someone edits the target model.
+
 **Partial cascade state**: each cascaded constraint is
 updated independently (a `PATCH` of its `metrics` only, no rollback needed).
 If the metric rename succeeds but M of N dependent constraints fail
