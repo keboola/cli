@@ -101,8 +101,9 @@ separate steps. Reasons:
 - The user may want to inspect the new config in the UI first.
 - The user may want to schedule the run for off-hours.
 
-Wait for an explicit user instruction before calling `job run` or any other
-execution endpoint.
+Wait for an explicit user instruction before calling `job run`, `flow run` or
+any other execution endpoint. For `flow run`, show the `--dry-run` selection and
+its warnings first ([flow-workflow](flow-workflow.md#run-a-flow)).
 
 ## Working from a git repository
 
