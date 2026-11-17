@@ -363,3 +363,41 @@ def test_a_script_edit_saved_after_the_recovery_put_is_neither_rewritten_nor_sta
     codes = [w.get("code") for w in result.get("warnings", [])]
     assert "LOCAL_EDIT_DURING_PUSH" in codes, result
     assert _target_change(world, PY, "Py step") != "unchanged"
+
+
+# ------------------------------------------------------------------------ review NB
+
+
+def test_held_uses_the_target_id_on_the_promote_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A promoted config has another id on the dev branch; its rows are held by that id too."""
+    v = VARIANTS["rows"]
+    seeded = _seeded(tmp_path, v)
+    w, prod_id = seeded.world, seeded.config_id
+    w.push(branch=DEV)  # the dev branch lacks it: created under a new id
+    ((comp, dev_id),) = [key for key in w.api.remote[DEV] if key[0] == v.component_id]
+    assert dev_id != prod_id
+    config_dir = w.config_dir(prod_id)
+    semantic_edit(config_dir / CONFIG_FILE)
+    row_file = next(p for p in (config_dir / "rows").rglob(CONFIG_FILE))
+    semantic_edit(row_file)
+    dev = w.api.remote[DEV][(comp, dev_id)]
+    rows_before = [dict(r["configuration"]) for r in dev["rows"]]
+    real = w.api._update
+
+    def ui_edits_dev_first(*args: Any, **kwargs: Any) -> dict:
+        if kwargs.get("expected_version") is not None:
+            dev["name"] = "edited on the dev branch"
+            dev["version"] = dev.get("version", 1) + 1
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(w.api, "_update", ui_edits_dev_first)
+    result = w.svc.push(alias="prod", project_root=w.root, branch_override=DEV)
+
+    codes = [
+        (e.get("error_code"), e.get("parent_config_id", e["config_id"])) for e in result["errors"]
+    ]
+    assert codes[0] == ("SYNC_CONFLICT", dev_id), result
+    assert ("SYNC_CONFLICT", dev_id) in codes[1:], result  # the row, held by the dev id
+    assert [r["configuration"] for r in dev["rows"]] == rows_before

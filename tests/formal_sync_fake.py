@@ -35,7 +35,7 @@ import copy
 import shutil
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 from unittest.mock import MagicMock
 
 import yaml
@@ -56,6 +56,13 @@ VERIFY = TokenVerifyResponse(
     project_name="Production",
     owner_name="My Org",
 )
+
+
+class Pulled(NamedTuple):
+    """A pulled config: its id and its folder."""
+
+    config_id: str
+    config_dir: Path
 
 
 class Crash(BaseException):

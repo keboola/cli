@@ -72,6 +72,7 @@ from ..sync.branch_scope import (
 from ..sync.manifest import (
     Manifest,
     ManifestConfiguration,
+    PendingPaths,
     load_manifest,
     save_manifest,
     under_pending,
@@ -336,7 +337,7 @@ def _unowned(
     tree_dir: Path,
     owned: set[str],
     ignored: frozenset[str],
-    pending: frozenset[str] = frozenset(),
+    pending: PendingPaths | None = None,
 ) -> dict[str, ConfigIdentity]:
     """Unowned config dirs of the tree -> the ``(component_id, config_id)`` they carry.
 
@@ -352,7 +353,7 @@ def _unowned(
         rel = config_file.parent.relative_to(tree_dir)
         if not rel.parts or "rows" in rel.parts or rel.as_posix() in owned:
             continue
-        if under_pending(rel.as_posix(), pending):
+        if pending is not None and under_pending(rel.as_posix(), pending):
             continue
         if config_file.parent.resolve() != real_tree / rel:
             continue  # a symlinked directory (or one below a symlink)

@@ -10,8 +10,9 @@ import contextlib
 import json
 import os
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Self
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
 
@@ -241,29 +242,28 @@ class Manifest(BaseModel):
     )
 
 
-class PendingPaths(frozenset[str]):
-    """Paths a pull has not finished deleting, and the tracked paths inside them (#827, H1).
+@dataclass(frozen=True)
+class PendingPaths:
+    """Paths a pull has not finished deleting, and the tracked paths that lift them (#827).
 
-    A ``frozenset`` of the pending paths (so it unions and iterates like
-    one) that also carries *exempt*: every tracked config and row directory.
-    A tracked directory inside a pending folder (a config tracked again
-    there) is never hidden by it -- only the rest of the folder is.
+    Attributes:
+        paths: The pending folders, relative to their tree.
+        exempt: Every tracked config and row folder in the same base. A
+            tracked folder at or inside a pending folder is never hidden by
+            THAT folder (H1); a pending record strictly below it still hides
+            its own path (I1).
     """
 
-    exempt: frozenset[str]
-
-    def __new__(cls, paths: frozenset[str], exempt: frozenset[str] = frozenset()) -> Self:
-        obj = super().__new__(cls, paths)
-        obj.exempt = exempt
-        return obj
+    paths: frozenset[str] = frozenset()
+    exempt: frozenset[str] = frozenset()
 
 
-def _at_or_below(path: str, prefixes: frozenset[str]) -> bool:
-    return any(path == p or path.startswith(f"{p}/") for p in prefixes)
+def _at_or_below(path: str, prefix: str) -> bool:
+    return path == prefix or path.startswith(f"{prefix}/")
 
 
-def under_pending(path: str, pending: frozenset[str]) -> bool:
-    """True iff *path* (relative to its tree) is a pending removal or lies below one.
+def under_pending(path: str, pending: PendingPaths) -> bool:
+    """True iff *path* is a pending removal or lies below one, and no tracked folder lifts it.
 
     Diff and push treat such a directory as absent: never a move target,
     never an untracked config to create or adopt, never a new row (#827, D11).
@@ -273,15 +273,10 @@ def under_pending(path: str, pending: frozenset[str]) -> bool:
     directory still covers its own path (I1): a row folder whose delete
     failed stays absent under its tracked configuration.
     """
-    exempt = getattr(pending, "exempt", frozenset())
-    for p in pending:
-        if not (path == p or path.startswith(f"{p}/")):
+    for p in pending.paths:
+        if not _at_or_below(path, p):
             continue
-        cancelled = any(
-            (t == p or t.startswith(f"{p}/")) and (path == t or path.startswith(f"{t}/"))
-            for t in exempt
-        )
-        if not cancelled:
+        if not any(_at_or_below(t, p) and _at_or_below(path, t) for t in pending.exempt):
             return True
     return False
 

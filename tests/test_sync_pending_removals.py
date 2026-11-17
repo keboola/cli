@@ -20,7 +20,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel, ConfigDict
 
-from formal_sync_fake import CONFIG_FILENAME, Crash, FakeStorage, Workspace
+from formal_sync_fake import CONFIG_FILENAME, Crash, FakeStorage, Pulled, Workspace
 from keboola_agent_cli.services import _sync_pending_removals
 from keboola_agent_cli.services._sync_pending_removals import _file_hash, tree_digest
 from keboola_agent_cli.sync.manifest import (
@@ -61,7 +61,7 @@ def _die(*_: Any, **__: Any) -> None:
 
 def _crashed_before_rmtree(
     ws: Workspace, api: FakeStorage, monkeypatch: pytest.MonkeyPatch
-) -> tuple[str, Path]:
+) -> Pulled:
     """A pulled config trashed in the UI; the pull dies after its checkpoint, before the delete."""
     cid = api.add("Orders", ["SELECT 1;"])
     ws.init_and_pull()
@@ -75,7 +75,7 @@ def _crashed_before_rmtree(
     assert ws.entry(cid) is None  # the checkpoint dropped the entry
     (item,) = ws.manifest().pending_removals
     assert (item.kind, item.config_id) == ("config", cid)
-    return cid, path
+    return Pulled(cid, path)
 
 
 def _no_change_at(diff: dict[str, Any], rel: str) -> bool:
@@ -784,3 +784,25 @@ def test_a_stale_record_at_a_config_tracked_again_does_not_hide_its_new_row(
 
     assert [(c["change_type"], c["parent_config_id"]) for c in rows] == [("added", cid)]
     assert [r["name"] for r in api.configs[cid]["rows"]] == ["Existing Row", "New Row"]
+
+
+def test_pull_row_discovery_honours_tracked_exemptions() -> None:
+    """NB-2: row adoption judges pending paths tree-relative, exemptions included."""
+    from keboola_agent_cli.services._sync_pull_dirs import IdDirs, without_pending
+    from keboola_agent_cli.sync.manifest import PendingPaths
+
+    def dirs() -> IdDirs:
+        found = IdDirs()
+        found.add("500", "rows/kept")
+        found.add("501", "rows/gone")
+        return found
+
+    # The config folder itself is pending and NOT tracked: every row folder is hidden.
+    hidden = without_pending(dirs(), PendingPaths(frozenset({"c"})), "c")
+    assert hidden.by_id == {}
+    assert hidden.paths == {"rows/kept", "rows/gone"}  # still reserved
+    # Tracked again at "c": its folder is lifted, the row record below it is not (H1, I1).
+    lifted = without_pending(
+        dirs(), PendingPaths(frozenset({"c", "c/rows/gone"}), frozenset({"c"})), "c"
+    )
+    assert lifted.by_id == {"500": "rows/kept"}

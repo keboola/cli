@@ -749,47 +749,31 @@ def _repoint_shared_code(config_data: dict[str, Any], link: SharedCodeLink) -> N
         )
 
 
-def _rewrite_script_files(config_dir: Path, row_id_map: dict[str, str]) -> dict[str, str]:
-    """Rewrite the script placeholders in a config's extracted code files.
+def rewrite_scripts_from(
+    config_dir: Path, contents: dict[str, bytes] | None, row_id_map: dict[str, str]
+) -> dict[str, str]:
+    """Rewrite the script placeholders in a config's code files; their hashes as left.
 
-    Returns the SHA-256 of each file as this call left it -- the bytes it
-    wrote, or the bytes it read when nothing changed -- so the caller stamps
-    those, never a re-read (#827, F7). Written like ``write_text`` (the
-    platform's line endings).
+    *contents* are the bytes read once by the caller (G3, link recovery);
+    ``None`` reads each file here (a config created in this push, R18). Only
+    a file whose text changes is written, like ``write_text`` (the platform's
+    line endings). The hash is of the bytes written, else of the bytes read
+    -- never a second read of the folder (#827, F7).
     """
     hashes: dict[str, str] = {}
     for filename in _SCRIPT_FILENAMES:
         path = config_dir / filename
-        if not path.exists():
-            continue
-        raw = path.read_bytes()
-        text = raw.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
-        rewritten = rewrite_shared_code_placeholders(text, row_id_map)
-        if rewritten != text:
-            raw = rewritten.replace("\n", os.linesep).encode("utf-8")
-            path.write_bytes(raw)
-        hashes[filename] = hashlib.sha256(raw).hexdigest()
-    return hashes
-
-
-def rewrite_scripts_from(
-    config_dir: Path, contents: dict[str, bytes], row_id_map: dict[str, str]
-) -> dict[str, str]:
-    """Rewrite script placeholders from the bytes read ONCE (*contents*); their new hashes (G3).
-
-    Only a file whose text changes is written; the hash is of the bytes
-    written, else of the bytes read -- never a second read of the folder.
-    """
-    hashes: dict[str, str] = {}
-    for filename in _SCRIPT_FILENAMES:
-        raw = contents.get(filename)
+        if contents is not None:
+            raw = contents.get(filename)
+        else:
+            raw = path.read_bytes() if path.exists() else None
         if raw is None:
             continue
         text = raw.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
         rewritten = rewrite_shared_code_placeholders(text, row_id_map)
         if rewritten != text:
             raw = rewritten.replace("\n", os.linesep).encode("utf-8")
-            (config_dir / filename).write_bytes(raw)
+            path.write_bytes(raw)
         hashes[filename] = hashlib.sha256(raw).hexdigest()
     return hashes
 
@@ -891,7 +875,7 @@ def _apply_shared_code_binding(
         )
     finally:
         service._write_config_file(created.config_dir, local_data)
-        _rewrite_script_files(created.config_dir, link.row_id_map)
+        rewrite_scripts_from(created.config_dir, None, link.row_id_map)
     logger.info(
         "Resolved shared code link for %s/%s -> shared_code_id=%s rows=%s",
         created.component_id,

@@ -14,12 +14,22 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 
 from formal_sync_fake import CONFIG_FILENAME, Crash, FakeStorage, Workspace
 
 ORIGINAL = ["SELECT 1"]
+
+
+class PulledWorkspace(NamedTuple):
+    """A working tree with one pulled config."""
+
+    ws: Workspace
+    config_id: str
+
+
 UI_SCRIPT = ["SELECT 'edited in the UI'"]
 
 
@@ -30,13 +40,13 @@ def push_force(request: pytest.FixtureRequest) -> bool:
 
 def _pulled(
     tmp_config_dir: Path, tmp_path: Path, api: FakeStorage, push_force: bool
-) -> tuple[Workspace, str]:
+) -> PulledWorkspace:
     """One tracked SQL config, freshly pulled."""
     cid = api.add("Orders", ORIGINAL)
     ws = Workspace(tmp_config_dir, tmp_path / "repo", api, push_force=push_force)
     ws.init_and_pull()
     assert ws.entry(cid) is not None
-    return ws, cid
+    return PulledWorkspace(ws, cid)
 
 
 # --------------------------------------------------------------------------- D

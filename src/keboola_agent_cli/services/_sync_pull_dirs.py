@@ -37,6 +37,7 @@ from ..sync.manifest import (
     Manifest,
     ManifestConfigRow,
     ManifestConfiguration,
+    PendingPaths,
     under_pending,
 )
 from ..sync.naming import config_row_path
@@ -395,25 +396,30 @@ def scan_config_dirs(
         else:
             found.paths.add(item["path"])  # authored, never pushed: reserved too (D26)
     # A directory whose delete failed is reserved, never adopted (#827, D11).
-    found.paths |= pending_removal_paths(manifest, branch_dir_name)
+    found.paths |= pending_removal_paths(manifest, branch_dir_name).paths
     return found
 
 
-def without_pending(dirs: IdDirs, pending: frozenset[str]) -> IdDirs:
-    """*dirs* with every directory at or below a *pending* path kept reserved only (#827, F5).
+def without_pending(dirs: IdDirs, pending: PendingPaths, config_path: str) -> IdDirs:
+    """*dirs* (row folders of *config_path*) with every pending one kept reserved only (#827, F5).
 
-    Such a directory is one an interrupted pull has not finished deleting:
-    it is never adopted by the id it carries nor taken for a moved row, but
-    no new row is written into it either.
+    Such a folder is one an interrupted pull has not finished deleting: it is
+    never adopted by the id it carries nor taken for a moved row, but no new
+    row is written into it either. Judged on the tree-relative path, so the
+    tracked folders' exemptions apply exactly as in diff and push (H1, I1).
     """
-    if not pending:
+    if not pending.paths:
         return dirs
+
+    def hidden(row_path: str) -> bool:
+        return under_pending(f"{config_path}/{row_path}", pending)
+
     out = IdDirs(paths=set(dirs.paths))
     for key, path in dirs.by_id.items():
-        if not under_pending(path, pending):
+        if not hidden(path):
             out.by_id[key] = path
     for key, paths in dirs.ambiguous.items():
-        kept = [p for p in paths if not under_pending(p, pending)]
+        kept = [p for p in paths if not hidden(p)]
         if len(kept) > 1:
             out.ambiguous[key] = kept
         elif kept:
@@ -563,7 +569,7 @@ def pull_config_rows(
     result = RowPullResult(rows=[])
     dirs = scan_row_dirs(service, ctx.config_dir)
     if ctx.journal is not None:  # a pending row dir is reserved, never adopted (F5)
-        dirs = without_pending(dirs, ctx.journal.rows_pending_under(ctx.rel_path))
+        dirs = without_pending(dirs, ctx.journal.pending, ctx.rel_path)
     warnings += ambiguous_id_warnings(dirs, parent=f"{ctx.component_id}/{ctx.config_id}")
     # A row dir carrying an id is adopted by that id under a tracked parent
     # too, unless a manifest row owns its path (D22 guards a differing file).

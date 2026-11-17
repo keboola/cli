@@ -10,11 +10,11 @@ from __future__ import annotations
 
 import copy
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import pytest
 
-from formal_sync_fake import CONFIG_FILENAME, FakeStorage, Workspace
+from formal_sync_fake import CONFIG_FILENAME, FakeStorage, Pulled, Workspace
 from keboola_agent_cli.services import _sync_push_update
 from keboola_agent_cli.services._sync_push_update import (
     SentUpdate,
@@ -35,10 +35,10 @@ def ws(tmp_config_dir: Path, tmp_path: Path, api: FakeStorage) -> Workspace:
     return Workspace(tmp_config_dir, tmp_path / "repo", api)
 
 
-def _pulled(ws: Workspace, api: FakeStorage, **kw: Any) -> tuple[str, Path]:
+def _pulled(ws: Workspace, api: FakeStorage, **kw: Any) -> Pulled:
     cid = api.add("Orders", ["SELECT 1"], **kw)
     ws.init_and_pull()
-    return cid, ws.dir_of(cid)
+    return Pulled(cid, ws.dir_of(cid))
 
 
 def _codes(result: dict[str, Any]) -> list[str]:
@@ -329,13 +329,21 @@ ROW = {
 }
 
 
-def _pulled_with_row(ws: Workspace, api: FakeStorage) -> tuple[str, Path, Path]:
+class PulledWithRow(NamedTuple):
+    """A pulled config with one row: its id, its folder and the row's folder."""
+
+    config_id: str
+    config_dir: Path
+    row_dir: Path
+
+
+def _pulled_with_row(ws: Workspace, api: FakeStorage) -> PulledWithRow:
     cid = api.add("Orders", ["SELECT 1;"])
     api.configs[cid]["rows"].append(copy.deepcopy(ROW))
     ws.init_and_pull()
     d = ws.dir_of(cid)
     (row_dir,) = [p for p in (d / "rows").iterdir() if (p / CONFIG_FILENAME).is_file()]
-    return cid, d, row_dir
+    return PulledWithRow(cid, d, row_dir)
 
 
 def test_rows_of_a_config_whose_update_got_412_are_held(ws: Workspace, api: FakeStorage) -> None:

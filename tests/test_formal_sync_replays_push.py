@@ -28,7 +28,7 @@ from typing import Any
 
 import pytest
 
-from formal_sync_fake import Crash, FakeStorage, Workspace, timeout_error
+from formal_sync_fake import Crash, FakeStorage, Pulled, Workspace, timeout_error
 from keboola_agent_cli.constants import CONFIG_FILENAME
 from keboola_agent_cli.services import _sync_push_create, _sync_push_update, sync_service
 
@@ -45,11 +45,11 @@ def ws(
     return Workspace(tmp_config_dir, tmp_path / "repo", api, push_force=bool(request.param))
 
 
-def _pulled(ws: Workspace, api: FakeStorage, name: str = "Orders") -> tuple[str, Path]:
+def _pulled(ws: Workspace, api: FakeStorage, name: str = "Orders") -> Pulled:
     """One remote SQL transformation, init + pull. Returns (config id, its dir)."""
     cid = api.add(name, ["SELECT 1"])
     ws.init_and_pull()
-    return cid, ws.dir_of(cid)
+    return Pulled(cid, ws.dir_of(cid))
 
 
 def _crash_at_first_save_after_create(monkeypatch: pytest.MonkeyPatch, api: FakeStorage) -> None:

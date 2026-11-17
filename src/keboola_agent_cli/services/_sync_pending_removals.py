@@ -43,6 +43,7 @@ from ..sync.manifest import (
     Manifest,
     ManifestConfiguration,
     ManifestPendingRemoval,
+    PendingPaths,
     save_manifest,
 )
 from ._sync_stale import holds, same_dir, scan_owned_tree
@@ -103,7 +104,7 @@ class RemovalJournal:
 
     project_root: Path
     tree: str
-    pending: frozenset[str] = frozenset()
+    pending: PendingPaths = field(default_factory=PendingPaths)
     planned: list[ManifestPendingRemoval] = field(default_factory=list)
     retained: list[ManifestPendingRemoval] = field(default_factory=list)
     warnings: list[dict[str, Any]] = field(default_factory=list)
@@ -112,11 +113,6 @@ class RemovalJournal:
     def for_pull(cls, project_root: Path, manifest: Manifest, tree: str) -> RemovalJournal:
         """The journal of a pull of *tree*, after the recovery ran."""
         return cls(project_root, tree, pending=pending_removal_paths(manifest, tree))
-
-    def rows_pending_under(self, config_path: str) -> frozenset[str]:
-        """Pending paths below *config_path*, relative to it (row directories)."""
-        prefix = f"{config_path}/"
-        return frozenset(p.removeprefix(prefix) for p in self.pending if p.startswith(prefix))
 
     def plan(
         self, path: str, kind: str, *, component_id: str, config_id: str, row_id: str = ""
