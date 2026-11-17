@@ -5624,6 +5624,13 @@ A `sync pull` without the right flags leaves column metadata empty in the local
 JSON. That does NOT mean Keboola has no metadata -- always re-fetch via
 `kbagent storage table-detail` when deciding about types.
 
+The general rule: **never trust a synced file for write-path metadata.** The
+sync tree is a snapshot of the last pull, and parts of it (column metadata,
+descriptions, types, storage metadata) may be empty or stale. Before a write
+that is based on such a value, read it from Keboola right before the write
+(`storage table-detail`, `config detail`, `branch metadata-get`), never from the
+synced file.
+
 ### `Client` library: `query()` needs a provisioned workspace; `branch_id=None` costs a branch-list call
 
 The in-process library facade (`from keboola_agent_cli import Client`, 0.61.0+)
