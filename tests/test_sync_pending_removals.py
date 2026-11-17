@@ -1119,3 +1119,93 @@ def test_a_hard_linked_quarantine_gitignore_is_replaced_not_written_through(
     assert other.read_text(encoding="utf-8") == "!keep-me\n"
     assert (quarantine / ".gitignore").read_bytes() == b"*\n"
     assert sorted(p.name for p in quarantine.iterdir()) == [".gitignore"]
+
+
+# ------------------------------------------------------------------- #1007 Devin
+
+
+def _promoted_world(tmp_path: Path) -> Any:
+    from test_sync_bookkeeping_differential import DEV, VARIANTS, _seeded
+
+    v = VARIANTS["extractor"]
+    seeded = _seeded(tmp_path, v)
+    seeded.world.push(branch=DEV)  # B: promoted from A's main/ folder, its own dev id
+    return seeded
+
+
+def test_an_ignored_source_cleanup_drops_the_promote_entry_too(tmp_path: Path) -> None:
+    """E1 (a): ignore A's component, pull removes A's folder, un-ignore: a forced dev push keeps B."""
+    from keboola_agent_cli.sync.manifest import load_manifest, save_manifest
+    from test_sync_bookkeeping_differential import CONFIG_FILE, DEV, VARIANTS
+
+    seeded = _promoted_world(tmp_path)
+    w, prod_id = seeded.world, seeded.config_id
+    component = VARIANTS["extractor"].component_id
+    config_dir = w.config_dir(prod_id)
+    dev_before = dict(w.api.remote[DEV])
+    manifest = load_manifest(w.root)
+    manifest.ignored_components = [component]
+    save_manifest(w.root, manifest)
+
+    w.pull()
+    assert not (config_dir / CONFIG_FILE).exists()  # unchanged, so cleaned up (#927)
+    manifest = load_manifest(w.root)
+    manifest.ignored_components = []
+    save_manifest(w.root, manifest)
+
+    result = w.svc.push(alias="prod", project_root=w.root, branch_override=DEV, force=True)
+
+    assert w.api.remote[DEV] == dev_before, result
+
+
+def test_a_recovered_removal_drops_the_promote_entry_before_a_listing_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E1 (b): the first removal fails, the recovery deletes the folder, the listing then fails."""
+    from keboola_agent_cli.errors import KeboolaApiError
+    from test_sync_bookkeeping_differential import CONFIG_FILE, DEV, PROD, VARIANTS
+
+    seeded = _promoted_world(tmp_path)
+    w, prod_id = seeded.world, seeded.config_id
+    component = VARIANTS["extractor"].component_id
+    config_dir = w.config_dir(prod_id)
+    dev_before = dict(w.api.remote[DEV])
+    del w.api.remote[PROD][(component, prod_id)]
+    _removal_via(monkeypatch, _refuse)
+    w.pull()  # the move fails: recorded, folder kept
+    monkeypatch.undo()
+    assert (config_dir / CONFIG_FILE).exists()
+
+    def listing_fails(*_: Any, **__: Any) -> Any:
+        raise KeboolaApiError("listing failed", status_code=503)
+
+    monkeypatch.setattr(w.api, "_list", listing_fails)
+    with pytest.raises(KeboolaApiError):
+        w.pull()  # recovery deletes the folder, then the listing fails
+    monkeypatch.undo()
+    assert not (config_dir / CONFIG_FILE).exists()
+
+    result = w.svc.push(alias="prod", project_root=w.root, branch_override=DEV, force=True)
+
+    assert w.api.remote[DEV] == dev_before, result
+
+
+def test_an_unreadable_quarantine_does_not_stop_a_pull(ws: Workspace, api: FakeStorage) -> None:
+    """E2: a quarantine that cannot be listed is reported; the pull goes on."""
+    api.add("Orders", ["SELECT 1;"])
+    ws.init_and_pull()
+    quarantine = _sync_pending_removals.quarantine_dir(ws.root)
+    (quarantine / "leftover").mkdir(parents=True)
+    quarantine.chmod(0)
+    try:
+        try:
+            list(quarantine.iterdir())
+            pytest.skip("chmod 000 does not stop listing here (root or Windows)")
+        except PermissionError:
+            pass
+        result = ws.pull()
+    finally:
+        quarantine.chmod(0o755)
+
+    assert result["status"] == "pulled"
+    assert "PENDING_REMOVAL_FAILED" in [w["code"] for w in result["warnings"]]
