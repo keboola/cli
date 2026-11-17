@@ -1094,3 +1094,28 @@ def test_a_quarantine_gitignore_with_other_content_is_rewritten(
 
     assert not path.exists()
     assert (quarantine / ".gitignore").read_bytes() == b"*\n"
+
+
+def test_a_hard_linked_quarantine_gitignore_is_replaced_not_written_through(
+    ws: Workspace, api: FakeStorage, tmp_path: Path
+) -> None:
+    """K3: a ``.gitignore`` hard-linked elsewhere is replaced; the other path keeps its content."""
+    cid = api.add("Orders", ["SELECT 1;"])
+    ws.init_and_pull()
+    path = ws.dir_of(cid)
+    quarantine = _sync_pending_removals.quarantine_dir(ws.root)
+    quarantine.mkdir(parents=True)
+    other = tmp_path / "another-repo-gitignore"
+    other.write_text("!keep-me\n", encoding="utf-8")
+    try:
+        os.link(other, quarantine / ".gitignore")
+    except (OSError, NotImplementedError):
+        pytest.skip("no hard link support")
+    api.ui_trash(cid)
+
+    ws.pull()
+
+    assert not path.exists()
+    assert other.read_text(encoding="utf-8") == "!keep-me\n"
+    assert (quarantine / ".gitignore").read_bytes() == b"*\n"
+    assert sorted(p.name for p in quarantine.iterdir()) == [".gitignore"]
