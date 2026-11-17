@@ -296,6 +296,20 @@ def _terminate_and_wait(
     return final
 
 
+class QueueJobFailedError(KeboolaApiError):
+    """``QUEUE_JOB_FAILED`` from :meth:`JobService.run_job`, with the failed job it read.
+
+    ``failed_job`` is the job detail ``_handle_wait_error`` already fetched
+    (``None`` when that read failed). It is a Python attribute, never a
+    ``details`` key, so ``job run`` output does not grow; ``flow run`` builds
+    its per-task results from it without a second read.
+    """
+
+    def __init__(self, *args: Any, failed_job: dict[str, Any] | None = None, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.failed_job = failed_job
+
+
 class JobService(BaseService):
     """Business logic for Keboola jobs (list, detail, run, terminate).
 
@@ -727,13 +741,15 @@ class JobService(BaseService):
         if code == "QUEUE_JOB_FAILED":
             # GET the job to resolve runId (required for Storage events)
             # and to enrich the error details with the failed job payload.
+            fetched: dict[str, Any] | None = None
             try:
-                failed_job = client.get_job_detail(job_id)
+                fetched = client.get_job_detail(job_id)
             except Exception:
-                failed_job = {"id": job_id}
+                fetched = None
+            failed_job = fetched if isinstance(fetched, dict) else {"id": job_id}
             tail = _safe_fetch_log_tail(client, failed_job, log_tail_lines)
             details = _enrich_with_tail(exc.details, tail)
-            raise KeboolaApiError(
+            raise QueueJobFailedError(
                 message=exc.message,
                 status_code=exc.status_code,
                 error_code=exc.error_code,
@@ -741,6 +757,7 @@ class JobService(BaseService):
                 # The job id travels with the failure (spec LR3), so a caller
                 # such as `flow run` can read the failed job's task results.
                 details={**(details or {}), "job_id": job_id},
+                failed_job=fetched if isinstance(fetched, dict) else None,
             ) from exc
 
         if code == "QUEUE_JOB_TIMEOUT" and not kill_on_timeout:

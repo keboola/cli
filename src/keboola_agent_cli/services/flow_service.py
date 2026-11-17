@@ -816,22 +816,31 @@ class FlowService(BaseService):
 
         A partial run whose flow job ended in ``error`` (``QUEUE_JOB_FAILED``,
         typically its last phase failed) carries ``task_results`` and
-        ``failed_task_ids`` in ``details``, read from one more job detail
-        call, plus a ``SELECTED_TASK_FAILED`` warning (F2). When that read
-        fails, the error stays as it was.
+        ``failed_task_ids`` in ``details``, plus a ``SELECTED_TASK_FAILED``
+        warning (F2). They come from the job ``run_job`` already read
+        (:class:`QueueJobFailedError`); only when that read failed is the job
+        read once more. Best effort: any read, decoding or shape problem
+        leaves the original error, its details and the warnings unchanged.
         """
+        from .job_service import QueueJobFailedError
+
         job_id = exc.details.get("job_id") if isinstance(exc.details, dict) else None
         if not selection.partial or exc.error_code != ErrorCode.QUEUE_JOB_FAILED or not job_id:
             return FlowRunError(exc, warnings)
-        client = self._client_factory(project.stack_url, project.token)
         try:
-            job = client.get_job_detail(str(job_id))
-        except (KeboolaApiError, OSError):
-            logger.debug("flow run: reading failed job %s for task results failed", job_id)
+            job = exc.failed_job if isinstance(exc, QueueJobFailedError) else None
+            if job is None:
+                client = self._client_factory(project.stack_url, project.token)
+                try:
+                    job = client.get_job_detail(str(job_id))
+                finally:
+                    client.close()
+            if not isinstance(job, dict):
+                raise TypeError(f"job detail is {type(job).__name__}, not an object")
+            results = summarize_task_results(job, selection)
+        except (KeboolaApiError, OSError, ValueError, TypeError, AttributeError, KeyError) as err:
+            logger.debug("flow run: no task results for failed job %s: %s", job_id, err)
             return FlowRunError(exc, warnings)
-        finally:
-            client.close()
-        results = summarize_task_results(job, selection)
         details = {
             **exc.details,
             "task_results": results.task_results,

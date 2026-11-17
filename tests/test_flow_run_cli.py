@@ -465,15 +465,42 @@ class TestFixRound1:
     def test_parent_error_read_failure_keeps_the_error(self, tmp_path: Path) -> None:
         client = _client()
         client.wait_for_queue_job.side_effect = _job_failed()
-        # First read: the log-tail lookup of `run_job`; second: the task-results read.
-        client.get_job_detail.side_effect = [
-            FAILED_JOB,
-            KeboolaApiError(message="boom", status_code=500, error_code=ErrorCode.API_ERROR),
-        ]
+        # Both reads fail: the one in `run_job` and the retry in the flow layer.
+        boom = KeboolaApiError(message="boom", status_code=500, error_code=ErrorCode.API_ERROR)
+        client.get_job_detail.side_effect = [boom, boom]
         result = _run(_store(tmp_path), client, [*BASE, "--from-phase-id", "p2", "--wait"])
         assert result.exit_code == 1, result.output
         envelope = _json(result)
         assert envelope["error"]["code"] == ErrorCode.QUEUE_JOB_FAILED
+        assert "failed_task_ids" not in envelope["error"]["details"]
+        assert "PARTIAL_RUN_IGNORES_CONDITIONS" in [w["code"] for w in envelope["warnings"]]
+
+    def test_enrichment_reuses_the_job_run_job_already_read(self, tmp_path: Path) -> None:
+        client = _client()
+        client.wait_for_queue_job.side_effect = _job_failed()
+        client.get_job_detail.return_value = FAILED_JOB
+        result = _run(_store(tmp_path), client, [*BASE, "--from-phase-id", "p2", "--wait"])
+        assert result.exit_code == 1, result.output
+        assert _json(result)["error"]["details"]["failed_task_ids"] == ["t3"]
+        # One read, exactly as `job run` makes on QUEUE_JOB_FAILED: no second read.
+        assert client.get_job_detail.call_count == 1
+
+    @pytest.mark.parametrize(
+        "bad_read",
+        [None, json.JSONDecodeError("Expecting value", "<html>", 0), ["not", "an", "object"]],
+        ids=["json-null", "non-json", "wrong-shape"],
+    )
+    def test_bad_enrichment_read_keeps_queue_job_failed(
+        self, tmp_path: Path, bad_read: Any
+    ) -> None:
+        client = _client()
+        client.wait_for_queue_job.side_effect = _job_failed()
+        client.get_job_detail.side_effect = [bad_read, bad_read]
+        result = _run(_store(tmp_path), client, [*BASE, "--from-phase-id", "p2", "--wait"])
+        assert result.exit_code == 1, result.output
+        envelope = _json(result)
+        assert envelope["error"]["code"] == ErrorCode.QUEUE_JOB_FAILED
+        assert envelope["error"]["details"]["job_id"] == "900"
         assert "failed_task_ids" not in envelope["error"]["details"]
         assert "PARTIAL_RUN_IGNORES_CONDITIONS" in [w["code"] for w in envelope["warnings"]]
 
