@@ -482,12 +482,11 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   `projects_failed` / `projects_refresh_failed` / `failed` / `summary.failed`
   and retry only the failed items, never the whole command blind (`--dry-run`
   exits 1 the same way). The 18 fan-out reads
-  (`billing credits`, `job list`, ...) exit 1 too (since 1.0.0, 0 before).
-  On 0.97.0 and older these writes exit 0 even when items failed: check the
-  same keys.
+  (`billing credits`, `job list`, ...) exit 1 too (1.0.0+).
+  On <=0.97.0 these writes exit 0 on item failure: check the same keys.
 - `project refresh` / `org setup --refresh` SKIP session projects (`--force`
-  does not override). A refresh TIMEOUT is exit 4 (network) -- re-run, do not
-  re-login.
+  too). TIMEOUT = exit 4, re-run. vNEXT+: in a local `.kbagent` dir
+  `project refresh` first takes global's working token.
 
 **Semantic-layer** -- full prose in
 [`gotchas.md`](../skills/kbagent/references/gotchas.md) § Semantic-layer:

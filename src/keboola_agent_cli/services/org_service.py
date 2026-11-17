@@ -605,9 +605,11 @@ class OrgService:
                 ensure_unchanged(self._config_store, alias, project)
             except ConfigError as exc:
                 raise ConfigError(
-                    f"{exc.message} A new Storage token was created for project "
-                    f"{project.project_id} but not saved; delete it with "
-                    "`kbagent token list` and `kbagent token delete`."
+                    f"{exc.message} A new Storage token (ID {token_data.get('id', '?')}) "
+                    f"was created in project {project.project_id} on "
+                    f"{project.stack_url} but not saved; delete it in the Keboola UI "
+                    "or with `kbagent token delete --token-id ID` from a config "
+                    "that holds that project."
                 ) from None
             self._config_store.edit_project(
                 alias,

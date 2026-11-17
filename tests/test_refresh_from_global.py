@@ -383,6 +383,7 @@ class TestServiceAdoption:
         assert result["projects_refreshed"] == []
         message = result["projects_failed"][0]["message"]
         assert "changed concurrently" in message and "token delete" in message
+        assert "(ID x)" in message and "project 200" in message
         assert MINTED not in message
         assert _token(local, "b") == concurrent
 
