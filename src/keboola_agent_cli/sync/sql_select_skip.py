@@ -1,33 +1,34 @@
-"""Find SQL statements a transformation runtime silently skips.
+r"""Find SQL statements a transformation runtime silently skips.
 
-``keboola/snowflake-transformation`` (``SnowflakeTransformation::executeQueries``)
-and ``keboola/google-bigquery-transformation`` run each ``script[]`` element
-like this::
+``keboola/snowflake-transformation`` and ``keboola/google-bigquery-transformation``
+do not run a ``script[]`` element whose comment-free text starts with ``SELECT``:
+the job succeeds even when the table does not exist. Both remove the comments
+with ``SqlFormatter::removeComments()`` first and then ignore leading whitespace:
 
-    $uncommentedQuery = SqlFormatter::removeComments($query, false);
-    if (strlen(trim($uncommentedQuery)) === 0) continue;               // empty
-    if (strtoupper(substr($uncommentedQuery, 0, 6)) === 'SELECT') continue;
+- Snowflake (``SnowflakeTransformation::isSkippedSelect``, since
+  keboola/snowflake-transformation#42): ``preg_match('/^\s*SELECT\b/i', ...)``.
+  ``SELECT`` must be a whole word, so ``SELECTT ...`` runs (and fails).
+- BigQuery (``Transformation::executeQueries``): ``removeComments($query)``
+  reformats the SQL, which drops leading whitespace, then compares the first 6
+  characters with ``SELECT``. No whole-word check, so ``SELECTT ...`` is skipped.
 
-``removeComments(..., false)`` drops the comment tokens only: no trim, no
-formatting. So a statement whose comment-free text starts with ``SELECT`` at
-its very first character never runs -- the job succeeds even when the table
-does not exist. Leading whitespace keeps the statement (``substr`` then sees
-the whitespace), and so does a leading line comment: its token ends before
-the newline, which stays. ``WITH ... SELECT`` runs.
+``WITH ... SELECT`` and ``CREATE TABLE ... AS SELECT`` run in both.
 
 A SELECT has no effect inside a transformation anyway (nothing reads its
 result), so kbagent warns about it and never blocks the write.
 
 Comment rules mirror SqlFormatter's tokenizer: ``--`` and ``#`` start a line
 comment that ends before the newline, ``/* ... */`` is a block comment (an
-unclosed one runs to the end of the text). Only the comments in front of the
-first real token matter for the 6-character check, so only those are
+unclosed one runs to the end of the text). ``//`` is not a comment for
+SqlFormatter, so ``// note\nSELECT ...`` runs. Only the comments and the
+whitespace in front of the first real token matter, so only those are
 removed. A quoted string or any other character ends the scan. A comment in
 the middle of the first word (``SEL/**/ECT``) is not handled.
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -47,6 +48,10 @@ SQL_SELECT_SKIPPED_CODE = "SQL_SELECT_SKIPPED_BY_RUNTIME"
 # Characters of the statement quoted in a finding.
 EXCERPT_MAX_CHARS = 80
 
+SNOWFLAKE_COMPONENT = "keboola.snowflake-transformation"
+
+# Snowflake requires SELECT as a whole word; BigQuery compares 6 characters.
+_SNOWFLAKE_SELECT = re.compile(r"SELECT\b", re.IGNORECASE)
 _SKIPPED_PREFIX = "SELECT"
 
 
@@ -70,26 +75,29 @@ class SkippedSelect:
 
 
 def strip_leading_comments(statement: str) -> str:
-    """Remove the comments in front of the first token, like SqlFormatter does.
+    """Remove the whitespace and comments in front of the first token.
 
-    Whitespace between or before comments is kept: the runtime keeps it too,
-    and it is what makes a statement run.
+    Both runtimes ignore them: comments are removed by SqlFormatter, and the
+    whitespace that remains does not change the decision.
     """
-    text = statement
+    text = statement.lstrip()
     while True:
         if text.startswith(("--", "#")):
             newline = text.find("\n")
-            text = "" if newline == -1 else text[newline:]
+            text = "" if newline == -1 else text[newline:].lstrip()
         elif text.startswith("/*"):
             end = text.find("*/", 2)
-            text = "" if end == -1 else text[end + 2 :]
+            text = "" if end == -1 else text[end + 2 :].lstrip()
         else:
             return text
 
 
-def is_skipped_by_runtime(statement: str) -> bool:
-    """Whether the runtime skips *statement* as a SELECT."""
-    return strip_leading_comments(statement)[:6].upper() == _SKIPPED_PREFIX
+def is_skipped_by_runtime(component_id: str, statement: str) -> bool:
+    """Whether the runtime of *component_id* skips *statement* as a SELECT."""
+    text = strip_leading_comments(statement)
+    if component_id == SNOWFLAKE_COMPONENT:
+        return _SNOWFLAKE_SELECT.match(text) is not None
+    return text[:6].upper() == _SKIPPED_PREFIX
 
 
 def skipped_select_statements(component_id: str, blocks: Any) -> list[SkippedSelect]:
@@ -119,7 +127,7 @@ def skipped_select_statements(component_id: str, blocks: Any) -> list[SkippedSel
             if not isinstance(statements, list):
                 continue
             for index, statement in enumerate(statements):
-                if isinstance(statement, str) and is_skipped_by_runtime(statement):
+                if isinstance(statement, str) and is_skipped_by_runtime(component_id, statement):
                     found.append(
                         SkippedSelect(
                             block=str(block.get("name", "")),

@@ -1650,7 +1650,9 @@ kbagent transformation edit [--project NAME] --config-id ID --change-description
 #   batch-start ids -- ALWAYS `transformation show` first, ids renumber after structural ops;
 #   --storage REPLACES configuration.storage wholesale; --dry-run previews without PUT.
 #   SELECT skip: the Snowflake/BigQuery transformation runtime skips a script[] statement whose
-#   comment-free text starts with SELECT at char 0 (the job succeeds without running it).
+#   comment-free text, leading whitespace ignored, starts with SELECT (Snowflake: whole word,
+#   since keboola/snowflake-transformation#42; BigQuery: first 6 chars). The job succeeds
+#   without running it.
 #   create/edit (also --dry-run) and `sync push` (configs it creates/updates, also --dry-run) add a
 #   warnings[] entry SQL_SELECT_SKIPPED_BY_RUNTIME per such statement ({code, message,
 #   component_id, config_id?, path?, statement: {block, code, index, excerpt}}); the write still

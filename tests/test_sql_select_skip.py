@@ -1,8 +1,8 @@
 """The SELECT-skip rule of the Snowflake / BigQuery transformation runtime.
 
-``SnowflakeTransformation::executeQueries`` (and the BigQuery twin) skip a
-``script[]`` element whose comment-free text starts with ``SELECT`` at its
-first character. kbagent mirrors that rule to warn before a write.
+The Snowflake and BigQuery transformation runtimes skip a ``script[]``
+element whose comment-free text, leading whitespace ignored, starts with
+``SELECT``. kbagent mirrors that rule to warn before a write.
 """
 
 import pytest
@@ -28,39 +28,54 @@ def _blocks(*scripts: list[str] | str) -> list[dict]:
     ]
 
 
+@pytest.mark.parametrize("component_id", [SNOWFLAKE, BIGQUERY])
 @pytest.mark.parametrize(
     "statement",
     [
         "SELECT * FROM table_that_does_not_exist;",
         "select 1;",
         "Select\n1;",
+        "SELECT*FROM t;",
+        "  SELECT 1;",  # leading whitespace is ignored (keboola/snowflake-transformation#42)
+        "\tSELECT 1;",
+        "\nSELECT 1;",
+        "\r\nSELECT 1;",
+        "-- note\nSELECT 1;",
+        "# note\nSELECT 1;",
         "/* explain */SELECT 1;",
-        "/* a *//* b */select 1;",
+        "/* x */ SELECT 1;",
+        "/* a */ -- b\n  /* c */\nselect 1;",
     ],
 )
-def test_skipped_statements(statement: str) -> None:
-    """The comment-free text starts with SELECT at its first character."""
-    assert is_skipped_by_runtime(statement) is True
+def test_skipped_statements(component_id: str, statement: str) -> None:
+    """The comment-free text, leading whitespace ignored, starts with SELECT."""
+    assert is_skipped_by_runtime(component_id, statement) is True
 
 
+@pytest.mark.parametrize("component_id", [SNOWFLAKE, BIGQUERY])
 @pytest.mark.parametrize(
     "statement",
     [
-        "-- note\nSELECT 1;",  # the newline after a line comment stays
-        "# note\nSELECT 1;",
-        " SELECT 1;",  # leading whitespace: substr() sees the space
-        "\nSELECT 1;",
-        "/* x */ SELECT 1;",
         "WITH a AS (SELECT 1) SELECT * FROM a;",
         'CREATE TABLE "t" AS SELECT * FROM "src";',
+        '  CREATE TABLE "t" AS SELECT 1;',
+        'INSERT INTO "t" SELECT 1;',
+        "// note\nSELECT 1;",  # SqlFormatter does not treat // as a comment
         "'SELECT';",
         "SELEC 1;",
         "/* never closed SELECT 1;",  # all comment: skipped as empty, not as a SELECT
         "",
     ],
 )
-def test_statements_that_run(statement: str) -> None:
-    assert is_skipped_by_runtime(statement) is False
+def test_statements_that_run(component_id: str, statement: str) -> None:
+    assert is_skipped_by_runtime(component_id, statement) is False
+
+
+@pytest.mark.parametrize("statement", ["SELECTT * FROM t;", "SELECTED_ROWS;", "  select_x;"])
+def test_select_must_be_a_whole_word_on_snowflake_only(statement: str) -> None:
+    """Snowflake matches SELECT as a whole word; BigQuery compares 6 characters."""
+    assert is_skipped_by_runtime(SNOWFLAKE, statement) is False
+    assert is_skipped_by_runtime(BIGQUERY, statement) is True
 
 
 def test_findings_name_block_code_and_index() -> None:
