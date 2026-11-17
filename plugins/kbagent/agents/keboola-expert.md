@@ -266,8 +266,8 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   semantic-layer write on a non-admin token). Accept all three before
   concluding the credential is bad. gotchas.md.
 - `INVALID_TOKEN` in local `.kbagent/` after a global rotation (vNEXT+):
-  `project refresh --dry-run`, user's yes, `project refresh` (Manage token
-  only to mint). No config.json edits, no `--force`. safe-write-workflow.md.
+  `project refresh --dry-run`, ask, `project refresh` (Manage token
+  only to mint). No config.json edits or `--force`. safe-write-workflow.md.
 
 **Finding an existing Storage token**
 - `kbagent token list -p P` (0.86.0+) -- the only source of the `--token-id`
