@@ -473,6 +473,9 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | **Project members & invitations** (single + bulk via CSV, role change, remove) | [member-workflow](references/member-workflow.md) |
 | **Billing / PAYG credits** (balance only; the shape of the invoice-history gap; PAYG_NOT_AVAILABLE; units) | [billing-workflow](references/billing-workflow.md) |
 | Dev branches | [branch-workflow](references/branch-workflow.md) |
+| **Conditional flows** (author / validate / update; **run the whole flow or only some tasks** with `flow run --task-id` / `--from-phase-id`: a partial run ignores conditions, `--dry-run` + user OK first, read `failed_task_ids`) | [flow-workflow](references/flow-workflow.md) |
+| Schedules (list / detail / find stale or overlapping cron schedules) | [schedule-workflow](references/schedule-workflow.md) |
+| Config runtime state (`config state-get` / `state-set`, never `config update --set state...`) | [config-state-workflow](references/config-state-workflow.md) |
 | **Merge requests** (dev branch -> production with review; conflicts + resolve; auto-merge is destructive; `--json merge` needs an explicit target) | [merge-request-workflow](references/merge-request-workflow.md) |
 | Encrypting secrets before a config write | [encrypt-workflow](references/encrypt-workflow.md) |
 | **Authorizing an OAuth component** (`config oauth-url`; no browser under `--json`, always echo the URL in a fenced block, verify by the config `version` bump) | [oauth-workflow](references/oauth-workflow.md) |
