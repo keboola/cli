@@ -7300,14 +7300,16 @@ class TestE2EFlowOperations:
         cf_file = self._write_cf(tmp_path)
 
         _step(2, "flow validate (semantic-only, no --project) -- structural skipped note")
-        result = self._run("flow", "validate", "--file", f"@{cf_file}")
+        result = self._run("flow", "validate", "--definition-file", str(cf_file))
         assert result.exit_code == 0, result.output
         payload = json.loads(result.output)["data"]
         assert payload["valid"] is True
         assert any("structural schema validation skipped" in n for n in payload.get("notes", []))
 
         _step(2.1, "flow validate --project -- fetch live schema, full validation")
-        result = self._run("flow", "validate", "--file", f"@{cf_file}", "--project", self.alias)
+        result = self._run(
+            "flow", "validate", "--definition-file", str(cf_file), "--project", self.alias
+        )
         # Skip cleanly if the project has conditional flows disabled.
         if result.exit_code != 0 and "conditional" in result.output.lower():
             pytest.skip("Project reports conditional_flows=false; skipping CF E2E")
@@ -7331,8 +7333,8 @@ class TestE2EFlowOperations:
             f"{RUN_ID}-flow",
             "--description",
             "E2E flow test",
-            "--file",
-            f"@{cf_file}",
+            "--definition-file",
+            str(cf_file),
         )
         # Skip cleanly if the project has conditional flows disabled.
         if result.exit_code != 0 and "conditional" in result.output.lower():
@@ -7389,6 +7391,81 @@ class TestE2EFlowOperations:
             "flow", "run", "--project", self.alias, "--flow-id", flow_id, "--task-id", " "
         )
         assert result.exit_code == 2, result.output
+
+        _step(5.3, "flow run --task-id --wait -- LIVE partial run of variable tasks only")
+        # The flow above points its task at a placeholder config, so it must
+        # never run. This flow has two phases with one `variable` task each:
+        # no component job, no credits. Only the p2 task is selected.
+        var_file = tmp_path / "cf-variables.yaml"
+        var_file.write_text(
+            "phases:\n"
+            '  - id: "p1"\n'
+            '    name: "P1"\n'
+            "    next:\n"
+            '      - id: "to-p2"\n'
+            '        goto: "p2"\n'
+            '  - id: "p2"\n'
+            '    name: "P2"\n'
+            "    next:\n"
+            '      - id: "end"\n'
+            "        goto: null\n"
+            "tasks:\n"
+            '  - id: "v1"\n'
+            '    name: "V1"\n'
+            '    phase: "p1"\n'
+            "    enabled: true\n"
+            "    task:\n"
+            "      type: variable\n"
+            '      name: "e2e_first"\n'
+            '      value: "1"\n'
+            '  - id: "v2"\n'
+            '    name: "V2"\n'
+            '    phase: "p2"\n'
+            "    enabled: true\n"
+            "    task:\n"
+            "      type: variable\n"
+            '      name: "e2e_second"\n'
+            '      value: "2"\n',
+            encoding="utf-8",
+        )
+        var_flow = self._run_ok(
+            "flow",
+            "new",
+            "--project",
+            self.alias,
+            "--name",
+            f"{RUN_ID}-flow-partial-run",
+            "--description",
+            "E2E partial flow run (variable tasks only)",
+            "--definition-file",
+            str(var_file),
+        )["data"]
+        var_flow_id = var_flow["id"]
+        self._created_flows.append(("keboola.flow", var_flow_id))
+        result = self._run(
+            "flow",
+            "run",
+            "--project",
+            self.alias,
+            "--flow-id",
+            var_flow_id,
+            "--task-id",
+            "v2",
+            "--wait",
+            "--timeout",
+            "300",
+        )
+        assert result.exit_code == 0, result.output
+        run = json.loads(result.output)["data"]
+        assert run["partial"] is True
+        assert run["selection"]["task_ids"] == ["v2"]
+        assert run["failed_task_ids"] == []
+        assert [r["task_id"] for r in run["task_results"]] == ["v2"]
+        assert run["task_results"][0]["status"] == "success"
+        job = self._run_ok("job", "detail", "--project", self.alias, "--job-id", str(run["id"]))[
+            "data"
+        ]
+        assert job["onlyFlowTaskIds"] == ["v2"]
 
         _step(6, "flow update -- rename the flow")
         result = self._run(
@@ -7498,8 +7575,8 @@ class TestE2EFlowOperations:
             self.alias,
             "--name",
             f"{RUN_ID}-invalid",
-            "--file",
-            f"@{bad_file}",
+            "--definition-file",
+            str(bad_file),
         )
         assert result.exit_code != 0
         out = json.loads(result.output)
@@ -7530,8 +7607,8 @@ class TestE2EFlowOperations:
             f"{RUN_ID}-flow-ws",
             "--description",
             "E2E with-schedules test",
-            "--file",
-            f"@{cf_file}",
+            "--definition-file",
+            str(cf_file),
         )
         if result.exit_code != 0 and "conditional" in result.output.lower():
             pytest.skip("Project reports conditional_flows=false; skipping CF E2E")
@@ -7655,8 +7732,8 @@ class TestE2EScheduleOperations:
                 f"{RUN_ID}-sched-flow",
                 "--description",
                 "E2E schedule discovery fixture",
-                "--file",
-                f"@{cf_file}",
+                "--definition-file",
+                str(cf_file),
             ],
         )
         if flow_result.exit_code != 0 and "conditional" in flow_result.output.lower():
