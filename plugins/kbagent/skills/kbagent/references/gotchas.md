@@ -68,7 +68,17 @@ These lists keep `error`, because their entries are not failed items with an err
 - **A blank `--task-id " "` is `INVALID_ARGUMENT`, never a whole-flow run**; over REST `task_ids: []` is HTTP 400 (`null` = no selector).
 - **A `--timeout` never stops the job** (unlike `job run --wait`, which kills it and exits 7): `QUEUE_JOB_TIMEOUT`, exit 4, `retryable: false`; follow it with `kbagent job detail --project P --job-id ID`.
 - **`job run --wait` and `flow run --wait`: a `QUEUE_JOB_FAILED` error now carries `details.job_id`** (additive), so the failed job can be read with `job detail` without parsing the message.
-- **Permission key `flow.run` (write) is separate from `job.run`.** A policy that denies `job.run` does NOT deny `flow.run`; deny both (or `cli:write`). A deny on `flow.run` also blocks `flow run --dry-run`.
+- **Permission key `flow.run` (write) also needs `job.run`** *(since vNEXT)*. `flow run` creates a Queue job like `job run`, so a policy that denies `job.run` (or `job.*`) blocks `flow run` too, exit 6 / HTTP 403, also `--dry-run`; the message names `job.run`. An allow-list policy (`--mode deny`) must allow both `flow.run` and `job.run`. Before vNEXT a `job.run` deny did not stop `flow run`.
+
+## `job run --wait` / `flow run --wait`: a failure while polling is not retryable
+
+*(since vNEXT)*
+
+- **Every error after the job was created carries `details.job_id` and `retryable: false`.** That is: `QUEUE_JOB_FAILED` (the job ended `error`, exit 1); `JOB_TIMEOUT_TERMINATED` (a `job run` timeout whose kill was confirmed, exit 7; `details.job` and `details.logTail` stay); `QUEUE_JOB_TIMEOUT` (a `flow run` timeout, or a `job run` timeout whose kill failed or could not be confirmed, exit 4); and a connection error, HTTP 5xx, read timeout or exhausted retries while polling (`CONNECTION_ERROR` / `TIMEOUT` / `RETRY_EXHAUSTED` exit 4, `API_ERROR` exit 1). These codes and exit codes are unchanged. Except for `QUEUE_JOB_FAILED` and `JOB_TIMEOUT_TERMINATED`, the message says the job was created and may still be running, and names `kbagent job detail --project P --job-id ID`.
+- **The job read, the kill and the log tail that enrich these errors are best effort.** An odd answer from one of them (a job detail that is not an object, a `null` event) no longer replaces the error with a crash: the error keeps its code and `details.job_id` (the log tail may be missing).
+- **Do not start the job again.** Before vNEXT such an error could say `retryable: true` with no job id, and a retry created a second run. Read the job with `job detail` first. Over REST (`POST /flows/{project}/{flow_id}/run?wait=true`) the error body has the same `retryable` and `details.job_id`.
+- **Behaviour change for errors the HTTP layer did not translate.** Before vNEXT, a reset connection or protocol error while polling, and a poll answer that is not JSON or not a job object, crashed the command: `INTERNAL_ERROR`, exit 1, no job id. Now a transport error is `CONNECTION_ERROR` (exit **4**) and an unreadable answer is `API_ERROR` (exit 1), both with `retryable: false` and `details.job_id`.
+- **SDK `Client.run_job(wait=True)` follows the same rule**: every error after the create (also `QUEUE_JOB_FAILED` and the local timeout, which never stops the job) has `retryable=False` and `details["job_id"]`; read the job with `Client.raw.get_job_detail(job_id)`.
 
 ## `project refresh` in a local directory takes the new token from the global config
 
@@ -4066,8 +4076,9 @@ Every error code has exactly one exit code and one `error.error_type` (since 1.0
   - **Errors:** `error.details.logTail` carries the tail when the job surfaces as an exception (exit 1 / `QUEUE_JOB_FAILED`, exit 4 / `QUEUE_JOB_TIMEOUT`).
   - **Non-error terminals** (`warning` / `terminated`): `logTail` is attached to the top-level result dict (exit 0).
 - `--timeout N` is a **local** deadline. When it elapses, kbagent issues `POST /jobs/{id}/kill` against the Queue API. Two outcomes:
-  - Kill succeeded -> exit **7** with `details.job` + `details.logTail`. The remote is definitely cancelled.
-  - Kill failed -> exit **4** with `details.logTail`, `retryable=True`. The remote **may still be running**; investigate before retrying.
+  - Kill succeeded -> exit **7** with `details.job` + `details.logTail` (+ `details.job_id`, *since vNEXT*). The remote is definitely cancelled.
+  - Kill failed -> exit **4** with `details.logTail` and `details.job_id`, `retryable=false` (*since vNEXT*; `retryable=True` before). The remote **may still be running**; read it with `job detail` before running again.
+- *(since vNEXT)* Any other polling failure (connection error, HTTP 5xx, retries exhausted) keeps its code and exit code but carries `details.job_id` and `retryable=false`: the job was created, so do not start it again.
 - Inspecting events outside of `job run`: `kbagent job detail --project X --job-id N --log-tail-lines N` (since v0.88.0). For the raw event stream, call the Storage Events API directly (`GET /v2/storage/events?runId=<job id>`) with the project token -- pass the plain job **id**, not the job's `runId`: a nested job (inside a flow, or a child row job) has a dotted `runId` (`<parent>.<child>.<id>`) that matches zero events.
 
 ## `--deny-writes` / `--deny-destructive` firewall (since 0.22.0)
@@ -6536,6 +6547,20 @@ The log tail is off by default so a plain `job detail` stays one API call.
 `job run --wait` still attaches a tail on its own for terminal failures --
 that behaviour is unchanged, and its `--log-tail-lines` is capped at the same
 maximum as `job detail`'s.
+
+## The five 0.88.0 read options are on `kbagent serve` too (since v0.88.0)
+
+The five read options added in v0.88.0 (job log tail, `job list` paging and
+sort, table usage, search scope, link stage) have the same parameter on their
+REST route, with the same default:
+
+| CLI | REST |
+|---|---|
+| `job detail --log-tail-lines N` | `GET /jobs/{project}/{job_id}?log_tail_lines=N` (default 0, no tail) |
+| `job list --offset/--sort-by/--sort-order` | `GET /jobs?offset=&sort_by=&sort_order=` |
+| `storage tables --include-usage` | `GET /storage/tables?include_usage=true` |
+| `search --scope PATH` | `GET /search?scope=PATH` (repeatable) |
+| `sharing link --stage in\|out` | `POST /sharing/{project}/link`, body `stage` (default `in`) |
 
 ## `logTail` was empty for nested jobs
 

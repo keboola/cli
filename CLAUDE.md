@@ -1717,7 +1717,11 @@ kbagent flow run [--project NAME] --flow-id ID [--task-id T ...] [--from-phase-i
 #   hide that. A flow job that ended in `error` keeps QUEUE_JOB_FAILED (exit 1); task_results and
 #   failed_task_ids are then in error.details. The selection warnings stay on error envelopes too.
 #   A --timeout never kills the job: QUEUE_JOB_TIMEOUT, exit 4, retryable false, names
-#   `job detail`. Permission key flow.run (write): a policy denying job.run does NOT deny it.
+#   `job detail`. Any other error after the job was created (a poll that fails with a connection
+#   error, HTTP 5xx, exhausted retries; in `job run` also a timeout whose kill failed) keeps its
+#   code and exit code, but is retryable false with details.job_id -- for job run --wait too.
+#   Permission key flow.run (write) also needs job.run (permissions.IMPLIED_OPERATIONS): a policy
+#   denying job.run blocks flow run, --dry-run and the REST route included.
 #   REST: POST /flows/{project}/{flow_id}/run (body task_ids/from_phase_id/branch_id/
 #   variable_values_id/no_variables/dry_run, query wait/timeout; unknown fields and query params 422;
 #   task_ids [] is 400). Version gate in gotchas.md.

@@ -513,6 +513,17 @@ FLAG_ESCALATIONS: dict[str, str] = {
     "rls.bindings-sweep --yes": "destructive",
 }
 
+# Operations that also need ANOTHER operation's permission, because they do
+# what that operation does. `flow run` creates a Queue job exactly like
+# `job run`, so a policy that denies `job.run` must stop `flow run` as well
+# (#725). The engine checks the operation itself first, then each key listed
+# here, so this covers the CLI group callback, the serve route table and
+# `permissions check` alike. An allow-list policy (`mode: deny`) must
+# therefore allow both keys.
+IMPLIED_OPERATIONS: dict[str, tuple[str, ...]] = {
+    "flow.run": ("job.run",),
+}
+
 # Operations that exist ONLY on the `kbagent serve` REST surface. They are real
 # OPERATION_REGISTRY entries (a policy must be able to name and deny them), but
 # they have no CLI leaf command, so the command-sync gate would otherwise report
@@ -715,7 +726,21 @@ class PermissionEngine:
         Fail-closed: CLI operations not in OPERATION_REGISTRY are treated as
         'write' for category matching. This ensures new commands added without
         updating the registry are blocked by policies like 'deny cli:write'.
+
+        An operation in ``IMPLIED_OPERATIONS`` is allowed only when each key
+        it implies is allowed too.
         """
+        return self._denied_by(operation) is None
+
+    def _denied_by(self, operation: str) -> str | None:
+        """The key that denies ``operation``: itself, an implied key, or None."""
+        for key in (operation, *IMPLIED_OPERATIONS.get(operation, ())):
+            if not self._allows_one(key):
+                return key
+        return None
+
+    def _allows_one(self, operation: str) -> bool:
+        """Whether the policy allows ``operation`` itself, implied keys aside."""
         if self._policy is None:
             return True
 
@@ -734,8 +759,16 @@ class PermissionEngine:
 
     def check_or_raise(self, operation: str) -> None:
         """Check if an operation is allowed, raising PermissionDeniedError if not."""
-        if not self.is_allowed(operation):
+        denied_by = self._denied_by(operation)
+        if denied_by is None:
+            return
+        if denied_by == operation:
             raise PermissionDeniedError(operation)
+        raise PermissionDeniedError(
+            operation,
+            f"Operation '{operation}' is blocked by the active permission policy: "
+            f"it also needs '{denied_by}', which the policy denies.",
+        )
 
     def list_operations(self) -> list[dict[str, str]]:
         """List all known operations with their category and allowed/denied status.

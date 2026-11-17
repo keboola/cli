@@ -6,11 +6,13 @@ translates between the high-level shapes (list[dict] rows, bytes, FileEntry) and
 the low-level client calls. No network.
 """
 
+import json
 import logging
 from pathlib import Path
 from typing import Any, ClassVar
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 from keboola_agent_cli import (
@@ -332,6 +334,91 @@ class TestRunJob:
         mock_kc.create_job.return_value = {"id": "j", "status": "created"}
         c.run_job("c", "cfg", branch_id=88)
         assert mock_kc.create_job.call_args.kwargs["branch_id"] == 88
+
+
+class TestRunJobWaitErrors:
+    """A failure while polling a job that was already created (#725 follow-up).
+
+    Retrying ``run_job`` creates a second job, so every error after the create
+    keeps its code but says ``retryable=False`` and carries ``details["job_id"]``.
+    """
+
+    @pytest.mark.parametrize(
+        ("failure", "code"),
+        [
+            pytest.param(
+                KeboolaApiError(
+                    message="Cannot connect",
+                    status_code=0,
+                    error_code=ErrorCode.CONNECTION_ERROR,
+                    retryable=True,
+                ),
+                ErrorCode.CONNECTION_ERROR,
+                id="connection-error",
+            ),
+            pytest.param(
+                KeboolaApiError(
+                    message="API error 503",
+                    status_code=503,
+                    error_code=ErrorCode.API_ERROR,
+                    retryable=True,
+                ),
+                ErrorCode.API_ERROR,
+                id="http-503",
+            ),
+            pytest.param(
+                KeboolaApiError(
+                    message="Queue job job-7 did not complete within 30s",
+                    status_code=504,
+                    error_code=ErrorCode.QUEUE_JOB_TIMEOUT,
+                    retryable=True,
+                ),
+                ErrorCode.QUEUE_JOB_TIMEOUT,
+                id="queue-timeout",
+            ),
+            pytest.param(
+                httpx.ReadError("connection reset by peer"),
+                ErrorCode.CONNECTION_ERROR,
+                id="raw-httpx",
+            ),
+            pytest.param(
+                json.JSONDecodeError("Expecting value", "<html>", 0),
+                ErrorCode.API_ERROR,
+                id="non-json-poll",
+            ),
+        ],
+    )
+    def test_poll_failure_is_not_retryable_and_names_the_job(
+        self, client: Client, mock_kc: MagicMock, failure: Exception, code: str
+    ) -> None:
+        mock_kc.create_job.return_value = {"id": "job-7", "status": "created"}
+        mock_kc.wait_for_queue_job.side_effect = failure
+        with pytest.raises(KeboolaApiError) as exc_info:
+            client.run_job("c", "cfg", wait=True, timeout=30)
+        err = exc_info.value
+        assert err.error_code == code
+        assert err.retryable is False
+        assert err.details["job_id"] == "job-7"
+        assert "was created" in err.message
+        assert "do not start it again" in err.message.lower()
+        assert "get_job_detail" in err.message
+        mock_kc.create_job.assert_called_once()
+
+    def test_failed_job_carries_job_id(self, client: Client, mock_kc: MagicMock) -> None:
+        mock_kc.create_job.return_value = {"id": "job-8", "status": "created"}
+        mock_kc.wait_for_queue_job.side_effect = KeboolaApiError(
+            message="Queue job job-8 failed: boom",
+            status_code=500,
+            error_code=ErrorCode.QUEUE_JOB_FAILED,
+            retryable=False,
+        )
+        with pytest.raises(KeboolaApiError) as exc_info:
+            client.run_job("c", "cfg", wait=True)
+        err = exc_info.value
+        assert err.error_code == ErrorCode.QUEUE_JOB_FAILED
+        assert err.retryable is False
+        assert err.details["job_id"] == "job-8"
+        assert err.message == "Queue job job-8 failed: boom"
 
 
 class TestConfigDetail:

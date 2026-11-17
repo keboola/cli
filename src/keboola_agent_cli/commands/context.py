@@ -1165,11 +1165,14 @@ explicit Storage config version, never the empty shell the create writes.
     --json response shapes by exit code:
       - exit 0 (success): {status:"ok", data:{..., logTail?:[...]}}
       - exit 1 (QUEUE_JOB_FAILED, remote job status=error):
-        {status:"error", error:{code:"QUEUE_JOB_FAILED", details:{logTail:[...]}}}
-      - exit 4 (QUEUE_JOB_TIMEOUT, local timeout + remote kill also failed):
-        {status:"error", error:{code:"QUEUE_JOB_TIMEOUT", retryable:true, details:{logTail:[...]}}}
+        {status:"error", error:{code:"QUEUE_JOB_FAILED", retryable:false, details:{job_id, logTail:[...]}}}
+      - exit 4 (QUEUE_JOB_TIMEOUT, local timeout + remote kill failed or unconfirmed):
+        {status:"error", error:{code:"QUEUE_JOB_TIMEOUT", retryable:false, details:{job_id, logTail:[...]}}}
       - exit 7 (JOB_TIMEOUT_TERMINATED, local timeout + remote kill succeeded):
-        {status:"error", error:{code:"JOB_TIMEOUT_TERMINATED", details:{job:{...}, logTail:[...]}}}
+        {status:"error", error:{code:"JOB_TIMEOUT_TERMINATED", retryable:false, details:{job_id, job:{...}, logTail:[...]}}}
+      - any other error after the job was created (connection error, 5xx, exhausted retries while
+        polling): code and exit code as usual, retryable:false, details.job_id. The job may still be
+        running: check `job detail --job-id ID`, never start it again (a retry is a second run).
     jq pattern: `.error.details.logTail? // .data.logTail? // []` picks up the tail regardless of exit.
 
   job terminate

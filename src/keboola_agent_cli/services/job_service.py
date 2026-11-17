@@ -26,6 +26,7 @@ from ..constants import (
 )
 from ..effective_branch import resolve_branch
 from ..errors import ErrorCode, KeboolaApiError
+from ..job_wait_errors import RAW_POLL_ERRORS, created_job_error, raw_poll_error
 from ..models import ProjectConfig
 from .base import BaseService, item_failure
 from .job_idempotency_store import JobIdempotencyStore, run_idempotent_job
@@ -194,8 +195,14 @@ def _safe_fetch_log_tail(client: Any, job: dict[str, Any], limit: int) -> list[d
     # rely on that: sort defensively by `created` DESC so a future API
     # ordering change cannot silently invert the tail. Events without a
     # `created` key sort last (they lose the race to timestamped peers).
-    events_list = list(events)
-    events_list.sort(key=lambda e: e.get("created") or "", reverse=True)
+    # Only event objects: an odd answer ([null], a bare object) must not
+    # turn the tail into a crash that hides the job's own error.
+    try:
+        events_list = [e for e in events if isinstance(e, dict)]
+    except TypeError:
+        logger.debug("fetch_job_events(%s) returned %r; surfacing empty logTail", run_id, events)
+        return []
+    events_list.sort(key=lambda e: str(e.get("created") or ""), reverse=True)
     # Cap at limit in case the server ignored ?limit.
     return events_list[:limit]
 
@@ -217,6 +224,13 @@ def _enrich_with_tail(
     if tail:
         merged["logTail"] = tail
     return merged or None
+
+
+def _finished_job(job: Any) -> dict[str, Any] | None:
+    """``job`` when it is a job object that says it finished, else None."""
+    if isinstance(job, dict) and job.get("isFinished"):
+        return job
+    return None
 
 
 def _terminate_and_wait(
@@ -251,15 +265,14 @@ def _terminate_and_wait(
         except Exception:
             logger.debug("terminate: kill failed AND GET failed for %s; giving up", job_id)
             return None
-        if job.get("isFinished"):
-            return job
-        logger.debug(
-            "terminate: kill failed, GET succeeded but job %s still not terminal "
-            "(status=%r); returning None (remote may still be running)",
-            job_id,
-            job.get("status"),
-        )
-        return None
+        finished = _finished_job(job)
+        if finished is None:
+            logger.debug(
+                "terminate: kill failed and job %s is not seen terminal; "
+                "returning None (remote may still be running)",
+                job_id,
+            )
+        return finished
     except Exception as exc:
         logger.debug("kill_job(%s) raised %r; giving up", job_id, exc)
         return None
@@ -274,18 +287,23 @@ def _terminate_and_wait(
         except Exception:
             time.sleep(min(JOB_TERMINATE_POLL_INTERVAL, remaining))
             continue
-        if job.get("isFinished"):
-            return job
+        finished = _finished_job(job)
+        if finished is not None:
+            return finished
         # Cap the sleep so we never overshoot the grace deadline by a
         # full poll interval (caller may be latency-sensitive).
         time.sleep(min(JOB_TERMINATE_POLL_INTERVAL, max(0.0, deadline - time.monotonic())))
 
     # Remote still wasn't terminal within the grace window; return whatever
-    # the last GET saw so callers can surface the actual state.
+    # the last GET saw so callers can surface the actual state. A read that
+    # is not a job object leaves the outcome unknown: None, like a failed kill.
     try:
         final = client.get_job_detail(job_id)
     except Exception:
         logger.debug("terminate: grace window exhausted and final GET failed for %s", job_id)
+        return None
+    if not isinstance(final, dict):
+        logger.debug("terminate: final GET for %s returned %r; outcome unknown", job_id, final)
         return None
     logger.debug(
         "terminate: grace window exhausted; job %s status=%r isFinished=%r",
@@ -296,13 +314,36 @@ def _terminate_and_wait(
     return final
 
 
+def _cli_follow_up(alias: str, job_id: str) -> str:
+    return f"`kbagent job detail --project {alias} --job-id {job_id}`"
+
+
+def _unenriched_wait_error(exc: KeboolaApiError, job_id: str, alias: str) -> KeboolaApiError:
+    """The polling error ``exc`` without enrichment, when enriching it broke.
+
+    ``QUEUE_JOB_FAILED`` keeps its message (the job ended); anything else,
+    a timeout included (the kill outcome is unknown, so it counts as a failed
+    kill), is reported as a failure after the job was created.
+    """
+    if exc.error_code == ErrorCode.QUEUE_JOB_FAILED:
+        return QueueJobFailedError(
+            message=exc.message,
+            status_code=exc.status_code,
+            error_code=exc.error_code,
+            retryable=False,
+            details={**(exc.details or {}), "job_id": job_id},
+        )
+    return created_job_error(exc, job_id=job_id, follow_up=_cli_follow_up(alias, job_id))
+
+
 class QueueJobFailedError(KeboolaApiError):
     """``QUEUE_JOB_FAILED`` from :meth:`JobService.run_job`, with the failed job it read.
 
     ``failed_job`` is the job detail ``_handle_wait_error`` already fetched
     (``None`` when that read failed). It is a Python attribute, never a
-    ``details`` key, so ``job run`` output does not grow; ``flow run`` builds
-    its per-task results from it without a second read.
+    ``details`` key: ``flow run`` builds its per-task results from it without
+    a second read. ``details`` itself carries ``job_id`` (spec LR3), in the
+    ``job run --wait`` error too.
     """
 
     def __init__(self, *args: Any, failed_job: dict[str, Any] | None = None, **kwargs: Any) -> None:
@@ -673,15 +714,28 @@ class JobService(BaseService):
                         poll_strategy=poll_strategy,
                     )
                 except KeboolaApiError as exc:
-                    job = self._handle_wait_error(
-                        client=client,
+                    try:
+                        job = self._handle_wait_error(
+                            client=client,
+                            job_id=job_id,
+                            exc=exc,
+                            log_tail_lines=log_tail_lines,
+                            timeout=timeout,
+                            kill_on_timeout=kill_on_timeout,
+                            alias=alias,
+                        )
+                    except RAW_POLL_ERRORS as broken:
+                        # The job read, the kill or the log tail broke on an odd
+                        # answer. They are best effort: the polling error stays.
+                        logger.debug("run_job: wait-error enrichment failed: %r", broken)
+                        raise _unenriched_wait_error(exc, job_id, alias) from exc
+                except RAW_POLL_ERRORS as exc:
+                    # The job exists either way: report it like any other poll failure.
+                    raise created_job_error(
+                        raw_poll_error(exc),
                         job_id=job_id,
-                        exc=exc,
-                        log_tail_lines=log_tail_lines,
-                        timeout=timeout,
-                        kill_on_timeout=kill_on_timeout,
-                        alias=alias,
-                    )
+                        follow_up=_cli_follow_up(alias, job_id),
+                    ) from exc
                 else:
                     # Successful poll: still attach log tail for warning /
                     # terminated statuses (not raised; just surfaced).
@@ -720,7 +774,7 @@ class JobService(BaseService):
     ) -> dict[str, Any]:
         """Handle a terminal wait_for_queue_job error.
 
-        Two error classes land here:
+        Errors that land here:
 
         - ``QUEUE_JOB_FAILED`` -- remote job reached ``error`` status on its
           own. Fetch the log tail so the caller sees the last events and
@@ -733,6 +787,11 @@ class JobService(BaseService):
           With ``kill_on_timeout=False`` (spec LR2) nothing is killed: the
           error stays ``QUEUE_JOB_TIMEOUT`` with ``retryable: false`` and says
           the job keeps running and how to follow it.
+
+        Every other error (connection, HTTP 5xx, auth, retries exhausted)
+        keeps its code but is raised as a failure after the job was created:
+        ``retryable: false``, ``details.job_id``, a message that names
+        ``kbagent job detail``. The same holds for a timeout whose kill failed.
 
         We never swallow the error; on any failure path we re-raise so the
         command layer maps to the correct exit code.
@@ -788,26 +847,26 @@ class JobService(BaseService):
                     status_code=504,
                     error_code=ErrorCode.JOB_TIMEOUT_TERMINATED,
                     retryable=False,
-                    details={"job": cancelled, "logTail": tail},
+                    details={"job_id": job_id, "job": cancelled, "logTail": tail},
                 ) from exc
-            # kill failed: surface the original timeout but keep the tail.
+            # kill failed: the job may still run. Surface the original timeout
+            # with the tail, as a failure after the job was created.
             details = _enrich_with_tail(exc.details, tail)
-            raise KeboolaApiError(
-                message=exc.message,
-                status_code=exc.status_code,
-                error_code=exc.error_code,
-                retryable=exc.retryable,
+            raise created_job_error(
+                exc,
+                job_id=job_id,
+                follow_up=_cli_follow_up(alias, job_id),
                 details=details or {},
             ) from exc
 
-        # Anything else (network, auth, a future Queue error code we
-        # don't specialise) bubbles up unchanged so the command layer
-        # maps it through map_error_to_exit_code().
-        logger.debug(
-            "run_job: unhandled wait error code=%s; bubbling up unchanged",
-            code,
-        )
-        raise exc
+        # Anything else (network, HTTP 5xx, auth, retries exhausted, a future
+        # Queue error code we don't specialise) keeps its code, so the command
+        # layer maps it to the same exit code. But the job was created and may
+        # still run: never retryable, with the job id (spec LR3).
+        logger.debug("run_job: wait error code=%s after the job was created", code)
+        raise created_job_error(
+            exc, job_id=job_id, follow_up=_cli_follow_up(alias, job_id)
+        ) from exc
 
     @staticmethod
     def resolve_variable_values_id(
