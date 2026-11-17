@@ -208,6 +208,10 @@ same mechanism as the Keboola UI's "Run selected tasks".
 
 ### What a partial run does (tell the user before running)
 
+This is the Queue daemon's behaviour ("Selected Tasks Run" in the
+job-queue-daemon flow documentation), not kbagent's; kbagent only sends the
+task list.
+
 - **Conditions are not evaluated.** The server chains the phases holding
   selected tasks one after another, from the flow's first phase. Phases needed
   only to reach a selected phase run empty.
@@ -289,7 +293,7 @@ skips all of this.
 | 1 | `SELECTED_TASK_FAILED` (payload has `failed_task_ids`), or `QUEUE_JOB_FAILED` (the flow job ended `error`; `error.details` has `job_id`, and on a partial run usually `task_results` / `failed_task_ids`; they are missing when kbagent could not read the failed job) | `job detail --project P --job-id` of the failed task's `job_id`; when a task has no `job_id` (status `missing`, or the result did not carry one), read the flow job itself |
 | 2 | invalid selection or options | fix the ids from `flow detail` |
 | 4 | `--timeout` reached: the job **keeps running** (`retryable: false`) | `job detail --project P --job-id ID`; do **not** start it again |
-| 6 | permission denied | see Permissions |
+| 6 | permission denied | see "Variables, branch, permissions" below |
 
 ### Retries create duplicate runs
 
