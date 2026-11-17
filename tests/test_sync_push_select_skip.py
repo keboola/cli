@@ -99,7 +99,8 @@ def test_cli_moves_the_entry_to_the_envelope(tmp_config_dir: Path, tmp_path: Pat
     _append_select(project_root)
     dry = _service(store, api).push(alias="prod", project_root=project_root, dry_run=True)
 
-    config_dir = tmp_path / "config"
+    # tmp_config_dir already owns tmp_path / "config".
+    config_dir = tmp_path / "cli-config"
     config_dir.mkdir()
     cli_store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
     mock_sync = MagicMock()
