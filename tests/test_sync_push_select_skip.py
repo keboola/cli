@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+import yaml
 from typer.testing import CliRunner
 
 from keboola_agent_cli.cli import app
@@ -121,3 +122,42 @@ def test_cli_moves_the_entry_to_the_envelope(tmp_config_dir: Path, tmp_path: Pat
     (warning,) = payload["warnings"]
     assert warning["code"] == SQL_SELECT_SKIPPED_CODE
     assert warning["statement"]["index"] == 1
+
+
+def test_inline_multi_statement_script_is_scanned_as_sent(
+    tmp_config_dir: Path, tmp_path: Path
+) -> None:
+    """A _config.yml with inline SQL (no transform.sql) is split before it is sent.
+
+    The SELECT after the first ``;`` becomes a statement of its own on the
+    wire, so the runtime skips it; the scan must see that shape too.
+    """
+    project_root = tmp_path / "project"
+    api = FakeApi(_sql_components([CREATE]))
+    store = _init_and_pull(tmp_config_dir, project_root, api)
+    sql_file = _sql_file(project_root)
+    config_file = sql_file.parent / "_config.yml"
+    sql_file.unlink()
+    local = yaml.safe_load(config_file.read_text(encoding="utf-8"))
+    local["parameters"] = {
+        **(local.get("parameters") or {}),
+        "blocks": [
+            {
+                "name": "main",
+                "codes": [
+                    {
+                        "name": "q",
+                        "script": [f"{CREATE} SELECT * FROM table_that_does_not_exist;"],
+                    }
+                ],
+            }
+        ],
+    }
+    config_file.write_text(yaml.safe_dump(local), encoding="utf-8")
+
+    result = _service(store, api).push(alias="prod", project_root=project_root, dry_run=True)
+
+    (warning,) = _select_skips(result)
+    assert warning["statement"]["block"] == "main"
+    assert warning["statement"]["index"] == 1
+    assert warning["statement"]["excerpt"] == "SELECT * FROM table_that_does_not_exist;"

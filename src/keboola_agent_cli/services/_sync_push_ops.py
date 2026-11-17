@@ -407,9 +407,13 @@ def add_select_skips(
         if local_data is None:
             continue
         merge_code_files(change["component_id"], local_data, config_dir)
+        # Scan the script[] push will send: guard_script_shape splits an inline
+        # string or a multi-statement element first, which can put a SELECT at
+        # the start of a statement of its own.
+        sent, _ = normalize_blocks_codes_script(change["component_id"], local_data)
         found += skipped_select_warnings(
             change["component_id"],
-            local_data,
+            sent,
             config_id=change.get("config_id", ""),
             path=change.get("path", ""),
         )

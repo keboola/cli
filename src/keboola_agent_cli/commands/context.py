@@ -2591,6 +2591,12 @@ remain branch-aware because modifying a dev branch is the expected intent.
     --storage REPLACES configuration.storage wholesale -- include every
     mapping you want to keep. --dry-run previews the resulting tree + op
     summary without writing.
+
+  Skipped SELECTs: the Snowflake / BigQuery runtime skips every statement
+  that starts with SELECT, so a job whose SQL only SELECTs succeeds even
+  when a table is missing. create / edit / `sync push` add a
+  SQL_SELECT_SKIPPED_BY_RUNTIME warnings[] entry; test a failure with
+  CREATE TABLE ... AS SELECT instead.
 """,
     "update": """\
   update
