@@ -24,7 +24,9 @@ def init_command(
     from_global: bool = typer.Option(
         False,
         "--from-global",
-        help="Copy projects from the global config into the new local workspace.",
+        help="Copy projects (tokens included) from the global config into the new local "
+        "workspace. A one-time copy: after a token rotation in the global config, run "
+        "`kbagent project refresh` in the workspace to take the new tokens.",
     ),
     project: list[str] | None = typer.Option(
         None,

@@ -70,6 +70,18 @@ These lists keep `error`, because their entries are not failed items with an err
 - **`job run --wait` and `flow run --wait`: a `QUEUE_JOB_FAILED` error now carries `details.job_id`** (additive), so the failed job can be read with `job detail` without parsing the message.
 - **Permission key `flow.run` (write) is separate from `job.run`.** A policy that denies `job.run` does NOT deny `flow.run`; deny both (or `cli:write`). A deny on `flow.run` also blocks `flow run --dry-run`.
 
+## `project refresh` in a local directory takes the new token from the global config
+
+*(since vNEXT)* (#955)
+
+- **`kbagent init --from-global` copies the tokens once.** After a token rotation in the global config, a local `.kbagent/` keeps the dead copies and every command there fails `INVALID_TOKEN`. Run `kbagent project refresh --project ALIAS` (or `--all-projects`) inside the local directory: for each project whose token the Storage API rejects as `INVALID_TOKEN`, it takes the global config's token of the same project (same project ID and stack) when exactly one such token exists and it verifies. No new flag, and no Manage token is needed for these. Before, refresh always minted a new token and always asked for the Manage token.
+- **Only a definitively invalid token is replaced from the global config.** A valid local token is never touched, and a timeout, 5xx or other check error keeps the old path (a new token is minted). Several different global tokens for the project, a global token that fails verification or belongs to another project: the old path. `--force` never takes from the global config. A missing or unreadable global config is not an error. The global config is only read, never written.
+- **The Manage token is asked for only when a token must be minted**, once, after every project was checked and before anything is written. Without it (no terminal, no `--allow-env-manage-token`) the run exits 2 and writes nothing, also the tokens it could have taken from the global config. A `--dry-run`, and a run where every dead token comes from the global config, never ask for it.
+- **New `--json` key `projects_adopted`**: `{alias, project_id, project_name, global_alias, action}`, `action` `adopted_from_global` or `would_adopt_from_global`. It carries no token, not even masked. The headline reads `N token(s) taken from the global config, M refreshed.` when N > 0; otherwise the old `M token(s) refreshed.`. The interactive confirmation asks "Proceed to update K token(s)?". When another process changed the alias between the check and the write, the project is in `projects_failed` (`CONFIG_ERROR`, "changed concurrently ... run again") and nothing is written for it.
+- **A taken token may have a broader scope than the dead one**: it is whatever the global config holds for the project. `--token-description` and `--token-expires-in` apply to minted tokens only.
+- **With `--config-dir` or `KBAGENT_CONFIG_DIR`, the global config of the running user is consulted too** (unless the directory is the global config itself, compared by resolved path).
+- **`project refresh` on the global config** that mints a token prints a reminder that local directories keep their own copies (human output only). `org setup --refresh` and `POST /org/refresh` do not look into the global config.
+
 ## Data apps clone a private GitHub repo through the organization connection: `--git-auth organization`, `git-auth-set`
 
 *(since 1.1.0)*

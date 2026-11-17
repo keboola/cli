@@ -4,6 +4,7 @@ Thin CLI layer: parses arguments, calls ProjectService, formats output.
 No business logic belongs here.
 """
 
+import functools
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -53,6 +54,14 @@ from ._metadata_input import resolve_text_input
 from ._project_create import format_provision_result
 from ._project_pin import format_current_result, format_use_result, print_active_project_change
 from ._project_ref import PROJECT_DEFAULT, PROJECT_HELP
+from ._project_refresh import (
+    format_refresh_result,
+    global_store_for,
+    is_global_config,
+    refresh_summary,
+    refresh_total,
+    tokens_to_update,
+)
 
 
 class ProjectBackend(StrEnum):
@@ -489,84 +498,6 @@ def project_edit(
         raise typer.Exit(code=5) from None
 
 
-def _format_refresh_result(console: Console, data: dict) -> None:
-    """Render token refresh results as Rich tables with summary."""
-    dry_run = data.get("dry_run", False)
-    mode_label = "[bold yellow]DRY RUN[/bold yellow] " if dry_run else ""
-    console.print(f"\n{mode_label}Token Refresh\n")
-
-    # Refreshed projects
-    refreshed = data.get("projects_refreshed", [])
-    if refreshed:
-        action_label = "Projects to Refresh" if dry_run else "Projects Refreshed"
-        table = Table(title=action_label)
-        table.add_column("Alias", style="bold cyan")
-        table.add_column("Project ID", justify="right")
-        table.add_column("Project Name")
-        if not dry_run:
-            table.add_column("Token", style="dim")
-
-        for p in refreshed:
-            if dry_run:
-                table.add_row(escape(p["alias"]), str(p["project_id"]), escape(p["project_name"]))
-            else:
-                table.add_row(
-                    escape(p["alias"]),
-                    str(p["project_id"]),
-                    escape(p["project_name"]),
-                    p.get("token", ""),
-                )
-
-        console.print(table)
-        console.print()
-
-    # Valid projects (tokens that were fine)
-    valid = data.get("projects_valid", [])
-    if valid:
-        table = Table(title="Projects Valid")
-        table.add_column("Alias", style="bold cyan")
-        table.add_column("Project ID", justify="right")
-        table.add_column("Project Name")
-
-        for p in valid:
-            table.add_row(escape(p["alias"]), str(p["project_id"]), escape(p["project_name"]))
-
-        console.print(table)
-        console.print()
-
-    # Skipped projects
-    skipped = data.get("projects_skipped", [])
-    if skipped:
-        table = Table(title="Projects Skipped")
-        table.add_column("Alias", style="bold cyan")
-        table.add_column("Reason", style="dim")
-
-        for p in skipped:
-            table.add_row(p["alias"], p["reason"])
-
-        console.print(table)
-        console.print()
-
-    # Failed projects
-    failed = data.get("projects_failed", [])
-    for p in failed:
-        console.print(format_item_error(f"project '{p['alias']}'", p["message"]), soft_wrap=True)
-
-    # Summary line
-    summary_parts = []
-    if refreshed:
-        verb = "to refresh" if dry_run else "refreshed"
-        summary_parts.append(f"[bold green]{len(refreshed)}[/bold green] {verb}")
-    if valid:
-        summary_parts.append(f"[bold green]{len(valid)}[/bold green] valid")
-    if skipped:
-        summary_parts.append(f"[dim]{len(skipped)} skipped[/dim]")
-    if failed:
-        summary_parts.append(f"[bold red]{len(failed)} failed[/bold red]")
-
-    console.print("Summary: " + ", ".join(summary_parts) if summary_parts else "No changes.")
-
-
 @project_app.command("status")
 def project_status(
     ctx: typer.Context,
@@ -617,21 +548,24 @@ def project_refresh(
     token_description: str = typer.Option(
         DEFAULT_TOKEN_DESCRIPTION,
         "--token-description",
-        help="Description prefix for created Storage API tokens",
+        help="Description prefix for newly created Storage API tokens (not applied to "
+        "tokens taken from the global config)",
     ),
     token_expires_in: int | None = typer.Option(
         None,
         "--token-expires-in",
         min=1,
-        help="Token lifetime in seconds. If not set, tokens never expire.",
+        help="Lifetime in seconds of newly created tokens (not applied to tokens taken from "
+        "the global config). If not set, they never expire.",
     ),
 ) -> None:
     """Refresh expired or invalid Storage API tokens.
 
-    Creates new tokens via the Manage API and updates the local config.
-    Requires a Manage API token: interactive hidden prompt by default
-    (since 0.28.0); pass top-level --allow-env-manage-token to read
-    KBC_MANAGE_API_TOKEN from env (CI/CD).
+    In a local kbagent directory (`init --from-global`), first takes a working
+    token for the same project from the global config. Other dead tokens get a
+    new token from the Manage API: interactive hidden prompt, or top-level
+    --allow-env-manage-token to read KBC_MANAGE_API_TOKEN (CI/CD).
+    The Manage token is asked for only when a token must be created.
 
     \b
     Examples:
@@ -654,20 +588,23 @@ def project_refresh(
     if not project and not all_projects:
         project = resolve_project_alias(ctx, formatter, None)
 
-    manage_token = resolve_manage_token(allow_env=ctx.obj["allow_env_manage_token"])
-
-    aliases = [project] if project else None
+    config_store = ctx.obj["config_store"]
+    # Asked for in the service, once, only when a token must be minted (#955).
+    manage_token_provider = functools.partial(
+        resolve_manage_token, allow_env=ctx.obj["allow_env_manage_token"]
+    )
 
     # Build kwargs shared by preview and real call
     refresh_kwargs: dict = {
-        "manage_token": manage_token,
-        "aliases": aliases,
+        "aliases": [project] if project else None,
         "token_description": token_description,
         "token_expires_in": token_expires_in,
         "force": force,
+        "global_store": global_store_for(config_store),
     }
 
-    # Interactive safety: show preview first, then confirm
+    # Interactive safety: show preview first, then confirm. The preview is a
+    # dry run, which never asks for the Manage token.
     interactive = not formatter.json_mode and not yes and not dry_run
     if interactive:
         try:
@@ -677,49 +614,46 @@ def project_refresh(
             emit_api_error(formatter, exc)
             raise typer.Exit(code=exit_code) from None
 
-        _format_refresh_result(formatter.console, preview)
+        format_refresh_result(formatter.console, preview)
 
-        would_refresh = len(preview.get("projects_refreshed", []))
-        if would_refresh == 0:
+        to_update = tokens_to_update(preview)
+        if to_update == 0:
             preview_failed = len(preview.get("projects_failed", []))
             # The preview is the whole run here: its failed projects are real (#745).
             finish_items(
                 formatter,
                 preview,
                 failed=preview_failed,
-                total=_refresh_total(preview),
+                total=refresh_total(preview),
                 noun="projects",
                 summary="0 token(s) refreshed.",
             )
             return
 
-        _confirm_or_abort(formatter, yes, f"Proceed to refresh {would_refresh} token(s)?")
+        _confirm_or_abort(formatter, yes, f"Proceed to update {to_update} token(s)?")
 
     # Execute the actual refresh
     try:
-        result = service.refresh_tokens(**refresh_kwargs, dry_run=dry_run)
+        result = service.refresh_tokens(
+            **refresh_kwargs, dry_run=dry_run, manage_token_provider=manage_token_provider
+        )
     except KeboolaApiError as exc:
         exit_code = map_error_to_exit_code(exc)
         emit_api_error(formatter, exc)
         raise typer.Exit(code=exit_code) from None
 
     # A project whose token check or refresh failed is collected, not raised (#745).
-    done_as = "would be refreshed" if result.get("dry_run") else "refreshed"
     finish_items(
         formatter,
         result,
         failed=len(result.get("projects_failed", [])),
-        total=_refresh_total(result),
+        total=refresh_total(result),
         noun="projects",
-        summary=f"{len(result.get('projects_refreshed', []))} token(s) {done_as}.",
-        render=lambda: _format_refresh_result(formatter.console, result),
+        summary=refresh_summary(result),
+        render=lambda: format_refresh_result(
+            formatter.console, result, local_copies_hint=is_global_config(config_store)
+        ),
     )
-
-
-def _refresh_total(data: dict[str, Any]) -> int:
-    """Every project that `project refresh` looked at."""
-    keys = ("projects_refreshed", "projects_valid", "projects_skipped", "projects_failed")
-    return sum(len(data.get(key, [])) for key in keys)
 
 
 # ── Active project (`project use`) ────────────────────────────────────
