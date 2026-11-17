@@ -589,6 +589,15 @@ kbagent project edit [--project NAME] [--url URL] [--token-stdin | --token-file 
 kbagent project status [--project NAME | --all-projects]
 kbagent project refresh [--project ALIAS] [--dry-run] [--force] [--yes] [--token-description DESC] [--token-expires-in N]
 kbagent project refresh --all-projects [--dry-run] [--force] [--yes] [--token-description DESC] [--token-expires-in N]
+# project refresh (#955): in a local .kbagent/ (config dir not the global one, compared by resolved
+#   path; also with --config-dir / KBAGENT_CONFIG_DIR) a project whose token is INVALID_TOKEN first takes
+#   the one distinct verified token the global config holds for the same project_id + normalized stack
+#   (projects_adopted: alias, project_id, project_name, global_alias, action; never a token). A transient
+#   check error, --force, several global tokens or a failed verify mint as before. Two phases: check and
+#   plan, then the Manage token (lazy provider, once, only when minting, before any write; exit 2 =
+#   nothing written), then writes. An adoption is written only if the alias is unchanged since the plan
+#   (else projects_failed, CONFIG_ERROR). The global config is never written. org setup --refresh and
+#   POST /org/refresh do not consult it. Version gate lives in gotchas.md.
 kbagent project description-get [--project NAME]
 kbagent project description-set [--project NAME] (--description STR | --description-file PATH)
 kbagent project use ALIAS

@@ -7,13 +7,16 @@ resolution. The flag is session-only (not persisted), mirroring
 
 Two CLI commands covered here consume the manage token: `org setup` and
 `project refresh`. Each is tested in both modes: default-deny (asserts the
-service was never reached) and allow-env (asserts the service received
-manage_token=<sentinel>). `data-app password` needed it until CLI-23 and
+service never got a token) and allow-env (asserts the service's lazy
+provider returned <sentinel>; since #955 the token is resolved only when a
+token must be minted). `data-app password` needed it until CLI-23 and
 now reads the password with the project token alone
 (tests/test_data_app_password.py).
 """
 
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
@@ -48,15 +51,35 @@ def _make_store(tmp_path: Path) -> ConfigStore:
 class TestAllowEnvManageTokenFlag:
     """Default-deny env + opt-in flag for resolve_manage_token."""
 
+    @staticmethod
+    def _minting_org_mock(seen: list[str]) -> MagicMock:
+        """An OrgService mock that needs to mint: it calls the lazy provider once.
+
+        Since #955 `project refresh` resolves the Manage token lazily -- the
+        service calls ``manage_token_provider`` only when a token must be
+        minted, before writing anything.
+        """
+
+        def refresh_tokens(**kwargs: Any) -> dict:
+            provider: Callable[[], str] = kwargs["manage_token_provider"]
+            seen.append(provider())
+            return {"projects_refreshed": [], "projects_failed": []}
+
+        mock_org = MagicMock()
+        mock_org.refresh_tokens.side_effect = refresh_tokens
+        return mock_org
+
     def test_project_refresh_default_ignores_env_warns_no_tty_exits_2(
         self, tmp_path: Path, monkeypatch
     ) -> None:
-        """Without --allow-env-manage-token, env is ignored, no TTY -> exit 2.
-        The OrgService.refresh_tokens call site must never be reached."""
+        """Without --allow-env-manage-token, env is ignored; when a token must be
+        minted and there is no TTY, the lazy provider exits 2 and the service
+        never gets a token."""
         store = _make_store(tmp_path)
         monkeypatch.setenv("KBC_MANAGE_API_TOKEN", SENTINEL_MANAGE_TOKEN)
 
-        mock_org = MagicMock()
+        seen: list[str] = []
+        mock_org = self._minting_org_mock(seen)
         with (
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
             patch("keboola_agent_cli.cli.OrgService") as MockOrgService,
@@ -71,23 +94,18 @@ class TestAllowEnvManageTokenFlag:
         # CliRunner combines stdout+stderr; the warning must appear somewhere.
         assert "found in environment but ignored" in result.output
         assert "--allow-env-manage-token" in result.output
-        # Crucial: the service was never called.
-        mock_org.refresh_tokens.assert_not_called()
+        # The provider never returned a token.
+        assert seen == []
         # The sentinel must not leak into output.
         assert SENTINEL_MANAGE_TOKEN not in result.output
 
     def test_project_refresh_allow_env_uses_env_token(self, tmp_path: Path, monkeypatch) -> None:
-        """With --allow-env-manage-token, env is honoured and forwarded
-        to OrgService.refresh_tokens as manage_token kwarg."""
+        """With --allow-env-manage-token, the lazy provider returns the env token."""
         store = _make_store(tmp_path)
         monkeypatch.setenv("KBC_MANAGE_API_TOKEN", SENTINEL_MANAGE_TOKEN)
 
-        mock_org = MagicMock()
-        mock_org.refresh_tokens.return_value = {
-            "status": "ok",
-            "refreshed": [],
-            "errors": [],
-        }
+        seen: list[str] = []
+        mock_org = self._minting_org_mock(seen)
         with (
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
             patch("keboola_agent_cli.cli.OrgService") as MockOrgService,
@@ -108,12 +126,9 @@ class TestAllowEnvManageTokenFlag:
             )
 
         assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
-        # Service called once, with the env-supplied manage_token.
         assert mock_org.refresh_tokens.call_count == 1
-        kwargs = mock_org.refresh_tokens.call_args.kwargs
-        assert kwargs["manage_token"] == SENTINEL_MANAGE_TOKEN
-        # Even though the call succeeded, the sentinel must not appear in
-        # JSON output (the resolver and service handle masking).
+        assert seen == [SENTINEL_MANAGE_TOKEN]
+        # Even though the call succeeded, the sentinel must not appear in output.
         assert SENTINEL_MANAGE_TOKEN not in result.output
 
     def test_org_setup_allow_env_passes_token_through(self, tmp_path: Path, monkeypatch) -> None:
