@@ -236,13 +236,32 @@ def _drop_tracked(manifest: Manifest, item: ManifestPendingRemoval) -> None:
     drop = {
         id(c)
         for c in in_tree
-        if (c.component_id == item.component_id and c.id == item.config_id and c.path == item.path)
-        or (
-            promoted_from(c) is not None
-            and (c.path == item.path or c.path.startswith(f"{item.path}/"))
-        )
+        if c.component_id == item.component_id and c.id == item.config_id and c.path == item.path
     }
     manifest.configurations = [c for c in manifest.configurations if id(c) not in drop]
+    drop_promote_references(manifest, item)
+
+
+def drop_promote_references(manifest: Manifest, item: ManifestPendingRemoval) -> None:
+    """Drop every promote entry that reads its files from *item*'s folder (K1, E1).
+
+    A dev-branch config promoted from a ``main/`` folder (``promoted_from``)
+    never outlives that folder: with its source gone the entry would read as
+    a local delete, and ``push --branch DEV --force`` would delete the dev
+    config. One rule wherever such a folder is removed -- the checkpoint, the
+    recovery and (by folder existence) the final save of a pull.
+    """
+    if item.kind != "config":
+        return
+    manifest.configurations = [
+        c
+        for c in manifest.configurations
+        if not (
+            promoted_from(c) is not None
+            and entry_tree(manifest, c) == item.tree
+            and (c.path == item.path or c.path.startswith(f"{item.path}/"))
+        )
+    ]
 
 
 def unsafe_reason(
@@ -452,7 +471,11 @@ def empty_quarantine(project_root: Path) -> list[dict[str, Any]]:
             }
         ]
     warnings: list[dict[str, Any]] = []
-    for leftover in sorted(root.iterdir()):
+    try:
+        leftovers = sorted(root.iterdir())
+    except OSError as exc:  # an unreadable quarantine never stops a pull (E2)
+        return [_quarantine_warning(root, project_root, exc)]
+    for leftover in leftovers:
         if leftover.name == QUARANTINE_IGNORE:
             continue
         try:
@@ -588,10 +611,15 @@ def _inner_change(
 
 @dataclass
 class Settled:
-    """What :func:`_settle` left: the records to keep and the ``warnings[]`` entries."""
+    """What :func:`_settle` left: the records to keep and the ``warnings[]`` entries.
+
+    ``gone`` lists the records whose folder is no longer in the tree (deleted
+    now or before): the promote entries reading from them must go (E1).
+    """
 
     retained: list[ManifestPendingRemoval] = field(default_factory=list)
     warnings: list[dict[str, Any]] = field(default_factory=list)
+    gone: list[ManifestPendingRemoval] = field(default_factory=list)
 
 
 def _settle(
@@ -636,6 +664,7 @@ def _settle(
             out.retained.append(item)
             continue
         if not (project_root / item.tree / item.path).exists():
+            out.gone.append(item)
             continue  # already gone
         keep = _keep_reason(project_root, manifest, item, live) or _inner_change(
             project_root, manifest, item, items, live
@@ -656,6 +685,7 @@ def _settle(
             out.warnings.append(_failed_warning(item, exc))
             continue
         deleted.append(item)
+        out.gone.append(item)
     return out
 
 
@@ -691,6 +721,8 @@ def recover_pending_removals(
         return leftovers
     settled = _settle(project_root, manifest, list(manifest.pending_removals), [])
     settled.warnings[:0] = leftovers
+    for gone in settled.gone:  # saved below, before the listing can fail (E1)
+        drop_promote_references(manifest, gone)
     manifest.pending_removals = settled.retained
     save_manifest(project_root, manifest)
     return settled.warnings

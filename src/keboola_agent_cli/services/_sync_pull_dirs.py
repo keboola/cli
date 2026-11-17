@@ -327,18 +327,23 @@ def finalize_kept_entries(
     component is carried untouched: the ignore filter keeps it out of diff and
     push, and it is back in scope, still associated, once the component is
     un-ignored -- dropping it made the next promote create a duplicate (risk
-    75). It is dropped -- its files are never touched -- only when its source
-    config is gone from the manifest and its directory is gone too (D13c).
+    75) -- while its source folder exists: a promote entry never outlives the
+    folder it reads from (#1007 E1). It is dropped -- its files are never
+    touched -- when its source config is gone from the manifest and its
+    directory is gone too (D13c).
     """
     paths = {(c.component_id, c.id): c.path for c in pulled}
     carried: list[ManifestConfiguration] = []
     for entry in kept:
-        if entry.component_id in ignored_components:
-            carried.append(entry)  # untouched until the component is un-ignored
-            continue
         association = promoted_from(entry)
         if association is not None and branch_dir.parent / association.tree != branch_dir:
             carried.append(entry)  # its source tree was not pulled: unchanged (D27)
+            continue
+        if entry.component_id in ignored_components:
+            # Untouched until the component is un-ignored -- but never past its
+            # source folder: a pull that removed that folder drops it (#1007 E1).
+            if association is None or (branch_dir / entry.path / CONFIG_FILENAME).exists():
+                carried.append(entry)
             continue
         source = association.config_id if association is not None else ""
         if source and (entry.component_id, source) in paths:
