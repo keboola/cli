@@ -166,7 +166,7 @@ git diff <base_branch>...HEAD -- 'tests/test_e2e.py' 'tests/test_e2e_*.py' | gre
 gh pr checks <pr_number> 2>&1 | tail -30
 
 # Cheap static checks only: seconds, no pytest
-make lint format-check typecheck loc-check skill-check cli-spec-rules 2>&1 | tail -15
+make lint format-check typecheck loc-check cli-spec-rules 2>&1 | tail -15
 ```
 
 **Never run a test suite on this machine.** No `make check`, `make test`,
@@ -177,13 +177,22 @@ has not run on this PR (for example a PR whose base is not `main`), look in
 the PR description and comments for a run the author reported: where it
 ran, which commit, pass and fail counts. If there is none, report "tests
 not verified" as NON-BLOCKING and say the author must run `make check` on
-a test machine. Do not run it yourself.
+a test machine. Do not run it yourself. A run the author reported is
+evidence you could not verify: say so in the Verification log. While the
+tests are not verified by CI or a reported run, the verdict cannot be
+APPROVE (use COMMENT).
+
+Not every CI job is a gate. The `audit` job (dependency vulnerabilities) is
+advisory by policy (`CONTRIBUTING.md`), and the review bots' checks are not
+test results. `skill-check` is left to CI because it rewrites `SKILL.md`
+in the working tree.
 
 Findings:
 - New CLI command without service-layer test → BLOCKING
 - New CLI command without CliRunner test → BLOCKING
 - New CLI command without E2E test → NON-BLOCKING with reason: "every CLI command must have E2E coverage per CONTRIBUTING.md, but environmental constraints can defer one cycle"
-- A failing CI check, or a static check above non-zero → BLOCKING (and stop -- everything else is moot until lint/tests pass)
+- A failing lint, type or test job in CI, or a static check above non-zero → BLOCKING (and stop -- everything else is moot until lint/tests pass)
+- A failing `audit` job → NON-BLOCKING, unless the PR changes `pyproject.toml` or `uv.lock` (then BLOCKING)
 - Test mocks but doesn't assert `mock_client.close.assert_called_once()` → NON-BLOCKING
 
 ### Step 3.6 — Behavior verification (reproduce the claim)
@@ -398,7 +407,7 @@ proves you didn't hallucinate.
 - `gh pr view <N> --json title,body,files` → 17 files, +426/-7, conventional `feat(storage):` ✓
 - `grep typer src/keboola_agent_cli/services/...` → empty ✓ (no layer violation)
 - `gh pr checks 123` → all required checks pass ✓
-- `make lint format-check typecheck loc-check skill-check cli-spec-rules` → exit 0 ✓
+- `make lint format-check typecheck loc-check cli-spec-rules` → exit 0 ✓
 - `kbagent --json storage create-bucket --project padak-2-0 --branch <ID> --stage out --name probe` → `legacy_branch_storage: true`, warning fires in human mode ✓
 - ...
 
