@@ -267,17 +267,19 @@ def under_pending(path: str, pending: frozenset[str]) -> bool:
 
     Diff and push treat such a directory as absent: never a move target,
     never an untracked config to create or adopt, never a new row (#827, D11).
-    A tracked directory strictly inside a pending folder, and everything below
-    it, is not covered by THAT folder (H1) -- but a pending record at or below
-    the tracked directory still covers its own path (I1): a row folder whose
-    delete failed stays absent under its tracked configuration.
+    A tracked directory at or inside a pending folder, and everything below
+    it, is not covered by THAT folder (H1; a config tracked again at a stale
+    record's path) -- but a pending record strictly below the tracked
+    directory still covers its own path (I1): a row folder whose delete
+    failed stays absent under its tracked configuration.
     """
     exempt = getattr(pending, "exempt", frozenset())
     for p in pending:
         if not (path == p or path.startswith(f"{p}/")):
             continue
         cancelled = any(
-            t.startswith(f"{p}/") and (path == t or path.startswith(f"{t}/")) for t in exempt
+            (t == p or t.startswith(f"{p}/")) and (path == t or path.startswith(f"{t}/"))
+            for t in exempt
         )
         if not cancelled:
             return True

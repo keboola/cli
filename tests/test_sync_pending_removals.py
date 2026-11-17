@@ -715,7 +715,11 @@ def test_under_pending_cancels_only_ancestors_of_a_tracked_folder() -> None:
     assert not under_pending("a/b/rows/new", pending)
     assert under_pending("a/b/rows/x", pending)
     assert under_pending("a/b/rows/x/deep", pending)
-    assert under_pending("c", PendingPaths(frozenset({"c"}), frozenset({"c"})))
+    # A config tracked again at a stale record's path is not hidden by it (round 5).
+    exact = PendingPaths(frozenset({"c", "c/rows/x"}), frozenset({"c"}))
+    assert not under_pending("c", exact)
+    assert not under_pending("c/rows/new", exact)
+    assert under_pending("c/rows/x", exact)
 
 
 @pytest.mark.parametrize("kind", ["row", "weird"])
@@ -751,3 +755,32 @@ def test_a_malformed_record_behind_a_link_is_dropped_not_kept(
     assert (victim / "notes.txt").is_file()
     assert "PENDING_REMOVAL_INVALID" in [w["code"] for w in result["warnings"]], result
     assert ws.manifest().pending_removals == []
+
+
+def test_a_stale_record_at_a_config_tracked_again_does_not_hide_its_new_row(
+    ws: Workspace, api: FakeStorage
+) -> None:
+    """Round 5: a pending record naming a config's own folder, the config tracked again there."""
+    cid = api.add("Orders", ["SELECT 1;"])
+    api.configs[cid]["rows"].append(dict(ROW))
+    ws.init_and_pull()
+    d = ws.dir_of(cid)
+    rel = d.relative_to(ws.root / "main").as_posix()
+    _plant(
+        ws,
+        {"tree": "main", "path": rel, "kind": "config", "componentId": "x", "configId": "9"},
+    )
+    (template,) = [p for p in (d / "rows").iterdir() if (p / CONFIG_FILENAME).is_file()]
+    new_row = d / "rows" / "new-row"
+    new_row.mkdir()
+    data = ws.read_yaml(template)
+    data["name"] = "New Row"
+    for key in ("row_id", "config_id"):
+        (data.get("_keboola") or {}).pop(key, None)
+    ws.write_yaml(new_row, data)
+
+    rows = [c for c in ws.diff()["changes"] if c.get("is_row")]
+    ws.push()
+
+    assert [(c["change_type"], c["parent_config_id"]) for c in rows] == [("added", cid)]
+    assert [r["name"] for r in api.configs[cid]["rows"]] == ["Existing Row", "New Row"]
