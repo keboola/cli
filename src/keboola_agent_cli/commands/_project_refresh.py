@@ -22,8 +22,10 @@ def is_global_config(config_store: ConfigStore) -> bool:
     """True when ``config_store`` is the global config, however its path is spelled."""
     try:
         return config_store.config_dir.resolve() == global_config_dir().resolve()
-    except OSError:
-        logger.debug("Cannot resolve config dirs; treating the config as global", exc_info=True)
+    except OSError as exc:
+        logger.debug(
+            "Cannot resolve config dirs (%s); treating the config as global", type(exc).__name__
+        )
         return True
 
 
@@ -31,12 +33,17 @@ def global_store_for(config_store: ConfigStore) -> ConfigStore | None:
     """The read-only global config to take tokens from, or None (#955).
 
     None when the refreshed config is the global config itself, or when the
-    global ``config.json`` does not exist.
+    global ``config.json`` does not exist or cannot be checked.
     """
     if is_global_config(config_store):
         return None
     global_dir = global_config_dir()
-    if not (global_dir / ConfigStore.CONFIG_FILENAME).is_file():
+    try:
+        if not (global_dir / ConfigStore.CONFIG_FILENAME).is_file():
+            return None
+    except OSError as exc:
+        # An unreadable global directory means there is no global store to use.
+        logger.debug("Global config dir unreadable (%s); not consulted", type(exc).__name__)
         return None
     return ConfigStore(config_dir=global_dir, source="global")
 

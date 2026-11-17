@@ -11,6 +11,7 @@ clients are mocks.
 """
 
 import json
+import logging
 from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
@@ -26,7 +27,7 @@ from keboola_agent_cli.commands._project_refresh import (
     is_global_config,
 )
 from keboola_agent_cli.config_store import ConfigStore, global_config_dir
-from keboola_agent_cli.errors import KeboolaApiError
+from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 from keboola_agent_cli.models import AppConfig, ProjectConfig, TokenVerifyResponse
 from keboola_agent_cli.services import _refresh_from_global
 from keboola_agent_cli.services._refresh_from_global import pick_global_candidate
@@ -45,7 +46,9 @@ MANAGE = "manage-token-123456789012345678"
 
 
 def _invalid() -> KeboolaApiError:
-    return KeboolaApiError(message="Invalid token", status_code=401, error_code="INVALID_TOKEN")
+    return KeboolaApiError(
+        message="Invalid token", status_code=401, error_code=ErrorCode.INVALID_TOKEN
+    )
 
 
 def _verified(project_id: int, name: str = "Renamed") -> TokenVerifyResponse:
@@ -64,6 +67,7 @@ class Storage:
     def __call__(self, url: str, token: str) -> MagicMock:
         self.seen.append(token)
         client = MagicMock()
+        client.__enter__.return_value = client  # like KeboolaClient.__enter__
         outcome = self.behaviour[token]
         if isinstance(outcome, Exception):
             client.verify_token.side_effect = outcome
@@ -164,7 +168,10 @@ class TestServiceAdoption:
         local = _store(tmp_path / "local", {"prod": _project(DEAD_LOCAL)})
         global_store = _global({"g-prod": _project(GLOBAL_TOKEN)})
         transient = KeboolaApiError(
-            message="Service unavailable", status_code=503, error_code="API_ERROR", retryable=True
+            message="Service unavailable",
+            status_code=503,
+            error_code=ErrorCode.API_ERROR,
+            retryable=True,
         )
         storage = Storage(
             {DEAD_LOCAL: transient, GLOBAL_TOKEN: _verified(100), MINTED: _verified(100)}
@@ -184,7 +191,9 @@ class TestServiceAdoption:
     def test_timeout_on_local_check_never_adopts(self, tmp_path: Path) -> None:
         local = _store(tmp_path / "local", {"prod": _project(DEAD_LOCAL)})
         global_store = _global({"g-prod": _project(GLOBAL_TOKEN)})
-        timeout = KeboolaApiError(message="t", status_code=0, error_code="TIMEOUT", retryable=True)
+        timeout = KeboolaApiError(
+            message="t", status_code=0, error_code=ErrorCode.TIMEOUT, retryable=True
+        )
         storage = Storage({DEAD_LOCAL: timeout, GLOBAL_TOKEN: _verified(100)})
 
         result = _service(local, storage, _manage()).refresh_tokens(
@@ -324,7 +333,7 @@ class TestServiceAdoption:
         assert result["projects_adopted"] == []
         assert [p["alias"] for p in result["projects_failed"]] == ["prod"]
         assert "changed concurrently" in result["projects_failed"][0]["message"]
-        assert result["projects_failed"][0]["error_code"] == "CONFIG_ERROR"
+        assert result["projects_failed"][0]["error_code"] == ErrorCode.CONFIG_ERROR
         assert _token(local, "prod") == concurrent
 
     def test_removed_alias_between_plan_and_write_is_reported(self, tmp_path: Path) -> None:
@@ -342,6 +351,33 @@ class TestServiceAdoption:
 
         assert [p["alias"] for p in result["projects_failed"]] == ["prod"]
         assert "prod" not in local.load().projects
+
+
+class TestOwnerLookupBeforeWrites:
+    def test_failing_owner_lookup_still_reports_every_adoption(self, tmp_path: Path) -> None:
+        """Review fix 3: a Manage client factory that raises must not hide written adoptions."""
+        local = _store(
+            tmp_path / "local", {"prod": _project(DEAD_LOCAL), "b": _project(DEAD_LOCAL_B, 200)}
+        )
+        global_store = _global({"g-prod": _project(GLOBAL_TOKEN)})
+        storage = Storage(
+            {DEAD_LOCAL: _invalid(), DEAD_LOCAL_B: _invalid(), GLOBAL_TOKEN: _verified(100)}
+        )
+
+        def broken_manage_factory(url: str, token: str) -> MagicMock:
+            raise RuntimeError("manage client unavailable")
+
+        service = OrgService(
+            config_store=local,
+            manage_client_factory=broken_manage_factory,
+            storage_client_factory=storage,
+        )
+        result = service.refresh_tokens(global_store=global_store, manage_token=MANAGE)
+
+        assert [p["alias"] for p in result["projects_adopted"]] == ["prod"]
+        assert [p["alias"] for p in result["projects_failed"]] == ["b"]
+        assert _token(local, "prod") == GLOBAL_TOKEN
+        assert _token(local, "b") == DEAD_LOCAL_B
 
 
 class TestServiceNoAdoption:
@@ -471,6 +507,89 @@ class TestServiceNoAdoption:
         assert result["projects_adopted"] == []
         assert GLOBAL_TOKEN not in storage.seen
         assert _token(local, "prod") == MINTED
+
+    def test_global_config_failing_validation_in_any_way_falls_back_to_minting(
+        self, tmp_path: Path
+    ) -> None:
+        """Review fix 1: a non-integer version raised TypeError out of refresh."""
+        local = _store(tmp_path / "local", {"prod": _project(DEAD_LOCAL)})
+        global_dir = global_config_dir()
+        global_dir.mkdir(parents=True, exist_ok=True)
+        (global_dir / "config.json").write_text(
+            '{"version": "broken", "projects": {}}', encoding="utf-8"
+        )
+        storage = Storage({DEAD_LOCAL: _invalid(), MINTED: _verified(100)})
+
+        result = _service(local, storage, _manage()).refresh_tokens(
+            global_store=ConfigStore(config_dir=global_dir), manage_token=MANAGE
+        )
+
+        assert result["projects_adopted"] == []
+        assert result["projects_failed"] == []
+        assert _token(local, "prod") == MINTED
+
+    def test_malformed_global_token_never_reaches_the_log(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Review fix 2: a pydantic error quoting the token must not be logged."""
+        secret = "FAKE-SECRET-GLOBAL-TOKEN-VALUE"
+        local = _store(tmp_path / "local", {"prod": _project(DEAD_LOCAL)})
+        global_dir = global_config_dir()
+        global_dir.mkdir(parents=True, exist_ok=True)
+        (global_dir / "config.json").write_text(
+            json.dumps({"version": 1, "projects": {"g": {"stack_url": STACK, "token": [secret]}}}),
+            encoding="utf-8",
+        )
+        storage = Storage({DEAD_LOCAL: _invalid(), MINTED: _verified(100)})
+        caplog.set_level(logging.DEBUG)
+
+        result = _service(local, storage, _manage()).refresh_tokens(
+            global_store=ConfigStore(config_dir=global_dir), manage_token=MANAGE
+        )
+
+        assert result["projects_adopted"] == []
+        assert secret not in caplog.text
+        assert all(record.exc_info is None for record in caplog.records)
+
+    def test_failed_global_verify_never_logs_the_token(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Review fix 2: the verify fallback logs the exception class only."""
+        leaky = KeboolaApiError(
+            message=f"rejected {GLOBAL_TOKEN}", status_code=401, error_code=ErrorCode.INVALID_TOKEN
+        )
+        caplog.set_level(logging.DEBUG)
+        result, _, _ = self._run(tmp_path, {"g": _project(GLOBAL_TOKEN)}, **{GLOBAL_TOKEN: leaky})
+        assert result["projects_adopted"] == []
+        assert GLOBAL_TOKEN not in caplog.text
+        assert all(record.exc_info is None for record in caplog.records)
+
+    def test_local_ephemeral_project_is_never_offered_an_adoption(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Review fix 5: the local `__env__` project falls through to today's path."""
+        local = _store(tmp_path / "local", {})
+        global_store = _global({"g-prod": _project(GLOBAL_TOKEN)})
+        monkeypatch.setenv("KBAGENT_PROJECT_FROM_ENV", "1")
+        monkeypatch.setenv("KBC_TOKEN", DEAD_LOCAL)
+        monkeypatch.setenv("KBC_STORAGE_API_URL", STACK)
+        storage = Storage({DEAD_LOCAL: _invalid(), GLOBAL_TOKEN: _verified(100)})
+
+        result = _service(local, storage, _manage()).refresh_tokens(
+            aliases=["__env__"], global_store=global_store, dry_run=True
+        )
+
+        assert result["projects_adopted"] == []
+        assert [p["action"] for p in result["projects_refreshed"]] == ["would_refresh"]
+        assert GLOBAL_TOKEN not in storage.seen
+
+    def test_unreadable_global_dir_means_no_candidates(self, tmp_path: Path) -> None:
+        """Review fix 4: an OSError while checking the global config is no error."""
+        from keboola_agent_cli.services._refresh_from_global import load_global_projects
+
+        _global({"g-prod": _project(GLOBAL_TOKEN)})
+        with patch.object(Path, "is_file", side_effect=PermissionError(13, "denied")):
+            assert load_global_projects(ConfigStore(config_dir=global_config_dir())) == {}
 
     def test_pick_skips_ephemeral_and_session_entries(self) -> None:
         from keboola_agent_cli.auth.sentinel import make_session_token
@@ -649,6 +768,12 @@ class TestGlobalStoreLookup:
         store = ConfigStore(config_dir=respelled, source="cli-flag")
         assert is_global_config(store)
         assert global_store_for(store) is None
+
+    def test_unreadable_global_dir_means_no_store(self, tmp_path: Path) -> None:
+        """Review fix 4: EACCES on the global dir must not crash `project refresh`."""
+        local = _store(tmp_path / "local", {})
+        with patch.object(Path, "is_file", side_effect=PermissionError(13, "denied")):
+            assert global_store_for(local) is None
 
     def test_global_dir_through_a_symlink_is_the_global_config(self, tmp_path: Path) -> None:
         _global({})

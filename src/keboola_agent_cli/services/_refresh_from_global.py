@@ -68,12 +68,19 @@ def load_global_projects(global_store: ConfigStore | None) -> dict[str, ProjectC
     A missing, unreadable or corrupt global config is not an error of
     `project refresh`: it only means there is nothing to take from it.
     """
-    if global_store is None or not global_store.config_path.is_file():
+    if global_store is None:
         return {}
+    # Any failure -- an unreadable directory, a corrupt file, a config that
+    # fails validation in any way -- means "no candidates", never an error.
+    # Only the exception class is logged: a validation error can quote a token.
     try:
+        if not global_store.config_path.is_file():
+            return {}
         return dict(global_store.load().projects)
-    except (ConfigError, OSError):
-        logger.debug("Global config unreadable; no global token candidates", exc_info=True)
+    except Exception as exc:
+        logger.debug(
+            "Global config unreadable (%s); no global token candidates", type(exc).__name__
+        )
         return {}
 
 
@@ -129,13 +136,10 @@ def verify_global_candidate(
     Any verification error means no adoption: the caller falls back to minting.
     """
     try:
-        client = storage_client_factory(project.stack_url, candidate.token)
-        try:
+        with storage_client_factory(project.stack_url, candidate.token) as client:
             info = client.verify_token()
-        finally:
-            client.close()
-    except Exception:
-        logger.debug("Global token for '%s' did not verify", alias, exc_info=True)
+    except Exception as exc:
+        logger.debug("Global token for '%s' did not verify (%s)", alias, type(exc).__name__)
         return None
     if info.project_id != project.project_id:
         logger.debug("Global token for '%s' belongs to another project", alias)

@@ -408,7 +408,14 @@ class OrgService:
 
             # Only a definitively invalid token may be replaced from the global
             # config: a transient check error says nothing about the token (R1).
-            if state is _TokenState.INVALID and not force and global_store is not None:
+            # An ephemeral (env-synthesized `__env__`) local project is never
+            # persisted, so it cannot take a token either: today's path.
+            if (
+                state is _TokenState.INVALID
+                and not force
+                and global_store is not None
+                and not project.ephemeral
+            ):
                 if global_projects is None:
                     global_projects = load_global_projects(global_store)
                 candidate = pick_global_candidate(global_projects, project)
@@ -456,6 +463,14 @@ class OrgService:
                 raise ValueError("refresh_tokens needs manage_token or manage_token_provider")
             manage_token = manage_token_provider()
 
+        # The owner lookup also runs before the first write, and never raises:
+        # a run either stops before writing anything or returns its full result.
+        owner_name = (
+            self._manage_token_owner(to_mint[0][1].stack_url, manage_token)
+            if to_mint and manage_token is not None
+            else ""
+        )
+
         for plan in adoptions:
             try:
                 write_adoption(self._config_store, plan)
@@ -464,7 +479,6 @@ class OrgService:
                 failed.append(item_failure(exc, alias=plan.alias, project_name=plan.project_name))
 
         if to_mint and manage_token is not None:
-            owner_name = self._manage_token_owner(to_mint[0][1].stack_url, manage_token)
             for alias, project in to_mint:
                 try:
                     new_token = self._refresh_single_project(
@@ -508,17 +522,22 @@ class OrgService:
             client.close()
 
     def _manage_token_owner(self, stack_url: str, manage_token: str) -> str:
-        """Email or name of the Manage token's owner, for unique token naming."""
-        manage_client = self._manage_client_factory(stack_url, manage_token)
+        """Email or name of the Manage token's owner, for unique token naming.
+
+        Never raises: a failure anywhere -- building the client included --
+        only means the description carries no owner.
+        """
         try:
-            token_info = manage_client.verify_token()
+            manage_client = self._manage_client_factory(stack_url, manage_token)
+            try:
+                token_info = manage_client.verify_token()
+            finally:
+                manage_client.close()
             user_info = token_info.get("user", {})
             return user_info.get("email") or user_info.get("name", "")
-        except Exception:
-            logger.debug("Could not resolve manage token owner identity")
+        except Exception as exc:
+            logger.debug("Could not resolve manage token owner identity (%s)", type(exc).__name__)
             return ""
-        finally:
-            manage_client.close()
 
     def _refresh_single_project(
         self,

@@ -548,13 +548,15 @@ def project_refresh(
     token_description: str = typer.Option(
         DEFAULT_TOKEN_DESCRIPTION,
         "--token-description",
-        help="Description prefix for created Storage API tokens",
+        help="Description prefix for newly created Storage API tokens (not applied to "
+        "tokens taken from the global config)",
     ),
     token_expires_in: int | None = typer.Option(
         None,
         "--token-expires-in",
         min=1,
-        help="Token lifetime in seconds. If not set, tokens never expire.",
+        help="Lifetime in seconds of newly created tokens (not applied to tokens taken from "
+        "the global config). If not set, they never expire.",
     ),
 ) -> None:
     """Refresh expired or invalid Storage API tokens.

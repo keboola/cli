@@ -2510,8 +2510,8 @@
         {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Preview what would be refreshed without making changes"},
         {"kind": "option", "name": "force", "opts": ["--force"], "type": "boolean", "is_flag": true, "default": false, "help": "Refresh even if token is valid"},
         {"kind": "option", "name": "yes", "opts": ["--yes", "-y"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip confirmation prompt"},
-        {"kind": "option", "name": "token_description", "opts": ["--token-description"], "type": "text", "default": "kbagent-cli", "help": "Description prefix for created Storage API tokens"},
-        {"kind": "option", "name": "token_expires_in", "opts": ["--token-expires-in"], "type": "integer", "default": null, "help": "Token lifetime in seconds. If not set, tokens never expire."}
+        {"kind": "option", "name": "token_description", "opts": ["--token-description"], "type": "text", "default": "kbagent-cli", "help": "Description prefix for newly created Storage API tokens (not applied to tokens taken from the global config)"},
+        {"kind": "option", "name": "token_expires_in", "opts": ["--token-expires-in"], "type": "integer", "default": null, "help": "Lifetime in seconds of newly created tokens (not applied to tokens taken from the global config). If not set, they never expire."}
       ]
     },
     {

@@ -18,7 +18,7 @@ from typer.testing import CliRunner, Result
 
 from keboola_agent_cli.cli import app
 from keboola_agent_cli.config_store import ConfigStore
-from keboola_agent_cli.errors import KeboolaApiError
+from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 from keboola_agent_cli.models import AppConfig, ProjectConfig, TokenVerifyResponse
 from keboola_agent_cli.services.org_service import OrgService
 
@@ -55,7 +55,7 @@ def _run(store: ConfigStore, *, old_token_valid: bool) -> tuple[Result, MagicMoc
         client = MagicMock()
         if token == TEST_STORAGE_TOKEN and not old_token_valid:
             client.verify_token.side_effect = KeboolaApiError(
-                message="Invalid token", status_code=401, error_code="INVALID_TOKEN"
+                message="Invalid token", status_code=401, error_code=ErrorCode.INVALID_TOKEN
             )
         else:
             client.verify_token.return_value = TokenVerifyResponse(
