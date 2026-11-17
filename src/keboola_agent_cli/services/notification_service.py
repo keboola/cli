@@ -34,7 +34,7 @@ import logging
 import math
 import re
 from dataclasses import dataclass, field
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from typing import Any
 
 from ..effective_branch import resolve_branch
@@ -127,7 +127,7 @@ def _overtime_percent(filters: list[Any]) -> int | float | None:
     numeric string. Anything else -- no filter, two filters, an equality
     filter, a boolean, NaN -- is ``None``; the raw ``filters`` stay in the row.
     The percent is an ``int`` when whole (``0.5`` -> ``50``) and keeps its
-    fraction otherwise (``0.125`` -> ``12.5``), so nothing is rounded away.
+    fraction otherwise (``0.125`` -> ``12.5``) with no fixed decimal cut-off.
     Never raises: one malformed subscription must not break a fleet audit.
     """
     matches = [
@@ -146,7 +146,7 @@ def _overtime_percent(filters: list[Any]) -> int | float | None:
     # no precision is cut off (1e-09 reads as 1e-07, not 0).
     try:
         exact = Decimal(value if isinstance(value, str) else repr(value)) * 100
-    except (InvalidOperation, ValueError):
+    except (ArithmeticError, ValueError):  # decimal Overflow / InvalidOperation
         return None
     if not exact.is_finite() or exact < 0 or not math.isfinite(float(exact)):
         return None

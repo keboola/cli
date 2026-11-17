@@ -2429,7 +2429,7 @@ def test_notifications_create_invalid_overtime_is_http_400(tmp_path: Path) -> No
             f"/notifications/{PROJECT}",
             headers=AUTH,
             json={
-                "event": "job-failed",
+                "event": "job-processing-long",
                 "channel": "email",
                 "address": "ops@example.com",
                 "overtime_percent": 50,
@@ -2478,7 +2478,7 @@ def test_notifications_create_passes_all_body_fields(tmp_path: Path) -> None:
     assert res.status_code == 200, res.text
     notification_svc.create_subscription.assert_called_once_with(
         alias=PROJECT,
-        event="job-failed",
+        event="job-processing-long",
         channel="email",
         address="alerts@example.com",
         component_id="keboola.flow",

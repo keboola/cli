@@ -1074,7 +1074,20 @@ class TestCreateSubscriptionOvertime:
         assert "--overtime-percent" in excinfo.value.message
         client.create_project_subscription.assert_not_called()
 
-    @pytest.mark.parametrize("bad", [0, -1, True, False, 1.5, "50", 10001, 10**400, 10**5000])
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            0,
+            -1,
+            True,
+            False,
+            1.5,
+            "50",
+            10001,
+            pytest.param(10**400, id="10e400"),
+            pytest.param(10**5000, id="10e5000"),
+        ],
+    )
     def test_non_integer_or_negative_is_invalid_argument(self, bad: object) -> None:
         client = MagicMock()
 
@@ -1159,6 +1172,8 @@ class TestOvertimePercentReadSide:
             [{"field": "durationOvertimePercentage", "value": 10**400, "operator": ">="}],
             [{"field": "durationOvertimePercentage", "value": 10**5000, "operator": ">="}],
             [{"field": "durationOvertimePercentage", "value": 0.5, "operator": ">= "}],
+            [{"field": "durationOvertimePercentage", "value": "1e999999", "operator": ">="}],
+            [{"field": "durationOvertimePercentage", "value": "-1e999999", "operator": ">="}],
             ["not-a-dict"],
         ],
     )
