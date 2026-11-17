@@ -16,16 +16,21 @@ kbagent --json notification list --project P --config-id FLOW_ID
 kbagent --json notification list --project P            # unfiltered
 ```
 
-- Run both. A subscription with no filters is project-wide and fires for
-  every job; `--config-id` / `--component-id` drop it and only count it in
-  `project_wide_excluded`. The full answer is the filtered rows plus the
-  project-wide rows of the unfiltered run.
+- Run both. `--config-id` / `--component-id` drop every subscription without
+  a config filter and only count them in `project_wide_excluded`. Those rows
+  can still alert for this flow, but `scope: project-wide` only means "no
+  config filter": read each row's `filters` (component, branch, phase,
+  overtime) before adding it to the answer.
+- Check `errors` before you conclude that nobody is subscribed. A blank
+  `config_name` does not mean the subscription is inactive.
 - `branch_id` is filled on production subscriptions too (the default branch's
   id). Compare it with `kbagent branch list` before calling an alert
   "dev-branch only".
 - `overtime_percent` is the "longer than usual" threshold of a
-  `job-processing-long` / `phase-job-processing-long` row, `null` when there
-  is none. `notification detail --subscription-id ID` prints every raw filter.
+  `job-processing-long` / `phase-job-processing-long` row. `null` does not
+  prove there is no threshold: an `==` filter, two overtime filters or an
+  unreadable value are `null` too. Read the raw `filters`
+  (`notification detail --project P --subscription-id ID` prints them all).
 
 ## 2. Create an alert
 
@@ -63,33 +68,39 @@ kbagent --json notification create --project P --event job-processing-long \
 - `create` is not idempotent: every call adds a subscription. Run step 1
   first and do not create a second identical one.
 
-Verify with `notification detail --subscription-id ID` (the `overtime_percent`
+Verify with `notification detail --project P --subscription-id ID` (the `overtime_percent`
 and the raw filters must match what you asked for).
 
 ## 3. Change the recipient
 
 ```bash
 kbagent --json notification replace-recipient --project P \
-  --subscription-id ID --address new@example.com
+  --subscription-id ID --address new@example.com --yes
 ```
 
 - The service has no update, so this creates a new subscription and then
   deletes the old one. The id always changes: use `new_subscription_id` from
   the result, never the old id.
-- `old_deleted: false` means the old one is still there (a duplicate). Delete
-  it with `notification delete --subscription-id OLD_ID`.
+- It exits 0 even when the old one could not be deleted: read
+  `old_deleted` in the result. `false` means a duplicate now exists. Do not
+  run the replace again; delete the old one with
+  `notification delete --project P --subscription-id OLD_ID --yes`.
+- The channel is kept unless you pass `--channel`. To move from email to a
+  webhook, pass `--channel webhook --address URL`.
 - Filters, the overtime threshold included, are copied unchanged. To change
   the threshold, create a new subscription and delete the old one.
 
 ## 4. Delete
 
 ```bash
-kbagent --json notification delete --project P --subscription-id ID
+kbagent --json notification delete --project P --subscription-id ID --yes
 ```
 
 `delete` is destructive-class: `--deny-destructive` blocks it.
-`create` and `replace-recipient` are write-class. In human mode `delete` and
-`replace-recipient` ask for confirmation unless `--yes` is passed.
+`create` and `replace-recipient` are write-class. `delete` and
+`replace-recipient` ask for confirmation on a terminal; without a terminal
+they refuse with `CONFIRMATION_REQUIRED` (exit 2). Pass `--yes` (or use
+`--json`) when you run them.
 
 More detail: the notification sections of [gotchas.md](gotchas.md) and
 [commands-reference.md](commands-reference.md).
