@@ -1678,6 +1678,26 @@ kbagent flow delete [--project NAME] --flow-id ID [--branch ID] [--yes]
 kbagent flow schedule [--project NAME] --flow-id ID --cron "0 6 * * *" [--timezone TZ] [--disabled] [--branch ID]
 kbagent flow schedule-remove [--project NAME] --flow-id ID [--branch ID] [--yes]
 kbagent flow triggers [--project NAME] --flow-id ID [--branch ID]
+kbagent flow run [--project NAME] --flow-id ID [--task-id T ...] [--from-phase-id P] [--variable-values-id ID | --no-variables] [--branch ID] [--wait] [--timeout N] [--dry-run]
+# flow run (#725): a whole flow (no selector; same Queue body as `job run --component-id keboola.flow`)
+#   or a PARTIAL run: --task-id (repeatable) and/or --from-phase-id, sent as onlyFlowTaskIds (the UI's
+#   "Run selected tasks"). --from-phase-id follows DEFAULT transitions only (the next[] entry with no
+#   `condition` key); two defaults or a default to an unknown phase is INVALID_ARGUMENT, a cycle stops
+#   and sets selection.default_path_cycle. A partial run ignores conditions (warning
+#   PARTIAL_RUN_IGNORES_CONDITIONS); phases with an enabled task that are not on the default path and
+#   are reachable from it only through a conditional transition get CONDITIONAL_PHASES_SKIPPED.
+#   Blank/empty/comma selectors, unknown ids, a disabled task given by id, a task in an undefined
+#   phase and an empty selection are INVALID_ARGUMENT (exit 2) before any POST. The flow config is
+#   read once (selection + variables); the branch is resolved once (0 = production). --wait on a
+#   partial run adds task_results + failed_task_ids and exits 1 (payload first, SELECTED_TASK_FAILED)
+#   when a selected task did not succeed or is missing from result.tasks; the flow status alone can
+#   hide that. A flow job that ended in `error` keeps QUEUE_JOB_FAILED (exit 1); task_results and
+#   failed_task_ids are then in error.details. The selection warnings stay on error envelopes too.
+#   A --timeout never kills the job: QUEUE_JOB_TIMEOUT, exit 4, retryable false, names
+#   `job detail`. Permission key flow.run (write): a policy denying job.run does NOT deny it.
+#   REST: POST /flows/{project}/{flow_id}/run (body task_ids/from_phase_id/branch_id/
+#   variable_values_id/no_variables/dry_run, query wait/timeout; unknown fields and query params 422;
+#   task_ids [] is 400). Version gate in gotchas.md.
 # flow triggers (#714): the honest answer to "what starts this flow automatically". A flow has at
 #   least three trigger mechanisms and kbagent used to see ONE: `schedule list` / `search` only ever
 #   read `keboola.scheduler` configs, so a flow driven by a TABLE TRIGGER came back "nothing found"
@@ -1715,7 +1735,7 @@ kbagent flow triggers [--project NAME] --flow-id ID [--branch ID]
 # flow schedule (0.66.1+) also activates the config on the Scheduler Service so the cron fires;
 #   activation failure keeps the config written, sets activated=false + warning, exit stays 0.
 #   flow schedule-remove deregisters from the service before deleting each config.
-# Execute a flow with: kbagent job run --project NAME --component-id keboola.flow --config-id ID
+# Execute a flow with: kbagent flow run --project NAME --flow-id ID (or job run --component-id keboola.flow)
 
 kbagent schedule list [--project NAME ... | --all-projects] [--enabled-only] [--branch ID]
 kbagent schedule detail [--project NAME] --schedule-id ID [--branch ID]

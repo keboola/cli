@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from importlib import resources as importlib_resources
@@ -25,6 +26,7 @@ from typing import Any
 
 from ..ai_client import AiServiceClient
 from ..config_store import ConfigStore
+from ..constants import DEFAULT_JOB_RUN_TIMEOUT
 from ..effective_branch import resolve_branch
 from ..errors import ErrorCode, KeboolaApiError
 from ..models import ComponentDetail, ProjectConfig
@@ -34,6 +36,16 @@ from .base import (
     ClientFactory,
     make_session_aware_client_factory,
     project_error_entry,
+)
+from .flow_run_selection import (
+    FlowRunError,
+    FlowRunSelection,
+    FlowWarning,
+    check_selector_values,
+    select_flow_tasks,
+    selection_warnings,
+    summarize_task_results,
+    task_failure_warning,
 )
 from .flow_validation import find_unreachable_phases, validate_conditional_flow
 
@@ -146,6 +158,43 @@ class FlowSchemaFetch:
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+@dataclass
+class FlowRunOutcome:
+    """The result of ``flow run``: the payload, its warnings, and the failed selected tasks.
+
+    The CLI adds ``warnings`` to the envelope (or stderr), REST to the
+    ``Kbagent-Warnings`` header. ``failed_task_ids`` non-empty means exit 1
+    with the payload (D12); ``selected_count`` is the M of ``Failed: N of M``.
+    """
+
+    payload: dict[str, Any]
+    warnings: list[FlowWarning]
+    failed_task_ids: list[str]
+    selected_count: int
+    waited: bool
+
+
+def _invalid_argument(message: str) -> KeboolaApiError:
+    return KeboolaApiError(message=message, status_code=0, error_code=ErrorCode.INVALID_ARGUMENT)
+
+
+def _check_run_options(variable_values_id: str | None, no_variables: bool, timeout: float) -> None:
+    """The option checks of ``flow run`` that need no API call (D10, D11)."""
+    if variable_values_id is not None and not variable_values_id.strip():
+        raise _invalid_argument(
+            "--variable-values-id cannot be empty or whitespace. Pass a row id, or omit "
+            "the flag to auto-resolve the default row."
+        )
+    if variable_values_id is not None and no_variables:
+        raise _invalid_argument(
+            "--variable-values-id and --no-variables are mutually exclusive. Pass "
+            "--variable-values-id to bind a specific values row, or --no-variables to skip "
+            "resolution, but not both."
+        )
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise _invalid_argument(f"--timeout must be a finite number above 0, got {timeout}.")
 
 
 def _parse_configuration(raw: Any) -> dict[str, Any]:
@@ -656,6 +705,154 @@ class FlowService(BaseService):
             )
         finally:
             client.close()
+
+    # ── run ─────────────────────────────────────────────────────────
+
+    def run_flow(
+        self,
+        alias: str,
+        flow_id: str,
+        task_ids: list[str] | None = None,
+        from_phase_id: str | None = None,
+        branch_id: int | None = None,
+        variable_values_id: str | None = None,
+        no_variables: bool = False,
+        wait: bool = False,
+        timeout: float = DEFAULT_JOB_RUN_TIMEOUT,
+        dry_run: bool = False,
+    ) -> FlowRunOutcome:
+        """Run a whole flow or a selection of its tasks (``kbagent flow run``, #725).
+
+        The branch is resolved once and that exact value goes to the flow read,
+        the variable rows read and the Queue POST (0 stays production). The
+        flow configuration is read ONCE: the task selection and the variable
+        binding both come from that read (a concurrent edit before the Queue
+        executes the job is still possible). A selection is sent as
+        ``onlyFlowTaskIds``; no selector runs the whole flow with the same body
+        as ``job run``. ``--dry-run`` reads the flow and creates nothing. A
+        local wait timeout never kills the job (spec LR2).
+
+        Raises:
+            KeboolaApiError: ``INVALID_ARGUMENT`` for a bad selector or option
+                (before any POST); API errors of the read, the POST and the wait.
+            ConfigError: Unknown project alias.
+        """
+        from .job_service import JobService
+
+        check_selector_values(task_ids, from_phase_id)
+        _check_run_options(variable_values_id, no_variables, timeout)
+        effective_branch = resolve_branch(self._config_store, alias, branch_id)
+        project = self.resolve_projects([alias])[alias]
+
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            detail = client.get_config_detail(
+                FLOW_COMPONENT_ID, flow_id, branch_id=effective_branch
+            )
+            configuration = _parse_configuration(detail.get("configuration"))
+            selection = select_flow_tasks(configuration, task_ids, from_phase_id)
+            warnings = selection_warnings(selection)
+            if dry_run:
+                payload = {
+                    "dry_run": True,
+                    "project_alias": alias,
+                    "flow_id": flow_id,
+                    "branch_id": effective_branch,
+                    "partial": selection.partial,
+                    "selection": selection.to_dict(),
+                    "tasks": selection.tasks,
+                }
+                return FlowRunOutcome(payload, warnings, [], len(selection.task_ids), False)
+            values_id = variable_values_id.strip() if variable_values_id else None
+            if values_id is None and not no_variables:
+                try:
+                    values_id = JobService.resolve_variable_values_from_configuration(
+                        client, configuration, branch_id=effective_branch
+                    )
+                except KeboolaApiError as exc:
+                    raise FlowRunError(exc, warnings) from exc
+        finally:
+            client.close()
+
+        # The variables are resolved above from the same read: `no_variables`
+        # tells run_job not to read the configuration again (R3).
+        try:
+            job = JobService(self._config_store, self._client_factory).run_job(
+                alias=alias,
+                component_id=FLOW_COMPONENT_ID,
+                config_id=flow_id,
+                wait=wait,
+                timeout=timeout,
+                # Production goes as an explicit 0: run_job resolves a None again,
+                # and a `branch use` in another terminal since our read would then
+                # send the job to a branch the selection was not read from.
+                branch_id=0 if effective_branch is None else effective_branch,
+                variable_values_id=values_id,
+                no_variables=values_id is None,
+                only_flow_task_ids=selection.task_ids if selection.partial else None,
+                kill_on_timeout=False,
+            )
+        except KeboolaApiError as exc:
+            # F1: the selection warnings stay on the error envelope / REST body.
+            raise self._flow_run_error(exc, warnings, selection, project) from exc
+        job["flow_id"] = flow_id
+        job["partial"] = selection.partial
+        job["selection"] = selection.to_dict()
+        failed: list[str] = []
+        if wait and selection.partial:
+            results = summarize_task_results(job, selection)
+            job["task_results"] = results.task_results
+            job["failed_task_ids"] = results.failed_task_ids
+            failed = results.failed_task_ids
+            if failed:
+                warnings.append(task_failure_warning(results))
+        return FlowRunOutcome(job, warnings, failed, len(selection.task_ids), wait)
+
+    def _flow_run_error(
+        self,
+        exc: KeboolaApiError,
+        warnings: list[FlowWarning],
+        selection: FlowRunSelection,
+        project: ProjectConfig,
+    ) -> FlowRunError:
+        """Wrap a run error with its warnings; a failed partial job also gets its task results.
+
+        A partial run whose flow job ended in ``error`` (``QUEUE_JOB_FAILED``,
+        typically its last phase failed) carries ``task_results`` and
+        ``failed_task_ids`` in ``details``, plus a ``SELECTED_TASK_FAILED``
+        warning (F2). They come from the job ``run_job`` already read
+        (:class:`QueueJobFailedError`); only when that read failed is the job
+        read once more. Best effort: any read, decoding or shape problem
+        leaves the original error, its details and the warnings unchanged.
+        """
+        from .job_service import QueueJobFailedError
+
+        job_id = exc.details.get("job_id") if isinstance(exc.details, dict) else None
+        if not selection.partial or exc.error_code != ErrorCode.QUEUE_JOB_FAILED or not job_id:
+            return FlowRunError(exc, warnings)
+        try:
+            job = exc.failed_job if isinstance(exc, QueueJobFailedError) else None
+            if job is None:
+                client = self._client_factory(project.stack_url, project.token)
+                try:
+                    job = client.get_job_detail(str(job_id))
+                finally:
+                    client.close()
+            if not isinstance(job, dict):
+                raise TypeError(f"job detail is {type(job).__name__}, not an object")
+            results = summarize_task_results(job, selection)
+        except (KeboolaApiError, OSError, ValueError, TypeError, AttributeError, KeyError) as err:
+            logger.debug("flow run: no task results for failed job %s: %s", job_id, err)
+            return FlowRunError(exc, warnings)
+        details = {
+            **exc.details,
+            "task_results": results.task_results,
+            "failed_task_ids": results.failed_task_ids,
+        }
+        found = list(warnings)
+        if results.failed_task_ids:
+            found.append(task_failure_warning(results))
+        return FlowRunError(exc, found, details=details)
 
     # ── schedule ────────────────────────────────────────────────────
 

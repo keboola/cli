@@ -1048,7 +1048,7 @@ explicit Storage config version, never the empty shell the create writes.
     (INVALID_FLOW_DEFINITION on failure). A schema-fetch failure does NOT block the write:
     structural check skipped, semantic checks still run, a warning is surfaced.
     IDs are STRINGS; phases use next[].goto (a phase id or null); tasks are typed
-    (job/notification/variable). Execute with: job run --component-id keboola.flow --config-id ID.
+    (job/notification/variable). Execute with: flow run --flow-id ID.
 
   flow update
     Update a flow's name, description, or phases/tasks. --definition / --definition-file
@@ -1077,6 +1077,15 @@ explicit Storage config version, never the empty shell the create writes.
     Remove all schedules bound to this flow: each schedule is deregistered from the Scheduler
     Service, then its keboola.scheduler config is deleted. Idempotent: safe to run when no
     schedules exist.
+
+  flow run
+    Run a whole flow, or only some tasks: --task-id (repeat) and/or --from-phase-id (that phase
+    plus the phases reached by DEFAULT transitions -- never conditional ones). A partial run does
+    NOT evaluate conditions: every selected task runs, also after a failure, and the flow status
+    can hide a failed task. Run --dry-run first (reads the flow, creates nothing; selection.phases
+    is membership, not execution order). With --wait read failed_task_ids / task_results: exit 1
+    when a selected task failed or left no result; when the flow job itself ended in error
+    (QUEUE_JOB_FAILED) they are in error.details. A --timeout never stops the job (exit 4).
 """,
     "http": """\
 #### Self-call HTTP (inside `kbagent serve` subprocesses)

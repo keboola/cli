@@ -57,6 +57,19 @@ These lists keep `error`, because their entries are not failed items with an err
 - **Removed short flags** (a usage error, exit 2): `-c` (`permissions list --category`, `lineage show --column`), `-r` (`search` and `config search --regex`, `project invite` and `project member-set-role --role`), `-d` on `http post/patch --body`, `permissions set --deny` and `token create --description`, `-f` on `lineage show --format`, `-l` on `search --limit` and `-n` on `changelog` and `kai history --limit` (use `-L`), `-m` on `permissions set --mode`, and `-v` on `changelog --full` (`-v` is the global `--verbose`).
 - **In documents and agent commands, use the long names.** They work on 0.x and 1.x.
 
+## `flow run`: partial flow runs ignore conditions; the flow status can hide a failed task
+
+*(since vNEXT)*
+
+- **New command `kbagent flow run --project ALIAS --flow-id ID`** runs a whole flow, or with `--task-id` (repeatable) / `--from-phase-id` only some tasks (`onlyFlowTaskIds` on the Queue job, the UI's "Run selected tasks"). Older versions have no way to run part of a flow; `job run --component-id keboola.flow` always runs all of it.
+- **A partial run does not evaluate transition conditions.** Every selected task runs, phase after phase, also after one failed; routing-only phases may run empty; unselected variable tasks do not run. Every partial run carries the `PARTIAL_RUN_IGNORES_CONDITIONS` warning.
+- **The flow job's status is the status of its last phase**, so a partial run can end `success` with a failed selected task. Under `--wait`, read `failed_task_ids` / `task_results` (a task absent from `result.tasks` is `missing`): kbagent exits 1 with the payload and a `SELECTED_TASK_FAILED` warning when that list is not empty -- also when the parent job is `terminated`, `cancelled` or `warning`. Over REST the answer is HTTP 200 with the same keys and the warning in `Kbagent-Warnings`. When the flow job itself ended in `error` (typically its last phase failed), the error stays `QUEUE_JOB_FAILED` (exit 1, REST 502) and `task_results` / `failed_task_ids` are in `error.details`; the warnings are still in the error envelope's `warnings`.
+- **`--from-phase-id` follows default transitions only** (the `next[]` entry with no `condition` key; `condition: null` or `{}` counts as a condition). Phases with an enabled task that are not on the default path, and are reachable from it only through a conditional transition, are named in `CONDITIONAL_PHASES_SKIPPED`. A task id or phase id with a comma, and a selected task whose `phase` the flow does not define, are `INVALID_ARGUMENT`. Two default transitions, or a default to an unknown phase, is `INVALID_ARGUMENT`; a cycle stops the path and sets `selection.default_path_cycle`.
+- **A blank `--task-id " "` is `INVALID_ARGUMENT`, never a whole-flow run**; over REST `task_ids: []` is HTTP 400 (`null` = no selector).
+- **A `--timeout` never stops the job** (unlike `job run --wait`, which kills it and exits 7): `QUEUE_JOB_TIMEOUT`, exit 4, `retryable: false`; follow it with `kbagent job detail --project P --job-id ID`.
+- **`job run --wait` and `flow run --wait`: a `QUEUE_JOB_FAILED` error now carries `details.job_id`** (additive), so the failed job can be read with `job detail` without parsing the message.
+- **Permission key `flow.run` (write) is separate from `job.run`.** A policy that denies `job.run` does NOT deny `flow.run`; deny both (or `cli:write`). A deny on `flow.run` also blocks `flow run --dry-run`.
+
 ## `project refresh` in a local directory takes the new token from the global config
 
 *(since vNEXT)* (#955)
