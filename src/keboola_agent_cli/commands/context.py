@@ -1110,7 +1110,9 @@ explicit Storage config version, never the empty shell the create writes.
 """,
     "init": """\
   init
-    Create local .kbagent/ workspace. --from-global copies existing projects;
+    Create local .kbagent/ workspace. --from-global copies existing projects
+    (a one-time copy of the tokens: after a rotation in the global config,
+    run `project refresh` in the workspace);
     --project ALIAS (repeatable) copies only the named project(s) and implies
     --from-global. When the global active project is not copied, the
     workspace has no active project (`active_project_cleared`, since 0.100.0).
@@ -1537,6 +1539,9 @@ explicit Storage config version, never the empty shell the create writes.
   kbagent project refresh --all-projects [--dry-run] [--force] [--yes] [--token-description ...] [--token-expires-in N]
     Refresh project tokens via Manage API. --all-projects refreshes all projects (since 1.0.0 --all is removed);
     without --project and --all-projects, the active project. --force replaces non-expiring tokens.
+    In a local .kbagent/ directory an INVALID_TOKEN project first takes the
+    one verified token the global config holds for it (`projects_adopted`);
+    the Manage token is asked for only when a token must be minted.
     Browser-login (session) projects are reported under "skipped" with the
     reason that there is no static token to replace -- their access token
     rotates on its own from auth.json. --force does NOT convert them either;
