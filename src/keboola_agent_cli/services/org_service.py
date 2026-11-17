@@ -14,11 +14,12 @@ from ..auth.sentinel import is_session_token
 from ..client import KeboolaClient
 from ..config_store import ConfigStore
 from ..constants import DEFAULT_TOKEN_DESCRIPTION
-from ..errors import ErrorCode, KeboolaApiError, mask_token
+from ..errors import ConfigError, ErrorCode, KeboolaApiError, mask_token
 from ..manage_client import ManageClient
 from ..models import ProjectConfig
 from ._refresh_from_global import (
     PlannedAdoption,
+    ensure_unchanged,
     load_global_projects,
     pick_global_candidate,
     verify_global_candidate,
@@ -574,6 +575,11 @@ class OrgService:
         # Create a new Storage API token via Manage API
         # project_id is always set on registered projects (populated by verify_token at add time)
         assert project.project_id is not None
+        # The Manage-token prompt may have waited for a human since the plan:
+        # check the alias before creating a token, so a concurrent edit costs
+        # no orphaned token, and again inside the write transaction below.
+        with self._config_store.transaction():
+            ensure_unchanged(self._config_store, alias, project)
         manage_client = self._manage_client_factory(project.stack_url, manage_token)
         try:
             token_data = manage_client.create_project_token(
@@ -593,13 +599,22 @@ class OrgService:
         finally:
             storage_client.close()
 
-        # Update the project in config
-        self._config_store.edit_project(
-            alias,
-            token=storage_token,
-            project_name=token_info.project_name,
-            project_id=token_info.project_id,
-        )
+        # Update the project in config, only if nobody changed it meanwhile.
+        with self._config_store.transaction():
+            try:
+                ensure_unchanged(self._config_store, alias, project)
+            except ConfigError as exc:
+                raise ConfigError(
+                    f"{exc.message} A new Storage token was created for project "
+                    f"{project.project_id} but not saved; delete it with "
+                    "`kbagent token list` and `kbagent token delete`."
+                ) from None
+            self._config_store.edit_project(
+                alias,
+                token=storage_token,
+                project_name=token_info.project_name,
+                project_id=token_info.project_id,
+            )
 
         return storage_token
 

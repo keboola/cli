@@ -153,6 +153,31 @@ def verify_global_candidate(
     )
 
 
+def ensure_unchanged(config_store: ConfigStore, alias: str, snapshot: ProjectConfig) -> None:
+    """Raise unless ``alias`` still holds the token, project and stack of ``snapshot``.
+
+    Call it inside ``config_store.transaction()`` right before a write, so a
+    concurrent edit of the alias (another kbagent process, or one that ran
+    while the Manage-token prompt waited for a human) is never overwritten.
+
+    Raises:
+        ConfigError: The alias was removed or changed since the snapshot.
+    """
+    current = config_store.load().projects.get(alias)
+    unchanged = (
+        current is not None
+        and not current.ephemeral
+        and current.token == snapshot.token
+        and current.project_id == snapshot.project_id
+        and same_stack(current.stack_url, snapshot.stack_url)
+    )
+    if not unchanged:
+        raise ConfigError(
+            f"Project '{alias}' changed concurrently while refreshing; "
+            "nothing was written. Run `kbagent project refresh` again."
+        )
+
+
 def write_adoption(config_store: ConfigStore, plan: PlannedAdoption) -> None:
     """Write the adopted token, only if the alias is unchanged since the plan.
 
@@ -163,17 +188,5 @@ def write_adoption(config_store: ConfigStore, plan: PlannedAdoption) -> None:
             alias now hold a session sentinel.
     """
     with config_store.transaction():
-        current = config_store.load().projects.get(plan.alias)
-        unchanged = (
-            current is not None
-            and not current.ephemeral
-            and current.token == plan.project.token
-            and current.project_id == plan.project.project_id
-            and same_stack(current.stack_url, plan.project.stack_url)
-        )
-        if not unchanged:
-            raise ConfigError(
-                f"Project '{plan.alias}' changed concurrently while refreshing; "
-                "nothing was written. Run `kbagent project refresh` again."
-            )
+        ensure_unchanged(config_store, plan.alias, plan.project)
         config_store.edit_project(plan.alias, token=plan.token, project_name=plan.project_name)

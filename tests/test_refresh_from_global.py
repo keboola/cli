@@ -336,6 +336,56 @@ class TestServiceAdoption:
         assert result["projects_failed"][0]["error_code"] == ErrorCode.CONFIG_ERROR
         assert _token(local, "prod") == concurrent
 
+    def test_edit_during_manage_prompt_mints_nothing_and_keeps_the_edit(
+        self, tmp_path: Path
+    ) -> None:
+        """An alias edited while the Manage-token prompt waited is never overwritten.
+
+        The lazy prompt runs after the plan; minting from that stale snapshot
+        would undo the concurrent edit. Nothing may be minted either, or the
+        new token would be left orphaned on the server.
+        """
+        local = _store(tmp_path / "local", {"b": _project(DEAD_LOCAL_B, 200)})
+        concurrent = "200-44-writtenByAnotherProcess0000"
+        storage = Storage({DEAD_LOCAL_B: _invalid(), MINTED: _verified(200)})
+        manage = _manage()
+
+        def prompt_while_another_process_edits() -> str:
+            local.edit_project("b", token=concurrent)
+            return MANAGE
+
+        result = _service(local, storage, manage).refresh_tokens(
+            manage_token_provider=prompt_while_another_process_edits
+        )
+
+        assert result["projects_refreshed"] == []
+        assert [p["alias"] for p in result["projects_failed"]] == ["b"]
+        assert "changed concurrently" in result["projects_failed"][0]["message"]
+        manage.create_project_token.assert_not_called()
+        assert _token(local, "b") == concurrent
+
+    def test_edit_after_mint_is_kept_and_names_the_unsaved_token(self, tmp_path: Path) -> None:
+        """An edit that lands while the token is being created is not overwritten either."""
+        local = _store(tmp_path / "local", {"b": _project(DEAD_LOCAL_B, 200)})
+        concurrent = "200-44-writtenByAnotherProcess0000"
+        storage = Storage({DEAD_LOCAL_B: _invalid(), MINTED: _verified(200)})
+        manage = _manage()
+        real_create = manage.create_project_token.side_effect
+
+        def create_while_another_process_edits(**kwargs: Any) -> Any:
+            local.edit_project("b", token=concurrent)
+            return real_create(**kwargs) if real_create else {"token": MINTED}
+
+        manage.create_project_token.side_effect = create_while_another_process_edits
+
+        result = _service(local, storage, manage).refresh_tokens(manage_token=MANAGE)
+
+        assert result["projects_refreshed"] == []
+        message = result["projects_failed"][0]["message"]
+        assert "changed concurrently" in message and "token delete" in message
+        assert MINTED not in message
+        assert _token(local, "b") == concurrent
+
     def test_removed_alias_between_plan_and_write_is_reported(self, tmp_path: Path) -> None:
         local = _store(tmp_path / "local", {"prod": _project(DEAD_LOCAL)})
         global_store = _global({"g-prod": _project(GLOBAL_TOKEN)})
