@@ -7353,11 +7353,12 @@ examples. Surprises worth knowing before you touch this:
   all -- not its owner, not a granted project, not viewing an
   organization-scoped object -- so a 403 never leaks "an object owned by
   some other project exists." Do not collapse the two when surfacing errors.
-- **`edit`, `import --overwrite` and `promote` update in place (PUT).** The
+- **`edit`, `import --overwrite` and `promote` update in place** (`edit` a
+  `PATCH` of the changed keys since vNEXT, the other two a `PUT`). The
   item keeps its id, scope, grants and pending elevation request. They used to
   DELETE+POST, which reset an organization/targeted item to `project` scope
   (`import --overwrite`, `promote`) or could lose the item when the re-create
-  was refused (`edit`). A failed PUT changes nothing. Note that `promote`'s
+  was refused (`edit`). A refused write changes nothing. Note that `promote`'s
   diff compares `attributes` only, so a scope difference between source and
   target is neither shown nor copied.
 - **No bulk-elevate.** There is no "promote every object in this project"
@@ -7819,3 +7820,30 @@ the same way. Now a dev branch id is sent as a string (`"branchId": "12345"`);
 production and `--branch 0` stay `null`. The `--dry-run` body of `data-app
 create` shows the same string. On an older version, create the app in
 production or in the Keboola UI.
+
+## `semantic-layer edit` overwrote a concurrent change to another field
+
+*(since vNEXT)* `semantic-layer edit metric|dataset|constraint|relationship|glossary`
+read the whole item, applied the change and wrote the WHOLE record back with a
+metastore `PUT`. A change that someone else made to another field between the
+read and the write was silently overwritten: two concurrent `edit metric` runs,
+one with `--new-description`, the other with `--new-sql`, lost one of the two
+changes in 4 of 5 live rounds (#833). The same applied to the metric-rename
+cascade, which rewrote each affected constraint whole.
+
+Now `edit` sends a metastore `PATCH` with only the keys you passed (for the
+rename cascade: only the constraint's `metrics`). The server merges them under
+a row lock and validates the merged record, so a concurrent change to another
+key survives. Unchanged: the item keeps its id, scope, grants, pending elevation
+request and revision history; the result shape is the same; `serve`'s
+`PATCH /semantic-layer/items/{kind}/{name}` behaves the same way.
+
+- A value you pass is written even when it equals the value just read.
+- An `edit` with no `--new-*` option writes nothing (no new revision).
+- Still racy: two edits of the SAME key (last one wins), two concurrent renames
+  of one metric, and a constraint that starts referencing the metric while the
+  rename runs (the cascade misses it -- run `semantic-layer validate` after a rename).
+- A `PATCH` is not retried on a 5xx or a read timeout (it may have been applied):
+  re-read with `semantic-layer show` before repeating an edit.
+- `import --overwrite` and `promote` still use a whole-record `PUT`: they make the
+  target equal to the source, so do not run them while someone edits the target.

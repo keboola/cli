@@ -323,7 +323,7 @@ def add_glossary(
 
 
 # ---------------------------------------------------------------------------
-# semantic-layer edit -- in-place PUT + rename cascade
+# semantic-layer edit -- in-place PATCH of the changed keys + rename cascade
 # ---------------------------------------------------------------------------
 
 

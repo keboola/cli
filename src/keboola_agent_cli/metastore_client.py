@@ -413,8 +413,8 @@ class MetastoreClient(BaseHttpClient):
     ) -> dict[str, Any]:
         """Replace an item in place via ``PUT`` (revisioned update).
 
-        ``PUT`` updates the record in place (``edit``, ``import --overwrite`` and
-        ``promote`` use it) and increments
+        ``PUT`` replaces the whole record in place (``import --overwrite`` and
+        ``promote`` use it; ``edit`` uses :meth:`patch_item`, issue #833) and increments
         ``meta.revision`` server-side, preserving the metastore's revision
         history. ``data`` is the inner ``attributes`` payload; the outer
         envelope is added here.
