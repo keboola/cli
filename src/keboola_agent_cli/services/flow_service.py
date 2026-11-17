@@ -783,7 +783,10 @@ class FlowService(BaseService):
                 config_id=flow_id,
                 wait=wait,
                 timeout=timeout,
-                branch_id=effective_branch,
+                # Production goes as an explicit 0: run_job resolves a None again,
+                # and a `branch use` in another terminal since our read would then
+                # send the job to a branch the selection was not read from.
+                branch_id=0 if effective_branch is None else effective_branch,
                 variable_values_id=values_id,
                 no_variables=values_id is None,
                 only_flow_task_ids=selection.task_ids if selection.partial else None,

@@ -221,6 +221,28 @@ class TestBranch:
         assert client.get_config_detail.call_args.kwargs["branch_id"] == ACTIVE_BRANCH
         assert client.create_job.call_args.kwargs["branch_id"] == ACTIVE_BRANCH
 
+    def test_production_stays_production_when_a_branch_is_activated_mid_run(
+        self, tmp_path: Path
+    ) -> None:
+        # Another terminal runs `branch use` after the flow was read for production:
+        # the job must still go to production, the branch the selection describes.
+        store = _store(tmp_path)
+        client = _client()
+        read = client.get_config_detail.side_effect
+        detail = client.get_config_detail.return_value
+
+        def _read_then_activate(*args: Any, **kwargs: Any) -> Any:
+            config = store.load()
+            config.projects["prod"].active_branch_id = ACTIVE_BRANCH
+            store.save(config)
+            return read(*args, **kwargs) if read else detail
+
+        client.get_config_detail.side_effect = _read_then_activate
+        result = _run(store, client, [*BASE, "--task-id", "t1"])
+        assert result.exit_code == 0, result.output
+        assert not client.get_config_detail.call_args.kwargs["branch_id"]
+        assert not client.create_job.call_args.kwargs["branch_id"]
+
     def test_dev_branch_reaches_read_rows_and_post(self, tmp_path: Path) -> None:
         configuration = {**FLOW_CONFIGURATION, "variables_id": "55"}
         client = _client(configuration)
