@@ -21,7 +21,9 @@ Both run after the create passes, PUT the corrected config, rewrite the local
 from __future__ import annotations
 
 import copy
+import hashlib
 import logging
+import os
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -37,7 +39,7 @@ from ..sync.diff_engine import config_hash
 from ..sync.manifest import Manifest
 from ._sync_baseline import apply_stamp, config_baseline
 from ._sync_companions import record_companions
-from ._sync_disabled import record_disabled
+from ._sync_disabled import file_disables, record_disabled
 from ._sync_link_pending import (
     LinkMaps,
     build_link_maps,
@@ -57,6 +59,7 @@ from ._sync_models import (
     VARIABLES_COMPONENT_ID,
     CreatedConfig,
     FlowBindingResult,
+    LocalConfigHashes,
     TargetCache,
     VariableBindingResult,
 )
@@ -522,15 +525,18 @@ def _refresh_binding_hashes(
     branch_id: int | None,
     response: Any,
     warnings: list[dict[str, Any]],
+    receipt: LocalConfigHashes | None = None,
 ) -> None:
     """Re-stamp a rebound config's manifest bookkeeping after the backfill PUT.
 
     ``config_hash`` includes ``_configuration_extra``, which both backfills
     rewrite, so the stored hashes must be refreshed or ``sync diff`` reports a
     conflict. The config hash comes from the API's view of the config it just
-    wrote (issue #686); the file hashes describe the local files.
+    wrote (issue #686); the file hashes describe the local files: *receipt*,
+    the hashes of the bytes the backfill wrote, for an existing config (#827,
+    F7). Only a config created in this push still reads them from disk (R18).
     """
-    hashes = service._compute_config_hashes(created.config_dir, created.component_id)
+    hashes = receipt or service._compute_config_hashes(created.config_dir, created.component_id)
     stamp = config_baseline(
         client,
         component_id=created.component_id,
@@ -736,16 +742,55 @@ def _repoint_shared_code(config_data: dict[str, Any], link: SharedCodeLink) -> N
         )
 
 
-def _rewrite_script_files(config_dir: Path, row_id_map: dict[str, str]) -> None:
-    """Rewrite the script placeholders in a config's extracted code files."""
+def _rewrite_script_files(config_dir: Path, row_id_map: dict[str, str]) -> dict[str, str]:
+    """Rewrite the script placeholders in a config's extracted code files.
+
+    Returns the SHA-256 of each file as this call left it -- the bytes it
+    wrote, or the bytes it read when nothing changed -- so the caller stamps
+    those, never a re-read (#827, F7). Written like ``write_text`` (the
+    platform's line endings).
+    """
+    hashes: dict[str, str] = {}
     for filename in _SCRIPT_FILENAMES:
         path = config_dir / filename
         if not path.exists():
             continue
-        text = path.read_text(encoding="utf-8")
+        raw = path.read_bytes()
+        text = raw.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
         rewritten = rewrite_shared_code_placeholders(text, row_id_map)
         if rewritten != text:
-            path.write_text(rewritten, encoding="utf-8")
+            raw = rewritten.replace("\n", os.linesep).encode("utf-8")
+            path.write_bytes(raw)
+        hashes[filename] = hashlib.sha256(raw).hexdigest()
+    return hashes
+
+
+def written_receipt(
+    manifest: Manifest,
+    created: CreatedConfig,
+    branch_id: int | None,
+    *,
+    local_data: dict[str, Any],
+    file_hash: str,
+    rewritten: dict[str, str] | None = None,
+) -> LocalConfigHashes:
+    """The hashes to stamp after a backfill rewrote an EXISTING config's files (#827, F7).
+
+    ``_config.yml`` is the hash of the bytes written; a companion keeps its
+    recorded baseline unless the backfill rewrote it (*rewritten*).
+    """
+    entry = find_branch_entry(manifest, created.component_id, created.config_id, branch_id)
+    recorded = (entry.metadata.get("pull_extra_hashes") if entry is not None else None) or {}
+    extra = {str(k): str(v) for k, v in recorded.items()} if isinstance(recorded, dict) else {}
+    for name, digest in (rewritten or {}).items():
+        if name in extra:
+            extra[name] = digest
+    return LocalConfigHashes(
+        file_hash=file_hash,
+        cfg_hash="",
+        extra_hashes=extra,
+        disabled=file_disables(local_data),
+    )
 
 
 def _apply_shared_code_binding(
@@ -1046,7 +1091,7 @@ def _recover_run_target(
             uncreated=maps.uncreated,
             planned_rows=maps.planned_rows,
         )
-        service._write_config_file(created.config_dir, local_data)
+        written = service._write_config_file(created.config_dir, local_data)
         _refresh_binding_hashes(
             service,
             client,
@@ -1055,6 +1100,9 @@ def _recover_run_target(
             branch_id=branch_id,
             response=response,
             warnings=result.warnings,
+            receipt=written_receipt(
+                manifest, created, branch_id, local_data=local_data, file_hash=written
+            ),
         )
     return remap.pending
 

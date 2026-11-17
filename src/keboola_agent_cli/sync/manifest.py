@@ -13,7 +13,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
 
 from ..constants import KEBOOLA_DIR_NAME, MANIFEST_FILENAME, MANIFEST_VERSION
 
@@ -137,6 +137,25 @@ class ManifestConfiguration(BaseModel):
         return _posix_path(value)
 
 
+def relative_path_problem(value: str) -> str | None:
+    """Why *value* is not a plain relative path inside its base, or ``None`` (#827, F1).
+
+    Refused: empty, absolute (``/x``, ``//server/share``), drive-qualified
+    (``C:/x``; any segment with a colon, which Windows reads as a drive), and
+    any empty, ``.`` or ``..`` segment.
+    """
+    if not value:
+        return "it is empty"
+    if value.startswith("/"):
+        return "it is an absolute path"
+    for segment in value.split("/"):
+        if segment in ("", ".", ".."):
+            return f"it has a {segment!r} segment" if segment else "it has an empty segment"
+        if ":" in segment:
+            return "it names a drive"
+    return None
+
+
 class ManifestPendingRemoval(BaseModel):
     """A directory a ``sync pull`` decided to delete and may not have deleted yet (#827).
 
@@ -165,10 +184,27 @@ class ManifestPendingRemoval(BaseModel):
     file_hash: str = Field(default="", alias="fileHash")
     tree_hash: str = Field(default="", alias="treeHash")
 
+    # Why the record is unsafe to act on, decided at load (F1). Never written.
+    _problem: str | None = PrivateAttr(default=None)
+
     @field_validator("tree", "path")
     @classmethod
     def _normalise_path(cls, value: str) -> str:
         return _posix_path(value)
+
+    @model_validator(mode="after")
+    def _check_paths(self) -> ManifestPendingRemoval:
+        for label, value in (("tree", self.tree), ("path", self.path)):
+            problem = relative_path_problem(value)
+            if problem is not None:
+                self._problem = f"its {label} {value!r} is refused: {problem}"
+                break
+        return self
+
+    @property
+    def problem(self) -> str | None:
+        """Why this record is never acted on (an unsafe path), or ``None``."""
+        return self._problem
 
 
 # ---------------------------------------------------------------------------
@@ -207,7 +243,11 @@ class Manifest(BaseModel):
 
 def pending_removal_paths(manifest: Manifest, tree: str) -> frozenset[str]:
     """Paths (relative to *tree*) of the directories a pull has not finished deleting (#827)."""
-    return frozenset(item.path for item in manifest.pending_removals if item.tree == tree)
+    return frozenset(
+        item.path
+        for item in manifest.pending_removals
+        if item.tree == tree and item.problem is None
+    )
 
 
 def under_pending(path: str, pending: frozenset[str]) -> bool:

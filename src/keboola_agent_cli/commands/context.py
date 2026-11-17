@@ -2471,10 +2471,11 @@ remain branch-aware because modifying a dev branch is the expected intent.
     under remote_only_rows[] (push never creates or deletes them).
     A config DELETE and a config UPDATE are conditional (If-Match on the version push read):
     a config edited in the UI after that read is neither deleted nor overwritten -- errors[]
-    entry SYNC_CONFLICT, exit 1, local files and manifest untouched; pull first.
+    entry SYNC_CONFLICT, exit 1, local files and manifest untouched, and its rows are not
+    pushed either (one SYNC_CONFLICT entry each); pull first.
     Push reads a config's files once: a file changed while it reads is SYNC_LOCAL_FILE_CHANGED
     (nothing sent; push again). A file edited during the update is not overwritten
-    (warnings[] LOCAL_EDIT_DURING_PUSH) and stays a local change in sync diff.
+    (warnings[] LOCAL_EDIT_DURING_PUSH) and stays a local change for the next push.
     Fails if encryption fails (plaintext secrets never pushed). Use escape hatch flag only if you know what you are doing.
     Every secret is encrypted BEFORE the first write (since 0.99.0, #792 F): an
     ENCRYPTION_FAILED stops the push before anything reaches the remote (message ends

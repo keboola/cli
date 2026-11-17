@@ -42,6 +42,7 @@ from ._sync_bindings import (
     _rewrite_script_files,
     put_configuration_only,
     resolve_transformation_bindings,
+    written_receipt,
 )
 from ._sync_link_pending import (
     LinkMaps,
@@ -359,15 +360,17 @@ def _apply_to_api(configuration: dict[str, Any], links: TransformationLinks) -> 
 
 def _apply_to_local(
     created: CreatedConfig, local_data: dict[str, Any], links: TransformationLinks
-) -> None:
+) -> dict[str, str]:
+    """Rewrite the links in *local_data* and the script files; the scripts' new hashes."""
     extra = local_data.setdefault("_configuration_extra", {})
     if links.variables_id:
         extra["variables_id"] = links.variables_id
     if links.variables_values_id:
         extra["variables_values_id"] = links.variables_values_id
-    if links.shared_code is not None:
-        _repoint_shared_code(local_data, links.shared_code)
-        _rewrite_script_files(created.config_dir, links.shared_code.row_id_map)
+    if links.shared_code is None:
+        return {}
+    _repoint_shared_code(local_data, links.shared_code)
+    return _rewrite_script_files(created.config_dir, links.shared_code.row_id_map)
 
 
 def _recover(
@@ -416,8 +419,8 @@ def _recover(
     if links.shared_code is not None:
         result.shared_code_links += 1
     if in_step and local_data is not None:
-        _apply_to_local(created, local_data, links)
-        service._write_config_file(created.config_dir, local_data)
+        scripts = _apply_to_local(created, local_data, links)
+        written = service._write_config_file(created.config_dir, local_data)
         _refresh_binding_hashes(
             service,
             client,
@@ -426,6 +429,14 @@ def _recover(
             branch_id=branch_id,
             response=response,
             warnings=result.warnings,
+            receipt=written_receipt(
+                manifest,
+                created,
+                branch_id,
+                local_data=local_data,
+                file_hash=written,
+                rewritten=scripts,
+            ),
         )
     return links.pending
 

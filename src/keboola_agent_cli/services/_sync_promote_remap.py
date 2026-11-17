@@ -101,6 +101,8 @@ class SentPayload:
     original: dict[str, Any]
     configuration: dict[str, Any]
     receipt: LocalConfigHashes | None = None
+    # Sent by an update (not a create): stamped from its receipt only (F4).
+    update: bool = False
 
 
 @dataclass
@@ -475,6 +477,7 @@ class PromoteRemap:
         config_path: str,
         original: dict[str, Any],
         configuration: dict[str, Any],
+        update: bool = False,
     ) -> None:
         """Keep the payload a referencing config was sent with, for the final rebind."""
         if has_references(component_id, original):
@@ -483,6 +486,7 @@ class PromoteRemap:
                 config_path=config_path,
                 original=original,
                 configuration=configuration,
+                update=update,
             )
 
     def keep_receipt(self, component_id: str, config_id: str, hashes: LocalConfigHashes) -> None:
@@ -561,6 +565,8 @@ def finish_promote_rebind(
         remap.refresh(manifest, branch_id, {}, {})
     remap.use_target(client, branch_id)  # target rows as they are after this push's creates
     for (component_id, config_id), sent in remap.sent.items():
+        if (component_id, config_id) in held:
+            continue  # its update failed after the PUT: not sent again (#827 F4)
         payload = _with_target_identity(
             component_id, remap.apply(component_id, sent.original), sent
         )
@@ -847,6 +853,8 @@ def _stamp(
     response: Any,
     warnings: list[dict[str, Any]],
 ) -> None:
+    if sent.update and sent.receipt is None:
+        return  # an update without a receipt failed locally; never a fresh read (F4)
     stamp_updated_config(
         client,
         manifest=manifest,

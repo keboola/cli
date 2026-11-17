@@ -212,3 +212,85 @@ def test_a_pyproject_edit_during_the_push_is_not_stamped(
         assert "LOCAL_EDIT_DURING_PUSH" in codes, result
     changes = {c["config_id"]: c["change_type"] for c in w.diff()["changes"]}
     assert changes.get(cid) == "modified"
+
+
+# ------------------------------------------------------------------------ F4
+
+
+def test_a_promote_update_whose_writeback_failed_is_not_resent_or_stamped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F4: the PUT landed, the local writeback raised; the final rebind skips the config."""
+    from keboola_agent_cli.services import _sync_push_update
+
+    f = _seed_flow_world(tmp_path, flow_first=True)
+    w = f.world
+    w.api.branch_from_prod()
+    del w.api.remote[DEV][(VARIANTS["extractor"].component_id, f.extractor_id)]
+    flow_file = w.config_dir(f.flow_id) / CONFIG_FILE
+    semantic_edit(flow_file)
+
+    def writeback_fails(*_: Any, **__: Any) -> Any:
+        raise PermissionError(13, "Permission denied", str(flow_file))
+
+    monkeypatch.setattr(_sync_push_update, "settle_local_files", writeback_fails)
+    flow_puts = _spy_flow_puts(w, monkeypatch)
+    result = w.svc.push(alias="prod", project_root=w.root, branch_override=DEV)
+    monkeypatch.undo()
+
+    assert [e["config_id"] for e in result["errors"]] == [f.flow_id], result
+    assert len(flow_puts) == 1  # Phase A only: no final resend
+
+
+def _spy_flow_puts(w: Any, monkeypatch: pytest.MonkeyPatch) -> list[Any]:
+    puts: list[Any] = []
+    real = w.api._update
+
+    def spy(*args: Any, **kwargs: Any) -> dict:
+        if kwargs.get("component_id") == "keboola.flow":
+            puts.append(kwargs.get("configuration"))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(w.api, "_update", spy)
+    return puts
+
+
+# ------------------------------------------------------------------------ F7
+
+
+def test_a_link_recovery_stamp_never_absorbs_an_edit_saved_after_its_write(
+    tmp_path: Path, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F7: a ``link_pending`` flow rewritten by Phase D is stamped from the bytes written."""
+    import yaml
+
+    from keboola_agent_cli.services import _sync_bindings
+    from test_sync_clone_links import FLOW
+    from test_sync_clone_links import World as CloneWorld
+
+    world = CloneWorld(tmp_path, tmp_config_dir)
+    world.tgt_api.fail_row_names.add("orders")
+    world.clone()
+    (entry,) = [c for c in load_manifest(world.clone_dir).configurations if c.component_id == FLOW]
+    assert entry.metadata.get("link_pending") is True
+    flow_file = world.clone_dir / "main" / entry.path / CONFIG_FILE
+    world.tgt_api.fail_row_names.clear()
+    real = _sync_bindings._refresh_binding_hashes
+    fired: list[bool] = []
+
+    def editor_saves_then_stamp(*args: Any, **kwargs: Any) -> Any:
+        if kwargs["created"].component_id == FLOW and not fired:
+            fired.append(True)
+            data = yaml.safe_load(flow_file.read_text(encoding="utf-8"))
+            data["description"] = "edited after the backfill wrote the file"
+            flow_file.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(_sync_bindings, "_refresh_binding_hashes", editor_saves_then_stamp)
+    world.clone()
+    monkeypatch.undo()
+
+    assert fired
+    diff = world.service.diff(alias="target", project_root=world.clone_dir)
+    changes = {c["config_id"]: c["change_type"] for c in diff["changes"] if not c.get("is_row")}
+    assert changes.get(entry.id) == "modified", diff

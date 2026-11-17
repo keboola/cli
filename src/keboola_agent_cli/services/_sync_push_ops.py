@@ -835,7 +835,9 @@ def push_update_row(
     )
     logger.info("Updated row %s/%s/%s", component_id, parent_config_id, row_id)
 
-    writeback_after_push(
+    # The baseline is the hash of the bytes written, never a re-read: an edit
+    # saved right after the write stays a local change (#827, F7).
+    new_file_hash = writeback_after_push(
         service,
         pristine_data,
         row_dir,
@@ -843,10 +845,7 @@ def push_update_row(
         configuration,
         is_row=True,
         row_id=row_id if remap is None else "",
-    )
-
-    row_file = row_dir / CONFIG_FILENAME
-    new_file_hash = service._file_hash(row_file) if row_file.exists() else ""
+    ).file_hash
     stamp = row_baseline(
         client,
         component_id=component_id,

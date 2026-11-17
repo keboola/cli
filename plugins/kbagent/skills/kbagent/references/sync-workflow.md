@@ -527,7 +527,8 @@ exactly what push sent (configuration with the ciphertexts as sent, name,
 description, enabled state when sent) the update counts as done -- the case of
 a PUT the transport repeated after a lost answer. Otherwise push reports
 `SYNC_CONFLICT` under `errors[]` (exit 1), leaves the local files and the
-manifest entry as they were, and no later step of that push writes the config.
+manifest entry as they were, and no later step of that push writes the config
+or its rows (each skipped row gets its own `SYNC_CONFLICT` entry).
 Run `kbagent sync pull`, review, push again. A listing without `version` sends
 no precondition.
 
@@ -535,7 +536,8 @@ Push reads each config's files once; a file that changes while push reads it
 is not sent (`SYNC_LOCAL_FILE_CHANGED`, push again). A file edited while the
 update runs is not written back over (`warnings[]` entry
 `LOCAL_EDIT_DURING_PUSH`): the manifest records what was sent, so
-`sync diff` keeps showing the newer content as a local change. The baseline is
+the newer content stays a local change for the next push (a comment-only edit
+has nothing to send). The baseline is
 always the hash of the bytes push wrote, never a second read of the folder.
 
 Limits: an editor save in the instant between push's last check and its

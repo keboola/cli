@@ -161,7 +161,7 @@ from ._sync_push_create import (
     register_adopted_parent,
 )
 from ._sync_push_ops import detect_name_drift, plan_push, push_create, push_row_change
-from ._sync_push_update import push_modified
+from ._sync_push_update import held_row_error, push_modified
 from ._sync_stale import (
     apply_stale_sweep,
     find_stale_entries,
@@ -618,7 +618,7 @@ class SyncService(BaseService):
         old_entries = {f"{c.component_id}/{c.id}": c for c in own_entries}
         untracked_dirs = scan_config_dirs(self, project_root, manifest, branch_dir_name)
         pull_warnings: list[dict[str, Any]] = recovered + ambiguous_id_warnings(untracked_dirs)
-        journal = RemovalJournal(project_root, branch_dir_name)  # deletes after a checkpoint
+        journal = RemovalJournal.for_pull(project_root, manifest, branch_dir_name)
         companion_warnings: list[dict[str, str]] = []
         # Paths owned on disk before this pull allocates any (D14): a new or
         # renamed config never lands in one, whatever order the remote lists.
@@ -928,7 +928,7 @@ class SyncService(BaseService):
             journal=journal,
         )
         if not dry_run:
-            journal.commit(manifest)  # checkpoint without the removed entries, then delete
+            journal.commit(manifest, new_configurations)  # checkpoint first, then delete
             pull_warnings += journal.warnings
 
         # -- Storage metadata (read-only, not tracked in manifest) --
@@ -949,7 +949,8 @@ class SyncService(BaseService):
                 entries.kept, new_configurations, branch_dir, ignored_components
             )
             entries.retire(manifest, project_root, branch_dir_name, new_configurations)
-            manifest.pending_removals = journal.failed
+            # Records an earlier pull left that still failed, plus this pull's (F2).
+            manifest.pending_removals = [*manifest.pending_removals, *journal.failed]
             save_manifest(project_root, manifest)
 
         return {
@@ -1716,6 +1717,9 @@ class SyncService(BaseService):
                 source_row_id = change.get("source_row_id") or config_id  # risk 71
                 config_path_str = change.get("path", "")
                 parent_config_id = change.get("parent_config_id", "")
+                if (component_id, parent_config_id) in held:  # its config failed (#827 F3)
+                    errors.append(held_row_error(change))
+                    continue
                 manifest_dirty = True  # before a create's checkpoint (D25)
                 try:
                     # The parent's id on the target after Phase A: a placeholder

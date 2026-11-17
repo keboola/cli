@@ -316,3 +316,206 @@ def test_an_edit_saved_right_after_the_writeback_is_not_stamped(
     entry = copy.deepcopy(ws.entry(cid))
     assert entry is not None
     assert entry.metadata["pull_hash"] == ws.service()._file_hash(d / CONFIG_FILENAME)
+
+
+# --------------------------------------------------------------------- round 2
+
+
+ROW = {
+    "id": "500",
+    "name": "Existing Row",
+    "description": "",
+    "configuration": {"parameters": {"table": "a"}},
+}
+
+
+def _pulled_with_row(ws: Workspace, api: FakeStorage) -> tuple[str, Path, Path]:
+    cid = api.add("Orders", ["SELECT 1;"])
+    api.configs[cid]["rows"].append(copy.deepcopy(ROW))
+    ws.init_and_pull()
+    d = ws.dir_of(cid)
+    (row_dir,) = [p for p in (d / "rows").iterdir() if (p / CONFIG_FILENAME).is_file()]
+    return cid, d, row_dir
+
+
+def test_rows_of_a_config_whose_update_got_412_are_held(ws: Workspace, api: FakeStorage) -> None:
+    """F3 (D4): after a 412 on the config, Phase B does not overwrite the row the UI edited."""
+    cid, d, row_dir = _pulled_with_row(ws, api)
+    ws.edit_description(d, "local")
+    row = ws.read_yaml(row_dir)
+    row["parameters"]["table"] = "local"
+    ws.write_yaml(row_dir, row)
+    assert [c for c in ws.diff()["changes"] if c.get("is_row")]
+
+    def ui_edits_the_row(_cid: str) -> None:
+        api.configs[cid]["rows"][0]["configuration"] = {"parameters": {"table": "ui"}}
+        api.ui_edit_row(cid)
+
+    api.on("update_config", "before", ui_edits_the_row)
+    result = ws.push()
+
+    assert _codes(result) == ["SYNC_CONFLICT", "SYNC_CONFLICT"], result
+    row_error = result["errors"][1]
+    assert row_error["parent_config_id"] == cid
+    assert f"{api.configs[cid]['component_id']}/{cid}" in row_error["message"]
+    assert api.configs[cid]["rows"][0]["configuration"]["parameters"]["table"] == "ui"
+    assert ws.read_yaml(row_dir)["parameters"]["table"] == "local"
+
+
+def test_a_row_edit_saved_right_after_its_writeback_is_not_stamped(
+    ws: Workspace, api: FakeStorage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F7: the row baseline is the hash of the bytes written, never a re-read."""
+    from keboola_agent_cli.services import _sync_push_ops
+
+    _cid, _d, row_dir = _pulled_with_row(ws, api)
+    row = ws.read_yaml(row_dir)
+    row["parameters"]["table"] = "pushed"
+    ws.write_yaml(row_dir, row)
+    real = _sync_push_ops.writeback_after_push
+
+    def writeback_then_edit(*args: Any, **kwargs: Any) -> Any:
+        written = real(*args, **kwargs)
+        data = ws.read_yaml(row_dir)
+        data["parameters"]["table"] = "edited after the write"
+        ws.write_yaml(row_dir, data)
+        return written
+
+    monkeypatch.setattr(_sync_push_ops, "writeback_after_push", writeback_then_edit)
+    result = ws.push()
+    monkeypatch.undo()
+
+    assert result["errors"] == [], result
+    rows = [c for c in ws.diff()["changes"] if c.get("is_row")]
+    assert [c["change_type"] for c in rows] == ["modified"], rows
+
+
+def test_a_config_yml_edit_saved_right_after_the_writeback_is_not_stamped(
+    ws: Workspace, api: FakeStorage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F9e (D8): the same for ``_config.yml`` itself."""
+    cid, d = _pulled(ws, api)
+    ws.edit_description(d, "pushed")
+    real = _sync_push_update.writeback_after_push
+
+    def writeback_then_edit(*args: Any, **kwargs: Any) -> Any:
+        written = real(*args, **kwargs)
+        ws.edit_description(d, "edited after the write")
+        return written
+
+    monkeypatch.setattr(_sync_push_update, "writeback_after_push", writeback_then_edit)
+    result = ws.push()
+    monkeypatch.undo()
+
+    assert result["updated"] == 1, result
+    assert api.configs[cid]["description"] == "pushed"
+    assert ws.change_of(cid) == "modified"
+    ws.push()
+    assert api.configs[cid]["description"] == "edited after the write"
+
+
+@pytest.mark.parametrize(
+    ("sent", "remote"),
+    [(True, 1), (1, True), (1, 1.0), (False, 0), ({"a": 1}, {"a": 1.0})],
+    ids=["true_vs_1", "1_vs_true", "int_vs_float", "false_vs_0", "nested_int_vs_float"],
+)
+def test_holds_sent_tells_json_types_apart(sent: Any, remote: Any) -> None:
+    """F8: ``true`` is not ``1`` and ``1`` is not ``1.0``; only ``{}`` == ``[]`` is kept."""
+    update = SentUpdate("n", "", {"parameters": {"mode": sent}}, None)
+    view = {"name": "n", "description": "", "configuration": {"parameters": {"mode": remote}}}
+    assert not holds_sent(view, update)
+    assert holds_sent({**view, "configuration": {"parameters": {"mode": sent}}}, update)
+
+
+def test_412_with_a_bool_sent_and_an_int_stored_is_a_conflict(
+    ws: Workspace, api: FakeStorage
+) -> None:
+    """F8 end to end: a refused update whose remote holds 1 for the true sent is not verified."""
+    cid = api.add("Api", component_id=HTTP, configuration={"parameters": {"mode": False}})
+    ws.init_and_pull()
+    d = ws.dir_of(cid)
+    data = ws.read_yaml(d)
+    data["parameters"]["mode"] = True
+    ws.write_yaml(d, data)
+
+    def ui_stores_an_int(_cid: str) -> None:
+        api.configs[cid]["configuration"] = {"parameters": {"mode": 1}}
+        api.configs[cid]["version"] += 1
+
+    api.on("update_config", "before", ui_stores_an_int)
+    result = ws.push()
+
+    assert _codes(result) == ["SYNC_CONFLICT"], result
+    assert api.configs[cid]["configuration"]["parameters"]["mode"] == 1
+
+
+def test_the_local_edit_warning_promises_no_diff() -> None:
+    """F9a (R12): a comment-only edit diffs clean, so the warning does not say diff shows it."""
+    message = local_edit_warning(HTTP, "1", Path("x"), secrets=False)["message"]
+    assert "sync diff" not in message
+    assert "comments or formatting" in message
+
+
+def test_a_lost_put_response_is_retried_by_the_transport_and_verified(
+    ws: Workspace, api: FakeStorage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F9d (R4): the real HTTP layer repeats a timed-out PUT with the same If-Match.
+
+    The Storage API is a tiny in-memory HTTP handler: the first PUT is applied
+    and then times out (the response is lost); the transport repeats it, gets
+    412 (our own write landed), and push reads the config back.
+    """
+    import json as jsonlib
+
+    import httpx
+
+    import keboola_agent_cli.http_base as http_base_module
+    from keboola_agent_cli.client import KeboolaClient
+
+    cid, d = _pulled(ws, api)
+    ws.edit_description(d, "local")
+    seen: list[str | None] = []
+    state = {"lost": False}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        cfg = api.configs[cid]
+        if request.method == "PUT":
+            seen.append(request.headers.get("If-Match"))
+            if request.headers.get("If-Match") != f'"{cfg["version"]}"':
+                return httpx.Response(412, json={"error": "Precondition failed"})
+            form = dict(httpx.QueryParams(request.content.decode("utf-8")))
+            cfg["description"] = form.get("description", cfg["description"])
+            cfg["configuration"] = jsonlib.loads(form["configuration"])
+            cfg["version"] += 1
+            if not state["lost"]:
+                state["lost"] = True
+                raise httpx.ReadTimeout("response lost", request=request)
+            return httpx.Response(200, json=api._view(cfg))
+        return httpx.Response(200, json=api._view(cfg))
+
+    transport = httpx.MockTransport(handler)
+    client = KeboolaClient(stack_url="https://connection.keboola.com", token="901-1-x")
+    client._client = httpx.Client(base_url=str(client._client.base_url), transport=transport)
+    real_update = api.update_config
+    real_detail = api.get_config_detail
+
+    def via_http(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return client.update_config(*args, **kwargs)
+
+    def detail_via_http(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        api.calls.append(("get_config_detail", cid))
+        return real_detail(*args, **kwargs)
+
+    monkeypatch.setattr(http_base_module.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(api, "update_config", via_http)
+    monkeypatch.setattr(api, "get_config_detail", detail_via_http)
+    result = ws.push()
+    monkeypatch.undo()
+    del real_update
+
+    assert seen == ['"1"', '"1"'], seen  # one PUT applied, repeated with the same If-Match
+    assert result["errors"] == [], result
+    assert result["updated"] == 1
+    assert api.configs[cid]["description"] == "local"
+    assert ("get_config_detail", cid) in api.calls
+    assert ws.change_of(cid) == "unchanged"

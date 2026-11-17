@@ -37,6 +37,7 @@ from ..sync.manifest import (
     ManifestConfigRow,
     ManifestConfiguration,
     pending_removal_paths,
+    under_pending,
 )
 from ..sync.naming import config_row_path
 from ._sync_disabled import DISABLED_BASELINE_KEY, carry_disabled, file_disables, record_disabled
@@ -398,6 +399,28 @@ def scan_config_dirs(
     return found
 
 
+def without_pending(dirs: IdDirs, pending: frozenset[str]) -> IdDirs:
+    """*dirs* with every directory at or below a *pending* path kept reserved only (#827, F5).
+
+    Such a directory is one an interrupted pull has not finished deleting:
+    it is never adopted by the id it carries nor taken for a moved row, but
+    no new row is written into it either.
+    """
+    if not pending:
+        return dirs
+    out = IdDirs(paths=set(dirs.paths))
+    for key, path in dirs.by_id.items():
+        if not under_pending(path, pending):
+            out.by_id[key] = path
+    for key, paths in dirs.ambiguous.items():
+        kept = [p for p in paths if not under_pending(p, pending)]
+        if len(kept) > 1:
+            out.ambiguous[key] = kept
+        elif kept:
+            out.by_id[key] = kept[0]
+    return out
+
+
 def scan_row_dirs(service: SyncService, config_dir: Path) -> IdDirs:
     """Row dirs of a config dir, by ``row_id``; ``paths`` holds every row dir.
 
@@ -539,6 +562,8 @@ def pull_config_rows(
     """
     result = RowPullResult(rows=[])
     dirs = scan_row_dirs(service, ctx.config_dir)
+    if ctx.journal is not None:  # a pending row dir is reserved, never adopted (F5)
+        dirs = without_pending(dirs, ctx.journal.rows_pending_under(ctx.rel_path))
     warnings += ambiguous_id_warnings(dirs, parent=f"{ctx.component_id}/{ctx.config_id}")
     # A row dir carrying an id is adopted by that id under a tracked parent
     # too, unless a manifest row owns its path (D22 guards a differing file).

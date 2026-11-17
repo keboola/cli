@@ -182,13 +182,34 @@ def local_file_changed_error(config_dir: Path) -> KeboolaApiError:
     )
 
 
-def _canonical(value: Any) -> Any:
-    """*value* with an empty object and an empty list made equal (the API returns ``[]`` for ``{}``)."""
-    if isinstance(value, dict):
-        return {key: _canonical(item) for key, item in value.items()} if value else []
-    if isinstance(value, list):
-        return [_canonical(item) for item in value]
-    return value
+def _empty_container(value: Any) -> bool:
+    return isinstance(value, dict | list) and not value
+
+
+def same_json(a: Any, b: Any) -> bool:
+    """True iff *a* and *b* are the same JSON value, types included (F8).
+
+    ``true`` is not ``1`` and ``1`` is not ``1.0``, as JSON distinguishes
+    them. The one equivalence kept: an empty object equals an empty list
+    (the API returns ``[]`` for an empty ``{}``).
+    """
+    if _empty_container(a) and _empty_container(b):
+        return True
+    if isinstance(a, dict):
+        return (
+            isinstance(b, dict)
+            and a.keys() == b.keys()
+            and all(same_json(a[key], b[key]) for key in a)
+        )
+    if isinstance(a, list):
+        return (
+            isinstance(b, list)
+            and len(a) == len(b)
+            and all(same_json(x, y) for x, y in zip(a, b, strict=True))
+        )
+    if isinstance(a, bool | int | float) or isinstance(b, bool | int | float):
+        return type(a) is type(b) and a == b
+    return a == b
 
 
 def holds_sent(remote: dict[str, Any] | None, sent: SentUpdate) -> bool:
@@ -200,7 +221,7 @@ def holds_sent(remote: dict[str, Any] | None, sent: SentUpdate) -> bool:
     """
     if not isinstance(remote, dict):
         return False
-    if _canonical(remote.get("configuration") or {}) != _canonical(sent.configuration or {}):
+    if not same_json(remote.get("configuration") or {}, sent.configuration or {}):
         return False
     if (remote.get("name") or "") != sent.name:
         return False
@@ -267,6 +288,29 @@ def update_if_unchanged(
     return result if isinstance(result, dict) else {}
 
 
+def held_row_error(change: dict[str, Any]) -> dict[str, str]:
+    """The ``errors[]`` entry of a row not pushed because its configuration failed (F3).
+
+    A row write raises its configuration's version and changes what the
+    configuration holds, so after the configuration's update failed (a
+    conflict, a changed local file) no row of it is created, updated or
+    deleted in the same push.
+    """
+    component_id, parent = change["component_id"], change.get("parent_config_id", "")
+    return {
+        "change_type": change["change_type"],
+        "component_id": component_id,
+        "config_id": change.get("config_id", ""),
+        "parent_config_id": parent,
+        "error_code": ErrorCode.SYNC_CONFLICT,
+        "message": (
+            f"Row {change.get('config_id') or change.get('path', '')} was not pushed: the update "
+            f"of its configuration {component_id}/{parent} failed in this push (see its error). "
+            "Nothing was written for the row. Resolve the configuration, then push again."
+        ),
+    }
+
+
 def local_edit_warning(
     component_id: str, config_id: str, config_dir: Path, *, secrets: bool
 ) -> dict[str, Any]:
@@ -274,7 +318,8 @@ def local_edit_warning(
     message = (
         f"{config_dir} was edited while push sent {component_id}/{config_id}. Push sent the "
         "version it read; the newer local content was kept, not pushed, and not written over. "
-        "`kbagent sync diff` shows it as a local change; push it again."
+        "Push again to send it (an edit that changes only comments or formatting has nothing "
+        "to send)."
     )
     if secrets:
         message += (
@@ -454,6 +499,7 @@ def push_update(
             config_path=config_path_str,
             original=original,
             configuration=configuration,
+            update=True,
         )
 
     # Never the target id on the promote path (D23): main/ keeps the source
