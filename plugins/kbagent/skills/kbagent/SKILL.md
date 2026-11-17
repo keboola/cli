@@ -472,6 +472,7 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | Bucket sharing & linking | [sharing-workflow](references/sharing-workflow.md) |
 | **Project members & invitations** (single + bulk via CSV, role change, remove) | [member-workflow](references/member-workflow.md) |
 | **Billing / PAYG credits** (balance only; the shape of the invoice-history gap; PAYG_NOT_AVAILABLE; units) | [billing-workflow](references/billing-workflow.md) |
+| **Notifications** (who gets alerted for a flow; failure and slow-job alerts with `--overtime-percent`; recipient swap mints a new id) | [notification-workflow](references/notification-workflow.md) |
 | Dev branches | [branch-workflow](references/branch-workflow.md) |
 | **Merge requests** (dev branch -> production with review; conflicts + resolve; auto-merge is destructive; `--json merge` needs an explicit target) | [merge-request-workflow](references/merge-request-workflow.md) |
 | Encrypting secrets before a config write | [encrypt-workflow](references/encrypt-workflow.md) |

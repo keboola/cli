@@ -2969,9 +2969,10 @@ events and emits a final `done` SSE frame mirroring the same record.
 - **Filter fields are dotted paths into the event payload.**
   `job.component.id`, `job.configuration.id`, `branch.id`, `phase.id`,
   `durationOvertimePercentage` -- *not* flat keys like `configurationId` or
-  `component`. Only the first four have dedicated output columns; everything
-  else rides along in the raw `filters` list (`notification detail` prints it
-  verbatim).
+  `component`. The first four have dedicated output columns, and a single
+  `>=` `durationOvertimePercentage` filter is also shown as
+  `overtime_percent` (since vNEXT); everything else rides along in the raw
+  `filters` list (`notification detail` prints it verbatim).
 - **`--component-id` / `--config-id` filter client-side** -- as does
   `--event` (see above). The endpoint has no server-side filter that works at
   all: kbagent always fetches the project's full subscription list and narrows
