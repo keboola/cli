@@ -1714,15 +1714,21 @@ kbagent schedule find [--cron-window START-END] [--not-run-since DAYS] [--projec
 
 kbagent notification list [--project NAME ... | --all-projects] [--event NAME] [--component-id ID] [--config-id ID]
 kbagent notification detail [--project NAME] --subscription-id ID
-kbagent notification create [--project ALIAS] --event NAME --channel email|webhook --address ADDR [--component-id ID] [--config-id ID] [--branch ID] [--expires-at TS]
+kbagent notification create [--project ALIAS] --event NAME --channel email|webhook --address ADDR [--component-id ID] [--config-id ID] [--branch ID] [--expires-at TS] [--overtime-percent N]
 kbagent notification delete [--project ALIAS] --subscription-id ID [--yes]
 kbagent notification replace-recipient [--project ALIAS] --subscription-id ID --address NEW_ADDR [--channel email|webhook] [--yes]
 # notification WRITE path (since 0.91.0, #690): the group is no longer read-only.
 #   --address carries the email address (--channel email) OR the webhook URL (--channel webhook) --
 #   channel-discriminated on the wire, same as the read path's single `address` column. An invalid
-#   --channel is a structured INVALID_ARGUMENT, exit 2. `create` WITHOUT --branch writes NO branch.id
-#   filter, unlike the UI which always writes one; an absent filter does not constrain matching, so
-#   such a subscription fires for jobs on EVERY branch.
+#   --channel is a structured INVALID_ARGUMENT, exit 2. `create` WITHOUT --branch sends no branch.id
+#   filter; the Notification Service then stores the default branch's id itself (production only,
+#   like the UI; verified live).
+#   --overtime-percent N (#989): whole percent 1-10000, only for job-processing-long /
+#   phase-job-processing-long (else INVALID_ARGUMENT, exit 2, before any API call); writes the UI's
+#   "job runs longer than usual" filter {field: durationOvertimePercentage, value: N/100,
+#   operator: ">="}. The service refuses 0. REST: `overtime_percent` (StrictInt) in the POST body.
+#   Rows of list/detail/create/replace-recipient carry `overtime_percent` (null unless exactly one
+#   `>=` overtime filter). Version gate lives in gotchas.md.
 #   `replace-recipient` is delete+recreate -- the API has NO update primitive. It creates the NEW
 #   subscription FIRST, then deletes the old one, so a NEW subscription_id is ALWAYS minted (scripts
 #   must not cache the old one; the result carries old_subscription_id + new_subscription_id). A

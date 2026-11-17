@@ -1341,17 +1341,20 @@ explicit Storage config version, never the empty shell the create writes.
     "dev-branch only" -- cross-check `branch list` to tell them apart.
 
   notification detail
-    One subscription with every filter printed verbatim, including threshold
-    filters like durationOvertimePercentage that have no dedicated column.
+    One subscription with every filter printed verbatim, including the
+    durationOvertimePercentage threshold (also in overtime_percent).
 
   notification create
     Create a subscription (since 0.91.0). --address carries the email address
     (--channel email) or the webhook URL (--channel webhook) -- the wire shape
     is channel-discriminated, the CLI takes one flag either way. An invalid
     --channel is a structured INVALID_ARGUMENT, exit 2.
-    WITHOUT --branch no branch.id filter is written, unlike the UI which
-    always writes one. An absent filter does not constrain matching, so such
-    a subscription fires for jobs on EVERY branch.
+    WITHOUT --branch kbagent sends no branch.id filter; the Notification
+    Service stores the default branch's id itself (production only).
+    --overtime-percent N: the "job runs longer than usual" threshold, a whole
+    percent 1-10000 (50 = 50 % longer), only for job-processing-long and
+    phase-job-processing-long (else INVALID_ARGUMENT, exit 2). Rows carry
+    overtime_percent.
 
   notification delete
     Delete a subscription (since 0.91.0). Confirms unless --yes or --json.

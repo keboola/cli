@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, StrictInt
 
 from ...services.base import resolve_fanout_aliases
 from ..dependencies import ALL_PROJECTS_HELP, ServiceRegistry, get_registry
@@ -21,6 +21,10 @@ class NotificationCreate(BaseModel):
     config_id: str | None = None
     branch_id: int | None = None
     expires_at: str | None = None
+    # Whole percent (50 = 50 % longer than usual), only for the
+    # *-processing-long events. StrictInt: a boolean or "50" is a 422, never
+    # coerced; the event and range checks are the service's (HTTP 400).
+    overtime_percent: StrictInt | None = None
 
 
 class NotificationReplaceRecipient(BaseModel):
@@ -81,6 +85,7 @@ def create(
         config_id=body.config_id,
         branch_id=body.branch_id,
         expires_at=body.expires_at,
+        overtime_percent=body.overtime_percent,
     )
 
 

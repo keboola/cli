@@ -434,6 +434,89 @@ class TestNotificationCreateCli:
         assert result.exit_code == 5
 
 
+class TestNotificationCreateOvertimeCli:
+    """``--overtime-percent`` (issue #989)."""
+
+    BASE = (
+        "notification",
+        "create",
+        "--project",
+        "prod",
+        "--event",
+        "job-processing-long",
+        "--channel",
+        "email",
+        "--address",
+        "ops@example.com",
+    )
+
+    def test_passes_whole_percent_to_service(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        service = MagicMock()
+        service.create_subscription.return_value = _row(
+            event="job-processing-long", overtime_percent=50
+        )
+
+        result = _run(["--json", *self.BASE, "--overtime-percent", "50"], store, service)
+
+        assert result.exit_code == 0, result.output
+        assert service.create_subscription.call_args.kwargs["overtime_percent"] == 50
+        assert json.loads(result.output)["data"]["overtime_percent"] == 50
+
+    def test_omitted_passes_none(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        service = MagicMock()
+        service.create_subscription.return_value = _row(event="job-processing-long")
+
+        result = _run(["--json", *self.BASE], store, service)
+
+        assert result.exit_code == 0, result.output
+        assert service.create_subscription.call_args.kwargs["overtime_percent"] is None
+
+    @pytest.mark.parametrize("bad", ["0", "0.5", "-1", "fifty", "10001"])
+    def test_fraction_negative_or_text_exits_2_without_service_call(
+        self, tmp_path: Path, bad: str
+    ) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        service = MagicMock()
+
+        result = _run(["--json", *self.BASE, "--overtime-percent", bad], store, service)
+
+        assert result.exit_code == 2, result.output
+        assert json.loads(result.output)["error"]["code"] == "INVALID_ARGUMENT"
+        service.create_subscription.assert_not_called()
+
+    def test_service_invalid_argument_exits_2(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        service = MagicMock()
+        service.create_subscription.side_effect = KeboolaApiError(
+            message="--overtime-percent applies only to job-processing-long",
+            error_code="INVALID_ARGUMENT",
+        )
+        args = list(self.BASE)
+        args[args.index("job-processing-long")] = "job-failed"
+
+        result = _run(["--json", *args, "--overtime-percent", "50"], store, service)
+
+        assert result.exit_code == 2, result.output
+        assert json.loads(result.output)["error"]["code"] == "INVALID_ARGUMENT"
+
+    def test_human_output_shows_threshold(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        service = MagicMock()
+        service.create_subscription.return_value = _row(
+            event="job-processing-long",
+            overtime_percent=50,
+            filters=[{"field": "durationOvertimePercentage", "value": 0.5, "operator": ">="}],
+        )
+
+        result = _run([*self.BASE, "--overtime-percent", "50"], store, service)
+
+        assert result.exit_code == 0, result.output
+        assert "Overtime:" in result.output
+        assert "50 %" in result.output
+
+
 # ---------------------------------------------------------------------------
 # notification delete
 # ---------------------------------------------------------------------------
