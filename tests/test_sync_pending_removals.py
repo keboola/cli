@@ -47,7 +47,13 @@ def ws(tmp_config_dir: Path, tmp_path: Path, api: FakeStorage) -> Workspace:
     return Workspace(tmp_config_dir, tmp_path / "proj", api, push_force=True)
 
 
-def _rmtree_via(monkeypatch: pytest.MonkeyPatch, rmtree: Any) -> None:
+def _removal_via(monkeypatch: pytest.MonkeyPatch, move: Any) -> None:
+    """Route the removal's move into the quarantine (the step that takes a folder away)."""
+    monkeypatch.setattr(_sync_pending_removals, "_move_aside", move)
+
+
+def _quarantine_rmtree_via(monkeypatch: pytest.MonkeyPatch, rmtree: Any) -> None:
+    """Route the delete of a folder already moved into the quarantine."""
     fake = SimpleNamespace(
         **{name: getattr(shutil, name) for name in dir(shutil) if not name.startswith("__")}
     )
@@ -67,7 +73,7 @@ def _crashed_before_rmtree(
     ws.init_and_pull()
     path = ws.dir_of(cid)
     api.ui_trash(cid)
-    _rmtree_via(monkeypatch, _die)
+    _removal_via(monkeypatch, _die)
     with pytest.raises(Crash):
         ws.pull()
     monkeypatch.undo()
@@ -131,7 +137,7 @@ def test_a_pending_row_directory_is_no_new_row(
     api.configs[cid]["rows"].append(dict(ROW))
     ws.init_and_pull()
     api.configs[cid]["rows"] = []  # the row is deleted in the UI
-    _rmtree_via(monkeypatch, _die)
+    _removal_via(monkeypatch, _die)
     with pytest.raises(Crash):
         ws.pull()
     monkeypatch.undo()
@@ -207,7 +213,7 @@ def test_a_failed_delete_stays_pending_until_a_pull_deletes_it(
     def refuse(*_: Any, **__: Any) -> None:
         raise PermissionError("busy")
 
-    _rmtree_via(monkeypatch, refuse)
+    _removal_via(monkeypatch, refuse)
     result = ws.pull()
     monkeypatch.undo()
 
@@ -259,13 +265,13 @@ def test_a_row_restored_after_a_crashed_row_removal_is_not_deleted(
     api.configs[cid]["rows"].append(dict(ROW))
     ws.init_and_pull()
     api.configs[cid]["rows"] = []
-    real = shutil.rmtree
+    real = _sync_pending_removals._move_aside
 
     def delete_then_die(*args: Any, **kwargs: Any) -> None:
         real(*args, **kwargs)
         raise Crash("killed right after the row delete")
 
-    _rmtree_via(monkeypatch, delete_then_die)
+    _removal_via(monkeypatch, delete_then_die)
     with pytest.raises(Crash):
         ws.pull()
     monkeypatch.undo()
@@ -419,7 +425,7 @@ def test_the_empty_parent_cleanup_stops_at_the_tree(tmp_path: Path) -> None:
     (tree_dir / "a" / "b").mkdir(parents=True)
     item = ManifestPendingRemoval(tree="main", path="a/b", kind="config")
 
-    _sync_pending_removals._remove(tree_dir, item)
+    _sync_pending_removals._remove(tmp_path, item)
 
     assert tree_dir.is_dir() and not (tree_dir / "a").exists()
 
@@ -442,7 +448,7 @@ def test_a_recovery_delete_that_fails_again_stays_pending(
     ws.init_and_pull()
     path = ws.dir_of(cid)
     api.ui_trash(cid)
-    _rmtree_via(monkeypatch, refuse)
+    _removal_via(monkeypatch, refuse)
     ws.pull()
     assert len(ws.manifest().pending_removals) == 1
     second = ws.pull()
@@ -466,7 +472,7 @@ def test_a_pending_row_directory_is_not_adopted_by_pull(
     api.configs[cid]["rows"].append(dict(ROW))
     ws.init_and_pull()
     api.configs[cid]["rows"] = []
-    _rmtree_via(monkeypatch, refuse)
+    _removal_via(monkeypatch, refuse)
     ws.pull()  # the row delete fails: recorded
     (item,) = ws.manifest().pending_removals
     api.configs[cid]["rows"].append(dict(ROW))  # restored in the UI
@@ -489,7 +495,7 @@ def test_recovery_keeps_a_pending_row_folder_that_is_tracked_again(
     api.configs[cid]["rows"].append(dict(ROW))
     ws.init_and_pull()
     api.configs[cid]["rows"] = []
-    _rmtree_via(monkeypatch, _die)
+    _removal_via(monkeypatch, _die)
     with pytest.raises(Crash):
         ws.pull()
     monkeypatch.undo()
@@ -823,7 +829,7 @@ def test_a_pending_row_follows_its_renamed_configuration(
     api.configs[cid]["rows"].append(dict(ROW))
     ws.init_and_pull()
     api.configs[cid]["rows"] = []
-    _rmtree_via(monkeypatch, _refuse)
+    _removal_via(monkeypatch, _refuse)
     ws.pull()  # the row delete fails: recorded
     (first,) = ws.manifest().pending_removals
     assert first.row_path and first.path.endswith(first.row_path)
@@ -851,7 +857,7 @@ def test_a_row_journaled_after_a_rename_in_the_same_pull_survives_a_restart(
     ws.init_and_pull()
     api.configs[cid]["rows"] = []
     api.ui_rename(cid, "Orders renamed")
-    _rmtree_via(monkeypatch, _die)
+    _removal_via(monkeypatch, _die)
     with pytest.raises(Crash):
         ws.pull()
     monkeypatch.undo()
@@ -892,3 +898,314 @@ def test_resolve_removal_follows_the_configuration_entry() -> None:
     legacy = row.model_copy(update={"row_path": ""})
     assert resolve_removal(manifest, legacy).path == "old/rows/r"
     assert ManifestPendingRemoval(tree="main", path="x", kind="row", rowPath="../x").problem
+
+
+# ------------------------------------------------------------------- #1005 review
+
+
+def test_a_promote_reference_does_not_keep_a_remotely_deleted_production_folder(
+    tmp_path: Path,
+) -> None:
+    """#1005 claim 1: B (dev, promoted from A's main/ folder) is no owner of that folder.
+
+    A is deleted on production. The production pull deletes A's folder (B's
+    promote entry then goes, its source folder is gone), and the next
+    production push creates nothing.
+    """
+    from test_sync_bookkeeping_differential import CONFIG_FILE, DEV, PROD, VARIANTS, _seeded
+
+    v = VARIANTS["extractor"]
+    seeded = _seeded(tmp_path, v)
+    w, prod_id = seeded.world, seeded.config_id
+    config_dir = w.config_dir(prod_id)
+    w.push(branch=DEV)  # B: promoted from main/<A>, a new id on the dev branch
+    assert [cid for comp, cid in w.api.remote[DEV] if comp == v.component_id] != [prod_id]
+    del w.api.remote[PROD][(v.component_id, prod_id)]
+
+    result = w.pull()
+
+    assert not (config_dir / CONFIG_FILE).exists(), result
+    from keboola_agent_cli.sync.manifest import load_manifest
+
+    assert load_manifest(w.root).pending_removals == []
+    pushed = w.push()
+    assert pushed["created"] == 0, pushed
+    assert (v.component_id, prod_id) not in w.api.remote[PROD]
+    assert not [key for key in w.api.remote[PROD] if key[0] == v.component_id]
+    # B stays on the dev branch; a promote push neither fails nor touches it.
+    dev_before = dict(w.api.remote[DEV])
+    w.push(branch=DEV)  # asserts errors == []
+    assert w.api.remote[DEV] == dev_before
+
+
+def test_a_partly_deleted_folder_is_finished_by_the_next_pull(
+    ws: Workspace, api: FakeStorage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1005 claim 2: an rmtree that removed some files and then failed is finished later."""
+    cid = api.add("Orders", ["SELECT 1;"])
+    ws.init_and_pull()
+    path = ws.dir_of(cid)
+    api.ui_trash(cid)
+
+    def delete_one_file_then_fail(target: Any, *_: Any, **__: Any) -> None:
+        (Path(target) / "transform.sql").unlink()
+        raise PermissionError("busy")
+
+    _quarantine_rmtree_via(monkeypatch, delete_one_file_then_fail)
+    first = ws.pull()
+    monkeypatch.undo()
+    assert [w["code"] for w in first["warnings"]] == ["PENDING_REMOVAL_FAILED"], first
+
+    assert not path.exists()  # moved out of the tree in one step, never half-deleted there
+    assert ws.manifest().pending_removals == []
+
+    second = ws.pull()  # permissions fixed: the quarantine is emptied
+
+    assert not path.exists(), second
+    assert ws.manifest().pending_removals == []
+    quarantine = _sync_pending_removals.quarantine_dir(ws.root)
+    assert [p.name for p in quarantine.iterdir()] == [".gitignore"]
+
+
+# ------------------------------------------------------------------- #1005 review round 2
+
+
+def test_a_crash_after_the_quarantine_move_keeps_the_dev_promote_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """K1: the checkpoint drops B's promote entry with A's folder; push --branch DEV --force deletes nothing."""
+    from test_sync_bookkeeping_differential import DEV, PROD, VARIANTS, _seeded
+
+    v = VARIANTS["extractor"]
+    seeded = _seeded(tmp_path, v)
+    w, prod_id = seeded.world, seeded.config_id
+    w.push(branch=DEV)  # B on the dev branch, promoted from A's main/ folder
+    dev_before = dict(w.api.remote[DEV])
+    del w.api.remote[PROD][(v.component_id, prod_id)]
+    real = _sync_pending_removals._move_aside
+
+    def move_then_die(*args: Any, **kwargs: Any) -> None:
+        real(*args, **kwargs)
+        raise Crash("killed right after the move into the quarantine")
+
+    _removal_via(monkeypatch, move_then_die)
+    with pytest.raises(Crash):
+        w.pull()
+    monkeypatch.undo()
+
+    result = w.svc.push(alias="prod", project_root=w.root, branch_override=DEV, force=True)
+
+    assert w.api.remote[DEV] == dev_before, result
+    assert result.get("deleted", 0) == 0, result
+
+
+def test_a_linked_quarantine_is_never_used(ws: Workspace, api: FakeStorage, tmp_path: Path) -> None:
+    """K2: ``.keboola/removing`` -> elsewhere: nothing is moved there and nothing there is deleted."""
+    cid = api.add("Orders", ["SELECT 1;"])
+    ws.init_and_pull()
+    path = ws.dir_of(cid)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "keep.txt").write_text("not kbagent's", encoding="utf-8")
+    try:
+        os.symlink(elsewhere, _sync_pending_removals.quarantine_dir(ws.root), True)
+    except (OSError, NotImplementedError):
+        pytest.skip("no symlink support")
+    api.ui_trash(cid)
+
+    result = ws.pull()
+    second = ws.pull()
+
+    assert (elsewhere / "keep.txt").is_file()
+    assert [p.name for p in elsewhere.iterdir()] == ["keep.txt"]
+    assert (path / CONFIG_FILENAME).is_file()  # not moved, still recorded
+    assert len(ws.manifest().pending_removals) == 1
+    assert "PENDING_REMOVAL_FAILED" in [w["code"] for w in result["warnings"]]
+    assert "PENDING_REMOVAL_FAILED" in [w["code"] for w in second["warnings"]]
+
+
+def test_quarantine_problem_refuses_a_linked_keboola_folder(tmp_path: Path) -> None:
+    """K2: a symlinked ``.keboola`` makes the quarantine unusable too."""
+    project = tmp_path / "project"
+    project.mkdir()
+    outside = tmp_path / "outside"
+    (outside / "removing").mkdir(parents=True)
+    try:
+        os.symlink(outside, project / ".keboola", True)
+    except (OSError, NotImplementedError):
+        pytest.skip("no symlink support")
+
+    assert "symbolic link" in (_sync_pending_removals.quarantine_problem(project) or "")
+    assert _sync_pending_removals.empty_quarantine(project)[0]["code"] == "PENDING_REMOVAL_FAILED"
+    assert (outside / "removing").is_dir()
+
+
+def test_the_quarantine_ignores_itself_for_git(ws: Workspace, api: FakeStorage) -> None:
+    """K3: the quarantine carries a ``.gitignore`` of ``*``, kept by its cleanup."""
+    cid = api.add("Orders", ["SELECT 1;"])
+    ws.init_and_pull()
+    api.ui_trash(cid)
+
+    ws.pull()
+    ws.pull()
+
+    ignore = _sync_pending_removals.quarantine_dir(ws.root) / ".gitignore"
+    assert ignore.read_text(encoding="utf-8") == "*\n"
+
+
+def test_a_linked_quarantine_gitignore_is_never_written_through(
+    ws: Workspace, api: FakeStorage, tmp_path: Path
+) -> None:
+    """K3: a dangling ``.gitignore`` link makes the quarantine unusable; its target is not created."""
+    cid = api.add("Orders", ["SELECT 1;"])
+    ws.init_and_pull()
+    path = ws.dir_of(cid)
+    quarantine = _sync_pending_removals.quarantine_dir(ws.root)
+    quarantine.mkdir(parents=True)
+    target = tmp_path / "another-repo" / ".gitignore"
+    target.parent.mkdir()
+    try:
+        os.symlink(target, quarantine / ".gitignore")
+    except (OSError, NotImplementedError):
+        pytest.skip("no symlink support")
+    api.ui_trash(cid)
+
+    result = ws.pull()
+
+    assert not target.exists()
+    assert (path / CONFIG_FILENAME).is_file()
+    assert len(ws.manifest().pending_removals) == 1
+    assert "PENDING_REMOVAL_FAILED" in [w["code"] for w in result["warnings"]]
+
+
+def test_a_quarantine_gitignore_with_other_content_is_rewritten(
+    ws: Workspace, api: FakeStorage
+) -> None:
+    """K3: a regular ``.gitignore`` that does not ignore everything is rewritten to ``*``."""
+    cid = api.add("Orders", ["SELECT 1;"])
+    ws.init_and_pull()
+    path = ws.dir_of(cid)
+    quarantine = _sync_pending_removals.quarantine_dir(ws.root)
+    quarantine.mkdir(parents=True)
+    (quarantine / ".gitignore").write_text("!keep-me\n", encoding="utf-8")
+    api.ui_trash(cid)
+
+    ws.pull()
+
+    assert not path.exists()
+    assert (quarantine / ".gitignore").read_bytes() == b"*\n"
+
+
+def test_a_hard_linked_quarantine_gitignore_is_replaced_not_written_through(
+    ws: Workspace, api: FakeStorage, tmp_path: Path
+) -> None:
+    """K3: a ``.gitignore`` hard-linked elsewhere is replaced; the other path keeps its content."""
+    cid = api.add("Orders", ["SELECT 1;"])
+    ws.init_and_pull()
+    path = ws.dir_of(cid)
+    quarantine = _sync_pending_removals.quarantine_dir(ws.root)
+    quarantine.mkdir(parents=True)
+    other = tmp_path / "another-repo-gitignore"
+    other.write_text("!keep-me\n", encoding="utf-8")
+    try:
+        os.link(other, quarantine / ".gitignore")
+    except (OSError, NotImplementedError):
+        pytest.skip("no hard link support")
+    api.ui_trash(cid)
+
+    ws.pull()
+
+    assert not path.exists()
+    assert other.read_text(encoding="utf-8") == "!keep-me\n"
+    assert (quarantine / ".gitignore").read_bytes() == b"*\n"
+    assert sorted(p.name for p in quarantine.iterdir()) == [".gitignore"]
+
+
+# ------------------------------------------------------------------- #1007 Devin
+
+
+def _promoted_world(tmp_path: Path) -> Any:
+    from test_sync_bookkeeping_differential import DEV, VARIANTS, _seeded
+
+    v = VARIANTS["extractor"]
+    seeded = _seeded(tmp_path, v)
+    seeded.world.push(branch=DEV)  # B: promoted from A's main/ folder, its own dev id
+    return seeded
+
+
+def test_an_ignored_source_cleanup_drops_the_promote_entry_too(tmp_path: Path) -> None:
+    """E1 (a): ignore A's component, pull removes A's folder, un-ignore: a forced dev push keeps B."""
+    from keboola_agent_cli.sync.manifest import load_manifest, save_manifest
+    from test_sync_bookkeeping_differential import CONFIG_FILE, DEV, VARIANTS
+
+    seeded = _promoted_world(tmp_path)
+    w, prod_id = seeded.world, seeded.config_id
+    component = VARIANTS["extractor"].component_id
+    config_dir = w.config_dir(prod_id)
+    dev_before = dict(w.api.remote[DEV])
+    manifest = load_manifest(w.root)
+    manifest.ignored_components = [component]
+    save_manifest(w.root, manifest)
+
+    w.pull()
+    assert not (config_dir / CONFIG_FILE).exists()  # unchanged, so cleaned up (#927)
+    manifest = load_manifest(w.root)
+    manifest.ignored_components = []
+    save_manifest(w.root, manifest)
+
+    result = w.svc.push(alias="prod", project_root=w.root, branch_override=DEV, force=True)
+
+    assert w.api.remote[DEV] == dev_before, result
+
+
+def test_a_recovered_removal_drops_the_promote_entry_before_a_listing_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E1 (b): the first removal fails, the recovery deletes the folder, the listing then fails."""
+    from keboola_agent_cli.errors import KeboolaApiError
+    from test_sync_bookkeeping_differential import CONFIG_FILE, DEV, PROD, VARIANTS
+
+    seeded = _promoted_world(tmp_path)
+    w, prod_id = seeded.world, seeded.config_id
+    component = VARIANTS["extractor"].component_id
+    config_dir = w.config_dir(prod_id)
+    dev_before = dict(w.api.remote[DEV])
+    del w.api.remote[PROD][(component, prod_id)]
+    _removal_via(monkeypatch, _refuse)
+    w.pull()  # the move fails: recorded, folder kept
+    monkeypatch.undo()
+    assert (config_dir / CONFIG_FILE).exists()
+
+    def listing_fails(*_: Any, **__: Any) -> Any:
+        raise KeboolaApiError("listing failed", status_code=503)
+
+    monkeypatch.setattr(w.api, "_list", listing_fails)
+    with pytest.raises(KeboolaApiError):
+        w.pull()  # recovery deletes the folder, then the listing fails
+    monkeypatch.undo()
+    assert not (config_dir / CONFIG_FILE).exists()
+
+    result = w.svc.push(alias="prod", project_root=w.root, branch_override=DEV, force=True)
+
+    assert w.api.remote[DEV] == dev_before, result
+
+
+def test_an_unreadable_quarantine_does_not_stop_a_pull(ws: Workspace, api: FakeStorage) -> None:
+    """E2: a quarantine that cannot be listed is reported; the pull goes on."""
+    api.add("Orders", ["SELECT 1;"])
+    ws.init_and_pull()
+    quarantine = _sync_pending_removals.quarantine_dir(ws.root)
+    (quarantine / "leftover").mkdir(parents=True)
+    quarantine.chmod(0)
+    try:
+        try:
+            list(quarantine.iterdir())
+            pytest.skip("chmod 000 does not stop listing here (root or Windows)")
+        except PermissionError:
+            pass
+        result = ws.pull()
+    finally:
+        quarantine.chmod(0o755)
+
+    assert result["status"] == "pulled"
+    assert "PENDING_REMOVAL_FAILED" in [w["code"] for w in result["warnings"]]

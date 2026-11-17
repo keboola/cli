@@ -572,6 +572,13 @@ sync tree), a failed delete is reported (`PENDING_REMOVAL_FAILED`) and retried
 by the next pull. A folder inside another planned folder goes with the outer
 one.
 
+Pull deletes a folder by first renaming it into `.keboola/removing/` (one step)
+and then deleting it there, so an interrupted delete never leaves a partly
+deleted folder in the tree; the next pull empties `.keboola/removing/`. A
+promote entry of a dev branch (`push --branch DEV` from `main/`) does not keep
+the `main/` folder of a production config deleted remotely: the folder and the
+promote entry go, the dev-branch config is not touched.
+
 Rules for an agent: never edit or delete `pendingRemovals` in
 `.keboola/manifest.json` by hand, and never run an older kbagent on a tree whose
 manifest has it (an older push re-creates or adopts the recorded folders). On
