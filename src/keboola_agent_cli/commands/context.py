@@ -1860,7 +1860,8 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
     key survives; import --overwrite / promote PUT the whole item): it keeps its id, scope,
     target-project grants (`scope get` below), pending elevation request and
     revision history -- editing an organization/targeted item never
-    downgrades it. A failed edit changes nothing.
+    downgrades it. A refused edit changes nothing; a PATCH that timed out may
+    have been applied (it is not retried) -- re-read with `show` first.
 
   semantic-layer remove metric|dataset|constraint|relationship|glossary ...
     Destructive. `remove metric` pre-scans constraints whose metrics[] includes

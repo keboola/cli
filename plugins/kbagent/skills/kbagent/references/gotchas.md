@@ -2096,7 +2096,8 @@ record per member. Consequences an agent must internalize:
   and `set` the whole thing back. There is no per-member endpoint.
 - **It uses the metastore's real `PUT`** (revisioned update, `meta.revision`
   increments, history preserved) when a record for that dimension already
-  exists — as `edit metric|…` does since 0.97.0 (before, those used DELETE+POST).
+  exists — as `edit metric|…` did from 0.97.0 (before, DELETE+POST; since vNEXT
+  `edit` sends a `PATCH` of only the changed keys).
   A brand-new dimension is `POST`-ed.
 - **The envelope `name` is the dimension, unique per project per type, so
   the `set`/`get` lookup is project-wide.** Because the dimension name is the
@@ -7281,7 +7282,7 @@ examples. Surprises worth knowing before you touch this:
   (later schema versions add `organization`/`targeted`), so pinning `1.0.0` on a plain
   create would make the item impossible to elevate later. With the key
   omitted, the server uses the stack's default schema (`1.1.0` or later where
-  the PSGO-140 migrations ran). `PUT` (edit) never changes the stored version.
+  the PSGO-140 migrations ran). An update (`PUT`, or since vNEXT the `PATCH` of `edit`) never changes the stored version.
 - **`--scope` omitted means "inherit" for child items.** `add
   metric|dataset|relationship|constraint|glossary` take their model's scope
   (and, for `targeted`, its target projects) when `--scope` is not given;
