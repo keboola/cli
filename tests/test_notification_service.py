@@ -1084,7 +1084,7 @@ class TestCreateSubscriptionOvertime:
                 event="job-processing-long",
                 channel="email",
                 address="ops@example.com",
-                overtime_percent=bad,  # type: ignore[arg-type]
+                overtime_percent=bad,  # ty: ignore[invalid-argument-type]
             )
 
         assert excinfo.value.error_code == "INVALID_ARGUMENT"
