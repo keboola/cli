@@ -370,11 +370,10 @@ class TestServiceAdoption:
         concurrent = "200-44-writtenByAnotherProcess0000"
         storage = Storage({DEAD_LOCAL_B: _invalid(), MINTED: _verified(200)})
         manage = _manage()
-        real_create = manage.create_project_token.side_effect
 
         def create_while_another_process_edits(**kwargs: Any) -> Any:
             local.edit_project("b", token=concurrent)
-            return real_create(**kwargs) if real_create else {"token": MINTED}
+            return {"id": "x", "token": MINTED}
 
         manage.create_project_token.side_effect = create_while_another_process_edits
 
