@@ -82,6 +82,30 @@ class TaskResults:
     missing_task_ids: list[str]
 
 
+class FlowRunError(KeboolaApiError):
+    """An API error of a flow run raised after its tasks were selected.
+
+    Carries the run's warnings (``PARTIAL_RUN_IGNORES_CONDITIONS``, ...), so
+    the CLI error envelope and the REST error body still list them (O3, V3).
+    Code, message, ``retryable`` and ``details`` are those of the cause.
+    """
+
+    def __init__(
+        self,
+        cause: KeboolaApiError,
+        warnings: list[FlowWarning],
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            message=cause.message,
+            status_code=cause.status_code,
+            error_code=cause.error_code,
+            retryable=cause.retryable,
+            details=details if details is not None else cause.details,
+        )
+        self.warnings = list(warnings)
+
+
 @dataclass
 class _DefaultPath:
     phase_ids: list[str]
@@ -98,18 +122,31 @@ def _is_blank(value: Any) -> bool:
 
 
 def check_selector_values(task_ids: list[str] | None, from_phase_id: str | None) -> None:
-    """Refuse an empty or blank selector BEFORE anything normalizes it (D2, R1, R2).
+    """Refuse an empty, blank or comma-joined selector BEFORE anything normalizes it (D2, R1-R2).
 
     ``None`` means "no selector". An empty list or a blank entry is a caller
-    error, never a whole-flow run.
+    error, never a whole-flow run. A comma in an id is refused (spec A4: one
+    id per value) on every surface, so REST ``task_ids: ["t,1"]`` and
+    ``--from-phase-id p,1`` fail like ``--task-id t,1``.
     """
     if task_ids is not None:
         if not task_ids:
             raise _invalid("task ids must not be an empty list; omit them to run the whole flow.")
         if any(_is_blank(task_id) for task_id in task_ids):
             raise _invalid("A task id must not be empty or whitespace.")
-    if from_phase_id is not None and _is_blank(from_phase_id):
-        raise _invalid("The from-phase id must not be empty or whitespace.")
+        with_comma = [task_id for task_id in task_ids if "," in task_id]
+        if with_comma:
+            raise _invalid(
+                f"A task id must not contain a comma, got: {', '.join(map(repr, with_comma))}. "
+                "Give one id per --task-id (one entry per id in task_ids)."
+            )
+    if from_phase_id is not None:
+        if _is_blank(from_phase_id):
+            raise _invalid("The from-phase id must not be empty or whitespace.")
+        if "," in from_phase_id:
+            raise _invalid(
+                f"The from-phase id takes one phase id, got {from_phase_id!r} (it contains a comma)."
+            )
 
 
 def _phases_by_id(configuration: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -121,11 +158,12 @@ def _phases_by_id(configuration: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def _tasks(configuration: dict[str, Any]) -> list[dict[str, Any]]:
-    return [
-        task
-        for task in configuration.get("tasks") or []
-        if isinstance(task, dict) and task.get("id") is not None
-    ]
+    """The tasks with an id, one per id: a malformed config with a repeated id keeps the first."""
+    unique: dict[str, dict[str, Any]] = {}
+    for task in configuration.get("tasks") or []:
+        if isinstance(task, dict) and task.get("id") is not None:
+            unique.setdefault(str(task["id"]), task)
+    return list(unique.values())
 
 
 def _transitions(phase: dict[str, Any]) -> list[dict[str, Any]]:
@@ -286,6 +324,9 @@ def select_flow_tasks(
     chosen = [t for t in tasks if str(t["id"]) in wanted or str(t.get("phase")) in on_path]
     selected = [_task_view(t) for t in chosen if _is_enabled(t)]
     skipped = [str(t["id"]) for t in chosen if not _is_enabled(t) and str(t["id"]) not in wanted]
+    orphans = [view["id"] for view in selected if view["phase_id"] not in phases]
+    if orphans:
+        errors.append(f"task(s) in a phase that the flow does not define: {', '.join(orphans)}")
     if not errors and not selected:
         errors.append("the selection is empty (every task it names is disabled or missing)")
     if errors:
@@ -293,8 +334,13 @@ def select_flow_tasks(
 
     selected_phases = {view["phase_id"] for view in selected}
     reach = _conditional_reach(phases, path.phase_ids) if start is not None else set()
+    # Only phases with an enabled task: for an empty routing phase or a
+    # disabled-only phase, "add its tasks with --task-id" is no advice (F6).
+    actionable = {str(t.get("phase")) for t in tasks if _is_enabled(t)}
     conditional = [
-        pid for pid in phases if pid in reach and pid not in on_path and pid not in selected_phases
+        pid
+        for pid in phases
+        if pid in reach and pid not in on_path and pid not in selected_phases and pid in actionable
     ]
     return FlowRunSelection(
         partial=True,
@@ -329,9 +375,9 @@ def selection_warnings(selection: FlowRunSelection) -> list[FlowWarning]:
             FlowWarning(
                 code=CONDITIONAL_PHASES_SKIPPED,
                 message=(
-                    f"Phase(s) reached only through a conditional transition are excluded "
-                    f"by --from-phase-id (it follows default transitions): {names}. Add "
-                    f"their tasks with --task-id to run them."
+                    f"Phase(s) not on the default path from {selection.from_phase_id}, "
+                    f"reachable from it only through a conditional transition, are not "
+                    f"selected: {names}. Add their tasks with --task-id to run them."
                 ),
                 extra={"phase_ids": list(selection.conditional_phase_ids)},
             )

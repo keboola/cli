@@ -157,3 +157,35 @@ def test_deny_policy_blocks_dry_run(tmp_path: Path) -> None:
     res = _post(_app(tmp_path, client, policy), {"dry_run": True})
     assert res.status_code == 403, res.text
     client.get_config_detail.assert_not_called()
+
+
+def test_parent_error_body_carries_warnings_and_task_results(tmp_path: Path) -> None:
+    from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
+
+    client = _client()
+    client.wait_for_queue_job.side_effect = KeboolaApiError(
+        message="Queue job 900 failed", status_code=500, error_code=ErrorCode.QUEUE_JOB_FAILED
+    )
+    client.get_job_detail.return_value = {
+        "id": "900",
+        "status": "error",
+        "isFinished": True,
+        "result": {"tasks": [{"id": "t2", "phase": "p2", "status": "error", "jobId": "5"}]},
+    }
+    res = _post(_app(tmp_path, client), {"from_phase_id": "p2"}, "?wait=true")
+    assert res.status_code == 502, res.text
+    body = res.json()
+    assert body["error"]["code"] == "QUEUE_JOB_FAILED"
+    codes = [w["code"] for w in body["warnings"]]
+    assert "PARTIAL_RUN_IGNORES_CONDITIONS" in codes
+    assert "SELECTED_TASK_FAILED" in codes
+    assert body["error"]["details"]["failed_task_ids"] == ["t2"]
+
+
+@pytest.mark.parametrize("body", [{"task_ids": ["t,1"]}, {"from_phase_id": "p,1"}])
+def test_comma_in_selector_is_400(tmp_path: Path, body: dict[str, Any]) -> None:
+    client = _client()
+    res = _post(_app(tmp_path, client), body)
+    assert res.status_code == 400, res.text
+    assert res.json()["error"]["code"] == "INVALID_ARGUMENT"
+    client.create_job.assert_not_called()

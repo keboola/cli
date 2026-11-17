@@ -738,7 +738,9 @@ class JobService(BaseService):
                 status_code=exc.status_code,
                 error_code=exc.error_code,
                 retryable=exc.retryable,
-                details=details or {},
+                # The job id travels with the failure (spec LR3), so a caller
+                # such as `flow run` can read the failed job's task results.
+                details={**(details or {}), "job_id": job_id},
             ) from exc
 
         if code == "QUEUE_JOB_TIMEOUT" and not kill_on_timeout:

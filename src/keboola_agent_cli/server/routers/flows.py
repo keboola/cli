@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict
 
 from ...constants import DEFAULT_JOB_RUN_TIMEOUT
 from ...services.base import resolve_fanout_aliases
+from ...services.flow_run_selection import FlowRunError, FlowWarning
 from ...services.flow_service import FLOW_COMPONENT_ID, get_flow_examples
 from ...services.flow_validation import find_unreachable_phases, validate_conditional_flow
 from ..dependencies import ALL_PROJECTS_HELP, ServiceRegistry, get_registry
@@ -268,21 +269,30 @@ def run(
     ``task_results`` / ``failed_task_ids``; a failed selected task answers
     HTTP 200 with a ``SELECTED_TASK_FAILED`` warning, never a dropped payload.
     """
-    outcome = registry.flow.run_flow(
-        alias=project,
-        flow_id=flow_id,
-        task_ids=body.task_ids,
-        from_phase_id=body.from_phase_id,
-        branch_id=body.branch_id,
-        variable_values_id=body.variable_values_id,
-        no_variables=body.no_variables,
-        wait=wait,
-        timeout=timeout,
-        dry_run=body.dry_run,
-    )
-    for warning in outcome.warnings:
-        add_warning(warning.message, code=warning.code, **warning.extra)
+    try:
+        outcome = registry.flow.run_flow(
+            alias=project,
+            flow_id=flow_id,
+            task_ids=body.task_ids,
+            from_phase_id=body.from_phase_id,
+            branch_id=body.branch_id,
+            variable_values_id=body.variable_values_id,
+            no_variables=body.no_variables,
+            wait=wait,
+            timeout=timeout,
+            dry_run=body.dry_run,
+        )
+    except FlowRunError as exc:
+        # The error body's `warnings` (V3) still lists the run's warnings.
+        _add_warnings(exc.warnings)
+        raise
+    _add_warnings(outcome.warnings)
     return outcome.payload
+
+
+def _add_warnings(warnings: list[FlowWarning]) -> None:
+    for warning in warnings:
+        add_warning(warning.message, code=warning.code, **warning.extra)
 
 
 @router.post("/{project}/{config_id}/schedule", summary="Set a cron schedule on a flow")

@@ -1675,13 +1675,16 @@ kbagent flow run [--project NAME] --flow-id ID [--task-id T ...] [--from-phase-i
 #   "Run selected tasks"). --from-phase-id follows DEFAULT transitions only (the next[] entry with no
 #   `condition` key); two defaults or a default to an unknown phase is INVALID_ARGUMENT, a cycle stops
 #   and sets selection.default_path_cycle. A partial run ignores conditions (warning
-#   PARTIAL_RUN_IGNORES_CONDITIONS); phases reached only through a conditional transition and not
-#   selected get CONDITIONAL_PHASES_SKIPPED. Blank/empty selectors, unknown ids, a disabled task given
-#   by id and an empty selection are INVALID_ARGUMENT (exit 2) before any POST. The flow config is
+#   PARTIAL_RUN_IGNORES_CONDITIONS); phases with an enabled task that are not on the default path and
+#   are reachable from it only through a conditional transition get CONDITIONAL_PHASES_SKIPPED.
+#   Blank/empty/comma selectors, unknown ids, a disabled task given by id, a task in an undefined
+#   phase and an empty selection are INVALID_ARGUMENT (exit 2) before any POST. The flow config is
 #   read once (selection + variables); the branch is resolved once (0 = production). --wait on a
 #   partial run adds task_results + failed_task_ids and exits 1 (payload first, SELECTED_TASK_FAILED)
 #   when a selected task did not succeed or is missing from result.tasks; the flow status alone can
-#   hide that. A --timeout never kills the job: QUEUE_JOB_TIMEOUT, exit 4, retryable false, names
+#   hide that. A flow job that ended in `error` keeps QUEUE_JOB_FAILED (exit 1); task_results and
+#   failed_task_ids are then in error.details. The selection warnings stay on error envelopes too.
+#   A --timeout never kills the job: QUEUE_JOB_TIMEOUT, exit 4, retryable false, names
 #   `job detail`. Permission key flow.run (write): a policy denying job.run does NOT deny it.
 #   REST: POST /flows/{project}/{flow_id}/run (body task_ids/from_phase_id/branch_id/
 #   variable_values_id/no_variables/dry_run, query wait/timeout; unknown fields and query params 422;

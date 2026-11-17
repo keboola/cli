@@ -20,6 +20,7 @@ from rich.markup import escape
 
 from ..constants import DEFAULT_JOB_RUN_TIMEOUT
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
+from ..services.flow_run_selection import FlowRunError, FlowWarning
 from ..services.flow_service import FlowRunOutcome
 from ._helpers import (
     emit_api_error,
@@ -44,12 +45,15 @@ can hide a failed task; unselected variable tasks do not run.
 
 --from-phase-id P selects the enabled tasks of P and of every phase reached
 by following DEFAULT transitions (the transition without a condition). It
-does not follow conditional transitions; the phases it leaves out that way are
-named in a CONDITIONAL_PHASES_SKIPPED warning. Disabled tasks there are
+does not follow conditional transitions; phases with an enabled task that are
+reachable from that path only through a conditional transition are named in a
+CONDITIONAL_PHASES_SKIPPED warning. Disabled tasks there are
 skipped and listed. --task-id adds tasks; the union runs in flow order.
 
 --wait on a partial run reports every selected task's status (task_results,
-failed_task_ids) and exits 1 when one did not succeed or left no result.
+failed_task_ids) and exits 1 when one did not succeed or left no result. When
+the flow job itself ends in error (QUEUE_JOB_FAILED, exit 1), those two keys
+are in the error details.
 A --timeout never stops the job: it keeps running, the error names it.
 """
 
@@ -106,7 +110,12 @@ def _finish(formatter: Any, outcome: FlowRunOutcome, alias: str) -> None:
         else:
             _render_selection(formatter, payload)
             count = len((payload.get("selection") or {}).get("task_ids") or [])
-            formatter.console.print(f"[bold green]Success:[/bold green] {count} task(s) would run.")
+            if payload.get("partial"):
+                said = f"{count} task(s) would run."
+            else:
+                # A whole flow evaluates its conditions, so these are candidates (F5).
+                said = f"{count} enabled task(s) could run; the flow's conditions decide which do."
+            formatter.console.print(f"[bold green]Success:[/bold green] {said}")
         return
     if not (outcome.waited and payload.get("partial")):
         if formatter.json_mode:
@@ -131,6 +140,11 @@ def _finish(formatter: Any, outcome: FlowRunOutcome, alias: str) -> None:
         summary="" if failed else f"{outcome.selected_count} selected task(s) succeeded.",
         render=render,
     )
+
+
+def _add_warnings(formatter: Any, warnings: list[FlowWarning]) -> None:
+    for warning in warnings:
+        formatter.warning(escape(warning.message), code=warning.code, **warning.extra)
 
 
 def register(app: typer.Typer) -> None:
@@ -204,10 +218,12 @@ def register(app: typer.Typer) -> None:
             )
             raise typer.Exit(code=5) from None
         except KeboolaApiError as exc:
+            # F1: a run that failed after its selection keeps its warnings.
+            if isinstance(exc, FlowRunError):
+                _add_warnings(formatter, exc.warnings)
             emit_api_error(formatter, exc, project=project)
             raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
         # O3: every warning goes in before the one output document.
-        for warning in outcome.warnings:
-            formatter.warning(escape(warning.message), code=warning.code, **warning.extra)
+        _add_warnings(formatter, outcome.warnings)
         _finish(formatter, outcome, project)

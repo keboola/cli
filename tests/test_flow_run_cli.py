@@ -411,3 +411,101 @@ class TestPermissions:
         assert engine.is_allowed("flow.run") is True
         engine = PermissionEngine(PermissionPolicy(mode="allow", deny=["cli:write"]))
         assert engine.is_allowed("flow.run") is False
+
+
+def _job_failed() -> KeboolaApiError:
+    return KeboolaApiError(
+        message="Queue job 900 failed: phase p3 failed",
+        status_code=500,
+        error_code=ErrorCode.QUEUE_JOB_FAILED,
+    )
+
+
+FAILED_JOB = {
+    "id": "900",
+    "status": "error",
+    "isFinished": True,
+    "result": {
+        "tasks": [
+            {"id": "t2", "phase": "p2", "status": "success", "jobId": "1"},
+            {"id": "t3", "phase": "p3", "status": "error", "jobId": "2"},
+        ]
+    },
+}
+
+
+class TestFixRound1:
+    """Regression tests for review fix round 1 (F1, F2, F3, F5)."""
+
+    def test_parent_error_keeps_code_and_carries_selection_warnings(self, tmp_path: Path) -> None:
+        client = _client()
+        client.wait_for_queue_job.side_effect = _job_failed()
+        client.get_job_detail.return_value = FAILED_JOB
+        result = _run(_store(tmp_path), client, [*BASE, "--from-phase-id", "p2", "--wait"])
+        assert result.exit_code == 1, result.output
+        envelope = _json(result)
+        assert envelope["error"]["code"] == ErrorCode.QUEUE_JOB_FAILED
+        codes = [w["code"] for w in envelope["warnings"]]
+        assert "PARTIAL_RUN_IGNORES_CONDITIONS" in codes
+        assert "CONDITIONAL_PHASES_SKIPPED" in codes
+
+    def test_parent_error_details_carry_task_results(self, tmp_path: Path) -> None:
+        client = _client()
+        client.wait_for_queue_job.side_effect = _job_failed()
+        client.get_job_detail.return_value = FAILED_JOB
+        result = _run(_store(tmp_path), client, [*BASE, "--from-phase-id", "p2", "--wait"])
+        assert result.exit_code == 1, result.output
+        envelope = _json(result)
+        details = envelope["error"]["details"]
+        assert details["job_id"] == "900"
+        assert details["failed_task_ids"] == ["t3"]
+        assert [r["status"] for r in details["task_results"]] == ["success", "error"]
+        assert "SELECTED_TASK_FAILED" in [w["code"] for w in envelope["warnings"]]
+
+    def test_parent_error_read_failure_keeps_the_error(self, tmp_path: Path) -> None:
+        client = _client()
+        client.wait_for_queue_job.side_effect = _job_failed()
+        # First read: the log-tail lookup of `run_job`; second: the task-results read.
+        client.get_job_detail.side_effect = [
+            FAILED_JOB,
+            KeboolaApiError(message="boom", status_code=500, error_code=ErrorCode.API_ERROR),
+        ]
+        result = _run(_store(tmp_path), client, [*BASE, "--from-phase-id", "p2", "--wait"])
+        assert result.exit_code == 1, result.output
+        envelope = _json(result)
+        assert envelope["error"]["code"] == ErrorCode.QUEUE_JOB_FAILED
+        assert "failed_task_ids" not in envelope["error"]["details"]
+        assert "PARTIAL_RUN_IGNORES_CONDITIONS" in [w["code"] for w in envelope["warnings"]]
+
+    def test_timeout_carries_selection_warnings(self, tmp_path: Path) -> None:
+        client = _client()
+        client.wait_for_queue_job.side_effect = KeboolaApiError(
+            message="Queue job 900 did not complete within 5s",
+            status_code=504,
+            error_code=ErrorCode.QUEUE_JOB_TIMEOUT,
+            retryable=True,
+        )
+        result = _run(
+            _store(tmp_path), client, [*BASE, "--task-id", "t3", "--wait", "--timeout", "5"]
+        )
+        assert result.exit_code == 4, result.output
+        envelope = _json(result)
+        assert envelope["error"]["code"] == ErrorCode.QUEUE_JOB_TIMEOUT
+        assert "PARTIAL_RUN_IGNORES_CONDITIONS" in [w["code"] for w in envelope["warnings"]]
+
+    def test_comma_in_from_phase_id_refused(self, tmp_path: Path) -> None:
+        client = _client()
+        result = _run(_store(tmp_path), client, [*BASE, "--from-phase-id", "p2,p3"])
+        assert result.exit_code == 2, result.output
+        assert _json(result)["error"]["code"] == ErrorCode.INVALID_ARGUMENT
+        client.create_job.assert_not_called()
+
+    def test_whole_flow_human_dry_run_says_tasks_could_run(self, tmp_path: Path) -> None:
+        client = _client()
+        args = ["flow", "run", "--project", "prod", "--flow-id", FLOW_ID, "--dry-run"]
+        result = _run(_store(tmp_path), client, args)
+        assert result.exit_code == 0, result.output
+        text = " ".join(result.stdout.split())
+        assert "could run" in text
+        assert "conditions decide" in text
+        assert "would run" not in text

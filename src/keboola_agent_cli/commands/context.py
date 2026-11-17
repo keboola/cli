@@ -1084,7 +1084,8 @@ explicit Storage config version, never the empty shell the create writes.
     NOT evaluate conditions: every selected task runs, also after a failure, and the flow status
     can hide a failed task. Run --dry-run first (reads the flow, creates nothing; selection.phases
     is membership, not execution order). With --wait read failed_task_ids / task_results: exit 1
-    when a selected task failed or left no result. A --timeout never stops the job (exit 4).
+    when a selected task failed or left no result; when the flow job itself ended in error
+    (QUEUE_JOB_FAILED) they are in error.details. A --timeout never stops the job (exit 4).
 """,
     "http": """\
 #### Self-call HTTP (inside `kbagent serve` subprocesses)

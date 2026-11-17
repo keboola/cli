@@ -282,3 +282,68 @@ class TestTaskResults:
     def test_result_without_tasks_marks_every_task_missing(self) -> None:
         results = summarize_task_results({"result": "oops"}, self._sel())
         assert results.missing_task_ids == ["t2", "t3"]
+
+
+class TestFixRound1:
+    """Regression tests for review fix round 1 (F3, F4, F6, F7)."""
+
+    @pytest.mark.parametrize(
+        ("task_ids", "from_phase_id"), [(["t,1"], None), (["t1", "t2,t3"], None), (None, "p,1")]
+    )
+    def test_comma_in_selector_refused(
+        self, task_ids: list[str] | None, from_phase_id: str | None
+    ) -> None:
+        with pytest.raises(KeboolaApiError) as exc:
+            select_flow_tasks(_linear(), task_ids=task_ids, from_phase_id=from_phase_id)
+        assert "comma" in _invalid(exc)
+
+    def test_duplicate_task_ids_in_config_selected_once(self) -> None:
+        config = _linear()
+        config["tasks"].append(_task("t3", "p3"))
+        assert select_flow_tasks(config, task_ids=["t3"]).task_ids == ["t3"]
+        assert select_flow_tasks(config, from_phase_id="p3").task_ids == ["t3"]
+        assert select_flow_tasks(config).task_ids == ["t1", "t2", "t3", "tf"]
+
+    def test_phase_without_enabled_task_not_reported(self) -> None:
+        config = {
+            "phases": [
+                _phase(
+                    "a", _cond("disabled_only"), _cond("routing"), _cond("real"), _default(None)
+                ),
+                _phase("disabled_only"),
+                _phase("routing"),
+                _phase("real"),
+            ],
+            "tasks": [
+                _task("ta", "a"),
+                _task("td", "disabled_only", enabled=False),
+                _task("tr", "real"),
+            ],
+        }
+        sel = select_flow_tasks(config, from_phase_id="a")
+        assert sel.conditional_phase_ids == ["real"]
+
+    def test_wording_names_the_start_phase_for_an_upstream_retry_loop(self) -> None:
+        # p2 retries back to p1 (the flow start) on a condition: p1 is upstream, not a
+        # phase "reached only through a conditional transition" in the flow as a whole.
+        config = {
+            "phases": [
+                _phase("p1", _default("p2")),
+                _phase("p2", _cond("p1"), _default(None)),
+            ],
+            "tasks": [_task("t1", "p1"), _task("t2", "p2")],
+        }
+        sel = select_flow_tasks(config, from_phase_id="p2")
+        assert sel.conditional_phase_ids == ["p1"]
+        warning = next(w for w in selection_warnings(sel) if w.code == CONDITIONAL_PHASES_SKIPPED)
+        assert "not on the default path from p2" in warning.message
+        assert "reachable from it only through a conditional transition" in warning.message
+        assert "reached only through" not in warning.message
+
+    def test_selected_task_in_undefined_phase_refused(self) -> None:
+        config = _linear()
+        config["tasks"].append(_task("tx", "ghost-phase"))
+        with pytest.raises(KeboolaApiError) as exc:
+            select_flow_tasks(config, task_ids=["tx", "t1"])
+        message = _invalid(exc)
+        assert "tx" in message and "phase" in message

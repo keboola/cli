@@ -38,6 +38,8 @@ from .base import (
     project_error_entry,
 )
 from .flow_run_selection import (
+    FlowRunError,
+    FlowRunSelection,
     FlowWarning,
     check_selector_values,
     select_flow_tasks,
@@ -763,26 +765,33 @@ class FlowService(BaseService):
                 return FlowRunOutcome(payload, warnings, [], len(selection.task_ids), False)
             values_id = variable_values_id.strip() if variable_values_id else None
             if values_id is None and not no_variables:
-                values_id = JobService.resolve_variable_values_from_configuration(
-                    client, configuration, branch_id=effective_branch
-                )
+                try:
+                    values_id = JobService.resolve_variable_values_from_configuration(
+                        client, configuration, branch_id=effective_branch
+                    )
+                except KeboolaApiError as exc:
+                    raise FlowRunError(exc, warnings) from exc
         finally:
             client.close()
 
         # The variables are resolved above from the same read: `no_variables`
         # tells run_job not to read the configuration again (R3).
-        job = JobService(self._config_store, self._client_factory).run_job(
-            alias=alias,
-            component_id=FLOW_COMPONENT_ID,
-            config_id=flow_id,
-            wait=wait,
-            timeout=timeout,
-            branch_id=effective_branch,
-            variable_values_id=values_id,
-            no_variables=values_id is None,
-            only_flow_task_ids=selection.task_ids if selection.partial else None,
-            kill_on_timeout=False,
-        )
+        try:
+            job = JobService(self._config_store, self._client_factory).run_job(
+                alias=alias,
+                component_id=FLOW_COMPONENT_ID,
+                config_id=flow_id,
+                wait=wait,
+                timeout=timeout,
+                branch_id=effective_branch,
+                variable_values_id=values_id,
+                no_variables=values_id is None,
+                only_flow_task_ids=selection.task_ids if selection.partial else None,
+                kill_on_timeout=False,
+            )
+        except KeboolaApiError as exc:
+            # F1: the selection warnings stay on the error envelope / REST body.
+            raise self._flow_run_error(exc, warnings, selection, project) from exc
         job["flow_id"] = flow_id
         job["partial"] = selection.partial
         job["selection"] = selection.to_dict()
@@ -795,6 +804,43 @@ class FlowService(BaseService):
             if failed:
                 warnings.append(task_failure_warning(results))
         return FlowRunOutcome(job, warnings, failed, len(selection.task_ids), wait)
+
+    def _flow_run_error(
+        self,
+        exc: KeboolaApiError,
+        warnings: list[FlowWarning],
+        selection: FlowRunSelection,
+        project: ProjectConfig,
+    ) -> FlowRunError:
+        """Wrap a run error with its warnings; a failed partial job also gets its task results.
+
+        A partial run whose flow job ended in ``error`` (``QUEUE_JOB_FAILED``,
+        typically its last phase failed) carries ``task_results`` and
+        ``failed_task_ids`` in ``details``, read from one more job detail
+        call, plus a ``SELECTED_TASK_FAILED`` warning (F2). When that read
+        fails, the error stays as it was.
+        """
+        job_id = exc.details.get("job_id") if isinstance(exc.details, dict) else None
+        if not selection.partial or exc.error_code != ErrorCode.QUEUE_JOB_FAILED or not job_id:
+            return FlowRunError(exc, warnings)
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            job = client.get_job_detail(str(job_id))
+        except (KeboolaApiError, OSError):
+            logger.debug("flow run: reading failed job %s for task results failed", job_id)
+            return FlowRunError(exc, warnings)
+        finally:
+            client.close()
+        results = summarize_task_results(job, selection)
+        details = {
+            **exc.details,
+            "task_results": results.task_results,
+            "failed_task_ids": results.failed_task_ids,
+        }
+        found = list(warnings)
+        if results.failed_task_ids:
+            found.append(task_failure_warning(results))
+        return FlowRunError(exc, found, details=details)
 
     # ── schedule ────────────────────────────────────────────────────
 
