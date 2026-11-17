@@ -256,7 +256,7 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
 
 **A write that failed with a 5xx**
 - `POST`/`PATCH` is NOT retried on 5xx any more (0.86.0+); `retryable: false`
-  is deliberate: never retry it yourself. The work may have
+  is deliberate: no retry loop. The work may have
   landed: check `token list`/`job list` first. Quote the
   message's `exceptionId` when escalating. gotchas.md.
 
