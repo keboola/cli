@@ -52,6 +52,7 @@ from .constants import (
     STREAM_DEFAULT_BRANCH,
 )
 from .errors import ErrorCode, KeboolaApiError
+from .job_wait_errors import RAW_POLL_ERRORS, created_job_error, raw_poll_error
 from .result_models import (
     ConfigDetailResult,
     JobResult,
@@ -64,7 +65,6 @@ from .result_models import (
 )
 from .services._token_last_used import dormancy_rank, enrich_tokens
 from .services.job_idempotency_store import JobIdempotencyStore, run_idempotent_job
-from .services.job_service import RAW_POLL_ERRORS, created_job_error, raw_poll_error
 
 logger = logging.getLogger(__name__)
 
