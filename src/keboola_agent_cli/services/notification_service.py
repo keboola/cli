@@ -31,11 +31,12 @@ erroring or dropping the row.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
 from ..effective_branch import resolve_branch
-from ..errors import ConfigError, KeboolaApiError
+from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..models import ProjectConfig
 from .base import BaseService
 
@@ -46,6 +47,22 @@ FILTER_FIELD_COMPONENT_ID = "job.component.id"
 FILTER_FIELD_CONFIG_ID = "job.configuration.id"
 FILTER_FIELD_BRANCH_ID = "branch.id"
 FILTER_FIELD_PHASE_ID = "phase.id"
+# Not a payload path: the job's run time over its usual run time, as a ratio
+# (0.5 = 50 % longer than usual). The job-queue daemon puts it on the
+# *-processing-long events only.
+FILTER_FIELD_OVERTIME = "durationOvertimePercentage"
+OPERATOR_AT_LEAST = ">="
+
+# The events whose payload carries ``durationOvertimePercentage``. Any other
+# event never matches an overtime filter, so ``--overtime-percent`` is refused
+# there instead of creating a subscription that silently never fires.
+OVERTIME_EVENTS = ("job-processing-long", "phase-job-processing-long")
+# The service validates the value as ``numeric`` and ``> 0`` (the
+# ``*ProcessingLongNotification`` data constraints), so 0 % is refused there.
+# The upper bound is technical, not a business rule: the daemon keeps emitting
+# past 500 %, but the percent must stay representable once divided by 100.
+MIN_OVERTIME_PERCENT = 1
+MAX_OVERTIME_PERCENT = 10000
 
 # ``recipient.channel`` values the write path accepts. The CLI layer
 # validates against the same tuple (defense in depth, not the primary guard --
@@ -96,6 +113,71 @@ def _recipient_address(recipient: dict[str, Any]) -> str:
     return str(recipient.get("address") or recipient.get("url") or "")
 
 
+def _overtime_percent(filters: list[Any]) -> int | float | None:
+    """Return the overtime threshold as a percent, or ``None``.
+
+    Only an unambiguous threshold is reported: exactly one
+    ``durationOvertimePercentage`` filter whose operator is ``>=`` (an omitted
+    operator means ``==`` on the wire) and whose value is a finite number or a
+    numeric string. Anything else -- no filter, two filters, an equality
+    filter, a boolean, NaN -- is ``None``; the raw ``filters`` stay in the row.
+    The percent is an ``int`` when whole (``0.5`` -> ``50``) and keeps its
+    fraction otherwise (``0.125`` -> ``12.5``), so nothing is rounded away.
+    Never raises: one malformed subscription must not break a fleet audit.
+    """
+    matches = [
+        item
+        for item in filters
+        if isinstance(item, dict) and item.get("field") == FILTER_FIELD_OVERTIME
+    ]
+    if len(matches) != 1 or matches[0].get("operator") != OPERATOR_AT_LEAST:
+        return None
+    value = matches[0].get("value")
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return None
+    try:
+        ratio = float(value)
+    except (ValueError, OverflowError):
+        return None
+    percent = round(ratio * 100, 6)
+    if not math.isfinite(percent):
+        return None
+    return int(percent) if percent.is_integer() else percent
+
+
+def _validate_overtime_percent(event: str, overtime_percent: object) -> None:
+    """Refuse a threshold the service would store but never match.
+
+    Raises:
+        KeboolaApiError: ``INVALID_ARGUMENT`` naming ``--overtime-percent``
+            (exit 2 on the CLI, HTTP 400 over ``serve``) for an event outside
+            :data:`OVERTIME_EVENTS`, a non-integer (booleans included), or a
+            value outside ``MIN_OVERTIME_PERCENT..MAX_OVERTIME_PERCENT``.
+    """
+    if event not in OVERTIME_EVENTS:
+        raise KeboolaApiError(
+            message=(
+                f"--overtime-percent applies only to {' and '.join(OVERTIME_EVENTS)}; "
+                f"event '{event}' carries no run-time overtime, so the subscription "
+                "would never fire."
+            ),
+            error_code=ErrorCode.INVALID_ARGUMENT,
+        )
+    if (
+        isinstance(overtime_percent, bool)
+        or not isinstance(overtime_percent, int)
+        or not MIN_OVERTIME_PERCENT <= overtime_percent <= MAX_OVERTIME_PERCENT
+    ):
+        raise KeboolaApiError(
+            message=(
+                f"--overtime-percent must be a whole number from {MIN_OVERTIME_PERCENT} "
+                f"to {MAX_OVERTIME_PERCENT} "
+                f"(50 means 50 % longer than usual), got {overtime_percent!r}."
+            ),
+            error_code=ErrorCode.INVALID_ARGUMENT,
+        )
+
+
 def _build_recipient(channel: str, address: str) -> dict[str, str]:
     """Build a ``recipient`` body for the given channel.
 
@@ -128,14 +210,19 @@ def _build_filters(
     component_id: str | None,
     config_id: str | None,
     branch_id: int | None,
+    overtime_percent: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Build ``filters[]`` in a stable component/config/branch order.
+    """Build ``filters[]`` in a stable component/config/branch/overtime order.
 
     Each scope argument is included only when provided, and every value is
     stringified -- filter values are declared as ``string | integer |
     boolean`` on the wire, and a numeric config/branch ID must not reach the
     API as a raw int (mirrors the read-side stringification in
     :func:`_filter_value`).
+
+    The overtime threshold is the exception: the service compares it with
+    ``>=`` against a ratio, so it goes out as the float ``percent / 100`` with
+    an explicit operator -- byte-for-byte what the Keboola UI writes.
     """
     filters: list[dict[str, Any]] = []
     if component_id:
@@ -144,6 +231,14 @@ def _build_filters(
         filters.append({"field": FILTER_FIELD_CONFIG_ID, "value": str(config_id)})
     if branch_id is not None:
         filters.append({"field": FILTER_FIELD_BRANCH_ID, "value": str(branch_id)})
+    if overtime_percent is not None:
+        filters.append(
+            {
+                "field": FILTER_FIELD_OVERTIME,
+                "value": overtime_percent / 100,
+                "operator": OPERATOR_AT_LEAST,
+            }
+        )
     return filters
 
 
@@ -175,6 +270,7 @@ def _extract_subscription_fields(sub: dict[str, Any]) -> dict[str, Any]:
         # (durationOvertimePercentage, and anything the service adds later),
         # so the raw list rides along for --json consumers.
         "filters": filters,
+        "overtime_percent": _overtime_percent(filters),
         "scope": SCOPE_CONFIG if config_id else SCOPE_PROJECT_WIDE,
     }
 
@@ -380,6 +476,7 @@ class NotificationService(BaseService):
         config_id: str | None = None,
         branch_id: int | None = None,
         expires_at: str | None = None,
+        overtime_percent: int | None = None,
     ) -> dict[str, Any]:
         """Create a notification subscription and return its audit row.
 
@@ -395,6 +492,10 @@ class NotificationService(BaseService):
             branch_id: Optional ``branch.id`` filter.
             expires_at: Optional ISO-8601 expiry, sent on the wire as
                 ``expiresAt``.
+            overtime_percent: Optional whole-percent threshold for the
+                ``*-processing-long`` events (50 = the job runs 50 % longer
+                than usual), sent as a ``durationOvertimePercentage >=``
+                filter. ``None`` adds no filter.
 
         Returns:
             The same shape as :meth:`get_subscription_detail`: the created
@@ -403,14 +504,18 @@ class NotificationService(BaseService):
 
         Raises:
             ConfigError: ``alias`` not registered, or ``channel`` invalid.
-            KeboolaApiError: the API rejected the subscription.
+            KeboolaApiError: ``INVALID_ARGUMENT`` for an unusable
+                ``overtime_percent`` (see :func:`_validate_overtime_percent`),
+                or the API rejected the subscription.
         """
+        if overtime_percent is not None:
+            _validate_overtime_percent(event, overtime_percent)
         projects = self.resolve_projects([alias])
         project = projects[alias]
         effective_branch = resolve_branch(self._config_store, alias, branch_id, role="source")
 
         recipient = _build_recipient(channel, address)
-        filters = _build_filters(component_id, config_id, branch_id)
+        filters = _build_filters(component_id, config_id, branch_id, overtime_percent)
 
         client = self._client_factory(project.stack_url, project.token)
         try:

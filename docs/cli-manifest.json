@@ -2178,7 +2178,7 @@
       "kind": "command",
       "hidden": false,
       "category": "write",
-      "help": "Create a notification subscription.\n\n``--address`` carries the recipient's destination -- an email address for\n``--channel email``, or a callback URL for ``--channel webhook``.",
+      "help": "Create a notification subscription.\n\n``--address`` carries the recipient's destination -- an email address for\n``--channel email``, or a callback URL for ``--channel webhook``.\n``--overtime-percent`` writes the threshold of the UI's \"job runs longer\nthan usual\" alert: a ``durationOvertimePercentage >= N/100`` filter.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "event", "opts": ["--event"], "type": "text", "required": true, "default": null, "help": "Event name filter, e.g. 'job-failed'. Known events: job-failed, job-succeeded, job-succeeded-with-warning, job-processing-long, phase-job-failed, phase-job-succeeded, phase-job-succeeded-with-warning, phase-job-processing-long. Not validated against that list -- the service may add more."},
@@ -2187,7 +2187,8 @@
         {"kind": "option", "name": "component_id", "opts": ["--component-id"], "type": "text", "default": null, "help": "Restrict to jobs of this component (e.g. keboola.flow)"},
         {"kind": "option", "name": "config_id", "opts": ["--config-id"], "type": "text", "default": null, "help": "Restrict to jobs of this configuration ID"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Restrict to jobs on this branch"},
-        {"kind": "option", "name": "expires_at", "opts": ["--expires-at"], "type": "text", "default": null, "help": "Optional ISO-8601 expiry for the subscription"}
+        {"kind": "option", "name": "expires_at", "opts": ["--expires-at"], "type": "text", "default": null, "help": "Optional ISO-8601 expiry for the subscription"},
+        {"kind": "option", "name": "overtime_percent", "opts": ["--overtime-percent"], "type": "integer", "default": null, "help": "Fire only when the job runs at least this many percent longer than usual (50 = 50 %). Only for job-processing-long and phase-job-processing-long. Omitted: no overtime filter."}
       ]
     },
     {

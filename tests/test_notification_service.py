@@ -981,3 +981,200 @@ class TestReplaceSubscriptionRecipient:
             _make_service(MagicMock()).replace_subscription_recipient(
                 "nope", "1", "new@example.com"
             )
+
+
+# ---------------------------------------------------------------------------
+# Overtime threshold (issue #989)
+# ---------------------------------------------------------------------------
+
+
+def _created(event: str = "job-processing-long", filters: list | None = None) -> dict:
+    return {
+        "id": "9200",
+        "event": event,
+        "filters": filters or [],
+        "recipient": {"channel": "email", "address": "ops@example.com"},
+    }
+
+
+class TestCreateSubscriptionOvertime:
+    """``overtime_percent`` writes the same filter the Keboola UI writes."""
+
+    @pytest.mark.parametrize("event", ["job-processing-long", "phase-job-processing-long"])
+    def test_writes_ui_shaped_threshold_filter_last(self, event: str) -> None:
+        client = MagicMock()
+        client.create_project_subscription.return_value = _created(event)
+
+        _make_service(client).create_subscription(
+            "prod",
+            event=event,
+            channel="email",
+            address="ops@example.com",
+            component_id="keboola.flow",
+            config_id="98765",
+            branch_id=4242,
+            overtime_percent=50,
+        )
+
+        args, _ = client.create_project_subscription.call_args
+        assert args[2] == [
+            {"field": "job.component.id", "value": "keboola.flow"},
+            {"field": "job.configuration.id", "value": "98765"},
+            {"field": "branch.id", "value": "4242"},
+            {"field": "durationOvertimePercentage", "value": 0.5, "operator": ">="},
+        ]
+
+    @pytest.mark.parametrize(
+        ("percent", "fraction"), [(1, 0.01), (7, 0.07), (150, 1.5), (501, 5.01), (10000, 100.0)]
+    )
+    def test_value_is_percent_divided_by_100_as_the_ui_sends_it(
+        self, percent: int, fraction: float
+    ) -> None:
+        client = MagicMock()
+        client.create_project_subscription.return_value = _created()
+
+        _make_service(client).create_subscription(
+            "prod",
+            event="job-processing-long",
+            channel="email",
+            address="ops@example.com",
+            overtime_percent=percent,
+        )
+
+        args, _ = client.create_project_subscription.call_args
+        sent = args[2][-1]
+        assert sent["value"] == fraction
+        assert isinstance(sent["value"], float)
+
+    def test_omitted_keeps_previous_body(self) -> None:
+        client = MagicMock()
+        client.create_project_subscription.return_value = _created()
+
+        _make_service(client).create_subscription(
+            "prod", event="job-processing-long", channel="email", address="ops@example.com"
+        )
+
+        args, _ = client.create_project_subscription.call_args
+        assert args[2] is None
+
+    @pytest.mark.parametrize("event", ["job-failed", "job-succeeded", "phase-job-failed", "x"])
+    def test_other_event_is_invalid_argument_before_any_call(self, event: str) -> None:
+        client = MagicMock()
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            _make_service(client).create_subscription(
+                "prod",
+                event=event,
+                channel="email",
+                address="ops@example.com",
+                overtime_percent=50,
+            )
+
+        assert excinfo.value.error_code == "INVALID_ARGUMENT"
+        assert "--overtime-percent" in excinfo.value.message
+        client.create_project_subscription.assert_not_called()
+
+    @pytest.mark.parametrize("bad", [0, -1, True, False, 1.5, "50", 10001, 10**400])
+    def test_non_integer_or_negative_is_invalid_argument(self, bad: object) -> None:
+        client = MagicMock()
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            _make_service(client).create_subscription(
+                "prod",
+                event="job-processing-long",
+                channel="email",
+                address="ops@example.com",
+                overtime_percent=bad,  # type: ignore[arg-type]
+            )
+
+        assert excinfo.value.error_code == "INVALID_ARGUMENT"
+        client.create_project_subscription.assert_not_called()
+
+    def test_created_row_reports_overtime_percent(self) -> None:
+        client = MagicMock()
+        client.create_project_subscription.return_value = _created(
+            filters=[{"field": "durationOvertimePercentage", "value": 0.5, "operator": ">="}]
+        )
+
+        row = _make_service(client).create_subscription(
+            "prod",
+            event="job-processing-long",
+            channel="email",
+            address="ops@example.com",
+            overtime_percent=50,
+        )
+
+        assert row["overtime_percent"] == 50
+
+
+class TestOvertimePercentReadSide:
+    """Audit rows expose the threshold only when it is unambiguous."""
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [(0.5, 50), (0.07, 7), (1.5, 150), (0, 0), (0.0, 0), ("0.25", 25), (0.125, 12.5)],
+    )
+    def test_single_ge_filter_is_percent(self, value: object, expected: float) -> None:
+        row = _extract_subscription_fields(
+            _created(
+                filters=[{"field": "durationOvertimePercentage", "value": value, "operator": ">="}]
+            )
+        )
+        assert row["overtime_percent"] == expected
+        assert type(row["overtime_percent"]) is type(expected)
+
+    @pytest.mark.parametrize(
+        "filters",
+        [
+            [],
+            [{"field": "branch.id", "value": "1"}],
+            [{"field": "durationOvertimePercentage", "value": 0.5}],
+            [{"field": "durationOvertimePercentage", "value": 0.5, "operator": "=="}],
+            [
+                {"field": "durationOvertimePercentage", "value": 0.5, "operator": ">="},
+                {"field": "durationOvertimePercentage", "value": 0.7, "operator": ">="},
+            ],
+            [{"field": "durationOvertimePercentage", "value": "abc", "operator": ">="}],
+            [{"field": "durationOvertimePercentage", "value": True, "operator": ">="}],
+            [{"field": "durationOvertimePercentage", "value": None, "operator": ">="}],
+            [{"field": "durationOvertimePercentage", "value": float("inf"), "operator": ">="}],
+            [{"field": "durationOvertimePercentage", "value": float("nan"), "operator": ">="}],
+            [{"field": "durationOvertimePercentage", "value": "nan", "operator": ">="}],
+            [{"field": "durationOvertimePercentage", "value": 1e308, "operator": ">="}],
+            [{"field": "durationOvertimePercentage", "value": 10**400, "operator": ">="}],
+            ["not-a-dict"],
+        ],
+    )
+    def test_absent_ambiguous_or_unreadable_threshold_is_none(self, filters: list) -> None:
+        row = _extract_subscription_fields(_created(filters=filters))
+        assert row["overtime_percent"] is None
+        assert row["filters"] == filters
+
+
+class TestReplaceRecipientKeepsOvertime:
+    def test_threshold_filter_with_operator_is_carried_verbatim(self) -> None:
+        old_filters = [
+            {"field": "job.component.id", "value": "keboola.flow", "operator": "=="},
+            {"field": "durationOvertimePercentage", "value": 0.125, "operator": ">="},
+        ]
+        client = MagicMock()
+        client.get_project_subscription.return_value = {
+            "id": "1234",
+            "event": "job-processing-long",
+            "filters": old_filters,
+            "recipient": {"channel": "email", "address": "ops@example.com"},
+        }
+        client.create_project_subscription.return_value = {
+            "id": "9300",
+            "event": "job-processing-long",
+            "filters": old_filters,
+            "recipient": {"channel": "email", "address": "new@example.com"},
+        }
+
+        result = _make_service(client).replace_subscription_recipient(
+            "prod", "1234", "new@example.com"
+        )
+
+        args, _ = client.create_project_subscription.call_args
+        assert args[2] == old_filters
+        assert result["overtime_percent"] == 12.5

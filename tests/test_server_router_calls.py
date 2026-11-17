@@ -2393,6 +2393,90 @@ def test_notifications_list_defaults_to_every_project(tmp_path: Path) -> None:
     )
 
 
+def test_notifications_create_passes_overtime_percent(tmp_path: Path) -> None:
+    notification_svc = MagicMock()
+    notification_svc.create_subscription.return_value = {"subscription_id": "1"}
+    app = _make_app_with_registry(tmp_path, _mock_registry(notification=notification_svc))
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/notifications/{PROJECT}",
+            headers=AUTH,
+            json={
+                "event": "job-processing-long",
+                "channel": "email",
+                "address": "ops@example.com",
+                "overtime_percent": 50,
+            },
+        )
+
+    assert res.status_code == 200, res.text
+    assert notification_svc.create_subscription.call_args.kwargs["overtime_percent"] == 50
+
+
+def test_notifications_create_overtime_percent_defaults_to_none(tmp_path: Path) -> None:
+    notification_svc = MagicMock()
+    notification_svc.create_subscription.return_value = {"subscription_id": "1"}
+    app = _make_app_with_registry(tmp_path, _mock_registry(notification=notification_svc))
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/notifications/{PROJECT}",
+            headers=AUTH,
+            json={"event": "job-failed", "channel": "email", "address": "ops@example.com"},
+        )
+
+    assert res.status_code == 200, res.text
+    assert notification_svc.create_subscription.call_args.kwargs["overtime_percent"] is None
+
+
+@pytest.mark.parametrize("bad", [True, "50", 50.5])
+def test_notifications_create_overtime_percent_must_be_a_strict_int(
+    tmp_path: Path, bad: object
+) -> None:
+    notification_svc = MagicMock()
+    app = _make_app_with_registry(tmp_path, _mock_registry(notification=notification_svc))
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/notifications/{PROJECT}",
+            headers=AUTH,
+            json={
+                "event": "job-processing-long",
+                "channel": "email",
+                "address": "ops@example.com",
+                "overtime_percent": bad,
+            },
+        )
+
+    assert res.status_code == 422, res.text
+    notification_svc.create_subscription.assert_not_called()
+
+
+def test_notifications_create_invalid_overtime_is_http_400(tmp_path: Path) -> None:
+    notification_svc = MagicMock()
+    notification_svc.create_subscription.side_effect = KeboolaApiError(
+        message="--overtime-percent applies only to job-processing-long",
+        error_code=ErrorCode.INVALID_ARGUMENT,
+    )
+    app = _make_app_with_registry(tmp_path, _mock_registry(notification=notification_svc))
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/notifications/{PROJECT}",
+            headers=AUTH,
+            json={
+                "event": "job-failed",
+                "channel": "email",
+                "address": "ops@example.com",
+                "overtime_percent": 50,
+            },
+        )
+
+    assert res.status_code == 400, res.text
+    assert res.json()["error"]["code"] == "INVALID_ARGUMENT"
+
+
 def test_notifications_detail_passes_alias_and_subscription_id(tmp_path: Path) -> None:
     notification_svc = MagicMock()
     notification_svc.get_subscription_detail.return_value = {"subscription_id": "1234"}

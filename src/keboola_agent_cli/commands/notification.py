@@ -31,7 +31,14 @@ from rich.table import Table
 
 from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
-from ..services.notification_service import KNOWN_EVENTS, SCOPE_PROJECT_WIDE, VALID_CHANNELS
+from ..services.notification_service import (
+    KNOWN_EVENTS,
+    MAX_OVERTIME_PERCENT,
+    MIN_OVERTIME_PERCENT,
+    OVERTIME_EVENTS,
+    SCOPE_PROJECT_WIDE,
+    VALID_CHANNELS,
+)
 from ._all_projects import (
     FANOUT_PROJECT_HELP,
     AllProjectsOption,
@@ -157,6 +164,10 @@ def _print_subscription(formatter: Any, row: dict[str, Any]) -> None:
     )
     if row.get("expires_at"):
         formatter.console.print(f"  Expires:     {escape(row['expires_at'])}")
+    if row.get("overtime_percent") is not None:
+        formatter.console.print(
+            f"  Overtime:    >= {escape(str(row['overtime_percent']))} % longer than usual"
+        )
 
     filters = row.get("filters") or []
     if filters:
@@ -310,11 +321,24 @@ def notification_create(
     expires_at: str | None = typer.Option(
         None, "--expires-at", help="Optional ISO-8601 expiry for the subscription"
     ),
+    overtime_percent: int | None = typer.Option(
+        None,
+        "--overtime-percent",
+        min=MIN_OVERTIME_PERCENT,
+        max=MAX_OVERTIME_PERCENT,
+        help=(
+            "Fire only when the job runs at least this many percent longer than usual "
+            f"(50 = 50 %). Only for {' and '.join(OVERTIME_EVENTS)}. "
+            "Omitted: no overtime filter."
+        ),
+    ),
 ) -> None:
     """Create a notification subscription.
 
     ``--address`` carries the recipient's destination -- an email address for
     ``--channel email``, or a callback URL for ``--channel webhook``.
+    ``--overtime-percent`` writes the threshold of the UI's "job runs longer
+    than usual" alert: a ``durationOvertimePercentage >= N/100`` filter.
     """
     formatter = get_formatter(ctx)
 
@@ -337,6 +361,7 @@ def notification_create(
             config_id=config_id,
             branch_id=branch,
             expires_at=expires_at,
+            overtime_percent=overtime_percent,
         )
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)

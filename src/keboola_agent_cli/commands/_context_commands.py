@@ -748,7 +748,7 @@ write, 'delete' as destructive.
 
   kbagent notification create [--project PROJECT] --event EVENT
       --channel CHANNEL --address ADDRESS [--component-id ID] [--config-id ID]
-      [--branch N] [--expires-at AT]
+      [--branch N] [--expires-at AT] [--overtime-percent N]
     Create a notification subscription.
 
   kbagent notification delete [--project PROJECT] --subscription-id ID [--yes]
