@@ -113,8 +113,10 @@ def test_a_pending_directory_is_no_move_target(
 
     assert not diff.get("moves"), diff
     (change,) = [c for c in diff["changes"] if c["config_id"] == other]
-    assert change["change_type"] == "deleted"
-    assert change["path"] == other_dir.relative_to(ws.root / "main").as_posix()
+    assert change["change_type"] == "deleted"  # its folder is gone, not moved
+    entry = ws.entry(other)
+    assert entry is not None
+    assert ws.root / "main" / entry.path == other_dir
 
 
 def test_a_pending_row_directory_is_no_new_row(

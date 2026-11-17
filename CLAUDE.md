@@ -1337,6 +1337,22 @@ kbagent sync push [--project ALIAS] [--all-projects] [--dry-run] [--force] [--al
 # sync push encryption (#792 F): every #-secret is encrypted before the first write, so an
 #   ENCRYPTION_FAILED stops push before anything reaches the remote (the message ends with "Nothing
 #   was pushed.") and a retry creates nothing twice. Version gate in gotchas.md.
+# sync push update (#827): a `modified` config's PUT carries If-Match with the version diff read
+#   (`remote_version`, also on modified changes; promote path: the target branch's version; none when
+#   the listing has no version). A 412 reads the config back: exactly the sent configuration/name/
+#   description/enabled state = done (a transport retry after a lost answer), else an errors[]
+#   SYNC_CONFLICT (exit 1) with the local files and manifest entry untouched, and no later phase of
+#   that push (promote rebind, Phase C/D link recovery) writes the config. Push reads a config's
+#   files once: a change while it reads is SYNC_LOCAL_FILE_CHANGED (nothing sent). An edit during
+#   the PUT skips the writeback (warnings[] LOCAL_EDIT_DURING_PUSH; manifest records what was sent).
+#   Stamps are hashes of the bytes push wrote (_config.yml, pyproject.toml), never a re-read; the
+#   promote final stamp reuses them. Row PUTs and link backfill PUTs stay unconditional.
+#   Version gate lives in gotchas.md.
+# sync pull stale removal (#827): pull records each stale config/row folder, saves the manifest
+#   without it and with `pendingRemovals`, then deletes; the final save keeps only failed deletes.
+#   Diff/push treat a pending path (and below) as absent; the next pull finishes it first, only while
+#   unchanged (else kept untracked, warnings[] PENDING_REMOVAL_KEPT / PENDING_REMOVAL_FAILED).
+#   Version gate lives in gotchas.md.
 # sync push workspace delete (CLI-25): in a `syncWorkspaces` tree, a `push --force` that deletes a shared SQL workspace also deletes its SQL editor sessions (every user's, push branch) and their backend workspaces, which `config restore` does not bring back; `push --dry-run --force` lists them (warnings[] workspace_sessions), a plain push lists the workspace under skipped_deletions and touches no session. `--force` is destructive-class (FLAG_ESCALATIONS `sync.push --force`), so `--deny-destructive` / a cli:destructive deny blocks it while a plain push stays write-class. Version gate for this entry lives in gotchas.md.
 # Partial failures change the exit code (#745): commands that collect per-item failures
 #   and keep going exit 1 (was 0) when at least one item failed:

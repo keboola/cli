@@ -148,7 +148,10 @@ def capture_local_input(
     with tempfile.TemporaryDirectory(prefix="kbagent-push-") as tmp:
         snapshot = Path(tmp)
         for name, raw in contents.items():
-            (snapshot / name).write_bytes(raw)
+            # A private copy: open() rather than Path.write_bytes, which the
+            # read-only-file tests patch for the user's own files.
+            with open(snapshot / name, "wb") as handle:
+                handle.write(raw)
         data = service._read_config_file(snapshot)
         if data is None:
             return None

@@ -515,6 +515,47 @@ and the Storage API has no precondition for a row delete, so a UI edit of a
 row made between the read and the DELETE of that single row is not protected.
 Review `sync diff` right before a `sync push --force` that deletes single rows.
 
+### A config update is conditional, and an edit during push is kept
+
+*(since vNEXT)* (#827)
+
+Push sends the version `sync diff` read (`remote_version` of a `modified`
+change; on the promote path the target branch's version) as `If-Match` on the
+config PUT. When the config or one of its rows was edited in the UI after that
+read, the Storage API answers 412. Push reads the config back: if it holds
+exactly what push sent (configuration with the ciphertexts as sent, name,
+description, enabled state when sent) the update counts as done -- the case of
+a PUT the transport repeated after a lost answer. Otherwise push reports
+`SYNC_CONFLICT` under `errors[]` (exit 1), leaves the local files and the
+manifest entry as they were, and no later step of that push writes the config.
+Run `kbagent sync pull`, review, push again. A listing without `version` sends
+no precondition.
+
+Push reads each config's files once; a file that changes while push reads it
+is not sent (`SYNC_LOCAL_FILE_CHANGED`, push again). A file edited while the
+update runs is not written back over (`warnings[]` entry
+`LOCAL_EDIT_DURING_PUSH`): the manifest records what was sent, so
+`sync diff` keeps showing the newer content as a local change. The baseline is
+always the hash of the bytes push wrote, never a second read of the folder.
+
+Limits: an editor save in the instant between push's last check and its
+write-back is overwritten (no file locking); row updates, the link backfill
+PUTs and data-app writes send no precondition.
+
+### `sync pull` journals the folders it deletes
+
+*(since vNEXT)* (#827)
+
+Pull drops a config or row the remote no longer lists from the manifest and
+records it under `pendingRemovals` BEFORE it deletes the folder; its final save
+clears the record. A pull killed in between no longer leaves an entry for a
+missing folder that a later `push --force` deletes on the remote. While a
+record exists, diff and push treat the folder (and everything below it) as
+absent. The next pull finishes the removal first, and only while the folder is
+unchanged; an edited folder is kept untracked (`warnings[]`
+`PENDING_REMOVAL_KEPT`), a failed delete is reported
+(`PENDING_REMOVAL_FAILED`) and retried by the next pull.
+
 ### Rows across `sync pull --branch` and promote pushes
 
 *(since 1.0.0)*
