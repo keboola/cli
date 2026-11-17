@@ -1841,11 +1841,11 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
     ASK THE USER before ever passing --scope organization|targeted.
 
   semantic-layer edit metric|dataset|constraint|relationship|glossary ...
-    In-place PUT (same id, scope and grants). Metric rename cascades through
-    every constraint referencing the old name (each PUT with updated
-    metrics[]); CODE_METRIC warning shown
-    (re.sub(r"[^A-Z0-9]+", "_", name.upper()).strip("_")). A failed PUT
-    changes nothing (the `rollback` field is always null).
+    In-place PATCH of only the changed keys (same id, scope and grants).
+    Metric rename cascades through every constraint referencing the old name
+    (each a PATCH of its metrics[] only); CODE_METRIC warning shown
+    (re.sub(r"[^A-Z0-9]+", "_", name.upper()).strip("_")). The `rollback`
+    field is always null.
     --yes skips the confirm prompt. `edit relationship` accepts --new-from /
     --new-to / --new-on / --new-type (left|inner). `edit glossary` accepts
     --new-term (destructive cascade; requires --yes in non-TTY) / --new-definition.
@@ -1860,8 +1860,9 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
     key survives; import --overwrite / promote PUT the whole item): it keeps its id, scope,
     target-project grants (`scope get` below), pending elevation request and
     revision history -- editing an organization/targeted item never
-    downgrades it. A refused edit changes nothing; a PATCH that timed out may
-    have been applied (it is not retried) -- re-read with `show` first.
+    downgrades it. A refused edit changes nothing; a PATCH whose response was
+    lost (5xx, read timeout) may have been applied and is not retried --
+    re-read with `show` first.
 
   semantic-layer remove metric|dataset|constraint|relationship|glossary ...
     Destructive. `remove metric` pre-scans constraints whose metrics[] includes

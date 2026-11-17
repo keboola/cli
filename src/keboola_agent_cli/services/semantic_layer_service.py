@@ -1214,7 +1214,7 @@ class SemanticLayerService(BaseService):
         )
 
     # ------------------------------------------------------------------
-    # Phase 4 — edit (DELETE-then-POST with rollback + rename cascade)
+    # Phase 4 — edit (PATCH of the changed keys + rename cascade)
     # ------------------------------------------------------------------
 
     # Thin delegates to ._semantic_layer_crud helpers -- bodies live

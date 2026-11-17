@@ -2658,9 +2658,10 @@ events and emits a final `done` SSE frame mirroring the same record.
 - `kbagent semantic-layer edit metric --project P --new-name NEW` updates the metric
   and ALSO every constraint whose `metrics[]` referenced the old name
   (`metrics[]` rewritten to the new name). *(updated 0.97.0)* Each is an
-  in-place `PUT` -- same id, scope, grants and revision history, and a failed
+  in-place update -- same id, scope, grants and revision history, and a refused
   update changes nothing; before, every "edit" was a delete-then-create with
-  a rollback re-POST.
+  a rollback re-POST. *(since vNEXT)* The update is a `PATCH` of only the
+  changed keys (each constraint: only `metrics`), no longer a whole-record `PUT`.
 - The `CODE_METRIC` derived value (used in downstream SQL joins on
   `DIM_METRIC_THRESHOLD` / `FACT_METRIC_*` lookups) is computed via
   ```python
@@ -2675,15 +2676,13 @@ events and emits a final `done` SSE frame mirroring the same record.
   unless `--yes` is set. The CODE_METRIC change line is printed even
   with `--yes` -- treat it as a contract change that needs explicit
   audit of downstream SQL.
-- On POST failure (e.g. the new name violates a constraint), the
-  service re-POSTs `original_attrs` to restore the pre-edit state
-  and reports rollback success/failure explicitly in the response
-  envelope's `rollback` field. If rollback itself fails, the model
-  is left in a partial state -- surface that to the operator and
-  recommend running `semantic-layer validate` immediately.
+- When the metric update is refused (e.g. the new name is taken),
+  nothing was written and no constraint is touched; the `rollback`
+  field is always `null` (since 0.97.0 -- before, the service
+  re-POSTed `original_attrs`).
 - **Partial-state envelope signal (updated v0.41.10 -- closes #294)**:
   the cascade is per-item only (each constraint is updated on its own;
-  *since 0.97.0* a PUT, so there is nothing to roll back), NOT whole-operation atomicity. If the
+  *since 0.97.0* an in-place update, since vNEXT a `PATCH`, so there is nothing to roll back), NOT whole-operation atomicity. If the
   metric rename succeeds but M of N dependent constraints fail to
   repoint, the response envelope sets `partial_state: true` and
   `recovery_hint: "<text pointing at validate + manual re-cascade>"`
