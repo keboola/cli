@@ -282,8 +282,10 @@ skips all of this.
   `success`/`warning`, or `missing` when the task is absent from the job's
   `result.tasks`).
 - The job id: `data.id` when the job was created (also with `--wait`);
-  `error.details.job_id` on `QUEUE_JOB_FAILED` and on a timeout. A `--dry-run`
-  creates no job and has no id.
+  `error.details.job_id` on every error after the job was created:
+  `QUEUE_JOB_FAILED`, a timeout, and a failure while polling (connection
+  error, HTTP 5xx, exhausted retries -- these keep their own code and exit
+  code, with `retryable: false`). A `--dry-run` creates no job and has no id.
 - A whole-flow `--dry-run` lists the enabled tasks as tasks that **could** run;
   the conditions decide which do.
 
@@ -292,7 +294,7 @@ skips all of this.
 | 0 | `--dry-run`; job created (no `--wait`); partial run where every selected task succeeded; whole-flow run that finished in any status but `error` (check `data.status`: `warning` / `terminated` also exit 0) | report the status, not just "done" |
 | 1 | `SELECTED_TASK_FAILED` (payload has `failed_task_ids`), or `QUEUE_JOB_FAILED` (the flow job ended `error`; `error.details` has `job_id`, and on a partial run usually `task_results` / `failed_task_ids`; they are missing when kbagent could not read the failed job) | `job detail --project P --job-id` of the failed task's `job_id`; when a task has no `job_id` (status `missing`, or the result did not carry one), read the flow job itself |
 | 2 | invalid selection or options | fix the ids from `flow detail` |
-| 4 | `--timeout` reached: the job **keeps running** (`retryable: false`) | `job detail --project P --job-id ID`; do **not** start it again |
+| 4 | `--timeout` reached, or polling lost the connection (`CONNECTION_ERROR`, `TIMEOUT`, `RETRY_EXHAUSTED`): the job **keeps running** (`retryable: false`, `error.details.job_id`) | `job detail --project P --job-id ID`; do **not** start it again |
 | 6 | permission denied | see "Variables, branch, permissions" below |
 
 ### Retries create duplicate runs
@@ -317,9 +319,10 @@ tasks of job X" is not exposed).
   given; `--branch 0` is production. The selection is read from the same branch
   the job runs on. An edit of the flow between that read and the Queue running
   the job is not detected.
-- Permission key `flow.run` (write) is separate from `job.run`: a policy that
-  denies `job.run` does **not** deny `flow.run`; deny both, or `cli:write`
-  (`--deny-writes`). A deny on `flow.run` also blocks `flow run --dry-run`.
+- Permission key `flow.run` (write), and it also needs `job.run`: `flow run`
+  creates a Queue job, so a policy that denies `job.run` (or `flow.run`, or
+  `cli:write` / `--deny-writes`) blocks it, `--dry-run` included (exit 6,
+  HTTP 403). An allow-list policy (`--mode deny`) must allow both keys.
 - Over `kbagent serve`: `POST /flows/{project}/{flow_id}/run` with body
   `task_ids`, `from_phase_id`, `branch_id`, `variable_values_id`,
   `no_variables`, `dry_run` and query `wait`, `timeout`. `task_ids: []` is HTTP
