@@ -58,7 +58,7 @@ For any operation that modifies a Keboola config or storage object, follow this 
 5. **Verify** by re-fetching the config and inspecting the new version.
 6. **Stop**. Do NOT auto-trigger `job run`, transformation execution, or any side-effecting follow-up. The user decides when to run.
 
-When working inside a git repository or project directory, run `kbagent init` (or `kbagent init --from-global`) once to create a local `.kbagent/` workspace. After that, kbagent works from any subdirectory of the project -- no need to `cd ~` first.
+When working inside a git repository or project directory, run `kbagent init` (or `kbagent init --from-global`) once to create a local `.kbagent/` workspace. After that, kbagent works from any subdirectory of the project -- no need to `cd ~` first. `--from-global` is a one-time copy: when a command there fails `INVALID_TOKEN` after a token rotation, follow [After a token rotation](references/safe-write-workflow.md#after-a-token-rotation-invalid_token-in-a-local-kbagent) (preview with `project refresh --dry-run`; never edit `.kbagent/config.json`).
 
 ## Choosing the right approach
 

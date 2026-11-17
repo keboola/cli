@@ -1551,6 +1551,8 @@ explicit Storage config version, never the empty shell the create writes.
     In a local .kbagent/ directory an INVALID_TOKEN project first takes the
     one verified token the global config holds for it (`projects_adopted`);
     the Manage token is asked for only when a token must be minted.
+    Agents: --dry-run first, then ask the user; never edit config.json and
+    never add --force for this (it mints new tokens and needs a Manage token).
     Browser-login (session) projects are reported under "skipped" with the
     reason that there is no static token to replace -- their access token
     rotates on its own from auth.json. --force does NOT convert them either;
