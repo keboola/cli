@@ -189,21 +189,16 @@ def unsafe_reason(
     tree of this manifest, and the target inside its tree. A row must lie in
     the rows folder of its configuration in that tree (*live*: the entries the
     running pull wrote, which a re-targeted tree's configuration is). Such a
-    record is malformed: it is dropped. A symbolic link on the way is not
-    checked here (:func:`link_on_the_way`): that record is valid, its folder
-    is only not deleted now (H2).
+    record is malformed: it is dropped. The structure (tree, kind, a row in
+    its rows folder) is checked first, on the path as written (I2); only
+    then does a symbolic link on the way stop the check
+    (:func:`link_on_the_way`): such a record is valid, its folder is only not
+    deleted now (H2). Without a link the resolved path must stay inside.
     """
     if item.problem is not None:
         return item.problem
     if item.tree not in {branch.path for branch in manifest.branches}:
         return f"its tree {item.tree!r} is not a branch tree of this manifest"
-    if link_on_the_way(project_root, item) is not None:
-        return None  # resolving through the link says nothing; the caller keeps it
-    tree_dir = (project_root / item.tree).resolve()
-    if project_root.resolve() not in tree_dir.parents:
-        return "its tree resolves outside the project"
-    if tree_dir not in (project_root / item.tree / item.path).resolve().parents:
-        return "it resolves outside its tree"
     if item.kind == "row":
         rows_prefix = manifest.naming.config_row.split("{", 1)[0]
         parents = [
@@ -221,6 +216,13 @@ def unsafe_reason(
             return "it is not in the rows folder of its configuration"
     elif item.kind != "config":
         return f"its kind {item.kind!r} is unknown"
+    if link_on_the_way(project_root, item) is not None:
+        return None  # resolving through the link says nothing; the caller keeps it (H2)
+    tree_dir = (project_root / item.tree).resolve()
+    if project_root.resolve() not in tree_dir.parents:
+        return "its tree resolves outside the project"
+    if tree_dir not in (project_root / item.tree / item.path).resolve().parents:
+        return "it resolves outside its tree"
     return None
 
 

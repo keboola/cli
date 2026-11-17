@@ -659,3 +659,95 @@ def test_an_inner_edit_between_the_two_snapshots_keeps_both_folders(
     assert _dir(sim, HTTP_DIR).is_dir()
     assert "PENDING_REMOVAL_KEPT" in [w.get("code") for w in result.get("warnings", [])]
     assert len(load_manifest(sim.root).pending_removals) == 2
+
+
+# ------------------------------------------------------------------- round 5
+
+
+def test_a_pending_row_below_a_tracked_config_inside_a_pending_folder_stays_hidden(
+    ws: Workspace, api: FakeStorage
+) -> None:
+    """I1: the tracked config's exemption cancels the pending ANCESTOR only, not its own row record."""
+    outer_id = api.add("Orders", ["SELECT 1;"])
+    inner_id = api.add("Inner", ["SELECT 2;"])
+    api.configs[inner_id]["rows"].append(dict(ROW))
+    ws.init_and_pull()
+    outer = ws.dir_of(outer_id)
+    outer_rel = outer.relative_to(ws.root / "main").as_posix()
+    shutil.move(str(ws.dir_of(inner_id)), str(outer / "inner"))
+    (row_dir,) = [p for p in (outer / "inner" / "rows").iterdir() if p.is_dir()]
+    row_rel = row_dir.relative_to(ws.root / "main").as_posix()
+    manifest_file = ws.root / ".keboola" / "manifest.json"
+    raw = json.loads(manifest_file.read_text(encoding="utf-8"))
+    raw["configurations"] = [c for c in raw["configurations"] if c["id"] != outer_id]
+    for cfg in raw["configurations"]:
+        if cfg["id"] == inner_id:
+            cfg["path"] = f"{outer_rel}/inner"
+            cfg["rows"] = []  # the row was removed; its folder's delete failed
+    raw["pendingRemovals"] = [
+        {"tree": "main", "path": outer_rel, "kind": "config", "componentId": "x", "configId": "9"},
+        {
+            "tree": "main",
+            "path": row_rel,
+            "kind": "row",
+            "componentId": "keboola.snowflake-transformation",
+            "configId": inner_id,
+            "rowId": "500",
+        },
+    ]
+    manifest_file.write_text(json.dumps(raw), encoding="utf-8")
+    api.configs[inner_id]["rows"] = []
+
+    rows = [c for c in ws.diff()["changes"] if c.get("is_row")]
+    calls = len(api.calls)
+    ws.push()
+
+    assert rows == [], rows
+    assert not [c for c in api.calls[calls:] if c[0] == "create_config_row"]
+
+
+def test_under_pending_cancels_only_ancestors_of_a_tracked_folder() -> None:
+    from keboola_agent_cli.sync.manifest import PendingPaths, under_pending
+
+    pending = PendingPaths(frozenset({"a", "a/b/rows/x"}), frozenset({"a/b"}))
+    assert under_pending("a/_other", pending)
+    assert not under_pending("a/b", pending)
+    assert not under_pending("a/b/rows/new", pending)
+    assert under_pending("a/b/rows/x", pending)
+    assert under_pending("a/b/rows/x/deep", pending)
+    assert under_pending("c", PendingPaths(frozenset({"c"}), frozenset({"c"})))
+
+
+@pytest.mark.parametrize("kind", ["row", "weird"])
+def test_a_malformed_record_behind_a_link_is_dropped_not_kept(
+    ws: Workspace, api: FakeStorage, tmp_path: Path, kind: str
+) -> None:
+    """I2: the record's structure is checked before a link on the way can keep it."""
+    api.add("Orders", ["SELECT 1;"])
+    ws.init_and_pull()
+    outside = tmp_path / "outside"
+    victim = outside / "victim"
+    victim.mkdir(parents=True)
+    (victim / "notes.txt").write_text("precious", encoding="utf-8")
+    try:
+        os.symlink(outside, ws.root / "main" / "linked", target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("no symlink support")
+    _plant(
+        ws,
+        {
+            "tree": "main",
+            "path": "linked/victim",
+            "kind": kind,
+            "componentId": "x",
+            "configId": "1",
+            "rowId": "1",
+            "treeHash": tree_digest(victim),
+        },
+    )
+
+    result = ws.pull()
+
+    assert (victim / "notes.txt").is_file()
+    assert "PENDING_REMOVAL_INVALID" in [w["code"] for w in result["warnings"]], result
+    assert ws.manifest().pending_removals == []
