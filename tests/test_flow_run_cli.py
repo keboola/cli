@@ -428,11 +428,49 @@ class TestPermissions:
         assert result.exit_code == 6, result.output
         client.get_config_detail.assert_not_called()
 
-    def test_flow_run_is_write_and_not_covered_by_a_job_run_deny(self) -> None:
+    def test_flow_run_is_write_and_also_needs_job_run(self) -> None:
+        """`flow run` creates a Queue job, so a policy denying `job.run` stops it too."""
         engine = PermissionEngine(PermissionPolicy(mode="allow", deny=["job.run"]))
-        assert engine.is_allowed("flow.run") is True
+        assert engine.is_allowed("flow.run") is False
         engine = PermissionEngine(PermissionPolicy(mode="allow", deny=["cli:write"]))
         assert engine.is_allowed("flow.run") is False
+        engine = PermissionEngine(PermissionPolicy(mode="allow", deny=["flow.run"]))
+        assert engine.is_allowed("flow.run") is False
+        assert engine.is_allowed("job.run") is True
+        engine = PermissionEngine(PermissionPolicy(mode="deny", allow=["flow.run"]))
+        assert engine.is_allowed("flow.run") is False
+        engine = PermissionEngine(PermissionPolicy(mode="deny", allow=["flow.run", "job.run"]))
+        assert engine.is_allowed("flow.run") is True
+
+    @pytest.mark.parametrize("denied", ["job.run", "flow.run", "job.*"])
+    @pytest.mark.parametrize("dry_run", [True, False], ids=["dry-run", "run"])
+    def test_persisted_deny_blocks_before_any_call(
+        self, tmp_path: Path, denied: str, dry_run: bool
+    ) -> None:
+        store = _store(tmp_path)
+        config = store.load()
+        config.permissions = PermissionPolicy(mode="allow", deny=[denied])
+        store.save(config)
+        client = _client()
+        args = [*BASE, "--task-id", "t2"] + (["--dry-run"] if dry_run else [])
+        result = _run(store, client, args)
+        assert result.exit_code == 6, result.output
+        error = _json(result)["error"]
+        assert error["code"] == ErrorCode.PERMISSION_DENIED
+        if denied != "flow.run":
+            assert "job.run" in error["message"]
+        client.get_config_detail.assert_not_called()
+        client.create_job.assert_not_called()
+
+    def test_persisted_allow_policy_still_runs(self, tmp_path: Path) -> None:
+        store = _store(tmp_path)
+        config = store.load()
+        config.permissions = PermissionPolicy(mode="allow", deny=["job.terminate"])
+        store.save(config)
+        client = _client()
+        result = _run(store, client, [*BASE, "--task-id", "t2"])
+        assert result.exit_code == 0, result.output
+        client.create_job.assert_called_once()
 
 
 def _job_failed() -> KeboolaApiError:

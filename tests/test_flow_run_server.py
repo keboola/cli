@@ -151,12 +151,25 @@ def test_failed_task_returns_200_with_results(tmp_path: Path) -> None:
     assert "SELECTED_TASK_FAILED" in _warning_codes(res)
 
 
-def test_deny_policy_blocks_dry_run(tmp_path: Path) -> None:
+@pytest.mark.parametrize("denied", ["flow.run", "job.run"])
+@pytest.mark.parametrize("dry_run", [True, False], ids=["dry-run", "run"])
+def test_deny_policy_blocks_before_any_call(tmp_path: Path, denied: str, dry_run: bool) -> None:
+    """A `job.run` deny stops the flow route too: it creates a Queue job."""
     client = _client()
-    policy = PermissionPolicy(mode="allow", deny=["flow.run"])
-    res = _post(_app(tmp_path, client, policy), {"dry_run": True})
+    policy = PermissionPolicy(mode="allow", deny=[denied])
+    res = _post(_app(tmp_path, client, policy), {"task_ids": ["t2"], "dry_run": dry_run})
     assert res.status_code == 403, res.text
+    assert res.json()["error"]["code"] == "PERMISSION_DENIED"
     client.get_config_detail.assert_not_called()
+    client.create_job.assert_not_called()
+
+
+def test_allow_policy_still_runs(tmp_path: Path) -> None:
+    client = _client()
+    policy = PermissionPolicy(mode="allow", deny=["job.terminate"])
+    res = _post(_app(tmp_path, client, policy), {"task_ids": ["t2"]})
+    assert res.status_code == 200, res.text
+    client.create_job.assert_called_once()
 
 
 def test_parent_error_body_carries_warnings_and_task_results(tmp_path: Path) -> None:
