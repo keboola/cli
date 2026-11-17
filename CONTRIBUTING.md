@@ -591,7 +591,9 @@ citation.
    /kbagent:review 234 focus on the new cache semantics
    ```
 
-5. The reviewer reads `CONTRIBUTING.md`, walks the diff, runs `make check`,
+5. The reviewer reads `CONTRIBUTING.md`, walks the diff, reads the CI
+   results (it never runs the test suite locally; it runs only cheap static
+   checks such as `make lint`),
    attempts to reproduce the PR's claimed behavior, and posts a single
    `gh pr review --comment` to the PR. It NEVER approves, requests changes,
    merges, or pushes -- the verdict in the comment body is advice; you and
