@@ -81,6 +81,7 @@ kbagent --json notification replace-recipient --project P \
 - The service has no update, so this creates a new subscription and then
   deletes the old one. The id always changes: use `new_subscription_id` from
   the result, never the old id.
+- Ask the user before you run it; `--yes` stands for their confirmation.
 - It exits 0 even when the old one could not be deleted: read
   `old_deleted` in the result. `false` means a duplicate now exists. Do not
   run the replace again; delete the old one with
@@ -99,8 +100,10 @@ kbagent --json notification delete --project P --subscription-id ID --yes
 `delete` is destructive-class: `--deny-destructive` blocks it.
 `create` and `replace-recipient` are write-class. `delete` and
 `replace-recipient` ask for confirmation on a terminal; without a terminal
-they refuse with `CONFIRMATION_REQUIRED` (exit 2). Pass `--yes` (or use
-`--json`) when you run them.
+they refuse with `CONFIRMATION_REQUIRED` (exit 2). An agent has no terminal
+to answer the prompt, so ask the user first (name the subscription id, event
+and recipient) and pass `--yes` only after they confirm. `--json` skips the
+prompt too, so the same rule applies to every `--json` call above.
 
 More detail: the notification sections of [gotchas.md](gotchas.md) and
 [commands-reference.md](commands-reference.md).
