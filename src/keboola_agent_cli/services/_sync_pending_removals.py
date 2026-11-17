@@ -32,13 +32,20 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import shutil
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ..constants import CONFIG_FILENAME
-from ..sync.branch_scope import entry_tree, pending_removal_paths, resolve_removal
+from ..constants import CONFIG_FILENAME, KEBOOLA_DIR_NAME
+from ..sync.branch_scope import (
+    entry_tree,
+    pending_removal_paths,
+    promoted_from,
+    resolve_removal,
+)
 from ..sync.manifest import (
     Manifest,
     ManifestConfiguration,
@@ -285,19 +292,87 @@ def link_on_the_way(project_root: Path, item: ManifestPendingRemoval) -> str | N
     return None
 
 
-def _remove(tree_dir: Path, item: ManifestPendingRemoval) -> None:
-    """Delete *item*'s directory; a config's now-empty parents go too, never the tree or above."""
+QUARANTINE_DIR = "removing"
+
+
+class QuarantineNotEmptied(OSError):
+    """The folder left its tree, but deleting it from the quarantine failed (#1005)."""
+
+
+def quarantine_dir(project_root: Path) -> Path:
+    """Where pull moves a folder right before deleting it: ``.keboola/removing`` (#1005)."""
+    return project_root / KEBOOLA_DIR_NAME / QUARANTINE_DIR
+
+
+def _move_aside(directory: Path, target: Path) -> None:
+    """Move *directory* to *target* in one rename (same file system, the project)."""
+    os.replace(directory, target)
+
+
+def _remove(project_root: Path, item: ManifestPendingRemoval) -> None:
+    """Delete *item*'s folder; a config's now-empty parents go too, never the tree or above.
+
+    The folder is first renamed into the quarantine (one atomic step), then
+    deleted there (#1005). So the tree holds either the whole folder or none
+    of it: a delete that stops half-way (a permission error, a crash) never
+    leaves a partly deleted folder that the next pull takes for an edit and
+    keeps forever. A failed rename leaves the folder whole (``OSError``); a
+    failed delete in the quarantine raises :class:`QuarantineNotEmptied` --
+    the next pull empties the quarantine (:func:`empty_quarantine`).
+    """
+    tree_dir = project_root / item.tree
     directory = tree_dir / item.path
     if not directory.is_dir():
         return
-    shutil.rmtree(directory)
+    target = quarantine_dir(project_root) / uuid.uuid4().hex
+    target.parent.mkdir(parents=True, exist_ok=True)
+    _move_aside(directory, target)
     logger.info("Removed directory: %s", directory)
-    if item.kind == "row":
-        return
-    parent = directory.parent
-    while tree_dir in parent.parents and parent.is_dir() and not any(parent.iterdir()):
-        parent.rmdir()
-        parent = parent.parent
+    if item.kind != "row":
+        parent = directory.parent
+        while tree_dir in parent.parents and parent.is_dir() and not any(parent.iterdir()):
+            parent.rmdir()
+            parent = parent.parent
+    try:
+        shutil.rmtree(target)
+    except OSError as exc:
+        raise QuarantineNotEmptied(str(exc)) from exc
+
+
+def empty_quarantine(project_root: Path) -> list[dict[str, Any]]:
+    """Delete what an earlier pull moved aside and could not delete (#1005).
+
+    Everything in the quarantine is a folder pull itself moved out of a tree
+    after every check -- never a user's folder -- so it is deleted as it is.
+    A folder that still cannot be deleted is reported and tried again by the
+    next pull.
+    """
+    root = quarantine_dir(project_root)
+    if not root.is_dir():
+        return []
+    warnings: list[dict[str, Any]] = []
+    for leftover in sorted(root.iterdir()):
+        try:
+            if leftover.is_dir() and not leftover.is_symlink():
+                shutil.rmtree(leftover)
+            else:
+                leftover.unlink()
+        except OSError as exc:
+            warnings.append(_quarantine_warning(leftover, project_root, exc))
+    return warnings
+
+
+def _quarantine_warning(path: Path, project_root: Path, exc: OSError) -> dict[str, Any]:
+    rel = path.relative_to(project_root).as_posix()
+    return {
+        "code": "PENDING_REMOVAL_FAILED",
+        "path": rel,
+        "message": (
+            f"A removed folder was moved to {rel} but could not be deleted there ({exc}). "
+            "It is outside the sync tree, so diff and push never see it; the next "
+            "`kbagent sync pull` deletes it, or delete it yourself."
+        ),
+    }
 
 
 def _failed_warning(item: ManifestPendingRemoval, exc: OSError) -> dict[str, Any]:
@@ -325,12 +400,19 @@ def _tracked_dirs(
     """Every existing tracked config and row directory of *tree* (for the ownership check).
 
     A tracked path with no directory on disk holds nothing (a nested config
-    the user deleted must not keep its outer folder).
+    the user deleted must not keep its outer folder). A promote entry
+    (``promoted_from``: a dev-branch config whose files are this tree's
+    folder) is no owner either (#1005): the folder belongs to the tree's own
+    config, and when that config is deleted on its branch the folder goes --
+    the promote entry is then dropped with it (its source folder is gone), as
+    a production pull always did.
     """
     dirs: set[Path] = set()
     for cfg in entries:
         if not cfg.path or entry_tree(manifest, cfg) != tree:
             continue
+        if promoted_from(cfg) is not None:
+            continue  # a promote reference to the folder, not its owner (#1005)
         dirs.add(tree_dir / cfg.path)
         dirs.update(tree_dir / cfg.path / row.path for row in cfg.rows if row.path)
     return frozenset(d for d in dirs if d.is_dir())
@@ -461,7 +543,11 @@ def _settle(
                 out.retained.append(item)
             continue
         try:
-            _remove(project_root / item.tree, item)
+            _remove(project_root, item)
+        except QuarantineNotEmptied as exc:  # gone from the tree; the quarantine waits
+            out.warnings.append(
+                _quarantine_warning(quarantine_dir(project_root), project_root, exc)
+            )
         except OSError as exc:
             out.retained.append(item)
             out.warnings.append(_failed_warning(item, exc))
@@ -481,12 +567,12 @@ def recover_pending_removals(
     its record (G1) -- unless it is tracked again. A delete that fails again
     keeps its record too (F2). The manifest is saved right away, so
     a pull that stops later (a conflict) does not leave the records hiding a
-    kept directory from diff. A dry run changes nothing and lists the records
-    it did not process.
+    kept directory from diff. First it empties the quarantine (#1005). A dry
+    run changes nothing and lists the records it did not process.
     """
-    if not manifest.pending_removals:
-        return []
     if dry_run:
+        if not manifest.pending_removals:
+            return []
         return [
             _warning(
                 "PENDING_REMOVALS_NOT_PROCESSED",
@@ -497,7 +583,11 @@ def recover_pending_removals(
             )
             for item in manifest.pending_removals
         ]
+    leftovers = empty_quarantine(project_root)
+    if not manifest.pending_removals:
+        return leftovers
     settled = _settle(project_root, manifest, list(manifest.pending_removals), [])
+    settled.warnings[:0] = leftovers
     manifest.pending_removals = settled.retained
     save_manifest(project_root, manifest)
     return settled.warnings

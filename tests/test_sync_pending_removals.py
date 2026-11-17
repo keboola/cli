@@ -47,7 +47,13 @@ def ws(tmp_config_dir: Path, tmp_path: Path, api: FakeStorage) -> Workspace:
     return Workspace(tmp_config_dir, tmp_path / "proj", api, push_force=True)
 
 
-def _rmtree_via(monkeypatch: pytest.MonkeyPatch, rmtree: Any) -> None:
+def _removal_via(monkeypatch: pytest.MonkeyPatch, move: Any) -> None:
+    """Route the removal's move into the quarantine (the step that takes a folder away)."""
+    monkeypatch.setattr(_sync_pending_removals, "_move_aside", move)
+
+
+def _quarantine_rmtree_via(monkeypatch: pytest.MonkeyPatch, rmtree: Any) -> None:
+    """Route the delete of a folder already moved into the quarantine."""
     fake = SimpleNamespace(
         **{name: getattr(shutil, name) for name in dir(shutil) if not name.startswith("__")}
     )
@@ -67,7 +73,7 @@ def _crashed_before_rmtree(
     ws.init_and_pull()
     path = ws.dir_of(cid)
     api.ui_trash(cid)
-    _rmtree_via(monkeypatch, _die)
+    _removal_via(monkeypatch, _die)
     with pytest.raises(Crash):
         ws.pull()
     monkeypatch.undo()
@@ -131,7 +137,7 @@ def test_a_pending_row_directory_is_no_new_row(
     api.configs[cid]["rows"].append(dict(ROW))
     ws.init_and_pull()
     api.configs[cid]["rows"] = []  # the row is deleted in the UI
-    _rmtree_via(monkeypatch, _die)
+    _removal_via(monkeypatch, _die)
     with pytest.raises(Crash):
         ws.pull()
     monkeypatch.undo()
@@ -207,7 +213,7 @@ def test_a_failed_delete_stays_pending_until_a_pull_deletes_it(
     def refuse(*_: Any, **__: Any) -> None:
         raise PermissionError("busy")
 
-    _rmtree_via(monkeypatch, refuse)
+    _removal_via(monkeypatch, refuse)
     result = ws.pull()
     monkeypatch.undo()
 
@@ -259,13 +265,13 @@ def test_a_row_restored_after_a_crashed_row_removal_is_not_deleted(
     api.configs[cid]["rows"].append(dict(ROW))
     ws.init_and_pull()
     api.configs[cid]["rows"] = []
-    real = shutil.rmtree
+    real = _sync_pending_removals._move_aside
 
     def delete_then_die(*args: Any, **kwargs: Any) -> None:
         real(*args, **kwargs)
         raise Crash("killed right after the row delete")
 
-    _rmtree_via(monkeypatch, delete_then_die)
+    _removal_via(monkeypatch, delete_then_die)
     with pytest.raises(Crash):
         ws.pull()
     monkeypatch.undo()
@@ -419,7 +425,7 @@ def test_the_empty_parent_cleanup_stops_at_the_tree(tmp_path: Path) -> None:
     (tree_dir / "a" / "b").mkdir(parents=True)
     item = ManifestPendingRemoval(tree="main", path="a/b", kind="config")
 
-    _sync_pending_removals._remove(tree_dir, item)
+    _sync_pending_removals._remove(tmp_path, item)
 
     assert tree_dir.is_dir() and not (tree_dir / "a").exists()
 
@@ -442,7 +448,7 @@ def test_a_recovery_delete_that_fails_again_stays_pending(
     ws.init_and_pull()
     path = ws.dir_of(cid)
     api.ui_trash(cid)
-    _rmtree_via(monkeypatch, refuse)
+    _removal_via(monkeypatch, refuse)
     ws.pull()
     assert len(ws.manifest().pending_removals) == 1
     second = ws.pull()
@@ -466,7 +472,7 @@ def test_a_pending_row_directory_is_not_adopted_by_pull(
     api.configs[cid]["rows"].append(dict(ROW))
     ws.init_and_pull()
     api.configs[cid]["rows"] = []
-    _rmtree_via(monkeypatch, refuse)
+    _removal_via(monkeypatch, refuse)
     ws.pull()  # the row delete fails: recorded
     (item,) = ws.manifest().pending_removals
     api.configs[cid]["rows"].append(dict(ROW))  # restored in the UI
@@ -489,7 +495,7 @@ def test_recovery_keeps_a_pending_row_folder_that_is_tracked_again(
     api.configs[cid]["rows"].append(dict(ROW))
     ws.init_and_pull()
     api.configs[cid]["rows"] = []
-    _rmtree_via(monkeypatch, _die)
+    _removal_via(monkeypatch, _die)
     with pytest.raises(Crash):
         ws.pull()
     monkeypatch.undo()
@@ -823,7 +829,7 @@ def test_a_pending_row_follows_its_renamed_configuration(
     api.configs[cid]["rows"].append(dict(ROW))
     ws.init_and_pull()
     api.configs[cid]["rows"] = []
-    _rmtree_via(monkeypatch, _refuse)
+    _removal_via(monkeypatch, _refuse)
     ws.pull()  # the row delete fails: recorded
     (first,) = ws.manifest().pending_removals
     assert first.row_path and first.path.endswith(first.row_path)
@@ -851,7 +857,7 @@ def test_a_row_journaled_after_a_rename_in_the_same_pull_survives_a_restart(
     ws.init_and_pull()
     api.configs[cid]["rows"] = []
     api.ui_rename(cid, "Orders renamed")
-    _rmtree_via(monkeypatch, _die)
+    _removal_via(monkeypatch, _die)
     with pytest.raises(Crash):
         ws.pull()
     monkeypatch.undo()
@@ -926,6 +932,10 @@ def test_a_promote_reference_does_not_keep_a_remotely_deleted_production_folder(
     assert pushed["created"] == 0, pushed
     assert (v.component_id, prod_id) not in w.api.remote[PROD]
     assert not [key for key in w.api.remote[PROD] if key[0] == v.component_id]
+    # B stays on the dev branch; a promote push neither fails nor touches it.
+    dev_before = dict(w.api.remote[DEV])
+    w.push(branch=DEV)  # asserts errors == []
+    assert w.api.remote[DEV] == dev_before
 
 
 def test_a_partly_deleted_folder_is_finished_by_the_next_pull(
@@ -941,12 +951,16 @@ def test_a_partly_deleted_folder_is_finished_by_the_next_pull(
         (Path(target) / "transform.sql").unlink()
         raise PermissionError("busy")
 
-    _rmtree_via(monkeypatch, delete_one_file_then_fail)
+    _quarantine_rmtree_via(monkeypatch, delete_one_file_then_fail)
     first = ws.pull()
     monkeypatch.undo()
     assert [w["code"] for w in first["warnings"]] == ["PENDING_REMOVAL_FAILED"], first
 
-    second = ws.pull()  # permissions fixed
+    assert not path.exists()  # moved out of the tree in one step, never half-deleted there
+    assert ws.manifest().pending_removals == []
+
+    second = ws.pull()  # permissions fixed: the quarantine is emptied
 
     assert not path.exists(), second
     assert ws.manifest().pending_removals == []
+    assert not any(_sync_pending_removals.quarantine_dir(ws.root).iterdir())

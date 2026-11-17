@@ -231,6 +231,8 @@ def pending_removal_paths(manifest: Manifest, tree: str) -> PendingPaths:
     for cfg in manifest.configurations:
         if not cfg.path or entry_tree(manifest, cfg) != tree:
             continue
+        if promoted_from(cfg) is not None:
+            continue  # a promote reference does not track the folder (#1005)
         tracked.add(cfg.path)
         tracked.update(f"{cfg.path}/{row.path}" for row in cfg.rows if row.path)
     return PendingPaths(
