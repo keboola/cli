@@ -154,7 +154,7 @@ class RemovalJournal:
         checkpoint.pending_removals = [*checkpoint.pending_removals, *self.planned]
         save_manifest(self.project_root, checkpoint)
         for item in self.planned:
-            unsafe = unsafe_reason(self.project_root, checkpoint, item)
+            unsafe = unsafe_reason(self.project_root, checkpoint, item, live)
             reason = unsafe or _keep_reason(self.project_root, checkpoint, item, live or [])
             if reason is not None:
                 self.warnings.append(_kept_warning(item, reason))
@@ -183,14 +183,18 @@ def _drop_tracked(manifest: Manifest, item: ManifestPendingRemoval) -> None:
 
 
 def unsafe_reason(
-    project_root: Path, manifest: Manifest, item: ManifestPendingRemoval
+    project_root: Path,
+    manifest: Manifest,
+    item: ManifestPendingRemoval,
+    live: list[ManifestConfiguration] | None = None,
 ) -> str | None:
     """Why *item* must never be acted on (F1), or ``None``.
 
     The paths must be plain relative paths (checked at load), *tree* a branch
     tree of this manifest, no directory from the project root down to the
     target a symbolic link, and the target inside its tree. A row must lie in
-    the rows folder of its configuration in that tree.
+    the rows folder of its configuration in that tree (*live*: the entries the
+    running pull wrote, which a re-targeted tree's configuration is).
     """
     if item.problem is not None:
         return item.problem
@@ -210,7 +214,7 @@ def unsafe_reason(
         rows_prefix = manifest.naming.config_row.split("{", 1)[0]
         parents = [
             c.path
-            for c in manifest.configurations
+            for c in [*manifest.configurations, *(live or [])]
             if entry_tree(manifest, c) == item.tree
             and c.component_id == item.component_id
             and c.id == item.config_id
@@ -262,14 +266,18 @@ def _kept_warning(item: ManifestPendingRemoval, reason: str) -> dict[str, Any]:
 def _tracked_dirs(
     tree_dir: Path, entries: list[ManifestConfiguration], manifest: Manifest, tree: str
 ) -> frozenset[Path]:
-    """Every tracked config and row directory of *tree* (for the ownership check)."""
+    """Every existing tracked config and row directory of *tree* (for the ownership check).
+
+    A tracked path with no directory on disk holds nothing (a nested config
+    the user deleted must not keep its outer folder).
+    """
     dirs: set[Path] = set()
     for cfg in entries:
         if not cfg.path or entry_tree(manifest, cfg) != tree:
             continue
         dirs.add(tree_dir / cfg.path)
         dirs.update(tree_dir / cfg.path / row.path for row in cfg.rows if row.path)
-    return frozenset(dirs)
+    return frozenset(d for d in dirs if d.is_dir())
 
 
 def _keep_reason(
