@@ -30,6 +30,7 @@ directory and reported; the record is dropped either way.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import logging
 import os
@@ -362,29 +363,31 @@ def _ensure_ignore_file(ignore: Path) -> None:
 
     A link (dangling or not) or anything but a regular file makes the
     quarantine unusable (:class:`QuarantineUnsafe`): writing through it could
-    create or change a file outside the project. A regular file with other
-    content is rewritten in place. A new one is created exclusively and
-    without following a link.
+    create or change a file outside the project. An existing file is never
+    written into -- it may be a hard link to a file elsewhere: a fresh file is
+    created exclusively next to it (no link followed) and renamed over it, so
+    only the directory entry changes.
     """
     if ignore.is_symlink() or (ignore.exists() and not ignore.is_file()):
         raise QuarantineUnsafe(
             f"the removal quarantine is not usable: {ignore.name} in it is not a regular file"
         )
-    if ignore.is_file():
-        if ignore.read_bytes() == _IGNORE_RULE:
-            return
-        flags = os.O_WRONLY | os.O_TRUNC
-    else:
-        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if ignore.is_file() and ignore.read_bytes() == _IGNORE_RULE:
+        return
+    temp = ignore.with_name(f"{ignore.name}.{uuid.uuid4().hex}.tmp")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
     try:
-        fd = os.open(ignore, flags, 0o644)
+        fd = os.open(temp, flags, 0o644)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(_IGNORE_RULE)
+        os.replace(temp, ignore)
     except OSError as exc:
+        with contextlib.suppress(OSError):
+            temp.unlink()
         raise QuarantineUnsafe(
             f"the removal quarantine is not usable: {ignore.name} could not be written ({exc})"
         ) from exc
-    with os.fdopen(fd, "wb") as handle:
-        handle.write(_IGNORE_RULE)
 
 
 def _move_aside(directory: Path, target: Path) -> None:
