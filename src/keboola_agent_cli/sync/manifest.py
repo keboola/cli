@@ -11,7 +11,7 @@ import json
 import os
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
 
@@ -241,13 +241,25 @@ class Manifest(BaseModel):
     )
 
 
-def pending_removal_paths(manifest: Manifest, tree: str) -> frozenset[str]:
-    """Paths (relative to *tree*) of the directories a pull has not finished deleting (#827)."""
-    return frozenset(
-        item.path
-        for item in manifest.pending_removals
-        if item.tree == tree and item.problem is None
-    )
+class PendingPaths(frozenset[str]):
+    """Paths a pull has not finished deleting, and the tracked paths inside them (#827, H1).
+
+    A ``frozenset`` of the pending paths (so it unions and iterates like
+    one) that also carries *exempt*: every tracked config and row directory.
+    A tracked directory inside a pending folder (a config tracked again
+    there) is never hidden by it -- only the rest of the folder is.
+    """
+
+    exempt: frozenset[str]
+
+    def __new__(cls, paths: frozenset[str], exempt: frozenset[str] = frozenset()) -> Self:
+        obj = super().__new__(cls, paths)
+        obj.exempt = exempt
+        return obj
+
+
+def _at_or_below(path: str, prefixes: frozenset[str]) -> bool:
+    return any(path == p or path.startswith(f"{p}/") for p in prefixes)
 
 
 def under_pending(path: str, pending: frozenset[str]) -> bool:
@@ -255,8 +267,14 @@ def under_pending(path: str, pending: frozenset[str]) -> bool:
 
     Diff and push treat such a directory as absent: never a move target,
     never an untracked config to create or adopt, never a new row (#827, D11).
+    A tracked directory inside a pending folder, and everything below it,
+    is not covered (H1).
     """
-    return any(path == p or path.startswith(f"{p}/") for p in pending)
+    if not _at_or_below(path, pending):
+        return False
+    exempt = getattr(pending, "exempt", frozenset())
+    inside = frozenset(t for t in exempt if _at_or_below(t, pending))
+    return not _at_or_below(path, inside)
 
 
 # ---------------------------------------------------------------------------

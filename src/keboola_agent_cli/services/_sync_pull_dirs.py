@@ -27,6 +27,7 @@ from ..sync.branch_scope import (
     branch_tree_path,
     find_untracked_configs,
     is_production,
+    pending_removal_paths,
     promoted_from,
     same_branch,
 )
@@ -36,7 +37,6 @@ from ..sync.manifest import (
     Manifest,
     ManifestConfigRow,
     ManifestConfiguration,
-    pending_removal_paths,
     under_pending,
 )
 from ..sync.naming import config_row_path

@@ -47,7 +47,7 @@ from pathlib import Path
 from typing import Any
 
 from ..constants import CONFIG_FILENAME
-from .manifest import Manifest, ManifestConfiguration, pending_removal_paths, under_pending
+from .manifest import Manifest, ManifestConfiguration, PendingPaths, under_pending
 
 logger = logging.getLogger(__name__)
 
@@ -213,6 +213,28 @@ def entry_tree(manifest: Manifest, cfg: ManifestConfiguration) -> str:
     """The tree an entry's files live in: a promote entry's source tree, else its branch's."""
     association = promoted_from(cfg)
     return association.tree if association else branch_tree_path(manifest, cfg.branch_id)
+
+
+def pending_removal_paths(manifest: Manifest, tree: str) -> PendingPaths:
+    """Paths (relative to *tree*) of the directories a pull has not finished deleting (#827).
+
+    Carries this tree's tracked config and row directories as exemptions:
+    one inside a pending folder stays visible (H1).
+    """
+    tracked: set[str] = set()
+    for cfg in manifest.configurations:
+        if not cfg.path or entry_tree(manifest, cfg) != tree:
+            continue
+        tracked.add(cfg.path)
+        tracked.update(f"{cfg.path}/{row.path}" for row in cfg.rows if row.path)
+    return PendingPaths(
+        frozenset(
+            item.path
+            for item in manifest.pending_removals
+            if item.tree == tree and item.problem is None
+        ),
+        frozenset(tracked),
+    )
 
 
 def find_branch_entry(

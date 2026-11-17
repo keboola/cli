@@ -62,12 +62,17 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..constants import CONFIG_FILENAME
-from ..sync.branch_scope import config_key, entry_tree, find_branch_entry, promoted_from
+from ..sync.branch_scope import (
+    config_key,
+    entry_tree,
+    find_branch_entry,
+    pending_removal_paths,
+    promoted_from,
+)
 from ..sync.manifest import (
     Manifest,
     ManifestConfiguration,
     load_manifest,
-    pending_removal_paths,
     save_manifest,
     under_pending,
 )

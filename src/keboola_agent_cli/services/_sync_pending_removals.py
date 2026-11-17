@@ -38,12 +38,11 @@ from pathlib import Path
 from typing import Any
 
 from ..constants import CONFIG_FILENAME
-from ..sync.branch_scope import entry_tree
+from ..sync.branch_scope import entry_tree, pending_removal_paths
 from ..sync.manifest import (
     Manifest,
     ManifestConfiguration,
     ManifestPendingRemoval,
-    pending_removal_paths,
     save_manifest,
 )
 from ._sync_stale import holds, same_dir, scan_owned_tree
@@ -187,20 +186,19 @@ def unsafe_reason(
     """Why *item* must never be acted on (F1), or ``None``.
 
     The paths must be plain relative paths (checked at load), *tree* a branch
-    tree of this manifest, no directory from the project root down to the
-    target a symbolic link, and the target inside its tree. A row must lie in
+    tree of this manifest, and the target inside its tree. A row must lie in
     the rows folder of its configuration in that tree (*live*: the entries the
-    running pull wrote, which a re-targeted tree's configuration is).
+    running pull wrote, which a re-targeted tree's configuration is). Such a
+    record is malformed: it is dropped. A symbolic link on the way is not
+    checked here (:func:`link_on_the_way`): that record is valid, its folder
+    is only not deleted now (H2).
     """
     if item.problem is not None:
         return item.problem
     if item.tree not in {branch.path for branch in manifest.branches}:
         return f"its tree {item.tree!r} is not a branch tree of this manifest"
-    current = project_root
-    for part in [*item.tree.split("/"), *item.path.split("/")]:
-        current = current / part
-        if current.is_symlink():
-            return f"{current.relative_to(project_root).as_posix()} is a symbolic link"
+    if link_on_the_way(project_root, item) is not None:
+        return None  # resolving through the link says nothing; the caller keeps it
     tree_dir = (project_root / item.tree).resolve()
     if project_root.resolve() not in tree_dir.parents:
         return "its tree resolves outside the project"
@@ -223,6 +221,16 @@ def unsafe_reason(
             return "it is not in the rows folder of its configuration"
     elif item.kind != "config":
         return f"its kind {item.kind!r} is unknown"
+    return None
+
+
+def link_on_the_way(project_root: Path, item: ManifestPendingRemoval) -> str | None:
+    """The first directory from the project root down to *item*'s folder that is a link (F1, H2)."""
+    current = project_root
+    for part in [*item.tree.split("/"), *item.path.split("/")]:
+        current = current / part
+        if current.is_symlink():
+            return f"{current.relative_to(project_root).as_posix()} is a symbolic link"
     return None
 
 
@@ -321,6 +329,27 @@ def _keep_reason(
     return None
 
 
+def _inner_change(
+    project_root: Path,
+    manifest: Manifest,
+    outer: ManifestPendingRemoval,
+    items: list[ManifestPendingRemoval],
+    live: list[ManifestConfiguration],
+) -> Keep | None:
+    """Why *outer* must stay because a recorded folder inside it changed since ITS snapshot (H3)."""
+    for inner in items:
+        if inner is outer or inner.tree != outer.tree:
+            continue
+        if not inner.path.startswith(f"{outer.path}/"):
+            continue
+        if not (project_root / inner.tree / inner.path).exists():
+            continue
+        keep = _keep_reason(project_root, manifest, inner, live)
+        if keep is not None and not keep.tracked:
+            return Keep(f"the folder {inner.path} inside it was not deleted: {keep.reason}")
+    return None
+
+
 @dataclass
 class Settled:
     """What :func:`_settle` left: the records to keep and the ``warnings[]`` entries."""
@@ -341,9 +370,13 @@ def _settle(
     goes with that folder's delete, after the outer one was checked against
     its own recorded content -- which includes the inner folder, so the inner
     one is never deleted first and taken for a change of the outer one. When
-    the outer folder is kept, an inner one is checked on its own. An unsafe
-    record is dropped and never acted on (F1); a folder that is now tracked
-    again drops its record; a kept or undeletable folder keeps it.
+    the outer folder is kept, an inner one is checked on its own. Before the
+    outer folder goes, every inner record is checked against its OWN snapshot
+    (H3): an inner edit made between the two snapshots keeps both. A
+    malformed or escaping record is dropped and never acted on (F1); a valid
+    one whose folder is reached through a symbolic link is kept, recorded
+    (H2); a folder that is now tracked again drops its record; a kept or
+    undeletable folder keeps it.
     """
     out = Settled()
     deleted: list[ManifestPendingRemoval] = []
@@ -360,9 +393,16 @@ def _settle(
                 )
             )
             continue
+        link = link_on_the_way(project_root, item)
+        if link is not None:  # valid, but not deleted through a link: still recorded (H2)
+            out.warnings.append(_kept_warning(item, link))
+            out.retained.append(item)
+            continue
         if not (project_root / item.tree / item.path).exists():
             continue  # already gone
-        keep = _keep_reason(project_root, manifest, item, live)
+        keep = _keep_reason(project_root, manifest, item, live) or _inner_change(
+            project_root, manifest, item, items, live
+        )
         if keep is not None:
             out.warnings.append(_kept_warning(item, keep.reason))
             if not keep.tracked:

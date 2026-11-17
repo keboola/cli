@@ -519,3 +519,10 @@ def test_a_lost_put_response_is_retried_by_the_transport_and_verified(
     assert api.configs[cid]["description"] == "local"
     assert ("get_config_detail", cid) in api.calls
     assert ws.change_of(cid) == "unchanged"
+
+
+def test_the_recovery_warning_points_at_diff_not_at_another_push() -> None:
+    """H4: after the link recovery the next step may be a conflict, not another push."""
+    message = local_edit_warning(HTTP, "1", Path("x"), secrets=False, recovery=True)["message"]
+    assert "kbagent sync diff" in message
+    assert "Push again" not in message

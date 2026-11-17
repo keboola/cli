@@ -1354,9 +1354,11 @@ kbagent sync push [--project ALIAS] [--all-projects] [--dry-run] [--force] [--al
 #   Diff/push treat a pending path (and below) as absent; the next pull finishes it first, only while
 #   unchanged (else kept AND still recorded, warnings[] PENDING_REMOVAL_KEPT / PENDING_REMOVAL_FAILED;
 #   a folder tracked again drops its record). A folder inside another planned one goes with it.
-#   A record with an unsafe path (absolute, drive, `..`, unknown tree, symlink on the way, row outside
-#   its rows folder) is dropped and never acted on (PENDING_REMOVAL_INVALID); a record whose delete
-#   fails again stays; dry-run pull lists records it did not process; commit re-checks each folder.
+#   A record with an unsafe path (absolute, drive, `..`, unknown tree, escapes its tree, row outside
+#   its rows folder) is dropped and never acted on (PENDING_REMOVAL_INVALID); a folder reached through
+#   a symlink is not deleted and keeps its record; a record whose delete fails again stays; dry-run
+#   pull lists records it did not process; commit re-checks each folder, an outer one with every
+#   recorded folder inside it. A pending folder never hides a tracked config/row folder inside it.
 #   Version gate lives in gotchas.md.
 # sync push workspace delete (CLI-25): in a `syncWorkspaces` tree, a `push --force` that deletes a shared SQL workspace also deletes its SQL editor sessions (every user's, push branch) and their backend workspaces, which `config restore` does not bring back; `push --dry-run --force` lists them (warnings[] workspace_sessions), a plain push lists the workspace under skipped_deletions and touches no session. `--force` is destructive-class (FLAG_ESCALATIONS `sync.push --force`), so `--deny-destructive` / a cli:destructive deny blocks it while a plain push stays write-class. Version gate for this entry lives in gotchas.md.
 # Partial failures change the exit code (#745): commands that collect per-item failures

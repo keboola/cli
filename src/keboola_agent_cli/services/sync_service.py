@@ -45,6 +45,7 @@ from ..sync.branch_scope import (
     entry_tree,
     find_untracked_configs,
     is_production,
+    pending_removal_paths,
     same_branch,
     scope_manifest,
     stale_tree_record,
@@ -69,7 +70,6 @@ from ..sync.manifest import (
     ManifestNaming,
     ManifestProject,
     load_manifest,
-    pending_removal_paths,
     save_manifest,
 )
 from ..sync.naming import config_path

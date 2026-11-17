@@ -826,7 +826,11 @@ def unchanged_since_read(
         return True
     warnings.append(
         local_edit_warning(
-            created.component_id, created.config_id, created.config_dir, secrets=False
+            created.component_id,
+            created.config_id,
+            created.config_dir,
+            secrets=False,
+            recovery=True,
         )
     )
     return False

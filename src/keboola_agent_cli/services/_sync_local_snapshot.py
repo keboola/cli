@@ -107,15 +107,33 @@ def capture_local_input(
 
 
 def local_edit_warning(
-    component_id: str, config_id: str, config_dir: Path, *, secrets: bool
+    component_id: str,
+    config_id: str,
+    config_dir: Path,
+    *,
+    secrets: bool,
+    recovery: bool = False,
 ) -> dict[str, Any]:
-    """The ``warnings[]`` entry of a config whose files were edited during the push (D7, R7)."""
-    message = (
-        f"{config_dir} was edited while push sent {component_id}/{config_id}. Push sent the "
-        "version it read; the newer local content was kept, not pushed, and not written over. "
-        "Push again to send it (an edit that changes only comments or formatting has nothing "
-        "to send)."
-    )
+    """The ``warnings[]`` entry of a config whose files were edited during the push (D7, R7).
+
+    *recovery*: the link recovery of Phases C/D, which changed the remote but
+    left the edited files and the baseline alone -- the next step is a diff,
+    possibly a conflict to resolve, not simply another push (H4).
+    """
+    if recovery:
+        message = (
+            f"{config_dir} was edited while push repaired the links of {component_id}/"
+            f"{config_id} in Keboola. The edited files were kept, not written over and not "
+            "recorded as synced. Run `kbagent sync diff`: when it reports a conflict, run "
+            "`kbagent sync pull` and review the changes first."
+        )
+    else:
+        message = (
+            f"{config_dir} was edited while push sent {component_id}/{config_id}. Push sent "
+            "the version it read; the newer local content was kept, not pushed, and not "
+            "written over. Push again to send it (an edit that changes only comments or "
+            "formatting has nothing to send)."
+        )
     if secrets:
         message += (
             " The file still holds its secret values in plain text: the encrypted values "

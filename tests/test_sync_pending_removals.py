@@ -380,7 +380,9 @@ def test_a_pending_removal_through_a_symlinked_ancestor_is_never_deleted(
     result = ws.pull()
 
     assert (victim / "notes.txt").is_file()
-    assert "PENDING_REMOVAL_INVALID" in [w["code"] for w in result["warnings"]]
+    # A valid record reached through a link: not deleted, and still recorded (H2).
+    assert "PENDING_REMOVAL_KEPT" in [w["code"] for w in result["warnings"]]
+    assert [i.path for i in ws.manifest().pending_removals] == ["linked/victim"]
 
 
 def test_a_row_record_outside_its_rows_folder_is_never_deleted(
@@ -566,3 +568,94 @@ def test_nested_removals_with_the_inner_one_listed_first_delete_both(tmp_path: P
     assert not _dir(sim, HTTP_DIR).exists()
     assert "PENDING_REMOVAL_KEPT" not in [w.get("code") for w in result.get("warnings", [])]
     assert load_manifest(sim.root).pending_removals == []
+
+
+# ------------------------------------------------------------------- round 4
+
+
+def test_a_pending_outer_folder_does_not_hide_a_tracked_config_inside_it(
+    ws: Workspace, api: FakeStorage
+) -> None:
+    """H1: a new row of a tracked config inside a still-recorded folder is pushed."""
+    outer_id = api.add("Orders", ["SELECT 1;"])
+    api.configs[outer_id]["rows"].append(dict(ROW))
+    inner_id = api.add("Inner", ["SELECT 2;"])
+    ws.init_and_pull()
+    outer = ws.dir_of(outer_id)
+    outer_rel = outer.relative_to(ws.root / "main").as_posix()
+    shutil.move(str(ws.dir_of(inner_id)), str(outer / "inner"))
+    (row_template,) = [p for p in (outer / "rows").iterdir() if (p / CONFIG_FILENAME).is_file()]
+    manifest_file = ws.root / ".keboola" / "manifest.json"
+    raw = json.loads(manifest_file.read_text(encoding="utf-8"))
+    raw["configurations"] = [c for c in raw["configurations"] if c["id"] != outer_id]
+    for cfg in raw["configurations"]:
+        if cfg["id"] == inner_id:
+            cfg["path"] = f"{outer_rel}/inner"
+    raw["pendingRemovals"] = [
+        {"tree": "main", "path": outer_rel, "kind": "config", "componentId": "x", "configId": "9"}
+    ]
+    manifest_file.write_text(json.dumps(raw), encoding="utf-8")
+    new_row = outer / "inner" / "rows" / "new-row"
+    new_row.mkdir(parents=True)
+    data = ws.read_yaml(row_template)
+    data["name"] = "New Row"
+    for key in ("row_id", "config_id"):
+        (data.get("_keboola") or {}).pop(key, None)
+    ws.write_yaml(new_row, data)
+
+    rows = [c for c in ws.diff()["changes"] if c.get("is_row")]
+
+    assert [(c["change_type"], c["parent_config_id"]) for c in rows] == [("added", inner_id)]
+    assert _no_change_at(ws.diff(), f"{outer_rel}/rows")  # the outer folder stays hidden
+
+
+def test_a_pending_folder_that_became_a_link_is_kept_and_recorded(
+    ws: Workspace, api: FakeStorage, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """H2: a valid record whose folder is now a symbolic link keeps its record; nothing deleted."""
+    _cid, path = _crashed_before_rmtree(ws, api, monkeypatch)
+    moved = tmp_path / "moved-away"
+    shutil.move(str(path), str(moved))
+    try:
+        os.symlink(moved, path, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("no symlink support")
+
+    result = ws.pull()
+
+    assert (moved / CONFIG_FILENAME).is_file()
+    assert [w["code"] for w in result["warnings"]] == ["PENDING_REMOVAL_KEPT"], result
+    assert len(ws.manifest().pending_removals) == 1
+
+
+def test_an_inner_edit_between_the_two_snapshots_keeps_both_folders(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """H3: the outer delete checks every inner record against the inner's own snapshot."""
+    from keboola_agent_cli.sync.manifest import load_manifest, save_manifest
+    from test_sync_untracked_rows import HTTP_DIR, _dir, _nest_config_b_in_a, _pull, _world
+
+    sim = _world(tmp_path)
+    child = _nest_config_b_in_a(sim)
+    manifest = load_manifest(sim.root)
+    manifest.configurations.sort(key=lambda c: c.id != "1003")  # the child is planned first
+    save_manifest(sim.root, manifest)
+    real = _sync_pending_removals.RemovalJournal.plan
+    edited: list[bool] = []
+
+    def plan_then_editor_saves(self: Any, *args: Any, **kwargs: Any) -> None:
+        real(self, *args, **kwargs)
+        if not edited:
+            edited.append(True)
+            text = (child / CONFIG_FILENAME).read_text(encoding="utf-8")
+            (child / CONFIG_FILENAME).write_text(text + "\n# saved between the snapshots\n")
+
+    monkeypatch.setattr(_sync_pending_removals.RemovalJournal, "plan", plan_then_editor_saves)
+    result = _pull(sim)
+    monkeypatch.undo()
+
+    assert edited
+    assert "saved between the snapshots" in (child / CONFIG_FILENAME).read_text(encoding="utf-8")
+    assert _dir(sim, HTTP_DIR).is_dir()
+    assert "PENDING_REMOVAL_KEPT" in [w.get("code") for w in result.get("warnings", [])]
+    assert len(load_manifest(sim.root).pending_removals) == 2
