@@ -515,6 +515,69 @@ and the Storage API has no precondition for a row delete, so a UI edit of a
 row made between the read and the DELETE of that single row is not protected.
 Review `sync diff` right before a `sync push --force` that deletes single rows.
 
+### A config update is conditional, and an edit during push is kept
+
+*(since vNEXT)* (#827)
+
+Push sends the version `sync diff` read (`remote_version` of a `modified`
+change; on the promote path the target branch's version) as `If-Match` on the
+config PUT. When the config or one of its rows was edited in the UI after that
+read, the Storage API answers 412. Push reads the config back: if it holds
+exactly what push sent (configuration with the ciphertexts as sent, name,
+description, enabled state when sent) the update counts as done -- the case of
+a PUT the transport repeated after a lost answer. Otherwise push reports
+`SYNC_CONFLICT` under `errors[]` (exit 1), leaves the local files and the
+manifest entry as they were, and no later step of that push writes the config
+or its rows (each skipped row gets its own `SYNC_CONFLICT` entry).
+Run `kbagent sync pull`, review, push again. A listing without `version` sends
+no precondition.
+
+Push reads each config's files once; a file that changes while push reads it
+is not sent (`SYNC_LOCAL_FILE_CHANGED`, push again). A file edited while the
+update runs is not written back over (`warnings[]` entry
+`LOCAL_EDIT_DURING_PUSH`): the manifest records what was sent, so
+the newer content stays a local change for the next push (a comment-only edit
+has nothing to send). The baseline is
+always the hash of the bytes push wrote, never a second read of the folder.
+
+Limits: an editor save in the instant between push's last check and its
+write-back is overwritten (no file locking); row updates, the link backfill
+PUTs and data-app writes send no precondition.
+
+Rules for an agent:
+
+- Do not edit files of the sync tree while `sync push` runs (also not from a
+  parallel tool call or a background job). Push would hold the config
+  (`SYNC_LOCAL_FILE_CHANGED`) or keep the edit unpushed
+  (`LOCAL_EDIT_DURING_PUSH`); after either, run `kbagent sync diff` and push
+  again.
+- On `SYNC_CONFLICT` do not re-run push and do not force the local version over
+  the UI edit. `kbagent sync pull`, show the user what changed in Keboola,
+  merge, push.
+
+### `sync pull` journals the folders it deletes
+
+*(since vNEXT)* (#827)
+
+Pull drops a config or row the remote no longer lists from the manifest and
+records it under `pendingRemovals` BEFORE it deletes the folder; its final save
+clears the record. A pull killed in between no longer leaves an entry for a
+missing folder that a later `push --force` deletes on the remote. While a
+record exists, diff and push treat the folder (and everything below it) as
+absent. The next pull finishes the removal first, and only while the folder is
+unchanged; an edited folder is kept and stays recorded (`warnings[]`
+`PENDING_REMOVAL_KEPT`; diff and push keep ignoring it, so a remotely deleted
+config is never re-created from it -- delete the folder or move it out of the
+sync tree), a failed delete is reported (`PENDING_REMOVAL_FAILED`) and retried
+by the next pull. A folder inside another planned folder goes with the outer
+one.
+
+Rules for an agent: never edit or delete `pendingRemovals` in
+`.keboola/manifest.json` by hand, and never run an older kbagent on a tree whose
+manifest has it (an older push re-creates or adopts the recorded folders). On
+`PENDING_REMOVAL_KEPT`, ask the user whether to delete the folder or move it out
+of the sync tree; do not push it back as a new config.
+
 ### Rows across `sync pull --branch` and promote pushes
 
 *(since 1.0.0)*

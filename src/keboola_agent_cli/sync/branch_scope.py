@@ -47,7 +47,13 @@ from pathlib import Path
 from typing import Any
 
 from ..constants import CONFIG_FILENAME
-from .manifest import Manifest, ManifestConfiguration
+from .manifest import (
+    Manifest,
+    ManifestConfiguration,
+    ManifestPendingRemoval,
+    PendingPaths,
+    under_pending,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -213,6 +219,56 @@ def entry_tree(manifest: Manifest, cfg: ManifestConfiguration) -> str:
     """The tree an entry's files live in: a promote entry's source tree, else its branch's."""
     association = promoted_from(cfg)
     return association.tree if association else branch_tree_path(manifest, cfg.branch_id)
+
+
+def pending_removal_paths(manifest: Manifest, tree: str) -> PendingPaths:
+    """Paths (relative to *tree*) of the directories a pull has not finished deleting (#827).
+
+    Carries this tree's tracked config and row directories as exemptions:
+    one inside a pending folder stays visible (H1).
+    """
+    tracked: set[str] = set()
+    for cfg in manifest.configurations:
+        if not cfg.path or entry_tree(manifest, cfg) != tree:
+            continue
+        tracked.add(cfg.path)
+        tracked.update(f"{cfg.path}/{row.path}" for row in cfg.rows if row.path)
+    return PendingPaths(
+        frozenset(
+            resolve_removal(manifest, item).path
+            for item in manifest.pending_removals
+            if item.tree == tree and item.problem is None
+        ),
+        frozenset(tracked),
+    )
+
+
+def resolve_removal(
+    manifest: Manifest,
+    item: ManifestPendingRemoval,
+    live: list[ManifestConfiguration] | tuple[ManifestConfiguration, ...] = (),
+) -> ManifestPendingRemoval:
+    """*item* at its configuration's CURRENT folder (#827, D1/D2).
+
+    A row record names its configuration (component, id, tree) and its folder
+    relative to it (``row_path``); its path is that configuration's current
+    path plus ``row_path`` -- *live* (the entries a running pull wrote) first,
+    then *manifest*. So a row whose delete is pending follows a rename or a
+    move of its configuration. Any other record, or a row whose configuration
+    has no entry, keeps its recorded path.
+    """
+    if item.kind != "row" or not item.row_path or item.problem is not None:
+        return item
+    for cfg in [*live, *manifest.configurations]:
+        if (
+            cfg.component_id == item.component_id
+            and cfg.id == item.config_id
+            and cfg.path
+            and entry_tree(manifest, cfg) == item.tree
+        ):
+            path = f"{cfg.path}/{item.row_path}"
+            return item if path == item.path else item.model_copy(update={"path": path})
+    return item
 
 
 def find_branch_entry(
@@ -707,6 +763,8 @@ def find_untracked_configs(
         branch_dir = project_root / branch.path
         if not branch_dir.exists():
             continue
+        # A directory a pull has not finished deleting is absent (#827, D11).
+        pending = pending_removal_paths(manifest, branch.path)
         for config_file in branch_dir.rglob(CONFIG_FILENAME):
             config_dir = config_file.parent
             # Skip row-level configs (they're under rows/ subdirectory)
@@ -714,6 +772,8 @@ def find_untracked_configs(
                 continue
             # Skip branch-level _config.yml
             if config_dir == branch_dir:
+                continue
+            if under_pending(config_dir.relative_to(branch_dir).as_posix(), pending):
                 continue
             if str(config_dir) not in tracked_paths:
                 local_data = read_config(config_dir)
@@ -780,12 +840,15 @@ def find_untracked_rows(
         if not rows_dir.is_dir():
             continue
         tracked_row_paths = {row.path for row in cfg.rows}
+        pending = pending_removal_paths(manifest, branch_path)  # absent (#827, D11)
         source_rows = _source_row_ids(manifest, cfg)
         for row_subdir in rows_dir.iterdir():
             if not row_subdir.is_dir():
                 continue
             row_rel_path = f"rows/{row_subdir.name}"
             if row_rel_path in tracked_row_paths:
+                continue
+            if under_pending(f"{cfg.path}/{row_rel_path}", pending):
                 continue
             if not (row_subdir / CONFIG_FILENAME).exists():
                 continue

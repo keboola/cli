@@ -21,7 +21,9 @@ Both run after the create passes, PUT the corrected config, rewrite the local
 from __future__ import annotations
 
 import copy
+import hashlib
 import logging
+import os
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -46,6 +48,13 @@ from ._sync_link_pending import (
     set_link_pending,
     validate_targets,
 )
+from ._sync_local_snapshot import (
+    CapturedInput,
+    capture_local_input,
+    local_edit_warning,
+    local_state,
+    same_files,
+)
 from ._sync_models import (
     AMBIGUOUS_ROW_PLACEHOLDERS_KEY,
     CREATED_FROM_KEY,
@@ -57,6 +66,7 @@ from ._sync_models import (
     VARIABLES_COMPONENT_ID,
     CreatedConfig,
     FlowBindingResult,
+    LocalConfigHashes,
     TargetCache,
     VariableBindingResult,
 )
@@ -522,15 +532,18 @@ def _refresh_binding_hashes(
     branch_id: int | None,
     response: Any,
     warnings: list[dict[str, Any]],
+    receipt: LocalConfigHashes | None = None,
 ) -> None:
     """Re-stamp a rebound config's manifest bookkeeping after the backfill PUT.
 
     ``config_hash`` includes ``_configuration_extra``, which both backfills
     rewrite, so the stored hashes must be refreshed or ``sync diff`` reports a
     conflict. The config hash comes from the API's view of the config it just
-    wrote (issue #686); the file hashes describe the local files.
+    wrote (issue #686); the file hashes describe the local files: *receipt*,
+    the hashes of the bytes the backfill wrote, for an existing config (#827,
+    F7). Only a config created in this push still reads them from disk (R18).
     """
-    hashes = service._compute_config_hashes(created.config_dir, created.component_id)
+    hashes = receipt or service._compute_config_hashes(created.config_dir, created.component_id)
     stamp = config_baseline(
         client,
         component_id=created.component_id,
@@ -736,16 +749,94 @@ def _repoint_shared_code(config_data: dict[str, Any], link: SharedCodeLink) -> N
         )
 
 
-def _rewrite_script_files(config_dir: Path, row_id_map: dict[str, str]) -> None:
-    """Rewrite the script placeholders in a config's extracted code files."""
+def rewrite_scripts_from(
+    config_dir: Path, contents: dict[str, bytes] | None, row_id_map: dict[str, str]
+) -> dict[str, str]:
+    """Rewrite the script placeholders in a config's code files; their hashes as left.
+
+    *contents* are the bytes read once by the caller (G3, link recovery);
+    ``None`` reads each file here (a config created in this push, R18). Only
+    a file whose text changes is written, like ``write_text`` (the platform's
+    line endings). The hash is of the bytes written, else of the bytes read
+    -- never a second read of the folder (#827, F7).
+    """
+    hashes: dict[str, str] = {}
     for filename in _SCRIPT_FILENAMES:
         path = config_dir / filename
-        if not path.exists():
+        if contents is not None:
+            raw = contents.get(filename)
+        else:
+            raw = path.read_bytes() if path.exists() else None
+        if raw is None:
             continue
-        text = path.read_text(encoding="utf-8")
+        text = raw.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
         rewritten = rewrite_shared_code_placeholders(text, row_id_map)
         if rewritten != text:
-            path.write_text(rewritten, encoding="utf-8")
+            raw = rewritten.replace("\n", os.linesep).encode("utf-8")
+            path.write_bytes(raw)
+        hashes[filename] = hashlib.sha256(raw).hexdigest()
+    return hashes
+
+
+def read_in_step(
+    service: SyncService, created: CreatedConfig, remote: dict[str, Any]
+) -> CapturedInput | None:
+    """The config's local files read once, when they hold exactly what *remote* holds (G2).
+
+    ``None`` when there is no usable ``_config.yml`` or it differs: then the
+    recovery touches no local file and moves no local baseline.
+    """
+    captured = capture_local_input(service, created.config_dir, created.component_id)
+    if captured is None:
+        return None
+    remote_local = api_config_to_local(created.component_id, remote, created.config_id)
+    return captured if config_hash(captured.merged) == config_hash(remote_local) else None
+
+
+def unchanged_since_read(
+    service: SyncService,
+    created: CreatedConfig,
+    captured: CapturedInput,
+    warnings: list[dict[str, Any]],
+) -> bool:
+    """True iff the files are still the bytes read; else a ``LOCAL_EDIT_DURING_PUSH`` warning (G3).
+
+    An edit saved after the read is neither rewritten nor stamped: the local
+    baseline stays as it was, so the next diff weighs the edit against the
+    remote change (a conflict) instead of taking it for synced.
+    """
+    now = local_state(service, created.config_dir, created.component_id)
+    if same_files(now, captured.hashes):
+        return True
+    warnings.append(
+        local_edit_warning(
+            created.component_id,
+            created.config_id,
+            created.config_dir,
+            secrets=False,
+            recovery=True,
+        )
+    )
+    return False
+
+
+def snapshot_receipt(
+    captured: CapturedInput, *, file_hash: str, rewritten: dict[str, str] | None = None
+) -> LocalConfigHashes:
+    """The hashes to stamp after a recovery rewrote an EXISTING config's files (#827 F7, G2).
+
+    ``_config.yml`` is the hash of the bytes written; every companion is the
+    hash of the bytes read once for the in-step comparison, or of the bytes
+    written where the recovery rewrote it (*rewritten*).
+    """
+    extra = dict(captured.hashes.extra_hashes)
+    extra.update({name: digest for name, digest in (rewritten or {}).items() if name in extra})
+    return LocalConfigHashes(
+        file_hash=file_hash,
+        cfg_hash="",
+        extra_hashes=extra,
+        disabled=captured.hashes.disabled,
+    )
 
 
 def _apply_shared_code_binding(
@@ -784,7 +875,7 @@ def _apply_shared_code_binding(
         )
     finally:
         service._write_config_file(created.config_dir, local_data)
-        _rewrite_script_files(created.config_dir, link.row_id_map)
+        rewrite_scripts_from(created.config_dir, None, link.row_id_map)
     logger.info(
         "Resolved shared code link for %s/%s -> shared_code_id=%s rows=%s",
         created.component_id,
@@ -841,6 +932,7 @@ def resolve_run_target_bindings(
     source_dir: Path | None = None,
     planned_rows: set[tuple[str, str]] | None = None,
     targets: TargetCache | None = None,
+    held: set[tuple[str, str]] | frozenset[tuple[str, str]] = frozenset(),
 ) -> FlowBindingResult:
     """Remap the configs that flows, orchestrations and schedules run (Phase D).
 
@@ -871,6 +963,9 @@ def resolve_run_target_bindings(
     on it stays pending and is reported. The flag is settled from the remote
     content, so a link repaired in the UI clears it without a write.
 
+    A pending config in *held* -- its update failed earlier in this push -- is
+    not written; it stays pending (#827, D4).
+
     A no-op when no such config was created this push or is pending, or when
     no task or target references a config created from a placeholder (the id
     is left untouched -- it may legitimately point at a pre-existing config).
@@ -891,6 +986,7 @@ def resolve_run_target_bindings(
         for entry in link_pending_entries(manifest, branch_id)
         if source_dir is not None
         and (entry.component_id, entry.id) not in seen
+        and (entry.component_id, entry.id) not in held
         and entry.component_id in _RUN_TARGET_LINK_TYPES
     ]
     # Recovery starts from the REMOTE (#929 D32): what a pending config holds
@@ -1018,10 +1114,7 @@ def _recover_run_target(
     remap = _remap_into(created, rewritten, maps, link_type, result)
     if not remap.references and not remap.config_row_ids:
         return remap.pending
-    local_data = service._read_config_file(created.config_dir)
-    in_step = local_data is not None and _local_hash(created, local_data) == config_hash(
-        api_config_to_local(created.component_id, remote, created.config_id)
-    )
+    captured = read_in_step(service, created, remote)
     try:
         response = put_configuration_only(
             client, created.component_id, created.config_id, rewritten, branch_id
@@ -1030,34 +1123,32 @@ def _recover_run_target(
         result.errors.append(_link_error(link_type, created, ErrorCode.API_ERROR, str(exc)))
         return True
     _count(created.component_id, remap, result)
-    extra = (local_data or {}).get("_configuration_extra")
-    if in_step and local_data is not None and isinstance(extra, dict):
-        remap_run_targets_in_place(
-            created.component_id,
-            extra,
-            maps.configs,
-            maps.rows,
-            target_rows=maps.target_rows,
-            uncreated=maps.uncreated,
-            planned_rows=maps.planned_rows,
-        )
-        service._write_config_file(created.config_dir, local_data)
-        _refresh_binding_hashes(
-            service,
-            client,
-            created=created,
-            manifest=manifest,
-            branch_id=branch_id,
-            response=response,
-            warnings=result.warnings,
-        )
+    if captured is None or not isinstance(captured.data.get("_configuration_extra"), dict):
+        return remap.pending
+    if not unchanged_since_read(service, created, captured, result.warnings):
+        return remap.pending
+    local_data = copy.deepcopy(captured.data)
+    remap_run_targets_in_place(
+        created.component_id,
+        local_data["_configuration_extra"],
+        maps.configs,
+        maps.rows,
+        target_rows=maps.target_rows,
+        uncreated=maps.uncreated,
+        planned_rows=maps.planned_rows,
+    )
+    written = service._write_config_file(created.config_dir, local_data)
+    _refresh_binding_hashes(
+        service,
+        client,
+        created=created,
+        manifest=manifest,
+        branch_id=branch_id,
+        response=response,
+        warnings=result.warnings,
+        receipt=snapshot_receipt(captured, file_hash=written),
+    )
     return remap.pending
-
-
-def _local_hash(created: CreatedConfig, local_data: dict[str, Any]) -> str:
-    merged = copy.deepcopy(local_data)
-    merge_code_files(created.component_id, merged, created.config_dir)
-    return config_hash(merged)
 
 
 def _remap_into(

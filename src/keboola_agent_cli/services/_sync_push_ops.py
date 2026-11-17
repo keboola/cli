@@ -1,9 +1,9 @@
 """Per-change push CRUD operations (create/update/delete config + rows).
 
 Extracted from sync_service.py. ``push()`` first splits the diff with
-:func:`plan_push`, then calls :func:`push_create`,
-:func:`push_update`, and :func:`push_row_change`; the row dispatcher fans out to
-the create/update/delete row helpers. Each reads a local ``_config.yml``,
+:func:`plan_push`, then calls :func:`push_create` and
+:func:`push_row_change` (an update is ``_sync_push_update``); the row
+dispatcher fans out to the create/update/delete row helpers. Each reads a local ``_config.yml``,
 encrypts ``#``-prefixed secrets (fail-closed), POSTs/PUTs/DELETEs, then writes
 the API-assigned id + encrypted secrets back to disk and refreshes the manifest
 hashes. Free functions taking the ``SyncService`` for the on-disk helpers it owns
@@ -43,7 +43,6 @@ from ._sync_companions import require_decided_packages
 from ._sync_data_app import create_synced_data_app, require_creatable_data_app_type
 from ._sync_deletes import fold_covered_rows
 from ._sync_disabled import (
-    baseline_entry,
     file_disables,
     pushed_disabled,
     record_disabled,
@@ -55,7 +54,7 @@ from ._sync_push_create import (
     plan_create,
     settle_create,
 )
-from ._sync_workspace import SANDBOXES_COMPONENT_ID, warn_on_backend_size_change
+from ._sync_workspace import SANDBOXES_COMPONENT_ID
 from ._sync_writeback import (
     link_promote_rows,
     manifest_folder,
@@ -836,7 +835,9 @@ def push_update_row(
     )
     logger.info("Updated row %s/%s/%s", component_id, parent_config_id, row_id)
 
-    writeback_after_push(
+    # The baseline is the hash of the bytes written, never a re-read: an edit
+    # saved right after the write stays a local change (#827, F7).
+    new_file_hash = writeback_after_push(
         service,
         pristine_data,
         row_dir,
@@ -844,10 +845,7 @@ def push_update_row(
         configuration,
         is_row=True,
         row_id=row_id if remap is None else "",
-    )
-
-    row_file = row_dir / CONFIG_FILENAME
-    new_file_hash = service._file_hash(row_file) if row_file.exists() else ""
+    ).file_hash
     stamp = row_baseline(
         client,
         component_id=component_id,
@@ -1092,157 +1090,3 @@ def push_create(
         file_config_id="" if promote else str(new_config_id),
         pending_refs=remap.pending_refs(component_id, original) if remap is not None else [],
     )
-
-
-def push_update(
-    service: SyncService,
-    client: Any,
-    component_id: str,
-    config_id: str,
-    config_path_str: str,
-    project_root: Path,
-    manifest: Manifest,
-    branch_id: int | None,
-    *,
-    allow_plaintext_fallback: bool = False,
-    warnings: list[dict[str, Any]] | None = None,
-    known_secrets: SecretCache | None = None,
-    remap: PromoteRemap | None = None,
-) -> dict[str, Any]:
-    """Update an existing config from a local _config.yml file.
-
-    On the promote path (*remap* given) the payload's references are remapped
-    to the target's ids (D24) and the local file keeps its own id (D23).
-
-    Returns the API response so the caller can stamp the manifest baseline
-    from the remote's own view of the config (issue #686). ``warnings``
-    accumulates the ``script[]`` normalization records of
-    :func:`guard_script_shape` for the push envelope, and for a workspace a
-    ``parameters.backendSize`` change (CLI-25).
-    """
-    branch_path = service._resolve_source_branch_path(manifest, project_root, branch_id)
-    config_dir = project_root / branch_path / config_path_str
-    local_data = service._read_config_file(config_dir)
-    if local_data is None:
-        raise FileNotFoundError(f"Config file not found: {config_dir / CONFIG_FILENAME}")
-
-    # Preserve pristine data for writeback (merge_code_files mutates local_data
-    # by injecting parameters.blocks which should not end up in _config.yml).
-    pristine_data = copy.deepcopy(local_data)
-
-    # Merge code files (transform.sql, transform.py, code.py) back into config
-    merge_code_files(component_id, local_data, config_dir)
-    # Packages a silent pyproject.toml left undecided: the target's own (T1).
-    require_decided_packages(
-        client,
-        component_id=component_id,
-        config_id=config_id,
-        branch_id=branch_id,
-        local_data=local_data,
-        config_path=config_path_str,
-    )
-
-    name, description, configuration = local_config_to_api(local_data)
-    baseline = baseline_entry(
-        manifest,
-        component_id=component_id,
-        config_id=config_id,
-        branch_id=branch_id,
-        source_tree=branch_path,
-        path=config_path_str,
-    )
-
-    # Runtime-safety backstop on the assembled API body (issues #245/#274).
-    configuration = guard_script_shape(
-        component_id, configuration, warnings, config_id=config_id, config_path=config_path_str
-    )
-    # Encrypt #-prefixed secrets before sending to API
-    project_id = manifest.project.id if manifest.project else None
-    original = encrypt_secrets_in_config(
-        client,
-        project_id,
-        component_id,
-        configuration,
-        allow_plaintext_fallback=allow_plaintext_fallback,
-        known=known_secrets,
-    )
-    configuration = original
-    if remap is not None:
-        # The remap starts from the source-id payload, once (D24).
-        configuration = remap.apply(component_id, original)
-        if component_id == DATA_APP_COMPONENT_ID:
-            configuration = copy.deepcopy(configuration)
-            _keep_target_app_id(client, config_id, branch_id, configuration)
-        # rebind_pending is on disk before the PUT that may need it.
-        remap.before_update(component_id, config_id, original)
-
-    if component_id == SANDBOXES_COMPONENT_ID and warnings is not None:
-        warn_on_backend_size_change(
-            client,
-            config_id=config_id,
-            configuration=configuration,
-            branch_id=branch_id,
-            warnings=warnings,
-        )
-
-    result = client.update_config(
-        component_id=component_id,
-        config_id=config_id,
-        name=name,
-        configuration=configuration,
-        description=description,
-        change_description="Updated via kbagent sync push",
-        # Explicit key in the local YAML pushes the state; an absent key
-        # leaves the remote state untouched (issue #467) unless the baseline
-        # file the push's diff compared against had the line -- then
-        # deleting it re-enables (``_sync_disabled``).
-        is_disabled=pushed_disabled(local_data, baseline.metadata if baseline else None),
-        branch_id=branch_id,
-    )
-    logger.info("Updated config %s/%s", component_id, config_id)
-    if remap is not None:
-        remap.after_update(component_id, config_id, original)
-        remap.record(
-            component_id,
-            config_id,
-            config_dir=config_dir,
-            config_path=config_path_str,
-            original=original,
-            configuration=configuration,
-        )
-
-    # Write back: update local file with encrypted secrets. Use pristine_data so
-    # blocks/code stay only in their code files. Never the target id on the
-    # promote path (D23): main/ keeps the source branch's id.
-    promote = branch_path != branch_tree_path(manifest, branch_id)
-    writeback_after_push(
-        service,
-        pristine_data,
-        config_dir,
-        "" if promote else config_id,
-        configuration,
-        component_id=component_id,
-        warnings=warnings,
-    )
-
-    return result if isinstance(result, dict) else {}
-
-
-def _keep_target_app_id(
-    client: Any, config_id: str, branch_id: int | None, configuration: dict[str, Any]
-) -> None:
-    """Send the target branch's data-app id, never the one main/ names.
-
-    A data app's ``parameters.id`` points at its Data Science app. On the
-    promote path main/ keeps the production app id (D23), so an update read
-    from main/ would re-point the dev branch's config at the production app.
-    The id is read from the config on the target branch itself; a failed read
-    fails this update rather than send the wrong id.
-    """
-    remote = client.get_config_detail(
-        component_id=DATA_APP_COMPONENT_ID, config_id=config_id, branch_id=branch_id
-    )
-    target_params = ((remote or {}).get("configuration") or {}).get("parameters") or {}
-    params = configuration.get("parameters")
-    if target_params.get("id") and isinstance(params, dict):
-        params["id"] = target_params["id"]

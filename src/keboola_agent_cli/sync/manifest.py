@@ -10,10 +10,11 @@ import contextlib
 import json
 import os
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
 
 from ..constants import KEBOOLA_DIR_NAME, MANIFEST_FILENAME, MANIFEST_VERSION
 
@@ -137,6 +138,85 @@ class ManifestConfiguration(BaseModel):
         return _posix_path(value)
 
 
+def relative_path_problem(value: str) -> str | None:
+    """Why *value* is not a plain relative path inside its base, or ``None`` (#827, F1).
+
+    Refused: empty, absolute (``/x``, ``//server/share``), drive-qualified
+    (``C:/x``; any segment with a colon, which Windows reads as a drive), and
+    any empty, ``.`` or ``..`` segment.
+    """
+    if not value:
+        return "it is empty"
+    if value.startswith("/"):
+        return "it is an absolute path"
+    for segment in value.split("/"):
+        if segment in ("", ".", ".."):
+            return f"it has a {segment!r} segment" if segment else "it has an empty segment"
+        if ":" in segment:
+            return "it names a drive"
+    return None
+
+
+class ManifestPendingRemoval(BaseModel):
+    """A directory a ``sync pull`` decided to delete and may not have deleted yet (#827).
+
+    Pull saves the manifest without the removed entry and with this record
+    BEFORE it deletes the directory; the final save drops the record once the
+    directory is gone. A record that survives (a crash, a failed delete) makes
+    diff and push treat *path* and everything below it as absent, and the next
+    pull finishes or abandons the removal before it allocates any path.
+
+    Attributes:
+        tree: The branch tree, relative to the project root (``main``).
+        path: The directory, relative to *tree*.
+        kind: ``config`` or ``row``.
+        row_path: For a row, its folder relative to its configuration's folder.
+            The row's current path is its configuration's current path plus
+            this, so the record follows every move of the configuration (a
+            pull rename, a hand move) -- ``path`` is only where it was when
+            last saved (#827 D1, D2).
+        file_hash: SHA-256 of its ``_config.yml`` when pull decided ("" if none).
+        tree_hash: Digest of every file below *path* when pull decided.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    tree: str
+    path: str
+    kind: str
+    component_id: str = Field(default="", alias="componentId")
+    config_id: str = Field(default="", alias="configId")
+    row_id: str = Field(default="", alias="rowId")
+    row_path: str = Field(default="", alias="rowPath")
+    file_hash: str = Field(default="", alias="fileHash")
+    tree_hash: str = Field(default="", alias="treeHash")
+
+    # Why the record is unsafe to act on, decided at load (F1). Never written.
+    _problem: str | None = PrivateAttr(default=None)
+
+    @field_validator("tree", "path", "row_path")
+    @classmethod
+    def _normalise_path(cls, value: str) -> str:
+        return _posix_path(value)
+
+    @model_validator(mode="after")
+    def _check_paths(self) -> ManifestPendingRemoval:
+        checks = [("tree", self.tree), ("path", self.path)]
+        if self.row_path:
+            checks.append(("row path", self.row_path))
+        for label, value in checks:
+            problem = relative_path_problem(value)
+            if problem is not None:
+                self._problem = f"its {label} {value!r} is refused: {problem}"
+                break
+        return self
+
+    @property
+    def problem(self) -> str | None:
+        """Why this record is never acted on (an unsafe path), or ``None``."""
+        return self._problem
+
+
 # ---------------------------------------------------------------------------
 # Root manifest
 # ---------------------------------------------------------------------------
@@ -163,6 +243,51 @@ class Manifest(BaseModel):
     sync_workspaces: bool = Field(default=False, alias="syncWorkspaces")
     branches: list[ManifestBranch] = Field(default_factory=list)
     configurations: list[ManifestConfiguration] = Field(default_factory=list)
+    # kbagent-only (#827): directories a pull has not finished deleting.
+    # ``save_manifest`` writes the key only while it is non-empty; an older
+    # kbagent keeps it as an unknown key (``extra="allow"``) and ignores it.
+    pending_removals: list[ManifestPendingRemoval] = Field(
+        default_factory=list, alias="pendingRemovals"
+    )
+
+
+@dataclass(frozen=True)
+class PendingPaths:
+    """Paths a pull has not finished deleting, and the tracked paths that lift them (#827).
+
+    Attributes:
+        paths: The pending folders, relative to their tree.
+        exempt: Every tracked config and row folder in the same base. A
+            tracked folder at or inside a pending folder is never hidden by
+            THAT folder (H1); a pending record strictly below it still hides
+            its own path (I1).
+    """
+
+    paths: frozenset[str] = frozenset()
+    exempt: frozenset[str] = frozenset()
+
+
+def _at_or_below(path: str, prefix: str) -> bool:
+    return path == prefix or path.startswith(f"{prefix}/")
+
+
+def under_pending(path: str, pending: PendingPaths) -> bool:
+    """True iff *path* is a pending removal or lies below one, and no tracked folder lifts it.
+
+    Diff and push treat such a directory as absent: never a move target,
+    never an untracked config to create or adopt, never a new row (#827, D11).
+    A tracked directory at or inside a pending folder, and everything below
+    it, is not covered by THAT folder (H1; a config tracked again at a stale
+    record's path) -- but a pending record strictly below the tracked
+    directory still covers its own path (I1): a row folder whose delete
+    failed stays absent under its tracked configuration.
+    """
+    for p in pending.paths:
+        if not _at_or_below(path, p):
+            continue
+        if not any(_at_or_below(t, p) and _at_or_below(path, t) for t in pending.exempt):
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -192,7 +317,8 @@ def save_manifest(project_root: Path, manifest: Manifest) -> None:
 
     Uses ``by_alias=True`` so all keys are written in camelCase,
     matching the format expected by the Go CLI. ``syncWorkspaces`` is left
-    out while false, so a tree that never opted in keeps its manifest as it was.
+    out while false and ``pendingRemovals`` while empty, so a tree that never
+    used them keeps its manifest as it was.
     """
     keboola_dir = project_root / KEBOOLA_DIR_NAME
     keboola_dir.mkdir(parents=True, exist_ok=True)
@@ -201,6 +327,8 @@ def save_manifest(project_root: Path, manifest: Manifest) -> None:
     payload = manifest.model_dump(mode="json", by_alias=True)
     if not manifest.sync_workspaces:
         payload.pop("syncWorkspaces", None)
+    if not manifest.pending_removals:
+        payload.pop("pendingRemovals", None)
     data = (json.dumps(payload, indent=4, ensure_ascii=False) + "\n").encode("utf-8")
     # Atomic: a temp file in the same directory, flushed to disk, then renamed
     # over the manifest. ``sync push`` saves after every create (a crash must

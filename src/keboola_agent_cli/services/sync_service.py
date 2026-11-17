@@ -45,6 +45,7 @@ from ..sync.branch_scope import (
     entry_tree,
     find_untracked_configs,
     is_production,
+    pending_removal_paths,
     same_branch,
     scope_manifest,
     stale_tree_record,
@@ -82,7 +83,6 @@ from ._sync_baseline import (
     adopted_skip_detail,
     detect_force_pull_conflicts,
     effective_stored_hash,
-    raise_on_legacy_boundary,
 )
 from ._sync_bindings import resolve_run_target_bindings
 from ._sync_branch import (
@@ -131,6 +131,7 @@ from ._sync_link_recovery import resolve_transformation_links
 from ._sync_local_files import check_local_files, drop_held, load_config_yaml
 from ._sync_models import LocalConfigHashes
 from ._sync_moves import move_fields, persist_moves, relocate, settle_moves, status_moves
+from ._sync_pending_removals import RemovalJournal, recover_pending_removals, relocate_records
 from ._sync_project_guard import adopt_existing_manifest, load_project_manifest
 from ._sync_promote_remap import (
     PromoteRemap,
@@ -159,7 +160,8 @@ from ._sync_push_create import (
     record_created_config,
     register_adopted_parent,
 )
-from ._sync_push_ops import detect_name_drift, plan_push, push_create, push_row_change, push_update
+from ._sync_push_ops import detect_name_drift, plan_push, push_create, push_row_change
+from ._sync_push_update import held_row_error, push_modified
 from ._sync_stale import (
     apply_stale_sweep,
     find_stale_entries,
@@ -179,7 +181,7 @@ from ._sync_untracked import (
     component_change_problem,
     raise_on_component_change,
 )
-from ._sync_writeback import reconcile_promote_links, stamp_updated_config
+from ._sync_writeback import reconcile_promote_links
 from .base import BaseService, ClientFactory, find_default_branch_id
 from .data_app_service import (
     DataScienceClientFactory,
@@ -516,6 +518,9 @@ class SyncService(BaseService):
 
         # Load or verify manifest exists
         manifest = load_project_manifest(self, alias, project, project_root)
+        # Finish the directory removals an interrupted pull left, before any
+        # path is allocated (#827, D11).
+        recovered = recover_pending_removals(project_root, manifest, dry_run=dry_run)
 
         # Determine branch to pull from (git-branching aware)
         branch_id = self._resolve_branch_id(
@@ -612,7 +617,8 @@ class SyncService(BaseService):
         new_configurations += moves.held_in(own_entries)
         old_entries = {f"{c.component_id}/{c.id}": c for c in own_entries}
         untracked_dirs = scan_config_dirs(self, project_root, manifest, branch_dir_name)
-        pull_warnings: list[dict[str, Any]] = ambiguous_id_warnings(untracked_dirs)
+        pull_warnings: list[dict[str, Any]] = recovered + ambiguous_id_warnings(untracked_dirs)
+        journal = RemovalJournal.for_pull(project_root, manifest, branch_dir_name)
         companion_warnings: list[dict[str, str]] = []
         # Paths owned on disk before this pull allocates any (D14): a new or
         # renamed config never lands in one, whatever order the remote lists.
@@ -867,6 +873,7 @@ class SyncService(BaseService):
                         adopt=is_new,
                         theirs=theirs,
                         dry_run=dry_run,
+                        journal=journal,
                     ),
                     cfg.get("rows", []),
                     existing_rows,
@@ -918,7 +925,11 @@ class SyncService(BaseService):
             dry_run=dry_run,
             new_configurations=new_configurations,
             pull_details=pull_details,
+            journal=journal,
         )
+        if not dry_run:
+            journal.commit(manifest, new_configurations)  # checkpoint first, then delete
+            pull_warnings += journal.warnings
 
         # -- Storage metadata (read-only, not tracked in manifest) --
         storage_stats: dict[str, int] = {"buckets": 0, "tables": 0, "samples": 0}
@@ -938,6 +949,10 @@ class SyncService(BaseService):
                 entries.kept, new_configurations, branch_dir, ignored_components
             )
             entries.retire(manifest, project_root, branch_dir_name, new_configurations)
+            # Records an earlier pull left, plus this pull's failed or kept ones (F2, G1).
+            manifest.pending_removals = relocate_records(
+                manifest, [*manifest.pending_removals, *journal.retained]
+            )
             save_manifest(project_root, manifest)
 
         return {
@@ -1134,7 +1149,13 @@ class SyncService(BaseService):
         never_fetched_keys = scope.never_fetched_keys
         # An unusable _config.yml holds its config back: reported in errors[],
         # never read as "no file" (a delete) nor pushed without its unknown keys.
-        bad = check_local_files(project_root, source_branch_path, scope.in_tree, ignored_components)
+        bad = check_local_files(
+            project_root,
+            source_branch_path,
+            scope.in_tree,
+            ignored_components,
+            pending_removal_paths(manifest, source_branch_path),
+        )
         tracked_keys = scope.tracked_keys
         orphaned: list[dict[str, Any]] = list(scope.orphaned)
 
@@ -1593,6 +1614,8 @@ class SyncService(BaseService):
                 remap.use_target(client, branch_id)
                 remap.hold = partial(hold_pending, client, manifest, target, checkpoint)
 
+            # A config whose update failed: no later phase writes it (#827 D4).
+            held: set[tuple[str, str]] = set()
             # ---- Phase A: config creates / updates / deletes -------------
             for change in config_changes:
                 change_type = change["change_type"]
@@ -1639,46 +1662,21 @@ class SyncService(BaseService):
                             pushed_details.append(change)
 
                     elif change_type == "modified":
-                        config_dir = project_root / branch_path / config_path_str
-                        raise_on_legacy_boundary(
+                        push_modified(
                             self,
                             client,
-                            component_id=component_id,
-                            config_id=config_id,
-                            config_dir=config_dir,
+                            change,
+                            project_root=project_root,
+                            branch_path=branch_path,
                             manifest=manifest,
                             branch_id=branch_id,
-                        )
-                        response = push_update(
-                            self,
-                            client,
-                            component_id,
-                            config_id,
-                            config_path_str,
-                            project_root,
-                            manifest,
-                            branch_id,
+                            held=held,
                             allow_plaintext_fallback=allow_plaintext_fallback,
                             warnings=warnings,
                             known_secrets=known_secrets,
                             remap=remap,
                         )
-                        # Update hashes so pull knows local == remote
-                        if (config_dir / CONFIG_FILENAME).exists():
-                            stamp_updated_config(
-                                client,
-                                manifest=manifest,
-                                component_id=component_id,
-                                config_id=config_id,
-                                branch_id=branch_id,
-                                config_path_str=config_path_str,
-                                hashes=self._compute_config_hashes(config_dir, component_id),
-                                response=response,
-                                warnings=warnings,
-                                source_tree=branch_path,
-                                config_dir=config_dir,
-                            )
-                            manifest_dirty = True
+                        manifest_dirty = True
                         updated += 1
                         pushed_details.append(change)
 
@@ -1710,6 +1708,7 @@ class SyncService(BaseService):
                     # record (D25).
                     if is_fatal_push_error(exc):
                         raise
+                    manifest_dirty |= change_type == "modified"  # an entry put back (D3)
                     self._record_push_error(errors, change_type, component_id, config_id, exc)
 
             # ---- Phase B: row creates / updates / deletes ----------------
@@ -1720,6 +1719,9 @@ class SyncService(BaseService):
                 source_row_id = change.get("source_row_id") or config_id  # risk 71
                 config_path_str = change.get("path", "")
                 parent_config_id = change.get("parent_config_id", "")
+                if (component_id, parent_config_id) in held:  # its config failed (#827 F3)
+                    errors.append(held_row_error(change))
+                    continue
                 manifest_dirty = True  # before a create's checkpoint (D25)
                 try:
                     # The parent's id on the target after Phase A: a placeholder
@@ -1794,6 +1796,7 @@ class SyncService(BaseService):
                 errors=errors,
                 diff_changes=diff_decisions(all_changes),
                 ignored_components=sql_workspaces.effective_ignored_components(manifest),
+                held=held,
             )
 
             # ---- Phase C: variable + shared-code links (KFR-03, CLI-24) --
@@ -1806,6 +1809,7 @@ class SyncService(BaseService):
                 manifest=manifest,
                 branch_id=branch_id,
                 source_dir=None if promoting else project_root / branch_path,
+                held=held,
             )
             errors.extend(binding.errors)
             warnings.extend(binding.warnings)
@@ -1826,6 +1830,7 @@ class SyncService(BaseService):
                 source_dir=None if promoting else project_root / branch_path,
                 planned_rows=planned_row_refs(row_changes),
                 targets=binding.targets,
+                held=held,
             )
             errors.extend(flow_binding.errors)
             warnings.extend(flow_binding.warnings)
