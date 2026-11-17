@@ -9,6 +9,8 @@ import logging
 import time
 from typing import Any
 
+import httpx
+
 from ..constants import (
     DEFAULT_JOB_LIMIT,
     DEFAULT_JOB_MODE,
@@ -296,13 +298,57 @@ def _terminate_and_wait(
     return final
 
 
+def _raw_poll_error(exc: Exception) -> KeboolaApiError:
+    """A ``KeboolaApiError`` for an exception that escaped ``wait_for_queue_job`` raw."""
+    if isinstance(exc, httpx.TransportError):
+        return KeboolaApiError(
+            message=f"Lost the connection to the Queue API while polling the job: {exc}",
+            status_code=0,
+            error_code=ErrorCode.CONNECTION_ERROR,
+        )
+    return KeboolaApiError(
+        message=f"Could not read the job state from the Queue API: {exc}",
+        status_code=0,
+        error_code=ErrorCode.API_ERROR,
+    )
+
+
+def _created_job_error(
+    exc: KeboolaApiError,
+    *,
+    job_id: str,
+    alias: str,
+    details: dict[str, Any] | None = None,
+) -> KeboolaApiError:
+    """``exc``, raised while waiting for job ``job_id`` that was already created.
+
+    The code and HTTP status stay (so the exit code does too); ``retryable``
+    is always false, because starting the command again creates a second job
+    (spec LR3). ``details`` gains ``job_id`` and the message says how to
+    follow the job.
+    """
+    base = exc.details if details is None else details
+    return KeboolaApiError(
+        message=(
+            f"{exc.message} Queue job {job_id} was created and may still be running: "
+            f"check it with `kbagent job detail --project {alias} --job-id {job_id}`. "
+            "Do not start it again."
+        ),
+        status_code=exc.status_code,
+        error_code=exc.error_code,
+        retryable=False,
+        details={**(base or {}), "job_id": job_id},
+    )
+
+
 class QueueJobFailedError(KeboolaApiError):
     """``QUEUE_JOB_FAILED`` from :meth:`JobService.run_job`, with the failed job it read.
 
     ``failed_job`` is the job detail ``_handle_wait_error`` already fetched
     (``None`` when that read failed). It is a Python attribute, never a
-    ``details`` key, so ``job run`` output does not grow; ``flow run`` builds
-    its per-task results from it without a second read.
+    ``details`` key: ``flow run`` builds its per-task results from it without
+    a second read. ``details`` itself carries ``job_id`` (spec LR3), in the
+    ``job run --wait`` error too.
     """
 
     def __init__(self, *args: Any, failed_job: dict[str, Any] | None = None, **kwargs: Any) -> None:
@@ -682,6 +728,14 @@ class JobService(BaseService):
                         kill_on_timeout=kill_on_timeout,
                         alias=alias,
                     )
+                except (httpx.HTTPError, ValueError, TypeError, AttributeError) as exc:
+                    # The HTTP layer translates connect errors and timeouts, but
+                    # another transport error (a reset connection, a protocol
+                    # error) or an unreadable poll response reaches us raw. The
+                    # job exists either way: report it like any other poll failure.
+                    raise _created_job_error(
+                        _raw_poll_error(exc), job_id=job_id, alias=alias
+                    ) from exc
                 else:
                     # Successful poll: still attach log tail for warning /
                     # terminated statuses (not raised; just surfaced).
@@ -720,7 +774,7 @@ class JobService(BaseService):
     ) -> dict[str, Any]:
         """Handle a terminal wait_for_queue_job error.
 
-        Two error classes land here:
+        Errors that land here:
 
         - ``QUEUE_JOB_FAILED`` -- remote job reached ``error`` status on its
           own. Fetch the log tail so the caller sees the last events and
@@ -733,6 +787,11 @@ class JobService(BaseService):
           With ``kill_on_timeout=False`` (spec LR2) nothing is killed: the
           error stays ``QUEUE_JOB_TIMEOUT`` with ``retryable: false`` and says
           the job keeps running and how to follow it.
+
+        Every other error (connection, HTTP 5xx, auth, retries exhausted)
+        keeps its code but is raised as a failure after the job was created:
+        ``retryable: false``, ``details.job_id``, a message that names
+        ``kbagent job detail``. The same holds for a timeout whose kill failed.
 
         We never swallow the error; on any failure path we re-raise so the
         command layer maps to the correct exit code.
@@ -790,24 +849,19 @@ class JobService(BaseService):
                     retryable=False,
                     details={"job": cancelled, "logTail": tail},
                 ) from exc
-            # kill failed: surface the original timeout but keep the tail.
+            # kill failed: the job may still run. Surface the original timeout
+            # with the tail, as a failure after the job was created.
             details = _enrich_with_tail(exc.details, tail)
-            raise KeboolaApiError(
-                message=exc.message,
-                status_code=exc.status_code,
-                error_code=exc.error_code,
-                retryable=exc.retryable,
-                details=details or {},
+            raise _created_job_error(
+                exc, job_id=job_id, alias=alias, details=details or {}
             ) from exc
 
-        # Anything else (network, auth, a future Queue error code we
-        # don't specialise) bubbles up unchanged so the command layer
-        # maps it through map_error_to_exit_code().
-        logger.debug(
-            "run_job: unhandled wait error code=%s; bubbling up unchanged",
-            code,
-        )
-        raise exc
+        # Anything else (network, HTTP 5xx, auth, retries exhausted, a future
+        # Queue error code we don't specialise) keeps its code, so the command
+        # layer maps it to the same exit code. But the job was created and may
+        # still run: never retryable, with the job id (spec LR3).
+        logger.debug("run_job: wait error code=%s after the job was created", code)
+        raise _created_job_error(exc, job_id=job_id, alias=alias) from exc
 
     @staticmethod
     def resolve_variable_values_id(
