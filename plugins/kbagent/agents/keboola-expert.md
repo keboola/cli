@@ -491,21 +491,20 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
 **Semantic-layer** -- full prose in
 [`gotchas.md`](../skills/kbagent/references/gotchas.md) § Semantic-layer:
 
-- constraint `rule` is a STRING (not `{bounds: {min, max}}`); `severity` is
-  3-level (`error|warning|info`) while the 4-band health lives in the name suffix
-  (`_critical/_warning/_healthy/_review`).
-- `edit metric --new-name` cascades into constraints' `metrics[]` and changes
-  CODE_METRIC -- downstream joins break silently, so surface it.
-- `remove metric` orphans referencing constraints (drop/rewrite first; the scan
-  warns even with `--yes`, non-TTY exits 2); `build` is a heuristic scaffold
-  (`fallback_used: "heuristic"`), not the full AI wizard (that is the `sl-build`
-  skill).
+- constraint `rule` is a STRING (not `{bounds:...}`); `severity` is
+  `error|warning|info`, the 4-band health is the name suffix (`_critical`...).
+- `edit` PATCHes only the keys you pass (vNEXT+); two edits of the SAME key:
+  last wins. A 5xx/timeout is not retried and may have applied: `show` before
+  repeating. `edit metric --new-name` cascades into constraints' `metrics[]` and
+  changes CODE_METRIC (downstream joins break: surface it); `validate`
+  after. `import --overwrite`/`promote` PUT whole items: never during edits.
+- `remove metric` orphans referencing constraints (drop/rewrite first; warns
+  even with `--yes`, non-TTY exits 2); `build` is a heuristic scaffold, not the
+  `sl-build` AI wizard.
 - dataset `fqn` = the table's Storage location (`storage table-detail` ->
-  `sql_path`), since 0.95.0: `add dataset` fails on a table that does not exist
-  unless `--fqn` is given. Older kbagent wrote a `"KEBOOLA"` database that
-  resolves nowhere -- `validate --deep` flags those as `FQN_MISMATCH`; never
-  hand-build an fqn from the tableId (a linked bucket lives in the SOURCE
-  project's database and schema).
+  `sql_path`), since 0.95.0: `add dataset` fails on a missing table unless
+  `--fqn` is given. Old `"KEBOOLA"` fqns: `validate --deep` -> `FQN_MISMATCH`;
+  never hand-build an fqn (a linked bucket lives in the SOURCE project).
 
 **`permissions set --allow/--deny` validates patterns (since 0.91.0)**
 - A typo'd or fabricated pattern (`tool.admin`, `stroage.*`) fails fast with
