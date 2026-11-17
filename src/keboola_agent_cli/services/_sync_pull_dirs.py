@@ -32,7 +32,12 @@ from ..sync.branch_scope import (
 )
 from ..sync.config_format import api_row_to_local
 from ..sync.diff_engine import config_hash
-from ..sync.manifest import Manifest, ManifestConfigRow, ManifestConfiguration
+from ..sync.manifest import (
+    Manifest,
+    ManifestConfigRow,
+    ManifestConfiguration,
+    pending_removal_paths,
+)
 from ..sync.naming import config_row_path
 from ._sync_disabled import DISABLED_BASELINE_KEY, carry_disabled, file_disables, record_disabled
 from ._sync_local_files import UNREADABLE_SKIP_REASON
@@ -55,6 +60,7 @@ from ._sync_stale import sweep_stale_rows
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
+    from ._sync_pending_removals import RemovalJournal
     from .sync_service import SyncService
 
 # Pull ``details[].reason`` for a kept row file that only carries the row id.
@@ -387,6 +393,8 @@ def scan_config_dirs(
             found.add(f"{item['component_id']}/{item['config_id']}", item["path"])
         else:
             found.paths.add(item["path"])  # authored, never pushed: reserved too (D26)
+    # A directory whose delete failed is reserved, never adopted (#827, D11).
+    found.paths |= pending_removal_paths(manifest, branch_dir_name)
     return found
 
 
@@ -508,6 +516,8 @@ class RowPullContext:
     adopt: bool
     theirs: bool
     dry_run: bool
+    # Where a stale row directory is recorded for deletion (#827, D10).
+    journal: RemovalJournal | None = None
 
 
 def pull_config_rows(
@@ -567,6 +577,7 @@ def pull_config_rows(
         pull_details=pull_details,
         carried=carried,
         deleted_rows=result.deleted_rows,
+        journal=ctx.journal,
     )
     return result
 

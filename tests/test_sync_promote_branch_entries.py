@@ -34,7 +34,7 @@ from keboola_agent_cli.services._sync_promote_remap import (
     recover_pending,
 )
 from keboola_agent_cli.services._sync_push_create import CreateTarget, ManifestCheckpointError
-from keboola_agent_cli.services._sync_push_ops import push_update
+from keboola_agent_cli.services._sync_push_update import push_update
 from keboola_agent_cli.services._sync_writeback import writeback_create_config_in_manifest
 from keboola_agent_cli.services.component_service import materialize_pushed_config
 from keboola_agent_cli.sync.branch_scope import find_untracked_rows, same_branch

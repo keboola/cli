@@ -107,12 +107,15 @@ def resolve_transformation_links(
     manifest: Manifest,
     branch_id: int | None,
     source_dir: Path | None,
+    held: set[tuple[str, str]] | frozenset[tuple[str, str]] = frozenset(),
 ) -> VariableBindingResult:
     """Phase C: the in-push link backfill, then the pending links of earlier pushes.
 
     *ledger* carries this push's creates and its planned placeholder claims
     (:meth:`CreateLedger.plan`): a variables id any of them claims -- also one
     whose create failed -- is never bound to another config by the fallback.
+    A pending config in *held* (its update failed in this push) is not
+    written (#827, D4); it stays pending.
     """
     created_configs = ledger.created_configs
     created_id_map = ledger.created_id_map
@@ -144,6 +147,7 @@ def resolve_transformation_links(
         for entry in link_pending_entries(manifest, branch_id)
         if entry.component_id not in RUN_TARGET_COMPONENTS
         and (entry.component_id, entry.id) not in failed
+        and (entry.component_id, entry.id) not in held
     ]
     if not pending:
         return result

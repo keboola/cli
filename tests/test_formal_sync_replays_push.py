@@ -30,7 +30,7 @@ import pytest
 
 from formal_sync_fake import Crash, FakeStorage, Workspace, timeout_error
 from keboola_agent_cli.constants import CONFIG_FILENAME
-from keboola_agent_cli.services import _sync_push_create, _sync_push_ops, sync_service
+from keboola_agent_cli.services import _sync_push_create, _sync_push_update, sync_service
 
 
 @pytest.fixture
@@ -228,7 +228,7 @@ def test_m_edit_between_writeback_and_stamp_is_reported(
     cid, d1 = _pulled(ws, api)
     ws.edit_description(d1, "v21")
 
-    original = _sync_push_ops.writeback_after_push
+    original = _sync_push_update.writeback_after_push
     fired: list[bool] = []
 
     def writeback_then_editor_saves(*args: Any, **kwargs: Any) -> Any:
@@ -238,7 +238,7 @@ def test_m_edit_between_writeback_and_stamp_is_reported(
             ws.edit_description(d1, "v22")
         return written
 
-    monkeypatch.setattr(_sync_push_ops, "writeback_after_push", writeback_then_editor_saves)
+    monkeypatch.setattr(_sync_push_update, "writeback_after_push", writeback_then_editor_saves)
     result = ws.push()
     monkeypatch.undo()
     assert result["updated"] == 1

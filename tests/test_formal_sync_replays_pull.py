@@ -21,7 +21,7 @@ import pytest
 from formal_sync_fake import Crash, FakeStorage, Workspace, timeout_error
 from keboola_agent_cli.constants import CONFIG_FILENAME
 from keboola_agent_cli.errors import SyncConflictError
-from keboola_agent_cli.services import _sync_stale as _sync_pending_removals
+from keboola_agent_cli.services import _sync_pending_removals
 from keboola_agent_cli.services.sync_service import SyncService
 
 PULLED_SQL = ["SELECT 1;"]
@@ -258,3 +258,4 @@ def test_R_pull_crash_after_rmtree_leaves_no_stale_entry(
     assert api.configs[cid]["state"] == "live"
     ws.pull()
     assert ws.entry(cid) is not None
+    assert ws.manifest().pending_removals == []

@@ -63,7 +63,14 @@ from typing import TYPE_CHECKING, Any
 
 from ..constants import CONFIG_FILENAME
 from ..sync.branch_scope import config_key, entry_tree, find_branch_entry, promoted_from
-from ..sync.manifest import Manifest, ManifestConfiguration, load_manifest, save_manifest
+from ..sync.manifest import (
+    Manifest,
+    ManifestConfiguration,
+    load_manifest,
+    pending_removal_paths,
+    save_manifest,
+    under_pending,
+)
 from ._sync_workspace import effective_ignored_components
 
 if TYPE_CHECKING:
@@ -320,12 +327,17 @@ def _carried(service: SyncService, config_dir: Path) -> ConfigIdentity | None:
 
 
 def _unowned(
-    service: SyncService, tree_dir: Path, owned: set[str], ignored: frozenset[str]
+    service: SyncService,
+    tree_dir: Path,
+    owned: set[str],
+    ignored: frozenset[str],
+    pending: frozenset[str] = frozenset(),
 ) -> dict[str, ConfigIdentity]:
     """Unowned config dirs of the tree -> the ``(component_id, config_id)`` they carry.
 
     A directory reached through a symlink is never one: it is another
-    directory's alias, not a place a config was moved to.
+    directory's alias, not a place a config was moved to. Nor is a directory
+    a pull has not finished deleting (*pending*, #827 D11): it is absent.
     """
     found: dict[str, ConfigIdentity] = {}
     if not tree_dir.is_dir():
@@ -334,6 +346,8 @@ def _unowned(
     for config_file in sorted(tree_dir.rglob(CONFIG_FILENAME)):
         rel = config_file.parent.relative_to(tree_dir)
         if not rel.parts or "rows" in rel.parts or rel.as_posix() in owned:
+            continue
+        if under_pending(rel.as_posix(), pending):
             continue
         if config_file.parent.resolve() != real_tree / rel:
             continue  # a symlinked directory (or one below a symlink)
@@ -434,7 +448,8 @@ def settle_moves(
     plan = MovePlan()
     if not absent and not foreign:
         return plan
-    unowned = _unowned(service, tree_dir, {c.path for c in in_tree}, ignored)
+    pending = pending_removal_paths(manifest, tree)
+    unowned = _unowned(service, tree_dir, {c.path for c in in_tree}, ignored, pending)
     scan.carried.update(unowned)
     held_entries: list[ManifestConfiguration] = []
     if foreign:

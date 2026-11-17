@@ -47,7 +47,7 @@ from pathlib import Path
 from typing import Any
 
 from ..constants import CONFIG_FILENAME
-from .manifest import Manifest, ManifestConfiguration
+from .manifest import Manifest, ManifestConfiguration, pending_removal_paths, under_pending
 
 logger = logging.getLogger(__name__)
 
@@ -707,6 +707,8 @@ def find_untracked_configs(
         branch_dir = project_root / branch.path
         if not branch_dir.exists():
             continue
+        # A directory a pull has not finished deleting is absent (#827, D11).
+        pending = pending_removal_paths(manifest, branch.path)
         for config_file in branch_dir.rglob(CONFIG_FILENAME):
             config_dir = config_file.parent
             # Skip row-level configs (they're under rows/ subdirectory)
@@ -714,6 +716,8 @@ def find_untracked_configs(
                 continue
             # Skip branch-level _config.yml
             if config_dir == branch_dir:
+                continue
+            if under_pending(config_dir.relative_to(branch_dir).as_posix(), pending):
                 continue
             if str(config_dir) not in tracked_paths:
                 local_data = read_config(config_dir)
@@ -780,12 +784,15 @@ def find_untracked_rows(
         if not rows_dir.is_dir():
             continue
         tracked_row_paths = {row.path for row in cfg.rows}
+        pending = pending_removal_paths(manifest, branch_path)  # absent (#827, D11)
         source_rows = _source_row_ids(manifest, cfg)
         for row_subdir in rows_dir.iterdir():
             if not row_subdir.is_dir():
                 continue
             row_rel_path = f"rows/{row_subdir.name}"
             if row_rel_path in tracked_row_paths:
+                continue
+            if under_pending(f"{cfg.path}/{row_rel_path}", pending):
                 continue
             if not (row_subdir / CONFIG_FILENAME).exists():
                 continue

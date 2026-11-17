@@ -841,6 +841,7 @@ def resolve_run_target_bindings(
     source_dir: Path | None = None,
     planned_rows: set[tuple[str, str]] | None = None,
     targets: TargetCache | None = None,
+    held: set[tuple[str, str]] | frozenset[tuple[str, str]] = frozenset(),
 ) -> FlowBindingResult:
     """Remap the configs that flows, orchestrations and schedules run (Phase D).
 
@@ -871,6 +872,9 @@ def resolve_run_target_bindings(
     on it stays pending and is reported. The flag is settled from the remote
     content, so a link repaired in the UI clears it without a write.
 
+    A pending config in *held* -- its update failed earlier in this push -- is
+    not written; it stays pending (#827, D4).
+
     A no-op when no such config was created this push or is pending, or when
     no task or target references a config created from a placeholder (the id
     is left untouched -- it may legitimately point at a pre-existing config).
@@ -891,6 +895,7 @@ def resolve_run_target_bindings(
         for entry in link_pending_entries(manifest, branch_id)
         if source_dir is not None
         and (entry.component_id, entry.id) not in seen
+        and (entry.component_id, entry.id) not in held
         and entry.component_id in _RUN_TARGET_LINK_TYPES
     ]
     # Recovery starts from the REMOTE (#929 D32): what a pending config holds

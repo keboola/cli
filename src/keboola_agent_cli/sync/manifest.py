@@ -137,6 +137,40 @@ class ManifestConfiguration(BaseModel):
         return _posix_path(value)
 
 
+class ManifestPendingRemoval(BaseModel):
+    """A directory a ``sync pull`` decided to delete and may not have deleted yet (#827).
+
+    Pull saves the manifest without the removed entry and with this record
+    BEFORE it deletes the directory; the final save drops the record once the
+    directory is gone. A record that survives (a crash, a failed delete) makes
+    diff and push treat *path* and everything below it as absent, and the next
+    pull finishes or abandons the removal before it allocates any path.
+
+    Attributes:
+        tree: The branch tree, relative to the project root (``main``).
+        path: The directory, relative to *tree*.
+        kind: ``config`` or ``row``.
+        file_hash: SHA-256 of its ``_config.yml`` when pull decided ("" if none).
+        tree_hash: Digest of every file below *path* when pull decided.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    tree: str
+    path: str
+    kind: str
+    component_id: str = Field(default="", alias="componentId")
+    config_id: str = Field(default="", alias="configId")
+    row_id: str = Field(default="", alias="rowId")
+    file_hash: str = Field(default="", alias="fileHash")
+    tree_hash: str = Field(default="", alias="treeHash")
+
+    @field_validator("tree", "path")
+    @classmethod
+    def _normalise_path(cls, value: str) -> str:
+        return _posix_path(value)
+
+
 # ---------------------------------------------------------------------------
 # Root manifest
 # ---------------------------------------------------------------------------
@@ -163,6 +197,26 @@ class Manifest(BaseModel):
     sync_workspaces: bool = Field(default=False, alias="syncWorkspaces")
     branches: list[ManifestBranch] = Field(default_factory=list)
     configurations: list[ManifestConfiguration] = Field(default_factory=list)
+    # kbagent-only (#827): directories a pull has not finished deleting.
+    # ``save_manifest`` writes the key only while it is non-empty; an older
+    # kbagent keeps it as an unknown key (``extra="allow"``) and ignores it.
+    pending_removals: list[ManifestPendingRemoval] = Field(
+        default_factory=list, alias="pendingRemovals"
+    )
+
+
+def pending_removal_paths(manifest: Manifest, tree: str) -> frozenset[str]:
+    """Paths (relative to *tree*) of the directories a pull has not finished deleting (#827)."""
+    return frozenset(item.path for item in manifest.pending_removals if item.tree == tree)
+
+
+def under_pending(path: str, pending: frozenset[str]) -> bool:
+    """True iff *path* (relative to its tree) is a pending removal or lies below one.
+
+    Diff and push treat such a directory as absent: never a move target,
+    never an untracked config to create or adopt, never a new row (#827, D11).
+    """
+    return any(path == p or path.startswith(f"{p}/") for p in pending)
 
 
 # ---------------------------------------------------------------------------
@@ -192,7 +246,8 @@ def save_manifest(project_root: Path, manifest: Manifest) -> None:
 
     Uses ``by_alias=True`` so all keys are written in camelCase,
     matching the format expected by the Go CLI. ``syncWorkspaces`` is left
-    out while false, so a tree that never opted in keeps its manifest as it was.
+    out while false and ``pendingRemovals`` while empty, so a tree that never
+    used them keeps its manifest as it was.
     """
     keboola_dir = project_root / KEBOOLA_DIR_NAME
     keboola_dir.mkdir(parents=True, exist_ok=True)
@@ -201,6 +256,8 @@ def save_manifest(project_root: Path, manifest: Manifest) -> None:
     payload = manifest.model_dump(mode="json", by_alias=True)
     if not manifest.sync_workspaces:
         payload.pop("syncWorkspaces", None)
+    if not manifest.pending_removals:
+        payload.pop("pendingRemovals", None)
     data = (json.dumps(payload, indent=4, ensure_ascii=False) + "\n").encode("utf-8")
     # Atomic: a temp file in the same directory, flushed to disk, then renamed
     # over the manifest. ``sync push`` saves after every create (a crash must
