@@ -1051,3 +1051,46 @@ def test_the_quarantine_ignores_itself_for_git(ws: Workspace, api: FakeStorage) 
 
     ignore = _sync_pending_removals.quarantine_dir(ws.root) / ".gitignore"
     assert ignore.read_text(encoding="utf-8") == "*\n"
+
+
+def test_a_linked_quarantine_gitignore_is_never_written_through(
+    ws: Workspace, api: FakeStorage, tmp_path: Path
+) -> None:
+    """K3: a dangling ``.gitignore`` link makes the quarantine unusable; its target is not created."""
+    cid = api.add("Orders", ["SELECT 1;"])
+    ws.init_and_pull()
+    path = ws.dir_of(cid)
+    quarantine = _sync_pending_removals.quarantine_dir(ws.root)
+    quarantine.mkdir(parents=True)
+    target = tmp_path / "another-repo" / ".gitignore"
+    target.parent.mkdir()
+    try:
+        os.symlink(target, quarantine / ".gitignore")
+    except (OSError, NotImplementedError):
+        pytest.skip("no symlink support")
+    api.ui_trash(cid)
+
+    result = ws.pull()
+
+    assert not target.exists()
+    assert (path / CONFIG_FILENAME).is_file()
+    assert len(ws.manifest().pending_removals) == 1
+    assert "PENDING_REMOVAL_FAILED" in [w["code"] for w in result["warnings"]]
+
+
+def test_a_quarantine_gitignore_with_other_content_is_rewritten(
+    ws: Workspace, api: FakeStorage
+) -> None:
+    """K3: a regular ``.gitignore`` that does not ignore everything is rewritten to ``*``."""
+    cid = api.add("Orders", ["SELECT 1;"])
+    ws.init_and_pull()
+    path = ws.dir_of(cid)
+    quarantine = _sync_pending_removals.quarantine_dir(ws.root)
+    quarantine.mkdir(parents=True)
+    (quarantine / ".gitignore").write_text("!keep-me\n", encoding="utf-8")
+    api.ui_trash(cid)
+
+    ws.pull()
+
+    assert not path.exists()
+    assert (quarantine / ".gitignore").read_bytes() == b"*\n"
