@@ -1467,7 +1467,8 @@ kbagent semantic-layer token --encrypt [--project P] --component-id C
 #   otherwise) -- an ordinary token instead uses `scope request-create` + an org-admin's
 #   `scope set --scope organization`. Elevation is ONE-WAY (no downgrade endpoint), which is why
 #   every `--scope organization` (here and on `model create` / `add <kind>`) is destructive-class
-#   (FLAG_ESCALATIONS). `edit`, `import --overwrite` and `promote` update in place (PUT): an item
+#   (FLAG_ESCALATIONS). `edit` (a PATCH of only the changed keys, #833) and `import --overwrite` /
+#   `promote` (a whole-record PUT) update in place: an item
 #   keeps its id, scope, grants and pending elevation request. `scope add|remove` merge into the
 #   grants client-side (not atomic; refused from a project that does not own the item, because
 #   the server hides the grants from a non-owner -- use `scope set --target-project` there).

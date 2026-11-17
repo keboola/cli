@@ -1214,7 +1214,7 @@ class SemanticLayerService(BaseService):
         )
 
     # ------------------------------------------------------------------
-    # Phase 4 — edit (DELETE-then-POST with rollback + rename cascade)
+    # Phase 4 — edit (PATCH of the changed keys + rename cascade)
     # ------------------------------------------------------------------
 
     # Thin delegates to ._semantic_layer_crud helpers -- bodies live
@@ -1235,7 +1235,7 @@ class SemanticLayerService(BaseService):
         is_tty: bool = False,
         confirm_cb: Callable[[str], bool] | None = None,
     ) -> dict[str, Any]:
-        """Edit a metric in place (PUT) with rename-cascade on constraints.
+        """Edit a metric in place (PATCH of the changed keys) with rename-cascade on constraints.
 
         Returns:
             ``{updated: item, cascaded_constraints: [...], rollback: None|{...}}``.
@@ -1271,7 +1271,7 @@ class SemanticLayerService(BaseService):
         new_description: str | None = None,
         new_grain: str | None = None,
     ) -> dict[str, Any]:
-        """Edit a dataset (in-place PUT). Renames do NOT cascade for datasets."""
+        """Edit a dataset (PATCH of the changed keys). Renames do NOT cascade for datasets."""
         project = self._resolve_one_project(alias)
         with self._new_metastore_client(project) as client:
             model_uuid, _ = self._resolve_model(client, model_name_or_uuid)
@@ -1301,7 +1301,7 @@ class SemanticLayerService(BaseService):
         new_severity: str | None = None,
         new_metrics: list[str] | None = None,
     ) -> dict[str, Any]:
-        """Edit a constraint (in-place PUT). Validates new attrs locally first."""
+        """Edit a constraint (PATCH of the changed keys). Validates new attrs locally first."""
         _validate_constraint_attrs(
             name_re=CONSTRAINT_NAME_RE,
             constraint_types=CONSTRAINT_TYPES,
@@ -1351,7 +1351,7 @@ class SemanticLayerService(BaseService):
         new_on: str | None = None,
         new_type: str | None = None,
     ) -> dict[str, Any]:
-        """Edit a relationship (in-place PUT). Validates ``--new-type`` locally.
+        """Edit a relationship (PATCH of the changed keys). Validates ``--new-type`` locally.
 
         Relationships are not referenced by any other entity, so no
         cascade is needed -- the result is shaped identically to
@@ -1390,7 +1390,7 @@ class SemanticLayerService(BaseService):
         new_term: str | None = None,
         new_definition: str | None = None,
     ) -> dict[str, Any]:
-        """Edit a glossary term (in-place PUT).
+        """Edit a glossary term (PATCH of the changed keys).
 
         Renaming via ``--new-term`` is destructive for downstream
         consumers that join on the literal term string (the term IS the

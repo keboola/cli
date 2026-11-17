@@ -2096,7 +2096,8 @@ record per member. Consequences an agent must internalize:
   and `set` the whole thing back. There is no per-member endpoint.
 - **It uses the metastore's real `PUT`** (revisioned update, `meta.revision`
   increments, history preserved) when a record for that dimension already
-  exists — as `edit metric|…` does since 0.97.0 (before, those used DELETE+POST).
+  exists — as `edit metric|…` did from 0.97.0 (before, DELETE+POST; since vNEXT
+  `edit` sends a `PATCH` of only the changed keys).
   A brand-new dimension is `POST`-ed.
 - **The envelope `name` is the dimension, unique per project per type, so
   the `set`/`get` lookup is project-wide.** Because the dimension name is the
@@ -2657,9 +2658,10 @@ events and emits a final `done` SSE frame mirroring the same record.
 - `kbagent semantic-layer edit metric --project P --new-name NEW` updates the metric
   and ALSO every constraint whose `metrics[]` referenced the old name
   (`metrics[]` rewritten to the new name). *(updated 0.97.0)* Each is an
-  in-place `PUT` -- same id, scope, grants and revision history, and a failed
+  in-place update -- same id, scope, grants and revision history, and a refused
   update changes nothing; before, every "edit" was a delete-then-create with
-  a rollback re-POST.
+  a rollback re-POST. *(since vNEXT)* The update is a `PATCH` of only the
+  changed keys (each constraint: only `metrics`), no longer a whole-record `PUT`.
 - The `CODE_METRIC` derived value (used in downstream SQL joins on
   `DIM_METRIC_THRESHOLD` / `FACT_METRIC_*` lookups) is computed via
   ```python
@@ -2674,15 +2676,13 @@ events and emits a final `done` SSE frame mirroring the same record.
   unless `--yes` is set. The CODE_METRIC change line is printed even
   with `--yes` -- treat it as a contract change that needs explicit
   audit of downstream SQL.
-- On POST failure (e.g. the new name violates a constraint), the
-  service re-POSTs `original_attrs` to restore the pre-edit state
-  and reports rollback success/failure explicitly in the response
-  envelope's `rollback` field. If rollback itself fails, the model
-  is left in a partial state -- surface that to the operator and
-  recommend running `semantic-layer validate` immediately.
+- When the metric update is refused (e.g. the new name is taken),
+  nothing was written and no constraint is touched; the `rollback`
+  field is always `null` (since 0.97.0 -- before, the service
+  re-POSTed `original_attrs`).
 - **Partial-state envelope signal (updated v0.41.10 -- closes #294)**:
   the cascade is per-item only (each constraint is updated on its own;
-  *since 0.97.0* a PUT, so there is nothing to roll back), NOT whole-operation atomicity. If the
+  *since 0.97.0* an in-place update, since vNEXT a `PATCH`, so there is nothing to roll back), NOT whole-operation atomicity. If the
   metric rename succeeds but M of N dependent constraints fail to
   repoint, the response envelope sets `partial_state: true` and
   `recovery_hint: "<text pointing at validate + manual re-cascade>"`
@@ -7281,7 +7281,7 @@ examples. Surprises worth knowing before you touch this:
   (later schema versions add `organization`/`targeted`), so pinning `1.0.0` on a plain
   create would make the item impossible to elevate later. With the key
   omitted, the server uses the stack's default schema (`1.1.0` or later where
-  the PSGO-140 migrations ran). `PUT` (edit) never changes the stored version.
+  the PSGO-140 migrations ran). An update (`PUT`, or since vNEXT the `PATCH` of `edit`) never changes the stored version.
 - **`--scope` omitted means "inherit" for child items.** `add
   metric|dataset|relationship|constraint|glossary` take their model's scope
   (and, for `targeted`, its target projects) when `--scope` is not given;
@@ -7353,11 +7353,12 @@ examples. Surprises worth knowing before you touch this:
   all -- not its owner, not a granted project, not viewing an
   organization-scoped object -- so a 403 never leaks "an object owned by
   some other project exists." Do not collapse the two when surfacing errors.
-- **`edit`, `import --overwrite` and `promote` update in place (PUT).** The
+- **`edit`, `import --overwrite` and `promote` update in place** (`edit` a
+  `PATCH` of the changed keys since vNEXT, the other two a `PUT`). The
   item keeps its id, scope, grants and pending elevation request. They used to
   DELETE+POST, which reset an organization/targeted item to `project` scope
   (`import --overwrite`, `promote`) or could lose the item when the re-create
-  was refused (`edit`). A failed PUT changes nothing. Note that `promote`'s
+  was refused (`edit`). A refused write changes nothing. Note that `promote`'s
   diff compares `attributes` only, so a scope difference between source and
   target is neither shown nor copied.
 - **No bulk-elevate.** There is no "promote every object in this project"
@@ -7819,3 +7820,30 @@ the same way. Now a dev branch id is sent as a string (`"branchId": "12345"`);
 production and `--branch 0` stay `null`. The `--dry-run` body of `data-app
 create` shows the same string. On an older version, create the app in
 production or in the Keboola UI.
+
+## `semantic-layer edit` overwrote a concurrent change to another field
+
+*(since vNEXT)* `semantic-layer edit metric|dataset|constraint|relationship|glossary`
+read the whole item, applied the change and wrote the WHOLE record back with a
+metastore `PUT`. A change that someone else made to another field between the
+read and the write was silently overwritten: two concurrent `edit metric` runs,
+one with `--new-description`, the other with `--new-sql`, lost one of the two
+changes in 4 of 5 live rounds (#833). The same applied to the metric-rename
+cascade, which rewrote each affected constraint whole.
+
+Now `edit` sends a metastore `PATCH` with only the keys you passed (for the
+rename cascade: only the constraint's `metrics`). The server merges them under
+a row lock and validates the merged record, so a concurrent change to another
+key survives. Unchanged: the item keeps its id, scope, grants, pending elevation
+request and revision history; the result shape is the same; `serve`'s
+`PATCH /semantic-layer/items/{kind}/{name}` behaves the same way.
+
+- A value you pass is written even when it equals the value just read.
+- An `edit` with no `--new-*` option writes nothing (no new revision).
+- Still racy: two edits of the SAME key (last one wins), two concurrent renames
+  of one metric, and a constraint that starts referencing the metric while the
+  rename runs (the cascade misses it -- run `semantic-layer validate` after a rename).
+- A `PATCH` is not retried on a 5xx or a read timeout (it may have been applied):
+  re-read with `semantic-layer show` before repeating an edit.
+- `import --overwrite` and `promote` still use a whole-record `PUT`: they make the
+  target equal to the source, so do not run them while someone edits the target.
