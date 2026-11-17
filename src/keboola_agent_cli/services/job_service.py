@@ -511,6 +511,8 @@ class JobService(BaseService):
         mode: str = DEFAULT_JOB_MODE,
         idempotency_key: str | None = None,
         force_rerun: bool = False,
+        only_flow_task_ids: list[str] | None = None,
+        kill_on_timeout: bool = True,
     ) -> dict[str, Any]:
         """Create and optionally wait for a Queue API job.
 
@@ -570,6 +572,13 @@ class JobService(BaseService):
                 wrong job.
             force_rerun: If True, ignore any recorded ``idempotency_key`` entry
                 and always create a fresh job (overwriting the stored entry).
+            only_flow_task_ids: keboola.flow only: the flow tasks to run
+                (``onlyFlowTaskIds``). ``None`` or empty runs the whole flow.
+            kill_on_timeout: ``True`` (``job run``): a local wait timeout kills
+                the remote job (``JOB_TIMEOUT_TERMINATED``). ``False``
+                (``flow run``, spec LR2): the job keeps running and the error is
+                ``QUEUE_JOB_TIMEOUT`` with ``retryable: false``, naming the job
+                and the ``job detail`` command that follows it.
 
         Returns:
             Job dict with ``project_alias``. If wait=True, returns the
@@ -626,6 +635,7 @@ class JobService(BaseService):
                     branch_id=branch_id,
                     variable_values_id=resolved_values_id,
                     mode=mode,
+                    only_flow_task_ids=only_flow_task_ids,
                 )
 
             store = self._default_idempotency_store() if idempotency_key else None
@@ -655,6 +665,8 @@ class JobService(BaseService):
                         exc=exc,
                         log_tail_lines=log_tail_lines,
                         timeout=timeout,
+                        kill_on_timeout=kill_on_timeout,
+                        alias=alias,
                     )
                 else:
                     # Successful poll: still attach log tail for warning /
@@ -689,6 +701,8 @@ class JobService(BaseService):
         exc: KeboolaApiError,
         log_tail_lines: int,
         timeout: float,
+        kill_on_timeout: bool = True,
+        alias: str = "",
     ) -> dict[str, Any]:
         """Handle a terminal wait_for_queue_job error.
 
@@ -702,6 +716,9 @@ class JobService(BaseService):
           briefly for termination, fetch the log tail and re-raise with a
           distinct ``JOB_TIMEOUT_TERMINATED`` code so shells can tell
           "we cancelled the job" from "job failed on its own".
+          With ``kill_on_timeout=False`` (spec LR2) nothing is killed: the
+          error stays ``QUEUE_JOB_TIMEOUT`` with ``retryable: false`` and says
+          the job keeps running and how to follow it.
 
         We never swallow the error; on any failure path we re-raise so the
         command layer maps to the correct exit code.
@@ -722,6 +739,19 @@ class JobService(BaseService):
                 error_code=exc.error_code,
                 retryable=exc.retryable,
                 details=details or {},
+            ) from exc
+
+        if code == "QUEUE_JOB_TIMEOUT" and not kill_on_timeout:
+            raise KeboolaApiError(
+                message=(
+                    f"Queue job {job_id} did not finish within the local --timeout "
+                    f"({timeout:g}s). The job keeps running on the server; follow it with "
+                    f"`kbagent job detail --project {alias} --job-id {job_id}`."
+                ),
+                status_code=exc.status_code,
+                error_code=ErrorCode.QUEUE_JOB_TIMEOUT,
+                retryable=False,
+                details={"job_id": job_id},
             ) from exc
 
         if code == "QUEUE_JOB_TIMEOUT":
@@ -794,7 +824,25 @@ class JobService(BaseService):
             config_id=config_id,
             branch_id=branch_id,
         )
-        configuration = detail.get("configuration") or {}
+        return JobService.resolve_variable_values_from_configuration(
+            client=client,
+            configuration=detail.get("configuration") or {},
+            branch_id=branch_id,
+        )
+
+    @staticmethod
+    def resolve_variable_values_from_configuration(
+        client: Any,
+        configuration: dict[str, Any],
+        branch_id: int | None = None,
+    ) -> str | None:
+        """:meth:`resolve_variable_values_id` from an already read ``configuration`` body.
+
+        ``flow run`` reads the flow configuration once and resolves both the
+        task selection and the variables from that one read, so they cannot
+        come from two revisions (#725). Only the linked ``keboola.variables``
+        rows are read here.
+        """
         variables_id = configuration.get("variables_id")
         if not variables_id:
             return None

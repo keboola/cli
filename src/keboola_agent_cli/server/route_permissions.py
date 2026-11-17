@@ -267,6 +267,7 @@ ROUTE_OPERATIONS: dict[tuple[str, str], str] = {
     ("GET", "/flows/{project}/{config_id}/schedules"): "schedule.list",
     ("GET", "/flows/{project}/{config_id}/triggers"): "flow.triggers",
     ("POST", "/flows/{project}/{config_id}/schedule"): "flow.schedule",
+    ("POST", "/flows/{project}/{flow_id}/run"): "flow.run",
     ("DELETE", "/flows/{project}/{config_id}/schedule"): "flow.schedule-remove",
     # ── schedules / notifications ────────────────────────────────────
     ("GET", "/schedules"): "schedule.list",

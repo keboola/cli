@@ -9,7 +9,7 @@ auth, and the concepts behind these routes live in
 [`web-server.md`](web-server.md); a running server serves the same spec
 interactively at `/docs` (Swagger) and `/openapi.json`.
 
-**274 operations** across **231 paths** and **34 routers**.
+**275 operations** across **232 paths** and **34 routers**.
 
 Paths are shown as the server registers them. Reaching them through the
 Node BFF (or single-process `--ui` mode) prefixes every path with `/api`.
@@ -253,7 +253,7 @@ Run components, inspect job history, terminate running jobs. Mirrors `kbagent jo
 | `POST` | `/jobs/{project}/terminate` | Terminate running jobs |
 | `GET` | `/jobs/{project}/{job_id}/stream` | Stream job status and logs (SSE) |
 
-### `flows` (12 operations)
+### `flows` (13 operations)
 
 Orchestrator and Flow CRUD, scheduling, run history. Mirrors `kbagent flow *`.
 
@@ -269,6 +269,7 @@ Orchestrator and Flow CRUD, scheduling, run history. Mirrors `kbagent flow *`.
 | `POST` | `/flows/{project}` | Create a new flow |
 | `GET` | `/flows/{project}/{config_id}/schedules` | List schedules for a flow |
 | `GET` | `/flows/{project}/{config_id}/triggers` | List every trigger kbagent can see |
+| `POST` | `/flows/{project}/{flow_id}/run` | Run a flow or a selection of its tasks |
 | `POST` | `/flows/{project}/{config_id}/schedule` | Set a cron schedule on a flow |
 | `DELETE` | `/flows/{project}/{config_id}/schedule` | Remove a flow schedule |
 

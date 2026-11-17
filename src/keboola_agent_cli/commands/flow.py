@@ -1094,3 +1094,8 @@ def flow_schedule_remove(
 from ._flow_triggers import register as _register_trigger_commands  # noqa: E402
 
 _register_trigger_commands(flow_app)
+
+# `run` (#725) is mounted the same way, for the same file-size reason.
+from ._flow_run import register as _register_run_command  # noqa: E402
+
+_register_run_command(flow_app)

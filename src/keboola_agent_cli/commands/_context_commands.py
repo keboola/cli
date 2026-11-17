@@ -561,6 +561,11 @@ Manage conditional flows (keboola.flow)
       [--definition DEFINITION] [--definition-file PATH] [--branch N]
     Create a new conditional-flow (keboola.flow) configuration.
 
+  kbagent flow run [--project PROJECT] --flow-id ID [--task-id ID ...]
+      [--from-phase-id ID] [--variable-values-id ID] [--no-variables]
+      [--branch N] [--wait] [--timeout N] [--dry-run]
+    Run a conditional flow, or only some of its tasks.
+
   kbagent flow schedule [--project PROJECT] --flow-id ID --cron CRON
       [--timezone TIMEZONE] [--enabled/--disabled] [--name NAME] [--branch N]
     Bind a cron schedule to a flow (upsert: creates or updates).

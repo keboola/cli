@@ -1643,6 +1643,25 @@
       ]
     },
     {
+      "path": "flow run",
+      "kind": "command",
+      "hidden": false,
+      "category": "write",
+      "help": "Run a conditional flow, or only some of its tasks.\n\nWithout --task-id / --from-phase-id the whole flow runs, exactly like\n`kbagent job run --component-id keboola.flow`.\n\nA PARTIAL run (any selector) sends onlyFlowTaskIds to the Queue API, like the\nUI's \"Run selected tasks\". It does NOT evaluate transition conditions: every\nselected task runs, phase after phase, also after a task failed; phases that\nonly route may run empty; the flow status is the status of the last phase and\ncan hide a failed task; unselected variable tasks do not run.\n\n--from-phase-id P selects the enabled tasks of P and of every phase reached\nby following DEFAULT transitions (the transition without a condition). It\ndoes not follow conditional transitions; the phases it leaves out that way are\nnamed in a CONDITIONAL_PHASES_SKIPPED warning. Disabled tasks there are\nskipped and listed. --task-id adds tasks; the union runs in flow order.\n\n--wait on a partial run reports every selected task's status (task_results,\nfailed_task_ids) and exits 1 when one did not succeed or left no result.\nA --timeout never stops the job: it keeps running, the error names it.",
+      "params": [
+        {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
+        {"kind": "option", "name": "flow_id", "opts": ["--flow-id"], "type": "text", "required": true, "default": null, "help": "Flow configuration ID"},
+        {"kind": "option", "name": "task_id", "opts": ["--task-id"], "type": "text", "multiple": true, "default": null, "help": "Flow task ID to run (repeat for several). Makes the run partial."},
+        {"kind": "option", "name": "from_phase_id", "opts": ["--from-phase-id"], "type": "text", "default": null, "help": "Run the enabled tasks of this phase and of the phases reached by following DEFAULT transitions. Makes the run partial."},
+        {"kind": "option", "name": "variable_values_id", "opts": ["--variable-values-id"], "type": "text", "default": null, "help": "Explicit keboola.variables values-row ID to bind. Mutually exclusive with --no-variables."},
+        {"kind": "option", "name": "no_variables", "opts": ["--no-variables"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip variable-values resolution. Mutually exclusive with --variable-values-id."},
+        {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID (overrides the active branch; 0 = production)"},
+        {"kind": "option", "name": "wait", "opts": ["--wait"], "type": "boolean", "is_flag": true, "default": false, "help": "Wait for the flow job to finish."},
+        {"kind": "option", "name": "timeout", "opts": ["--timeout"], "type": "float", "default": 300.0, "help": "Max seconds to wait with --wait (default 300). The job keeps running after a timeout."},
+        {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Read the flow and show the selection; create no job."}
+      ]
+    },
+    {
       "path": "flow schedule",
       "kind": "command",
       "hidden": false,
