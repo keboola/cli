@@ -892,3 +892,61 @@ def test_resolve_removal_follows_the_configuration_entry() -> None:
     legacy = row.model_copy(update={"row_path": ""})
     assert resolve_removal(manifest, legacy).path == "old/rows/r"
     assert ManifestPendingRemoval(tree="main", path="x", kind="row", rowPath="../x").problem
+
+
+# ------------------------------------------------------------------- #1005 review
+
+
+def test_a_promote_reference_does_not_keep_a_remotely_deleted_production_folder(
+    tmp_path: Path,
+) -> None:
+    """#1005 claim 1: B (dev, promoted from A's main/ folder) is no owner of that folder.
+
+    A is deleted on production. The production pull deletes A's folder (B's
+    promote entry then goes, its source folder is gone), and the next
+    production push creates nothing.
+    """
+    from test_sync_bookkeeping_differential import CONFIG_FILE, DEV, PROD, VARIANTS, _seeded
+
+    v = VARIANTS["extractor"]
+    seeded = _seeded(tmp_path, v)
+    w, prod_id = seeded.world, seeded.config_id
+    config_dir = w.config_dir(prod_id)
+    w.push(branch=DEV)  # B: promoted from main/<A>, a new id on the dev branch
+    assert [cid for comp, cid in w.api.remote[DEV] if comp == v.component_id] != [prod_id]
+    del w.api.remote[PROD][(v.component_id, prod_id)]
+
+    result = w.pull()
+
+    assert not (config_dir / CONFIG_FILE).exists(), result
+    from keboola_agent_cli.sync.manifest import load_manifest
+
+    assert load_manifest(w.root).pending_removals == []
+    pushed = w.push()
+    assert pushed["created"] == 0, pushed
+    assert (v.component_id, prod_id) not in w.api.remote[PROD]
+    assert not [key for key in w.api.remote[PROD] if key[0] == v.component_id]
+
+
+def test_a_partly_deleted_folder_is_finished_by_the_next_pull(
+    ws: Workspace, api: FakeStorage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1005 claim 2: an rmtree that removed some files and then failed is finished later."""
+    cid = api.add("Orders", ["SELECT 1;"])
+    ws.init_and_pull()
+    path = ws.dir_of(cid)
+    api.ui_trash(cid)
+
+    def delete_one_file_then_fail(target: Any, *_: Any, **__: Any) -> None:
+        (Path(target) / "transform.sql").unlink()
+        raise PermissionError("busy")
+
+    _rmtree_via(monkeypatch, delete_one_file_then_fail)
+    first = ws.pull()
+    monkeypatch.undo()
+    assert [w["code"] for w in first["warnings"]] == ["PENDING_REMOVAL_FAILED"], first
+
+    second = ws.pull()  # permissions fixed
+
+    assert not path.exists(), second
+    assert ws.manifest().pending_removals == []
