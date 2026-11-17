@@ -1475,6 +1475,7 @@ class SyncService(BaseService):
         stored = load_manifest(project_root)
         target_id = self._resolve_branch_id(alias, stored, project_root, branch_override)
         pending = pending_rebinds(stored, target_id) or link_pending_entries(stored, target_id)
+        shown = push_ops.add_select_skips(self, stored, project_root, target_id, changes, shown)
         if not changes and not pending:
             # An unchanged pure move is still saved (#792 I).
             persist_moves(project_root, diff_result, dry_run=dry_run)

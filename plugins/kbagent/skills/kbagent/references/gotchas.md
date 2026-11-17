@@ -57,6 +57,16 @@ These lists keep `error`, because their entries are not failed items with an err
 - **Removed short flags** (a usage error, exit 2): `-c` (`permissions list --category`, `lineage show --column`), `-r` (`search` and `config search --regex`, `project invite` and `project member-set-role --role`), `-d` on `http post/patch --body`, `permissions set --deny` and `token create --description`, `-f` on `lineage show --format`, `-l` on `search --limit` and `-n` on `changelog` and `kai history --limit` (use `-L`), `-m` on `permissions set --mode`, and `-v` on `changelog --full` (`-v` is the global `--verbose`).
 - **In documents and agent commands, use the long names.** They work on 0.x and 1.x.
 
+## A SQL transformation statement that starts with SELECT never runs: `SQL_SELECT_SKIPPED_BY_RUNTIME`
+
+*(since vNEXT)*
+
+- **The Snowflake and BigQuery transformation runtime skips every `script[]` statement whose text starts with `SELECT`** after comments are removed (`keboola.snowflake-transformation`, `keboola.google-bigquery-transformation`). The job succeeds, even when the SELECT names a table that does not exist. So `SELECT * FROM missing_table;` is no way to test a failure: use `CREATE TABLE t AS SELECT * FROM missing_table;`. A SELECT has no effect in a transformation anyway.
+- **What still runs**: leading whitespace before `SELECT`, a line comment before it (`-- note` + newline: the newline stays), `WITH ... SELECT`, `CREATE TABLE ... AS SELECT`. A block comment directly before it (`/* x */SELECT`) does not help: the statement is skipped.
+- **`transformation create` and `transformation edit` warn** (also with `--dry-run`): one `warnings[]` entry per skipped statement with `code: "SQL_SELECT_SKIPPED_BY_RUNTIME"`, `component_id`, `config_id` (edit), and `statement: {block, code, index, excerpt}` (`index` counts from 0 inside the code). Human mode prints a `Warning:` line on stderr. The write still happens. Over `kbagent serve` the entries are in the response body's `warnings` key.
+- **`sync push` warns the same way** for each SQL transformation config it creates or updates (also `--dry-run`), with `path` (the config directory) in the entry. Unchanged configs are not checked.
+- **`config update` / `config row-update` do not check.** Other SQL transformation components (Synapse, Redshift, ...) are not checked: their runtime was not verified.
+
 ## Data apps clone a private GitHub repo through the organization connection: `--git-auth organization`, `git-auth-set`
 
 *(since 1.1.0)*
