@@ -1341,8 +1341,8 @@ explicit Storage config version, never the empty shell the create writes.
     "dev-branch only" -- cross-check `branch list` to tell them apart.
 
   notification detail
-    One subscription with every filter printed verbatim, including threshold
-    filters like durationOvertimePercentage that have no dedicated column.
+    One subscription with every filter printed verbatim, including the
+    durationOvertimePercentage threshold (also in overtime_percent).
 
   notification create
     Create a subscription (since 0.91.0). --address carries the email address

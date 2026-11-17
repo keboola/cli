@@ -32,7 +32,9 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from ..effective_branch import resolve_branch
@@ -62,6 +64,9 @@ OVERTIME_EVENTS = ("job-processing-long", "phase-job-processing-long")
 # The upper bound is technical, not a business rule: the daemon keeps emitting
 # past 500 %, but the percent must stay representable once divided by 100.
 MIN_OVERTIME_PERCENT = 1
+# A plain decimal number. ``float()`` alone would also accept "1_0", " 0.5 "
+# and "nan", which the service would never compare as numbers.
+_NUMERIC_STRING = re.compile(r"[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?")
 MAX_OVERTIME_PERCENT = 10000
 
 # ``recipient.channel`` values the write path accepts. The CLI layer
@@ -135,14 +140,17 @@ def _overtime_percent(filters: list[Any]) -> int | float | None:
     value = matches[0].get("value")
     if isinstance(value, bool) or not isinstance(value, (int, float, str)):
         return None
+    if isinstance(value, str) and not _NUMERIC_STRING.fullmatch(value):
+        return None
+    # Decimal of the value's shortest text form: 0.07 reads as exactly 7, and
+    # no precision is cut off (1e-09 reads as 1e-07, not 0).
     try:
-        ratio = float(value)
-    except (ValueError, OverflowError):
+        exact = Decimal(value if isinstance(value, str) else repr(value)) * 100
+    except (InvalidOperation, ValueError):
         return None
-    percent = round(ratio * 100, 6)
-    if not math.isfinite(percent):
+    if not exact.is_finite() or exact < 0 or not math.isfinite(float(exact)):
         return None
-    return int(percent) if percent.is_integer() else percent
+    return int(exact) if exact == exact.to_integral_value() else float(exact)
 
 
 def _validate_overtime_percent(event: str, overtime_percent: object) -> None:
@@ -172,7 +180,7 @@ def _validate_overtime_percent(event: str, overtime_percent: object) -> None:
             message=(
                 f"--overtime-percent must be a whole number from {MIN_OVERTIME_PERCENT} "
                 f"to {MAX_OVERTIME_PERCENT} "
-                f"(50 means 50 % longer than usual), got {overtime_percent!r}."
+                "(50 means 50 % longer than usual)."
             ),
             error_code=ErrorCode.INVALID_ARGUMENT,
         )
@@ -266,9 +274,9 @@ def _extract_subscription_fields(sub: dict[str, Any]) -> dict[str, Any]:
         "channel": str(recipient.get("channel", "")),
         "address": _recipient_address(recipient),
         "expires_at": str(sub.get("expiresAt", "") or ""),
-        # A subscription can filter on fields with no dedicated column
-        # (durationOvertimePercentage, and anything the service adds later),
-        # so the raw list rides along for --json consumers.
+        # A subscription can filter on fields with no dedicated key (anything
+        # the service adds later; overtime_percent summarises only one
+        # unambiguous threshold), so the raw list rides along for --json.
         "filters": filters,
         "overtime_percent": _overtime_percent(filters),
         "scope": SCOPE_CONFIG if config_id else SCOPE_PROJECT_WIDE,

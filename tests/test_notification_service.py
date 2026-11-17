@@ -1074,7 +1074,7 @@ class TestCreateSubscriptionOvertime:
         assert "--overtime-percent" in excinfo.value.message
         client.create_project_subscription.assert_not_called()
 
-    @pytest.mark.parametrize("bad", [0, -1, True, False, 1.5, "50", 10001, 10**400])
+    @pytest.mark.parametrize("bad", [0, -1, True, False, 1.5, "50", 10001, 10**400, 10**5000])
     def test_non_integer_or_negative_is_invalid_argument(self, bad: object) -> None:
         client = MagicMock()
 
@@ -1112,7 +1112,19 @@ class TestOvertimePercentReadSide:
 
     @pytest.mark.parametrize(
         ("value", "expected"),
-        [(0.5, 50), (0.07, 7), (1.5, 150), (0, 0), (0.0, 0), ("0.25", 25), (0.125, 12.5)],
+        [
+            (0.5, 50),
+            (0.07, 7),
+            (0.29, 29),
+            (0.57, 57),
+            (1.5, 150),
+            (0, 0),
+            (0.0, 0),
+            ("0.25", 25),
+            (0.125, 12.5),
+            (0.000000001, 1e-07),
+            (0.123456789, 12.3456789),
+        ],
     )
     def test_single_ge_filter_is_percent(self, value: object, expected: float) -> None:
         row = _extract_subscription_fields(
@@ -1140,8 +1152,13 @@ class TestOvertimePercentReadSide:
             [{"field": "durationOvertimePercentage", "value": float("inf"), "operator": ">="}],
             [{"field": "durationOvertimePercentage", "value": float("nan"), "operator": ">="}],
             [{"field": "durationOvertimePercentage", "value": "nan", "operator": ">="}],
+            [{"field": "durationOvertimePercentage", "value": "1_0", "operator": ">="}],
+            [{"field": "durationOvertimePercentage", "value": " 0.5 ", "operator": ">="}],
+            [{"field": "durationOvertimePercentage", "value": -0.5, "operator": ">="}],
             [{"field": "durationOvertimePercentage", "value": 1e308, "operator": ">="}],
             [{"field": "durationOvertimePercentage", "value": 10**400, "operator": ">="}],
+            [{"field": "durationOvertimePercentage", "value": 10**5000, "operator": ">="}],
+            [{"field": "durationOvertimePercentage", "value": 0.5, "operator": ">= "}],
             ["not-a-dict"],
         ],
     )

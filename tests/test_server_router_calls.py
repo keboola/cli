@@ -2393,44 +2393,7 @@ def test_notifications_list_defaults_to_every_project(tmp_path: Path) -> None:
     )
 
 
-def test_notifications_create_passes_overtime_percent(tmp_path: Path) -> None:
-    notification_svc = MagicMock()
-    notification_svc.create_subscription.return_value = {"subscription_id": "1"}
-    app = _make_app_with_registry(tmp_path, _mock_registry(notification=notification_svc))
-
-    with TestClient(app) as client:
-        res = client.post(
-            f"/notifications/{PROJECT}",
-            headers=AUTH,
-            json={
-                "event": "job-processing-long",
-                "channel": "email",
-                "address": "ops@example.com",
-                "overtime_percent": 50,
-            },
-        )
-
-    assert res.status_code == 200, res.text
-    assert notification_svc.create_subscription.call_args.kwargs["overtime_percent"] == 50
-
-
-def test_notifications_create_overtime_percent_defaults_to_none(tmp_path: Path) -> None:
-    notification_svc = MagicMock()
-    notification_svc.create_subscription.return_value = {"subscription_id": "1"}
-    app = _make_app_with_registry(tmp_path, _mock_registry(notification=notification_svc))
-
-    with TestClient(app) as client:
-        res = client.post(
-            f"/notifications/{PROJECT}",
-            headers=AUTH,
-            json={"event": "job-failed", "channel": "email", "address": "ops@example.com"},
-        )
-
-    assert res.status_code == 200, res.text
-    assert notification_svc.create_subscription.call_args.kwargs["overtime_percent"] is None
-
-
-@pytest.mark.parametrize("bad", [True, "50", 50.5])
+@pytest.mark.parametrize("bad", [True, "50", 50.5, 50.0])
 def test_notifications_create_overtime_percent_must_be_a_strict_int(
     tmp_path: Path, bad: object
 ) -> None:
@@ -2508,6 +2471,7 @@ def test_notifications_create_passes_all_body_fields(tmp_path: Path) -> None:
                 "config_id": CONFIG_ID,
                 "branch_id": 456,
                 "expires_at": "2027-01-01T00:00:00Z",
+                "overtime_percent": 50,
             },
         )
 
@@ -2521,6 +2485,7 @@ def test_notifications_create_passes_all_body_fields(tmp_path: Path) -> None:
         config_id=CONFIG_ID,
         branch_id=456,
         expires_at="2027-01-01T00:00:00Z",
+        overtime_percent=50,
     )
 
 
@@ -2550,6 +2515,7 @@ def test_notifications_create_defaults_optional_fields(tmp_path: Path) -> None:
         config_id=None,
         branch_id=None,
         expires_at=None,
+        overtime_percent=None,
     )
 
 
