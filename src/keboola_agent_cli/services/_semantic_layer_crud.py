@@ -6,8 +6,15 @@ externally-provided :class:`MetastoreClient`; the class methods in the
 main module are thin orchestrators that resolve credentials + the model
 UUID, then delegate.
 
-Edits are an in-place ``PUT`` (the item keeps its ID, scope, grants, pending
-elevation request and revision history); a failed PUT leaves the original intact.
+Edits are a metastore ``PATCH`` that carries only the changed keys (issue #833):
+the server merges them into the stored record one top-level key at a time, under
+a row lock, so a concurrent edit of another key is never overwritten -- the
+whole-record ``PUT`` used before lost it. The item keeps its ID, scope, grants,
+pending elevation request and revision history. The server validates the merged
+record (cross-field schema rules and references) inside the same transaction
+(go-monorepo AJDA-3460, 2026-10-16), so no client-side merged check is needed.
+``import --overwrite`` and ``promote`` keep the ``PUT``: they must make the
+target equal to the source, and a PATCH would keep target-only keys.
 
 Helpers:
 
@@ -66,9 +73,9 @@ def edit_metric_with_cascade(
     """Body of :meth:`SemanticLayerService.edit_metric`.
 
     Resolves the target metric, computes the constraint cascade list,
-    enforces TTY/--yes guards, then PUTs the metric and
-    PUTs each cascaded constraint individually so per-item
-    failures don't poison the rest.
+    enforces TTY/--yes guards, then PATCHes the changed keys of the metric
+    and the ``metrics`` key of each cascaded constraint individually so
+    per-item failures don't poison the rest.
     """
     metrics = client.list_items("semantic-metric", model_uuid)
     target = next(
@@ -80,9 +87,6 @@ def edit_metric_with_cascade(
             message=f"Metric '{current_name}' not found in this model.",
             error_code=ErrorCode.NOT_FOUND,
         )
-    original_attrs = dict(target.get("attributes") or {})
-    old_id = target["id"]
-
     effective_new_name = new_name if new_name is not None else current_name
     cascade_required: list[dict[str, Any]] = []
     if new_name is not None and new_name != current_name:
@@ -115,29 +119,33 @@ def edit_metric_with_cascade(
                     error_code=ErrorCode.VALIDATION_ERROR,
                 )
 
-    new_attrs = dict(original_attrs)
-    if new_name is not None:
-        new_attrs["name"] = new_name
-    if new_sql is not None:
-        new_attrs["sql"] = new_sql
-    if new_dataset is not None:
-        new_attrs["dataset"] = new_dataset
-    if new_description is not None:
-        new_attrs["description"] = new_description
-
-    new_item = client.put_item("semantic-metric", old_id, effective_new_name, new_attrs)
+    new_item = _patch_changes(
+        client,
+        "semantic-metric",
+        target,
+        id_key="name",
+        changes={
+            "name": new_name,
+            "sql": new_sql,
+            "dataset": new_dataset,
+            "description": new_description,
+        },
+    )
 
     # Cascade constraints individually (each is independent --
-    # report per-constraint success/failure).
+    # report per-constraint success/failure). Only `metrics` is sent, so a
+    # concurrent edit of the constraint's other keys survives.
     cascaded: list[dict[str, Any]] = []
     for c in cascade_required:
-        cattrs = dict(c.get("attributes") or {})
-        cmetrics = list(cattrs.get("metrics") or [])
-        cmetrics = [effective_new_name if x == current_name else x for x in cmetrics]
-        cattrs["metrics"] = cmetrics
+        cattrs = c.get("attributes") or {}
+        cmetrics = [
+            effective_new_name if x == current_name else x for x in cattrs.get("metrics") or []
+        ]
         cname = cattrs.get("name", "")
         try:
-            cascaded_item = client.put_item("semantic-constraint", c["id"], cname, cattrs)
+            cascaded_item = client.patch_item(
+                "semantic-constraint", c["id"], data={"metrics": cmetrics}
+            )
             cascaded.append({"constraint": cname, "status": "updated", "id": cascaded_item["id"]})
         except KeboolaApiError as exc:
             cascaded.append(item_failure(exc, constraint=cname, status="failed"))
@@ -271,13 +279,7 @@ def edit_simple(
             message=f"{not_found_label} '{current_key}' not found in this model.",
             error_code=ErrorCode.NOT_FOUND,
         )
-    original_attrs = dict(target.get("attributes") or {})
-    new_attrs = dict(original_attrs)
-    for k, v in overrides.items():
-        if v is not None:
-            new_attrs[k] = v
-    effective_new = new_attrs.get(id_key) or current_key
-    new_item = client.put_item(item_type, target["id"], effective_new, new_attrs)
+    new_item = _patch_changes(client, item_type, target, id_key=id_key, changes=overrides)
     return {
         "updated": new_item,
         "cascaded_constraints": [],
@@ -285,6 +287,28 @@ def edit_simple(
         "partial_state": False,
         "recovery_hint": None,
     }
+
+
+def _patch_changes(
+    client: MetastoreClient,
+    item_type: SemanticType,
+    target: dict[str, Any],
+    *,
+    id_key: str,
+    changes: dict[str, Any],
+) -> dict[str, Any]:
+    """PATCH only the keys the caller gave (``None`` = unchanged) and return the item.
+
+    A given value is sent even when it equals the value just read: the read may
+    be stale, and the caller asked for that value. The identity key (``name``,
+    or ``term`` for glossary) is sent together with the envelope ``name`` so the
+    two never disagree. With nothing to change, nothing is written and the item
+    as read is returned (no new revision).
+    """
+    data = {k: v for k, v in changes.items() if v is not None}
+    if not data:
+        return target
+    return client.patch_item(item_type, target["id"], name=data.get(id_key), data=data)
 
 
 def scan_orphan_constraints(
