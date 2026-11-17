@@ -963,4 +963,91 @@ def test_a_partly_deleted_folder_is_finished_by_the_next_pull(
 
     assert not path.exists(), second
     assert ws.manifest().pending_removals == []
-    assert not any(_sync_pending_removals.quarantine_dir(ws.root).iterdir())
+    quarantine = _sync_pending_removals.quarantine_dir(ws.root)
+    assert [p.name for p in quarantine.iterdir()] == [".gitignore"]
+
+
+# ------------------------------------------------------------------- #1005 review round 2
+
+
+def test_a_crash_after_the_quarantine_move_keeps_the_dev_promote_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """K1: the checkpoint drops B's promote entry with A's folder; push --branch DEV --force deletes nothing."""
+    from test_sync_bookkeeping_differential import DEV, PROD, VARIANTS, _seeded
+
+    v = VARIANTS["extractor"]
+    seeded = _seeded(tmp_path, v)
+    w, prod_id = seeded.world, seeded.config_id
+    w.push(branch=DEV)  # B on the dev branch, promoted from A's main/ folder
+    dev_before = dict(w.api.remote[DEV])
+    del w.api.remote[PROD][(v.component_id, prod_id)]
+    real = _sync_pending_removals._move_aside
+
+    def move_then_die(*args: Any, **kwargs: Any) -> None:
+        real(*args, **kwargs)
+        raise Crash("killed right after the move into the quarantine")
+
+    _removal_via(monkeypatch, move_then_die)
+    with pytest.raises(Crash):
+        w.pull()
+    monkeypatch.undo()
+
+    result = w.svc.push(alias="prod", project_root=w.root, branch_override=DEV, force=True)
+
+    assert w.api.remote[DEV] == dev_before, result
+    assert result.get("deleted", 0) == 0, result
+
+
+def test_a_linked_quarantine_is_never_used(ws: Workspace, api: FakeStorage, tmp_path: Path) -> None:
+    """K2: ``.keboola/removing`` -> elsewhere: nothing is moved there and nothing there is deleted."""
+    cid = api.add("Orders", ["SELECT 1;"])
+    ws.init_and_pull()
+    path = ws.dir_of(cid)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "keep.txt").write_text("not kbagent's", encoding="utf-8")
+    try:
+        os.symlink(elsewhere, _sync_pending_removals.quarantine_dir(ws.root), True)
+    except (OSError, NotImplementedError):
+        pytest.skip("no symlink support")
+    api.ui_trash(cid)
+
+    result = ws.pull()
+    second = ws.pull()
+
+    assert (elsewhere / "keep.txt").is_file()
+    assert [p.name for p in elsewhere.iterdir()] == ["keep.txt"]
+    assert (path / CONFIG_FILENAME).is_file()  # not moved, still recorded
+    assert len(ws.manifest().pending_removals) == 1
+    assert "PENDING_REMOVAL_FAILED" in [w["code"] for w in result["warnings"]]
+    assert "PENDING_REMOVAL_FAILED" in [w["code"] for w in second["warnings"]]
+
+
+def test_quarantine_problem_refuses_a_linked_keboola_folder(tmp_path: Path) -> None:
+    """K2: a symlinked ``.keboola`` makes the quarantine unusable too."""
+    project = tmp_path / "project"
+    project.mkdir()
+    outside = tmp_path / "outside"
+    (outside / "removing").mkdir(parents=True)
+    try:
+        os.symlink(outside, project / ".keboola", True)
+    except (OSError, NotImplementedError):
+        pytest.skip("no symlink support")
+
+    assert "symbolic link" in (_sync_pending_removals.quarantine_problem(project) or "")
+    assert _sync_pending_removals.empty_quarantine(project)[0]["code"] == "PENDING_REMOVAL_FAILED"
+    assert (outside / "removing").is_dir()
+
+
+def test_the_quarantine_ignores_itself_for_git(ws: Workspace, api: FakeStorage) -> None:
+    """K3: the quarantine carries a ``.gitignore`` of ``*``, kept by its cleanup."""
+    cid = api.add("Orders", ["SELECT 1;"])
+    ws.init_and_pull()
+    api.ui_trash(cid)
+
+    ws.pull()
+    ws.pull()
+
+    ignore = _sync_pending_removals.quarantine_dir(ws.root) / ".gitignore"
+    assert ignore.read_text(encoding="utf-8") == "*\n"
