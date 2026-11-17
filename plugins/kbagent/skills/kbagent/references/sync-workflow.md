@@ -554,9 +554,12 @@ clears the record. A pull killed in between no longer leaves an entry for a
 missing folder that a later `push --force` deletes on the remote. While a
 record exists, diff and push treat the folder (and everything below it) as
 absent. The next pull finishes the removal first, and only while the folder is
-unchanged; an edited folder is kept untracked (`warnings[]`
-`PENDING_REMOVAL_KEPT`), a failed delete is reported
-(`PENDING_REMOVAL_FAILED`) and retried by the next pull.
+unchanged; an edited folder is kept and stays recorded (`warnings[]`
+`PENDING_REMOVAL_KEPT`; diff and push keep ignoring it, so a remotely deleted
+config is never re-created from it -- delete the folder or move it out of the
+sync tree), a failed delete is reported (`PENDING_REMOVAL_FAILED`) and retried
+by the next pull. A folder inside another planned folder goes with the outer
+one.
 
 ### Rows across `sync pull --branch` and promote pushes
 

@@ -949,8 +949,8 @@ class SyncService(BaseService):
                 entries.kept, new_configurations, branch_dir, ignored_components
             )
             entries.retire(manifest, project_root, branch_dir_name, new_configurations)
-            # Records an earlier pull left that still failed, plus this pull's (F2).
-            manifest.pending_removals = [*manifest.pending_removals, *journal.failed]
+            # Records an earlier pull left, plus this pull's failed or kept ones (F2, G1).
+            manifest.pending_removals = [*manifest.pending_removals, *journal.retained]
             save_manifest(project_root, manifest)
 
         return {

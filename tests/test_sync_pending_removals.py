@@ -155,7 +155,9 @@ def test_a_pending_directory_edited_after_the_checkpoint_is_kept(
 
     assert (path / "transform.sql").read_text(encoding="utf-8").startswith("SELECT 'edited")
     assert [w["code"] for w in result["warnings"]] == ["PENDING_REMOVAL_KEPT"]
-    assert ws.manifest().pending_removals == []
+    # Kept, so still recorded (G1): diff and push never re-create it from the folder.
+    assert len(ws.manifest().pending_removals) == 1
+    assert _no_change_at(ws.diff(), path.relative_to(ws.root / "main").as_posix())
 
 
 def test_a_pending_directory_with_a_symlink_is_kept(
@@ -523,7 +525,12 @@ def test_a_folder_edited_between_planning_and_delete_is_kept(
 
     assert (path / "transform.sql").read_text(encoding="utf-8").startswith("SELECT 'saved")
     assert [w["code"] for w in result["warnings"]] == ["PENDING_REMOVAL_KEPT"], result
-    assert ws.manifest().pending_removals == []
+    # G1: a folder kept at commit time keeps its record -- its manifest entry is gone.
+    assert ws.entry(cid) is None
+    assert len(ws.manifest().pending_removals) == 1
+    calls = len(api.calls)
+    ws.push()
+    assert not [c for c in api.calls[calls:] if c[0] == "create_config"]
 
 
 def test_a_dry_run_pull_lists_the_records_it_did_not_process(
@@ -537,3 +544,25 @@ def test_a_dry_run_pull_lists_the_records_it_did_not_process(
     assert path.is_dir()
     assert [w["code"] for w in result["warnings"]] == ["PENDING_REMOVALS_NOT_PROCESSED"]
     assert len(ws.manifest().pending_removals) == 1
+
+
+# ------------------------------------------------------------------- round 3
+
+
+def test_nested_removals_with_the_inner_one_listed_first_delete_both(tmp_path: Path) -> None:
+    """G1: the inner folder's delete must not be taken for an edit of the outer one."""
+    from keboola_agent_cli.sync.manifest import load_manifest, save_manifest
+    from test_sync_untracked_rows import HTTP_DIR, _dir, _nest_config_b_in_a, _pull, _world
+
+    sim = _world(tmp_path)
+    child = _nest_config_b_in_a(sim)
+    manifest = load_manifest(sim.root)
+    manifest.configurations.sort(key=lambda c: c.id != "1003")  # the child first
+    save_manifest(sim.root, manifest)
+
+    result = _pull(sim)
+
+    assert not child.exists()
+    assert not _dir(sim, HTTP_DIR).exists()
+    assert "PENDING_REMOVAL_KEPT" not in [w.get("code") for w in result.get("warnings", [])]
+    assert load_manifest(sim.root).pending_removals == []

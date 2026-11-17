@@ -294,3 +294,72 @@ def test_a_link_recovery_stamp_never_absorbs_an_edit_saved_after_its_write(
     diff = world.service.diff(alias="target", project_root=world.clone_dir)
     changes = {c["config_id"]: c["change_type"] for c in diff["changes"] if not c.get("is_row")}
     assert changes.get(entry.id) == "modified", diff
+
+
+# ------------------------------------------------------------------------ G2, G3
+
+
+def _clone_world_with_pending(tmp_path: Path, tmp_config_dir: Path, failing_row: str) -> Any:
+    from test_sync_clone_links import World as CloneWorld
+
+    world = CloneWorld(tmp_path, tmp_config_dir)
+    world.tgt_api.fail_row_names.add(failing_row)
+    world.clone()
+    world.tgt_api.fail_row_names.clear()
+    return world
+
+
+def _target_change(world: Any, component_id: str, name: str) -> str:
+    config_id = world.target(component_id, name)["id"]
+    diff = world.service.diff(alias="target", project_root=world.clone_dir)
+    for change in diff["changes"]:
+        if change["config_id"] == config_id and not change.get("is_row"):
+            return change["change_type"]
+    return "unchanged"
+
+
+def test_a_recovery_stamps_the_companion_bytes_it_compared(
+    tmp_path: Path, tmp_config_dir: Path
+) -> None:
+    """G2: transform.sql is B locally and remotely (baseline A); a later revert to A is reported."""
+    from test_sync_clone_links import SQL
+
+    world = _clone_world_with_pending(tmp_path, tmp_config_dir, "Default values")
+    sql_file = world.local_dir(SQL, "SQL vars only") / "transform.sql"
+    original = sql_file.read_text(encoding="utf-8")
+    assert "SELECT {{limit}};" in original
+    sql_file.write_text(original.replace("SELECT {{limit}};", "SELECT 2;"), encoding="utf-8")
+    remote = world.target(SQL, "SQL vars only")["configuration"]
+    remote["parameters"]["blocks"][0]["codes"][0]["script"] = ["SELECT 2;"]
+
+    world.clone()  # Phase C finishes the pending variables link, in step with the remote
+    sql_file.write_text(original, encoding="utf-8")  # the user reverts transform.sql
+
+    assert _target_change(world, SQL, "SQL vars only") != "unchanged"
+
+
+def test_a_script_edit_saved_after_the_recovery_put_is_neither_rewritten_nor_stamped(
+    tmp_path: Path, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """G3: the scripts are rewritten from the bytes read once; a later save is kept and warned."""
+    from keboola_agent_cli.services import _sync_link_recovery
+    from test_sync_clone_links import PY
+
+    world = _clone_world_with_pending(tmp_path, tmp_config_dir, "helpers")
+    py_file = world.local_dir(PY, "Py step") / "transform.py"
+    edited = py_file.read_text(encoding="utf-8") + "\nprint('saved during the push')\n"
+    real = _sync_link_recovery.put_configuration_only
+
+    def put_then_editor_saves(*args: Any, **kwargs: Any) -> Any:
+        response = real(*args, **kwargs)
+        py_file.write_text(edited, encoding="utf-8")
+        return response
+
+    monkeypatch.setattr(_sync_link_recovery, "put_configuration_only", put_then_editor_saves)
+    result = world.clone()
+    monkeypatch.undo()
+
+    assert py_file.read_text(encoding="utf-8") == edited
+    codes = [w.get("code") for w in result.get("warnings", [])]
+    assert "LOCAL_EDIT_DURING_PUSH" in codes, result
+    assert _target_change(world, PY, "Py step") != "unchanged"

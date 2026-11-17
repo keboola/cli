@@ -38,9 +38,7 @@ their own identity checkpoint (``pending_creates``).
 from __future__ import annotations
 
 import copy
-import hashlib
 import logging
-import tempfile
 from dataclasses import dataclass
 from http import HTTPStatus
 from pathlib import Path
@@ -49,13 +47,20 @@ from typing import TYPE_CHECKING, Any
 from ..constants import CONFIG_FILENAME
 from ..errors import ErrorCode, KeboolaApiError
 from ..sync.branch_scope import branch_tree_path, find_branch_entry
-from ..sync.code_extraction import PYPROJECT_FILENAME, merge_code_files, owned_companions
+from ..sync.code_extraction import PYPROJECT_FILENAME
 from ..sync.config_format import local_config_to_api
 from ..sync.manifest import Manifest, ManifestConfiguration
 from ._encryption import SecretCache, collect_secrets, encrypt_secrets_in_config
 from ._sync_baseline import raise_on_legacy_boundary
-from ._sync_companions import current_companions, require_decided_packages
-from ._sync_disabled import baseline_entry, file_disables, pushed_disabled
+from ._sync_companions import require_decided_packages
+from ._sync_disabled import baseline_entry, pushed_disabled
+from ._sync_local_snapshot import (
+    CapturedInput,
+    capture_local_input,
+    local_edit_warning,
+    local_state,
+    same_files,
+)
 from ._sync_models import LocalConfigHashes
 from ._sync_push_ops import guard_script_shape
 from ._sync_workspace import SANDBOXES_COMPONENT_ID, warn_on_backend_size_change
@@ -67,24 +72,6 @@ if TYPE_CHECKING:
     from .sync_service import SyncService
 
 logger = logging.getLogger(__name__)
-
-LOCAL_EDIT_DURING_PUSH = "LOCAL_EDIT_DURING_PUSH"
-
-
-@dataclass(frozen=True)
-class CapturedInput:
-    """A config's local files as push read them, once.
-
-    Attributes:
-        data: ``_config.yml`` parsed -- what the writeback starts from.
-        merged: *data* with the companion files merged in -- what is sent.
-        hashes: SHA-256 of exactly the bytes *data* and *merged* came from,
-            and whether that ``_config.yml`` disables the config.
-    """
-
-    data: dict[str, Any]
-    merged: dict[str, Any]
-    hashes: LocalConfigHashes
 
 
 @dataclass(frozen=True)
@@ -107,66 +94,6 @@ class UpdateOutcome:
 
     response: dict[str, Any]
     hashes: LocalConfigHashes
-
-
-def local_state(service: SyncService, config_dir: Path, component_id: str) -> LocalConfigHashes:
-    """Hashes of the config's ``_config.yml`` and companion files as they are on disk now."""
-    config_file = config_dir / CONFIG_FILENAME
-    return LocalConfigHashes(
-        file_hash=service._file_hash(config_file) if config_file.is_file() else "",
-        cfg_hash="",
-        extra_hashes=current_companions(service, config_dir, component_id),
-    )
-
-
-def same_files(a: LocalConfigHashes, b: LocalConfigHashes) -> bool:
-    """True iff *a* and *b* describe the same ``_config.yml`` and companion bytes."""
-    return a.file_hash == b.file_hash and a.extra_hashes == b.extra_hashes
-
-
-def _sha256(content: bytes) -> str:
-    return hashlib.sha256(content).hexdigest()
-
-
-def capture_local_input(
-    service: SyncService, config_dir: Path, component_id: str
-) -> CapturedInput | None:
-    """Read ``_config.yml`` and every owned companion file ONCE (D6).
-
-    The bytes are copied into a private directory and parsed and merged from
-    there, so the hashes describe exactly what is sent, whatever an editor
-    does to *config_dir* meanwhile. ``None`` when there is no usable
-    ``_config.yml``.
-    """
-    contents: dict[str, bytes] = {}
-    for name in (CONFIG_FILENAME, *owned_companions(component_id)):
-        path = config_dir / name
-        if path.is_file():
-            contents[name] = path.read_bytes()
-    if CONFIG_FILENAME not in contents:
-        return None
-    with tempfile.TemporaryDirectory(prefix="kbagent-push-") as tmp:
-        snapshot = Path(tmp)
-        for name, raw in contents.items():
-            # A private copy: open() rather than Path.write_bytes, which the
-            # read-only-file tests patch for the user's own files.
-            with open(snapshot / name, "wb") as handle:
-                handle.write(raw)
-        data = service._read_config_file(snapshot)
-        if data is None:
-            return None
-        merged = merge_code_files(component_id, copy.deepcopy(data), snapshot)
-    hashes = {name: _sha256(raw) for name, raw in contents.items()}
-    return CapturedInput(
-        data=data,
-        merged=merged,
-        hashes=LocalConfigHashes(
-            file_hash=hashes.pop(CONFIG_FILENAME),
-            cfg_hash="",
-            extra_hashes=hashes,
-            disabled=file_disables(data),
-        ),
-    )
 
 
 def local_file_changed_error(config_dir: Path) -> KeboolaApiError:
@@ -308,31 +235,6 @@ def held_row_error(change: dict[str, Any]) -> dict[str, str]:
             f"of its configuration {component_id}/{parent} failed in this push (see its error). "
             "Nothing was written for the row. Resolve the configuration, then push again."
         ),
-    }
-
-
-def local_edit_warning(
-    component_id: str, config_id: str, config_dir: Path, *, secrets: bool
-) -> dict[str, Any]:
-    """The ``warnings[]`` entry of a config whose files were edited during the push (D7, R7)."""
-    message = (
-        f"{config_dir} was edited while push sent {component_id}/{config_id}. Push sent the "
-        "version it read; the newer local content was kept, not pushed, and not written over. "
-        "Push again to send it (an edit that changes only comments or formatting has nothing "
-        "to send)."
-    )
-    if secrets:
-        message += (
-            " The file still holds its secret values in plain text: the encrypted values "
-            "were not written back."
-        )
-    return {
-        "code": LOCAL_EDIT_DURING_PUSH,
-        "change_type": "local_edit_during_push",
-        "component_id": component_id,
-        "config_id": config_id,
-        "path": str(config_dir),
-        "message": message,
     }
 
 

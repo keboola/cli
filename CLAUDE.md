@@ -1352,7 +1352,8 @@ kbagent sync push [--project ALIAS] [--all-projects] [--dry-run] [--force] [--al
 # sync pull stale removal (#827): pull records each stale config/row folder, saves the manifest
 #   without it and with `pendingRemovals`, then deletes; the final save keeps only failed deletes.
 #   Diff/push treat a pending path (and below) as absent; the next pull finishes it first, only while
-#   unchanged (else kept untracked, warnings[] PENDING_REMOVAL_KEPT / PENDING_REMOVAL_FAILED).
+#   unchanged (else kept AND still recorded, warnings[] PENDING_REMOVAL_KEPT / PENDING_REMOVAL_FAILED;
+#   a folder tracked again drops its record). A folder inside another planned one goes with it.
 #   A record with an unsafe path (absolute, drive, `..`, unknown tree, symlink on the way, row outside
 #   its rows folder) is dropped and never acted on (PENDING_REMOVAL_INVALID); a record whose delete
 #   fails again stays; dry-run pull lists records it did not process; commit re-checks each folder.

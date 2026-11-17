@@ -46,7 +46,7 @@ from ..sync.manifest import (
     pending_removal_paths,
     save_manifest,
 )
-from ._sync_stale import holds, scan_owned_tree
+from ._sync_stale import holds, same_dir, scan_owned_tree
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +95,10 @@ class RemovalJournal:
             after the recovery -- their delete failed again. Pull reserves
             them and never adopts a row from them (F5).
         planned: Records of the directories to delete, in planning order.
-        failed: Records whose delete failed; the final save keeps them.
+        retained: Records still recorded after the commit -- a delete that
+            failed, or a folder kept because it changed (G1); the final save
+            keeps them, so a kept folder never loses both its manifest entry
+            and its record.
         warnings: ``warnings[]`` entries for the pull result.
     """
 
@@ -103,7 +106,7 @@ class RemovalJournal:
     tree: str
     pending: frozenset[str] = frozenset()
     planned: list[ManifestPendingRemoval] = field(default_factory=list)
-    failed: list[ManifestPendingRemoval] = field(default_factory=list)
+    retained: list[ManifestPendingRemoval] = field(default_factory=list)
     warnings: list[dict[str, Any]] = field(default_factory=list)
 
     @classmethod
@@ -144,7 +147,8 @@ class RemovalJournal:
         records an earlier pull left). Right before each delete the directory
         is checked again (F6): an unsafe path, a symbolic link, a tracked
         config or row inside -- *live* holds the entries this pull wrote --
-        or any change since it was planned keeps it, with a warning.
+        or any change since it was planned keeps it, with a warning. A folder
+        inside another planned one goes with it (G1, :func:`_settle`).
         """
         if not self.planned:
             return
@@ -153,17 +157,9 @@ class RemovalJournal:
             _drop_tracked(checkpoint, item)
         checkpoint.pending_removals = [*checkpoint.pending_removals, *self.planned]
         save_manifest(self.project_root, checkpoint)
-        for item in self.planned:
-            unsafe = unsafe_reason(self.project_root, checkpoint, item, live)
-            reason = unsafe or _keep_reason(self.project_root, checkpoint, item, live or [])
-            if reason is not None:
-                self.warnings.append(_kept_warning(item, reason))
-                continue
-            try:
-                _remove(self.project_root / item.tree, item)
-            except OSError as exc:
-                self.failed.append(item)
-                self.warnings.append(_failed_warning(item, exc))
+        settled = _settle(self.project_root, checkpoint, self.planned, live or [])
+        self.retained += settled.retained
+        self.warnings += settled.warnings
 
 
 def _drop_tracked(manifest: Manifest, item: ManifestPendingRemoval) -> None:
@@ -259,7 +255,8 @@ def _kept_warning(item: ManifestPendingRemoval, reason: str) -> dict[str, Any]:
         "PENDING_REMOVAL_KEPT",
         item,
         f"{_record_path(item)} was not deleted: {reason}. A pull removed its config or row; "
-        "the directory is now untracked. Delete it yourself if you do not need it.",
+        "the folder stays recorded for deletion, so diff and push ignore it and every pull "
+        "checks it again. Delete it, or move it out of the sync tree to keep its content.",
     )
 
 
@@ -280,12 +277,27 @@ def _tracked_dirs(
     return frozenset(d for d in dirs if d.is_dir())
 
 
+@dataclass(frozen=True)
+class Keep:
+    """Why a recorded folder is not deleted now.
+
+    Attributes:
+        reason: The text of the warning.
+        tracked: The folder itself is a tracked config or row directory again
+            (re-tracked since): its manifest entry records it, so the pending
+            record is dropped. Any other kept folder keeps its record (G1).
+    """
+
+    reason: str
+    tracked: bool = False
+
+
 def _keep_reason(
     project_root: Path,
     manifest: Manifest,
     item: ManifestPendingRemoval,
     live: list[ManifestConfiguration],
-) -> str | None:
+) -> Keep | None:
     """Why the recorded directory must not be deleted now, or ``None`` (D11, R15, R16, F5, F6).
 
     Kept: a symbolic link in it, a tracked config or row directory at or
@@ -297,13 +309,73 @@ def _keep_reason(
     others = _tracked_dirs(tree_dir, [*manifest.configurations, *live], manifest, item.tree)
     owned = scan_owned_tree(directory, others)
     if owned.is_link or owned.symlinks:
-        return KEPT_REASON_LINK
+        return Keep(KEPT_REASON_LINK)
     holder = next((o for o in sorted(others) if holds(directory, o)), None)
     if holder is not None:
-        return f"it holds the tracked directory {holder.relative_to(tree_dir).as_posix()}"
+        return Keep(
+            f"it holds the tracked directory {holder.relative_to(tree_dir).as_posix()}",
+            tracked=same_dir(holder, directory),
+        )
     if _file_hash(directory) != item.file_hash or tree_digest(directory) != item.tree_hash:
-        return KEPT_REASON_CHANGED
+        return Keep(KEPT_REASON_CHANGED)
     return None
+
+
+@dataclass
+class Settled:
+    """What :func:`_settle` left: the records to keep and the ``warnings[]`` entries."""
+
+    retained: list[ManifestPendingRemoval] = field(default_factory=list)
+    warnings: list[dict[str, Any]] = field(default_factory=list)
+
+
+def _settle(
+    project_root: Path,
+    manifest: Manifest,
+    items: list[ManifestPendingRemoval],
+    live: list[ManifestConfiguration],
+) -> Settled:
+    """Delete each recorded folder that is still safe and unchanged; the rest stays recorded.
+
+    Outermost first (G1): a folder inside another recorded folder of its tree
+    goes with that folder's delete, after the outer one was checked against
+    its own recorded content -- which includes the inner folder, so the inner
+    one is never deleted first and taken for a change of the outer one. When
+    the outer folder is kept, an inner one is checked on its own. An unsafe
+    record is dropped and never acted on (F1); a folder that is now tracked
+    again drops its record; a kept or undeletable folder keeps it.
+    """
+    out = Settled()
+    deleted: list[ManifestPendingRemoval] = []
+    for item in sorted(items, key=lambda i: (i.tree, i.path.count("/"), i.path)):
+        if any(d.tree == item.tree and item.path.startswith(f"{d.path}/") for d in deleted):
+            continue  # removed with its outer folder
+        unsafe = unsafe_reason(project_root, manifest, item, live)
+        if unsafe is not None:
+            out.warnings.append(
+                _warning(
+                    "PENDING_REMOVAL_INVALID",
+                    item,
+                    f"A pending removal record was dropped and nothing deleted: {unsafe}.",
+                )
+            )
+            continue
+        if not (project_root / item.tree / item.path).exists():
+            continue  # already gone
+        keep = _keep_reason(project_root, manifest, item, live)
+        if keep is not None:
+            out.warnings.append(_kept_warning(item, keep.reason))
+            if not keep.tracked:
+                out.retained.append(item)
+            continue
+        try:
+            _remove(project_root / item.tree, item)
+        except OSError as exc:
+            out.retained.append(item)
+            out.warnings.append(_failed_warning(item, exc))
+            continue
+        deleted.append(item)
+    return out
 
 
 def recover_pending_removals(
@@ -313,9 +385,9 @@ def recover_pending_removals(
 
     Runs at the start of a pull, before any path is allocated. A record with
     an unsafe path is dropped and never acted on (F1). A directory still
-    exactly as recorded is deleted; any other is kept as an untracked
-    directory and reported. Each record is dropped, except one whose delete
-    fails again: it stays recorded (F2). The manifest is saved right away, so
+    exactly as recorded is deleted; any other is kept and reported, and keeps
+    its record (G1) -- unless it is tracked again. A delete that fails again
+    keeps its record too (F2). The manifest is saved right away, so
     a pull that stops later (a conflict) does not leave the records hiding a
     kept directory from diff. A dry run changes nothing and lists the records
     it did not process.
@@ -329,35 +401,11 @@ def recover_pending_removals(
                 item,
                 f"{_record_path(item)} is recorded for deletion by an interrupted pull; a dry "
                 "run does not process it. A real `kbagent sync pull` deletes it if it is "
-                "unchanged, else keeps it untracked.",
+                "unchanged, else keeps it recorded.",
             )
             for item in manifest.pending_removals
         ]
-    warnings: list[dict[str, Any]] = []
-    remaining: list[ManifestPendingRemoval] = []
-    for item in manifest.pending_removals:
-        unsafe = unsafe_reason(project_root, manifest, item)
-        if unsafe is not None:
-            warnings.append(
-                _warning(
-                    "PENDING_REMOVAL_INVALID",
-                    item,
-                    f"A pending removal record was dropped and nothing deleted: {unsafe}.",
-                )
-            )
-            continue
-        directory = project_root / item.tree / item.path
-        if not directory.exists():
-            continue  # deleted before the crash
-        reason = _keep_reason(project_root, manifest, item, [])
-        if reason is not None:
-            warnings.append(_kept_warning(item, reason))
-            continue
-        try:
-            _remove(project_root / item.tree, item)
-        except OSError as exc:
-            remaining.append(item)
-            warnings.append(_failed_warning(item, exc))
-    manifest.pending_removals = remaining
+    settled = _settle(project_root, manifest, list(manifest.pending_removals), [])
+    manifest.pending_removals = settled.retained
     save_manifest(project_root, manifest)
-    return warnings
+    return settled.warnings

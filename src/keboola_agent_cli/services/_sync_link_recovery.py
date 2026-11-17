@@ -30,19 +30,18 @@ from typing import TYPE_CHECKING, Any
 
 from ..errors import ErrorCode, KeboolaApiError
 from ..sync.branch_scope import find_branch_entry
-from ..sync.config_format import api_config_to_local
-from ..sync.diff_engine import config_hash
 from ..sync.manifest import Manifest, ManifestConfiguration
 from ._sync_bindings import (
     SharedCodeLink,
-    _local_hash,
     _refresh_binding_hashes,
     _repoint_shared_code,
     _rewrite_list_placeholders,
-    _rewrite_script_files,
     put_configuration_only,
+    read_in_step,
     resolve_transformation_bindings,
-    written_receipt,
+    rewrite_scripts_from,
+    snapshot_receipt,
+    unchanged_since_read,
 )
 from ._sync_link_pending import (
     LinkMaps,
@@ -359,9 +358,15 @@ def _apply_to_api(configuration: dict[str, Any], links: TransformationLinks) -> 
 
 
 def _apply_to_local(
-    created: CreatedConfig, local_data: dict[str, Any], links: TransformationLinks
+    created: CreatedConfig,
+    local_data: dict[str, Any],
+    links: TransformationLinks,
+    contents: dict[str, bytes],
 ) -> dict[str, str]:
-    """Rewrite the links in *local_data* and the script files; the scripts' new hashes."""
+    """Rewrite the links in *local_data* and the script files (from the bytes read once).
+
+    Returns the scripts' hashes as written (or read, when unchanged) -- G3.
+    """
     extra = local_data.setdefault("_configuration_extra", {})
     if links.variables_id:
         extra["variables_id"] = links.variables_id
@@ -370,7 +375,7 @@ def _apply_to_local(
     if links.shared_code is None:
         return {}
     _repoint_shared_code(local_data, links.shared_code)
-    return _rewrite_script_files(created.config_dir, links.shared_code.row_id_map)
+    return rewrite_scripts_from(created.config_dir, contents, links.shared_code.row_id_map)
 
 
 def _recover(
@@ -399,10 +404,7 @@ def _recover(
         return links.pending
     rewritten = copy.deepcopy(configuration)
     _apply_to_api(rewritten, links)
-    local_data = service._read_config_file(created.config_dir)
-    in_step = local_data is not None and _local_hash(created, local_data) == config_hash(
-        api_config_to_local(created.component_id, remote, created.config_id)
-    )
+    captured = read_in_step(service, created, remote)
     try:
         response = put_configuration_only(
             client,
@@ -418,8 +420,9 @@ def _recover(
     result.configs_rewritten += 1
     if links.shared_code is not None:
         result.shared_code_links += 1
-    if in_step and local_data is not None:
-        scripts = _apply_to_local(created, local_data, links)
+    if captured is not None and unchanged_since_read(service, created, captured, result.warnings):
+        local_data = copy.deepcopy(captured.data)
+        scripts = _apply_to_local(created, local_data, links, captured.contents)
         written = service._write_config_file(created.config_dir, local_data)
         _refresh_binding_hashes(
             service,
@@ -429,14 +432,7 @@ def _recover(
             branch_id=branch_id,
             response=response,
             warnings=result.warnings,
-            receipt=written_receipt(
-                manifest,
-                created,
-                branch_id,
-                local_data=local_data,
-                file_hash=written,
-                rewritten=scripts,
-            ),
+            receipt=snapshot_receipt(captured, file_hash=written, rewritten=scripts),
         )
     return links.pending
 

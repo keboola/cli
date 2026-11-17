@@ -39,7 +39,7 @@ from ..sync.diff_engine import config_hash
 from ..sync.manifest import Manifest
 from ._sync_baseline import apply_stamp, config_baseline
 from ._sync_companions import record_companions
-from ._sync_disabled import file_disables, record_disabled
+from ._sync_disabled import record_disabled
 from ._sync_link_pending import (
     LinkMaps,
     build_link_maps,
@@ -47,6 +47,13 @@ from ._sync_link_pending import (
     read_target,
     set_link_pending,
     validate_targets,
+)
+from ._sync_local_snapshot import (
+    CapturedInput,
+    capture_local_input,
+    local_edit_warning,
+    local_state,
+    same_files,
 )
 from ._sync_models import (
     AMBIGUOUS_ROW_PLACEHOLDERS_KEY,
@@ -765,31 +772,82 @@ def _rewrite_script_files(config_dir: Path, row_id_map: dict[str, str]) -> dict[
     return hashes
 
 
-def written_receipt(
-    manifest: Manifest,
-    created: CreatedConfig,
-    branch_id: int | None,
-    *,
-    local_data: dict[str, Any],
-    file_hash: str,
-    rewritten: dict[str, str] | None = None,
-) -> LocalConfigHashes:
-    """The hashes to stamp after a backfill rewrote an EXISTING config's files (#827, F7).
+def rewrite_scripts_from(
+    config_dir: Path, contents: dict[str, bytes], row_id_map: dict[str, str]
+) -> dict[str, str]:
+    """Rewrite script placeholders from the bytes read ONCE (*contents*); their new hashes (G3).
 
-    ``_config.yml`` is the hash of the bytes written; a companion keeps its
-    recorded baseline unless the backfill rewrote it (*rewritten*).
+    Only a file whose text changes is written; the hash is of the bytes
+    written, else of the bytes read -- never a second read of the folder.
     """
-    entry = find_branch_entry(manifest, created.component_id, created.config_id, branch_id)
-    recorded = (entry.metadata.get("pull_extra_hashes") if entry is not None else None) or {}
-    extra = {str(k): str(v) for k, v in recorded.items()} if isinstance(recorded, dict) else {}
-    for name, digest in (rewritten or {}).items():
-        if name in extra:
-            extra[name] = digest
+    hashes: dict[str, str] = {}
+    for filename in _SCRIPT_FILENAMES:
+        raw = contents.get(filename)
+        if raw is None:
+            continue
+        text = raw.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+        rewritten = rewrite_shared_code_placeholders(text, row_id_map)
+        if rewritten != text:
+            raw = rewritten.replace("\n", os.linesep).encode("utf-8")
+            (config_dir / filename).write_bytes(raw)
+        hashes[filename] = hashlib.sha256(raw).hexdigest()
+    return hashes
+
+
+def read_in_step(
+    service: SyncService, created: CreatedConfig, remote: dict[str, Any]
+) -> CapturedInput | None:
+    """The config's local files read once, when they hold exactly what *remote* holds (G2).
+
+    ``None`` when there is no usable ``_config.yml`` or it differs: then the
+    recovery touches no local file and moves no local baseline.
+    """
+    captured = capture_local_input(service, created.config_dir, created.component_id)
+    if captured is None:
+        return None
+    remote_local = api_config_to_local(created.component_id, remote, created.config_id)
+    return captured if config_hash(captured.merged) == config_hash(remote_local) else None
+
+
+def unchanged_since_read(
+    service: SyncService,
+    created: CreatedConfig,
+    captured: CapturedInput,
+    warnings: list[dict[str, Any]],
+) -> bool:
+    """True iff the files are still the bytes read; else a ``LOCAL_EDIT_DURING_PUSH`` warning (G3).
+
+    An edit saved after the read is neither rewritten nor stamped: the local
+    baseline stays as it was, so the next diff weighs the edit against the
+    remote change (a conflict) instead of taking it for synced.
+    """
+    now = local_state(service, created.config_dir, created.component_id)
+    if same_files(now, captured.hashes):
+        return True
+    warnings.append(
+        local_edit_warning(
+            created.component_id, created.config_id, created.config_dir, secrets=False
+        )
+    )
+    return False
+
+
+def snapshot_receipt(
+    captured: CapturedInput, *, file_hash: str, rewritten: dict[str, str] | None = None
+) -> LocalConfigHashes:
+    """The hashes to stamp after a recovery rewrote an EXISTING config's files (#827 F7, G2).
+
+    ``_config.yml`` is the hash of the bytes written; every companion is the
+    hash of the bytes read once for the in-step comparison, or of the bytes
+    written where the recovery rewrote it (*rewritten*).
+    """
+    extra = dict(captured.hashes.extra_hashes)
+    extra.update({name: digest for name, digest in (rewritten or {}).items() if name in extra})
     return LocalConfigHashes(
         file_hash=file_hash,
         cfg_hash="",
         extra_hashes=extra,
-        disabled=file_disables(local_data),
+        disabled=captured.hashes.disabled,
     )
 
 
@@ -1068,10 +1126,7 @@ def _recover_run_target(
     remap = _remap_into(created, rewritten, maps, link_type, result)
     if not remap.references and not remap.config_row_ids:
         return remap.pending
-    local_data = service._read_config_file(created.config_dir)
-    in_step = local_data is not None and _local_hash(created, local_data) == config_hash(
-        api_config_to_local(created.component_id, remote, created.config_id)
-    )
+    captured = read_in_step(service, created, remote)
     try:
         response = put_configuration_only(
             client, created.component_id, created.config_id, rewritten, branch_id
@@ -1080,37 +1135,32 @@ def _recover_run_target(
         result.errors.append(_link_error(link_type, created, ErrorCode.API_ERROR, str(exc)))
         return True
     _count(created.component_id, remap, result)
-    extra = (local_data or {}).get("_configuration_extra")
-    if in_step and local_data is not None and isinstance(extra, dict):
-        remap_run_targets_in_place(
-            created.component_id,
-            extra,
-            maps.configs,
-            maps.rows,
-            target_rows=maps.target_rows,
-            uncreated=maps.uncreated,
-            planned_rows=maps.planned_rows,
-        )
-        written = service._write_config_file(created.config_dir, local_data)
-        _refresh_binding_hashes(
-            service,
-            client,
-            created=created,
-            manifest=manifest,
-            branch_id=branch_id,
-            response=response,
-            warnings=result.warnings,
-            receipt=written_receipt(
-                manifest, created, branch_id, local_data=local_data, file_hash=written
-            ),
-        )
+    if captured is None or not isinstance(captured.data.get("_configuration_extra"), dict):
+        return remap.pending
+    if not unchanged_since_read(service, created, captured, result.warnings):
+        return remap.pending
+    local_data = copy.deepcopy(captured.data)
+    remap_run_targets_in_place(
+        created.component_id,
+        local_data["_configuration_extra"],
+        maps.configs,
+        maps.rows,
+        target_rows=maps.target_rows,
+        uncreated=maps.uncreated,
+        planned_rows=maps.planned_rows,
+    )
+    written = service._write_config_file(created.config_dir, local_data)
+    _refresh_binding_hashes(
+        service,
+        client,
+        created=created,
+        manifest=manifest,
+        branch_id=branch_id,
+        response=response,
+        warnings=result.warnings,
+        receipt=snapshot_receipt(captured, file_hash=written),
+    )
     return remap.pending
-
-
-def _local_hash(created: CreatedConfig, local_data: dict[str, Any]) -> str:
-    merged = copy.deepcopy(local_data)
-    merge_code_files(created.component_id, merged, created.config_dir)
-    return config_hash(merged)
 
 
 def _remap_into(
