@@ -298,8 +298,13 @@ def _terminate_and_wait(
     return final
 
 
-def _raw_poll_error(exc: Exception) -> KeboolaApiError:
-    """A ``KeboolaApiError`` for an exception that escaped ``wait_for_queue_job`` raw."""
+def raw_poll_error(exc: Exception) -> KeboolaApiError:
+    """A ``KeboolaApiError`` for an exception that escaped ``wait_for_queue_job`` raw.
+
+    The HTTP layer translates connect errors and timeouts, but another
+    transport error (a reset connection, a protocol error) or an unreadable
+    poll response reaches the caller untranslated.
+    """
     if isinstance(exc, httpx.TransportError):
         return KeboolaApiError(
             message=f"Lost the connection to the Queue API while polling the job: {exc}",
@@ -313,32 +318,45 @@ def _raw_poll_error(exc: Exception) -> KeboolaApiError:
     )
 
 
-def _created_job_error(
+# Raw exceptions ``wait_for_queue_job`` can let through: transport errors the
+# HTTP layer does not translate, and a poll response that is not a job object.
+RAW_POLL_ERRORS: tuple[type[Exception], ...] = (
+    httpx.HTTPError,
+    ValueError,
+    TypeError,
+    AttributeError,
+)
+
+
+def created_job_error(
     exc: KeboolaApiError,
     *,
     job_id: str,
-    alias: str,
+    follow_up: str,
     details: dict[str, Any] | None = None,
 ) -> KeboolaApiError:
     """``exc``, raised while waiting for job ``job_id`` that was already created.
 
     The code and HTTP status stay (so the exit code does too); ``retryable``
-    is always false, because starting the command again creates a second job
-    (spec LR3). ``details`` gains ``job_id`` and the message says how to
-    follow the job.
+    is always false, because starting the job again creates a second one
+    (spec LR3). ``details`` gains ``job_id`` and the message names
+    ``follow_up``, the way to read the job (a CLI command, or an SDK call).
     """
     base = exc.details if details is None else details
     return KeboolaApiError(
         message=(
             f"{exc.message} Queue job {job_id} was created and may still be running: "
-            f"check it with `kbagent job detail --project {alias} --job-id {job_id}`. "
-            "Do not start it again."
+            f"check it with {follow_up}. Do not start it again."
         ),
         status_code=exc.status_code,
         error_code=exc.error_code,
         retryable=False,
         details={**(base or {}), "job_id": job_id},
     )
+
+
+def _cli_follow_up(alias: str, job_id: str) -> str:
+    return f"`kbagent job detail --project {alias} --job-id {job_id}`"
 
 
 class QueueJobFailedError(KeboolaApiError):
@@ -728,13 +746,12 @@ class JobService(BaseService):
                         kill_on_timeout=kill_on_timeout,
                         alias=alias,
                     )
-                except (httpx.HTTPError, ValueError, TypeError, AttributeError) as exc:
-                    # The HTTP layer translates connect errors and timeouts, but
-                    # another transport error (a reset connection, a protocol
-                    # error) or an unreadable poll response reaches us raw. The
-                    # job exists either way: report it like any other poll failure.
-                    raise _created_job_error(
-                        _raw_poll_error(exc), job_id=job_id, alias=alias
+                except RAW_POLL_ERRORS as exc:
+                    # The job exists either way: report it like any other poll failure.
+                    raise created_job_error(
+                        raw_poll_error(exc),
+                        job_id=job_id,
+                        follow_up=_cli_follow_up(alias, job_id),
                     ) from exc
                 else:
                     # Successful poll: still attach log tail for warning /
@@ -852,8 +869,11 @@ class JobService(BaseService):
             # kill failed: the job may still run. Surface the original timeout
             # with the tail, as a failure after the job was created.
             details = _enrich_with_tail(exc.details, tail)
-            raise _created_job_error(
-                exc, job_id=job_id, alias=alias, details=details or {}
+            raise created_job_error(
+                exc,
+                job_id=job_id,
+                follow_up=_cli_follow_up(alias, job_id),
+                details=details or {},
             ) from exc
 
         # Anything else (network, HTTP 5xx, auth, retries exhausted, a future
@@ -861,7 +881,9 @@ class JobService(BaseService):
         # layer maps it to the same exit code. But the job was created and may
         # still run: never retryable, with the job id (spec LR3).
         logger.debug("run_job: wait error code=%s after the job was created", code)
-        raise _created_job_error(exc, job_id=job_id, alias=alias) from exc
+        raise created_job_error(
+            exc, job_id=job_id, follow_up=_cli_follow_up(alias, job_id)
+        ) from exc
 
     @staticmethod
     def resolve_variable_values_id(

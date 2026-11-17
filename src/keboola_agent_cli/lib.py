@@ -64,6 +64,7 @@ from .result_models import (
 )
 from .services._token_last_used import dormancy_rank, enrich_tokens
 from .services.job_idempotency_store import JobIdempotencyStore, run_idempotent_job
+from .services.job_service import RAW_POLL_ERRORS, created_job_error, raw_poll_error
 
 logger = logging.getLogger(__name__)
 
@@ -468,6 +469,10 @@ class Client:
         Raises:
             ValueError: If ``idempotency_key`` is given but no store is available
                 (the stateless facade cannot invent a persistence location).
+            KeboolaApiError: With ``wait=True``, any failure after the job was
+                created (the job failed, the local timeout ran out, polling
+                failed) has ``retryable=False`` and ``details["job_id"]``: read
+                the job, do not run it again.
         """
         effective_branch = branch_id if branch_id is not None else self._resolved_branch_id
 
@@ -501,12 +506,41 @@ class Client:
         )
         job_id = str(job.get("id", ""))
         if wait and job_id:
-            job = self._client.wait_for_queue_job(
-                job_id, max_wait=timeout, poll_strategy=poll_strategy
-            )
+            job = self._wait_for_created_job(job_id, timeout, poll_strategy)
         if replayed:
             job = {**job, "idempotent_replay": True}
         return JobResult.model_validate(job)
+
+    def _wait_for_created_job(
+        self, job_id: str, timeout: float, poll_strategy: str
+    ) -> dict[str, Any]:
+        """Poll a job ``run_job`` created; every failure names the job and is not retryable.
+
+        A retry of ``run_job`` would create a second job, so a poll failure
+        keeps its code but gets ``retryable=False`` and ``details["job_id"]``
+        (#725 follow-up). A job that ended in ``error`` (``QUEUE_JOB_FAILED``)
+        keeps its message; the others say the job may still be running. A
+        local timeout never stops the job.
+        """
+        follow_up = f"`Client.raw.get_job_detail({job_id!r})`"
+        try:
+            return self._client.wait_for_queue_job(
+                job_id, max_wait=timeout, poll_strategy=poll_strategy
+            )
+        except KeboolaApiError as exc:
+            if exc.error_code == ErrorCode.QUEUE_JOB_FAILED:
+                raise KeboolaApiError(
+                    message=exc.message,
+                    status_code=exc.status_code,
+                    error_code=exc.error_code,
+                    retryable=False,
+                    details={**(exc.details or {}), "job_id": job_id},
+                ) from exc
+            raise created_job_error(exc, job_id=job_id, follow_up=follow_up) from exc
+        except RAW_POLL_ERRORS as exc:
+            raise created_job_error(
+                raw_poll_error(exc), job_id=job_id, follow_up=follow_up
+            ) from exc
 
     def config_detail(
         self,

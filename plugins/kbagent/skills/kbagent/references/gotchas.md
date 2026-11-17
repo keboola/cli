@@ -77,6 +77,7 @@ These lists keep `error`, because their entries are not failed items with an err
 - **Every error after the job was created carries `details.job_id` and `retryable: false`**: a connection error, HTTP 5xx, a read timeout or exhausted retries while polling, an unreadable poll response, and a `job run` timeout whose kill failed. The error code and the exit code are unchanged (`CONNECTION_ERROR` / `TIMEOUT` / `RETRY_EXHAUSTED` exit 4, `API_ERROR` exit 1, `QUEUE_JOB_TIMEOUT` exit 4); the message says the job was created and may still be running, and names `kbagent job detail --project P --job-id ID`.
 - **Do not start the job again.** Before vNEXT such an error could say `retryable: true` with no job id, and a retry created a second run. Read the job with `job detail` first. Over REST (`POST /flows/{project}/{flow_id}/run?wait=true`) the error body has the same `retryable` and `details.job_id`.
 - A transport error the HTTP layer did not translate (a reset connection) is now `CONNECTION_ERROR` (exit 4) instead of an internal error.
+- **SDK `Client.run_job(wait=True)` follows the same rule**: every error after the create (also `QUEUE_JOB_FAILED` and the local timeout, which never stops the job) has `retryable=False` and `details["job_id"]`; read the job with `Client.raw.get_job_detail(job_id)`.
 
 ## `project refresh` in a local directory takes the new token from the global config
 
