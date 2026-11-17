@@ -194,6 +194,96 @@ class TestJobRunWait:
         client.create_job.assert_called_once()
 
 
+def _queue_timeout() -> KeboolaApiError:
+    return KeboolaApiError(
+        message=f"Queue job {JOB_ID} did not complete within 5s",
+        status_code=504,
+        error_code=ErrorCode.QUEUE_JOB_TIMEOUT,
+        retryable=True,
+    )
+
+
+def _queue_job_failed() -> KeboolaApiError:
+    return KeboolaApiError(
+        message=f"Queue job {JOB_ID} failed: boom",
+        status_code=500,
+        error_code=ErrorCode.QUEUE_JOB_FAILED,
+        retryable=False,
+    )
+
+
+FAILED_JOB = {"id": JOB_ID, "status": "error", "isFinished": True, "result": {"tasks": []}}
+
+
+class TestEnrichmentNeverLosesThePollError:
+    """The log tail, the job read and the kill are best effort (#725 follow-up review A/B).
+
+    When one of them breaks on an odd answer, the polling error survives with
+    its code and exit code, ``retryable: false`` and ``details.job_id``.
+    """
+
+    def test_job_run_timeout_kill_ok_but_job_detail_is_a_list(self, tmp_path: Path) -> None:
+        client = _client(_queue_timeout())
+        client.kill_job.return_value = {"id": JOB_ID}
+        client.get_job_detail.return_value = []
+        with patch("keboola_agent_cli.services.job_service.JOB_TERMINATE_GRACE_SECONDS", 0):
+            result = _job_run(_store(tmp_path), client)
+        # The kill outcome is unknown: reported like a failed kill, exit 4.
+        assert result.exit_code == 4, result.output
+        _assert_created_job_error(json.loads(result.stdout)["error"], ErrorCode.QUEUE_JOB_TIMEOUT)
+
+    def test_job_run_failed_job_with_null_event(self, tmp_path: Path) -> None:
+        client = _client(_queue_job_failed())
+        client.get_job_detail.return_value = FAILED_JOB
+        client.fetch_job_events.return_value = [None]
+        result = _job_run(_store(tmp_path), client)
+        assert result.exit_code == 1, result.output
+        error = json.loads(result.stdout)["error"]
+        assert error["code"] == ErrorCode.QUEUE_JOB_FAILED
+        assert error["retryable"] is False
+        assert error["details"]["job_id"] == JOB_ID
+
+    def test_flow_run_failed_job_with_null_event(self, tmp_path: Path) -> None:
+        client = _client(_queue_job_failed())
+        client.get_job_detail.return_value = FAILED_JOB
+        client.fetch_job_events.return_value = [None]
+        result = _flow_run(_store(tmp_path), client)
+        assert result.exit_code == 1, result.output
+        envelope = json.loads(result.stdout)
+        assert envelope["error"]["code"] == ErrorCode.QUEUE_JOB_FAILED
+        assert envelope["error"]["retryable"] is False
+        assert envelope["error"]["details"]["job_id"] == JOB_ID
+        assert "PARTIAL_RUN_IGNORES_CONDITIONS" in [w["code"] for w in envelope["warnings"]]
+
+    def test_flow_run_timeout_with_list_job_detail_never_kills(self, tmp_path: Path) -> None:
+        client = _client(_queue_timeout())
+        client.get_job_detail.return_value = []
+        result = _flow_run(_store(tmp_path), client)
+        assert result.exit_code == 4, result.output
+        error = json.loads(result.stdout)["error"]
+        assert error["code"] == ErrorCode.QUEUE_JOB_TIMEOUT
+        assert error["retryable"] is False
+        assert error["details"]["job_id"] == JOB_ID
+        client.kill_job.assert_not_called()
+
+    def test_job_run_terminated_timeout_carries_job_id(self, tmp_path: Path) -> None:
+        client = _client(_queue_timeout())
+        client.kill_job.return_value = {"id": JOB_ID}
+        client.get_job_detail.return_value = {
+            "id": JOB_ID,
+            "status": "terminated",
+            "isFinished": True,
+        }
+        result = _job_run(_store(tmp_path), client)
+        assert result.exit_code == 7, result.output
+        error = json.loads(result.stdout)["error"]
+        assert error["code"] == ErrorCode.JOB_TIMEOUT_TERMINATED
+        assert error["retryable"] is False
+        assert error["details"]["job_id"] == JOB_ID
+        assert error["details"]["job"]["status"] == "terminated"
+        assert "logTail" in error["details"]
+
+
 class TestFlowRunWait:
     @pytest.mark.parametrize(("failure", "code", "exit_code"), POLL_FAILURES)
     def test_poll_failure_is_not_retryable_and_keeps_warnings(
