@@ -7367,6 +7367,29 @@ class TestE2EFlowOperations:
         assert detail["component_id"] == "keboola.flow"
         assert "phase_count" in detail
 
+        _step(5.1, "flow run --dry-run -- partial selection, no job created")
+        data = self._run_ok(
+            "flow",
+            "run",
+            "--project",
+            self.alias,
+            "--flow-id",
+            flow_id,
+            "--from-phase-id",
+            "p1",
+            "--dry-run",
+        )
+        assert data["data"]["dry_run"] is True
+        assert data["data"]["partial"] is True
+        assert data["data"]["selection"]["task_ids"] == ["t1"]
+        assert "PARTIAL_RUN_IGNORES_CONDITIONS" in [w["code"] for w in data["warnings"]]
+
+        _step(5.2, "flow run --task-id ' ' -- blank selector is exit 2, never a whole-flow run")
+        result = self._run(
+            "flow", "run", "--project", self.alias, "--flow-id", flow_id, "--task-id", " "
+        )
+        assert result.exit_code == 2, result.output
+
         _step(6, "flow update -- rename the flow")
         result = self._run(
             "flow",

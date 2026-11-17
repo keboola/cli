@@ -167,8 +167,45 @@ kbagent --json flow update --project prod --flow-id 111 --definition-file update
 Conditional flows execute as a job on the `keboola.flow` component:
 
 ```bash
-kbagent --json job run --project prod --component-id keboola.flow --config-id 111 --wait
+kbagent --json flow run --project prod --flow-id 111 --wait
+# Same job, older kbagent: job run --component-id keboola.flow --config-id 111
 ```
+
+### Run only some tasks
+
+*(since vNEXT)*
+
+`flow run` takes a selection: `--task-id` (repeat it) and/or `--from-phase-id`.
+The Queue job then carries `onlyFlowTaskIds`, like the UI's "Run selected tasks".
+
+```bash
+# 1. Preview: reads the flow once, creates nothing
+kbagent --json flow run --project prod --flow-id 111 --from-phase-id transform --dry-run
+# 2. Run it and wait; read failed_task_ids, not only the flow status
+kbagent --json flow run --project prod --flow-id 111 --from-phase-id transform --wait
+# Single tasks, any phase:
+kbagent --json flow run --project prod --flow-id 111 --task-id task-a --task-id task-b --wait
+```
+
+- `--from-phase-id P` = P plus the phases reached by following **default
+  transitions** (the `next[]` entry without `condition`). It never follows a
+  conditional transition: such phases come back in a `CONDITIONAL_PHASES_SKIPPED`
+  warning; add their tasks with `--task-id`. It does not mean "as if everything
+  succeeded".
+- **Conditions are not evaluated in a partial run.** Every selected task runs,
+  phase after phase, also after a failure; routing-only phases may run empty;
+  unselected variable tasks do not run. The flow job's status is the status of
+  its last phase, so it can say `success` while a selected task failed. Under
+  `--wait` kbagent reports `task_results` / `failed_task_ids` and exits 1 when a
+  selected task failed or is missing from the job's `result.tasks`.
+- `selection.phases` in the output is which phases hold selected tasks, not the
+  order the daemon runs them in.
+- Disabled tasks: given by id = error; on the `--from-phase-id` path = skipped
+  and listed in `skipped_disabled_task_ids`; nothing left = error.
+- `--timeout` never stops the job (exit 4); follow it with `job detail`.
+- The selection and the variable binding come from one read of the flow. An
+  edit of the flow between that read and the Queue executing the job is not
+  detected.
 
 ## Schedule a flow
 

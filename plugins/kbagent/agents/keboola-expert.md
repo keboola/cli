@@ -116,7 +116,7 @@ been retired, so its absence is NOT a promise (see §1 Rule 6).
 
 | User intent | First choice | Fallback | NEVER |
 |---|---|---|---|
-| Author / edit a conditional flow (keboola.flow) | `kbagent flow validate --definition-file f.yaml --project P` (fetches the live schema; loop until clean) then `flow new` / `flow update --definition-file` | fetch `flow detail`, merge phases/tasks locally, re-validate, push | integer ids (ids are STRINGS); `dependsOn` (use `next[].goto` + conditions); `--component-id` or `keboola.orchestrator` (both dropped 0.57.0); `flow schema --full` without `--project` |
+| Author / edit a conditional flow (keboola.flow) | `kbagent flow validate --definition-file f.yaml --project P` (fetches the live schema; loop until clean) then `flow new` / `flow update --definition-file` | fetch `flow detail`, merge phases/tasks locally, re-validate, push | integer ids (ids are STRINGS); `dependsOn` (use `next[].goto` + conditions); `--component-id` or `keboola.orchestrator` (both dropped 0.57.0) |
 | Schedule flow | `kbagent flow schedule --project P --cron ... [--timezone]` -- confirm `activated: true` | -- | raw REST to `/storage/configurations/keboola.scheduler` |
 | Deploy configs from git in CI | [gitops-cicd-workflow.md](../skills/kbagent/references/gitops-cicd-workflow.md) | -- | `push --force` without a reviewed dry run |
 | What starts this flow automatically / is this flow scheduled | `kbagent flow triggers --project P --flow-id ID` (0.92.0+) -- cron schedules AND table triggers in one call | `kbagent schedule list --project P` for the cron half only | concluding "this flow has no trigger" from an empty result -- `cross_project_triggers_checked` is `false`, so empty means "no trigger that kbagent CHECKED"; reading `last_run: null` as "disabled" (it means never fired); expecting table triggers on a dev branch (the Storage route is production-only) |
@@ -125,6 +125,7 @@ been retired, so its absence is NOT a promise (see §1 Rule 6).
 | Create SQL transformation | `kbagent transformation create --project P --name N (--sql '...' \| --sql-file F) [--created-table T ...]` -- dialect from the project `default_backend`, statements split, output mapping derived from the name | `kbagent config new --component-id keboola.snowflake-transformation --name N --project P --push --no-files` then `config update --set ...` | raw `POST /v2/storage/components/.../configs` |
 | Edit SQL transformation blocks/codes | `kbagent transformation show` (FRESH ids) then `kbagent transformation edit --project P --config-id K --change-description T --op '{"op":"set_code",...}'` -- 9 ops, ids `b{i}` / `b{i}.c{j}`, `--storage` REPLACES wholesale | `kbagent config update --project P --configuration-file body.json` (auto-normalizes `script[]`) | `transformation edit` without a fresh `show` (positional ids renumber); raw `PUT` (skips `script[]` normalization) |
 | Run a job (and wait) | `kbagent job run --project P --component-id C --config-id K --wait` | -- | `job run` without `--wait` when the user expects the result |
+| Run some tasks of a flow | `kbagent flow run -p P --flow-id F --task-id T` / `--from-phase-id PH` (vNEXT+), `--dry-run` first | -- | expecting conditions to apply; trusting the flow status over `failed_task_ids` |
 | Provision / read an OTLP Data Streams endpoint | `kbagent stream create-source -p P --name N --type otlp [--if-not-exists]` (auto-creates logs/metrics/traces sinks) then `stream detail --name N -p P --reveal` | `stream list`; `--no-sinks` for a bare source | deriving the `stream-in` URL yourself (use `source.otlp.url`); printing the secret unasked |
 | Mint / rotate / revoke a scoped Storage token | `kbagent token create -p P --description DESC [--bucket-write B ...] [--expires-in N]` / `token refresh` / `token delete --token-id ID` -- `create` needs a MASTER token (0.89.0+ pre-flight `MISSING_MASTER_TOKEN`; `canManageTokens` alone = server 500, #599), refresh/list/delete need only `canManageTokens`; secret shown ONCE (persist `id` + `expires` only); `token list` (0.86.0+) is the only source of an existing `--token-id` | same ops on the SDK facade: `Client.create_scoped_token / refresh_token / delete_token` | `--component-access` / `--can-read-all-file-uploads` for an UPLOAD token (uploads need `--bucket-write` on the sink bucket; those flags gate READING others' uploads); claiming `stream create-source` needs a master token |
 | Search items by name across projects | `kbagent search QUERY (--project P \| --all-projects) [--type table\|bucket\|config\|flow\|data-app\|transformation] [--search-type textual\|config-based] [--regex]` -- `--regex` matches WHOLE terms on entity names: `report` does NOT match `monthly_report`, write `.*report.*` | -- | `--regex` with `--search-type config-based` (exit 2) |
@@ -251,7 +252,7 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   --sort-order`. `storage tables --include-usage` -- storage input/output
   mappings ONLY, never SQL text. `search --scope PATH` -- config-based only.
   `sharing link --stage in|out` -- default stays `in`, NOT derived from the
-  source bucket (MCP derives it). All five are on `kbagent serve` too. gotchas.md.
+  source bucket. gotchas.md.
 
 **A write that failed with a 5xx**
 - `POST`/`PATCH` is NOT retried on 5xx any more (0.86.0+); `retryable: false`
@@ -263,8 +264,7 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
 - Exit 3 covers `INVALID_TOKEN`, `AUTH_REJECTED` (the 401 body blames
   something other than the credential) and `MISSING_MASTER_TOKEN` (a
   semantic-layer write on a non-admin token). Accept all three before
-  concluding the credential is bad. Quote the `[exceptionId: ...]` when
-  escalating. gotchas.md.
+  concluding the credential is bad. gotchas.md.
 
 **Finding an existing Storage token**
 - `kbagent token list -p P` (0.86.0+) -- the only source of the `--token-id`
@@ -279,7 +279,7 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   is invalid. `flow new`/`flow update` validate against the **live** schema
   fetched from the stack and reject bad bodies with `INVALID_FLOW_DEFINITION`;
   a failed schema fetch does NOT block the write (structural checks skipped,
-  `structural schema validation skipped` warning). `flow update --definition-file` is a
+  with a warning). `flow update --definition-file` is a
   **full-replace** of phases+tasks -- fetch `flow detail` first, merge locally,
   `flow validate --definition-file merged.yaml --project P` until clean, then push.
 - **"No schedules found" is not "no trigger" (0.92.0+)**: `schedule list` /
