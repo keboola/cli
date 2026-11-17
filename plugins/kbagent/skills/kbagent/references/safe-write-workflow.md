@@ -136,8 +136,9 @@ once `.kbagent/` exists, you can run from any subdirectory of the repo.
 *(since vNEXT)* (#955) `init --from-global` copies the tokens **once**; the
 local directory is not linked to the global config. When the old tokens stop
 working (expired, or revoked after the user minted new ones in the global
-config), commands in the local directory that call Keboola fail with
-`INVALID_TOKEN` (exit 3), while the same project works from `~`. Fix it with
+config), commands in the local directory that call Keboola report
+`INVALID_TOKEN` (exit 3; `project status` shows an error row and exits 1),
+while the same project works from `~`. Fix it with
 `project refresh` in the local directory, which first takes the global
 config's working token:
 
@@ -150,7 +151,8 @@ config's working token:
      be minted, which needs the Manage token. This does not prove the global
      config has no working token: adoption also needs the local check to say
      `INVALID_TOKEN` (a timeout, 5xx or `AUTH_REJECTED` skips it) and exactly
-     one distinct global token for the project. Retry a transient error first.
+     one distinct global static token for the same project and stack, other
+     than the local one. Retry a transient error first.
    - `data.projects_valid[]` (left alone), `data.projects_skipped[]` (session
      or no project ID), `data.projects_failed[]` (check failed; exit 1, also
      in a dry-run).
@@ -168,7 +170,8 @@ config's working token:
    `kbagent project refresh --project ALIAS` (or `--all-projects`) themselves
    in a terminal, from the same directory. Never ask for the Manage token in
    chat, never pass `--allow-env-manage-token` on your own. Exit 1 means some
-   project landed in `data.projects_failed`; the others were written.
+   project landed in `data.projects_failed`; only the entries in
+   `projects_adopted` and `projects_refreshed` were written.
 4. **Verify**: `kbagent --json project status --project ALIAS` returns
    `data[].status == "ok"`.
 
@@ -183,8 +186,9 @@ Do not:
 
 Notes:
 - Only adoption from the global config is limited to a token the API rejects
-  as `INVALID_TOKEN`; a valid local token is never touched. Any other check
-  error (timeout, 5xx, `AUTH_REJECTED`) falls back to minting.
+  as `INVALID_TOKEN`; a valid local token is never touched. Another API error
+  during the check (timeout, 5xx, `AUTH_REJECTED`) falls back to minting; a
+  non-API failure lands the project in `projects_failed`.
 - `projects_failed` with "changed concurrently": another process edited the
   alias during the run; run the command again. If the message says a new
   Storage token was created but not saved, give the user its ID so they can
