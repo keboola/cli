@@ -225,6 +225,16 @@ after file deletion) show as `deleted` -- `push --force` DELETEs them via
 as `remote_deleted`; push never re-creates it. `sync pull` deletes its
 directory, or keeps an edited one and reports it as `skipped`.
 
+*(since vNEXT, #827)* When the update of the parent config is refused
+(`SYNC_CONFLICT`: it or one of its rows changed in Keboola after push read
+it), push sends none of that config's row creates, updates or deletes; each
+gets its own `SYNC_CONFLICT` entry in `errors[]` naming the parent. Run
+`kbagent sync pull`, review, push again. A row update itself still sends no
+version precondition, so a UI edit of a row whose parent push did not update
+can still be overwritten -- run `sync diff` right before the push.
+A row folder that pull is removing is recorded under `pendingRemovals` first;
+until a pull finishes the removal, diff and push never read it as a new row.
+
 Human-mode diff output prints row-level changes with the same `+`/`~`/`-`/`=`
 prefixes as parent configs, e.g.:
 

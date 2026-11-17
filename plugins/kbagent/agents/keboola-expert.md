@@ -321,11 +321,10 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
 - **`kbagent storage rename-table` does not exist** (nor `flow migrate`): the
   Storage API has no table rename. Create-new + rewrite downstream configs;
   never propose a rename step.
-- **`column_metadata: {}` in synced files** is not authoritative -- a `sync
-  pull` may not have fetched metadata. Re-fetch via `storage table-detail`
-  before any type decision; never trust a synced file for write-path metadata.
-- **Drifted sync tree**: reconcile with `sync pull --theirs` (remote wins:
-  overwrites local edits, restores deleted files, resolves conflicts); NEVER
+- **`column_metadata: {}` in synced files** is not authoritative (pull may
+  not have fetched it): re-fetch via `storage table-detail` before any type
+  decision.
+- **Drifted sync tree**: reconcile with `sync pull --theirs` (remote wins everywhere); NEVER
   hand-edit `.keboola/manifest.json`. Plain pull re-materializes deleted dirs;
   `is_disabled: true` = disabled (absent = enabled); `never_fetched` on
   diff/push = `sync pull` first; non-zero `summary.orphaned` (0.89.0+, #649) =
@@ -343,10 +342,12 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   diff` still shows the edit as local; a promoted config gets its own dev
   entry; flow/schedule/variables/shared-code refs map to dev ids. gotchas.md.
 - **Sync rows/deletes/companions** (1.0.0, #931/#933): `push --force` never
-  deletes a remotely changed (or baseline-less) config/row -- read
-  `refused_deletions[]`; UI-added rows are in `remote_only_rows[]`; ignoring a
-  component keeps local work; `_description.md`/`pyproject.toml` are a tracked
-  set, a pyproject with no dependencies list never clears packages. gotchas.md.
+  deletes a remotely changed or baseline-less config/row (`refused_deletions[]`);
+  UI-added rows: `remote_only_rows[]`; ignoring a component keeps local work.
+  vNEXT+ (#827): updates are conditional -- `SYNC_CONFLICT` = edited in Keboola
+  after push read it, its rows held: pull, review, push; never retry blindly.
+  Don't edit the tree during push. Never use an older kbagent on a manifest
+  with `pendingRemovals`. gotchas.md.
 - **Ignored components** (0.91.0, #689): `keboola.sandboxes` +
   `keboola.mcp-server-tool` (+ manifest `ignoredComponents`) never sync; on
   <= 0.90.1 delete-dir-then-push still deletes such a config in production.

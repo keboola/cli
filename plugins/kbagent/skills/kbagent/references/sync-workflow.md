@@ -544,6 +544,17 @@ Limits: an editor save in the instant between push's last check and its
 write-back is overwritten (no file locking); row updates, the link backfill
 PUTs and data-app writes send no precondition.
 
+Rules for an agent:
+
+- Do not edit files of the sync tree while `sync push` runs (also not from a
+  parallel tool call or a background job). Push would hold the config
+  (`SYNC_LOCAL_FILE_CHANGED`) or keep the edit unpushed
+  (`LOCAL_EDIT_DURING_PUSH`); after either, run `kbagent sync diff` and push
+  again.
+- On `SYNC_CONFLICT` do not re-run push and do not force the local version over
+  the UI edit. `kbagent sync pull`, show the user what changed in Keboola,
+  merge, push.
+
 ### `sync pull` journals the folders it deletes
 
 *(since vNEXT)* (#827)
@@ -560,6 +571,12 @@ config is never re-created from it -- delete the folder or move it out of the
 sync tree), a failed delete is reported (`PENDING_REMOVAL_FAILED`) and retried
 by the next pull. A folder inside another planned folder goes with the outer
 one.
+
+Rules for an agent: never edit or delete `pendingRemovals` in
+`.keboola/manifest.json` by hand, and never run an older kbagent on a tree whose
+manifest has it (an older push re-creates or adopts the recorded folders). On
+`PENDING_REMOVAL_KEPT`, ask the user whether to delete the folder or move it out
+of the sync tree; do not push it back as a new config.
 
 ### Rows across `sync pull --branch` and promote pushes
 
