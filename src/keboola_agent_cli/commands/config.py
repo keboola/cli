@@ -20,6 +20,7 @@ from ..constants import KEBOOLA_DIR_NAME, MANIFEST_FILENAME, VALID_COMPONENT_TYP
 from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, FeatureNotEnabledError, KeboolaApiError
 from ..output import format_config_detail, format_configs_table, format_search_results
+from ..services._sync_project_guard import sync_tree_scope
 from ..services.component_service import (
     materialize_pushed_config,
     pushed_config_base_hash,
@@ -28,7 +29,6 @@ from ..services.component_service import (
 from ..services.config_service import validate_set_paths
 from ..services.variables_service import variables_preview
 from ..sync.branch_registry import ScaffoldPlacement, default_branch_prefix
-from ..sync.dir_lock import sync_dir_lock
 from ._all_projects import (
     FANOUT_PROJECT_HELP,
     AllProjectsOption,
@@ -1453,18 +1453,13 @@ def config_new(
 def _hold_output_dir(
     ctx: typer.Context, formatter: Any, output_dir: Path, project: str | None
 ) -> bool:
-    """Hold the directory lock of a sync tree until the command ends (L5).
+    """Hold :func:`sync_tree_scope` of *output_dir* until the command ends (L5).
 
-    Returns whether *output_dir* is a sync tree. A directory without
-    ``.keboola/`` when the command starts is a plain folder for the whole
-    command: not locked, and its manifest is never read or written -- not even
-    one a first `sync pull` creates there meanwhile (#827 round 2). The
-    scaffold goes there flat; that pull is not serialized with it.
+    Returns whether *output_dir* is a sync tree (decided by the service); the
+    command only keeps the scope open and reports its errors.
     """
-    if not (output_dir / KEBOOLA_DIR_NAME).is_dir():
-        return False
     try:
-        ctx.with_resource(sync_dir_lock(output_dir))
+        return ctx.with_resource(sync_tree_scope(output_dir))
     except ConfigError as exc:
         formatter.error(
             message=exc.message, error_code=getattr(exc, "error_code", ErrorCode.CONFIG_ERROR)
@@ -1473,7 +1468,6 @@ def _hold_output_dir(
     except KeboolaApiError as exc:
         emit_api_error(formatter, exc, project=project or "")
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
-    return True
 
 
 def _scaffold_target_dir(output_dir: str, branch_prefix: str | None, scaffold_dir: str) -> Path:

@@ -11,7 +11,6 @@ import re
 import shutil
 import subprocess
 from collections.abc import Callable
-from contextlib import AbstractContextManager, nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -28,7 +27,6 @@ from ..json_utils import compute_diff, deep_merge, find_matches_in_json, set_nes
 from ..models import ComponentDetail, ProjectConfig
 from ..sync.branch_scope import entry_tree
 from ..sync.code_extraction import normalize_blocks_codes_script
-from ..sync.dir_lock import sync_dir_lock
 from ..sync.manifest import load_manifest, save_manifest
 from ..sync.naming import sanitize_name
 from ._config_clone import clone_config_method
@@ -36,6 +34,7 @@ from ._config_folder import set_config_folder_method
 from ._config_set_guard import validate_set_paths
 from ._encryption import collect_secrets, encrypt_secrets_in_config, find_plaintext_secret_keys
 from ._sync_moves import SKIPPED_OTHER_BRANCH, rename_entries
+from ._sync_project_guard import sync_tree_scope
 from .base import (
     BaseService,
     ClientFactory,
@@ -1291,12 +1290,8 @@ class ConfigService(BaseService):
         # Decided once: a directory that is no sync tree now is never read or
         # written as one, not even when a first pull creates a manifest there
         # meanwhile (#827 round 2).
-        if directory is not None and not (directory / KEBOOLA_DIR_NAME).is_dir():
-            directory = None
-        tree_lock: AbstractContextManager[None] = (
-            sync_dir_lock(directory) if directory else nullcontext()
-        )
-        with tree_lock:
+        with sync_tree_scope(directory) as sync_tree:
+            directory = directory if sync_tree else None
             projects = self.resolve_projects([alias])
             project = projects[alias]
             effective_branch_id = resolve_branch(self._config_store, alias, branch_id)
@@ -1365,7 +1360,7 @@ class ConfigService(BaseService):
         if directory is None:
             return None
 
-        from ..constants import KEBOOLA_DIR_NAME, MANIFEST_FILENAME
+        from ..constants import MANIFEST_FILENAME
 
         manifest_path = directory / KEBOOLA_DIR_NAME / MANIFEST_FILENAME
         if not manifest_path.exists():
