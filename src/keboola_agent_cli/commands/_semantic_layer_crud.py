@@ -353,6 +353,10 @@ def _print_edit_result(label: str):  # type: ignore[no-untyped-def]
         updated = d.get("updated") or {}
         attrs = updated.get("attributes") or {}
         name = attrs.get("name") or attrs.get("term", "?")
+        if d.get("status") == "unchanged":
+            # Spec R6: nothing was written, so do not say "Updated".
+            c.print(f"No change: {label} [cyan]{name}[/cyan] already has these values.")
+            return
         if d.get("partial_state"):
             c.print(
                 f"[bold red]PARTIAL STATE[/bold red] -- {label} edit "
@@ -414,6 +418,10 @@ def edit_metric(
         is_tty=_is_stdin_tty(),
         confirm_cb=typer.confirm,
     )
+    if result.get("status") == "unchanged":
+        # Nothing was written, so there are no items to count: no finish_items headline.
+        formatter.output(result, _print_edit_result("metric"))
+        return
     # A constraint the rename could not repoint is a failed cascade item (#745).
     cascaded = result.get("cascaded_constraints") or []
     failed = sum(1 for c in cascaded if c.get("status") == "failed")

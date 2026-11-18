@@ -10,9 +10,14 @@ Edits are a metastore ``PATCH`` that carries only the changed keys (issue #833):
 the server merges them into the stored record one top-level key at a time, under
 a row lock, so a concurrent edit of another key is never overwritten -- the
 whole-record ``PUT`` used before lost it. The item keeps its ID, scope, grants,
-pending elevation request and revision history. The server validates the merged
-record (cross-field schema rules and references) inside the same transaction
-(go-monorepo AJDA-3460, 2026-10-16), so no client-side merged check is needed.
+pending elevation request and revision history. The server validates each patched
+key against the schema, and inside the same transaction the merged record's
+references and the schema rules that combine several fields (go-monorepo
+AJDA-3460, 2026-10-16). It does NOT re-check ``required`` or
+``additionalProperties`` on the merged record; that is safe because a PATCH from
+here only sets keys and never removes one (no ``null`` values). An edit whose every
+given value equals the value just read sends nothing and reports
+``status: "unchanged"`` (spec R6).
 ``import --overwrite`` and ``promote`` keep the ``PUT``: they must make the
 target equal to the source, and a PATCH would keep target-only keys.
 
@@ -27,6 +32,7 @@ Helpers:
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from ..errors import ErrorCode, KeboolaApiError
@@ -46,6 +52,14 @@ REMOVE_KINDS: tuple[str, ...] = (
     "relationship",
     "glossary",
 )
+
+
+@dataclass(frozen=True)
+class PatchOutcome:
+    """Result of :func:`_patch_changes`: the item after the edit and whether it was written."""
+
+    item: dict[str, Any]
+    changed: bool
 
 
 def code_metric(name: str) -> str:
@@ -119,7 +133,7 @@ def edit_metric_with_cascade(
                     error_code=ErrorCode.VALIDATION_ERROR,
                 )
 
-    new_item = _patch_changes(
+    outcome = _patch_changes(
         client,
         "semantic-metric",
         target,
@@ -153,7 +167,8 @@ def edit_metric_with_cascade(
     failed_cascades = [entry for entry in cascaded if entry["status"] == "failed"]
     partial_state = bool(failed_cascades)
     return {
-        "updated": new_item,
+        "status": "updated" if outcome.changed or cascaded else "unchanged",
+        "updated": outcome.item,
         "cascaded_constraints": cascaded,
         "rollback": None,
         "partial_state": partial_state,
@@ -266,7 +281,7 @@ def edit_simple(
         not_found_label: Human-readable label for the NOT_FOUND error.
 
     Returns the same envelope shape as ``edit_metric_with_cascade``:
-    ``{updated, cascaded_constraints: [], rollback, partial_state: False,
+    ``{status, updated, cascaded_constraints: [], rollback, partial_state: False,
     recovery_hint: None}``. No-cascade variants never enter a partial
     state, but carry the keys for envelope uniformity.
     """
@@ -279,9 +294,10 @@ def edit_simple(
             message=f"{not_found_label} '{current_key}' not found in this model.",
             error_code=ErrorCode.NOT_FOUND,
         )
-    new_item = _patch_changes(client, item_type, target, id_key=id_key, changes=overrides)
+    outcome = _patch_changes(client, item_type, target, id_key=id_key, changes=overrides)
     return {
-        "updated": new_item,
+        "status": "updated" if outcome.changed else "unchanged",
+        "updated": outcome.item,
         "cascaded_constraints": [],
         "rollback": None,
         "partial_state": False,
@@ -296,19 +312,24 @@ def _patch_changes(
     *,
     id_key: str,
     changes: dict[str, Any],
-) -> dict[str, Any]:
-    """PATCH only the keys the caller gave (``None`` = unchanged) and return the item.
+) -> PatchOutcome:
+    """PATCH every given key unless all equal the read values.
 
-    A given value is sent even when it equals the value just read: the read may
-    be stale, and the caller asked for that value. The identity key (``name``,
-    or ``term`` for glossary) is sent together with the envelope ``name`` so the
-    two never disagree. With nothing to change, nothing is written and the item
-    as read is returned (no new revision).
+    ``None`` means "not given". When every given value equals the value just
+    read, nothing is written (no new revision): the edit is then ordered at the
+    moment of the read, and the item as read is returned with ``changed`` False.
+    Otherwise ALL given keys are sent, also the equal ones: dropping only those
+    would let a concurrent edit win one key and lose another, a state no
+    serial order of the two edits produces. The identity key (``name``, or
+    ``term`` for glossary) is sent together with the envelope ``name`` so the
+    two never disagree.
     """
+    attrs = target.get("attributes") or {}
     data = {k: v for k, v in changes.items() if v is not None}
-    if not data:
-        return target
-    return client.patch_item(item_type, target["id"], name=data.get(id_key), data=data)
+    if all(attrs.get(k) == v for k, v in data.items()):
+        return PatchOutcome(item=target, changed=False)
+    patched = client.patch_item(item_type, target["id"], name=data.get(id_key), data=data)
+    return PatchOutcome(item=patched, changed=True)
 
 
 def scan_orphan_constraints(

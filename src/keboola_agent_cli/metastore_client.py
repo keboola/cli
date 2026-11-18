@@ -461,9 +461,12 @@ class MetastoreClient(BaseHttpClient):
         unlike :meth:`put_item`. A ``null`` value removes its key and a patched key
         that the schema of a closed object does not know is refused (metastore
         v0.15.2; before it the key was saved, and ``null`` was stored as ``null``).
-        The server validates the patched keys and, inside the same transaction,
-        the merged record's cross-field schema rules and references (go-monorepo
-        AJDA-3460, 2026-10-16; before it only the patched keys). Never sends ``scope`` (a scope step-up cannot be combined with
+        The server validates each patched key against the schema and, inside the
+        same transaction, the merged record's references and the schema rules
+        that combine several fields (go-monorepo AJDA-3460, 2026-10-16; before it
+        only the patched keys). It does NOT re-check ``required`` or
+        ``additionalProperties`` on the merged record, so a ``null`` that removes
+        a required key is not caught there. Never sends ``scope`` (a scope step-up cannot be combined with
         name/data -- :meth:`elevate_to_organization`).
 
         Raises ``NOT_FOUND`` on 404 and ``ALREADY_EXISTS`` on 409 (a rename to
