@@ -31,7 +31,6 @@ process, but the same file to the OS, so it fails busy instead of nesting.
 from __future__ import annotations
 
 import contextlib
-import errno
 import functools
 import inspect
 import os
@@ -69,9 +68,6 @@ class _Hold:
 _owner = threading.local()
 # The stand-in lock of a directory entered UNLOCKED (no sync tree yet).
 _UNLOCKED = object()
-# errnos of a tree that cannot be written (PermissionError covers EACCES/EPERM
-# and Windows' access denied).
-_READ_ONLY = frozenset({errno.EROFS, errno.EACCES, errno.EPERM})
 
 
 def _holds() -> dict[Path, _Hold]:
@@ -117,20 +113,8 @@ def busy_error(root: Path) -> KeboolaApiError:
     )
 
 
-def _not_writable(exc: BaseException) -> bool:
-    """True iff *exc* says the tree cannot be written (read-only mount, no permission)."""
-    cause = exc.__cause__ if isinstance(exc, SelfIgnoreError) else exc
-    return isinstance(cause, PermissionError) or getattr(cause, "errno", None) in _READ_ONLY
-
-
-def _acquire(root: Path, *, reader: bool = False) -> Any:
-    """Take the OS lock of *root* without waiting; busy or ``ConfigError`` otherwise.
-
-    A *reader* (status, diff, branch-status, a clone's source) on a tree it
-    cannot write gets no lock instead (PR #1016 review NB-2): no kbagent
-    writer can change a tree that cannot be written, so the read is safe. A
-    lock another run holds stays busy; a writer keeps the ``ConfigError``.
-    """
+def _acquire(root: Path) -> Any:
+    """Take the OS lock of *root* without waiting; busy or ``ConfigError`` otherwise."""
     lock_dir = root / KEBOOLA_DIR_NAME / LOCK_DIR
     lock_file = lock_dir / LOCK_FILENAME
     try:
@@ -152,8 +136,6 @@ def _acquire(root: Path, *, reader: bool = False) -> Any:
     except Timeout:
         raise busy_error(root) from None
     except (OSError, SelfIgnoreError) as exc:
-        if reader and _not_writable(exc):
-            return _UNLOCKED
         raise ConfigError(
             f"Could not lock the sync directory {root} ({lock_file}): {exc}. The lock needs a "
             "writable .keboola/lock/ folder on a local disk."
@@ -177,15 +159,12 @@ UNLOCKED = "unlocked"
 
 
 @contextlib.contextmanager
-def sync_dir_lock(
-    project_root: Path | str, *, outside: str = CREATE, reader: bool = False
-) -> Iterator[None]:
+def sync_dir_lock(project_root: Path | str, *, outside: str = CREATE) -> Iterator[None]:
     """Hold the lock of *project_root* for the ``with`` block (L1-L4).
 
     The thread that already holds the tree -- or entered it UNLOCKED -- just
     nests. *outside* decides for a directory that has no ``.keboola/`` yet:
-    :data:`CREATE`, :data:`REFUSE` or :data:`UNLOCKED`. A *reader* runs
-    unlocked on a tree it cannot write (see :func:`_acquire`).
+    :data:`CREATE`, :data:`REFUSE` or :data:`UNLOCKED`.
     """
     root = Path(project_root).resolve()
     holds = _holds()
@@ -200,7 +179,7 @@ def sync_dir_lock(
     no_tree = outside != CREATE and not (root / KEBOOLA_DIR_NAME).is_dir()
     if no_tree and outside == REFUSE:
         load_manifest(root)  # raises the "no manifest" FileNotFoundError
-    lock: Any = _UNLOCKED if no_tree and outside == UNLOCKED else _acquire(root, reader=reader)
+    lock: Any = _UNLOCKED if no_tree and outside == UNLOCKED else _acquire(root)
     holds[root] = _Hold(lock=lock, depth=1)
     try:
         yield
@@ -210,7 +189,7 @@ def sync_dir_lock(
             lock.release()
 
 
-def locks_tree[F: Callable[..., Any]](*, outside: str, reader: bool = False) -> Callable[[F], F]:
+def locks_tree[F: Callable[..., Any]](*, outside: str) -> Callable[[F], F]:
     """Run a method under the lock of its ``project_root`` argument (L5)."""
 
     def decorate(method: F) -> F:
@@ -219,7 +198,7 @@ def locks_tree[F: Callable[..., Any]](*, outside: str, reader: bool = False) -> 
         @functools.wraps(method)
         def locked(*args: Any, **kwargs: Any) -> Any:
             root = signature.bind(*args, **kwargs).arguments["project_root"]
-            with sync_dir_lock(root, outside=outside, reader=reader):
+            with sync_dir_lock(root, outside=outside):
                 return method(*args, **kwargs)
 
         return cast(F, locked)

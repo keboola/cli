@@ -590,6 +590,10 @@ Rules for an agent:
   in git.
 - The lock needs a local disk. On a network drive it may not exclude a run on
   another machine. A lock kbagent cannot create is `CONFIG_ERROR` (exit 5).
+  Every sync command needs write access to `.keboola/lock/` -- `status`,
+  `diff`, `branch-status` and the source of `sync clone` too, since they take
+  the lock there. On a read-only checkout, copy the tree to a writable place
+  first.
 - `sync clone` refuses a target that is the source, inside it or contains it.
 
 ### Row writes check the configuration's version first

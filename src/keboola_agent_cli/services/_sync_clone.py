@@ -150,7 +150,7 @@ def clone_project(
     if not is_fresh_target(target_path):
         load_manifest(target_path)
     target_hold = contextlib.ExitStack()
-    with sync_dir_lock(source_dir, reader=True):
+    with sync_dir_lock(source_dir):
         target_hold.enter_context(sync_dir_lock(target_path))
         try:
             prepared = _prepare_target(
