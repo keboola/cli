@@ -188,22 +188,31 @@ def check_parent(phase: RowPhase, change: dict[str, Any], parent_id: str) -> dic
 
 
 def _failed_parent_error(code: str, change: dict[str, Any]) -> dict[str, str]:
-    """The errors[] entry of a new row whose new configuration failed to be created."""
-    component_id, parent_path = change["component_id"], change.get("parent_path", "")
-    return {
+    """The errors[] entry of a new row whose new configuration failed to be created.
+
+    The parent is named by its folder (``parent_path``) or by the placeholder
+    id it never got replaced (a clone): the entry keeps whichever the row had.
+    """
+    component_id = change["component_id"]
+    parent_path = change.get("parent_path", "")
+    parent_config_id = change.get("parent_config_id", "")
+    parent = f"at {parent_path}" if parent_path else parent_config_id
+    entry = {
         "change_type": change["change_type"],
         "component_id": component_id,
         "config_id": change.get("config_id", ""),
-        "parent_config_id": "",
-        "parent_path": parent_path,
+        "parent_config_id": parent_config_id,
         "error_code": code,
         "message": (
-            f"Row {parent_path}/{change.get('path', '')} was not created because the create of "
-            f"its configuration {component_id} at {parent_path} failed in this push with {code} "
-            "(see the configuration's error). Nothing was written for the row. The next "
+            f"Row {change.get('path', '')} was not created because the create of its "
+            f"configuration {component_id} {parent} failed in this push with {code} (see the "
+            "configuration's error). Nothing was written for the row. The next "
             "`kbagent sync push` creates both."
         ),
     }
+    if parent_path:
+        entry["parent_path"] = parent_path
+    return entry
 
 
 def _row_error(change: dict[str, Any], template: dict[str, str], parent_id: str) -> dict[str, str]:
