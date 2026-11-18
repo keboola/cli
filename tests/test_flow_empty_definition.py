@@ -498,8 +498,8 @@ def test_service_create_refuses_malformed_lists(tmp_path: Path) -> None:
         _service(_store(tmp_path), client).create_flow(
             alias="prod",
             name="F",
-            phases=[None],
-            tasks=[],  # type: ignore[list-item]
+            phases=[None],  # ty: ignore[invalid-argument-type]
+            tasks=[],
         )
     assert exc.value.error_code == ErrorCode.INVALID_FLOW_DEFINITION
     client.create_config.assert_not_called()
