@@ -214,8 +214,18 @@ def _take_moves(checkpoint: Manifest, live: list[ManifestConfiguration], tree: s
 def relocate_records(
     manifest: Manifest, records: list[ManifestPendingRemoval]
 ) -> list[ManifestPendingRemoval]:
-    """*records* at their configurations' current folders in *manifest* (D1), for a save."""
-    return [resolve_removal(manifest, item) for item in records]
+    """*records* at their configurations' current folders in *manifest* (D1), for a save.
+
+    Every promote entry that reads its files from a recorded folder leaves
+    *manifest* too, as at the checkpoint: a failed removal keeps the folder
+    (and so, by folder existence, the entry) until a later pull, and a
+    ``push --branch DEV --force`` after the folder is removed by hand would
+    read the dev config as a local delete.
+    """
+    relocated = [resolve_removal(manifest, item) for item in records]
+    for item in relocated:
+        drop_promote_references(manifest, item)
+    return relocated
 
 
 def _drop_tracked(manifest: Manifest, item: ManifestPendingRemoval) -> None:
@@ -249,7 +259,7 @@ def drop_promote_references(manifest: Manifest, item: ManifestPendingRemoval) ->
     never outlives that folder: with its source gone the entry would read as
     a local delete, and ``push --branch DEV --force`` would delete the dev
     config. One rule wherever such a folder is removed -- the checkpoint, the
-    recovery and (by folder existence) the final save of a pull.
+    recovery and the final save of a pull (:func:`relocate_records`).
     """
     if item.kind != "config":
         return

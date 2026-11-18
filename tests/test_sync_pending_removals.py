@@ -1209,3 +1209,95 @@ def test_an_unreadable_quarantine_does_not_stop_a_pull(ws: Workspace, api: FakeS
 
     assert result["status"] == "pulled"
     assert "PENDING_REMOVAL_FAILED" in [w["code"] for w in result["warnings"]]
+
+
+# ------------------------------------------------------------------- collector review (Astra)
+
+
+def test_a_failed_source_removal_drops_the_promote_entry_from_the_final_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A's move into the quarantine fails; the final save must not bring B's promote entry back.
+
+    The user then deletes A's folder by hand: a ``push --branch DEV --force``
+    must not read B's missing source folder as a local delete.
+    """
+    from keboola_agent_cli.sync.branch_scope import promoted_from
+    from keboola_agent_cli.sync.manifest import load_manifest
+    from test_sync_bookkeeping_differential import CONFIG_FILE, DEV, PROD, VARIANTS
+
+    seeded = _promoted_world(tmp_path)
+    w, prod_id = seeded.world, seeded.config_id
+    component = VARIANTS["extractor"].component_id
+    config_dir = w.config_dir(prod_id)
+    dev_before = dict(w.api.remote[DEV])
+    del w.api.remote[PROD][(component, prod_id)]
+    _removal_via(monkeypatch, _refuse)
+    w.pull()  # the move fails (a Windows handle): recorded, folder kept
+    monkeypatch.undo()
+    assert (config_dir / CONFIG_FILE).exists()
+
+    manifest = load_manifest(w.root)
+    assert [p.config_id for p in manifest.pending_removals] == [prod_id]
+    assert [c.id for c in manifest.configurations if promoted_from(c) is not None] == []
+
+    shutil.rmtree(config_dir)  # the handle is closed; the user removes the folder
+    result = w.svc.push(alias="prod", project_root=w.root, branch_override=DEV, force=True)
+
+    assert w.api.remote[DEV] == dev_before, result
+    assert result.get("deleted", 0) == 0, result
+
+
+@pytest.mark.parametrize("how", ["changed", "symlinked"])
+def test_a_kept_source_folder_drops_the_promote_entry_from_the_final_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, how: str
+) -> None:
+    """A's folder is kept (PENDING_REMOVAL_KEPT): edited, or a link, after the checkpoint.
+
+    The record stays, and no promote entry reads from the kept folder.
+    """
+    from keboola_agent_cli.sync.branch_scope import promoted_from
+    from keboola_agent_cli.sync.manifest import load_manifest
+    from test_sync_bookkeeping_differential import CONFIG_FILE, DEV, PROD, VARIANTS
+
+    seeded = _promoted_world(tmp_path)
+    w, prod_id = seeded.world, seeded.config_id
+    component = VARIANTS["extractor"].component_id
+    config_dir = w.config_dir(prod_id)
+    dev_before = dict(w.api.remote[DEV])
+    del w.api.remote[PROD][(component, prod_id)]
+    if how == "symlinked":
+        probe = tmp_path / "probe-link"
+        try:
+            os.symlink(tmp_path, probe, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            pytest.skip("no symlink support")
+        probe.unlink()
+    real = _sync_pending_removals.save_manifest
+    done: list[bool] = []
+
+    def change_then_checkpoint(*args: Any, **kwargs: Any) -> None:
+        if not done:
+            done.append(True)
+            if how == "changed":
+                with (config_dir / CONFIG_FILE).open("a", encoding="utf-8") as fh:
+                    fh.write("# saved while pull ran\n")
+            else:
+                moved = tmp_path / "moved-away"
+                shutil.move(str(config_dir), str(moved))
+                os.symlink(moved, config_dir, target_is_directory=True)
+        real(*args, **kwargs)
+
+    monkeypatch.setattr(_sync_pending_removals, "save_manifest", change_then_checkpoint)
+    result = w.pull()
+    monkeypatch.undo()
+
+    assert (config_dir / CONFIG_FILE).exists()
+    assert "PENDING_REMOVAL_KEPT" in [x["code"] for x in result.get("warnings", [])], result
+    manifest = load_manifest(w.root)
+    assert [p.config_id for p in manifest.pending_removals] == [prod_id]
+    assert [c.id for c in manifest.configurations if promoted_from(c) is not None] == []
+
+    pushed = w.svc.push(alias="prod", project_root=w.root, branch_override=DEV, force=True)
+
+    assert w.api.remote[DEV] == dev_before, pushed
