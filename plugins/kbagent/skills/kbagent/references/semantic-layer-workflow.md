@@ -262,8 +262,9 @@ What an edit does NOT protect against *(since vNEXT)*:
   `kbagent semantic-layer validate` after every metric rename.
 - A `PATCH` that failed with a 5xx or a read timeout is not retried and may have
   been applied. Re-read with `kbagent semantic-layer show` before you repeat it.
-- An `edit` with no `--new-*` option writes nothing (no new revision); a value
-  you pass is written even when it equals the stored one.
+- A value equal to the stored one is not sent. When nothing differs, nothing is
+  written (no new revision) and the result has `status: "unchanged"` (exit 0);
+  a real write has `status: "updated"`. Key on `status`, not on the message.
 - `import --overwrite` and `promote` still replace the whole item (`PUT`): do
   not run them while someone edits the target model.
 

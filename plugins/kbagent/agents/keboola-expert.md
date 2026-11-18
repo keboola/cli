@@ -496,7 +496,7 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
 
 - constraint `rule` is a STRING (not `{bounds:...}`); `severity` is
   `error|warning|info`, the 4-band health is the name suffix (`_critical`...).
-- `edit` PATCHes only the keys you pass (vNEXT+); two edits of the SAME key:
+- `edit` PATCHes only keys that differ (none: `status` unchanged) (vNEXT+); two edits of the SAME key:
   last wins. A 5xx/read timeout isn't retried, may have applied: `show` before
   repeating. `edit metric --new-name` cascades into constraints' `metrics[]` and
   changes CODE_METRIC (downstream joins break: surface it); `validate`

@@ -7932,13 +7932,17 @@ cascade, which rewrote each affected constraint whole.
 
 Now `edit` sends a metastore `PATCH` with only the keys you passed (for the
 rename cascade: only the constraint's `metrics`). The server merges them under
-a row lock and validates the merged record, so a concurrent change to another
+a row lock and checks references and the schema rules that combine several
+fields on the merged record (not `required` / `additionalProperties`; an edit only
+sets keys, so that check is not needed), so a concurrent change to another
 key survives. Unchanged: the item keeps its id, scope, grants, pending elevation
 request and revision history; the result shape is the same; `serve`'s
 `PATCH /semantic-layer/items/{kind}/{name}` behaves the same way.
 
-- A value you pass is written even when it equals the value just read.
-- An `edit` with no `--new-*` option writes nothing (no new revision).
+- A value equal to the stored one is not sent. When nothing differs (also with no
+  `--new-*` option) nothing is written (no new revision) and the result has
+  `status: "unchanged"`, exit 0; human mode prints `No change: ...` instead of
+  `Updated ...`. A real write has `status: "updated"` (spec R6). Same over `serve`.
 - Still racy: two edits of the SAME key (last one wins), two concurrent renames
   of one metric, and a constraint that starts referencing the metric while the
   rename runs (the cascade misses it -- run `semantic-layer validate` after a rename).
