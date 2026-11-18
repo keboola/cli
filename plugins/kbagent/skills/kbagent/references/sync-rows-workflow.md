@@ -229,9 +229,22 @@ directory, or keeps an edited one and reports it as `skipped`.
 (`SYNC_CONFLICT`: it or one of its rows changed in Keboola after push read
 it), push sends none of that config's row creates, updates or deletes; each
 gets its own `SYNC_CONFLICT` entry in `errors[]` naming the parent. Run
-`kbagent sync pull`, review, push again. A row update itself still sends no
-version precondition, so a UI edit of a row whose parent push did not update
-can still be overwritten -- run `sync diff` right before the push.
+`kbagent sync pull`, review, push again.
+
+*(since vNEXT, #827)* A row write itself sends no version precondition (the
+Storage API has none for rows), so push reads the parent right before its
+first row write and compares its version with the one the diff read
+(`parent_remote_version` on each row change) or with the version push's own
+update answered. Any doubt -- a different version, an update confirmed only by
+a read-back after a 412, a missing version, a failed read -- blocks every row
+of that parent with an `errors[]` entry (`SYNC_CONFLICT`, or the read's own
+code) and writes nothing for them. Run `kbagent sync diff`, merge the remote
+change into the row files, push again; a plain `sync pull` keeps a locally
+modified row. The time between the check and the parent's last row write is
+not bounded (many rows, retries), so a UI edit in it is still overwritten --
+run `sync diff` right before the push and keep pushes short. See
+[sync-workflow.md](sync-workflow.md) "Row writes check the configuration's
+version first".
 A row folder that pull is removing is recorded under `pendingRemovals` first;
 until a pull finishes the removal, diff and push never read it as a new row.
 

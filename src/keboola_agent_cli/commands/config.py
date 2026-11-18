@@ -28,6 +28,7 @@ from ..services.component_service import (
 from ..services.config_service import validate_set_paths
 from ..services.variables_service import variables_preview
 from ..sync.branch_registry import default_branch_prefix
+from ..sync.dir_lock import sync_dir_lock
 from ._all_projects import (
     FANOUT_PROJECT_HELP,
     AllProjectsOption,
@@ -1302,6 +1303,11 @@ def config_new(
             emit_api_error(formatter, exc, project=project or "")
             raise typer.Exit(code=exit_code) from None
 
+    # A sync tree the files go into is locked before the remote create (L5):
+    # a busy tree fails here, before anything exists in Keboola.
+    if output_dir and not (push and dry_run):
+        _hold_output_dir(ctx, formatter, Path(output_dir), project)
+
     # ── Push path: also create remotely via Storage API ──────────────────────
     if push:
         config_service = get_service(ctx, "config_service")
@@ -1435,6 +1441,25 @@ def config_new(
                 )
                 formatter.console.print(syntax)
                 formatter.console.print()
+
+
+def _hold_output_dir(
+    ctx: typer.Context, formatter: Any, output_dir: Path, project: str | None
+) -> None:
+    """Hold the directory lock of a sync tree until the command ends (L5).
+
+    A directory without ``.keboola/`` is no sync tree and is not locked.
+    """
+    try:
+        ctx.with_resource(sync_dir_lock(output_dir, create=False))
+    except ConfigError as exc:
+        formatter.error(
+            message=exc.message, error_code=getattr(exc, "error_code", ErrorCode.CONFIG_ERROR)
+        )
+        raise typer.Exit(code=5) from None
+    except KeboolaApiError as exc:
+        emit_api_error(formatter, exc, project=project or "")
+        raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
 
 def _scaffold_target_dir(output_dir: str, branch_prefix: str | None, scaffold_dir: str) -> Path:

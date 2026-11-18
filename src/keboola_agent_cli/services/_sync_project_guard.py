@@ -13,7 +13,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
-from ..errors import ConfigError, KeboolaApiError
+from ..constants import KEBOOLA_DIR_NAME, MANIFEST_FILENAME
+from ..errors import ConfigError, KeboolaApiError, SyncInitError
 from ..sync.manifest import Manifest, load_manifest, save_manifest
 
 if TYPE_CHECKING:
@@ -134,3 +135,17 @@ def adopt_existing_manifest(
         "sync_workspaces": existing.sync_workspaces,
         "files_created": [],
     }
+
+
+def init_missing_tree(service: SyncService, alias: str, project_root: Path) -> None:
+    """``sync init`` *project_root* when it has no manifest yet (pull's auto-init, L5).
+
+    Runs inside pull's directory lock, so two first pulls of one directory
+    never both see "no manifest". A failed init is :class:`SyncInitError`.
+    """
+    if (project_root / KEBOOLA_DIR_NAME / MANIFEST_FILENAME).exists():
+        return
+    try:
+        service.init_sync(alias, project_root)
+    except Exception as exc:
+        raise SyncInitError(exc) from exc

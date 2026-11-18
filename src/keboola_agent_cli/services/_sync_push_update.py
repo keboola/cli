@@ -94,6 +94,31 @@ class UpdateOutcome:
 
     response: dict[str, Any]
     hashes: LocalConfigHashes
+    # True when the PUT answered 412 and a read showed the config holds what
+    # push sent: ``response`` is that read, not our own PUT's answer.
+    verified_by_readback: bool = False
+
+
+# Where a parent's version after Phase A comes from (R2): our own PUT's
+# answer, or a later read that only matched the fields push sent.
+PUT_RESPONSE = "put_response"
+VERIFIED_BY_READBACK = "verified_by_readback"
+
+
+@dataclass(frozen=True)
+class ParentWrite:
+    """A config Phase A updated: its version afterwards and where that version comes from."""
+
+    version: int | None
+    provenance: str
+
+
+@dataclass(frozen=True)
+class PutAnswer:
+    """The config after a conditional PUT, and whether a 412 read verified it (R2)."""
+
+    response: dict[str, Any]
+    verified_by_readback: bool = False
 
 
 def local_file_changed_error(config_dir: Path) -> KeboolaApiError:
@@ -165,13 +190,14 @@ def update_if_unchanged(
     branch_id: int | None,
     expected_version: int | None,
     sent: SentUpdate,
-) -> dict[str, Any]:
+) -> PutAnswer:
     """PUT *sent* only while the config is at *expected_version* (#827, D2, D3).
 
     A 412 means the config, or one of its rows, changed after the diff read
     it -- or the transport repeated a PUT that had landed. The config is read
     back: when it holds exactly *sent*, the requested state is verified and
-    that read is returned as the response. Otherwise a ``SYNC_CONFLICT`` is
+    that read is returned, marked ``verified_by_readback`` -- it proves the
+    config's own fields, never that no row changed. Otherwise a ``SYNC_CONFLICT`` is
     raised and nothing more is written. Without *expected_version* (the
     listing carried none) the PUT has no precondition, as before.
     """
@@ -200,7 +226,7 @@ def update_if_unchanged(
                 component_id,
                 config_id,
             )
-            return remote
+            return PutAnswer(remote, verified_by_readback=True)
         raise KeboolaApiError(
             message=(
                 f"{component_id}/{config_id} was not updated: it changed in Keboola after this "
@@ -212,7 +238,7 @@ def update_if_unchanged(
             error_code=ErrorCode.SYNC_CONFLICT,
             retryable=False,
         ) from exc
-    return result if isinstance(result, dict) else {}
+    return PutAnswer(result if isinstance(result, dict) else {})
 
 
 def held_row_error(change: dict[str, Any]) -> dict[str, str]:
@@ -374,7 +400,7 @@ def push_update(
             warnings=warnings,
         )
 
-    result = update_if_unchanged(
+    answer = update_if_unchanged(
         client,
         component_id=component_id,
         config_id=config_id,
@@ -419,7 +445,11 @@ def push_update(
     )
     if remap is not None:
         remap.keep_receipt(component_id, config_id, hashes)
-    return UpdateOutcome(response=result, hashes=hashes)
+    return UpdateOutcome(
+        response=answer.response,
+        hashes=hashes,
+        verified_by_readback=answer.verified_by_readback,
+    )
 
 
 def _keep_target_app_id(
@@ -473,13 +503,14 @@ def push_modified(
     warnings: list[dict[str, Any]],
     known_secrets: SecretCache,
     remap: PromoteRemap | None,
-) -> None:
+) -> ParentWrite:
     """Push one ``modified`` config and stamp its manifest entry (Phase A).
 
     A failed update puts the config into *held*: no later phase of this push
     writes it (D4). A conflict also puts its manifest entry back as it was
     before the update -- the ``rebind_pending`` the promote path checkpoints
-    before the PUT included: that PUT never happened.
+    before the PUT included: that PUT never happened. Returns the config's
+    version after the update and its provenance, for the row precheck (R2).
     """
     component_id, config_id = change["component_id"], change["config_id"]
     config_path_str = change.get("path", "")
@@ -528,4 +559,9 @@ def push_modified(
         warnings=warnings,
         source_tree=branch_path,
         config_dir=project_root / branch_path / config_path_str,
+    )
+    version = outcome.response.get("version")
+    return ParentWrite(
+        version=version if isinstance(version, int) and not isinstance(version, bool) else None,
+        provenance=VERIFIED_BY_READBACK if outcome.verified_by_readback else PUT_RESPONSE,
     )

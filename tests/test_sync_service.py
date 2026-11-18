@@ -1201,6 +1201,21 @@ class TestPush:
         push_client.update_config.assert_called()
 
 
+def _versioned_push_client() -> MagicMock:
+    """A push client whose listing and reads carry the config version, as Storage does.
+
+    Push checks a parent config's version before its first row write
+    (#827 follow-up, R3); a listing without versions blocks the rows.
+    """
+    components = copy.deepcopy(SAMPLE_COMPONENTS)
+    for component in components:
+        for config in component["configurations"]:
+            config["version"] = 7
+    client = _make_sync_mock_client(components_response=components)
+    client.get_config_detail.return_value = {"version": 7}
+    return client
+
+
 class TestPushRows:
     """Row-level push tests: create/update/delete + encryption.
 
@@ -1252,7 +1267,7 @@ class TestPushRows:
         row_data["parameters"]["path"] = "/users/changed"
         row_file.write_text(yaml.dump(row_data, default_flow_style=False), encoding="utf-8")
 
-        push_client = _make_sync_mock_client(components_response=SAMPLE_COMPONENTS)
+        push_client = _versioned_push_client()
         push_client.update_config_row.return_value = {"id": "row-001"}
         push_svc = SyncService(
             config_store=store,
@@ -1288,7 +1303,7 @@ class TestPushRows:
         assert len(row_files) == 1
         row_files[0].unlink()
 
-        push_client = _make_sync_mock_client(components_response=SAMPLE_COMPONENTS)
+        push_client = _versioned_push_client()
         push_client.delete_config_row.return_value = None
         push_svc = SyncService(
             config_store=store,
@@ -1324,7 +1339,7 @@ class TestPushRows:
         )
         row_file.unlink()
 
-        push_client = _make_sync_mock_client(components_response=SAMPLE_COMPONENTS)
+        push_client = _versioned_push_client()
         push_svc = SyncService(config_store=store, client_factory=lambda url, token: push_client)
 
         dry = push_svc.push(alias="prod", project_root=project_root, dry_run=True)
@@ -1468,7 +1483,7 @@ class TestPushRows:
         row_data["parameters"]["#api_token"] = "plain-secret"
         row_file.write_text(yaml.dump(row_data, default_flow_style=False), encoding="utf-8")
 
-        push_client = _make_sync_mock_client(components_response=SAMPLE_COMPONENTS)
+        push_client = _versioned_push_client()
         push_client.update_config_row.return_value = {"id": "row-001"}
 
         # Real encryption API returns the SAME keys the caller sent, with values
@@ -1519,7 +1534,7 @@ class TestPushRows:
         row_data["parameters"]["path"] = "/users/changed"
         row_file.write_text(yaml.dump(row_data, default_flow_style=False), encoding="utf-8")
 
-        push_client = _make_sync_mock_client(components_response=SAMPLE_COMPONENTS)
+        push_client = _versioned_push_client()
         push_client.update_config_row.side_effect = KeboolaApiError(
             message="validation failed",
             status_code=400,
@@ -1564,7 +1579,7 @@ class TestPushRows:
         row_data["parameters"]["#api_token"] = "plain-secret"
         row_file.write_text(yaml.dump(row_data, default_flow_style=False), encoding="utf-8")
 
-        push_client = _make_sync_mock_client(components_response=SAMPLE_COMPONENTS)
+        push_client = _versioned_push_client()
         push_client.encrypt_values.side_effect = Exception("encryption service unreachable")
         push_svc = SyncService(
             config_store=store,
@@ -1610,7 +1625,7 @@ class TestPushRows:
             encoding="utf-8",
         )
 
-        push_client = _make_sync_mock_client(components_response=SAMPLE_COMPONENTS)
+        push_client = _versioned_push_client()
         push_client.create_config_row.return_value = {"id": "row-new-001"}
         push_svc = SyncService(
             config_store=store,

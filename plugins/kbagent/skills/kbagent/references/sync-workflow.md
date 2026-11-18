@@ -541,8 +541,9 @@ has nothing to send). The baseline is
 always the hash of the bytes push wrote, never a second read of the folder.
 
 Limits: an editor save in the instant between push's last check and its
-write-back is overwritten (no file locking); row updates, the link backfill
-PUTs and data-app writes send no precondition.
+write-back is overwritten (no file locking); the link backfill PUTs and
+data-app writes send no precondition; row writes send none either, push checks
+the configuration's version before them (below).
 
 Rules for an agent:
 
@@ -554,6 +555,56 @@ Rules for an agent:
 - On `SYNC_CONFLICT` do not re-run push and do not force the local version over
   the UI edit. `kbagent sync pull`, show the user what changed in Keboola,
   merge, push.
+
+### One kbagent run at a time per directory
+
+*(since vNEXT)* (#827)
+
+Every command that reads or writes a sync tree holds its lock
+(`.keboola/lock/sync.lock`, an OS lock) for the whole run: `sync init`,
+`pull` (with its auto-init and `--dry-run`), `push` (also `--dry-run`),
+`diff`, `status`, `branch-link`, `branch-unlink`, `branch-status`, `clone`
+(source while copied, target for the whole clone), `config new --output-dir`
+into a sync tree (taken before `--push` creates the config) and
+`config rename --directory` (before the remote rename). A second run in the
+same folder stops at once with `SYNC_DIRECTORY_BUSY` (exit 1,
+`retryable: true`, `details.directory`, `details.lock_file`) and changes
+nothing, locally or in Keboola. `--all-projects` reports it per project.
+
+Rules for an agent:
+
+- On `SYNC_DIRECTORY_BUSY` wait for the other run (another tool call, a
+  background job, a teammate's terminal) to finish, then run the command
+  again. Do not run two sync commands on one folder in parallel.
+- Never delete `.keboola/lock/`: a crashed run frees the lock with its
+  process, so the error always means a live run. The folder ignores itself
+  in git.
+- The lock needs a local disk. On a network drive it may not exclude a run on
+  another machine. A lock kbagent cannot create is `CONFIG_ERROR` (exit 5).
+- `sync clone` refuses a target that is the source, inside it or contains it.
+
+### Row writes check the configuration's version first
+
+*(since vNEXT)* (#827)
+
+Row creates, updates and deletes take no `If-Match` in the Storage API. Push
+therefore reads the parent configuration right before its first row write and
+compares its version with the one `sync diff` read (`parent_remote_version` on
+row changes), or with the version push's own update of that configuration
+answered. A configuration created in the same push is not checked. A
+different version, an update confirmed only by reading it back after a 412, a
+missing version, a 404 or a failed read blocks all its rows: `errors[]`
+entries (`SYNC_CONFLICT`, or the read's own code) with `parent_config_id`,
+nothing written for them, their files and manifest entries unchanged. Run
+`kbagent sync diff` and merge the remote change into the local files, then
+push again; a plain `sync pull` keeps the locally modified rows and the next
+push conflicts again. To take the remote first: copy the local files aside,
+`kbagent sync pull --project ALIAS --theirs`, re-apply the local edit, push.
+
+The check narrows the window, it does not close it: a UI edit between the
+check and the configuration's last row write is still overwritten, and that
+time is not bounded (many rows, retries). Rows are pushed grouped by
+configuration. Only `If-Match` on the row endpoints closes it.
 
 ### `sync pull` journals the folders it deletes
 

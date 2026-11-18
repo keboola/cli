@@ -648,7 +648,13 @@ def test_unreadable_dev_rows_create_a_missing_row_once(
     w.api.get(DEV, v.component_id, cid)["rows"].pop(0)
     _rows_unreadable(w, monkeypatch)
     semantic_edit(config_dir / CONFIG_FILE)
-    w.push(branch=DEV)  # the missing row is "added" before the push: created here
+    # The parent cannot be read, so push cannot check its version before the
+    # row write (#827 follow-up, R3): the row waits, with the read's own code.
+    first = w.svc.push(alias="prod", project_root=w.root, branch_override=DEV)
+    assert [e["error_code"] for e in first["errors"]] == [ErrorCode.API_ERROR], first
+    assert len(w.api.get(DEV, v.component_id, cid)["rows"]) == 1
+    monkeypatch.undo()  # readable again: the missing row is created, once
+    w.push(branch=DEV)
 
     assert len(w.api.get(DEV, v.component_id, cid)["rows"]) == 2
     assert w.diff(branch=DEV)["summary"]["added"] == 0

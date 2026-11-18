@@ -163,6 +163,7 @@ A command that fails with an error code exits with the code's `Exit` value below
 | `COMPANION_UNREADABLE` | 1 | `conflict` | `sync push` refused one config: its `pyproject.toml` states no usable `[project].dependencies` list (no key, not valid TOML), `_config.yml` has no inline `packages`, and the remote packages could not be read, so a push would drop them. Fix the file or add `packages` inline |
 | `SYNC_LOCAL_FILE_INVALID` | 1 | `validation` | `sync diff` / `sync push` held one config back: its `_config.yml` (or a row's) is not valid YAML, is not a mapping, or has a top-level key sync does not know (`path` names the file). Nothing is created, updated or deleted for that config. Fix the file; put extra configuration keys under `_configuration_extra` |
 | `SYNC_LOCAL_FILE_CHANGED` | 1 | `conflict` | `sync push` did not send one config: its `_config.yml` or a companion file changed while push read it, so push could not tell which version to send. Nothing was written for that config. Run `sync push` again |
+| `SYNC_DIRECTORY_BUSY` | 1 | `conflict` | Another kbagent run is using this sync directory (`sync` pull/push/diff/status/init/clone/branch-*, `config new --output-dir`, `config rename --directory`), so this run did nothing. `retryable: true`; `details` has `directory` and `lock_file`. Wait for the other run to finish, then run the command again. Never delete `.keboola/lock` |
 
 ### Encryption
 

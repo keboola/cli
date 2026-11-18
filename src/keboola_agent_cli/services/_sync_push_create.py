@@ -382,6 +382,15 @@ class CreateLedger:
         ledger.row_warnings = _plan_rows(service, manifest, changes, target, ledger.ambiguous_rows)
         return ledger
 
+    def created_here(self, component_id: str, config_id: str) -> bool:
+        """True iff this push created *component_id* / *config_id* (the row precheck, R3)."""
+        made = (self.created_id_map, self.promoted_id_map, self.created_by_path)
+        return any(
+            comp == component_id and new_id == config_id
+            for ids in made
+            for (comp, _), new_id in ids.items()
+        )
+
     def parent_id(self, component_id: str, parent_config_id: str) -> str:
         """The id a row change's parent has on the target after this push's creates."""
         key = (component_id, parent_config_id)

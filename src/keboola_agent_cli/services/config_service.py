@@ -11,6 +11,7 @@ import re
 import shutil
 import subprocess
 from collections.abc import Callable
+from contextlib import AbstractContextManager, nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,7 @@ from ..json_utils import compute_diff, deep_merge, find_matches_in_json, set_nes
 from ..models import ComponentDetail, ProjectConfig
 from ..sync.branch_scope import entry_tree
 from ..sync.code_extraction import normalize_blocks_codes_script
+from ..sync.dir_lock import sync_dir_lock
 from ..sync.manifest import load_manifest, save_manifest
 from ..sync.naming import sanitize_name
 from ._config_clone import clone_config_method
@@ -1284,53 +1286,58 @@ class ConfigService(BaseService):
             ConfigError: If the alias is not found.
             KeboolaApiError: If the API call fails.
         """
-        projects = self.resolve_projects([alias])
-        project = projects[alias]
-        effective_branch_id = resolve_branch(self._config_store, alias, branch_id)
+        # A sync tree it renames in is locked before the remote rename (L5).
+        tree_lock: AbstractContextManager[None] = (
+            sync_dir_lock(directory, create=False) if directory else nullcontext()
+        )
+        with tree_lock:
+            projects = self.resolve_projects([alias])
+            project = projects[alias]
+            effective_branch_id = resolve_branch(self._config_store, alias, branch_id)
 
-        client = self._client_factory(project.stack_url, project.token)
-        try:
-            # Fetch current state to get old name
-            current = client.get_config_detail(
-                component_id, config_id, branch_id=effective_branch_id
-            )
-            old_name = current.get("name", "")
+            client = self._client_factory(project.stack_url, project.token)
+            try:
+                # Fetch current state to get old name
+                current = client.get_config_detail(
+                    component_id, config_id, branch_id=effective_branch_id
+                )
+                old_name = current.get("name", "")
 
-            # Update name via API
-            client.update_config(
+                # Update name via API
+                client.update_config(
+                    component_id=component_id,
+                    config_id=config_id,
+                    name=name,
+                    change_description=f"Renamed via kbagent config rename: {old_name} -> {name}",
+                    branch_id=effective_branch_id,
+                )
+            finally:
+                client.close()
+
+            result: dict[str, Any] = {
+                "status": "renamed",
+                "project_alias": alias,
+                "component_id": component_id,
+                "config_id": config_id,
+                "old_name": old_name,
+                "new_name": name,
+                "branch_id": effective_branch_id,
+            }
+
+            # Attempt local sync directory rename if applicable
+            sync_result = self._rename_sync_directory(
+                directory=directory,
                 component_id=component_id,
                 config_id=config_id,
-                name=name,
-                change_description=f"Renamed via kbagent config rename: {old_name} -> {name}",
+                new_name=name,
                 branch_id=effective_branch_id,
             )
-        finally:
-            client.close()
+            if sync_result and "skipped" in sync_result:
+                result["sync_skipped"] = sync_result["skipped"]  # local tree not changed (F3)
+            elif sync_result:
+                result["sync"] = sync_result
 
-        result: dict[str, Any] = {
-            "status": "renamed",
-            "project_alias": alias,
-            "component_id": component_id,
-            "config_id": config_id,
-            "old_name": old_name,
-            "new_name": name,
-            "branch_id": effective_branch_id,
-        }
-
-        # Attempt local sync directory rename if applicable
-        sync_result = self._rename_sync_directory(
-            directory=directory,
-            component_id=component_id,
-            config_id=config_id,
-            new_name=name,
-            branch_id=effective_branch_id,
-        )
-        if sync_result and "skipped" in sync_result:
-            result["sync_skipped"] = sync_result["skipped"]  # local tree not changed (F3)
-        elif sync_result:
-            result["sync"] = sync_result
-
-        return result
+            return result
 
     def _rename_sync_directory(
         self,
