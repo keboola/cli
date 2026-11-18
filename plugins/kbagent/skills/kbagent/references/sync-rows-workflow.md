@@ -243,9 +243,9 @@ first row write and compares its version with the one the diff read
 update answered. Any doubt -- a different version, an update confirmed only by
 a read-back after a 412, a missing version, a failed read -- blocks every row
 of that parent with an `errors[]` entry (`SYNC_CONFLICT`, or the read's own
-code) and writes nothing for them. Run `kbagent sync diff`, merge the remote
-change into the row files, push again; a plain `sync pull` keeps a locally
-modified row. The time between the check and the parent's last row write is
+code) and writes nothing for them. Run `kbagent sync push --project ALIAS`
+again: its diff reads the current version and writes the row; a row changed in
+Keboola itself then shows as a conflict and is not pushed. The time between the check and the parent's last row write is
 not bounded (many rows, retries), so a UI edit in it is still overwritten --
 run `sync diff` right before the push and keep pushes short. See
 [sync-workflow.md](sync-workflow.md) "Row writes check the configuration's

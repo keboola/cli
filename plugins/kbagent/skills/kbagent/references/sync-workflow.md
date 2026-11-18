@@ -605,10 +605,10 @@ different version, an update confirmed only by reading it back after a 412, a
 missing version, a 404 or a failed read blocks all its rows: `errors[]`
 entries (`SYNC_CONFLICT`, or the read's own code) with `parent_config_id`,
 nothing written for them, their files and manifest entries unchanged. Run
-`kbagent sync diff` and merge the remote change into the local files, then
-push again; a plain `sync pull` keeps the locally modified rows and the next
-push conflicts again. To take the remote first: copy the local files aside,
-`kbagent sync pull --project ALIAS --theirs`, re-apply the local edit, push.
+`kbagent sync push --project ALIAS` again: its diff reads the current version,
+so the check passes and the row is written; a row that was itself changed in
+Keboola then shows as a conflict and is not pushed. Do not run
+`sync pull --theirs` for a blocked row (it overwrites every local change).
 
 The check narrows the window, it does not close it: a UI edit between the
 check and the configuration's last row write is still overwritten, and that
@@ -867,8 +867,8 @@ sync skips `keboola.sandboxes` exactly as before.
   when a user saves the code (also when its AI assistant saves); running
   queries, opening sessions and loading tables do not write the config. So
   someone saved SQL in the editor after the diff read it: resolve it like any
-  other conflict (`kbagent sync diff` and merge, or copy aside,
-  `kbagent sync pull --project ALIAS --theirs`, re-apply, push).
+  other conflict (copy the folder aside,
+  `kbagent sync pull --project ALIAS --theirs`, re-apply, `sync diff`, push).
 - **Push delete** needs `--force`, like every delete: a plain push lists the
   workspace under `skipped_deletions` and touches neither its sessions nor its
   configuration; `skipped_deletions_reason` then says what `--force` also
