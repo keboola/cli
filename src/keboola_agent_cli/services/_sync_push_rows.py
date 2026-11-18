@@ -109,9 +109,7 @@ def group_by_parent(row_changes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [change for group in groups.values() for change in group]
 
 
-def _blocked(
-    component_id: str, parent_id: str, why: str, code: str = ErrorCode.SYNC_CONFLICT
-) -> dict[str, str]:
+def _blocked(code: str, component_id: str, parent_id: str, why: str) -> dict[str, str]:
     """The errors[] template of the rows of a parent the precheck blocked."""
     return {
         "error_code": str(code),
@@ -167,7 +165,7 @@ def check_parent(phase: RowPhase, change: dict[str, Any], parent_id: str) -> dic
         return None
     expected = _expected_version(phase, change, (component_id, parent_id))
     if isinstance(expected, str):
-        return _blocked(component_id, parent_id, expected)
+        return _blocked(ErrorCode.SYNC_CONFLICT, component_id, parent_id, expected)
     if not isinstance(expected, int) or isinstance(expected, bool):
         return _no_version(component_id, parent_id, "in the listing the diff read")
     try:
@@ -176,7 +174,7 @@ def check_parent(phase: RowPhase, change: dict[str, Any], parent_id: str) -> dic
         )
     except KeboolaApiError as exc:
         why = f"could not be read to check its version ({exc.message})"
-        return _blocked(component_id, parent_id, why, exc.error_code or ErrorCode.API_ERROR)
+        return _blocked(exc.error_code or ErrorCode.API_ERROR, component_id, parent_id, why)
     version = current.get("version") if isinstance(current, dict) else None
     if not isinstance(version, int) or isinstance(version, bool):
         return _no_version(component_id, parent_id, "when push read it before its rows")
@@ -185,11 +183,11 @@ def check_parent(phase: RowPhase, change: dict[str, Any], parent_id: str) -> dic
             f"changed in Keboola after this push read it (version {expected}, now {version}; "
             "the configuration or one of its rows was edited)"
         )
-        return _blocked(component_id, parent_id, why)
+        return _blocked(ErrorCode.SYNC_CONFLICT, component_id, parent_id, why)
     return None
 
 
-def _failed_parent_error(change: dict[str, Any], code: str) -> dict[str, str]:
+def _failed_parent_error(code: str, change: dict[str, Any]) -> dict[str, str]:
     """The errors[] entry of a new row whose new configuration failed to be created."""
     component_id, parent_path = change["component_id"], change.get("parent_path", "")
     return {
@@ -234,11 +232,11 @@ def push_rows(phase: RowPhase, row_changes: list[dict[str, Any]]) -> RowTotals:
         parent_config_id = change.get("parent_config_id", "")
         if (component_id, parent_config_id) in phase.held:  # its config failed (#827 F3)
             code = config_error_code(phase.errors, component_id, parent_config_id)
-            phase.errors.append(held_row_error(change, code))
+            phase.errors.append(held_row_error(code, change))
             continue
         failed = ledger.failed_creates.get((component_id, change.get("parent_path", "")))
         if failed is not None and not parent_config_id:  # its new config failed (item 5)
-            phase.errors.append(_failed_parent_error(change, failed))
+            phase.errors.append(_failed_parent_error(failed, change))
             continue
         try:
             # The parent's id on the target after Phase A: a placeholder

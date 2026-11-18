@@ -286,12 +286,12 @@ def create_refusals(
                     "error_code": str(exc.error_code),
                 }
             )
-            refusals += _dependent_row_refusals(change, changes, str(exc.error_code))
+            refusals += _dependent_row_refusals(str(exc.error_code), change, changes)
     return refusals
 
 
 def _dependent_row_refusals(
-    parent: dict[str, Any], changes: list[dict[str, Any]], parent_code: str
+    parent_code: str, parent: dict[str, Any], changes: list[dict[str, Any]]
 ) -> list[dict[str, str]]:
     """The planned rows of a refused new config: the real push skips them too (round 8).
 

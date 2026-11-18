@@ -256,7 +256,7 @@ def config_error_code(errors: list[dict[str, Any]], component_id: str, config_id
     return str(ErrorCode.UNEXPECTED_ERROR)
 
 
-def held_row_error(change: dict[str, Any], config_code: str) -> dict[str, str]:
+def held_row_error(config_code: str, change: dict[str, Any]) -> dict[str, str]:
     """The ``errors[]`` entry of a row not pushed because its configuration failed (F3).
 
     A row write raises its configuration's version and changes what the
