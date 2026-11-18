@@ -463,3 +463,49 @@ def test_rows_of_a_failed_new_config_carry_the_create_error_code(
     assert len(rows) == 2, result
     assert {e["error_code"] for e in rows} == {ErrorCode.API_ERROR}
     assert all("API_ERROR" in e["message"] for e in rows)
+
+
+# ---------------------------------------------------------------------------
+# PR #1016 Devin review: rows of a failed placeholder parent (clone)
+# ---------------------------------------------------------------------------
+
+
+def test_rows_of_a_failed_cloned_config_carry_the_create_code(
+    tmp_path: Path, tmp_config_dir: Path
+) -> None:
+    """A cloned config keeps its reference id as a placeholder until created.
+
+    When its create fails, its rows (which still name that placeholder) carry
+    the create's own code -- never a fabricated SYNC_CONFLICT from a version
+    check of a config that does not exist.
+    """
+    from test_sync_clone_links import VARS
+    from test_sync_clone_links import World as CloneWorld
+
+    world = CloneWorld(tmp_path, tmp_config_dir)
+    world.tgt_api.fail_config_names.add("Variables")
+
+    result = world.clone()
+
+    (config_error,) = [
+        e for e in result["errors"] if e["component_id"] == VARS and not e.get("parent_config_id")
+    ]
+    rows = [e for e in result["errors"] if e.get("parent_config_id") == "var-ref"]
+    assert rows, result["errors"]
+    assert {e["error_code"] for e in rows} == {config_error["error_code"]}
+    assert ErrorCode.SYNC_CONFLICT not in {e["error_code"] for e in rows}
+
+
+def test_dry_run_rows_of_a_refused_placeholder_config_carry_its_code() -> None:
+    """Dry-run parity: a row naming a refused config's placeholder gets the config's code."""
+    from keboola_agent_cli.services._sync_push_ops import _dependent_row_refusals
+
+    parent = {"component_id": "c", "path": "dir", "config_id": "source-config"}
+    rows = [
+        {"is_row": True, "change_type": "added", "component_id": "c", "path": "rows/a",
+         "parent_config_id": "source-config"},
+        {"is_row": True, "change_type": "added", "component_id": "c", "path": "rows/b",
+         "parent_path": "dir", "parent_config_id": ""},
+    ]  # fmt: skip
+    refusals = _dependent_row_refusals(ErrorCode.COMPANION_UNREADABLE, parent, rows)
+    assert [r["error_code"] for r in refusals] == [ErrorCode.COMPANION_UNREADABLE] * 2

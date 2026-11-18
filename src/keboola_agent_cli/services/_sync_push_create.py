@@ -320,6 +320,33 @@ class CreateLedger:
     # ``(component_id, config dir path)`` of a new config whose create failed
     # in this push -> its error code, for the rows under it (round 1, item 5).
     failed_creates: dict[tuple[str, str], str] = field(default_factory=dict)
+    # The same by the placeholder id the config carried (a clone keeps the
+    # reference id until the create succeeds): its rows name that id.
+    failed_create_ids: dict[tuple[str, str], str] = field(default_factory=dict)
+
+    def record_failed_create(
+        self, component_id: str, config_path: str, placeholder: str, exc: Exception
+    ) -> None:
+        """Remember a failed create by folder and by placeholder id, with its code."""
+        code = str(getattr(exc, "error_code", "") or ErrorCode.UNEXPECTED_ERROR)
+        self.failed_creates[(component_id, config_path)] = code
+        if placeholder:
+            self.failed_create_ids[(component_id, placeholder)] = code
+
+    def failed_parent_code(self, change: dict[str, Any]) -> str | None:
+        """The create code of a row change's parent when that create failed in this push.
+
+        The parent is named by its folder (a new config dir) or by a
+        placeholder id that never got mapped to a created config (a clone).
+        """
+        component_id = change["component_id"]
+        parent_config_id = change.get("parent_config_id", "")
+        if parent_config_id:
+            mapped = self.parent_id(component_id, parent_config_id) != parent_config_id
+            if mapped:
+                return None
+            return self.failed_create_ids.get((component_id, parent_config_id))
+        return self.failed_creates.get((component_id, change.get("parent_path", "")))
 
     def uncreated_claims(self) -> set[tuple[str, str]]:
         """``(component_id, placeholder)`` planned for a new dir this push did not create."""

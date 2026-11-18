@@ -234,8 +234,8 @@ def push_rows(phase: RowPhase, row_changes: list[dict[str, Any]]) -> RowTotals:
             code = config_error_code(phase.errors, component_id, parent_config_id)
             phase.errors.append(held_row_error(code, change))
             continue
-        failed = ledger.failed_creates.get((component_id, change.get("parent_path", "")))
-        if failed is not None and not parent_config_id:  # its new config failed (item 5)
+        failed = ledger.failed_parent_code(change)
+        if failed is not None:  # its new config failed (round 1 item 5, Devin review)
             phase.errors.append(_failed_parent_error(failed, change))
             continue
         try:

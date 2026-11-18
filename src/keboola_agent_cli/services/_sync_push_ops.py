@@ -296,9 +296,8 @@ def _dependent_row_refusals(
     """The planned rows of a refused new config: the real push skips them too (round 8).
 
     They name the refused config by its directory (``parent_path``) -- or, for
-    a placeholder config (a clone), by its placeholder id. A row named by the
-    directory carries the config's own code (*parent_code*), as in the real
-    push (#827 round 1, item 5).
+    a placeholder config (a clone), by its placeholder id. Either way it
+    carries the config's own code (*parent_code*), as in the real push (#827).
     """
     path, config_id = parent.get("path", ""), parent.get("config_id", "")
     return [
@@ -310,11 +309,7 @@ def _dependent_row_refusals(
                 f"Row {row.get('path', '')} would not be created: its config "
                 f"{parent['component_id']} at {path} is refused (see its error)."
             ),
-            "error_code": (
-                parent_code
-                if row.get("parent_path") == path and not row.get("parent_config_id")
-                else str(ErrorCode.PARENT_CONFIG_NOT_TRACKED)
-            ),
+            "error_code": parent_code,
         }
         for row in changes
         if row.get("is_row")
