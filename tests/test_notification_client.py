@@ -251,3 +251,31 @@ class TestSubClientLifecycle:
         client.close()
 
         assert sub_client.is_closed
+
+
+class TestSubscriptionPathEncoding:
+    """Subscription ids are opaque: no id may address another endpoint (#989)."""
+
+    def test_dot_dot_id_is_encoded(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{NOTIFICATION_URL}/project-subscriptions/%2E%2E",
+            method="GET",
+            json={},
+        )
+
+        with KeboolaClient(stack_url=STACK_URL, token=TEST_TOKEN) as client:
+            client.get_project_subscription("..")
+
+        assert str(httpx_mock.get_requests()[0].url).endswith("/project-subscriptions/%2E%2E")
+
+    def test_single_dot_id_is_encoded_on_delete(self, httpx_mock) -> None:
+        httpx_mock.add_response(
+            url=f"{NOTIFICATION_URL}/project-subscriptions/%2E",
+            method="DELETE",
+            status_code=204,
+        )
+
+        with KeboolaClient(stack_url=STACK_URL, token=TEST_TOKEN) as client:
+            client.delete_project_subscription(".")
+
+        assert str(httpx_mock.get_requests()[0].url).endswith("/project-subscriptions/%2E")

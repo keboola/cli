@@ -19,11 +19,16 @@ Tests the business logic in isolation using a mocked KeboolaClient. Covers:
 
 from __future__ import annotations
 
+import copy
 from unittest.mock import MagicMock
 
 import pytest
 
 from keboola_agent_cli.errors import ConfigError, KeboolaApiError
+from keboola_agent_cli.services._notification_filters import (
+    normalize_filters,
+    parse_filter_expression,
+)
 from keboola_agent_cli.services.notification_service import (
     NotificationService,
     _extract_subscription_fields,
@@ -1210,3 +1215,699 @@ class TestReplaceRecipientKeepsOvertime:
         args, _ = client.create_project_subscription.call_args
         assert args[2] == old_filters
         assert result["overtime_percent"] == 12.5
+
+
+# ---------------------------------------------------------------------------
+# Generic filters and clone (issue #989, rest)
+# ---------------------------------------------------------------------------
+
+
+def _code(exc: KeboolaApiError) -> str:
+    return str(exc.error_code)
+
+
+class TestParseFilterExpression:
+    @pytest.mark.parametrize(
+        ("expr", "field", "operator", "value"),
+        [
+            ("averageDuration>=60", "averageDuration", ">=", "60"),
+            ("a.b=x", "a.b", "==", "x"),
+            ("a==x", "a", "==", "x"),
+            ("a<=1", "a", "<=", "1"),
+            ("a<1", "a", "<", "1"),
+            ("a>1", "a", ">", "1"),
+            ("job-x.y_z>=1", "job-x.y_z", ">=", "1"),
+            # VALUE is kept byte-for-byte: ':', '=', '<', ',' and spaces survive.
+            ("x=c:d=e<f, g h", "x", "==", "c:d=e<f, g h"),
+            ("x==<5", "x", "==", "<5"),
+            ("x=", "x", "==", ""),
+            ("x= padded ", "x", "==", " padded "),
+            ("job.configuration.id=00123", "job.configuration.id", "==", "00123"),
+        ],
+    )
+    def test_valid_expressions(self, expr: str, field: str, operator: str, value: str) -> None:
+        assert parse_filter_expression(expr) == {
+            "field": field,
+            "operator": operator,
+            "value": value,
+        }
+
+    def test_value_is_always_a_string(self) -> None:
+        parsed = parse_filter_expression("averageDuration>=123")
+        assert parsed["value"] == "123"
+        assert isinstance(parsed["value"], str)
+
+    @pytest.mark.parametrize("expr", ["noop", "a..b=1", "=1", ".a=1", "a b=1", "", "a!=1"])
+    def test_malformed_is_invalid_argument_naming_the_option(self, expr: str) -> None:
+        with pytest.raises(KeboolaApiError) as exc_info:
+            parse_filter_expression(expr)
+        assert _code(exc_info.value) == "INVALID_ARGUMENT"
+        assert "--filter" in exc_info.value.message
+
+
+class TestNormalizeFilters:
+    def test_normalizes_operator_and_keeps_typed_values(self) -> None:
+        result = normalize_filters(
+            [
+                {"field": "a", "operator": "=", "value": 1},
+                {"field": "b", "value": "x"},
+                {"field": "c", "operator": ">=", "value": 0.5},
+                {"field": "d", "operator": "==", "value": None},
+                {"field": "e", "value": True},
+            ]
+        )
+        assert result == [
+            {"field": "a", "operator": "==", "value": 1},
+            {"field": "b", "value": "x"},
+            {"field": "c", "operator": ">=", "value": 0.5},
+            {"field": "d", "operator": "==", "value": None},
+            {"field": "e", "value": True},
+        ]
+
+    def test_none_and_empty_are_no_filters(self) -> None:
+        assert normalize_filters(None) == []
+        assert normalize_filters([]) == []
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            [{"field": "a"}],  # value key missing
+            [{"field": "a", "value": [1]}],
+            [{"field": "a", "value": {"x": 1}}],
+            [{"field": "a", "value": float("nan")}],
+            [{"field": "a", "value": float("inf")}],
+            [{"field": "a", "value": 1, "extra": 2}],
+            [{"field": "a..b", "value": 1}],
+            [{"field": "", "value": 1}],
+            [{"field": 5, "value": 1}],
+            [{"field": "a", "operator": "!=", "value": 1}],
+            ["a=1"],
+            {"field": "a", "value": 1},
+        ],
+    )
+    def test_invalid_entries_are_invalid_argument(self, bad: object) -> None:
+        with pytest.raises(KeboolaApiError) as exc_info:
+            normalize_filters(bad)  # type: ignore[arg-type]
+        assert _code(exc_info.value) == "INVALID_ARGUMENT"
+
+
+def _created_any(filters: list | None = None, event: str = "job-processing-long") -> dict:
+    return {
+        "id": "9400",
+        "event": event,
+        "filters": filters or [],
+        "recipient": {"channel": "email", "address": "ops@example.com"},
+    }
+
+
+class TestCreateSubscriptionGenericFilters:
+    def test_generic_filters_follow_the_dedicated_ones(self) -> None:
+        client = MagicMock()
+        client.create_project_subscription.return_value = _created_any()
+
+        _make_service(client).create_subscription(
+            "prod",
+            event="job-processing-long",
+            channel="email",
+            address="ops@example.com",
+            config_id="98765",
+            overtime_percent=50,
+            filters=[{"field": "averageDuration", "operator": ">=", "value": "60"}],
+        )
+
+        args, _ = client.create_project_subscription.call_args
+        assert args[2] == [
+            {"field": "job.configuration.id", "value": "98765"},
+            {"field": "durationOvertimePercentage", "value": 0.5, "operator": ">="},
+            {"field": "averageDuration", "operator": ">=", "value": "60"},
+        ]
+
+    def test_string_value_is_sent_as_string(self) -> None:
+        client = MagicMock()
+        client.create_project_subscription.return_value = _created_any()
+
+        _make_service(client).create_subscription(
+            "prod",
+            event="job-failed",
+            channel="email",
+            address="ops@example.com",
+            filters=[parse_filter_expression("job.configuration.id=00123")],
+        )
+
+        args, _ = client.create_project_subscription.call_args
+        assert args[2] == [{"field": "job.configuration.id", "operator": "==", "value": "00123"}]
+
+    def test_upper_overtime_bound_alone_is_allowed(self) -> None:
+        client = MagicMock()
+        client.create_project_subscription.return_value = _created_any()
+
+        _make_service(client).create_subscription(
+            "prod",
+            event="job-processing-long",
+            channel="email",
+            address="ops@example.com",
+            filters=[parse_filter_expression("durationOvertimePercentage<5")],
+        )
+
+        args, _ = client.create_project_subscription.call_args
+        assert args[2] == [{"field": "durationOvertimePercentage", "operator": "<", "value": "5"}]
+
+    @pytest.mark.parametrize(
+        ("kwargs", "expr", "option"),
+        [
+            ({"overtime_percent": 50}, "durationOvertimePercentage<5", "--overtime-percent"),
+            ({"component_id": "keboola.flow"}, "job.component.id=x", "--component-id"),
+            ({"config_id": "1"}, "job.configuration.id=2", "--config-id"),
+            ({"branch_id": 7}, "branch.id=8", "--branch"),
+        ],
+    )
+    def test_dedicated_option_and_filter_on_same_field_is_refused(
+        self, kwargs: dict, expr: str, option: str
+    ) -> None:
+        client = MagicMock()
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            _make_service(client).create_subscription(
+                "prod",
+                event="job-processing-long",
+                channel="email",
+                address="ops@example.com",
+                filters=[parse_filter_expression(expr)],
+                **kwargs,
+            )
+
+        assert _code(exc_info.value) == "INVALID_ARGUMENT"
+        assert option in exc_info.value.message
+        assert "--filter" in exc_info.value.message
+        client.create_project_subscription.assert_not_called()
+
+    def test_same_field_and_operator_twice_is_refused(self) -> None:
+        client = MagicMock()
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            _make_service(client).create_subscription(
+                "prod",
+                event="job-failed",
+                channel="email",
+                address="ops@example.com",
+                filters=[parse_filter_expression("x=1"), parse_filter_expression("x==2")],
+            )
+
+        assert _code(exc_info.value) == "INVALID_ARGUMENT"
+        client.create_project_subscription.assert_not_called()
+
+    def test_omitted_operator_and_equality_are_the_same_operator(self) -> None:
+        client = MagicMock()
+
+        with pytest.raises(KeboolaApiError):
+            _make_service(client).create_subscription(
+                "prod",
+                event="job-failed",
+                channel="email",
+                address="ops@example.com",
+                filters=[{"field": "x", "value": 1}, {"field": "x", "operator": "==", "value": 2}],
+            )
+        client.create_project_subscription.assert_not_called()
+
+    def test_range_on_one_field_is_allowed(self) -> None:
+        client = MagicMock()
+        client.create_project_subscription.return_value = _created_any()
+
+        _make_service(client).create_subscription(
+            "prod",
+            event="job-failed",
+            channel="email",
+            address="ops@example.com",
+            filters=[parse_filter_expression("x>=1"), parse_filter_expression("x<5")],
+        )
+
+        args, _ = client.create_project_subscription.call_args
+        assert [(f["field"], f["operator"]) for f in args[2]] == [("x", ">="), ("x", "<")]
+
+    def test_empty_filter_list_sends_no_filters(self) -> None:
+        client = MagicMock()
+        client.create_project_subscription.return_value = _created_any()
+
+        _make_service(client).create_subscription(
+            "prod", event="job-failed", channel="email", address="ops@example.com", filters=[]
+        )
+
+        args, _ = client.create_project_subscription.call_args
+        assert args[2] is None
+
+    def test_service_refusal_of_unknown_field_is_preserved(self) -> None:
+        client = MagicMock()
+        client.create_project_subscription.side_effect = KeboolaApiError(
+            message="Field 'nope' is not valid for event job-failed",
+            status_code=400,
+            error_code="VALIDATION_ERROR",
+            details={"field": "nope"},
+        )
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            _make_service(client).create_subscription(
+                "prod",
+                event="job-failed",
+                channel="email",
+                address="ops@example.com",
+                filters=[parse_filter_expression("nope=1")],
+            )
+
+        assert exc_info.value.error_code == "VALIDATION_ERROR"
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.details == {"field": "nope"}
+        assert "nope" in exc_info.value.message
+
+    def test_lost_response_says_not_to_rerun(self) -> None:
+        client = MagicMock()
+        client.create_project_subscription.side_effect = KeboolaApiError(
+            message="Gateway timeout", status_code=504, error_code="API_ERROR"
+        )
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            _make_service(client).create_subscription(
+                "prod", event="job-failed", channel="email", address="ops@example.com"
+            )
+
+        assert client.create_project_subscription.call_count == 1
+        assert exc_info.value.retryable is False
+        assert "notification list" in exc_info.value.message
+        assert "re-run" in exc_info.value.message
+
+
+class TestFilterValueReadsEqualityOnly:
+    def test_inequality_branch_filter_is_not_a_branch(self) -> None:
+        row = _extract_subscription_fields(
+            {
+                "id": "1",
+                "event": "job-failed",
+                "filters": [{"field": "branch.id", "operator": "<", "value": "123"}],
+                "recipient": {"channel": "email", "address": "a@example.com"},
+            }
+        )
+        assert row["branch_id"] == ""
+
+    def test_inequality_config_filter_does_not_scope_the_row(self) -> None:
+        row = _extract_subscription_fields(
+            {
+                "id": "1",
+                "event": "job-failed",
+                "filters": [{"field": "job.configuration.id", "operator": ">=", "value": "5"}],
+                "recipient": {"channel": "email", "address": "a@example.com"},
+            }
+        )
+        assert row["config_id"] == ""
+        assert row["scope"] == "project-wide"
+
+    def test_explicit_equality_operator_is_read(self) -> None:
+        row = _extract_subscription_fields(
+            {
+                "id": "1",
+                "event": "job-failed",
+                "filters": [
+                    {"field": "branch.id", "operator": ">", "value": "1"},
+                    {"field": "branch.id", "operator": "==", "value": "42"},
+                ],
+                "recipient": {"channel": "email", "address": "a@example.com"},
+            }
+        )
+        assert row["branch_id"] == "42"
+
+
+CLONE_SOURCE = {
+    "id": "500",
+    "event": "job-processing-long",
+    "expiresAt": "2027-01-01T00:00:00Z",
+    "filters": [
+        {"field": "job.component.id", "value": "keboola.flow"},
+        {"field": "job.configuration.id", "value": "111"},
+        {"field": "branch.id", "value": "4242"},
+        {"field": "durationOvertimePercentage", "operator": ">=", "value": 0.5},
+        {"field": "someFutureField", "value": None},
+    ],
+    "recipient": {"channel": "email", "address": "ops@example.com", "extra": "kept"},
+}
+
+
+def _clone_client(source: dict | None = None) -> MagicMock:
+    src = copy.deepcopy(source if source is not None else CLONE_SOURCE)
+    client = MagicMock()
+    client.get_project_subscription.return_value = src
+
+    def create(event: str, recipient: dict, filters: list | None, expires_at: str | None) -> dict:
+        return {
+            "id": "900",
+            "event": event,
+            "filters": filters or [],
+            "recipient": recipient,
+            **({"expiresAt": expires_at} if expires_at else {}),
+        }
+
+    client.create_project_subscription.side_effect = create
+    client.list_component_configs.return_value = []
+    return client
+
+
+def _posted(client: MagicMock) -> tuple:
+    args, _ = client.create_project_subscription.call_args
+    return args
+
+
+class TestCloneSubscription:
+    def test_no_override_duplicates_the_source_verbatim(self) -> None:
+        client = _clone_client()
+
+        result = _make_service(client).clone_subscription("prod", "500")
+
+        client.get_project_subscription.assert_called_once_with("500")
+        assert client.create_project_subscription.call_count == 1
+        event, recipient, filters, expires_at = _posted(client)
+        assert event == "job-processing-long"
+        assert recipient == CLONE_SOURCE["recipient"]
+        assert filters == CLONE_SOURCE["filters"]
+        assert expires_at == "2027-01-01T00:00:00Z"
+        assert result["source_subscription_id"] == "500"
+        assert result["new_subscription_id"] == "900"
+        assert result["dry_run"] is False
+        assert result["filters_replaced"] == []
+        assert result["filters_added"] == []
+        assert result["filters_kept"] == CLONE_SOURCE["filters"]
+        client.delete_project_subscription.assert_not_called()
+
+    def test_config_override_replaces_only_that_field(self) -> None:
+        client = _clone_client()
+
+        result = _make_service(client).clone_subscription("prod", "500", config_id="222")
+
+        _, _, filters, _ = _posted(client)
+        assert filters == [
+            {"field": "job.component.id", "value": "keboola.flow"},
+            {"field": "branch.id", "value": "4242"},
+            {"field": "durationOvertimePercentage", "operator": ">=", "value": 0.5},
+            {"field": "someFutureField", "value": None},
+            {"field": "job.configuration.id", "value": "222"},
+        ]
+        assert result["filters_replaced"] == [
+            {
+                "field": "job.configuration.id",
+                "old": [{"field": "job.configuration.id", "value": "111"}],
+                "new": [{"field": "job.configuration.id", "value": "222"}],
+            }
+        ]
+        assert result["config_id"] == "222"
+        assert result["branch_id"] == "4242"
+        assert result["overtime_percent"] == 50
+
+    def test_two_bound_range_is_replaced_as_a_group(self) -> None:
+        source = copy.deepcopy(CLONE_SOURCE)
+        source["filters"] = [
+            {"field": "a", "value": "1"},
+            {"field": "averageDuration", "operator": ">=", "value": "10"},
+            {"field": "b", "value": "2"},
+            {"field": "averageDuration", "operator": "<", "value": "100"},
+            {"field": "c", "value": "3"},
+        ]
+        client = _clone_client(source)
+
+        result = _make_service(client).clone_subscription(
+            "prod",
+            "500",
+            filters=[
+                parse_filter_expression("averageDuration>=60"),
+                parse_filter_expression("averageDuration<600"),
+            ],
+        )
+
+        _, _, filters, _ = _posted(client)
+        assert filters == [
+            {"field": "a", "value": "1"},
+            {"field": "b", "value": "2"},
+            {"field": "c", "value": "3"},
+            {"field": "averageDuration", "operator": ">=", "value": "60"},
+            {"field": "averageDuration", "operator": "<", "value": "600"},
+        ]
+        assert result["filters_replaced"][0]["field"] == "averageDuration"
+        assert len(result["filters_replaced"][0]["old"]) == 2
+        assert len(result["filters_replaced"][0]["new"]) == 2
+
+    def test_new_field_is_reported_as_added(self) -> None:
+        client = _clone_client()
+
+        result = _make_service(client).clone_subscription(
+            "prod", "500", filters=[parse_filter_expression("averageDuration>=60")]
+        )
+
+        assert result["filters_added"] == [
+            {"field": "averageDuration", "operator": ">=", "value": "60"}
+        ]
+        assert result["filters_replaced"] == []
+
+    def test_active_branch_never_replaces_the_source_branch(self) -> None:
+        client = _clone_client()
+        service = _make_service(client)
+        service._config_store.get_project("prod").active_branch_id = 999
+
+        service.clone_subscription("prod", "500", config_id="222")
+
+        _, _, filters, _ = _posted(client)
+        branch_filters = [f for f in filters if f["field"] == "branch.id"]
+        assert branch_filters == [{"field": "branch.id", "value": "4242"}]
+
+    def test_branch_override_replaces_the_branch_filter(self) -> None:
+        client = _clone_client()
+
+        _make_service(client).clone_subscription("prod", "500", branch_id=7)
+
+        _, _, filters, _ = _posted(client)
+        assert [f for f in filters if f["field"] == "branch.id"] == [
+            {"field": "branch.id", "value": "7"}
+        ]
+
+    def test_source_without_branch_filter_warns_about_the_default_branch(self) -> None:
+        source = copy.deepcopy(CLONE_SOURCE)
+        source["filters"] = [f for f in source["filters"] if f["field"] != "branch.id"]
+        client = _clone_client(source)
+
+        result = _make_service(client).clone_subscription("prod", "500", config_id="222")
+
+        assert any("default branch" in w for w in result["warnings"])
+
+    def test_address_only_keeps_the_source_channel(self) -> None:
+        source = copy.deepcopy(CLONE_SOURCE)
+        source["recipient"] = {"channel": "webhook", "url": "https://hooks.example.com/a"}
+        client = _clone_client(source)
+
+        _make_service(client).clone_subscription(
+            "prod", "500", address="https://hooks.example.com/b"
+        )
+
+        _, recipient, _, _ = _posted(client)
+        assert recipient == {"channel": "webhook", "url": "https://hooks.example.com/b"}
+
+    def test_address_and_channel_switch_the_recipient(self) -> None:
+        client = _clone_client()
+
+        _make_service(client).clone_subscription(
+            "prod", "500", address="https://hooks.example.com/b", channel="webhook"
+        )
+
+        _, recipient, _, _ = _posted(client)
+        assert recipient == {"channel": "webhook", "url": "https://hooks.example.com/b"}
+
+    def test_channel_without_address_is_refused_before_any_call(self) -> None:
+        client = _clone_client()
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            _make_service(client).clone_subscription("prod", "500", channel="webhook")
+
+        assert _code(exc_info.value) == "INVALID_ARGUMENT"
+        assert "--address" in exc_info.value.message
+        client.get_project_subscription.assert_not_called()
+        client.create_project_subscription.assert_not_called()
+
+    def test_invalid_channel_is_invalid_argument(self) -> None:
+        client = _clone_client()
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            _make_service(client).clone_subscription(
+                "prod", "500", address="a@example.com", channel="slack"
+            )
+
+        assert _code(exc_info.value) == "INVALID_ARGUMENT"
+        client.create_project_subscription.assert_not_called()
+
+    def test_expires_at_override_replaces_an_expired_source(self) -> None:
+        source = copy.deepcopy(CLONE_SOURCE)
+        source["expiresAt"] = "2020-01-01T00:00:00Z"
+        client = _clone_client(source)
+
+        _make_service(client).clone_subscription("prod", "500", expires_at="2030-01-01T00:00:00Z")
+
+        assert _posted(client)[3] == "2030-01-01T00:00:00Z"
+
+    def test_clear_expires_at_sends_no_expiry(self) -> None:
+        client = _clone_client()
+
+        _make_service(client).clone_subscription("prod", "500", clear_expires_at=True)
+
+        assert _posted(client)[3] is None
+
+    def test_expires_at_and_clear_together_are_refused(self) -> None:
+        client = _clone_client()
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            _make_service(client).clone_subscription(
+                "prod", "500", expires_at="2030-01-01T00:00:00Z", clear_expires_at=True
+            )
+
+        assert _code(exc_info.value) == "INVALID_ARGUMENT"
+        client.get_project_subscription.assert_not_called()
+
+    def test_overtime_on_a_non_overtime_source_makes_no_post(self) -> None:
+        source = copy.deepcopy(CLONE_SOURCE)
+        source["event"] = "job-failed"
+        source["filters"] = []
+        client = _clone_client(source)
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            _make_service(client).clone_subscription("prod", "500", overtime_percent=50)
+
+        assert _code(exc_info.value) == "INVALID_ARGUMENT"
+        client.create_project_subscription.assert_not_called()
+
+    def test_overtime_override_replaces_the_threshold_group(self) -> None:
+        client = _clone_client()
+
+        result = _make_service(client).clone_subscription("prod", "500", overtime_percent=75)
+
+        _, _, filters, _ = _posted(client)
+        overtime = [f for f in filters if f["field"] == "durationOvertimePercentage"]
+        assert overtime == [
+            {"field": "durationOvertimePercentage", "value": 0.75, "operator": ">="}
+        ]
+        assert result["event"] == "job-processing-long"
+
+    def test_event_is_preserved(self) -> None:
+        source = copy.deepcopy(CLONE_SOURCE)
+        source["event"] = "phase-job-failed"
+        client = _clone_client(source)
+
+        _make_service(client).clone_subscription("prod", "500", config_id="222")
+
+        assert _posted(client)[0] == "phase-job-failed"
+
+    def test_inherited_phase_on_config_override_warns(self) -> None:
+        source = copy.deepcopy(CLONE_SOURCE)
+        source["filters"].append({"field": "phase.id", "value": "ph-1"})
+        client = _clone_client(source)
+
+        result = _make_service(client).clone_subscription("prod", "500", config_id="222")
+
+        assert any("phase.id" in w for w in result["warnings"])
+
+    def test_overridden_phase_does_not_warn(self) -> None:
+        source = copy.deepcopy(CLONE_SOURCE)
+        source["filters"].append({"field": "phase.id", "value": "ph-1"})
+        client = _clone_client(source)
+
+        result = _make_service(client).clone_subscription(
+            "prod", "500", config_id="222", filters=[parse_filter_expression("phase.id=ph-2")]
+        )
+
+        assert not any("phase.id" in w for w in result["warnings"])
+
+    def test_dry_run_reads_once_and_writes_nothing(self) -> None:
+        client = _clone_client()
+
+        result = _make_service(client).clone_subscription(
+            "prod", "500", config_id="222", dry_run=True
+        )
+
+        client.get_project_subscription.assert_called_once_with("500")
+        client.create_project_subscription.assert_not_called()
+        client.delete_project_subscription.assert_not_called()
+        client.list_component_configs.assert_not_called()
+        client.list_components_with_configs.assert_not_called()
+        assert result["dry_run"] is True
+        assert "new_subscription_id" not in result
+        assert result["planned"]["event"] == "job-processing-long"
+        assert result["planned"]["recipient"] == CLONE_SOURCE["recipient"]
+        assert result["planned"]["expiresAt"] == "2027-01-01T00:00:00Z"
+        assert {"field": "job.configuration.id", "value": "222"} in result["planned"]["filters"]
+
+    def test_lost_post_response_is_one_post_and_says_not_to_rerun(self) -> None:
+        client = _clone_client()
+        client.create_project_subscription.side_effect = KeboolaApiError(
+            message="Bad gateway", status_code=502, error_code="API_ERROR", retryable=True
+        )
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            _make_service(client).clone_subscription("prod", "500", config_id="222")
+
+        assert client.create_project_subscription.call_count == 1
+        assert exc_info.value.retryable is False
+        assert "notification list" in exc_info.value.message
+        assert "re-run" in exc_info.value.message
+
+    def test_name_stamping_failure_still_returns_the_new_id(self) -> None:
+        client = _clone_client()
+        client.list_component_configs.side_effect = RuntimeError("boom")
+
+        result = _make_service(client).clone_subscription("prod", "500", config_id="222")
+
+        assert result["new_subscription_id"] == "900"
+        assert result["warnings"]
+
+    def test_legacy_filters_round_trip_exactly(self) -> None:
+        source = copy.deepcopy(CLONE_SOURCE)
+        source["filters"] = [
+            {"field": "unknownLegacy", "value": None},
+            {"field": "noOperator", "value": 1},
+            {"field": "branch.id", "value": 4242},
+        ]
+        client = _clone_client(source)
+
+        _make_service(client).clone_subscription("prod", "500")
+
+        assert _posted(client)[2] == source["filters"]
+
+    @pytest.mark.parametrize(
+        "bad_filters",
+        [
+            ["job.component.id=x"],
+            [{"value": "x"}],
+            [{"field": "a"}],
+            {"field": "a", "value": 1},
+        ],
+    )
+    def test_malformed_source_filters_refuse_the_clone(self, bad_filters: object) -> None:
+        source = copy.deepcopy(CLONE_SOURCE)
+        source["filters"] = bad_filters
+        client = _clone_client(source)
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            _make_service(client).clone_subscription("prod", "500")
+
+        assert _code(exc_info.value) == "INVALID_ARGUMENT"
+        assert "500" in exc_info.value.message
+        assert "create" in exc_info.value.message
+        client.create_project_subscription.assert_not_called()
+
+    def test_dedicated_and_generic_filter_on_one_field_refused_before_get(self) -> None:
+        client = _clone_client()
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            _make_service(client).clone_subscription(
+                "prod",
+                "500",
+                config_id="222",
+                filters=[parse_filter_expression("job.configuration.id=333")],
+            )
+
+        assert _code(exc_info.value) == "INVALID_ARGUMENT"
+        client.get_project_subscription.assert_not_called()
+
+    def test_unknown_alias_raises_config_error(self) -> None:
+        client = _clone_client()
+        with pytest.raises(ConfigError):
+            _make_service(client).clone_subscription("nope", "500")

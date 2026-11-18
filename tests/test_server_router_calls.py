@@ -2439,6 +2439,219 @@ def test_notifications_create_invalid_overtime_is_http_400(tmp_path: Path) -> No
     assert res.json()["error"]["code"] == "INVALID_ARGUMENT"
 
 
+def test_notifications_create_passes_typed_filters(tmp_path: Path) -> None:
+    notification_svc = MagicMock()
+    notification_svc.create_subscription.return_value = {"subscription_id": "5678"}
+    app = _make_app_with_registry(tmp_path, _mock_registry(notification=notification_svc))
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/notifications/{PROJECT}",
+            headers=AUTH,
+            json={
+                "event": "job-processing-long",
+                "channel": "email",
+                "address": "alerts@example.com",
+                "filters": [
+                    {"field": "averageDuration", "operator": ">=", "value": 60},
+                    {"field": "x", "value": None},
+                    {"field": "y", "operator": "=", "value": "00123"},
+                ],
+            },
+        )
+
+    assert res.status_code == 200, res.text
+    assert notification_svc.create_subscription.call_args.kwargs["filters"] == [
+        {"field": "averageDuration", "operator": ">=", "value": 60},
+        {"field": "x", "value": None},
+        {"field": "y", "operator": "=", "value": "00123"},
+    ]
+
+
+def test_notifications_create_empty_filters_is_an_explicit_empty_list(tmp_path: Path) -> None:
+    notification_svc = MagicMock()
+    notification_svc.create_subscription.return_value = {"subscription_id": "5678"}
+    app = _make_app_with_registry(tmp_path, _mock_registry(notification=notification_svc))
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/notifications/{PROJECT}",
+            headers=AUTH,
+            json={
+                "event": "job-failed",
+                "channel": "email",
+                "address": "a@example.com",
+                "filters": [],
+            },
+        )
+
+    assert res.status_code == 200, res.text
+    assert notification_svc.create_subscription.call_args.kwargs["filters"] == []
+
+
+@pytest.mark.parametrize(
+    "bad_filter",
+    [
+        {"field": "a"},
+        {"field": "a", "value": [1]},
+        {"field": "a", "value": {"b": 1}},
+        {"field": "a", "value": 1, "extra": True},
+        {"field": "a", "operator": "!=", "value": 1},
+        {"field": 5, "value": 1},
+    ],
+)
+def test_notifications_create_refuses_malformed_filters(tmp_path: Path, bad_filter: dict) -> None:
+    notification_svc = MagicMock()
+    app = _make_app_with_registry(tmp_path, _mock_registry(notification=notification_svc))
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/notifications/{PROJECT}",
+            headers=AUTH,
+            json={
+                "event": "job-failed",
+                "channel": "email",
+                "address": "a@example.com",
+                "filters": [bad_filter],
+            },
+        )
+
+    assert res.status_code == 422, res.text
+    notification_svc.create_subscription.assert_not_called()
+
+
+def test_notifications_create_refuses_nan_filter_value(tmp_path: Path) -> None:
+    notification_svc = MagicMock()
+    app = _make_app_with_registry(tmp_path, _mock_registry(notification=notification_svc))
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/notifications/{PROJECT}",
+            headers={**AUTH, "Content-Type": "application/json"},
+            content=(
+                '{"event": "job-failed", "channel": "email", "address": "a@example.com", '
+                '"filters": [{"field": "a", "value": NaN}]}'
+            ),
+        )
+
+    assert res.status_code == 422, res.text
+    notification_svc.create_subscription.assert_not_called()
+
+
+def test_notifications_clone_passes_every_body_field(tmp_path: Path) -> None:
+    notification_svc = MagicMock()
+    notification_svc.clone_subscription.return_value = {"new_subscription_id": "900"}
+    app = _make_app_with_registry(tmp_path, _mock_registry(notification=notification_svc))
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/notifications/{PROJECT}/500/clone",
+            headers=AUTH,
+            json={
+                "component_id": "keboola.flow",
+                "config_id": "222",
+                "branch_id": 7,
+                "overtime_percent": 50,
+                "filters": [{"field": "averageDuration", "operator": ">=", "value": 60}],
+                "address": "new@example.com",
+                "channel": "email",
+                "expires_at": "2030-01-01T00:00:00Z",
+                "clear_expires_at": False,
+                "dry_run": True,
+            },
+        )
+
+    assert res.status_code == 200, res.text
+    notification_svc.clone_subscription.assert_called_once_with(
+        alias=PROJECT,
+        subscription_id="500",
+        component_id="keboola.flow",
+        config_id="222",
+        branch_id=7,
+        overtime_percent=50,
+        filters=[{"field": "averageDuration", "operator": ">=", "value": 60}],
+        address="new@example.com",
+        channel="email",
+        expires_at="2030-01-01T00:00:00Z",
+        clear_expires_at=False,
+        dry_run=True,
+    )
+
+
+def test_notifications_clone_defaults(tmp_path: Path) -> None:
+    notification_svc = MagicMock()
+    notification_svc.clone_subscription.return_value = {"new_subscription_id": "900"}
+    app = _make_app_with_registry(tmp_path, _mock_registry(notification=notification_svc))
+
+    with TestClient(app) as client:
+        res = client.post(f"/notifications/{PROJECT}/500/clone", headers=AUTH, json={})
+
+    assert res.status_code == 200, res.text
+    notification_svc.clone_subscription.assert_called_once_with(
+        alias=PROJECT,
+        subscription_id="500",
+        component_id=None,
+        config_id=None,
+        branch_id=None,
+        overtime_percent=None,
+        filters=None,
+        address=None,
+        channel=None,
+        expires_at=None,
+        clear_expires_at=False,
+        dry_run=False,
+    )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"unknown": 1},
+        {"branch_id": "7"},
+        {"overtime_percent": True},
+        {"event": "job-failed"},
+        {"filters": [{"field": "a"}]},
+    ],
+)
+def test_notifications_clone_refuses_bad_body(tmp_path: Path, body: dict) -> None:
+    notification_svc = MagicMock()
+    app = _make_app_with_registry(tmp_path, _mock_registry(notification=notification_svc))
+
+    with TestClient(app) as client:
+        res = client.post(f"/notifications/{PROJECT}/500/clone", headers=AUTH, json=body)
+
+    assert res.status_code == 422, res.text
+    notification_svc.clone_subscription.assert_not_called()
+
+
+@pytest.mark.parametrize("query", ["dry_run=true", "config_id=1", "foo=bar"])
+def test_notifications_clone_refuses_query_parameters(tmp_path: Path, query: str) -> None:
+    notification_svc = MagicMock()
+    app = _make_app_with_registry(tmp_path, _mock_registry(notification=notification_svc))
+
+    with TestClient(app) as client:
+        res = client.post(f"/notifications/{PROJECT}/500/clone?{query}", headers=AUTH, json={})
+
+    assert res.status_code == 422, res.text
+    notification_svc.clone_subscription.assert_not_called()
+
+
+def test_notifications_clone_invalid_argument_is_http_400(tmp_path: Path) -> None:
+    notification_svc = MagicMock()
+    notification_svc.clone_subscription.side_effect = KeboolaApiError(
+        message="--channel needs --address", error_code=ErrorCode.INVALID_ARGUMENT
+    )
+    app = _make_app_with_registry(tmp_path, _mock_registry(notification=notification_svc))
+
+    with TestClient(app) as client:
+        res = client.post(
+            f"/notifications/{PROJECT}/500/clone", headers=AUTH, json={"channel": "email"}
+        )
+
+    assert res.status_code == 400, res.text
+    assert res.json()["error"]["code"] == "INVALID_ARGUMENT"
+
+
 def test_notifications_detail_passes_alias_and_subscription_id(tmp_path: Path) -> None:
     notification_svc = MagicMock()
     notification_svc.get_subscription_detail.return_value = {"subscription_id": "1234"}
@@ -2485,6 +2698,7 @@ def test_notifications_create_passes_all_body_fields(tmp_path: Path) -> None:
         branch_id=456,
         expires_at="2027-01-01T00:00:00Z",
         overtime_percent=50,
+        filters=None,
     )
 
 
@@ -2515,6 +2729,7 @@ def test_notifications_create_defaults_optional_fields(tmp_path: Path) -> None:
         branch_id=None,
         expires_at=None,
         overtime_percent=None,
+        filters=None,
     )
 
 
