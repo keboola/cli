@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Any
 
 import typer
-import yaml
 from rich.markup import escape
 from rich.syntax import Syntax
 from rich.table import Table
@@ -32,6 +31,7 @@ from ._all_projects import (
     fanout_projects,
     finish_fanout,
 )
+from ._flow_definition import load_definition_or_exit
 from ._helpers import (
     BRANCH_ONE_PROJECT_MESSAGE,
     _confirm_or_abort,
@@ -42,7 +42,6 @@ from ._helpers import (
     get_service,
     map_error_to_exit_code,
     resolve_project_alias_or_none,
-    structured_input,
 )
 from ._project_ref import PROJECT_DEFAULT, PROJECT_HELP
 
@@ -564,13 +563,7 @@ def flow_validate(
     """
     formatter = get_formatter(ctx)
 
-    try:
-        flow_def = _load_flow_yaml(definition, definition_file)
-    except (OSError, yaml.YAMLError, ValueError) as exc:
-        formatter.error(
-            message=f"Cannot load flow definition: {exc}", error_code=ErrorCode.VALIDATION_ERROR
-        )
-        raise typer.Exit(code=2) from None
+    flow_def = load_definition_or_exit(formatter, definition, definition_file)
     if flow_def is None:
         formatter.error(
             message="Pass the flow definition with --definition YAML or --definition-file PATH.",
@@ -632,48 +625,6 @@ def flow_validate(
 # ---------------------------------------------------------------------------
 
 
-# The top-level keys of a flow definition document (`flow schema`).
-_DEFINITION_KEYS = ("phases", "tasks")
-
-
-def _load_flow_yaml(inline: str | None, file: Path | None) -> dict[str, Any] | None:
-    """The flow definition of ``--definition`` (inline YAML/JSON) or ``--definition-file``.
-
-    ``None`` when neither is given; ``-`` as the file is stdin (spec rule I1).
-
-    A definition that is given must carry one: an empty value, an empty or
-    comments-only file, a YAML ``null`` and a mapping with neither ``phases``
-    nor ``tasks`` are refused. Before, they created a flow with no phases, and
-    ``flow update --name X`` with such a file only renamed the flow.
-    """
-    if inline is None and file is None:
-        return None
-    parsed = structured_input(inline, file, label="--definition", allow_yaml=True)
-    if parsed is None:
-        raise ValueError(
-            "the definition is empty. Pass a YAML/JSON object with 'phases' and 'tasks' "
-            "('kbagent flow schema' shows the format); omit --definition and "
-            "--definition-file to create an empty flow."
-        )
-    if not isinstance(parsed, dict):
-        raise ValueError(
-            f"Flow definition must be a YAML/JSON object (mapping), got {type(parsed).__name__}"
-        )
-    unknown = [str(key) for key in parsed if key not in _DEFINITION_KEYS]
-    if unknown or not parsed:
-        found = ", ".join(repr(str(key)) for key in parsed) or "none"
-        raise ValueError(
-            "a flow definition has only the keys 'phases' and 'tasks' (keys found: "
-            f"{found}). 'kbagent flow schema' shows the format."
-        )
-    nulls = [key for key in _DEFINITION_KEYS if key in parsed and parsed[key] is None]
-    if nulls:
-        raise ValueError(
-            f"'{nulls[0]}' is null. Give a list, or leave the key out to keep the current value."
-        )
-    return parsed
-
-
 @flow_app.command("new")
 def flow_new(
     ctx: typer.Context,
@@ -712,13 +663,7 @@ def flow_new(
     phases: list[dict[str, Any]] | None = None
     tasks: list[dict[str, Any]] | None = None
 
-    try:
-        flow_def = _load_flow_yaml(definition, definition_file)
-    except (OSError, yaml.YAMLError, ValueError) as exc:
-        formatter.error(
-            message=f"Cannot load flow definition: {exc}", error_code=ErrorCode.VALIDATION_ERROR
-        )
-        raise typer.Exit(code=2) from None
+    flow_def = load_definition_or_exit(formatter, definition, definition_file)
     if flow_def is not None:
         phases = flow_def.get("phases", [])
         tasks = flow_def.get("tasks", [])
@@ -792,13 +737,7 @@ def flow_update(
     phases: list[dict[str, Any]] | None = None
     tasks: list[dict[str, Any]] | None = None
 
-    try:
-        flow_def = _load_flow_yaml(definition, definition_file)
-    except (OSError, yaml.YAMLError, ValueError) as exc:
-        formatter.error(
-            message=f"Cannot load flow definition: {exc}", error_code=ErrorCode.VALIDATION_ERROR
-        )
-        raise typer.Exit(code=2) from None
+    flow_def = load_definition_or_exit(formatter, definition, definition_file)
     if flow_def is not None:
         phases = flow_def.get("phases")
         tasks = flow_def.get("tasks")
