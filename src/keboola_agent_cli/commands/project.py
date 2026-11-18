@@ -23,7 +23,7 @@ from ..constants import (
     PROJECT_ROLES,
 )
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
-from ..output import format_item_error
+from ..output import OutputFormatter, format_item_error
 from ..services.project_service import AUTH_MODE_SESSION, AUTH_MODE_STATIC
 from ._all_projects import (
     FANOUT_ONE_PROJECT_HELP,
@@ -44,6 +44,7 @@ from ._helpers import (
     finish_items,
     get_formatter,
     get_service,
+    ignored_env_manage_token_warning,
     manage_token_if_available,
     map_error_to_exit_code,
     resolve_manage_token,
@@ -597,7 +598,7 @@ def project_refresh(
     # None (no terminal, env not allowed) fails only the projects that need a
     # new token; tokens taken from the global config are still written.
     manage_token_provider = functools.partial(
-        manage_token_if_available, allow_env=ctx.obj["allow_env_manage_token"]
+        _refresh_manage_token, formatter, allow_env=ctx.obj["allow_env_manage_token"]
     )
 
     # Build kwargs shared by preview and real call
@@ -660,6 +661,18 @@ def project_refresh(
             formatter.console, result, local_copies_hint=is_global_config(config_store)
         ),
     )
+
+
+def _refresh_manage_token(formatter: OutputFormatter, *, allow_env: bool) -> str | None:
+    """The Manage-token provider of `project refresh` (#955).
+
+    Warns through the formatter (stderr, or ``warnings[]`` under --json) about a
+    set but ignored KBC_MANAGE_API_TOKEN, then returns the token or None.
+    """
+    warning = ignored_env_manage_token_warning(allow_env=allow_env)
+    if warning:
+        formatter.warning(escape(warning))
+    return manage_token_if_available(allow_env=allow_env)
 
 
 # ── Active project (`project use`) ────────────────────────────────────

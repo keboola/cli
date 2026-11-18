@@ -167,10 +167,12 @@ def format_refresh_result(console: Console, data: dict, *, local_copies_hint: bo
         console.print()
 
     failed = data.get("projects_failed", [])
-    for line in not_used_lines([*refreshed, *failed]):
+    for line in not_used_lines(refreshed):
         console.print(line, soft_wrap=True, markup=False)
     for p in failed:
-        console.print(format_item_error(f"project '{p['alias']}'", p["message"]), soft_wrap=True)
+        # A refused global token is part of that project's one error line (HO2).
+        message = " ".join([p["message"], *not_used_lines([p])])
+        console.print(format_item_error(f"project '{p['alias']}'", message), soft_wrap=True)
 
     summary_parts = []
     if adopted:

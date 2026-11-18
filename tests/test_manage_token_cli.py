@@ -24,7 +24,11 @@ import typer
 from typer.testing import CliRunner
 
 from keboola_agent_cli.cli import app
-from keboola_agent_cli.commands._helpers import manage_token_if_available, resolve_manage_token
+from keboola_agent_cli.commands._helpers import (
+    ignored_env_manage_token_warning,
+    manage_token_if_available,
+    resolve_manage_token,
+)
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.models import AppConfig, ProjectConfig
 
@@ -183,11 +187,24 @@ class TestManageTokenResolution:
         assert manage_token_if_available(allow_env=True) is None
         assert capsys.readouterr().err == ""
 
-    def test_if_available_warns_on_ignored_env(self, monkeypatch, capsys) -> None:
-        """R4: env present but not allowed -- warning, still None."""
+    def test_if_available_ignores_env_silently_the_caller_warns(self, monkeypatch, capsys) -> None:
+        """R4: env present but not allowed -- None, nothing printed; the warning
+        text comes from ignored_env_manage_token_warning for the caller to show."""
         monkeypatch.setenv("KBC_MANAGE_API_TOKEN", SENTINEL_MANAGE_TOKEN)
         monkeypatch.setattr("sys.stdin.isatty", lambda: False, raising=False)
         assert manage_token_if_available(allow_env=False) is None
+        assert capsys.readouterr().err == ""
+        warning = ignored_env_manage_token_warning(allow_env=False)
+        assert warning is not None
+        assert "found in environment but ignored" in warning
+        assert SENTINEL_MANAGE_TOKEN not in warning
+        assert ignored_env_manage_token_warning(allow_env=True) is None
+
+    def test_resolve_still_warns_on_ignored_env(self, monkeypatch, capsys) -> None:
+        monkeypatch.setenv("KBC_MANAGE_API_TOKEN", SENTINEL_MANAGE_TOKEN)
+        monkeypatch.setattr("sys.stdin.isatty", lambda: False, raising=False)
+        with pytest.raises(typer.Exit):
+            resolve_manage_token(allow_env=False)
         err = capsys.readouterr().err
         assert "found in environment but ignored" in err
         assert SENTINEL_MANAGE_TOKEN not in err
