@@ -1686,6 +1686,15 @@ kbagent transformation edit [--project NAME] --config-id ID --change-description
 #   (add/remove/rename block+code, set_code, add_script, str_replace) applied sequentially against
 #   batch-start ids -- ALWAYS `transformation show` first, ids renumber after structural ops;
 #   --storage REPLACES configuration.storage wholesale; --dry-run previews without PUT.
+#   SELECT skip: the Snowflake/BigQuery transformation runtime skips a script[] statement whose
+#   comment-free text, leading whitespace ignored, starts with SELECT (Snowflake: whole word,
+#   since keboola/snowflake-transformation#42; BigQuery: first 6 chars). The job succeeds
+#   without running it.
+#   create/edit (also --dry-run) and `sync push` (configs it creates/updates, also --dry-run) add a
+#   warnings[] entry SQL_SELECT_SKIPPED_BY_RUNTIME per such statement ({code, message,
+#   component_id, config_id?, path?, statement: {block, code, index, excerpt}}); the write still
+#   happens. Rule in sync/sql_select_skip.py. config update/row-update do not check. Version gate
+#   lives in gotchas.md.
 
 kbagent docs query "QUESTION" [--project NAME]
 # (0.73.0+) Documentation Q&A via the AI Service (server-side RAG). Unlike kai ask it does NOT
@@ -1843,12 +1852,20 @@ kbagent context [GROUP]
 #   INVALID_ARGUMENT, exit 2, listing the valid ones. --json adds data.group. Version gate in gotchas.md.
 kbagent init [--from-global] [--project ALIAS ...]
 # `--project ALIAS` (repeatable) copies only the named project(s) from the global config and implies --from-global.
-kbagent doctor
+kbagent doctor [--check skipped-selects ...]
 # `doctor` includes an `mcp_tool_tasks` check: it FAILs on scheduled agent tasks still
 # using the removed `--type mcp_tool` (they are inert tombstones that never run again).
 # `agent list` marks those rows and adds a per-task `deprecation` key in --json. Recreate
 # each as `--type cli_command` using the map in docs/mcp-migration.md.
 # `doctor` has no `--fix` since 0.85.0 -- it only ever installed keboola-mcp-server.
+# `doctor` optional checks: a plain doctor lists each one as a skip entry with optional: true and
+#   `command` (the exact command to run it) and does not run it; `--check NAME` (repeatable; serve:
+#   GET /doctor?check=NAME) runs it. `--check skipped-selects`: lists every Snowflake/BigQuery SQL transformation statement
+#   that starts with SELECT (the runtime never runs it) in the production branch of each
+#   connected project, one config listing per component and project; `ran_before_fix` marks
+#   statements that ran until Snowflake transformation 1.7.1 (a comment or whitespace before
+#   SELECT), e.g. data checks written as SELECT ... 1/0. Rewrite those as
+#   SET ABORT_TRANSFORMATION. Version gate lives in gotchas.md.
 kbagent version [--beta]
 kbagent update [--beta] [--major]
 # Major gate (CLI-40, #791 section 4.3): the updater (startup hook, `update`, `version`) reads

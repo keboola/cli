@@ -31,6 +31,7 @@ from ..sync.code_extraction import merge_code_files, normalize_blocks_codes_scri
 from ..sync.config_format import local_config_to_api, local_row_to_api
 from ..sync.manifest import Manifest, ManifestConfiguration
 from ..sync.naming import sanitize_name
+from ..sync.sql_select_skip import SELECT_SKIPPING_COMPONENTS, skipped_select_warnings
 from ._config_folder import FOLDER_NOT_SUPPORTED_MESSAGE
 from ._encryption import (
     SecretCache,
@@ -369,6 +370,55 @@ def detect_name_drift(
                 }
             )
     return warnings
+
+
+def add_select_skips(
+    service: SyncService,
+    manifest: Manifest,
+    project_root: Path,
+    branch_id: int | None,
+    changes: list[dict[str, Any]],
+    shown: dict[str, Any],
+) -> dict[str, Any]:
+    """Add a SQL_SELECT_SKIPPED_BY_RUNTIME warning per skipped statement to *shown*.
+
+    Read from the local files of every SQL transformation config this push
+    creates or updates (dry run too): a statement starting with SELECT is
+    skipped by the Snowflake / BigQuery transformation runtime, so the job
+    succeeds without running it (see :mod:`..sync.sql_select_skip`). The
+    entries go to ``companion_warnings``, which ``sync push`` moves to the
+    envelope's ``warnings[]`` (stderr in human mode). The push is not refused.
+    """
+    candidates = [
+        change
+        for change in changes
+        if not change.get("is_row")
+        and change.get("change_type") in ("added", "modified")
+        and change.get("component_id") in SELECT_SKIPPING_COMPONENTS
+    ]
+    if not candidates:
+        return shown
+    branch_path = service._resolve_source_branch_path(manifest, project_root, branch_id)
+    found: list[dict[str, Any]] = []
+    for change in candidates:
+        config_dir = project_root / branch_path / change.get("path", "")
+        local_data = service._read_config_file(config_dir)
+        if local_data is None:
+            continue
+        merge_code_files(change["component_id"], local_data, config_dir)
+        # Scan the script[] push will send: guard_script_shape splits an inline
+        # string or a multi-statement element first, which can put a SELECT at
+        # the start of a statement of its own.
+        sent, _ = normalize_blocks_codes_script(change["component_id"], local_data)
+        found += skipped_select_warnings(
+            change["component_id"],
+            sent,
+            config_id=change.get("config_id", ""),
+            path=change.get("path", ""),
+        )
+    if found:
+        shown = {**shown, "companion_warnings": [*shown.get("companion_warnings", []), *found]}
+    return shown
 
 
 def guard_script_shape(
