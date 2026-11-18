@@ -268,7 +268,7 @@ class TestCreate:
 
         assert result.exit_code == 2
         if bad_rules.startswith("{"):
-            assert "{subjects|groups, visible_columns}" in result.output
+            assert "{subjects|groups|attributes+issuers, visible_columns}" in result.output
         service.create_policy.assert_not_called()
 
     def test_validation_error_surfaces_cls_code(self, tmp_path: Path) -> None:
