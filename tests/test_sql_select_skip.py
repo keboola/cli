@@ -11,8 +11,10 @@ from keboola_agent_cli.sync.sql_select_skip import (
     SQL_SELECT_SKIPPED_CODE,
     SkippedSelect,
     is_skipped_by_runtime,
+    ran_before_fix,
     skipped_select_statements,
     skipped_select_warnings,
+    skipped_selects_in_configs,
 )
 
 SNOWFLAKE = "keboola.snowflake-transformation"
@@ -139,3 +141,58 @@ def test_warning_entries() -> None:
 def test_no_warnings_without_blocks() -> None:
     assert skipped_select_warnings(SNOWFLAKE, {"parameters": {}}) == []
     assert skipped_select_warnings(SNOWFLAKE, None) == []
+
+
+@pytest.mark.parametrize(
+    ("statement", "ran"),
+    [
+        ("SELECT 1/0;", False),  # skipped before 1.7.1 too
+        ("/* x */SELECT 1/0;", False),
+        ("-- check\nselect iff(x = 0, 1, 1/0) from t;", True),  # the guard pattern
+        ("  SELECT 1/0;", True),
+        ("\nSELECT 1/0;", True),
+        ("/* x */ SELECT 1/0;", True),
+    ],
+)
+def test_ran_before_fix_marks_statements_the_old_snowflake_rule_executed(
+    statement: str, ran: bool
+) -> None:
+    assert is_skipped_by_runtime(SNOWFLAKE, statement) is True
+    assert ran_before_fix(SNOWFLAKE, statement) is ran
+
+
+def test_ran_before_fix_is_false_for_bigquery() -> None:
+    """BigQuery always ignored the leading whitespace: nothing changed there."""
+    assert ran_before_fix(BIGQUERY, "-- check\nSELECT 1/0;") is False
+
+
+def test_skipped_selects_in_configs() -> None:
+    configs = [
+        {
+            "id": "777",
+            "name": "Gate",
+            "configuration": {
+                "parameters": {"blocks": _blocks(["-- check\nselect 1/0;", "SELECT 1;"])}
+            },
+        },
+        {
+            "id": "778",
+            "name": "Clean",
+            "configuration": {"parameters": {"blocks": _blocks(['CREATE TABLE "t" AS SELECT 1;'])}},
+        },
+        {"id": "779", "configuration": None},
+        "junk",
+    ]
+
+    found = skipped_selects_in_configs(SNOWFLAKE, configs)
+
+    assert [(f["config_id"], f["config_name"], f["ran_before_fix"]) for f in found] == [
+        ("777", "Gate", True),
+        ("777", "Gate", False),
+    ]
+    assert found[0]["component_id"] == SNOWFLAKE
+    assert found[0]["statement"]["index"] == 0
+
+
+def test_skipped_selects_in_configs_ignores_a_non_list() -> None:
+    assert skipped_selects_in_configs(SNOWFLAKE, {"error": "x"}) == []

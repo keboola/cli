@@ -5,6 +5,9 @@ Runs checks for:
 2. Config file valid JSON and parseable
 3. Token verification for each project (API call with response time)
 4. CLI version
+...
+10. SQL transformation statements the runtime skips as a SELECT (one config
+    listing per SQL transformation component and connected project)
 
 Extracted from commands/doctor.py to respect the 3-layer architecture.
 """
@@ -96,6 +99,10 @@ class DoctorService:
         # Check 9: persisted permission patterns that can no longer match
         inert_patterns_check = self._check_inert_permission_patterns(config)
         all_checks.append(inert_patterns_check)
+
+        # Check 10: SQL transformation statements the runtime skips as a SELECT
+        select_skip_check = self._check_skipped_selects(config, connectivity_checks)
+        all_checks.append(select_skip_check)
 
         # Build summary
         total = len(all_checks)
@@ -489,6 +496,101 @@ class DoctorService:
                 client.close()
 
         return results
+
+    def _check_skipped_selects(
+        self,
+        config: AppConfig | None,
+        connectivity_checks: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Check 10: SQL statements the Snowflake / BigQuery runtime never runs.
+
+        A ``script[]`` statement that starts with SELECT is skipped without an
+        error, so a data check written as ``SELECT ... 1/0`` never stops the job.
+        Snowflake transformation 1.7.1 (keboola/snowflake-transformation#42)
+        made this independent of formatting: a check with a comment above it ran
+        until then and is skipped since. ``ran_before_fix`` marks those.
+
+        One config listing per component and project that passed the
+        connectivity check; production branch only. A listing that fails is
+        reported, the other projects are still checked.
+        """
+        from ..sync.sql_select_skip import SELECT_SKIPPING_COMPONENTS, skipped_selects_in_configs
+
+        name = "Skipped SELECT statements"
+        connected = [c["alias"] for c in connectivity_checks if c.get("status") == "pass"]
+        if config is None or not connected:
+            return {
+                "check": "skipped_selects",
+                "name": name,
+                "status": "skip",
+                "message": "No connected project to check.",
+            }
+
+        findings: list[dict[str, Any]] = []
+        errors: list[dict[str, Any]] = []
+        for alias in connected:
+            project = config.projects[alias]
+            client = self._client_factory(project.stack_url, project.token)
+            try:
+                for component_id in sorted(SELECT_SKIPPING_COMPONENTS):
+                    try:
+                        configs = client.list_component_configs(component_id)
+                    except KeboolaApiError as exc:
+                        errors.append(
+                            {
+                                "project_alias": alias,
+                                "component_id": component_id,
+                                "error_code": exc.error_code,
+                                "message": exc.message,
+                            }
+                        )
+                        continue
+                    for finding in skipped_selects_in_configs(component_id, configs):
+                        findings.append({"project_alias": alias, **finding})
+            finally:
+                client.close()
+
+        details = {"statements": findings, "errors": errors}
+        if not findings:
+            status = "warn" if errors else "pass"
+            unread = f" {len(errors)} listing(s) could not be read." if errors else ""
+            return {
+                "check": "skipped_selects",
+                "name": name,
+                "status": status,
+                "message": (
+                    f"No SQL transformation statement starts with SELECT in "
+                    f"{len(connected)} project(s).{unread}"
+                ),
+                "details": details,
+            }
+
+        configs_hit = {(f["project_alias"], f["component_id"], f["config_id"]) for f in findings}
+        changed = [f for f in findings if f["ran_before_fix"]]
+        shown = ", ".join(
+            f"{f['project_alias']}/{f['config_id']} ({f['config_name']})"
+            for f in (changed or findings)[:_MAX_LISTED_TASKS]
+        )
+        changed_note = (
+            f" {len(changed)} of them have a comment or whitespace before SELECT: they ran "
+            f"until Snowflake transformation 1.7.1 and are skipped since, so a data check "
+            f"written that way no longer stops the job."
+            if changed
+            else ""
+        )
+        return {
+            "check": "skipped_selects",
+            "name": name,
+            "status": "warn",
+            "message": (
+                f"{len(findings)} statement(s) in {len(configs_hit)} SQL transformation(s) "
+                f"start with SELECT, so the runtime skips them without running them."
+                f"{changed_note} For example: {shown}. To stop a job on purpose use "
+                f"SET ABORT_TRANSFORMATION; see the kbagent skill reference "
+                f"transformation-workflow.md."
+            ),
+            "details": details,
+        }
 
     @staticmethod
     def _check_version() -> dict[str, Any]:

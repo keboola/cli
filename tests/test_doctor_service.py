@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from keboola_agent_cli.config_store import ConfigStore
-from keboola_agent_cli.errors import KeboolaApiError
+from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 from keboola_agent_cli.models import (
     AppConfig,
     PermissionPolicy,
@@ -926,3 +926,113 @@ class TestDoctorServiceCheckInertPermissionPatterns:
         matching = [c for c in checks if c["check"] == "inert_permission_patterns"]
         assert len(matching) == 1
         assert matching[0]["status"] == "warn"
+
+
+class TestDoctorServiceCheckSkippedSelects:
+    """Check 10: SQL statements the transformation runtime skips as a SELECT."""
+
+    SNOWFLAKE = "keboola.snowflake-transformation"
+
+    @staticmethod
+    def _store(tmp_config_dir: Path) -> ConfigStore:
+        store = ConfigStore(config_dir=tmp_config_dir)
+        store.add_project(
+            "prod",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token="901-xxx-testtoken1234",
+                project_name="Production",
+                project_id=1234,
+            ),
+        )
+        return store
+
+    def _client(self, snowflake_configs: list | Exception) -> MagicMock:
+        client = _make_mock_client()
+
+        def list_configs(component_id: str) -> list:
+            if component_id != self.SNOWFLAKE:
+                return []
+            if isinstance(snowflake_configs, Exception):
+                raise snowflake_configs
+            return snowflake_configs
+
+        client.list_component_configs.side_effect = list_configs
+        return client
+
+    @staticmethod
+    def _config(config_id: str, *statements: str) -> dict:
+        return {
+            "id": config_id,
+            "name": f"Config {config_id}",
+            "configuration": {
+                "parameters": {
+                    "blocks": [{"name": "B", "codes": [{"name": "C", "script": list(statements)}]}]
+                }
+            },
+        }
+
+    def _run(self, tmp_config_dir: Path, client: MagicMock) -> dict:
+        store = self._store(tmp_config_dir)
+        service = DoctorService(config_store=store, client_factory=lambda url, token: client)
+        result = service.run_checks()
+        (check,) = [c for c in result["checks"] if c["check"] == "skipped_selects"]
+        return check
+
+    def test_guard_after_a_comment_is_reported_as_changed(self, tmp_config_dir: Path) -> None:
+        """The pattern that stopped jobs until Snowflake 1.7.1 and is skipped since."""
+        client = self._client(
+            [
+                self._config("777", "-- check\nselect iff(x = 0, 1, 1/0) from t;"),
+                self._config("778", 'CREATE TABLE "t" AS SELECT 1;'),
+            ]
+        )
+
+        check = self._run(tmp_config_dir, client)
+
+        assert check["status"] == "warn"
+        assert "1 of them have a comment or whitespace before SELECT" in check["message"]
+        assert "SET ABORT_TRANSFORMATION" in check["message"]
+        (finding,) = check["details"]["statements"]
+        assert finding["project_alias"] == "prod"
+        assert finding["config_id"] == "777"
+        assert finding["ran_before_fix"] is True
+        assert check["details"]["errors"] == []
+
+    def test_plain_select_is_reported_without_the_change_note(self, tmp_config_dir: Path) -> None:
+        check = self._run(tmp_config_dir, self._client([self._config("1", "SELECT 1;")]))
+
+        assert check["status"] == "warn"
+        assert "comment or whitespace" not in check["message"]
+        assert check["details"]["statements"][0]["ran_before_fix"] is False
+
+    def test_clean_project_passes(self, tmp_config_dir: Path) -> None:
+        client = self._client([self._config("1", 'CREATE TABLE "t" AS SELECT 1;')])
+
+        check = self._run(tmp_config_dir, client)
+
+        assert check["status"] == "pass"
+        assert check["details"]["statements"] == []
+
+    def test_listing_failure_is_reported_not_raised(self, tmp_config_dir: Path) -> None:
+        error = KeboolaApiError(
+            message="Forbidden", status_code=403, error_code=ErrorCode.ACCESS_DENIED
+        )
+
+        check = self._run(tmp_config_dir, self._client(error))
+
+        assert check["status"] == "warn"
+        (entry,) = check["details"]["errors"]
+        assert entry["component_id"] == self.SNOWFLAKE
+        assert entry["error_code"] == ErrorCode.ACCESS_DENIED
+
+    def test_project_that_did_not_connect_is_not_scanned(self, tmp_config_dir: Path) -> None:
+        error = KeboolaApiError(
+            message="Invalid token", status_code=401, error_code="INVALID_TOKEN"
+        )
+        client = _make_failing_client(error)
+
+        check = self._run(tmp_config_dir, client)
+
+        assert check["status"] == "skip"
+        client.list_component_configs.assert_not_called()

@@ -2595,8 +2595,10 @@ remain branch-aware because modifying a dev branch is the expected intent.
   Skipped SELECTs: the Snowflake / BigQuery runtime skips every statement
   that starts with SELECT, so a job whose SQL only SELECTs succeeds even
   when a table is missing. create / edit / `sync push` add a
-  SQL_SELECT_SKIPPED_BY_RUNTIME warnings[] entry; test a failure with
-  CREATE TABLE ... AS SELECT instead.
+  SQL_SELECT_SKIPPED_BY_RUNTIME warnings[] entry, `doctor` lists them in
+  all connected projects. A data check that must stop the job is
+  SET ABORT_TRANSFORMATION = (SELECT IFF(<ok>, '', '<message>') ...),
+  never SELECT ... 1/0.
 """,
     "update": """\
   update

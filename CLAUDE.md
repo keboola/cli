@@ -1774,6 +1774,12 @@ kbagent doctor
 # `agent list` marks those rows and adds a per-task `deprecation` key in --json. Recreate
 # each as `--type cli_command` using the map in docs/mcp-migration.md.
 # `doctor` has no `--fix` since 0.85.0 -- it only ever installed keboola-mcp-server.
+# `doctor` skipped_selects check: lists every Snowflake/BigQuery SQL transformation statement
+#   that starts with SELECT (the runtime never runs it) in the production branch of each
+#   connected project, one config listing per component and project; `ran_before_fix` marks
+#   statements that ran until Snowflake transformation 1.7.1 (a comment or whitespace before
+#   SELECT), e.g. data checks written as SELECT ... 1/0. Rewrite those as
+#   SET ABORT_TRANSFORMATION. Version gate lives in gotchas.md.
 kbagent version [--beta]
 kbagent update [--beta] [--major]
 # Major gate (CLI-40, #791 section 4.3): the updater (startup hook, `update`, `version`) reads

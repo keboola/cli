@@ -63,6 +63,11 @@ class SkippedSelect:
     code: str
     index: int
     excerpt: str
+    # True when the Snowflake runtime before keboola/snowflake-transformation#42
+    # (component 1.7.1) ran this statement: a comment, a newline or a space in front
+    # of SELECT made it run. A guard written like that (``-- check`` + ``SELECT 1/0``)
+    # stopped the job until 1.7.1 and is silently skipped since.
+    ran_before_fix: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """The JSON shape of the finding."""
@@ -72,6 +77,30 @@ class SkippedSelect:
             "index": self.index,
             "excerpt": self.excerpt,
         }
+
+
+def _strip_comments_keep_whitespace(statement: str) -> str:
+    """Remove the leading comments only, as the runtime before 1.7.1 did."""
+    text = statement
+    while True:
+        if text.startswith(("--", "#")):
+            newline = text.find("\n")
+            text = "" if newline == -1 else text[newline:]
+        elif text.startswith("/*"):
+            end = text.find("*/", 2)
+            text = "" if end == -1 else text[end + 2 :]
+        else:
+            return text
+
+
+def ran_before_fix(component_id: str, statement: str) -> bool:
+    """Whether a statement skipped today still ran before Snowflake 1.7.1.
+
+    Only Snowflake changed: BigQuery always ignored the leading whitespace.
+    """
+    if component_id != SNOWFLAKE_COMPONENT:
+        return False
+    return _strip_comments_keep_whitespace(statement)[:6].upper() != _SKIPPED_PREFIX
 
 
 def strip_leading_comments(statement: str) -> str:
@@ -134,8 +163,43 @@ def skipped_select_statements(component_id: str, blocks: Any) -> list[SkippedSel
                             code=str(code.get("name", "")),
                             index=index,
                             excerpt=_excerpt(statement),
+                            ran_before_fix=ran_before_fix(component_id, statement),
                         )
                     )
+    return found
+
+
+def skipped_selects_in_configs(component_id: str, configs: Any) -> list[dict[str, Any]]:
+    """The skipped SELECTs of every configuration in a component's config listing.
+
+    Args:
+        component_id: The component the listing belongs to.
+        configs: ``GET .../components/{id}/configs`` as returned by the API
+            (each item carries ``configuration``); anything else gives no findings.
+
+    Returns:
+        One ``{component_id, config_id, config_name, ran_before_fix, statement}``
+        entry per skipped statement.
+    """
+    if not isinstance(configs, list):
+        return []
+    found: list[dict[str, Any]] = []
+    for config in configs:
+        if not isinstance(config, dict):
+            continue
+        configuration = config.get("configuration")
+        parameters = configuration.get("parameters") if isinstance(configuration, dict) else None
+        blocks = parameters.get("blocks") if isinstance(parameters, dict) else None
+        for finding in skipped_select_statements(component_id, blocks):
+            found.append(
+                {
+                    "component_id": component_id,
+                    "config_id": str(config.get("id", "")),
+                    "config_name": str(config.get("name", "")),
+                    "ran_before_fix": finding.ran_before_fix,
+                    "statement": finding.to_dict(),
+                }
+            )
     return found
 
 
@@ -176,8 +240,9 @@ def select_skip_message(finding: SkippedSelect, where: str) -> str:
         f"{where}: block '{finding.block}', code '{finding.code}', statement "
         f"#{finding.index + 1} starts with SELECT, so the transformation runtime skips "
         f"it without running it (the job succeeds even if the SQL is invalid). A SELECT "
-        f"has no effect in a transformation; to test a failure use e.g. "
-        f"CREATE TABLE ... AS SELECT. Statement: {finding.excerpt}"
+        f"has no effect in a transformation. To stop the job on purpose (a data check), "
+        f"use SET ABORT_TRANSFORMATION = (SELECT IFF(<ok>, '', '<message>') ...); to "
+        f"keep a result, use CREATE TABLE ... AS SELECT. Statement: {finding.excerpt}"
     )
 
 
