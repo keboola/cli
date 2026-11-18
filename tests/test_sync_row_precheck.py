@@ -211,6 +211,35 @@ def test_versions_missing_on_both_sides_block_the_rows(
     assert len(errors) == 2, result
     assert {e["error_code"] for e in errors} == {ErrorCode.SYNC_CONFLICT}
     assert _remote_tables(api, cid) == ["a", "b"]
+    # NB-4 (PR #1016 review): the stack reported no version, so pushing again
+    # cannot help -- the message says so instead of "push again".
+    message = errors[0]["message"]
+    assert "did not report a version" in message
+    assert "will not help" in message
+    assert "kbagent sync push` again" not in message
+
+
+def test_a_parent_read_without_a_version_says_a_retry_will_not_help(
+    ws: Workspace, api: FakeStorage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """NB-4: the listing had a version, the parent read has none: the same stuck state."""
+    cid = _with_rows(api)
+    ws.init_and_pull()
+    _edit_rows(ws, cid, "z")
+    real_detail = api.get_config_detail
+
+    def without_version(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        answer = real_detail(*args, **kwargs)
+        answer.pop("version", None)
+        return answer
+
+    monkeypatch.setattr(api, "get_config_detail", without_version)
+    errors = _row_errors(ws.push())
+
+    assert len(errors) == 2
+    assert "did not report a version" in errors[0]["message"]
+    assert "kbagent sync push` again" not in errors[0]["message"]
+    assert _remote_tables(api, cid) == ["a", "b"]
 
 
 @pytest.mark.parametrize(

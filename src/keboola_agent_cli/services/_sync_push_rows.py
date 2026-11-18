@@ -126,6 +126,25 @@ def _blocked(
     }
 
 
+def _no_version(component_id: str, parent_id: str, where: str) -> dict[str, str]:
+    """The errors[] template when the stack reports no configuration version (NB-4).
+
+    Pushing again cannot help: without a version push can never check the
+    configuration, so its rows stay blocked. Current Storage always reports
+    one; this state is a stack defect to report.
+    """
+    return {
+        "error_code": str(ErrorCode.SYNC_CONFLICT),
+        "message": (
+            f"Row not pushed: the Keboola stack did not report a version for configuration "
+            f"{component_id}/{parent_id} ({where}), so push cannot check that it is unchanged "
+            "before writing its rows, and pushing again will not help. Nothing was written for "
+            "this row. Current Keboola Storage always reports a version: report this to "
+            "Keboola support with the stack URL."
+        ),
+    }
+
+
 def _expected_version(phase: RowPhase, change: dict[str, Any], key: tuple[str, str]) -> Any:
     """The version the parent must be at, or a reason it cannot be checked (R3)."""
     if key in phase.ledger.recovered_versions:  # an earlier push's create (item 2)
@@ -150,7 +169,7 @@ def check_parent(phase: RowPhase, change: dict[str, Any], parent_id: str) -> dic
     if isinstance(expected, str):
         return _blocked(component_id, parent_id, expected)
     if not isinstance(expected, int) or isinstance(expected, bool):
-        return _blocked(component_id, parent_id, "has no version push could check against")
+        return _no_version(component_id, parent_id, "in the listing the diff read")
     try:
         current = phase.client.get_config_detail(
             component_id=component_id, config_id=parent_id, branch_id=phase.branch_id
@@ -160,7 +179,7 @@ def check_parent(phase: RowPhase, change: dict[str, Any], parent_id: str) -> dic
         return _blocked(component_id, parent_id, why, exc.error_code or ErrorCode.API_ERROR)
     version = current.get("version") if isinstance(current, dict) else None
     if not isinstance(version, int) or isinstance(version, bool):
-        return _blocked(component_id, parent_id, "was read without a version")
+        return _no_version(component_id, parent_id, "when push read it before its rows")
     if version != expected:
         why = (
             f"changed in Keboola after this push read it (version {expected}, now {version}; "
