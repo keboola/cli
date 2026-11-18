@@ -72,6 +72,12 @@ def _invalid(exc: pytest.ExceptionInfo[KeboolaApiError]) -> str:
     return exc.value.message
 
 
+def _broken_flow(exc: pytest.ExceptionInfo[KeboolaApiError]) -> str:
+    """A flow the daemon refuses for every run: INVALID_FLOW_DEFINITION, like flow new/update."""
+    assert exc.value.error_code == ErrorCode.INVALID_FLOW_DEFINITION
+    return exc.value.message
+
+
 class TestSelectorPresence:
     def test_no_selector_is_whole_flow_with_potential_tasks(self) -> None:
         config = _linear()
@@ -107,10 +113,10 @@ class TestDefaultPath:
 
     def test_missing_next_stops(self) -> None:
         config = {
-            "phases": [{"id": "a"}, {"id": "b"}],
+            "phases": [_phase("a", _cond("b")), {"id": "b"}],
             "tasks": [_task("ta", "a"), _task("tb", "b")],
         }
-        assert select_flow_tasks(config, from_phase_id="a").task_ids == ["ta"]
+        assert select_flow_tasks(config, from_phase_id="b").task_ids == ["tb"]
 
     def test_default_not_last_is_followed(self) -> None:
         config = {
@@ -150,18 +156,20 @@ class TestDefaultPath:
         assert "phase 'a'" in _invalid(exc)
 
     def test_dangling_default_refused(self) -> None:
+        """A goto to an undefined phase breaks every run of the flow (the daemon refuses it)."""
         config = {"phases": [_phase("a", _default("ghost"))], "tasks": [_task("ta", "a")]}
         with pytest.raises(KeboolaApiError) as exc:
             select_flow_tasks(config, from_phase_id="a")
-        assert "ghost" in _invalid(exc)
+        assert "ghost" in _broken_flow(exc)
 
     def test_cycle_stops_and_is_noted(self) -> None:
+        # A phase that retries itself: the only loop a partial run can take.
         config = {
-            "phases": [_phase("a", _default("b")), _phase("b", _default("a"))],
-            "tasks": [_task("ta", "a"), _task("tb", "b")],
+            "phases": [_phase("r", _default("a")), _phase("a", _default("a"))],
+            "tasks": [_task("tr", "r"), _task("ta", "a")],
         }
-        sel = select_flow_tasks(config, from_phase_id="b")
-        assert sel.task_ids == ["ta", "tb"]
+        sel = select_flow_tasks(config, from_phase_id="a")
+        assert sel.task_ids == ["ta"]
         assert sel.default_path_cycle is True
         assert sel.to_dict()["default_path_cycle"] is True
 
@@ -297,12 +305,19 @@ class TestFixRound1:
             select_flow_tasks(_linear(), task_ids=task_ids, from_phase_id=from_phase_id)
         assert "comma" in _invalid(exc)
 
-    def test_duplicate_task_ids_in_config_selected_once(self) -> None:
+    def test_duplicate_task_ids_in_config_refused(self) -> None:
+        """The daemon refuses a flow with a repeated task id (checkPhaseAndTaskIds)."""
         config = _linear()
-        config["tasks"].append(_task("t3", "p3"))
-        assert select_flow_tasks(config, task_ids=["t3"]).task_ids == ["t3"]
-        assert select_flow_tasks(config, from_phase_id="p3").task_ids == ["t3"]
-        assert select_flow_tasks(config).task_ids == ["t1", "t2", "t3", "tf"]
+        config["tasks"].append(_task("t3", "p1"))
+        selectors: list[tuple[list[str] | None, str | None]] = [
+            (["t3"], None),
+            (None, "p3"),
+            (None, None),
+        ]
+        for task_ids, from_phase_id in selectors:
+            with pytest.raises(KeboolaApiError) as exc:
+                select_flow_tasks(config, task_ids=task_ids, from_phase_id=from_phase_id)
+            assert "repeated task id(s): t3" in _broken_flow(exc)
 
     def test_phase_without_enabled_task_not_reported(self) -> None:
         config = {
@@ -323,22 +338,29 @@ class TestFixRound1:
         sel = select_flow_tasks(config, from_phase_id="a")
         assert sel.conditional_phase_ids == ["real"]
 
-    def test_wording_names_the_start_phase_for_an_upstream_retry_loop(self) -> None:
-        # p2 retries back to p1 (the flow start) on a condition: p1 is upstream, not a
-        # phase "reached only through a conditional transition" in the flow as a whole.
-        config = {
-            "phases": [
-                _phase("p1", _default("p2")),
-                _phase("p2", _cond("p1"), _default(None)),
-            ],
-            "tasks": [_task("t1", "p1"), _task("t2", "p2")],
-        }
-        sel = select_flow_tasks(config, from_phase_id="p2")
-        assert sel.conditional_phase_ids == ["p1"]
+    def test_wording_names_the_start_phase(self) -> None:
+        # (An upstream retry, p2 -> p1 on a condition, is no longer a fixture here: with
+        # p1 on the route to p2, p1 and p2 reach each other and the daemon refuses the
+        # selection as a loop. See TestDaemonRefusals.)
+        sel = select_flow_tasks(_linear(), from_phase_id="p2")
+        assert sel.conditional_phase_ids == ["pfail"]
         warning = next(w for w in selection_warnings(sel) if w.code == CONDITIONAL_PHASES_SKIPPED)
         assert "not on the default path from p2" in warning.message
         assert "reachable from it only through a conditional transition" in warning.message
         assert "reached only through" not in warning.message
+
+    def test_upstream_retry_is_a_loop(self) -> None:
+        config = {
+            "phases": [
+                _phase("p0", _default("p1")),
+                _phase("p1", _default("p2")),
+                _phase("p2", _cond("p1"), _default(None)),
+            ],
+            "tasks": [_task("t0", "p0"), _task("t1", "p1"), _task("t2", "p2")],
+        }
+        with pytest.raises(KeboolaApiError) as exc:
+            select_flow_tasks(config, from_phase_id="p2")
+        assert "form a loop (p1, p2)" in _invalid(exc)
 
     def test_selected_task_in_undefined_phase_refused(self) -> None:
         config = _linear()
@@ -347,3 +369,152 @@ class TestFixRound1:
             select_flow_tasks(config, task_ids=["tx", "t1"])
         message = _invalid(exc)
         assert "tx" in message and "phase" in message
+
+
+class TestDaemonRefusals:
+    """Flows and selections the job-queue daemon refuses are refused before the POST.
+
+    Ported from keboola/job-queue-daemon: FlowContainerTypeHandler::checkPhaseAndTaskIds
+    and Flow::getFirstPhaseId (every run), SelectedTasksFlowRewriter (partial runs).
+    Before, the dry run reported success and the real job failed after it was created.
+    """
+
+    @pytest.mark.parametrize("kwargs", [{}, {"task_ids": ["t1"]}, {"from_phase_id": "p1"}])
+    def test_repeated_phase_id(self, kwargs: dict[str, Any]) -> None:
+        config = _linear()
+        config["phases"].append(_phase("p3"))
+        with pytest.raises(KeboolaApiError) as exc:
+            select_flow_tasks(config, **kwargs)
+        assert "repeated phase id(s): p3" in _broken_flow(exc)
+
+    @pytest.mark.parametrize("kwargs", [{}, {"task_ids": ["t1"]}])
+    def test_conditional_goto_to_unknown_phase(self, kwargs: dict[str, Any]) -> None:
+        config = _linear()
+        config["phases"][0]["next"].insert(0, _cond("ghost"))
+        with pytest.raises(KeboolaApiError) as exc:
+            select_flow_tasks(config, **kwargs)
+        assert "ghost" in _broken_flow(exc)
+
+    @pytest.mark.parametrize("kwargs", [{}, {"task_ids": ["t1"]}])
+    def test_two_first_phases(self, kwargs: dict[str, Any]) -> None:
+        config = _linear()
+        config["phases"].append(_phase("island"))
+        config["tasks"].append(_task("ti", "island"))
+        with pytest.raises(KeboolaApiError) as exc:
+            select_flow_tasks(config, **kwargs)
+        message = _broken_flow(exc)
+        assert "exactly one first phase" in message and "p1, island" in message
+
+    def test_no_first_phase(self) -> None:
+        config = {
+            "phases": [_phase("a", _default("b")), _phase("b", _cond("a"), _default(None))],
+            "tasks": [_task("ta", "a"), _task("tb", "b")],
+        }
+        with pytest.raises(KeboolaApiError) as exc:
+            select_flow_tasks(config)
+        assert "found: none" in _broken_flow(exc)
+
+    def test_first_phase_is_the_root_not_the_first_listed(self) -> None:
+        """The daemon starts at the phase no transition goes to, wherever it is listed."""
+        config = {
+            "phases": [_phase("b", _default(None)), _phase("a", _default("b"))],
+            "tasks": [_task("tb", "b"), _task("ta", "a")],
+        }
+        assert select_flow_tasks(config, task_ids=["tb"]).task_ids == ["tb"]
+
+    def test_selected_phase_unreachable_from_the_first_phase(self) -> None:
+        # x and y only reach each other, so p1 is still the only first phase.
+        config = _linear()
+        config["phases"] += [_phase("x", _default("y")), _phase("y", _default("x"))]
+        config["tasks"] += [_task("tx", "x")]
+        with pytest.raises(KeboolaApiError) as exc:
+            select_flow_tasks(config, task_ids=["tx"])
+        message = _invalid(exc)
+        assert "cannot be reached from the first phase 'p1': x" in message
+        # The whole flow is accepted: the daemon checks reachability only for a selection.
+        assert select_flow_tasks(config).partial is False
+
+    def test_loop_between_needed_phases(self) -> None:
+        """b and c reach each other, and both are needed: no order exists."""
+        config = {
+            "phases": [
+                _phase("a", _default("b")),
+                _phase("b", _cond("c"), _default(None)),
+                _phase("c", _cond("b"), _default(None)),
+            ],
+            "tasks": [_task("ta", "a"), _task("tb", "b"), _task("tc", "c")],
+        }
+        with pytest.raises(KeboolaApiError) as exc:
+            select_flow_tasks(config, task_ids=["tc"])
+        assert "form a loop (b, c)" in _invalid(exc)
+        # From b the default path ends at b: only a and b are kept, no loop.
+        assert select_flow_tasks(config, from_phase_id="b").task_ids == ["tb"]
+        # Only phase a needed: no loop among the kept phases.
+        assert select_flow_tasks(config, task_ids=["ta"]).task_ids == ["ta"]
+
+    def test_loop_through_a_phase_that_is_not_kept(self) -> None:
+        """Reachability is over the whole flow: A reaches B through X, which is not kept."""
+        config = {
+            "phases": [
+                _phase("r", _cond("a"), _default("b")),
+                _phase("a", _default("x")),
+                _phase("x", _default("b")),
+                _phase("b", _cond("a"), _default(None)),
+            ],
+            "tasks": [_task("tr", "r"), _task("ta", "a"), _task("tx", "x"), _task("tb", "b")],
+        }
+        with pytest.raises(KeboolaApiError) as exc:
+            select_flow_tasks(config, task_ids=["ta", "tb"])
+        assert "form a loop" in _invalid(exc)
+
+    def test_loop_with_one_kept_member_is_accepted(self) -> None:
+        """R -> A -> B -> A: selecting A keeps R, A only, which can be ordered."""
+        config = {
+            "phases": [
+                _phase("r", _default("a")),
+                _phase("a", _default("b")),
+                _phase("b", _default("a")),
+            ],
+            "tasks": [_task("tr", "r"), _task("ta", "a"), _task("tb", "b")],
+        }
+        assert select_flow_tasks(config, task_ids=["ta"]).task_ids == ["ta"]
+        with pytest.raises(KeboolaApiError) as exc:
+            select_flow_tasks(config, task_ids=["tb"])
+        assert "form a loop (a, b)" in _invalid(exc)
+
+    def test_parallel_branches_converging_are_accepted(self) -> None:
+        config = {
+            "phases": [
+                _phase("a", _cond("b"), _default("c")),
+                _phase("b", _default("d")),
+                _phase("c", _default("d")),
+                _phase("d", _default(None)),
+            ],
+            "tasks": [_task("ta", "a"), _task("tb", "b"), _task("tc", "c"), _task("td", "d")],
+        }
+        sel = select_flow_tasks(config, task_ids=["tb", "tc", "td"])
+        assert sel.task_ids == ["tb", "tc", "td"]
+
+    def test_numeric_ids_compare_as_strings(self) -> None:
+        config = {
+            "phases": [{"id": 1, "next": [{"id": "n", "goto": 2}]}, {"id": "1"}, {"id": 2}],
+            "tasks": [_task("t", "2")],
+        }
+        with pytest.raises(KeboolaApiError) as exc:
+            select_flow_tasks(config)
+        assert "repeated phase id(s): 1" in _broken_flow(exc)
+
+    def test_integral_float_id_is_the_same_id(self) -> None:
+        """PHP casts 1.0 to "1", so the daemon sees two tasks with id 1."""
+        tasks = [dict(_task("x", "r"), id=1), dict(_task("x", "r"), id=1.0)]
+        config = {"phases": [{"id": "r"}], "tasks": tasks}
+        with pytest.raises(KeboolaApiError) as exc:
+            select_flow_tasks(config)
+        assert "repeated task id(s): 1" in _broken_flow(exc)
+
+    def test_warning_names_every_task_type(self) -> None:
+        sel = select_flow_tasks(_linear(), task_ids=["t1"])
+        warning = next(
+            w for w in selection_warnings(sel) if w.code == PARTIAL_RUN_IGNORES_CONDITIONS
+        )
+        assert "job, variable, notification" in warning.message

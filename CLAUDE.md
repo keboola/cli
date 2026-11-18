@@ -260,7 +260,7 @@ Full author checklist: see `CONTRIBUTING.md` > "Releasing a beta (pre-release) v
 
 5. **Error handling**: commands catch `KeboolaApiError` and `ConfigError`, map them to the appropriate exit code, and output structured errors in JSON mode. Report a `KeboolaApiError` with `emit_api_error(formatter, exc)` (`commands/_helpers.py`), which keeps its `retryable` and `details`. `tests/test_error_forwarding.py` fails on a handler that drops them.
 
-6. **Exit codes**: 0=success, 1=general error, 2=usage error, 3=auth error, 4=network error, 5=config error, 6=permission denied, 7=job timed out and cancelled (`JOB_TIMEOUT_TERMINATED`), 130=interrupted. [`docs/error-codes.md`](docs/error-codes.md) is the one list of error codes with their exit code and error type. `ERROR_CODE_TABLE` in `errors.py` holds the same pairs and `map_error_to_exit_code` reads it. `make check-error-codes` keeps the two equal.
+6. **Exit codes**: 0=success, 1=general error, 2=usage error, 3=auth error, 4=network error, 5=config error, 6=permission denied, 7=job timed out and a kill was accepted (`JOB_TIMEOUT_TERMINATED`), 130=interrupted. [`docs/error-codes.md`](docs/error-codes.md) is the one list of error codes with their exit code and error type. `ERROR_CODE_TABLE` in `errors.py` holds the same pairs and `map_error_to_exit_code` reads it. `make check-error-codes` keeps the two equal.
 
 7. **Token masking**: tokens are never printed in full. Use `mask_token()` from `errors.py`.
 
@@ -1705,12 +1705,15 @@ kbagent flow run [--project NAME] --flow-id ID [--task-id T ...] [--from-phase-i
 # flow run (#725): a whole flow (no selector; same Queue body as `job run --component-id keboola.flow`)
 #   or a PARTIAL run: --task-id (repeatable) and/or --from-phase-id, sent as onlyFlowTaskIds (the UI's
 #   "Run selected tasks"). --from-phase-id follows DEFAULT transitions only (the next[] entry with no
-#   `condition` key); two defaults or a default to an unknown phase is INVALID_ARGUMENT, a cycle stops
+#   `condition` key); two defaults is INVALID_ARGUMENT (a goto to an unknown phase: see below), a cycle stops
 #   and sets selection.default_path_cycle. A partial run ignores conditions (warning
 #   PARTIAL_RUN_IGNORES_CONDITIONS); phases with an enabled task that are not on the default path and
 #   are reachable from it only through a conditional transition get CONDITIONAL_PHASES_SKIPPED.
 #   Blank/empty/comma selectors, unknown ids, a disabled task given by id, a task in an undefined
-#   phase and an empty selection are INVALID_ARGUMENT (exit 2) before any POST. The flow config is
+#   phase, an empty selection, a selected phase the first phase cannot reach and needed phases that
+#   form a loop are INVALID_ARGUMENT (exit 2) before any POST; a flow the job queue refuses for every
+#   run (repeated phase/task id, goto to an undefined phase, not exactly one first phase) is
+#   INVALID_FLOW_DEFINITION (exit 1), dry run too. The flow config is
 #   read once (selection + variables); the branch is resolved once (0 = production). --wait on a
 #   partial run adds task_results + failed_task_ids and exits 1 (payload first, SELECTED_TASK_FAILED)
 #   when a selected task did not succeed or is missing from result.tasks; the flow status alone can

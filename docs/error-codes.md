@@ -16,7 +16,7 @@ This page is the one list of error codes, their exit codes and their error types
 | 4 | Network error, or a local wait that timed out while the server job keeps running. |
 | 5 | Configuration error, for example no project resolves (`CONFIG_ERROR`). |
 | 6 | Denied by a permission policy (`PERMISSION_DENIED`), or a refused random-code confirmation. |
-| 7 | The job was terminated after its timeout (`JOB_TIMEOUT_TERMINATED`). |
+| 7 | The job timed out and a kill was accepted (`JOB_TIMEOUT_TERMINATED`). |
 | 130 | Interrupted (Ctrl-C). |
 
 A command that fails with an error code exits with the code's `Exit` value below. A command that processes several items or projects exits 1 when one of them failed, and each failed item carries its own `error_code` ([CLI spec E4, E5](cli-interface-spec.md#E4)).
@@ -92,7 +92,7 @@ A command that fails with an error code exits with the code's `Exit` value below
 | `STORAGE_JOB_TIMEOUT` | 4 | `api` | Polling timed out waiting for a Storage async job |
 | `QUERY_JOB_FAILED` | 1 | `api` | Query Service job finished in a failed state |
 | `QUERY_JOB_TIMEOUT` | 1 | `api` | Polling timed out waiting for a Query Service job |
-| `JOB_TIMEOUT_TERMINATED` | 7 | `api` | `job run --wait` timeout expired and the remote job was successfully cancelled (exit 7; distinct from `QUEUE_JOB_TIMEOUT`, where the remote may still be running) |
+| `JOB_TIMEOUT_TERMINATED` | 7 | `api` | `job run --wait` timeout expired and the kill request was accepted, or a follow-up read showed the job already finished. `details.job.status` is the last status seen and may still be `terminating`: exit 7 does not guarantee the stop is complete (distinct from `QUEUE_JOB_TIMEOUT`, exit 4, where the kill failed or its result is unknown) |
 
 ### Variables
 
@@ -174,7 +174,7 @@ A command that fails with an error code exits with the code's `Exit` value below
 | Code | Exit | Type | Description |
 |---|---|---|---|
 | `SCHEDULE_DELETE_FAILED` | 1 | `api` | Deleting or deregistering a flow schedule failed |
-| `INVALID_FLOW_DEFINITION` | 1 | `api` | Flow definition failed schema or semantic validation |
+| `INVALID_FLOW_DEFINITION` | 1 | `api` | Flow definition failed schema or semantic validation (`flow new` / `update`), or `flow run` found a flow the job queue refuses for every run (repeated phase or task id, transition to an undefined phase, not exactly one first phase) |
 
 ### Data Apps
 

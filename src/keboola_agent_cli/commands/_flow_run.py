@@ -41,7 +41,8 @@ A PARTIAL run (any selector) sends onlyFlowTaskIds to the Queue API, like the
 UI's "Run selected tasks". It does NOT evaluate transition conditions: every
 selected task runs, phase after phase, also after a task failed; phases that
 only route may run empty; the flow status is the status of the last phase and
-can hide a failed task; unselected variable tasks do not run.
+can hide a failed task; only the selected tasks run (no unselected job, variable or
+notification task).
 
 --from-phase-id P selects the enabled tasks of P and of every phase reached
 by following DEFAULT transitions (the transition without a condition). It
