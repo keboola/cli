@@ -1705,7 +1705,7 @@ kbagent flow run [--project NAME] --flow-id ID [--task-id T ...] [--from-phase-i
 # flow run (#725): a whole flow (no selector; same Queue body as `job run --component-id keboola.flow`)
 #   or a PARTIAL run: --task-id (repeatable) and/or --from-phase-id, sent as onlyFlowTaskIds (the UI's
 #   "Run selected tasks"). --from-phase-id follows DEFAULT transitions only (the next[] entry with no
-#   `condition` key); two defaults or a default to an unknown phase is INVALID_ARGUMENT, a cycle stops
+#   `condition` key); two defaults is INVALID_ARGUMENT (a goto to an unknown phase: see below), a cycle stops
 #   and sets selection.default_path_cycle. A partial run ignores conditions (warning
 #   PARTIAL_RUN_IGNORES_CONDITIONS); phases with an enabled task that are not on the default path and
 #   are reachable from it only through a conditional transition get CONDITIONAL_PHASES_SKIPPED.

@@ -248,8 +248,9 @@ would, for example, send the failure e-mail although nothing failed.
   only when the user wants them to run.
 - `condition: null` or `condition: {}` counts as a condition, not a default.
 - A phase with conditional transitions but no default ends the path there.
-- More than one default transition, or a default that points to an unknown
-  phase, is a malformed flow: `INVALID_ARGUMENT`.
+- More than one default transition is a malformed flow: `INVALID_ARGUMENT`.
+  A transition (default or not) to an unknown phase breaks every run:
+  `INVALID_FLOW_DEFINITION` (see Validation).
 - It does not mean "as if everything succeeded": a success condition can lead
   somewhere else than the default transition.
 

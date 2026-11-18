@@ -155,11 +155,24 @@ def check_selector_values(task_ids: list[str] | None, from_phase_id: str | None)
             )
 
 
+def _id(value: Any) -> str:
+    """An id as the job-queue daemon compares it: PHP's string cast.
+
+    ``1`` and ``"1"`` are one id, and so is ``1.0`` (PHP casts an integral
+    float to ``"1"``, Python to ``"1.0"``); ``True`` is ``"1"``.
+    """
+    if isinstance(value, bool):
+        return "1" if value else ""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
+
+
 def _phases_by_id(configuration: dict[str, Any]) -> dict[str, dict[str, Any]]:
     phases: dict[str, dict[str, Any]] = {}
     for phase in configuration.get("phases") or []:
         if isinstance(phase, dict) and phase.get("id") is not None:
-            phases.setdefault(str(phase["id"]), phase)
+            phases.setdefault(_id(phase["id"]), phase)
     return phases
 
 
@@ -193,8 +206,8 @@ def _edges(configuration: dict[str, Any]) -> dict[str, list[str]]:
     """Phase id -> its distinct ``goto`` targets in ``next[]`` order, conditional ones too."""
     edges: dict[str, list[str]] = {}
     for phase in _phase_list(configuration):
-        targets = [str(t["goto"]) for t in _transitions(phase) if t.get("goto") is not None]
-        edges[str(phase["id"])] = _dedupe(targets)
+        targets = [_id(t["goto"]) for t in _transitions(phase) if t.get("goto") is not None]
+        edges[_id(phase["id"])] = _dedupe(targets)
     return edges
 
 
@@ -211,8 +224,8 @@ def _structure_errors(configuration: dict[str, Any]) -> tuple[list[str], str | N
     daemon's "Flow must have exactly one first step").
     """
     errors: list[str] = []
-    phase_ids = [str(phase["id"]) for phase in _phase_list(configuration)]
-    task_ids = [str(task["id"]) for task in _tasks(configuration)]
+    phase_ids = [_id(phase["id"]) for phase in _phase_list(configuration)]
+    task_ids = [_id(task["id"]) for task in _tasks(configuration)]
     if repeated := _repeated(phase_ids):
         errors.append(f"repeated phase id(s): {', '.join(repeated)}")
     if repeated := _repeated(task_ids):
@@ -333,7 +346,7 @@ def _default_path(phases: dict[str, dict[str, Any]], start: str) -> _DefaultPath
             )
         if not defaults or defaults[0].get("goto") is None:
             break
-        target = str(defaults[0]["goto"])
+        target = _id(defaults[0]["goto"])
         if target not in phases:
             return _DefaultPath(
                 path,
@@ -356,7 +369,7 @@ def _conditional_reach(phases: dict[str, dict[str, Any]], path: list[str]) -> se
     then follows every transition, so a deeper branch is included. Cycle-safe.
     """
     stack = [
-        str(t["goto"])
+        _id(t["goto"])
         for pid in path
         for t in _transitions(phases[pid])
         if "condition" in t and t.get("goto") is not None
@@ -367,7 +380,7 @@ def _conditional_reach(phases: dict[str, dict[str, Any]], path: list[str]) -> se
         if pid in reached or pid not in phases:
             continue
         reached.add(pid)
-        stack.extend(str(t["goto"]) for t in _transitions(phases[pid]) if t.get("goto") is not None)
+        stack.extend(_id(t["goto"]) for t in _transitions(phases[pid]) if t.get("goto") is not None)
     return reached
 
 
@@ -376,9 +389,9 @@ def _task_view(task: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(inner, dict):
         inner = {}
     return {
-        "id": str(task["id"]),
+        "id": _id(task["id"]),
         "name": task.get("name"),
-        "phase_id": None if task.get("phase") is None else str(task.get("phase")),
+        "phase_id": None if task.get("phase") is None else _id(task.get("phase")),
         "type": inner.get("type"),
     }
 
@@ -392,7 +405,7 @@ def _phase_blocks(
 ) -> list[dict[str, Any]]:
     by_phase: dict[str, list[str]] = {}
     for view in selected:
-        by_phase.setdefault(str(view["phase_id"]), []).append(view["id"])
+        by_phase.setdefault(_id(view["phase_id"]), []).append(view["id"])
     return [
         {"id": pid, "name": phase.get("name"), "task_ids": by_phase[pid]}
         for pid, phase in phases.items()
@@ -445,12 +458,12 @@ def select_flow_tasks(
             from_phase_id=None,
             phases=_phase_blocks(phases, enabled),
             tasks=enabled,
-            skipped_disabled_task_ids=[str(t["id"]) for t in tasks if not _is_enabled(t)],
+            skipped_disabled_task_ids=[_id(t["id"]) for t in tasks if not _is_enabled(t)],
             default_path_cycle=False,
             conditional_phase_ids=[],
         )
 
-    by_id = {str(t["id"]): t for t in tasks}
+    by_id = {_id(t["id"]): t for t in tasks}
     requested = _dedupe(task_id.strip() for task_id in task_ids or [])
     errors: list[str] = []
     unknown = [tid for tid in requested if tid not in by_id]
@@ -471,9 +484,9 @@ def select_flow_tasks(
 
     on_path = set(path.phase_ids)
     wanted = set(requested)
-    chosen = [t for t in tasks if str(t["id"]) in wanted or str(t.get("phase")) in on_path]
+    chosen = [t for t in tasks if _id(t["id"]) in wanted or _id(t.get("phase")) in on_path]
     selected = [_task_view(t) for t in chosen if _is_enabled(t)]
-    skipped = [str(t["id"]) for t in chosen if not _is_enabled(t) and str(t["id"]) not in wanted]
+    skipped = [_id(t["id"]) for t in chosen if not _is_enabled(t) and _id(t["id"]) not in wanted]
     orphans = [view["id"] for view in selected if view["phase_id"] not in phases]
     if orphans:
         errors.append(f"task(s) in a phase that the flow does not define: {', '.join(orphans)}")
@@ -492,7 +505,7 @@ def select_flow_tasks(
     reach = _conditional_reach(phases, path.phase_ids) if start is not None else set()
     # Only phases with an enabled task: for an empty routing phase or a
     # disabled-only phase, "add its tasks with --task-id" is no advice (F6).
-    actionable = {str(t.get("phase")) for t in tasks if _is_enabled(t)}
+    actionable = {_id(t.get("phase")) for t in tasks if _is_enabled(t)}
     conditional = [
         pid
         for pid in phases
