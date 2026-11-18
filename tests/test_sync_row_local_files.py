@@ -47,6 +47,12 @@ def _pulled_with_row(ws: Workspace, api: FakeStorage) -> tuple[str, Path]:
     return cid, row_file
 
 
+def _rows_of(ws: Workspace, cid: str) -> list[Any]:
+    entry = ws.entry(cid)
+    assert entry is not None
+    return entry.rows
+
+
 def _set_table(path: Path, value: str) -> None:
     data = yaml.safe_load(path.read_text(encoding="utf-8"))
     data["parameters"] = {"table": value}
@@ -100,7 +106,7 @@ def test_a_row_edited_while_push_reads_it_is_not_updated(
 ) -> None:
     cid, row_file = _pulled_with_row(ws, api)
     _set_table(row_file, "first")
-    entry_before = ws.entry(cid).rows[0].metadata.copy()
+    entry_before = _rows_of(ws, cid)[0].metadata.copy()
     _flip_during_read(monkeypatch, row_file, "second")
 
     result = ws.push()
@@ -108,7 +114,7 @@ def test_a_row_edited_while_push_reads_it_is_not_updated(
     codes = [e.get("error_code") for e in result["errors"]]
     assert codes == [ErrorCode.SYNC_LOCAL_FILE_CHANGED], result
     assert _remote_table(api, cid, "500") is None
-    assert ws.entry(cid).rows[0].metadata == entry_before
+    assert _rows_of(ws, cid)[0].metadata == entry_before
     monkeypatch.undo()
     assert ws.push()["errors"] == []
     assert _remote_table(api, cid, "500") == "second"
@@ -197,7 +203,7 @@ def test_an_edit_saved_right_after_a_row_create_is_not_stamped(
 
     assert result["errors"] == [], result
     (created,) = [r for r in api.configs[cid]["rows"] if r["name"] == "Row new"]
-    entry = next(r for r in ws.entry(cid).rows if r.id == created["id"])
+    entry = next(r for r in _rows_of(ws, cid) if r.id == created["id"])
     current = hashlib.sha256(new_file.read_bytes()).hexdigest()
     assert entry.metadata["pull_hash"] != current
     monkeypatch.undo()

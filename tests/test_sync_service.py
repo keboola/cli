@@ -1207,8 +1207,9 @@ def _versioned_push_client() -> MagicMock:
     Push checks a parent config's version before its first row write
     (#827 follow-up, R3); a listing without versions blocks the rows.
     """
-    components = copy.deepcopy(SAMPLE_COMPONENTS)
+    components: list[dict[str, Any]] = copy.deepcopy(SAMPLE_COMPONENTS)
     for component in components:
+        config: dict[str, Any]
         for config in component["configurations"]:
             config["version"] = 7
     client = _make_sync_mock_client(components_response=components)
