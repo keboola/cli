@@ -1770,9 +1770,21 @@ kbagent schedule find [--cron-window START-END] [--not-run-since DAYS] [--projec
 
 kbagent notification list [--project NAME ... | --all-projects] [--event NAME] [--component-id ID] [--config-id ID]
 kbagent notification detail [--project NAME] --subscription-id ID
-kbagent notification create [--project ALIAS] --event NAME --channel email|webhook --address ADDR [--component-id ID] [--config-id ID] [--branch ID] [--expires-at TS] [--overtime-percent N]
+kbagent notification create [--project ALIAS] --event NAME --channel email|webhook --address ADDR [--component-id ID] [--config-id ID] [--branch ID] [--expires-at TS] [--overtime-percent N] [--filter 'FIELD<OP>VALUE' ...]
 kbagent notification delete [--project ALIAS] --subscription-id ID [--yes]
 kbagent notification replace-recipient [--project ALIAS] --subscription-id ID --address NEW_ADDR [--channel email|webhook] [--yes]
+kbagent notification clone [--project ALIAS] --subscription-id ID [--component-id ID] [--config-id ID] [--branch ID] [--overtime-percent N] [--filter 'FIELD<OP>VALUE' ...] [--address ADDR] [--channel email|webhook] [--expires-at TS | --clear-expires-at] [--dry-run]
+# --filter / clone (#989): --filter (repeatable, OP ==,=,<=,>=,<,>; quote it) adds any filter the
+#   service accepts for the event; VALUE is sent as a string; syntax-only check locally, the service
+#   refuses an unknown field; a dedicated option + --filter on one field, or one field+operator twice,
+#   is INVALID_ARGUMENT (exit 2). REST: `filters: [{field, operator?, value}]`. Row columns read
+#   equality filters only. `clone` (write) creates a NEW subscription from an existing one: event and
+#   project kept, each override replaces every source filter on its field (grouped), the rest copied
+#   verbatim, source branch.id kept (active branch never applied), recipient/expiry inherited
+#   unless overridden; returns filters_replaced/added/kept + warnings; --dry-run reads once and
+#   returns `planned`. Every run creates one more subscription. REST:
+#   POST /notifications/{project}/{subscription_id}/clone (body only, extra fields and any query
+#   parameter 422). Version gate lives in gotchas.md.
 # notification WRITE path (since 0.91.0, #690): the group is no longer read-only.
 #   --address carries the email address (--channel email) OR the webhook URL (--channel webhook) --
 #   channel-discriminated on the wire, same as the read path's single `address` column. An invalid

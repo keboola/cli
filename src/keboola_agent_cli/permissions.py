@@ -448,6 +448,7 @@ OPERATION_REGISTRY: dict[str, str] = {
     "notification.create": "write",
     "notification.delete": "destructive",
     "notification.replace-recipient": "write",
+    "notification.clone": "write",
     # Schedule discovery / audit (read-only)
     "schedule.list": "read",
     "schedule.detail": "read",

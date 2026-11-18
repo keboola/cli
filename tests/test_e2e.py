@@ -6513,6 +6513,130 @@ class TestE2ENotificationSubscriptions:
                         "--yes",
                     )
 
+    def test_create_with_filter_then_clone_onto_another_config(self) -> None:
+        """``create --filter`` and ``clone --config-id`` round trip (issue #989).
+
+        Creates an overtime alert with a generic ``averageDuration>=60`` filter
+        on an inert address, clones it onto another configuration id, reads
+        both back, and deletes both. The config ids are arbitrary: a filter
+        value need not name an existing configuration.
+        """
+        marker = "-989f@example.com"
+        stale = self._payload("notification", "list", "--project", self.alias)
+        for row in stale["subscriptions"]:
+            if marker in (row.get("address") or ""):
+                with contextlib.suppress(Exception):
+                    self._run(
+                        "notification",
+                        "delete",
+                        "--project",
+                        self.alias,
+                        "--subscription-id",
+                        row["subscription_id"],
+                        "--yes",
+                    )
+
+        address = f"{RUN_ID}{marker}"
+        created_ids: list[str] = []
+        try:
+            _step(14, "notification create --filter")
+            created = self._payload(
+                "notification",
+                "create",
+                "--project",
+                self.alias,
+                "--event",
+                "job-processing-long",
+                "--channel",
+                "email",
+                "--address",
+                address,
+                "--component-id",
+                "keboola.flow",
+                "--config-id",
+                "989001",
+                "--overtime-percent",
+                "50",
+                "--filter",
+                "averageDuration>=60",
+            )
+            source_id = created["subscription_id"]
+            created_ids.append(source_id)
+            stored = {(f["field"], f.get("operator", "==")): f["value"] for f in created["filters"]}
+            assert str(stored[("averageDuration", ">=")]) == "60", created["filters"]
+            assert created["overtime_percent"] == 50
+            assert created["config_id"] == "989001"
+            source_branch = created["branch_id"]
+
+            _step(15, "notification clone --dry-run creates nothing")
+            before = {
+                row["subscription_id"]
+                for row in self._payload("notification", "list", "--project", self.alias)[
+                    "subscriptions"
+                ]
+            }
+            planned = self._payload(
+                "notification",
+                "clone",
+                "--project",
+                self.alias,
+                "--subscription-id",
+                source_id,
+                "--config-id",
+                "989002",
+                "--dry-run",
+            )
+            assert planned["dry_run"] is True
+            assert "new_subscription_id" not in planned
+            after = {
+                row["subscription_id"]
+                for row in self._payload("notification", "list", "--project", self.alias)[
+                    "subscriptions"
+                ]
+            }
+            assert after == before
+
+            _step(16, "notification clone --config-id")
+            cloned = self._payload(
+                "notification",
+                "clone",
+                "--project",
+                self.alias,
+                "--subscription-id",
+                source_id,
+                "--config-id",
+                "989002",
+            )
+            new_id = cloned["new_subscription_id"]
+            created_ids.append(new_id)
+            assert new_id != source_id
+            assert cloned["source_subscription_id"] == source_id
+
+            detail = self._payload(
+                "notification", "detail", "--project", self.alias, "--subscription-id", new_id
+            )
+            assert detail["event"] == "job-processing-long"
+            assert detail["config_id"] == "989002"
+            assert detail["component_id"] == "keboola.flow"
+            assert detail["overtime_percent"] == 50
+            assert detail["branch_id"] == source_branch
+            assert detail["address"] == address
+            fields = [f["field"] for f in detail["filters"]]
+            assert "averageDuration" in fields
+            assert fields.count("job.configuration.id") == 1
+        finally:
+            for leftover_id in created_ids:
+                with contextlib.suppress(Exception):
+                    self._run(
+                        "notification",
+                        "delete",
+                        "--project",
+                        self.alias,
+                        "--subscription-id",
+                        leftover_id,
+                        "--yes",
+                    )
+
 
 # ---------------------------------------------------------------------------
 # Job run variable values resolution

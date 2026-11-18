@@ -1,6 +1,6 @@
 """Notification subscription commands (issue #600, #690).
 
-Thin CLI layer over :class:`NotificationService`. Five subcommands:
+Thin CLI layer over :class:`NotificationService`. Six subcommands:
 
 - ``notification list`` — fleet-wide listing of notification subscriptions.
 - ``notification detail`` — one subscription including its raw filters.
@@ -8,6 +8,8 @@ Thin CLI layer over :class:`NotificationService`. Five subcommands:
 - ``notification delete`` — remove a subscription (destructive).
 - ``notification replace-recipient`` — swap a subscription's recipient by
   creating a new subscription and deleting the old one (write).
+- ``notification clone`` — create a new subscription from an existing one,
+  with overrides (write, #989).
 
 These are the recipients behind the Flow Builder's *Notifications* tab (the
 bell icon), which live in a separate platform service and are therefore
@@ -15,7 +17,7 @@ invisible to ``flow detail`` / ``config detail``. The in-flow
 ``type: "notification"`` task is a different mechanism and stays visible there.
 
 ``list`` and ``detail`` are read-only and safe under ``--deny-writes``.
-``create`` / ``replace-recipient`` are gated as ``write``; ``delete`` is
+``create`` / ``replace-recipient`` / ``clone`` are gated as ``write``; ``delete`` is
 gated as ``destructive`` -- see ``notification.*`` in
 ``CLI_OPERATIONS`` (``permissions.py``).
 """
@@ -23,7 +25,7 @@ gated as ``destructive`` -- see ``notification.*`` in
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, NoReturn
 
 import typer
 from rich.markup import escape
@@ -31,6 +33,7 @@ from rich.table import Table
 
 from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
+from ..services._notification_filters import parse_filter_expressions
 from ..services.notification_service import (
     KNOWN_EVENTS,
     MAX_OVERTIME_PERCENT,
@@ -51,6 +54,7 @@ from ._helpers import (
     emit_api_error,
     get_formatter,
     get_service,
+    handle_service_call,
     map_error_to_exit_code,
 )
 from ._project_ref import PROJECT_HELP
@@ -60,8 +64,8 @@ logger = logging.getLogger(__name__)
 notification_app = typer.Typer(
     help=(
         "Manage notification subscriptions across projects (Flow Notifications tab). "
-        "'list'/'detail' are read-only; 'create'/'replace-recipient' are gated as "
-        "write, 'delete' as destructive."
+        "'list'/'detail' are read-only; 'create'/'replace-recipient'/'clone' are "
+        "gated as write, 'delete' as destructive."
     )
 )
 
@@ -70,6 +74,27 @@ _EVENT_HELP = (
     + ", ".join(KNOWN_EVENTS)
     + ". Not validated against that list -- the service may add more."
 )
+
+_FILTER_HELP = (
+    "Extra filter on the event payload, FIELD<OP>VALUE with OP one of ==, =, <=, >=, <, > "
+    "(= means ==). Repeatable; all filters must match. Quote it: < and > are shell "
+    "redirections, e.g. --filter 'averageDuration>=60'. VALUE is sent as a string "
+    "(numeric fields compare it as a number). The service checks that FIELD exists "
+    "for the event."
+)
+
+_OVERTIME_HELP = (
+    "Fire only when the job runs at least this many percent longer than usual "
+    f"(50 = 50 %). Only for {' and '.join(OVERTIME_EVENTS)}. "
+)
+
+
+def _invalid_channel(formatter: Any, channel: str) -> NoReturn:
+    formatter.error(
+        message=f"Invalid --channel '{channel}'. Valid channels: {', '.join(VALID_CHANNELS)}.",
+        error_code=ErrorCode.INVALID_ARGUMENT,
+    )
+    raise typer.Exit(code=2) from None
 
 
 @notification_app.callback(invoke_without_command=True)
@@ -169,15 +194,20 @@ def _print_subscription(formatter: Any, row: dict[str, Any]) -> None:
             f"  Overtime:    >= {escape(str(row['overtime_percent']))} % longer than usual"
         )
 
-    filters = row.get("filters") or []
-    if filters:
-        formatter.console.print("  Filters:")
-        for item in filters:
-            operator = item.get("operator", "==")
-            formatter.console.print(
-                f"    {escape(str(item.get('field', '')))} "
-                f"{escape(str(operator))} {escape(str(item.get('value', '')))}"
-            )
+    _print_filters(formatter, row.get("filters") or [])
+
+
+def _print_filters(formatter: Any, filters: list[Any]) -> None:
+    """Print every filter verbatim, one per line (an omitted operator reads ``==``)."""
+    if not filters:
+        return
+    formatter.console.print("  Filters:")
+    for item in filters:
+        operator = item.get("operator", "==")
+        formatter.console.print(
+            f"    {escape(str(item.get('field', '')))} "
+            f"{escape(str(operator))} {escape(str(item.get('value', '')))}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -326,12 +356,9 @@ def notification_create(
         "--overtime-percent",
         min=MIN_OVERTIME_PERCENT,
         max=MAX_OVERTIME_PERCENT,
-        help=(
-            "Fire only when the job runs at least this many percent longer than usual "
-            f"(50 = 50 %). Only for {' and '.join(OVERTIME_EVENTS)}. "
-            "Omitted: no overtime filter."
-        ),
+        help=_OVERTIME_HELP + "Omitted: no overtime filter.",
     ),
+    filter_exprs: list[str] | None = typer.Option(None, "--filter", help=_FILTER_HELP),
 ) -> None:
     """Create a notification subscription.
 
@@ -339,19 +366,18 @@ def notification_create(
     ``--channel email``, or a callback URL for ``--channel webhook``.
     ``--overtime-percent`` writes the threshold of the UI's "job runs longer
     than usual" alert: a ``durationOvertimePercentage >= N/100`` filter.
+    ``--filter`` adds any other filter the service accepts for the event; it
+    may not repeat a field a dedicated option already sets.
     """
     formatter = get_formatter(ctx)
 
     if channel not in VALID_CHANNELS:
-        formatter.error(
-            message=f"Invalid --channel '{channel}'. Valid channels: {', '.join(VALID_CHANNELS)}.",
-            error_code=ErrorCode.INVALID_ARGUMENT,
-        )
-        raise typer.Exit(code=2) from None
+        _invalid_channel(formatter, channel)
 
     service = get_service(ctx, "notification_service")
 
     try:
+        filters = parse_filter_expressions(filter_exprs)
         result = service.create_subscription(
             alias=project,
             event=event,
@@ -362,6 +388,7 @@ def notification_create(
             branch_id=branch,
             expires_at=expires_at,
             overtime_percent=overtime_percent,
+            filters=filters,
         )
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
@@ -450,11 +477,7 @@ def notification_replace_recipient(
     formatter = get_formatter(ctx)
 
     if channel is not None and channel not in VALID_CHANNELS:
-        formatter.error(
-            message=f"Invalid --channel '{channel}'. Valid channels: {', '.join(VALID_CHANNELS)}.",
-            error_code=ErrorCode.INVALID_ARGUMENT,
-        )
-        raise typer.Exit(code=2) from None
+        _invalid_channel(formatter, channel)
 
     service = get_service(ctx, "notification_service")
     # Name the branch the config names are read from before the prompt.
@@ -487,5 +510,129 @@ def notification_replace_recipient(
         f"-> {escape(result.get('new_subscription_id', ''))}"
     )
     _print_subscription(formatter, result)
+    for warning in result.get("warnings", []):
+        formatter.warning(warning)
+
+
+# ---------------------------------------------------------------------------
+# notification clone
+# ---------------------------------------------------------------------------
+
+
+@notification_app.command("clone")
+def notification_clone(
+    ctx: typer.Context,
+    project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
+    subscription_id: str = typer.Option(
+        ..., "--subscription-id", help="Notification subscription ID to copy from"
+    ),
+    component_id: str | None = typer.Option(
+        None, "--component-id", help="Replace the job.component.id filter"
+    ),
+    config_id: str | None = typer.Option(
+        None, "--config-id", help="Replace the job.configuration.id filter (e.g. another flow)"
+    ),
+    branch: int | None = typer.Option(
+        None,
+        "--branch",
+        help="Replace the branch.id filter. Omitted: the source's branch filter is kept "
+        "(the active branch never changes it).",
+    ),
+    overtime_percent: int | None = typer.Option(
+        None,
+        "--overtime-percent",
+        min=MIN_OVERTIME_PERCENT,
+        max=MAX_OVERTIME_PERCENT,
+        help=_OVERTIME_HELP + "Replaces the source's threshold.",
+    ),
+    filter_exprs: list[str] | None = typer.Option(
+        None,
+        "--filter",
+        help=_FILTER_HELP + " Replaces every source filter on the same FIELD.",
+    ),
+    address: str | None = typer.Option(
+        None, "--address", help="New recipient address or webhook URL (keeps the source channel)"
+    ),
+    channel: str | None = typer.Option(
+        None,
+        "--channel",
+        help=f"New recipient channel: {' | '.join(VALID_CHANNELS)}. Needs --address.",
+    ),
+    expires_at: str | None = typer.Option(
+        None, "--expires-at", help="New ISO-8601 expiry. Omitted: the source's expiry is kept."
+    ),
+    clear_expires_at: bool = typer.Option(
+        False, "--clear-expires-at", help="Create the new subscription without an expiry"
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Read the source and show the planned subscription; create nothing"
+    ),
+) -> None:
+    """Create a new subscription from an existing one, with overrides.
+
+    The event, the recipient, the filters and the expiry are copied from the
+    source; each option replaces one part. An override on a filter field
+    replaces every source filter on that field; the other filters are copied
+    verbatim. The source is never changed or deleted. Without any override
+    the alert is duplicated, and every run creates one more subscription --
+    run with ``--dry-run`` first.
+    """
+    formatter = get_formatter(ctx)
+
+    if channel is not None and channel not in VALID_CHANNELS:
+        _invalid_channel(formatter, channel)
+
+    service = get_service(ctx, "notification_service")
+
+    filters = handle_service_call(ctx, parse_filter_expressions, filter_exprs)
+    result = handle_service_call(
+        ctx,
+        service.clone_subscription,
+        alias=project,
+        subscription_id=subscription_id,
+        component_id=component_id,
+        config_id=config_id,
+        branch_id=branch,
+        overtime_percent=overtime_percent,
+        filters=filters,
+        address=address,
+        channel=channel,
+        expires_at=expires_at,
+        clear_expires_at=clear_expires_at,
+        dry_run=dry_run,
+    )
+
+    if formatter.json_mode:
+        formatter.output(result)
+        return
+
+    _print_clone(formatter, result)
+
+
+def _print_clone(formatter: Any, result: dict[str, Any]) -> None:
+    """Human view of a clone: the outcome, what changed in the filters, warnings."""
+    source_id = escape(result.get("source_subscription_id", ""))
+    if result.get("dry_run"):
+        planned = result.get("planned") or {}
+        formatter.console.print(
+            f"[bold]Dry run:[/bold] would clone subscription {source_id} "
+            f"({escape(str(planned.get('event', '')))}); nothing was created."
+        )
+        recipient = planned.get("recipient") or {}
+        formatter.console.print(
+            f"  Recipient:   {escape(str(recipient.get('address') or recipient.get('url') or ''))}"
+        )
+        if planned.get("expiresAt"):
+            formatter.console.print(f"  Expires:     {escape(str(planned['expiresAt']))}")
+        _print_filters(formatter, planned.get("filters") or [])
+    else:
+        formatter.success(
+            f"Cloned subscription {source_id} -> {escape(result.get('new_subscription_id', ''))}"
+        )
+        _print_subscription(formatter, result)
+    for change in result.get("filters_replaced", []):
+        formatter.console.print(f"  Replaced:    {escape(str(change.get('field', '')))}")
+    for item in result.get("filters_added", []):
+        formatter.console.print(f"  Added:       {escape(str(item.get('field', '')))}")
     for warning in result.get("warnings", []):
         formatter.warning(warning)
