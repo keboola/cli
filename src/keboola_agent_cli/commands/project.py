@@ -44,6 +44,7 @@ from ._helpers import (
     finish_items,
     get_formatter,
     get_service,
+    manage_token_if_available,
     map_error_to_exit_code,
     resolve_manage_token,
     resolve_project_alias,
@@ -565,7 +566,10 @@ def project_refresh(
     token for the same project from the global config. Other dead tokens get a
     new token from the Manage API: interactive hidden prompt, or top-level
     --allow-env-manage-token to read KBC_MANAGE_API_TOKEN (CI/CD).
-    The Manage token is asked for only when a token must be created.
+    The Manage token is asked for only when a token must be created; without
+    one, those projects fail (MANAGE_TOKEN_REQUIRED, exit 1) and the tokens
+    taken from the global config are still written. A global token with
+    fewer rights than a new token is not taken.
 
     \b
     Examples:
@@ -590,8 +594,10 @@ def project_refresh(
 
     config_store = ctx.obj["config_store"]
     # Asked for in the service, once, only when a token must be minted (#955).
+    # None (no terminal, env not allowed) fails only the projects that need a
+    # new token; tokens taken from the global config are still written.
     manage_token_provider = functools.partial(
-        resolve_manage_token, allow_env=ctx.obj["allow_env_manage_token"]
+        manage_token_if_available, allow_env=ctx.obj["allow_env_manage_token"]
     )
 
     # Build kwargs shared by preview and real call

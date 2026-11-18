@@ -75,6 +75,23 @@ def refresh_summary(data: dict[str, Any]) -> str:
     return f"{adopted} token(s) {would}taken from the global config, {refreshed} {would}refreshed."
 
 
+def not_used_lines(entries: list[dict[str, Any]]) -> list[str]:
+    """One line per project whose global token was refused for having fewer rights.
+
+    Names the aliases only, never a token.
+    """
+    lines = []
+    for entry in entries:
+        not_used = entry.get("global_token_not_used")
+        if not not_used:
+            continue
+        lines.append(
+            f"Global token of '{entry['alias']}' (global alias '{not_used['global_alias']}') "
+            "has fewer rights than a new token; not used."
+        )
+    return lines
+
+
 def format_refresh_result(console: Console, data: dict, *, local_copies_hint: bool = False) -> None:
     """Render token refresh results as Rich tables with summary.
 
@@ -150,6 +167,8 @@ def format_refresh_result(console: Console, data: dict, *, local_copies_hint: bo
         console.print()
 
     failed = data.get("projects_failed", [])
+    for line in not_used_lines([*refreshed, *failed]):
+        console.print(line, soft_wrap=True, markup=False)
     for p in failed:
         console.print(format_item_error(f"project '{p['alias']}'", p["message"]), soft_wrap=True)
 

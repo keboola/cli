@@ -22,7 +22,7 @@ from typing import Any
 from ..auth.sentinel import is_session_token
 from ..client import KeboolaClient
 from ..config_store import ConfigStore
-from ..errors import ConfigError
+from ..errors import ConfigError, ErrorCode
 from ..models import ProjectConfig, normalize_stack_url
 
 logger = logging.getLogger(__name__)
@@ -31,6 +31,24 @@ StorageClientFactory = Callable[[str, str], KeboolaClient]
 
 ACTION_ADOPTED = "adopted_from_global"
 ACTION_WOULD_ADOPT = "would_adopt_from_global"
+
+# The `reason` of `global_token_not_used`: the global token has fewer rights
+# than a token kbagent would mint (D5).
+REASON_SCOPED = "scoped"
+
+# The rights `manage_client.create_project_token` gives a minted token by
+# default. A global token is adopted only when it has all of them (or is a
+# master token): the dead local token's rights cannot be read any more, so
+# what a mint would produce is the only safe baseline. `canManageBuckets`
+# already covers every bucket and component, so bucketPermissions and
+# componentAccess need no check.
+MINTED_TOKEN_RIGHTS = (
+    "canManageBuckets",
+    "canReadAllFileUploads",
+    "canReadAllProjectEvents",
+    "canManageDevBranches",
+    "canManageTokens",
+)
 
 
 @dataclass(frozen=True)
@@ -60,6 +78,49 @@ class PlannedAdoption:
             "global_alias": self.global_alias,
             "action": ACTION_WOULD_ADOPT if dry_run else ACTION_ADOPTED,
         }
+
+
+@dataclass(frozen=True)
+class GlobalTokenNotUsed:
+    """A global token that verified for the project but was not adopted."""
+
+    global_alias: str
+    reason: str
+
+    def report(self) -> dict[str, str]:
+        """The `global_token_not_used` value. It never carries the token."""
+        return {"global_alias": self.global_alias, "reason": self.reason}
+
+
+class ManageTokenRequiredError(Exception):
+    """A project needs a minted token and no Manage API token is available (#955).
+
+    Reported as that project's ``projects_failed`` entry; the run goes on.
+    """
+
+    error_code = ErrorCode.MANAGE_TOKEN_REQUIRED
+    retryable = False
+
+    def __init__(self, alias: str) -> None:
+        self.message = (
+            f"Project '{alias}' needs a new Storage token and no Manage token is available "
+            "(no terminal, and KBC_MANAGE_API_TOKEN is read only with "
+            "--allow-env-manage-token). Run `kbagent project refresh --project "
+            f"{alias}` in a terminal, or set KBC_MANAGE_API_TOKEN and pass "
+            "--allow-env-manage-token."
+        )
+        super().__init__(self.message)
+
+
+def has_minted_token_rights(info: dict[str, Any]) -> bool:
+    """True when a raw token-verify response is at least as strong as a minted token.
+
+    A master token, or every flag of :data:`MINTED_TOKEN_RIGHTS` explicitly
+    ``True``. A missing or non-boolean flag counts as not granted.
+    """
+    if info.get("isMasterToken") is True:
+        return True
+    return all(info.get(flag) is True for flag in MINTED_TOKEN_RIGHTS)
 
 
 def load_global_projects(global_store: ConfigStore | None) -> dict[str, ProjectConfig]:
@@ -125,31 +186,48 @@ def pick_global_candidate(
     return GlobalCandidate(token=token, global_alias=global_alias)
 
 
+def _owner_id(owner: dict[str, Any]) -> int | None:
+    """The project ID of a raw verify response's ``owner`` block, or None."""
+    try:
+        return int(owner["id"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 def verify_global_candidate(
     storage_client_factory: StorageClientFactory,
     alias: str,
     project: ProjectConfig,
     candidate: GlobalCandidate,
-) -> PlannedAdoption | None:
-    """Verify the global token; adopt it only when it works for the same project.
+) -> PlannedAdoption | GlobalTokenNotUsed | None:
+    """Verify the global token; adopt it only when it works for the same project
+    and has at least the rights of a minted token.
 
-    Any verification error means no adoption: the caller falls back to minting.
+    Returns:
+        A :class:`PlannedAdoption`; a :class:`GlobalTokenNotUsed` (reason
+        ``scoped``) when the token verified for this project but has fewer
+        rights; or None when it did not verify or belongs to another project.
+        In both non-adoption cases the caller falls back to minting.
     """
     try:
         with storage_client_factory(project.stack_url, candidate.token) as client:
-            info = client.verify_token()
+            info = client.get_project_info()
     except Exception as exc:
         logger.debug("Global token for '%s' did not verify (%s)", alias, type(exc).__name__)
         return None
-    if info.project_id != project.project_id:
+    owner = info.get("owner") if isinstance(info, dict) else None
+    if not isinstance(owner, dict) or _owner_id(owner) != project.project_id:
         logger.debug("Global token for '%s' belongs to another project", alias)
         return None
+    if not has_minted_token_rights(info):
+        logger.debug("Global token for '%s' has fewer rights than a minted token", alias)
+        return GlobalTokenNotUsed(global_alias=candidate.global_alias, reason=REASON_SCOPED)
     return PlannedAdoption(
         alias=alias,
         project=project,
         token=candidate.token,
         global_alias=candidate.global_alias,
-        project_name=info.project_name or project.project_name,
+        project_name=owner.get("name") or project.project_name,
     )
 
 

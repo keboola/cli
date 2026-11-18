@@ -1557,7 +1557,11 @@ explicit Storage config version, never the empty shell the create writes.
     without --project and --all-projects, the active project. --force replaces non-expiring tokens.
     In a local .kbagent/ directory an INVALID_TOKEN project first takes the
     one verified token the global config holds for it (`projects_adopted`);
-    the Manage token is asked for only when a token must be minted.
+    the Manage token is asked for only when a token must be minted. Without
+    one (no terminal, no --allow-env-manage-token) those projects fail
+    MANAGE_TOKEN_REQUIRED (exit 1) and the adoptions are still written. A
+    global token with fewer rights than a new one is not taken
+    (`global_token_not_used`, reason `scoped`).
     Agents: --dry-run first, then ask the user; never edit config.json and
     never add --force for this (it mints new tokens and needs a Manage token).
     Browser-login (session) projects are reported under "skipped" with the

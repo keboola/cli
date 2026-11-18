@@ -45,6 +45,10 @@ class ErrorCode(StrEnum):
     # A safety prompt in human mode without a terminal and without --yes
     # (spec S4, decision D6). Exit 2; the hint names --yes.
     CONFIRMATION_REQUIRED = "CONFIRMATION_REQUIRED"
+    # A Manage API token is needed and no source can supply one: no terminal
+    # to ask on, and KBC_MANAGE_API_TOKEN not allowed (#955). As a per-project
+    # failure of `project refresh` it aggregates to exit 1.
+    MANAGE_TOKEN_REQUIRED = "MANAGE_TOKEN_REQUIRED"
     MISSING_PARAMETER = "MISSING_PARAMETER"
     UNKNOWN_ERROR = "UNKNOWN_ERROR"
     # Per-project envelope fallback in multi-project commands: the operation
@@ -433,6 +437,8 @@ ERROR_CODE_TABLE: dict[str, ErrorClass] = {
     ErrorCode.USAGE_ERROR: ErrorClass("validation", 2),
     # A safety prompt nobody can answer: refused by us before any API call (S4).
     ErrorCode.CONFIRMATION_REQUIRED: ErrorClass("validation", 2),
+    # Like CONFIRMATION_REQUIRED: something only a human (or an opt-in flag) can supply.
+    ErrorCode.MANAGE_TOKEN_REQUIRED: ErrorClass("validation", 2),
     ErrorCode.MISSING_PARAMETER: ErrorClass("validation", 2),
     ErrorCode.UNKNOWN_ERROR: ErrorClass("api", 1),
     ErrorCode.UNEXPECTED_ERROR: ErrorClass("api", 1),

@@ -1,4 +1,4 @@
-"""Pin the bulk-prompt-once contract for resolve_manage_token (since 0.28.0).
+"""Pin the bulk-prompt-once contract for the Manage-token resolver (since 0.28.0).
 
 Padak's review on PR #238 explicitly required: when a single command
 invocation processes N projects (e.g. `kbagent project refresh --all-projects`),
@@ -78,7 +78,7 @@ def _run(store: ConfigStore, *, old_token_valid: bool) -> tuple[Result, MagicMoc
     with (
         patch("keboola_agent_cli.cli.ConfigStore", return_value=store),
         patch("keboola_agent_cli.cli.OrgService", build),
-        patch("keboola_agent_cli.commands.project.resolve_manage_token", resolver_mock),
+        patch("keboola_agent_cli.commands.project.manage_token_if_available", resolver_mock),
     ):
         result = runner.invoke(app, ["--json", "project", "refresh", "--all-projects", "--yes"])
     return result, resolver_mock
@@ -86,7 +86,7 @@ def _run(store: ConfigStore, *, old_token_valid: bool) -> tuple[Result, MagicMoc
 
 class TestBulkPromptOnce:
     def test_project_refresh_all_resolves_token_once_for_n_projects(self, tmp_path: Path) -> None:
-        """5 projects on 3 stacks, every token dead: ``resolve_manage_token`` is
+        """5 projects on 3 stacks, every token dead: ``manage_token_if_available`` is
         called exactly once and all 5 tokens are minted with its token."""
         store = _make_store_n_projects(tmp_path, 5)
 
@@ -94,7 +94,7 @@ class TestBulkPromptOnce:
 
         assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
         assert resolver_mock.call_count == 1, (
-            f"Expected resolve_manage_token to be called once across 5 projects, got "
+            f"Expected manage_token_if_available to be called once across 5 projects, got "
             f"{resolver_mock.call_count} calls -- per-project resolution regression."
         )
         config = store.load()

@@ -18,6 +18,8 @@ from ..errors import ConfigError, ErrorCode, KeboolaApiError, mask_token
 from ..manage_client import ManageClient
 from ..models import ProjectConfig
 from ._refresh_from_global import (
+    GlobalTokenNotUsed,
+    ManageTokenRequiredError,
     PlannedAdoption,
     ensure_unchanged,
     load_global_projects,
@@ -308,7 +310,7 @@ class OrgService:
         token_expires_in: int | None = None,
         force: bool = False,
         *,
-        manage_token_provider: Callable[[], str] | None = None,
+        manage_token_provider: Callable[[], str | None] | None = None,
         global_store: ConfigStore | None = None,
     ) -> dict[str, Any]:
         """Refresh storage API tokens for registered projects.
@@ -320,7 +322,9 @@ class OrgService:
         token verifies (#955); every other token needs a new one minted
         through the Manage API. Phase 2 resolves the Manage token once --
         only when something must be minted and not in a dry run -- and then
-        writes the adoptions and mints.
+        writes the adoptions and mints. A global token with fewer rights than
+        a minted one is never adopted; that project is minted for and its
+        entry carries ``global_token_not_used`` (reason ``scoped``).
 
         Browser-login (session) projects are reported under
         ``projects_skipped`` and never touched, ``force`` included: they hold a
@@ -337,9 +341,11 @@ class OrgService:
             force: If True, refresh all tokens even if they are still valid.
                 Never takes a token from the global config.
             manage_token_provider: Called once, in phase 2, when ``manage_token``
-                is None and a token must be minted. Its exceptions (the CLI's
-                ``typer.Exit(2)``) propagate untouched; nothing is written
-                before it is called.
+                is None and a token must be minted. Its exceptions propagate
+                untouched; nothing is written before it is called. When it
+                returns None (no Manage token source), the adoptions are
+                still written and every project that needs a mint becomes a
+                ``projects_failed`` entry with ``MANAGE_TOKEN_REQUIRED``.
             global_store: The global config, read-only, consulted when the
                 refreshed config is a local one. None disables adoption.
 
@@ -376,6 +382,8 @@ class OrgService:
         projects_skipped: list[dict[str, Any]] = []
         adoptions: list[PlannedAdoption] = []
         to_mint: list[tuple[str, ProjectConfig]] = []
+        # Alias -> `global_token_not_used` value: a scoped global token was refused.
+        not_used: dict[str, dict[str, str]] = {}
         # Loaded on first need: only an INVALID_TOKEN project reads the global config.
         global_projects: dict[str, ProjectConfig] | None = None
 
@@ -420,14 +428,16 @@ class OrgService:
                 if global_projects is None:
                     global_projects = load_global_projects(global_store)
                 candidate = pick_global_candidate(global_projects, project)
-                plan = (
+                outcome = (
                     verify_global_candidate(self._storage_client_factory, alias, project, candidate)
                     if candidate
                     else None
                 )
-                if plan is not None:
-                    adoptions.append(plan)
+                if isinstance(outcome, PlannedAdoption):
+                    adoptions.append(outcome)
                     continue
+                if isinstance(outcome, GlobalTokenNotUsed):
+                    not_used[alias] = outcome.report()
 
             to_mint.append((alias, project))
 
@@ -442,6 +452,10 @@ class OrgService:
             "token_expires_in": token_expires_in,
         }
 
+        def not_used_key(alias: str) -> dict[str, Any]:
+            """The additive `global_token_not_used` key of ``alias``'s entry, if any."""
+            return {"global_token_not_used": not_used[alias]} if alias in not_used else {}
+
         if dry_run:
             result["projects_adopted"] = [plan.report(dry_run=True) for plan in adoptions]
             result["projects_refreshed"] = [
@@ -451,14 +465,16 @@ class OrgService:
                     "project_name": project.project_name,
                     "token": "***",
                     "action": "would_refresh",
+                    **not_used_key(alias),
                 }
                 for alias, project in to_mint
             ]
             return result
 
         # Phase 2. The Manage token is resolved before the first write and
-        # outside any per-project handler, so a provider that cannot supply
-        # one (typer.Exit(2)) ends the run with nothing written (R2).
+        # outside any per-project handler, so a provider that raises (an
+        # aborted prompt, Ctrl+C) ends the run with nothing written. A provider
+        # that returns None (no Manage token source) fails only the mints.
         if to_mint and manage_token is None:
             if manage_token_provider is None:
                 raise ValueError("refresh_tokens needs manage_token or manage_token_provider")
@@ -479,7 +495,19 @@ class OrgService:
             except Exception as exc:
                 failed.append(item_failure(exc, alias=plan.alias, project_name=plan.project_name))
 
-        if to_mint and manage_token is not None:
+        if to_mint and manage_token is None:
+            # Nothing is minted; each project that needed a token says how to get one.
+            for alias, project in to_mint:
+                failed.append(
+                    item_failure(
+                        ManageTokenRequiredError(alias),
+                        alias=alias,
+                        project_id=project.project_id,
+                        project_name=project.project_name,
+                        **not_used_key(alias),
+                    )
+                )
+        elif manage_token is not None:
             for alias, project in to_mint:
                 try:
                     new_token = self._refresh_single_project(
@@ -497,10 +525,18 @@ class OrgService:
                             "project_name": project.project_name,
                             "token": mask_token(new_token),
                             "action": "refreshed",
+                            **not_used_key(alias),
                         }
                     )
                 except Exception as exc:
-                    failed.append(item_failure(exc, alias=alias, project_name=project.project_name))
+                    failed.append(
+                        item_failure(
+                            exc,
+                            alias=alias,
+                            project_name=project.project_name,
+                            **not_used_key(alias),
+                        )
+                    )
 
         return result
 
