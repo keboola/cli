@@ -100,6 +100,13 @@ kbagent --json flow validate --definition-file flow.yaml --project prod
 kbagent --json flow new --project prod --name "Daily ETL" --definition-file flow.yaml
 ```
 
+A definition you pass must hold `phases` and `tasks` only, with at least one
+phase. An empty file, a `null` list, an unknown top-level key (`task:` instead
+of `tasks:`) or the whole `flow detail --json` output is refused with
+`VALIDATION_ERROR` (exit 2) and nothing is written. `flow new` WITHOUT
+`--definition`/`--definition-file` creates an empty flow on purpose; fill it
+with one `flow update` that carries the phases and their tasks together.
+
 ## Conditions cookbook
 
 ```yaml
@@ -362,6 +369,8 @@ live schema) to see them. Common causes:
 - integer ids (ids must be **strings**);
 - `next[].goto` targets a non-existent phase (use `null` to end);
 - a phase with conditional transitions lacks a trailing default transition;
+- the definition has no phases (`phases: []`, or a `tasks`-only `flow new`);
+- `phases` / `tasks` / `next` is not a list of objects;
 - a task references an unknown `phase`, or a phase has no enabled task;
 - operator/function operand-arity violations.
 

@@ -57,6 +57,16 @@ These lists keep `error`, because their entries are not failed items with an err
 - **Removed short flags** (a usage error, exit 2): `-c` (`permissions list --category`, `lineage show --column`), `-r` (`search` and `config search --regex`, `project invite` and `project member-set-role --role`), `-d` on `http post/patch --body`, `permissions set --deny` and `token create --description`, `-f` on `lineage show --format`, `-l` on `search --limit` and `-n` on `changelog` and `kai history --limit` (use `-L`), `-m` on `permissions set --mode`, and `-v` on `changelog --full` (`-v` is the global `--verbose`).
 - **In documents and agent commands, use the long names.** They work on 0.x and 1.x.
 
+## `flow new` / `flow update` / `flow validate`: an empty or malformed definition is refused
+
+*(since vNEXT)*
+
+- **A definition that is given must be a phases/tasks document with at least one phase.** `--definition ""`, an empty, whitespace-only or comments-only file (or stdin), a YAML `null`, a document with neither `phases` nor `tasks`, a top-level key other than those two (a typo like `task:`, or a whole `flow detail --json` envelope) and `phases: null` / `tasks: null` are `VALIDATION_ERROR`, exit 2, nothing written. `phases: []` (or a `tasks`-only `flow new`, or an update that leaves the flow with no phases) is `INVALID_FLOW_DEFINITION`, exit 1, "Flow definition has no phases". `flow validate` reports the same as `valid: false`, exit 2. Before vNEXT an empty file created a flow with no phases (exit 0), and `flow update --name X --definition-file empty.yaml` only renamed the flow.
+- **Omitting the definition still creates an empty flow** (`flow new --name X` with no `--definition`/`--definition-file`, or REST `POST /flows/{project}` with neither `phases` nor `tasks`). Fill it with ONE `flow update` that has the phases AND their tasks: every phase needs an enabled task, so phases first and tasks later is refused.
+- **Feed `flow update` the definition only**: take `phases` and `tasks` from `flow detail --json` (`.data.phases`, `.data.tasks`), not the whole output.
+- **REST**: `POST /flows/{project}`, `PATCH /flows/{project}/{id}` and `POST /flows/validate` answer 422 for an unknown field (including the legacy `component_id`, which used to be dropped silently) and for `phases: null` / `tasks: null`.
+- **Not covered**: `config new/update/clone --component-id keboola.flow` and `http` write a flow configuration without these checks. Use the `flow` commands for flows.
+
 ## `flow run`: partial flow runs ignore conditions; the flow status can hide a failed task
 
 *(since vNEXT)*
