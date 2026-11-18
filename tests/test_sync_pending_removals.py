@@ -1209,3 +1209,40 @@ def test_an_unreadable_quarantine_does_not_stop_a_pull(ws: Workspace, api: FakeS
 
     assert result["status"] == "pulled"
     assert "PENDING_REMOVAL_FAILED" in [w["code"] for w in result["warnings"]]
+
+
+# ------------------------------------------------------------------- collector review (Astra)
+
+
+def test_a_failed_source_removal_drops_the_promote_entry_from_the_final_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A's move into the quarantine fails; the final save must not bring B's promote entry back.
+
+    The user then deletes A's folder by hand: a ``push --branch DEV --force``
+    must not read B's missing source folder as a local delete.
+    """
+    from keboola_agent_cli.sync.branch_scope import promoted_from
+    from keboola_agent_cli.sync.manifest import load_manifest
+    from test_sync_bookkeeping_differential import CONFIG_FILE, DEV, PROD, VARIANTS
+
+    seeded = _promoted_world(tmp_path)
+    w, prod_id = seeded.world, seeded.config_id
+    component = VARIANTS["extractor"].component_id
+    config_dir = w.config_dir(prod_id)
+    dev_before = dict(w.api.remote[DEV])
+    del w.api.remote[PROD][(component, prod_id)]
+    _removal_via(monkeypatch, _refuse)
+    w.pull()  # the move fails (a Windows handle): recorded, folder kept
+    monkeypatch.undo()
+    assert (config_dir / CONFIG_FILE).exists()
+
+    manifest = load_manifest(w.root)
+    assert [p.config_id for p in manifest.pending_removals] == [prod_id]
+    assert [c.id for c in manifest.configurations if promoted_from(c) is not None] == []
+
+    shutil.rmtree(config_dir)  # the handle is closed; the user removes the folder
+    result = w.svc.push(alias="prod", project_root=w.root, branch_override=DEV, force=True)
+
+    assert w.api.remote[DEV] == dev_before, result
+    assert result.get("deleted", 0) == 0, result
