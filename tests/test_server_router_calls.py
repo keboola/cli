@@ -1001,6 +1001,28 @@ def test_create_model_and_add_item_pass_scope_through(tmp_path: Path) -> None:
     assert kwargs["target_projects"] is None
 
 
+def test_edit_item_returns_status_from_the_service(tmp_path: Path) -> None:
+    """PATCH /semantic-layer/items/{kind}/{name} passes the R6 `status` through (#833)."""
+    sl = MagicMock()
+    sl.edit_dataset.return_value = {
+        "status": "unchanged",
+        "updated": {"id": "d1", "attributes": {"name": "x"}},
+        "cascaded_constraints": [],
+        "rollback": None,
+        "partial_state": False,
+        "recovery_hint": None,
+    }
+    client = TestClient(_make_app_with_registry(tmp_path, _mock_registry(semantic_layer=sl)))
+    res = client.patch(
+        "/semantic-layer/items/dataset/x",
+        json={"project": PROJECT, "new_description": "same"},
+        headers=AUTH,
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["status"] == "unchanged"
+    assert sl.edit_dataset.call_args.kwargs["new_description"] == "same"
+
+
 # ---------------------------------------------------------------------------
 # flows.py  POST /flows/validate  +  GET /flows/{project}/schema
 # New in 0.57.0 -- mirror `flow validate` / `flow schema --full`.

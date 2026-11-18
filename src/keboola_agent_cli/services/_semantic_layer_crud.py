@@ -32,6 +32,7 @@ Helpers:
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from ..errors import ErrorCode, KeboolaApiError
@@ -51,6 +52,14 @@ REMOVE_KINDS: tuple[str, ...] = (
     "relationship",
     "glossary",
 )
+
+
+@dataclass(frozen=True)
+class PatchOutcome:
+    """Result of :func:`_patch_changes`: the item after the edit and whether it was written."""
+
+    item: dict[str, Any]
+    changed: bool
 
 
 def code_metric(name: str) -> str:
@@ -124,7 +133,7 @@ def edit_metric_with_cascade(
                     error_code=ErrorCode.VALIDATION_ERROR,
                 )
 
-    new_item, changed = _patch_changes(
+    outcome = _patch_changes(
         client,
         "semantic-metric",
         target,
@@ -158,8 +167,8 @@ def edit_metric_with_cascade(
     failed_cascades = [entry for entry in cascaded if entry["status"] == "failed"]
     partial_state = bool(failed_cascades)
     return {
-        "status": "updated" if changed or cascaded else "unchanged",
-        "updated": new_item,
+        "status": "updated" if outcome.changed or cascaded else "unchanged",
+        "updated": outcome.item,
         "cascaded_constraints": cascaded,
         "rollback": None,
         "partial_state": partial_state,
@@ -285,10 +294,10 @@ def edit_simple(
             message=f"{not_found_label} '{current_key}' not found in this model.",
             error_code=ErrorCode.NOT_FOUND,
         )
-    new_item, changed = _patch_changes(client, item_type, target, id_key=id_key, changes=overrides)
+    outcome = _patch_changes(client, item_type, target, id_key=id_key, changes=overrides)
     return {
-        "status": "updated" if changed else "unchanged",
-        "updated": new_item,
+        "status": "updated" if outcome.changed else "unchanged",
+        "updated": outcome.item,
         "cascaded_constraints": [],
         "rollback": None,
         "partial_state": False,
@@ -303,8 +312,8 @@ def _patch_changes(
     *,
     id_key: str,
     changes: dict[str, Any],
-) -> tuple[dict[str, Any], bool]:
-    """PATCH every given key unless all equal the read values; return ``(item, changed)``.
+) -> PatchOutcome:
+    """PATCH every given key unless all equal the read values.
 
     ``None`` means "not given". When every given value equals the value just
     read, nothing is written (no new revision): the edit is then ordered at the
@@ -318,8 +327,9 @@ def _patch_changes(
     attrs = target.get("attributes") or {}
     data = {k: v for k, v in changes.items() if v is not None}
     if all(attrs.get(k) == v for k, v in data.items()):
-        return target, False
-    return client.patch_item(item_type, target["id"], name=data.get(id_key), data=data), True
+        return PatchOutcome(item=target, changed=False)
+    patched = client.patch_item(item_type, target["id"], name=data.get(id_key), data=data)
+    return PatchOutcome(item=patched, changed=True)
 
 
 def scan_orphan_constraints(

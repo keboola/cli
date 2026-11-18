@@ -419,6 +419,7 @@ def edit_metric(
         confirm_cb=typer.confirm,
     )
     if result.get("status") == "unchanged":
+        # Nothing was written, so there are no items to count: no finish_items headline.
         formatter.output(result, _print_edit_result("metric"))
         return
     # A constraint the rename could not repoint is a failed cascade item (#745).

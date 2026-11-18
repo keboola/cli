@@ -2011,6 +2011,16 @@ class TestEditPatchSemantics:
         mock.patch_item.assert_not_called()
         assert result["status"] == "unchanged"
 
+    def test_relationship_same_values_is_unchanged(self, tmp_path: Path) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        r = _child_item("semantic-relationship", "r1", {"name": "j", "type": "left"})
+        mock.list_items.side_effect = lambda t, m=None: (
+            [_model_item("U", "m")] if t == "semantic-model" else [r]
+        )
+        result = service.edit_relationship("prod", None, current_name="j", new_type="left")
+        mock.patch_item.assert_not_called()
+        assert result["status"] == "unchanged"
+
     def test_real_change_reports_updated(self, tmp_path: Path) -> None:
         service, mock = _make_service(_make_store(tmp_path))
         ds = _child_item("semantic-dataset", "d1", {"name": "x", "description": "old"})
