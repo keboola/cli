@@ -20,6 +20,7 @@ Tests the business logic in isolation using a mocked KeboolaClient. Covers:
 from __future__ import annotations
 
 import copy
+from typing import Any
 from unittest.mock import MagicMock
 
 import httpx
@@ -1308,7 +1309,7 @@ class TestNormalizeFilters:
     )
     def test_invalid_entries_are_invalid_argument(self, bad: object) -> None:
         with pytest.raises(KeboolaApiError) as exc_info:
-            normalize_filters(bad)  # type: ignore[arg-type]
+            normalize_filters(bad)  # ty: ignore[invalid-argument-type]  -- bad input on purpose
         assert _code(exc_info.value) == "INVALID_ARGUMENT"
 
 
@@ -1535,7 +1536,7 @@ class TestFilterValueReadsEqualityOnly:
         assert row["branch_id"] == "42"
 
 
-CLONE_SOURCE = {
+CLONE_SOURCE: dict[str, Any] = {
     "id": "500",
     "event": "job-processing-long",
     "expiresAt": "2027-01-01T00:00:00Z",
@@ -1666,7 +1667,9 @@ class TestCloneSubscription:
     def test_active_branch_never_replaces_the_source_branch(self) -> None:
         client = _clone_client()
         service = _make_service(client)
-        service._config_store.get_project("prod").active_branch_id = 999
+        project = service._config_store.get_project("prod")
+        assert project is not None
+        project.active_branch_id = 999
 
         service.clone_subscription("prod", "500", config_id="222")
 
@@ -1965,7 +1968,7 @@ class TestCloneOvertimeTypeCheckedFirst:
             _make_service(client).clone_subscription(
                 "prod",
                 "500",
-                overtime_percent=bad,  # type: ignore[arg-type]
+                overtime_percent=bad,  # ty: ignore[invalid-argument-type]  -- bad input on purpose
             )
 
         assert _code(exc_info.value) == "INVALID_ARGUMENT"
