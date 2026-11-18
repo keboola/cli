@@ -314,6 +314,9 @@ class CreateLedger:
     # ``(component_id, config dir path)`` of a NEW config -> the row
     # placeholders its row dirs share: recorded on its entry when it is created.
     ambiguous_rows: dict[tuple[str, str], set[str]] = field(default_factory=dict)
+    # ``(component_id, config id)`` of a config an earlier push created and
+    # this push only recovered (#926) -> the version it saw then (None: none).
+    recovered_versions: dict[tuple[str, str], int | None] = field(default_factory=dict)
 
     def uncreated_claims(self) -> set[tuple[str, str]]:
         """``(component_id, placeholder)`` planned for a new dir this push did not create."""
@@ -383,7 +386,13 @@ class CreateLedger:
         return ledger
 
     def created_here(self, component_id: str, config_id: str) -> bool:
-        """True iff this push created *component_id* / *config_id* (the row precheck, R3)."""
+        """True iff this push created *component_id* / *config_id* (the row precheck, R3).
+
+        A config recovered from an earlier push's lost answer is not: someone
+        may have edited it since (review round 1, item 2).
+        """
+        if (component_id, config_id) in self.recovered_versions:
+            return False
         made = (self.created_id_map, self.promoted_id_map, self.created_by_path)
         return any(
             comp == component_id and new_id == config_id
@@ -535,6 +544,13 @@ def record_created_config(
         raise fatal from fatal.__cause__
 
     ledger.created_by_path[(component_id, config_path_str)] = new_id
+    if outcome.recovered:
+        # The row precheck expects the version the recovery read (or our own
+        # update after it) saw; an edit made since blocks the rows (item 2).
+        version = outcome.result.get("version")
+        ledger.recovered_versions[(component_id, new_id)] = (
+            version if isinstance(version, int) and not isinstance(version, bool) else None
+        )
     writeback_after_push(
         service,
         outcome.pristine_data,

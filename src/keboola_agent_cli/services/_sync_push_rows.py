@@ -127,6 +127,8 @@ def _blocked(
 
 def _expected_version(phase: RowPhase, change: dict[str, Any], key: tuple[str, str]) -> Any:
     """The version the parent must be at, or a reason it cannot be checked (R3)."""
+    if key in phase.ledger.recovered_versions:  # an earlier push's create (item 2)
+        return phase.ledger.recovered_versions[key]
     write = phase.parent_writes.get(key)
     if write is None:
         return change.get("parent_remote_version")

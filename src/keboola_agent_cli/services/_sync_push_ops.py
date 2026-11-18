@@ -54,6 +54,7 @@ from ._sync_local_snapshot import (
 )
 from ._sync_models import AUTHORED_ROW_KEY, CREATED_FROM_KEY, PROMOTED_ROW_KEY, CreateOutcome
 from ._sync_push_create import (
+    PlannedCreate,
     differs_from_local,
     pending_config_creates,
     plan_create,
@@ -1011,6 +1012,7 @@ def push_create(
     # The remap starts from the source-id payload, once (D24).
     configuration = remap.apply(component_id, original) if remap is not None else original
 
+    planned: PlannedCreate | None = None  # the data-app path plans no id (#926)
     if component_id == DATA_APP_COMPONENT_ID and ds_client is not None:
         # Carry the DS runtime type into the target (CLI-8): create the DS
         # /apps record with the type, then fill the Storage config body.
@@ -1131,4 +1133,5 @@ def push_create(
         config_dir=config_dir,
         file_config_id="" if promote else str(new_config_id),
         pending_refs=remap.pending_refs(component_id, original) if remap is not None else [],
+        recovered=planned is not None and planned.existing is not None,
     )

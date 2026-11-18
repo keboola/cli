@@ -139,6 +139,10 @@ class CreateOutcome:
     file_config_id: str
     # Promote path: the source references this push still creates (D30).
     pending_refs: list[list[str]] = field(default_factory=list)
+    # True when an earlier push created the config (its answer was lost) and
+    # this push only found it again (#926): not "created here" for the row
+    # precheck (review round 1, item 2).
+    recovered: bool = False
 
 
 @dataclass
