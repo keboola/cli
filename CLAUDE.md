@@ -1768,13 +1768,15 @@ kbagent context [GROUP]
 #   INVALID_ARGUMENT, exit 2, listing the valid ones. --json adds data.group. Version gate in gotchas.md.
 kbagent init [--from-global] [--project ALIAS ...]
 # `--project ALIAS` (repeatable) copies only the named project(s) from the global config and implies --from-global.
-kbagent doctor
+kbagent doctor [--check skipped-selects ...]
 # `doctor` includes an `mcp_tool_tasks` check: it FAILs on scheduled agent tasks still
 # using the removed `--type mcp_tool` (they are inert tombstones that never run again).
 # `agent list` marks those rows and adds a per-task `deprecation` key in --json. Recreate
 # each as `--type cli_command` using the map in docs/mcp-migration.md.
 # `doctor` has no `--fix` since 0.85.0 -- it only ever installed keboola-mcp-server.
-# `doctor` skipped_selects check: lists every Snowflake/BigQuery SQL transformation statement
+# `doctor` optional checks: a plain doctor lists each one as a skip entry with optional: true and
+#   `command` (the exact command to run it) and does not run it; `--check NAME` (repeatable; serve:
+#   GET /doctor?check=NAME) runs it. `--check skipped-selects`: lists every Snowflake/BigQuery SQL transformation statement
 #   that starts with SELECT (the runtime never runs it) in the production branch of each
 #   connected project, one config listing per component and project; `ran_before_fix` marks
 #   statements that ran until Snowflake transformation 1.7.1 (a comment or whitespace before

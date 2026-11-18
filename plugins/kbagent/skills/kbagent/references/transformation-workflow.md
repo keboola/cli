@@ -98,8 +98,9 @@ SET ABORT_TRANSFORMATION = (
   the `SELECT` made it run by accident; since 1.7.1 it is skipped in every format,
   and the job succeeds with bad data and without a notification.
 - `transformation create` / `edit` and `sync push` warn about every skipped
-  `SELECT` (`SQL_SELECT_SKIPPED_BY_RUNTIME`). `kbagent doctor` lists them in all
-  connected projects (check `skipped_selects`, `details.statements[]`);
+  `SELECT` (`SQL_SELECT_SKIPPED_BY_RUNTIME`). `kbagent doctor --check skipped-selects` lists them in all
+  connected projects (`details.statements[]`; a plain `doctor` only names the
+  check and its command);
   `ran_before_fix: true` marks a statement that ran until 1.7.1 -- the first
   candidates to rewrite as above. Rewrite only after the owner agrees: turning
   a skipped check back on makes jobs fail again.

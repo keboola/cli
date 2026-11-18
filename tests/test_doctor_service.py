@@ -14,7 +14,7 @@ from keboola_agent_cli.models import (
     ProjectConfig,
     TokenVerifyResponse,
 )
-from keboola_agent_cli.services.doctor_service import DoctorService
+from keboola_agent_cli.services.doctor_service import DoctorService, OptionalCheck
 
 
 def _make_mock_client(
@@ -975,9 +975,24 @@ class TestDoctorServiceCheckSkippedSelects:
     def _run(self, tmp_config_dir: Path, client: MagicMock) -> dict:
         store = self._store(tmp_config_dir)
         service = DoctorService(config_store=store, client_factory=lambda url, token: client)
-        result = service.run_checks()
+        result = service.run_checks((OptionalCheck.SKIPPED_SELECTS,))
         (check,) = [c for c in result["checks"] if c["check"] == "skipped_selects"]
         return check
+
+    def test_plain_doctor_lists_the_check_and_does_not_run_it(self, tmp_config_dir: Path) -> None:
+        """Without --check the scan costs nothing; the entry says how to run it."""
+        client = self._client([self._config("777", "-- check\nselect 1/0;")])
+        store = self._store(tmp_config_dir)
+        service = DoctorService(config_store=store, client_factory=lambda url, token: client)
+
+        result = service.run_checks()
+
+        (check,) = [c for c in result["checks"] if c["check"] == "skipped_selects"]
+        assert check["status"] == "skip"
+        assert check["optional"] is True
+        assert check["command"] == "kbagent doctor --check skipped-selects"
+        assert check["command"] in check["message"]
+        client.list_component_configs.assert_not_called()
 
     def test_guard_after_a_comment_is_reported_as_changed(self, tmp_config_dir: Path) -> None:
         """The pattern that stopped jobs until Snowflake 1.7.1 and is skipped since."""

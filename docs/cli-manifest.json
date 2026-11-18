@@ -1459,7 +1459,9 @@
       "hidden": false,
       "category": "read",
       "help": "Run health checks on CLI configuration and project connectivity.",
-      "params": []
+      "params": [
+        {"kind": "option", "name": "check", "opts": ["--check"], "type": "choice", "choices": ["skipped-selects"], "multiple": true, "default": null, "help": "Also run this optional check (repeat for more). Optional checks read more than the CLI setup; a plain doctor lists each one with the command to run it."}
+      ]
     },
     {
       "path": "encrypt",

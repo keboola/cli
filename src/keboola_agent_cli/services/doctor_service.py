@@ -6,8 +6,10 @@ Runs checks for:
 3. Token verification for each project (API call with response time)
 4. CLI version
 ...
-10. SQL transformation statements the runtime skips as a SELECT (one config
-    listing per SQL transformation component and connected project)
+10. Optional, only with ``--check skipped-selects``: SQL transformation
+    statements the runtime skips as a SELECT (one config listing per SQL
+    transformation component and connected project). Without it, a ``skip``
+    entry names the command.
 
 Extracted from commands/doctor.py to respect the 3-layer architecture.
 """
@@ -16,6 +18,7 @@ import json
 import os
 import stat
 import time
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +41,29 @@ _MAX_LISTED_TASKS = 5
 AGENTS_FILENAME = "agents.json"
 
 
+class OptionalCheck(StrEnum):
+    """A doctor check that runs only when asked for (``doctor --check NAME``).
+
+    These read more than the CLI setup (every SQL transformation of every
+    project), so a plain ``doctor`` stays fast. Instead it lists each one as a
+    ``skip`` entry with ``optional: true`` and the exact command to run it, so
+    the caller -- often an AI agent -- learns what can be checked and how.
+    """
+
+    SKIPPED_SELECTS = "skipped-selects"
+
+
+# What each optional check looks for, shown in the skip entry of a plain doctor.
+OPTIONAL_CHECK_PURPOSE: dict[OptionalCheck, str] = {
+    OptionalCheck.SKIPPED_SELECTS: (
+        "SQL transformation statements that start with SELECT and therefore never run, "
+        "including data checks (SELECT ... 1/0) that stopped jobs only until Snowflake "
+        "transformation 1.7.1. Reads every Snowflake/BigQuery SQL transformation of each "
+        "connected project."
+    ),
+}
+
+
 class DoctorService:
     """Business logic for health checks.
 
@@ -52,8 +78,13 @@ class DoctorService:
         self._config_store = config_store
         self._client_factory = client_factory or make_client_factory(config_store)
 
-    def run_checks(self) -> dict[str, Any]:
+    def run_checks(self, optional_checks: tuple[OptionalCheck, ...] = ()) -> dict[str, Any]:
         """Run all health checks and return structured results.
+
+        Args:
+            optional_checks: The optional checks to run as well. Each optional
+                check not named here is listed as a ``skip`` entry that says
+                how to run it.
 
         Returns:
             Dict with 'checks' list and 'summary' dict.
@@ -100,9 +131,11 @@ class DoctorService:
         inert_patterns_check = self._check_inert_permission_patterns(config)
         all_checks.append(inert_patterns_check)
 
-        # Check 10: SQL transformation statements the runtime skips as a SELECT
-        select_skip_check = self._check_skipped_selects(config, connectivity_checks)
-        all_checks.append(select_skip_check)
+        # Check 10 (optional): SQL transformation statements skipped as a SELECT
+        if OptionalCheck.SKIPPED_SELECTS in optional_checks:
+            all_checks.append(self._check_skipped_selects(config, connectivity_checks))
+        else:
+            all_checks.append(_optional_check_not_run(OptionalCheck.SKIPPED_SELECTS))
 
         # Build summary
         total = len(all_checks)
@@ -523,6 +556,7 @@ class DoctorService:
                 "check": "skipped_selects",
                 "name": name,
                 "status": "skip",
+                "optional": True,
                 "message": "No connected project to check.",
             }
 
@@ -558,6 +592,7 @@ class DoctorService:
                 "check": "skipped_selects",
                 "name": name,
                 "status": status,
+                "optional": True,
                 "message": (
                     f"No SQL transformation statement starts with SELECT in "
                     f"{len(connected)} project(s).{unread}"
@@ -582,6 +617,7 @@ class DoctorService:
             "check": "skipped_selects",
             "name": name,
             "status": "warn",
+            "optional": True,
             "message": (
                 f"{len(findings)} statement(s) in {len(configs_hit)} SQL transformation(s) "
                 f"start with SELECT, so the runtime skips them without running them."
@@ -812,3 +848,16 @@ class DoctorService:
             return (1, Version(name.lstrip("v")), "")
         except InvalidVersion:
             return (0, None, name)
+
+
+def _optional_check_not_run(check: OptionalCheck) -> dict[str, Any]:
+    """The ``skip`` entry a plain doctor shows for an optional check."""
+    command = f"kbagent doctor --check {check.value}"
+    return {
+        "check": check.value.replace("-", "_"),
+        "name": f"Optional check '{check.value}'",
+        "status": "skip",
+        "optional": True,
+        "command": command,
+        "message": f"Not run. Checks {OPTIONAL_CHECK_PURPOSE[check]} Run: {command}",
+    }

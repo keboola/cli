@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 
 from ... import __version__
 from ...changelog import CHANGELOG, get_changelog
+from ...services.doctor_service import OptionalCheck
 from ..dependencies import ServiceRegistry, get_registry
 
 router = APIRouter(tags=["health"])
@@ -75,6 +76,11 @@ def changelog(limit: int | None = None) -> dict[str, Any]:
 
 
 @router.get("/doctor", summary="Run health diagnostics")
-def doctor(registry: ServiceRegistry = Depends(get_registry)) -> dict[str, Any]:
+def doctor(
+    check: list[OptionalCheck] = Query(
+        default=[], description="Optional checks to run as well (`doctor --check`)."
+    ),
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
     """Run kbagent doctor health checks."""
-    return registry.doctor.run_checks()
+    return registry.doctor.run_checks(tuple(dict.fromkeys(check)))
