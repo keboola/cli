@@ -261,10 +261,10 @@ def test_a_forked_child_owns_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
 
 def test_a_directory_without_keboola_gets_no_lock_folder(tmp_path: Path) -> None:
-    """``create=False``: a command run in the wrong place leaves nothing behind."""
-    from keboola_agent_cli.sync.dir_lock import sync_dir_lock
+    """UNLOCKED: a command run in a plain directory leaves nothing behind."""
+    from keboola_agent_cli.sync.dir_lock import UNLOCKED, sync_dir_lock
 
-    with sync_dir_lock(tmp_path, create=False):
+    with sync_dir_lock(tmp_path, outside=UNLOCKED):
         pass
     assert not (tmp_path / ".keboola").exists()
 
@@ -516,3 +516,117 @@ def test_clone_into_a_lock_only_target_clones(tmp_path: Path, tmp_config_dir: Pa
     with sync_dir_lock(world.clone_dir):
         pass
     assert world.clone()["status"] == "cloned"
+
+
+# ---------------------------------------------------------------------------
+# Review round 1: a directory that is not a sync tree yet (items 1, 6)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("operation", "body_start"),
+    [
+        ("diff", "load_project_manifest"),
+        ("push", "_reconcile_saved_promote_links"),
+        ("status", "load_manifest"),
+        ("branch_status", "_branch_status"),
+        ("branch_unlink", "_branch_unlink"),
+        ("branch_link", "_branch_link"),
+    ],
+)
+def test_a_tree_operation_outside_a_sync_tree_stops_before_its_body(
+    ws: Workspace, monkeypatch: pytest.MonkeyPatch, operation: str, body_start: str
+) -> None:
+    """Item 1: no `.keboola/` -> the "no manifest" error first; the body never runs unlocked.
+
+    Before, the body ran unlocked, so a first `sync pull` starting in the same
+    directory meanwhile was not serialized with it.
+    """
+    from keboola_agent_cli.services import sync_service as module
+
+    entered: list[str] = []
+
+    def body_ran(*_: Any, **__: Any) -> Any:
+        entered.append(body_start)
+        raise FileNotFoundError("the body ran")
+
+    monkeypatch.setattr(module, body_start, body_ran)
+    svc = ws.service()
+    calls = {
+        "diff": lambda: svc.diff(alias="prod", project_root=ws.root),
+        "push": lambda: svc.push(alias="prod", project_root=ws.root),
+        "status": lambda: svc.status(project_root=ws.root),
+        "branch_status": lambda: svc.branch_status(project_root=ws.root),
+        "branch_unlink": lambda: svc.branch_unlink(project_root=ws.root),
+        "branch_link": lambda: svc.branch_link(alias="prod", project_root=ws.root),
+    }
+    with pytest.raises(FileNotFoundError) as caught:
+        calls[operation]()
+    assert entered == []
+    assert "manifest" in str(caught.value).lower()
+    assert not (ws.root / ".keboola").exists()
+
+
+def test_config_new_into_a_plain_directory_keeps_its_scaffold_when_a_pull_starts(
+    tmp_path: Path,
+) -> None:
+    """Item 1: a directory that was no sync tree when config new started stays unlocked.
+
+    A first `sync pull` that starts there after the POST takes the lock; the
+    scaffold placement must not then fail busy, or the created config would
+    have no local files.
+    """
+    store = _store(tmp_path)
+    out = tmp_path / "plain"
+    out.mkdir()
+    holders: list[Any] = []
+    config_service = MagicMock()
+
+    def create_then_a_pull_starts(**_: Any) -> dict[str, Any]:
+        holder = held_by_other_process(out)
+        holder.__enter__()
+        holders.append(holder)
+        return {"id": "12345", "name": "new", "branch_id": None, "configuration": None}
+
+    config_service.create_config.side_effect = create_then_a_pull_starts
+    component_service = MagicMock()
+    component_service.generate_scaffold.return_value = {
+        "component_id": "keboola.ex-http",
+        "directory": "extractor/keboola.ex-http/new",
+        "files": [{"path": "_config.yml", "content": "name: new\n"}],
+    }
+    args = ["--json", "config", "new", "--component-id", "keboola.ex-http", "--project", "prod"]
+    args += ["--name", "new", "--push", "--output-dir", str(out)]
+    try:
+        with (
+            patch("keboola_agent_cli.cli.ConfigStore") as mock_store,
+            patch("keboola_agent_cli.cli.ProjectService") as mock_projects,
+            patch("keboola_agent_cli.cli.ComponentService") as mock_components,
+            patch("keboola_agent_cli.cli.ConfigService") as mock_configs,
+            patch("keboola_agent_cli.cli.SyncService") as mock_sync,
+        ):
+            mock_store.return_value = store
+            mock_projects.return_value = ProjectService(config_store=store)
+            mock_components.return_value = component_service
+            mock_configs.return_value = config_service
+            mock_sync.return_value = SyncService(config_store=store)
+            result = runner.invoke(app, args)
+    finally:
+        for holder in holders:
+            holder.__exit__(None, None, None)
+    assert result.exit_code == 0, result.output
+    assert (out / "extractor/keboola.ex-http/new/_config.yml").exists()
+
+
+def test_clone_into_an_unrelated_directory_leaves_no_lock_there(
+    ws: Workspace, tmp_path: Path
+) -> None:
+    """Item 6: the target is checked before its lock folder is created."""
+    ws.init_and_pull()
+    target = tmp_path / "unrelated"
+    target.mkdir()
+    (target / "notes.txt").write_text("mine", encoding="utf-8")
+    with pytest.raises(FileNotFoundError):
+        ws.service().clone_project(source=ws.root, target_alias="prod", target_dir=target)
+    assert not (target / ".keboola").exists()
+    assert [p.name for p in target.iterdir()] == ["notes.txt"]

@@ -144,6 +144,11 @@ def clone_project(
     # The source is read as one snapshot and the target is written by this
     # clone alone: source lock while the tree is prepared, target lock for
     # the whole clone (L5). Taken in that order; a failure releases both.
+    # An existing directory that is neither fresh nor a clone is refused
+    # before its lock folder is created there (item 6); _prepare_target checks
+    # again under the lock.
+    if not is_fresh_target(target_path):
+        load_manifest(target_path)
     target_hold = contextlib.ExitStack()
     with sync_dir_lock(source_dir):
         target_hold.enter_context(sync_dir_lock(target_path))

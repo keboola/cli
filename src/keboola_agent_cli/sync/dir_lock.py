@@ -45,6 +45,7 @@ from filelock import Timeout
 
 from ..constants import KEBOOLA_DIR_NAME
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
+from .manifest import load_manifest
 from .self_ignore import IGNORE_FILENAME, SelfIgnoreError, ensure_self_ignore
 
 if sys.platform == "win32":
@@ -65,6 +66,8 @@ class _Hold:
 
 
 _owner = threading.local()
+# The stand-in lock of a directory entered UNLOCKED (no sync tree yet).
+_UNLOCKED = object()
 
 
 def _holds() -> dict[Path, _Hold]:
@@ -140,14 +143,27 @@ def _acquire(root: Path) -> Any:
     return lock
 
 
+# What a directory without ``.keboola/`` (no sync tree yet) gets (L5):
+# CREATE takes the lock and creates the folder (init, pull: they make the tree);
+# REFUSE raises the "no manifest" error before the block runs (status, diff,
+# push, branch-*: they need a tree, and a body that ran unlocked would not be
+# serialized with a first pull starting there meanwhile);
+# UNLOCKED runs the block without the OS lock (config new / rename writing into
+# a plain directory): the decision holds for the whole command, so a nested
+# call never fails busy half-way -- but a first `sync pull` started into that
+# directory at the same moment is not serialized with it.
+CREATE = "create"
+REFUSE = "refuse"
+UNLOCKED = "unlocked"
+
+
 @contextlib.contextmanager
-def sync_dir_lock(project_root: Path | str, *, create: bool = True) -> Iterator[None]:
+def sync_dir_lock(project_root: Path | str, *, outside: str = CREATE) -> Iterator[None]:
     """Hold the lock of *project_root* for the ``with`` block (L1-L4).
 
-    The thread that already holds the tree just nests. With ``create=False`` a
-    directory that has no ``.keboola/`` is not a sync tree and gets none: the
-    block runs unlocked (it fails on the missing manifest), and no folder is
-    left behind by a command run in the wrong place.
+    The thread that already holds the tree -- or entered it UNLOCKED -- just
+    nests. *outside* decides for a directory that has no ``.keboola/`` yet:
+    :data:`CREATE`, :data:`REFUSE` or :data:`UNLOCKED`.
     """
     root = Path(project_root).resolve()
     holds = _holds()
@@ -159,19 +175,20 @@ def sync_dir_lock(project_root: Path | str, *, create: bool = True) -> Iterator[
         finally:
             hold.depth -= 1
         return
-    if not create and not (root / KEBOOLA_DIR_NAME).is_dir():
-        yield
-        return
-    lock = _acquire(root)
+    no_tree = outside != CREATE and not (root / KEBOOLA_DIR_NAME).is_dir()
+    if no_tree and outside == REFUSE:
+        load_manifest(root)  # raises the "no manifest" FileNotFoundError
+    lock: Any = _UNLOCKED if no_tree and outside == UNLOCKED else _acquire(root)
     holds[root] = _Hold(lock=lock, depth=1)
     try:
         yield
     finally:
         del holds[root]
-        lock.release()
+        if lock is not _UNLOCKED:
+            lock.release()
 
 
-def locks_tree[F: Callable[..., Any]](*, create: bool) -> Callable[[F], F]:
+def locks_tree[F: Callable[..., Any]](*, outside: str) -> Callable[[F], F]:
     """Run a method under the lock of its ``project_root`` argument (L5)."""
 
     def decorate(method: F) -> F:
@@ -180,7 +197,7 @@ def locks_tree[F: Callable[..., Any]](*, create: bool) -> Callable[[F], F]:
         @functools.wraps(method)
         def locked(*args: Any, **kwargs: Any) -> Any:
             root = signature.bind(*args, **kwargs).arguments["project_root"]
-            with sync_dir_lock(root, create=create):
+            with sync_dir_lock(root, outside=outside):
                 return method(*args, **kwargs)
 
         return cast(F, locked)

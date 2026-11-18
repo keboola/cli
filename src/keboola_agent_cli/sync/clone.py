@@ -61,9 +61,11 @@ def is_fresh_target(target_dir: Path) -> bool:
     lives in ``.keboola/lock/`` -- so a target that holds only that folder is
     still a fresh one.
     """
-    if not target_dir.exists():
-        return True
+    if not target_dir.is_dir():
+        return not target_dir.exists()
     keboola = target_dir / KEBOOLA_DIR_NAME
+    if not keboola.is_dir():
+        return False
     return [p.name for p in target_dir.iterdir()] == [KEBOOLA_DIR_NAME] and [
         p.name for p in keboola.iterdir()
     ] == [LOCK_DIR]

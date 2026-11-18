@@ -28,7 +28,7 @@ from ..services.component_service import (
 from ..services.config_service import validate_set_paths
 from ..services.variables_service import variables_preview
 from ..sync.branch_registry import default_branch_prefix
-from ..sync.dir_lock import sync_dir_lock
+from ..sync.dir_lock import UNLOCKED, sync_dir_lock
 from ._all_projects import (
     FANOUT_PROJECT_HELP,
     AllProjectsOption,
@@ -1451,7 +1451,10 @@ def _hold_output_dir(
     A directory without ``.keboola/`` is no sync tree and is not locked.
     """
     try:
-        ctx.with_resource(sync_dir_lock(output_dir, create=False))
+        # A plain directory (no .keboola/) runs unlocked for the whole command,
+        # so the scaffold placement after the POST never fails busy. A first
+        # `sync pull` started into that directory meanwhile is not serialized.
+        ctx.with_resource(sync_dir_lock(output_dir, outside=UNLOCKED))
     except ConfigError as exc:
         formatter.error(
             message=exc.message, error_code=getattr(exc, "error_code", ErrorCode.CONFIG_ERROR)

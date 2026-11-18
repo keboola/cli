@@ -61,7 +61,7 @@ from ..sync.config_format import (
     local_row_to_api,
 )
 from ..sync.diff_engine import compute_changeset, compute_row_changeset, config_hash
-from ..sync.dir_lock import locks_tree
+from ..sync.dir_lock import CREATE, REFUSE, UNLOCKED, locks_tree
 from ..sync.git_utils import get_default_branch, is_git_repo
 from ..sync.manifest import (
     Manifest,
@@ -350,7 +350,7 @@ class SyncService(BaseService):
     # init
     # ------------------------------------------------------------------
 
-    @locks_tree(create=True)
+    @locks_tree(outside=CREATE)
     def init_sync(
         self,
         alias: str,
@@ -480,7 +480,7 @@ class SyncService(BaseService):
     # pull
     # ------------------------------------------------------------------
 
-    @locks_tree(create=True)
+    @locks_tree(outside=CREATE)
     def pull(
         self,
         alias: str,
@@ -991,7 +991,7 @@ class SyncService(BaseService):
     # status
     # ------------------------------------------------------------------
 
-    @locks_tree(create=False)
+    @locks_tree(outside=REFUSE)
     def status(self, project_root: Path) -> dict[str, Any]:
         """Compare local state against the manifest to detect changes.
 
@@ -1073,7 +1073,7 @@ class SyncService(BaseService):
     # diff
     # ------------------------------------------------------------------
 
-    @locks_tree(create=False)
+    @locks_tree(outside=REFUSE)
     def diff(
         self,
         alias: str,
@@ -1446,7 +1446,7 @@ class SyncService(BaseService):
     # push
     # ------------------------------------------------------------------
 
-    @locks_tree(create=False)
+    @locks_tree(outside=REFUSE)
     def push(
         self,
         alias: str,
@@ -1978,7 +1978,7 @@ class SyncService(BaseService):
     # branch mapping
     # ------------------------------------------------------------------
 
-    @locks_tree(create=False)
+    @locks_tree(outside=REFUSE)
     def branch_link(
         self,
         alias: str,
@@ -1989,12 +1989,12 @@ class SyncService(BaseService):
         """Link the current git branch to a Keboola dev branch (see ``_sync_branch``)."""
         return _branch_link(self, alias, project_root, branch_id, branch_name)
 
-    @locks_tree(create=False)
+    @locks_tree(outside=REFUSE)
     def branch_unlink(self, project_root: Path) -> dict[str, Any]:
         """Remove the branch mapping for the current git branch (see ``_sync_branch``)."""
         return _branch_unlink(project_root)
 
-    @locks_tree(create=False)
+    @locks_tree(outside=REFUSE)
     def branch_status(self, project_root: Path) -> dict[str, Any]:
         """Show the branch mapping status for the current git branch (see ``_sync_branch``)."""
         return _branch_status(project_root)
@@ -2130,7 +2130,7 @@ class SyncService(BaseService):
             logger.warning("%s %s", config_file, parsed.problem)
         return parsed.data
 
-    @locks_tree(create=False)
+    @locks_tree(outside=UNLOCKED)
     def register_branch_dir(
         self,
         alias: str,
@@ -2145,7 +2145,7 @@ class SyncService(BaseService):
         projects = self.resolve_projects([alias])
         return register_branch_dir(projects[alias], project_root, branch_id, self._client_factory)
 
-    @locks_tree(create=False)
+    @locks_tree(outside=UNLOCKED)
     def resolve_scaffold_placement(
         self,
         alias: str,
