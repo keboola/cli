@@ -1788,9 +1788,9 @@ kbagent notification clone [--project ALIAS] --subscription-id ID [--component-i
 # notification WRITE path (since 0.91.0, #690): the group is no longer read-only.
 #   --address carries the email address (--channel email) OR the webhook URL (--channel webhook) --
 #   channel-discriminated on the wire, same as the read path's single `address` column. An invalid
-#   --channel is a structured INVALID_ARGUMENT, exit 2. `create` WITHOUT --branch sends no branch.id
-#   filter; the Notification Service then stores the default branch's id itself (production only,
-#   like the UI; verified live).
+#   --channel is a structured INVALID_ARGUMENT, exit 2. `create` WITHOUT --branch and without a
+#   branch.id --filter sends no branch.id filter; the Notification Service then stores the default
+#   branch's id itself (production only, like the UI; verified live).
 #   --overtime-percent N (#989): whole percent 1-10000, only for job-processing-long /
 #   phase-job-processing-long (else INVALID_ARGUMENT, exit 2, before any API call); writes the UI's
 #   "job runs longer than usual" filter {field: durationOvertimePercentage, value: N/100,
@@ -1811,8 +1811,9 @@ kbagent notification clone [--project ALIAS] --subscription-id ID [--component-i
 #   flow's configuration JSON, so `flow detail` / `config detail` never showed them. The in-flow
 #   `type: "notification"` TASK is a different mechanism and stays visible there.
 #   Event names are kebab-case (job-failed, job-succeeded, job-succeeded-with-warning,
-#   job-processing-long + phase-job-* variants); --event is NOT validated (the API declares
-#   EventName as an open string). The service ACCEPTS ?event= and then IGNORES it (200 + the
+#   job-processing-long + phase-job-* variants); kbagent does NOT validate --event, the service
+#   checks it against its event registry on create and refuses an unknown one; on list a misspelled
+#   event just matches nothing. The service ACCEPTS ?event= and then IGNORES it (200 + the
 #   full list, verified live), so kbagent sends it AND narrows client-side -- a direct API
 #   caller must do the same or get a superset. Filter fields are dotted paths into the event
 #   payload (job.component.id, job.configuration.id, branch.id, phase.id) -- --component-id /

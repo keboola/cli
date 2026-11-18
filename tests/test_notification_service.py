@@ -22,6 +22,7 @@ from __future__ import annotations
 import copy
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
 
 from keboola_agent_cli.errors import ConfigError, KeboolaApiError
@@ -1911,3 +1912,187 @@ class TestCloneSubscription:
         client = _clone_client()
         with pytest.raises(ConfigError):
             _make_service(client).clone_subscription("nope", "500")
+
+
+# ---------------------------------------------------------------------------
+# Review findings on #989 (Astra): every case is INVALID_ARGUMENT or an
+# uncertain-outcome error, never a crash or a silent fallback.
+# ---------------------------------------------------------------------------
+
+
+class TestNormalizeFiltersNeverCrashes:
+    @pytest.mark.parametrize("operator", [[], {}, 5, (">=",)])
+    def test_non_string_operator_is_invalid_argument(self, operator: object) -> None:
+        with pytest.raises(KeboolaApiError) as exc_info:
+            normalize_filters([{"field": "x", "operator": operator, "value": 1}])
+        assert _code(exc_info.value) == "INVALID_ARGUMENT"
+
+    def test_non_string_extra_key_is_invalid_argument(self) -> None:
+        with pytest.raises(KeboolaApiError) as exc_info:
+            normalize_filters([{"field": "x", "value": 1, 7: 2}])
+        assert _code(exc_info.value) == "INVALID_ARGUMENT"
+        assert "7" in exc_info.value.message
+
+
+class TestCloneOvertimeTypeCheckedFirst:
+    @pytest.mark.parametrize("bad", ["50", True, 50.0, 0, 10001])
+    def test_bad_overtime_is_invalid_argument_before_any_call(self, bad: object) -> None:
+        client = _clone_client()
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            _make_service(client).clone_subscription(
+                "prod",
+                "500",
+                overtime_percent=bad,  # type: ignore[arg-type]
+            )
+
+        assert _code(exc_info.value) == "INVALID_ARGUMENT"
+        client.get_project_subscription.assert_not_called()
+        client.create_project_subscription.assert_not_called()
+
+
+class TestCloneSourceWithoutFilters:
+    @pytest.mark.parametrize("missing", ["absent", "null"])
+    def test_missing_or_null_filters_refuse_the_clone(self, missing: str) -> None:
+        source = copy.deepcopy(CLONE_SOURCE)
+        if missing == "absent":
+            del source["filters"]
+        else:
+            source["filters"] = None
+        client = _clone_client(source)
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            _make_service(client).clone_subscription("prod", "500", config_id="222")
+
+        assert _code(exc_info.value) == "INVALID_ARGUMENT"
+        assert "500" in exc_info.value.message
+        assert "create" in exc_info.value.message
+        client.create_project_subscription.assert_not_called()
+
+    def test_empty_filter_list_is_copied_as_project_wide(self) -> None:
+        source = copy.deepcopy(CLONE_SOURCE)
+        source["filters"] = []
+        client = _clone_client(source)
+
+        result = _make_service(client).clone_subscription("prod", "500")
+
+        assert client.create_project_subscription.call_count == 1
+        assert _posted(client)[2] is None
+        assert result["filters_kept"] == []
+
+
+_TRANSPORT_ERRORS = [
+    httpx.RemoteProtocolError("peer closed connection"),
+    httpx.ReadError("read failed"),
+    httpx.WriteError("write failed"),
+]
+
+
+class TestUnwrappedTransportErrorOnCreatePost:
+    @pytest.mark.parametrize("error", _TRANSPORT_ERRORS)
+    def test_create_says_not_to_rerun(self, error: Exception) -> None:
+        client = MagicMock()
+        client.create_project_subscription.side_effect = error
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            _make_service(client).create_subscription(
+                "prod", event="job-failed", channel="email", address="ops@example.com"
+            )
+
+        assert client.create_project_subscription.call_count == 1
+        assert exc_info.value.retryable is False
+        assert "notification list" in exc_info.value.message
+        assert "re-run" in exc_info.value.message
+
+    @pytest.mark.parametrize("error", _TRANSPORT_ERRORS)
+    def test_clone_says_not_to_rerun(self, error: Exception) -> None:
+        client = _clone_client()
+        client.create_project_subscription.side_effect = error
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            _make_service(client).clone_subscription("prod", "500", config_id="222")
+
+        assert client.create_project_subscription.call_count == 1
+        assert exc_info.value.retryable is False
+        assert "notification list" in exc_info.value.message
+        assert "re-run" in exc_info.value.message
+
+
+class TestEmptyValuesAreNotOmitted:
+    @pytest.mark.parametrize(
+        ("kwargs", "option"),
+        [
+            ({"component_id": ""}, "--component-id"),
+            ({"config_id": ""}, "--config-id"),
+            ({"config_id": "  "}, "--config-id"),
+        ],
+    )
+    def test_create_refuses_an_empty_dedicated_id(self, kwargs: dict, option: str) -> None:
+        client = MagicMock()
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            _make_service(client).create_subscription(
+                "prod", event="job-failed", channel="email", address="ops@example.com", **kwargs
+            )
+
+        assert _code(exc_info.value) == "INVALID_ARGUMENT"
+        assert option in exc_info.value.message
+        client.create_project_subscription.assert_not_called()
+
+    def test_empty_config_id_does_not_bypass_the_conflict_check(self) -> None:
+        client = MagicMock()
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            _make_service(client).create_subscription(
+                "prod",
+                event="job-failed",
+                channel="email",
+                address="ops@example.com",
+                config_id="",
+                filters=[parse_filter_expression("job.configuration.id=5")],
+            )
+
+        assert _code(exc_info.value) == "INVALID_ARGUMENT"
+        client.create_project_subscription.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("kwargs", "option"),
+        [({"component_id": ""}, "--component-id"), ({"config_id": ""}, "--config-id")],
+    )
+    def test_clone_refuses_an_empty_dedicated_id(self, kwargs: dict, option: str) -> None:
+        client = _clone_client()
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            _make_service(client).clone_subscription("prod", "500", **kwargs)
+
+        assert _code(exc_info.value) == "INVALID_ARGUMENT"
+        assert option in exc_info.value.message
+        client.get_project_subscription.assert_not_called()
+        client.create_project_subscription.assert_not_called()
+
+    @pytest.mark.parametrize("empty", ["", "   "])
+    def test_create_refuses_an_empty_expiry(self, empty: str) -> None:
+        client = MagicMock()
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            _make_service(client).create_subscription(
+                "prod",
+                event="job-failed",
+                channel="email",
+                address="ops@example.com",
+                expires_at=empty,
+            )
+
+        assert _code(exc_info.value) == "INVALID_ARGUMENT"
+        assert "--expires-at" in exc_info.value.message
+        client.create_project_subscription.assert_not_called()
+
+    def test_clone_refuses_an_empty_expiry_instead_of_inheriting(self) -> None:
+        client = _clone_client()
+
+        with pytest.raises(KeboolaApiError) as exc_info:
+            _make_service(client).clone_subscription("prod", "500", expires_at="")
+
+        assert _code(exc_info.value) == "INVALID_ARGUMENT"
+        assert "--expires-at" in exc_info.value.message
+        client.create_project_subscription.assert_not_called()

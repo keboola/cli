@@ -101,7 +101,8 @@ def normalize_filters(raw: list[Any] | None) -> list[dict[str, Any]]:
             raise _invalid(
                 f"Invalid filter {item!r}: expected an object {{field, operator, value}}."
             )
-        extra = sorted(set(item) - _ALLOWED_KEYS)
+        # Keys of any type: a direct caller may pass ``{7: 2}``.
+        extra = sorted(repr(key) for key in item if key not in _ALLOWED_KEYS)
         if extra:
             raise _invalid(f"Invalid filter {item!r}: unknown key(s) {', '.join(extra)}.")
         field_path = item.get("field")
@@ -118,7 +119,13 @@ def normalize_filters(raw: list[Any] | None) -> list[dict[str, Any]]:
             )
         entry: dict[str, Any] = {"field": field_path}
         if "operator" in item and item["operator"] is not None:
-            operator = _OPERATOR_ALIASES.get(item["operator"], item["operator"])
+            raw_operator = item["operator"]
+            # Type first: an unhashable operator (a list) must not reach the dict lookup.
+            operator = (
+                _OPERATOR_ALIASES.get(raw_operator, raw_operator)
+                if isinstance(raw_operator, str)
+                else None
+            )
             if operator not in FILTER_OPERATORS:
                 raise _invalid(
                     f"Filter on '{field_path}' has an unknown operator {item['operator']!r}: use one of ==, =, <, <=, >, >=."
@@ -171,18 +178,20 @@ def check_incoming_filters(
         seen.add(key)
 
 
-def validate_source_filters(subscription_id: str, filters: object) -> list[dict[str, Any]]:
+def validate_source_filters(subscription_id: str, source: dict[str, Any]) -> list[dict[str, Any]]:
     """Return a source subscription's filters, refusing a shape a clone cannot copy.
 
     Unknown fields, an omitted operator and a null value are legal and are
-    kept verbatim. A non-list, a non-dict entry, an entry without a string
-    ``field`` or without a ``value`` key cannot be copied faithfully.
+    kept verbatim; ``filters: []`` (a project-wide subscription) is copied as
+    empty. A MISSING or null ``filters`` key is refused, not read as ``[]``:
+    copying it as "no filters" would create an alert that fires for every
+    job. So are a non-list, a non-dict entry, and an entry without a string
+    ``field`` or without a ``value`` key.
 
     Raises:
         KeboolaApiError: ``INVALID_ARGUMENT`` naming the subscription.
     """
-    if filters is None:
-        return []
+    filters = source.get("filters")
     refusal = _invalid(
         f"Subscription {subscription_id} has filters kbagent cannot copy "
         f"({filters!r}). Recreate it with `kbagent notification create` instead."

@@ -63,8 +63,9 @@ kbagent --json notification create --project P --event job-processing-long \
   There is no CLI workaround; tell the user to set the threshold in the
   Flow Builder, or to upgrade.
 - `--channel webhook` takes the URL in `--address`.
-- Without `--branch` the service stores the default branch's id, so the
-  alert fires for production jobs only. Pass `--branch ID` for a dev branch.
+- Without `--branch` (and without a `--filter 'branch.id=...'`) the service
+  stores the default branch's id, so the alert fires for production jobs
+  only. Pass `--branch ID` for a dev branch.
 - `create` is not idempotent: every call adds a subscription. Run step 1
   first and do not create a second identical one.
 
@@ -135,7 +136,8 @@ kbagent --json notification clone --project P --subscription-id ID \
   subscription instead.
 - The branch is kept as the source has it. `branch use` does not change it;
   pass `--branch ID` to move the alert to another branch.
-- A `phase.id` filter is copied too, and the result warns: that phase id
+- A `phase.id` filter is copied too. When you override `--config-id` or
+  `--component-id` (and not `phase.id`), the result warns: that phase id
   belongs to the old flow. Pass `--filter 'phase.id=NEW_PHASE'` or create a
   new subscription.
 - `--address` alone keeps the source channel. The source expiry is kept,

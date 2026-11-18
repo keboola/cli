@@ -37,6 +37,8 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
 
+import httpx
+
 from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError, request_outcome_unknown
 from ..models import ProjectConfig
@@ -182,6 +184,15 @@ def _validate_overtime_percent(event: str, overtime_percent: object) -> None:
             ),
             error_code=ErrorCode.INVALID_ARGUMENT,
         )
+    _validate_overtime_value(overtime_percent)
+
+
+def _validate_overtime_value(overtime_percent: object) -> None:
+    """Refuse a non-integer (booleans included) or out-of-range threshold.
+
+    Raises:
+        KeboolaApiError: ``INVALID_ARGUMENT`` naming ``--overtime-percent``.
+    """
     if (
         isinstance(overtime_percent, bool)
         or not isinstance(overtime_percent, int)
@@ -289,11 +300,38 @@ def _incoming_filters(
         KeboolaApiError: ``INVALID_ARGUMENT`` for a malformed filter, a dedicated
             option and a filter on the same field, or a repeated field+operator.
     """
+    # An explicit empty ID is not "omitted": it would silently skip the filter
+    # (and the conflict check below), so it is refused.
+    for option, value in (("--component-id", component_id), ("--config-id", config_id)):
+        if value is not None and not str(value).strip():
+            raise KeboolaApiError(
+                message=f"{option} is empty. Give an ID, or leave the option out.",
+                error_code=ErrorCode.INVALID_ARGUMENT,
+            )
+    # Type and range before _build_filters divides it (a string would raise
+    # TypeError there). The event check needs the event, so callers run it.
+    if overtime_percent is not None:
+        _validate_overtime_value(overtime_percent)
     generic = normalize_filters(filters)
     check_incoming_filters(
         _dedicated_options(component_id, config_id, branch_id, overtime_percent), generic
     )
     return _build_filters(component_id, config_id, branch_id, overtime_percent) + generic
+
+
+_OUTCOME_UNKNOWN_HINT = (
+    "The subscription may have been created anyway: do not re-run this command; "
+    "check `kbagent notification list` first."
+)
+
+
+def _validate_expires_at(expires_at: str | None) -> None:
+    """Refuse an explicit empty expiry: it is not "omitted" (create) or "inherit" (clone)."""
+    if expires_at is not None and not expires_at.strip():
+        raise KeboolaApiError(
+            message="--expires-at is empty. Give an ISO-8601 time, or leave the option out.",
+            error_code=ErrorCode.INVALID_ARGUMENT,
+        )
 
 
 def _create_or_explain(
@@ -311,14 +349,23 @@ def _create_or_explain(
     """
     try:
         return client.create_project_subscription(event, recipient, filters, expires_at)
+    except (httpx.RemoteProtocolError, httpx.ReadError, httpx.WriteError) as exc:
+        # Transport failures the HTTP layer does not wrap: the request may have
+        # reached the service, so the outcome is unknown, like a lost 5xx.
+        raise KeboolaApiError(
+            message=(
+                f"The connection failed while creating the subscription ({type(exc).__name__}). "
+                f"{_OUTCOME_UNKNOWN_HINT}"
+            ),
+            error_code=ErrorCode.CONNECTION_ERROR,
+            retryable=False,
+            details={"outcome_unknown": True},
+        ) from exc
     except KeboolaApiError as exc:
         if not request_outcome_unknown(exc):
             raise
         raise KeboolaApiError(
-            message=(
-                f"{exc.message} The subscription may have been created anyway: do not "
-                "re-run this command; check `kbagent notification list` first."
-            ),
+            message=f"{exc.message} {_OUTCOME_UNKNOWN_HINT}",
             status_code=exc.status_code,
             error_code=exc.error_code,
             retryable=False,
@@ -627,6 +674,7 @@ class NotificationService(BaseService):
         """
         if overtime_percent is not None:
             _validate_overtime_percent(event, overtime_percent)
+        _validate_expires_at(expires_at)
         wire_filters = _incoming_filters(
             component_id, config_id, branch_id, overtime_percent, filters
         )
@@ -856,6 +904,7 @@ class NotificationService(BaseService):
                 message=f"Invalid --channel '{channel}'. Valid channels: {', '.join(VALID_CHANNELS)}.",
                 error_code=ErrorCode.INVALID_ARGUMENT,
             )
+        _validate_expires_at(expires_at)
         if expires_at is not None and clear_expires_at:
             raise KeboolaApiError(
                 message="--expires-at and --clear-expires-at exclude each other.",
@@ -873,7 +922,7 @@ class NotificationService(BaseService):
             event = str(source.get("event", ""))
             if overtime_percent is not None:
                 _validate_overtime_percent(event, overtime_percent)
-            source_filters = validate_source_filters(str(subscription_id), source.get("filters"))
+            source_filters = validate_source_filters(str(subscription_id), source)
             merge = merge_filters(source_filters, incoming)
 
             raw_recipient = source.get("recipient")
@@ -899,7 +948,12 @@ class NotificationService(BaseService):
                     )
                 recipient = _build_recipient(new_channel, address)
 
-            new_expires = None if clear_expires_at else (expires_at or source.get("expiresAt"))
+            if clear_expires_at:
+                new_expires = None
+            elif expires_at is not None:
+                new_expires = expires_at
+            else:
+                new_expires = source.get("expiresAt")
             warnings = _clone_warnings(merge.filters, incoming, component_id, config_id)
             report: dict[str, Any] = {
                 "project_alias": alias,

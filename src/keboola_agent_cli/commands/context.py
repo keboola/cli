@@ -1369,8 +1369,9 @@ explicit Storage config version, never the empty shell the create writes.
     (--channel email) or the webhook URL (--channel webhook) -- the wire shape
     is channel-discriminated, the CLI takes one flag either way. An invalid
     --channel is a structured INVALID_ARGUMENT, exit 2.
-    WITHOUT --branch kbagent sends no branch.id filter; the Notification
-    Service stores the default branch's id itself (production only).
+    WITHOUT --branch (and without a --filter 'branch.id=...') kbagent sends
+    no branch.id filter; the Notification Service stores the default
+    branch's id itself (production only).
     --overtime-percent N: the "job runs longer than usual" threshold, a whole
     percent 1-10000 (50 = 50 % longer), only for job-processing-long and
     phase-job-processing-long (else INVALID_ARGUMENT, exit 2). Rows carry
@@ -1405,7 +1406,8 @@ explicit Storage config version, never the empty shell the create writes.
     verbatim. Without --branch the source's branch.id is kept (the active
     branch is NOT applied). --address alone keeps the channel; --channel needs
     --address; expiry inherited unless --expires-at / --clear-expires-at.
-    Warnings: copied phase.id on another flow; no branch filter. No prompt,
+    Warnings: a copied phase.id when --config-id/--component-id is
+    overridden and phase.id is not; no branch filter. No prompt,
     and EVERY run creates one more subscription: --dry-run first (one read,
     returns `planned`), ask the user, then run once. After a lost response
     check `notification list` before re-running.
