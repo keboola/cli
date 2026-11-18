@@ -75,6 +75,17 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+# What to do about a change made in Keboola after push read it (#827, PR #1005
+# review). A plain `sync pull` keeps locally modified files, so it does not
+# bring the remote change in and the next push conflicts again.
+RESOLVE_STEPS = (
+    "A plain `kbagent sync pull` keeps your locally modified files, so it does not resolve "
+    "this. Either run `kbagent sync diff` and merge the remote change into the local files "
+    "by hand, or copy your local changes aside, run `kbagent sync pull --theirs` (it "
+    "discards every local change in this tree), re-apply your edit, then push again."
+)
+
+
 @dataclass(frozen=True)
 class SentUpdate:
     """The fields one config PUT sends; a 412 is verified against exactly these."""
@@ -219,8 +230,7 @@ def update_if_unchanged(
             message=(
                 f"{component_id}/{config_id} was not updated: it changed in Keboola after this "
                 f"push read it at version {expected_version} (the config or one of its rows was "
-                "edited). The local files and the manifest were left as they are. Run "
-                "`kbagent sync pull` for this branch, review the changes, then push again."
+                f"edited). The local files and the manifest were left as they are. {RESOLVE_STEPS}"
             ),
             status_code=exc.status_code,
             error_code=ErrorCode.SYNC_CONFLICT,

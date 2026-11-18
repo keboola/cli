@@ -127,8 +127,11 @@ pitfall 2.2.
 5. **Never retry `sync push` blindly after `SYNC_CONFLICT`** *(since vNEXT, #827)*.
    A config (or its rows) changed in Keboola after push read it, so push left
    it alone. A re-run gives the same answer or, worse, a person resolves it by
-   overwriting the UI edit. Fail the job, then `kbagent sync pull`, review the
-   change, commit, and push again. `SYNC_LOCAL_FILE_CHANGED` means a file of the
+   overwriting the UI edit. Fail the job, then merge the remote change by hand
+   (`kbagent sync diff`) -- a plain `kbagent sync pull` keeps the locally
+   modified config -- or copy the local change aside, run
+   `kbagent sync pull --project ALIAS --theirs`, re-apply it, commit, and push
+   again. `SYNC_LOCAL_FILE_CHANGED` means a file of the
    tree changed while push read it: in CI something else writes the checkout --
    fix that, then re-run. A `warnings[]` entry `LOCAL_EDIT_DURING_PUSH` means
    the same during the update: run `kbagent sync diff` after the job.

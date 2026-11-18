@@ -207,6 +207,29 @@ def test_a_conflict_leaves_the_file_the_manifest_and_later_phases_alone(
     assert api.script(cid) == ["SELECT 'ui'"]
 
 
+def test_a_conflict_names_steps_that_resolve_it(ws: Workspace, api: FakeStorage) -> None:
+    """PR #1005 review: a plain pull keeps the local edit, so it never resolves a conflict.
+
+    The message names `sync diff` (merge by hand) or `pull --theirs` + re-apply;
+    following the second path pushes the local edit on top of the UI edit.
+    """
+    cid, d = _pulled(ws, api)
+    ws.edit_description(d, "local")
+    api.on("update_config", "before", lambda _cid: api.ui_edit(cid, ["SELECT 'ui'"]))
+    message = ws.push()["errors"][0]["message"]
+
+    assert "kbagent sync diff" in message
+    assert "kbagent sync pull --theirs" in message
+    assert "plain `kbagent sync pull` keeps" in message
+    # The advised path: pull --theirs, re-apply the edit, push.
+    ws.pull(theirs=True)
+    ws.edit_description(d, "local")
+    result = ws.push()
+    assert result["errors"] == [], result
+    assert api.configs[cid]["description"] == "local"
+    assert api.script(cid) == ["SELECT 'ui'"]
+
+
 # --------------------------------------------------------------------- D6, R9
 
 

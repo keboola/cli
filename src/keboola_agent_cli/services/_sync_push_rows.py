@@ -47,6 +47,7 @@ from ._sync_push_create import (
 from ._sync_push_ops import push_row_change
 from ._sync_push_update import (
     PUT_RESPONSE,
+    RESOLVE_STEPS,
     ParentWrite,
     config_error_code,
     held_row_error,
@@ -119,8 +120,7 @@ def _blocked(
             f"Row not pushed: its configuration {component_id}/{parent_id} {why}. Nothing was "
             "written for this row; its files and manifest entry are unchanged. Row writes "
             "take no version precondition, so push does not write rows of a configuration "
-            "it cannot prove unchanged. Run `kbagent sync diff` and merge the remote change "
-            "into the local files, then push again."
+            f"it cannot prove unchanged. {RESOLVE_STEPS}"
         ),
     }
 
