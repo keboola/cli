@@ -19,6 +19,7 @@ from ..ai_client import AiServiceClient
 from ..config_store import ConfigStore
 from ..constants import (
     CONFIG_STATE_MAX_BYTES,
+    KEBOOLA_DIR_NAME,
     ROOT_LEVEL_CONFIG_COMPONENTS,
 )
 from ..effective_branch import record_branch, resolve_branch
@@ -27,7 +28,7 @@ from ..json_utils import compute_diff, deep_merge, find_matches_in_json, set_nes
 from ..models import ComponentDetail, ProjectConfig
 from ..sync.branch_scope import entry_tree
 from ..sync.code_extraction import normalize_blocks_codes_script
-from ..sync.dir_lock import UNLOCKED, sync_dir_lock
+from ..sync.dir_lock import sync_dir_lock
 from ..sync.manifest import load_manifest, save_manifest
 from ..sync.naming import sanitize_name
 from ._config_clone import clone_config_method
@@ -1286,11 +1287,14 @@ class ConfigService(BaseService):
             ConfigError: If the alias is not found.
             KeboolaApiError: If the API call fails.
         """
-        # A sync tree it renames in is locked before the remote rename (L5). A
-        # plain directory runs unlocked; a first pull into it meanwhile is not
-        # serialized (and the rename finds no manifest there anyway).
+        # A sync tree it renames in is locked before the remote rename (L5).
+        # Decided once: a directory that is no sync tree now is never read or
+        # written as one, not even when a first pull creates a manifest there
+        # meanwhile (#827 round 2).
+        if directory is not None and not (directory / KEBOOLA_DIR_NAME).is_dir():
+            directory = None
         tree_lock: AbstractContextManager[None] = (
-            sync_dir_lock(directory, outside=UNLOCKED) if directory else nullcontext()
+            sync_dir_lock(directory) if directory else nullcontext()
         )
         with tree_lock:
             projects = self.resolve_projects([alias])

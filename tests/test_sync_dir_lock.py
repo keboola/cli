@@ -630,3 +630,127 @@ def test_clone_into_an_unrelated_directory_leaves_no_lock_there(
         ws.service().clone_project(source=ws.root, target_alias="prod", target_dir=target)
     assert not (target / ".keboola").exists()
     assert [p.name for p in target.iterdir()] == ["notes.txt"]
+
+
+# ---------------------------------------------------------------------------
+# Review round 2: decided once per command (A), an empty clone target (B)
+# ---------------------------------------------------------------------------
+
+
+def _pulled_manifest(root: Path) -> bytes:
+    """What a first `sync pull` into *root* leaves: a manifest with a tracked config."""
+    import json as _json
+
+    (root / ".keboola").mkdir(parents=True, exist_ok=True)
+    manifest = {
+        "version": 2,
+        "project": {"id": 258, "apiHost": "connection.keboola.com"},
+        "naming": {},
+        "branches": [{"id": 10, "path": "main"}],
+        "configurations": [
+            {"branchId": 10, "componentId": "keboola.ex-http", "id": "777", "path": "ex/old"}
+        ],
+    }
+    path = root / ".keboola" / "manifest.json"
+    path.write_text(_json.dumps(manifest), encoding="utf-8")
+    (root / "main" / "ex" / "old").mkdir(parents=True)
+    return path.read_bytes()
+
+
+def test_config_new_into_a_plain_directory_never_touches_a_manifest_a_pull_writes(
+    tmp_path: Path,
+) -> None:
+    """Round 2, A: a folder that was no sync tree when the command started stays plain.
+
+    A first `sync pull` initialises the folder after the POST; config new must
+    not load or save that manifest (registering its branch over the pull's
+    entries), and writes its scaffold flat, as into any plain folder.
+    """
+    store = _store(tmp_path)
+    out = tmp_path / "plain"
+    out.mkdir()
+    pulled: list[bytes] = []
+    config_service = MagicMock()
+
+    def create_then_a_pull_writes(**_: Any) -> dict[str, Any]:
+        pulled.append(_pulled_manifest(out))
+        return {"id": "12345", "name": "new", "branch_id": 20, "configuration": None}
+
+    config_service.create_config.side_effect = create_then_a_pull_writes
+    component_service = MagicMock()
+    component_service.generate_scaffold.return_value = {
+        "component_id": "keboola.ex-http",
+        "directory": "extractor/keboola.ex-http/new",
+        "files": [{"path": "_config.yml", "content": "name: new\n"}],
+    }
+    client = MagicMock()
+    client.__enter__ = MagicMock(return_value=client)
+    client.__exit__ = MagicMock(return_value=False)
+    client.list_dev_branches.return_value = [{"id": 20, "name": "dev-x"}]
+    args = ["--json", "config", "new", "--component-id", "keboola.ex-http", "--project", "prod"]
+    args += ["--name", "new", "--push", "--branch", "20", "--output-dir", str(out)]
+    with (
+        patch("keboola_agent_cli.cli.ConfigStore") as mock_store,
+        patch("keboola_agent_cli.cli.ProjectService") as mock_projects,
+        patch("keboola_agent_cli.cli.ComponentService") as mock_components,
+        patch("keboola_agent_cli.cli.ConfigService") as mock_configs,
+        patch("keboola_agent_cli.cli.SyncService") as mock_sync,
+    ):
+        mock_store.return_value = store
+        mock_projects.return_value = ProjectService(config_store=store)
+        mock_components.return_value = component_service
+        mock_configs.return_value = config_service
+        mock_sync.return_value = SyncService(config_store=store, client_factory=lambda u, t: client)
+        result = runner.invoke(app, args)
+
+    assert result.exit_code == 0, result.output
+    assert (out / ".keboola" / "manifest.json").read_bytes() == pulled[0]
+    assert (out / "extractor/keboola.ex-http/new/_config.yml").exists()
+    client.list_dev_branches.assert_not_called()
+
+
+def test_config_rename_into_a_plain_directory_never_touches_a_manifest_a_pull_writes(
+    tmp_path: Path,
+) -> None:
+    """Round 2, A: rename decides at its start; a manifest a pull writes meanwhile is left alone."""
+    from keboola_agent_cli.services.config_service import ConfigService
+
+    store = _store(tmp_path)
+    out = tmp_path / "plain"
+    out.mkdir()
+    pulled: list[bytes] = []
+    client = MagicMock()
+    client.get_config_detail.return_value = {"id": "777", "name": "Old"}
+
+    def renamed_then_a_pull_writes(**_: Any) -> dict[str, Any]:
+        pulled.append(_pulled_manifest(out))
+        return {"id": "777", "name": "New"}
+
+    client.update_config.side_effect = renamed_then_a_pull_writes
+    service = ConfigService(config_store=store, client_factory=lambda u, t: client)
+
+    result = service.rename_config(
+        alias="prod",
+        component_id="keboola.ex-http",
+        config_id="777",
+        name="New",
+        directory=out,
+    )
+
+    assert "sync" not in result
+    assert "sync_skipped" not in result
+    assert (out / ".keboola" / "manifest.json").read_bytes() == pulled[0]
+    assert (out / "main" / "ex" / "old").is_dir()
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_clone_into_an_existing_empty_directory_clones(
+    tmp_path: Path, tmp_config_dir: Path, dry_run: bool
+) -> None:
+    """Round 2, B: an empty target folder is a fresh target, as before the lock."""
+    from test_sync_clone_links import World
+
+    world = World(tmp_path, tmp_config_dir)
+    world.clone_dir.mkdir()
+    result = world.clone(dry_run=dry_run)
+    assert result["status"] == ("dry_run" if dry_run else "cloned"), result

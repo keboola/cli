@@ -148,10 +148,11 @@ def _acquire(root: Path) -> Any:
 # REFUSE raises the "no manifest" error before the block runs (status, diff,
 # push, branch-*: they need a tree, and a body that ran unlocked would not be
 # serialized with a first pull starting there meanwhile);
-# UNLOCKED runs the block without the OS lock (config new / rename writing into
-# a plain directory): the decision holds for the whole command, so a nested
-# call never fails busy half-way -- but a first `sync pull` started into that
-# directory at the same moment is not serialized with it.
+# UNLOCKED runs the block without the OS lock (the scaffold placement of a
+# direct SDK call into a plain directory, which then reads no manifest). The
+# decision holds for the thread's whole block. `config new --output-dir` and
+# `config rename --directory` decide before they start instead: a folder that
+# is no sync tree then is never read or written as one (#827 round 2).
 CREATE = "create"
 REFUSE = "refuse"
 UNLOCKED = "unlocked"

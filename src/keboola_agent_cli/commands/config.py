@@ -27,8 +27,8 @@ from ..services.component_service import (
 )
 from ..services.config_service import validate_set_paths
 from ..services.variables_service import variables_preview
-from ..sync.branch_registry import default_branch_prefix
-from ..sync.dir_lock import UNLOCKED, sync_dir_lock
+from ..sync.branch_registry import ScaffoldPlacement, default_branch_prefix
+from ..sync.dir_lock import sync_dir_lock
 from ._all_projects import (
     FANOUT_PROJECT_HELP,
     AllProjectsOption,
@@ -1304,9 +1304,12 @@ def config_new(
             raise typer.Exit(code=exit_code) from None
 
     # A sync tree the files go into is locked before the remote create (L5):
-    # a busy tree fails here, before anything exists in Keboola.
+    # a busy tree fails here, before anything exists in Keboola. Decided once:
+    # a folder that is no sync tree now stays a plain folder for the whole
+    # command (#827 round 2).
+    sync_tree = False
     if output_dir and not (push and dry_run):
-        _hold_output_dir(ctx, formatter, Path(output_dir), project)
+        sync_tree = _hold_output_dir(ctx, formatter, Path(output_dir), project)
 
     # ── Push path: also create remotely via Storage API ──────────────────────
     if push:
@@ -1352,10 +1355,14 @@ def config_new(
         # before it is read.
         if output_dir and scaffold is not None and not dry_run:
             created_id = str(push_result.get("id") or "")
-            placement = get_service(ctx, "sync_service").resolve_scaffold_placement(
-                alias=project or "",
-                project_root=Path(output_dir),
-                branch_id=push_result.get("branch_id"),
+            placement = (
+                get_service(ctx, "sync_service").resolve_scaffold_placement(
+                    alias=project or "",
+                    project_root=Path(output_dir),
+                    branch_id=push_result.get("branch_id"),
+                )
+                if sync_tree
+                else ScaffoldPlacement(None)  # a plain folder: flat, no manifest touched
             )
             pushed_body = push_result.get("configuration")
             if created_id and config_body is not None and isinstance(pushed_body, dict):
@@ -1414,7 +1421,7 @@ def config_new(
             scaffold,
             output_dir,
             json_mode=formatter.json_mode,
-            branch_prefix=_detect_branch_prefix(Path(output_dir)),
+            branch_prefix=_detect_branch_prefix(Path(output_dir)) if sync_tree else None,
         )
     else:
         # Print scaffold content
@@ -1445,16 +1452,19 @@ def config_new(
 
 def _hold_output_dir(
     ctx: typer.Context, formatter: Any, output_dir: Path, project: str | None
-) -> None:
+) -> bool:
     """Hold the directory lock of a sync tree until the command ends (L5).
 
-    A directory without ``.keboola/`` is no sync tree and is not locked.
+    Returns whether *output_dir* is a sync tree. A directory without
+    ``.keboola/`` when the command starts is a plain folder for the whole
+    command: not locked, and its manifest is never read or written -- not even
+    one a first `sync pull` creates there meanwhile (#827 round 2). The
+    scaffold goes there flat; that pull is not serialized with it.
     """
+    if not (output_dir / KEBOOLA_DIR_NAME).is_dir():
+        return False
     try:
-        # A plain directory (no .keboola/) runs unlocked for the whole command,
-        # so the scaffold placement after the POST never fails busy. A first
-        # `sync pull` started into that directory meanwhile is not serialized.
-        ctx.with_resource(sync_dir_lock(output_dir, outside=UNLOCKED))
+        ctx.with_resource(sync_dir_lock(output_dir))
     except ConfigError as exc:
         formatter.error(
             message=exc.message, error_code=getattr(exc, "error_code", ErrorCode.CONFIG_ERROR)
@@ -1463,6 +1473,7 @@ def _hold_output_dir(
     except KeboolaApiError as exc:
         emit_api_error(formatter, exc, project=project or "")
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
+    return True
 
 
 def _scaffold_target_dir(output_dir: str, branch_prefix: str | None, scaffold_dir: str) -> Path:

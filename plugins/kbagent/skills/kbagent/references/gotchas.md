@@ -172,7 +172,7 @@ These lists keep `error`, because their entries are not failed items with an err
 - **The lock needs a local disk.** On a network drive (NFS, SMB) the OS lock may not exclude a run on another machine. A folder kbagent cannot create or lock (read-only disk, `.keboola/lock` that is a file or a link out of the project) is `CONFIG_ERROR`, exit 5, naming the lock file -- never `SYNC_DIRECTORY_BUSY`.
 - **`sync clone`:** the target must not be the source, inside it, or contain it (`CONFIG_ERROR`). A target that holds only `.keboola/lock/` (a clone that stopped before its copy) is still a fresh target; the source's lock folder is never copied. An existing target that is neither empty-but-locked nor a clone is refused before any lock folder is created in it.
 - **`sync status` / `diff` / `push` / `branch-*` in a folder without `.keboola/`** stop with the missing-manifest error before they do anything, and leave nothing behind.
-- **`config new --output-dir` / `config rename --directory` into a plain folder (no `.keboola/`)** take no lock, for the whole command. A first `sync pull` started into that same folder at the same moment is not serialized with them: do not run the two at once there.
+- **`config new --output-dir` / `config rename --directory` into a plain folder (no `.keboola/` when the command starts)** treat it as a plain folder for the whole command: no lock, no manifest read or written, the scaffold written flat (rename: no local folder rename). A first `sync pull` started into that folder at the same moment keeps its manifest intact, but the scaffold then sits flat in its tree: run `sync pull` before such a `config new`, not during it.
 
 ## `sync push` checks a configuration's version before it writes its rows
 
