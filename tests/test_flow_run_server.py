@@ -202,3 +202,18 @@ def test_comma_in_selector_is_400(tmp_path: Path, body: dict[str, Any]) -> None:
     assert res.status_code == 400, res.text
     assert res.json()["error"]["code"] == "INVALID_ARGUMENT"
     client.create_job.assert_not_called()
+
+
+def test_loop_selection_is_400_before_any_job(tmp_path: Path) -> None:
+    """A selection the job queue refuses is a 400 with no job created, dry run or not."""
+    client = _client()
+    configuration = json.loads(json.dumps(CONFIGURATION))
+    configuration["phases"][2]["next"] = [{"id": "back", "goto": "p2"}]
+    client.get_config_detail.return_value = {"id": "01flow", "configuration": configuration}
+    app = _app(tmp_path, client)
+    for body in ({"task_ids": ["tf"]}, {"task_ids": ["tf"], "dry_run": True}):
+        res = _post(app, body)
+        assert res.status_code == 400, res.text
+        assert res.json()["error"]["code"] == "INVALID_ARGUMENT"
+        assert "form a loop" in res.json()["error"]["message"]
+    client.create_job.assert_not_called()

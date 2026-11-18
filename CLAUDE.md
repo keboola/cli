@@ -1710,7 +1710,10 @@ kbagent flow run [--project NAME] --flow-id ID [--task-id T ...] [--from-phase-i
 #   PARTIAL_RUN_IGNORES_CONDITIONS); phases with an enabled task that are not on the default path and
 #   are reachable from it only through a conditional transition get CONDITIONAL_PHASES_SKIPPED.
 #   Blank/empty/comma selectors, unknown ids, a disabled task given by id, a task in an undefined
-#   phase and an empty selection are INVALID_ARGUMENT (exit 2) before any POST. The flow config is
+#   phase, an empty selection, a selected phase the first phase cannot reach and needed phases that
+#   form a loop are INVALID_ARGUMENT (exit 2) before any POST; a flow the job queue refuses for every
+#   run (repeated phase/task id, goto to an undefined phase, not exactly one first phase) is
+#   INVALID_FLOW_DEFINITION (exit 1), dry run too. The flow config is
 #   read once (selection + variables); the branch is resolved once (0 = production). --wait on a
 #   partial run adds task_results + failed_task_ids and exits 1 (payload first, SELECTED_TASK_FAILED)
 #   when a selected task did not succeed or is missing from result.tasks; the flow status alone can

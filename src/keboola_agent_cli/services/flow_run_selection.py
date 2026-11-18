@@ -8,8 +8,13 @@ The Queue API runs a subset of a flow when the job body carries
 does NOT evaluate transition conditions, chains the phases that hold a
 selected task one after another (routing-only phases run empty), keeps going
 after a failed task, and reports the status of the last phase as the flow
-status. Unselected variable tasks do not run. That is why every partial run
-carries the ``PARTIAL_RUN_IGNORES_CONDITIONS`` warning.
+status. Unselected tasks of every type (job, variable, notification) do not
+run. That is why every partial run carries the ``PARTIAL_RUN_IGNORES_CONDITIONS``
+warning.
+
+A flow or a selection the daemon refuses is refused here first, before the
+POST (``_structure_errors``, ``_run_order_errors``): otherwise a dry run
+reports success and the real job fails after it was created.
 
 ``--from-phase-id P`` expands to P plus the phases reached by following only
 the DEFAULT transition of each phase: the single ``next[]`` entry without a
@@ -19,6 +24,7 @@ condition can lead somewhere other than the default.
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
@@ -158,12 +164,143 @@ def _phases_by_id(configuration: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def _tasks(configuration: dict[str, Any]) -> list[dict[str, Any]]:
-    """The tasks with an id, one per id: a malformed config with a repeated id keeps the first."""
-    unique: dict[str, dict[str, Any]] = {}
-    for task in configuration.get("tasks") or []:
-        if isinstance(task, dict) and task.get("id") is not None:
-            unique.setdefault(str(task["id"]), task)
-    return list(unique.values())
+    """The tasks with an id (a repeated id is refused first, by ``_structure_errors``)."""
+    return [
+        task
+        for task in configuration.get("tasks") or []
+        if isinstance(task, dict) and task.get("id") is not None
+    ]
+
+
+# ---------------------------------------------------------------------------
+# What the job-queue daemon refuses. Ported from keboola/job-queue-daemon:
+# FlowContainerTypeHandler::checkPhaseAndTaskIds and Flow::getFirstPhaseId for
+# every flow run, SelectedTasksFlowRewriter for a run with onlyFlowTaskIds.
+# Refusing the same flows here, before the POST, means a dry run never reports
+# a run the daemon fails after the job was created.
+# ---------------------------------------------------------------------------
+
+
+def _phase_list(configuration: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        phase
+        for phase in configuration.get("phases") or []
+        if isinstance(phase, dict) and phase.get("id") is not None
+    ]
+
+
+def _edges(configuration: dict[str, Any]) -> dict[str, list[str]]:
+    """Phase id -> its distinct ``goto`` targets in ``next[]`` order, conditional ones too."""
+    edges: dict[str, list[str]] = {}
+    for phase in _phase_list(configuration):
+        targets = [str(t["goto"]) for t in _transitions(phase) if t.get("goto") is not None]
+        edges[str(phase["id"])] = _dedupe(targets)
+    return edges
+
+
+def _repeated(values: list[str]) -> list[str]:
+    counts = Counter(values)
+    return [value for value in _dedupe(values) if counts[value] > 1]
+
+
+def _structure_errors(configuration: dict[str, Any]) -> tuple[list[str], str | None]:
+    """The reasons the daemon refuses ANY run of this flow, and its first phase.
+
+    Repeated phase or task ids, a ``goto`` to a phase the flow does not
+    define, and not exactly one phase that no transition goes to (the
+    daemon's "Flow must have exactly one first step").
+    """
+    errors: list[str] = []
+    phase_ids = [str(phase["id"]) for phase in _phase_list(configuration)]
+    task_ids = [str(task["id"]) for task in _tasks(configuration)]
+    if repeated := _repeated(phase_ids):
+        errors.append(f"repeated phase id(s): {', '.join(repeated)}")
+    if repeated := _repeated(task_ids):
+        errors.append(f"repeated task id(s): {', '.join(repeated)}")
+    edges = _edges(configuration)
+    unknown = _dedupe(t for targets in edges.values() for t in targets if t not in edges)
+    if unknown:
+        errors.append(
+            f"transition(s) go to phase(s) the flow does not define: {', '.join(unknown)}"
+        )
+    incoming = {target for targets in edges.values() for target in targets}
+    roots = [pid for pid in edges if pid not in incoming]
+    if len(roots) != 1:
+        found = ", ".join(roots) if roots else "none"
+        errors.append(
+            "the flow must have exactly one first phase (a phase no transition goes to); "
+            f"found: {found}"
+        )
+    return errors, roots[0] if len(roots) == 1 else None
+
+
+def _reachable(start: str, edges: dict[str, list[str]]) -> list[str]:
+    """Phase ids reachable from ``start`` over every transition, ``start`` included (BFS)."""
+    visited = [start]
+    queue = [start]
+    while queue:
+        for target in edges.get(queue.pop(0), []):
+            if target not in visited:
+                visited.append(target)
+                queue.append(target)
+    return visited
+
+
+def _shortest_path(start: str, goal: str, edges: dict[str, list[str]]) -> list[str]:
+    """The phases after ``start`` on the shortest route to ``goal``; config order breaks ties."""
+    if start == goal:
+        return []
+    previous: dict[str, str] = {}
+    queue = [start]
+    while queue and goal not in previous:
+        current = queue.pop(0)
+        for target in edges.get(current, []):
+            if target != start and target not in previous:
+                previous[target] = current
+                queue.append(target)
+    path: list[str] = []
+    phase_id = goal
+    while phase_id != start:
+        path.insert(0, phase_id)
+        phase_id = previous[phase_id]
+    return path
+
+
+def _run_order_errors(
+    edges: dict[str, list[str]], root: str, selected_phase_ids: list[str]
+) -> list[str]:
+    """The reasons the daemon refuses this selection (SelectedTasksFlowRewriter).
+
+    A phase with a selected task that the first phase cannot reach; or kept
+    phases (the first phase plus the shortest route to each selected phase)
+    that cannot be put in one order because they reach each other (a loop).
+    """
+    reachable = set(_reachable(root, edges))
+    unreachable = [pid for pid in selected_phase_ids if pid not in reachable]
+    if unreachable:
+        names = ", ".join(unreachable)
+        return [
+            f"phase(s) with a selected task cannot be reached from the first phase '{root}': {names}"
+        ]
+    kept = [root]
+    for pid in selected_phase_ids:
+        kept.extend(step for step in _shortest_path(root, pid, edges) if step not in kept)
+    reach = {pid: set(_reachable(pid, edges)) for pid in kept}
+    pending = [pid for pid in edges if pid != root and pid in kept]
+    while pending:
+        ready = next(
+            (
+                pid
+                for pid in pending
+                if not any(other != pid and pid in reach[other] for other in pending)
+            ),
+            None,
+        )
+        if ready is None:
+            loop = ", ".join(pending)
+            return [f"the phases needed to reach the selected tasks form a loop ({loop})"]
+        pending.remove(ready)
+    return []
 
 
 def _transitions(phase: dict[str, Any]) -> list[dict[str, Any]]:
@@ -285,6 +422,19 @@ def select_flow_tasks(
             a malformed default transition, or an empty final selection.
     """
     check_selector_values(task_ids, from_phase_id)
+    structure, root = _structure_errors(configuration)
+    if structure:
+        # The flow itself is broken, not the selection: the code flow new/update use.
+        raise KeboolaApiError(
+            message=(
+                "The job queue would refuse this flow, so it was not started: "
+                + "; ".join(structure)
+                + ". Fix the flow (kbagent flow detail shows it)."
+            ),
+            status_code=400,
+            error_code=ErrorCode.INVALID_FLOW_DEFINITION,
+            retryable=False,
+        )
     phases = _phases_by_id(configuration)
     tasks = _tasks(configuration)
     if task_ids is None and from_phase_id is None:
@@ -329,6 +479,12 @@ def select_flow_tasks(
         errors.append(f"task(s) in a phase that the flow does not define: {', '.join(orphans)}")
     if not errors and not selected:
         errors.append("the selection is empty (every task it names is disabled or missing)")
+    if not errors and root is not None:
+        errors.extend(
+            _run_order_errors(
+                _edges(configuration), root, _dedupe(view["phase_id"] for view in selected)
+            )
+        )
     if errors:
         raise _invalid("Cannot select the tasks of this flow run: " + "; ".join(errors) + ".")
 
@@ -365,7 +521,8 @@ def selection_warnings(selection: FlowRunSelection) -> list[FlowWarning]:
                 "A partial flow run does not evaluate transition conditions: every selected "
                 "task runs, phase after phase, also after a task failed; routing-only phases "
                 "may run empty; the flow status is the status of the last phase and can hide "
-                "a failed task; unselected variable tasks do not run."
+                "a failed task; only the selected tasks run, so unselected tasks of every "
+                "type (job, variable, notification) do not run."
             ),
         )
     ]

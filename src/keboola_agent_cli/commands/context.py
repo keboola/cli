@@ -1172,7 +1172,8 @@ explicit Storage config version, never the empty shell the create writes.
         {status:"error", error:{code:"QUEUE_JOB_FAILED", retryable:false, details:{job_id, logTail:[...]}}}
       - exit 4 (QUEUE_JOB_TIMEOUT, local timeout + remote kill failed or unconfirmed):
         {status:"error", error:{code:"QUEUE_JOB_TIMEOUT", retryable:false, details:{job_id, logTail:[...]}}}
-      - exit 7 (JOB_TIMEOUT_TERMINATED, local timeout + remote kill succeeded):
+      - exit 7 (JOB_TIMEOUT_TERMINATED, local timeout + kill accepted, or the job was
+        already finished; details.job.status is the last status seen, may be `terminating`):
         {status:"error", error:{code:"JOB_TIMEOUT_TERMINATED", retryable:false, details:{job_id, job:{...}, logTail:[...]}}}
       - any other error after the job was created (connection error, 5xx, exhausted retries while
         polling): code and exit code as usual, retryable:false, details.job_id. The job may still be
@@ -2951,7 +2952,7 @@ _FOOTER = """\
        out while the server job keeps running
   5    Configuration error (corrupt config, missing alias)
   6    Permission denied (operation blocked by policy)
-  7    Job timed out and was cancelled (JOB_TIMEOUT_TERMINATED)
+  7    Job timed out and a kill was accepted (JOB_TIMEOUT_TERMINATED)
   130  Interrupted (Ctrl-C)
 
 When you receive a non-zero exit code, use --json to get structured error details.

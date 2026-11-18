@@ -225,8 +225,8 @@ task list.
 - **Every selected task runs, even after a failure.** A failed task does not
   stop the run.
 - **Tasks you select on both arms of an if/else both run**, one after the other.
-- **Unselected tasks do not run at all**, notification and variable tasks
-  included: no alert is sent unless its task is selected, and variables that an
+- **Only the selected tasks run.** Unselected tasks of every type (job,
+  variable, notification) do not run at all: no alert is sent unless its task is selected, and variables that an
   unselected variable task would set are not set (jobs fall back to their
   component's own variable values).
 - **The flow job's status is the status of its last phase**, so it can say
@@ -266,14 +266,25 @@ before any job is created, when:
   `skipped_disabled_task_ids`); a selected task's phase does not exist; nothing
   is left to run. These are listed together in one message;
 - the `--from-phase-id` path meets a malformed default transition (see above).
-  Only that path is checked: a `--task-id`-only run does not look at the
-  transitions.
+- *(since vNEXT)* the job queue would refuse the selection: a phase with a
+  selected task cannot be reached from the flow's first phase, or the phases
+  the run needs reach each other (a loop: a partial run cannot enter a phase
+  twice). kbagent runs the job queue's own check, so a `--dry-run` that
+  succeeds is a run the queue accepts.
 
-A cycle on the default path is not an error: kbagent stops there and sets
-`selection.default_path_cycle: true`. Whether the server accepts the run (a
-loop, a selected phase not reachable from the first phase) is decided by the
-Queue API, whose error comes back unchanged. A whole-flow run (no selector)
-skips all of this.
+*(since vNEXT)* Every run, whole or partial, `--dry-run` included, fails with
+`INVALID_FLOW_DEFINITION`, exit 1, before any job is created when the flow
+itself is one the job queue refuses: a repeated phase id or task id (also a
+disabled one), a transition to a phase the flow does not define, or not
+exactly one first phase (a phase no transition goes to; a transition back to
+the first phase leaves none). Fix the flow; `flow validate` does not check
+all of these. Before vNEXT the dry run said yes and the job failed after it
+was created.
+
+A cycle on the default path that stays inside one phase (a phase retrying
+itself) is not an error: kbagent stops there and sets
+`selection.default_path_cycle: true`. A whole-flow run checks only the flow
+rules above; its conditions decide the rest.
 
 ### Result
 

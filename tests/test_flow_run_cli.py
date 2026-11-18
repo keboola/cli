@@ -596,3 +596,47 @@ class TestFixRound1:
         assert "could run" in text
         assert "conditions decide" in text
         assert "would run" not in text
+
+
+class TestDaemonRefusalsBeforePost:
+    """A flow or selection the job queue refuses is refused before the POST, dry run too."""
+
+    @staticmethod
+    def _repeated_task_id() -> dict[str, Any]:
+        configuration = json.loads(json.dumps(FLOW_CONFIGURATION))
+        configuration["tasks"].append(dict(configuration["tasks"][2], phase="p1"))
+        return configuration
+
+    @staticmethod
+    def _loop() -> dict[str, Any]:
+        configuration = json.loads(json.dumps(FLOW_CONFIGURATION))
+        # pfail goes back to p2: p2 and pfail reach each other.
+        configuration["phases"][3]["next"] = [{"id": "back", "goto": "p2"}]
+        return configuration
+
+    @pytest.mark.parametrize("extra", [[], ["--dry-run"], ["--task-id", "t1"]])
+    def test_repeated_task_id_is_a_broken_flow(self, tmp_path: Path, extra: list[str]) -> None:
+        client = _client(self._repeated_task_id())
+        result = _run(_store(tmp_path), client, [*BASE, *extra])
+        assert result.exit_code == 1, result.output
+        error = _json(result)["error"]
+        assert error["code"] == ErrorCode.INVALID_FLOW_DEFINITION
+        assert "repeated task id(s): t3" in error["message"]
+        client.create_job.assert_not_called()
+
+    @pytest.mark.parametrize("extra", [[], ["--dry-run"]])
+    def test_loop_selection_exits_2(self, tmp_path: Path, extra: list[str]) -> None:
+        client = _client(self._loop())
+        result = _run(_store(tmp_path), client, [*BASE, "--task-id", "tf", *extra])
+        assert result.exit_code == 2, result.output
+        error = _json(result)["error"]
+        assert error["code"] == ErrorCode.INVALID_ARGUMENT
+        assert "form a loop" in error["message"]
+        client.create_job.assert_not_called()
+
+    def test_whole_run_of_a_flow_with_a_loop_is_still_sent(self, tmp_path: Path) -> None:
+        """The daemon checks loops only for selected-task runs; conditions decide the rest."""
+        client = _client(self._loop())
+        result = _run(_store(tmp_path), client, BASE)
+        assert result.exit_code == 0, result.output
+        client.create_job.assert_called_once()
