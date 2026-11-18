@@ -1144,12 +1144,12 @@ def test_flows_get_schema_fetch_failure_is_502(tmp_path: Path) -> None:
     assert "no configurationSchema" in res.text
 
 
-def test_flows_create_drops_component_id(tmp_path: Path) -> None:
-    """POST /flows/{project} calls create_flow WITHOUT component_id.
+def test_flows_create_refuses_component_id(tmp_path: Path) -> None:
+    """POST /flows/{project} refuses the legacy component_id (spec V5).
 
-    Orchestrator support is dropped: FlowCreate has no component_id field, so
-    even a client that still sends one has it silently dropped (Pydantic
-    extra='ignore') and the service is never asked to target a component.
+    Orchestrator support is dropped and FlowCreate has no component_id field.
+    It used to be dropped silently (a client asking for keboola.orchestrator
+    got a keboola.flow); unknown fields are now a 422 and nothing is created.
     """
     flow_svc = MagicMock()
     flow_svc.create_flow.return_value = {"id": "999", "name": "My Flow"}
@@ -1164,17 +1164,17 @@ def test_flows_create_drops_component_id(tmp_path: Path) -> None:
                 "name": "My Flow",
                 "phases": _CF_PHASES,
                 "tasks": _CF_TASKS,
-                "component_id": "keboola.orchestrator",  # legacy field -> dropped
+                "component_id": "keboola.orchestrator",  # legacy field -> refused
             },
         )
 
-    assert res.status_code == 200, res.text
-    flow_svc.create_flow.assert_called_once()
-    assert "component_id" not in flow_svc.create_flow.call_args.kwargs
+    assert res.status_code == 422, res.text
+    assert "component_id" in res.text
+    flow_svc.create_flow.assert_not_called()
 
 
-def test_flows_update_drops_component_id(tmp_path: Path) -> None:
-    """PATCH /flows/{project}/{config_id} calls update_flow WITHOUT component_id."""
+def test_flows_update_refuses_component_id(tmp_path: Path) -> None:
+    """PATCH /flows/{project}/{config_id} refuses the legacy component_id (spec V5)."""
     flow_svc = MagicMock()
     flow_svc.update_flow.return_value = {"id": "999", "name": "Renamed"}
     registry = _mock_registry(flow=flow_svc)
@@ -1187,9 +1187,8 @@ def test_flows_update_drops_component_id(tmp_path: Path) -> None:
             json={"name": "Renamed", "component_id": "keboola.orchestrator"},
         )
 
-    assert res.status_code == 200, res.text
-    flow_svc.update_flow.assert_called_once()
-    assert "component_id" not in flow_svc.update_flow.call_args.kwargs
+    assert res.status_code == 422, res.text
+    flow_svc.update_flow.assert_not_called()
 
 
 def test_flows_delete_repeated_does_not_purge(tmp_path: Path) -> None:

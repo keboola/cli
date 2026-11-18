@@ -636,17 +636,42 @@ def _load_flow_yaml(inline: str | None, file: Path | None) -> dict[str, Any] | N
     """The flow definition of ``--definition`` (inline YAML/JSON) or ``--definition-file``.
 
     ``None`` when neither is given; ``-`` as the file is stdin (spec rule I1).
+
+    A definition that is given must carry one: an empty value, an empty or
+    comments-only file, a YAML ``null`` and a mapping with neither ``phases``
+    nor ``tasks`` are refused. Before, they created a flow with no phases, and
+    ``flow update --name X`` with such a file only renamed the flow.
     """
-    if not inline and file is None:
+    if inline is None and file is None:
         return None
-    parsed = structured_input(inline or None, file, label="--definition", allow_yaml=True)
+    parsed = structured_input(inline, file, label="--definition", allow_yaml=True)
     if parsed is None:
-        return {}
+        raise ValueError(
+            "the definition is empty. Pass a YAML/JSON object with 'phases' and 'tasks' "
+            "('kbagent flow schema' shows the format); omit --definition and "
+            "--definition-file to create an empty flow."
+        )
     if not isinstance(parsed, dict):
         raise ValueError(
             f"Flow definition must be a YAML/JSON object (mapping), got {type(parsed).__name__}"
         )
+    unknown = [str(key) for key in parsed if key not in _DEFINITION_KEYS]
+    if unknown or not parsed:
+        found = ", ".join(repr(str(key)) for key in parsed) or "none"
+        raise ValueError(
+            "a flow definition has only the keys 'phases' and 'tasks' (keys found: "
+            f"{found}). 'kbagent flow schema' shows the format."
+        )
+    nulls = [key for key in _DEFINITION_KEYS if key in parsed and parsed[key] is None]
+    if nulls:
+        raise ValueError(
+            f"'{nulls[0]}' is null. Give a list, or leave the key out to keep the current value."
+        )
     return parsed
+
+
+# The top-level keys of a flow definition document (`flow schema`).
+_DEFINITION_KEYS = ("phases", "tasks")
 
 
 @flow_app.command("new")
@@ -682,8 +707,10 @@ def flow_new(
     formatter = get_formatter(ctx)
     service = get_service(ctx, "flow_service")
 
-    phases: list[dict[str, Any]] = []
-    tasks: list[dict[str, Any]] = []
+    # None/None (no definition given) creates an empty flow; a given definition
+    # is validated, and one with no phases is refused (INVALID_FLOW_DEFINITION).
+    phases: list[dict[str, Any]] | None = None
+    tasks: list[dict[str, Any]] | None = None
 
     try:
         flow_def = _load_flow_yaml(definition, definition_file)

@@ -152,11 +152,39 @@ def validate_conditional_flow(
     ALWAYS run -- with or without a schema -- because the Storage API does not
     validate flow configurations server-side.
     """
+    shape = _shape_errors(phases, tasks)
+    if shape:
+        return shape
     if schema:
         structural = _structural_errors(phases, tasks, schema)
         if structural:
             return structural
+    if not phases:
+        # Checked here, not in the schema: a flow with no phases runs nothing,
+        # and `flow new --definition-file empty.yaml` used to create one.
+        return ["Flow definition has no phases"]
     return _semantic_errors(phases, tasks)
+
+
+def _shape_errors(phases: Any, tasks: Any) -> list[str]:
+    """The lists the semantic checks iterate are lists of objects.
+
+    Checked before the schema, so a malformed document gets an error instead
+    of a crash also when no schema could be fetched.
+    """
+    errors: list[str] = []
+    for name, items in (("phases", phases), ("tasks", tasks)):
+        if not isinstance(items, list):
+            errors.append(f"'{name}' must be a list, got {type(items).__name__}")
+        elif not all(isinstance(item, dict) for item in items):
+            errors.append(f"Every entry of '{name}' must be an object")
+    if errors:
+        return errors
+    for phase in phases:
+        nexts = phase.get("next", [])
+        if not isinstance(nexts, list) or not all(isinstance(t, dict) for t in nexts):
+            errors.append(f"Phase '{phase.get('id', '?')}': 'next' must be a list of objects")
+    return errors
 
 
 def find_unreachable_phases(phases: list[dict[str, Any]]) -> list[str]:
@@ -164,7 +192,7 @@ def find_unreachable_phases(phases: list[dict[str, Any]]) -> list[str]:
     list) by following next[].goto edges. WARNING-level only -- never blocks a
     write. Returns ids in the order they appear in ``phases``.
     """
-    if not phases:
+    if not phases or _shape_errors(phases, []):
         return []
     by_id = {str(p.get("id")): p for p in phases}
     entry = str(phases[0].get("id"))
