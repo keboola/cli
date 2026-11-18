@@ -55,14 +55,16 @@ def _write_yaml(path: Path, data: dict[str, Any]) -> None:
 
 
 def is_fresh_target(target_dir: Path) -> bool:
-    """True iff *target_dir* does not exist or holds nothing but its sync lock (L5).
+    """True iff *target_dir* does not exist, is empty, or holds nothing but its sync lock (L5).
 
     Clone takes the target's directory lock before it copies, and the lock
     lives in ``.keboola/lock/`` -- so a target that holds only that folder is
-    still a fresh one.
+    still a fresh one, like an empty one (#827 round 2).
     """
     if not target_dir.is_dir():
         return not target_dir.exists()
+    if not any(target_dir.iterdir()):
+        return True
     keboola = target_dir / KEBOOLA_DIR_NAME
     if not keboola.is_dir():
         return False
