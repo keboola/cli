@@ -1416,6 +1416,8 @@ kbagent sync push [--project ALIAS] [--all-projects] [--dry-run] [--force] [--al
 #   in git; per-thread ownership, the owner thread nests). A second run fails at once with
 #   SYNC_DIRECTORY_BUSY (exit 1, conflict, retryable, details.directory/lock_file), also per project
 #   under --all-projects; a lock kbagent cannot create is CONFIG_ERROR (exit 5). sync/dir_lock.py.
+#   A folder without .keboola/: status/diff/push/branch-* stop with the no-manifest error first
+#   (REFUSE); config new/rename into it run UNLOCKED for the whole command (CREATE: init/pull).
 #   Row precheck: push Phase B (services/_sync_push_rows.py) reads each parent before its first
 #   row write; a version other than the diff's parent_remote_version (or push's own PUT answer),
 #   a 412-readback update, a missing version or a failed read blocks its rows (errors[]
