@@ -554,4 +554,4 @@ CLI parity for the `/agents` REST surface. Reads/writes `<config_dir>/agents.jso
 | `KBAGENT_SERVE_TOKEN` | Bearer token for `kbagent serve` (paired with `KBAGENT_SERVE_URL`; auto-injected into scheduled-agent subprocesses) |
 
 ## Exit Codes
-`0` success, `1` general error, `2` usage or validation error, `3` auth error, `4` network error, `5` config error, `6` permission denied (permission policy), `7` job timed out and was cancelled (`JOB_TIMEOUT_TERMINATED`), `130` interrupted. Details: [gotchas.md](gotchas.md#exit-codes). The exit code and `error_type` of every error code: [docs/error-codes.md](https://github.com/keboola/cli/blob/main/docs/error-codes.md) (since 1.0.0).
+`0` success, `1` general error, `2` usage or validation error, `3` auth error, `4` network error, `5` config error, `6` permission denied (permission policy), `7` job timed out and a kill was accepted (`JOB_TIMEOUT_TERMINATED`; the job may still be `terminating`), `130` interrupted. Details: [gotchas.md](gotchas.md#exit-codes). The exit code and `error_type` of every error code: [docs/error-codes.md](https://github.com/keboola/cli/blob/main/docs/error-codes.md) (since 1.0.0).
