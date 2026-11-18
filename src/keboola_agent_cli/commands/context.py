@@ -1867,7 +1867,7 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
     ASK THE USER before ever passing --scope organization|targeted.
 
   semantic-layer edit metric|dataset|constraint|relationship|glossary ...
-    In-place PATCH of only the changed keys (same id, scope and grants).
+    In-place PATCH of only the keys passed (same id, scope and grants).
     Metric rename cascades through every constraint referencing the old name
     (each a PATCH of its metrics[] only); CODE_METRIC warning shown
     (re.sub(r"[^A-Z0-9]+", "_", name.upper()).strip("_")). The `rollback`
@@ -1882,7 +1882,7 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
     --new-metric ...`. Human-mode CLI prints a red `PARTIAL STATE` banner
     above the per-entry list. `edit_simple` (no-cascade variants) carries
     `partial_state: false, recovery_hint: null` for envelope uniformity.
-    Edits PATCH only the changed keys in place (a concurrent change to another
+    Edits PATCH only the keys passed, in place (a concurrent change to another
     key survives; import --overwrite / promote PUT the whole item): it keeps its id, scope,
     target-project grants (`scope get` below), pending elevation request and
     revision history -- editing an organization/targeted item never

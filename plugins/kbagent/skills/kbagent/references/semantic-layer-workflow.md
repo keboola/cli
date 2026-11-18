@@ -247,7 +247,7 @@ kbagent --json semantic-layer show --project prod --model core_model --type cons
 #    These joins WILL silently start returning empty rows otherwise.
 ```
 
-Edits are an in-place `PATCH` that carries only the keys you changed
+Edits are an in-place `PATCH` that carries only the keys you pass
 *(since vNEXT; before: a whole-record `PUT` that overwrote a concurrent change
 to another field)*, so if the update is refused (e.g. the new name collides)
 nothing was deleted and nothing needs rolling back -- the item is exactly as it
@@ -542,7 +542,7 @@ Quick reminders:
   top-level `data` keys it carries (under a row lock) and can also change the
   scope (never in the same request as `name`/`data`). Both are revisioned and
   in place. *(since vNEXT)* kbagent's `edit metric / dataset / relationship /
-  constraint / glossary` send a `PATCH` with only the changed keys (before: a
+  constraint / glossary` send a `PATCH` with only the keys you pass (before: a
   whole-record `PUT`); they keep the item's id, scope and grants.
   `import --overwrite` and `promote` keep the `PUT`. Same five types are
   available under `remove`.
