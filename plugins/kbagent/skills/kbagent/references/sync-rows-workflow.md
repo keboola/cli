@@ -247,6 +247,12 @@ not bounded (many rows, retries), so a UI edit in it is still overwritten --
 run `sync diff` right before the push and keep pushes short. See
 [sync-workflow.md](sync-workflow.md) "Row writes check the configuration's
 version first".
+*(since vNEXT, #827)* A row file is read once, like a config's: a file that
+changes while push reads it is not sent (`SYNC_LOCAL_FILE_CHANGED`, push
+again); one edited during the row's create or update is not written over
+(`warnings[]` `LOCAL_EDIT_DURING_PUSH`) and stays a local change, because the
+row's baseline is the hash of the bytes push wrote or sent, never a re-read.
+
 A row folder that pull is removing is recorded under `pendingRemovals` first;
 until a pull finishes the removal, diff and push never read it as a new row.
 

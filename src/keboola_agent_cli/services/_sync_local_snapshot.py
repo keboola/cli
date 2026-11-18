@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..constants import CONFIG_FILENAME
+from ..errors import ErrorCode, KeboolaApiError
 from ..sync.code_extraction import merge_code_files, owned_companions
 from ._sync_companions import current_companions
 from ._sync_disabled import file_disables
@@ -147,3 +148,45 @@ def local_edit_warning(
         "path": str(config_dir),
         "message": message,
     }
+
+
+def local_file_changed_error(config_dir: Path) -> KeboolaApiError:
+    """The per-change error of a config or row whose files changed while push read them (D6)."""
+    return KeboolaApiError(
+        message=(
+            f"{config_dir} was not pushed: its files changed while push read them, so push "
+            "could not tell which version to send. Nothing was written for this config. "
+            "Run `kbagent sync push` again."
+        ),
+        error_code=ErrorCode.SYNC_LOCAL_FILE_CHANGED,
+        retryable=False,
+    )
+
+
+@dataclass(frozen=True)
+class RowInput:
+    """A row's ``_config.yml`` as push read it, once (#827 item 8 for rows)."""
+
+    data: dict[str, Any]
+    file_hash: str
+
+
+def capture_row_input(service: SyncService, row_dir: Path) -> RowInput:
+    """Read a row's ``_config.yml`` ONCE; a change during the read is not sent (D6).
+
+    A row has no companion files: its ``_config.yml`` is the whole row.
+    Raises ``FileNotFoundError`` without a usable file and
+    ``SYNC_LOCAL_FILE_CHANGED`` when the file changed while it was read.
+    """
+    before = local_state(service, row_dir, "")
+    captured = capture_local_input(service, row_dir, "")
+    if captured is None:
+        raise FileNotFoundError(f"Row file not found: {row_dir / CONFIG_FILENAME}")
+    if not same_files(before, captured.hashes):
+        raise local_file_changed_error(row_dir)
+    return RowInput(data=captured.data, file_hash=captured.hashes.file_hash)
+
+
+def row_file_unchanged(service: SyncService, row_dir: Path, read: RowInput) -> bool:
+    """True iff the row's ``_config.yml`` still holds the bytes push read (D7)."""
+    return local_state(service, row_dir, "").file_hash == read.file_hash

@@ -58,6 +58,7 @@ from ._sync_local_snapshot import (
     CapturedInput,
     capture_local_input,
     local_edit_warning,
+    local_file_changed_error,
     local_state,
     same_files,
 )
@@ -119,19 +120,6 @@ class PutAnswer:
 
     response: dict[str, Any]
     verified_by_readback: bool = False
-
-
-def local_file_changed_error(config_dir: Path) -> KeboolaApiError:
-    """The per-change error of a config whose files changed while push read them (D6)."""
-    return KeboolaApiError(
-        message=(
-            f"{config_dir} was not pushed: its files changed while push read them, so push "
-            "could not tell which version to send. Nothing was written for this config. "
-            "Run `kbagent sync push` again."
-        ),
-        error_code=ErrorCode.SYNC_LOCAL_FILE_CHANGED,
-        retryable=False,
-    )
 
 
 def _empty_container(value: Any) -> bool:

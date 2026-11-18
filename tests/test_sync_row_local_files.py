@@ -13,6 +13,7 @@ Real ``SyncService`` on a real tree; only the Storage API is faked.
 
 from __future__ import annotations
 
+import hashlib
 import shutil
 from pathlib import Path
 from typing import Any
@@ -23,7 +24,7 @@ import yaml
 from formal_sync_fake import FakeStorage, Workspace
 from keboola_agent_cli.constants import CONFIG_FILENAME
 from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
-from keboola_agent_cli.services import _sync_local_snapshot, _sync_push_update
+from keboola_agent_cli.services import _sync_local_snapshot, _sync_push_ops, _sync_push_update
 
 
 @pytest.fixture
@@ -87,6 +88,120 @@ def _flip_during_read(monkeypatch: pytest.MonkeyPatch, row_file: Path, value: st
     # The row path reads through the shared one-read helper (before the fix it
     # read the file directly, so this hook never fired and the edit was sent).
     monkeypatch.setattr(_sync_local_snapshot, "capture_local_input", editor_saves_during_read)
+
+
+# ---------------------------------------------------------------------------
+# One read: a file changed while push reads it is not sent
+# ---------------------------------------------------------------------------
+
+
+def test_a_row_edited_while_push_reads_it_is_not_updated(
+    ws: Workspace, api: FakeStorage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cid, row_file = _pulled_with_row(ws, api)
+    _set_table(row_file, "first")
+    entry_before = ws.entry(cid).rows[0].metadata.copy()
+    _flip_during_read(monkeypatch, row_file, "second")
+
+    result = ws.push()
+
+    codes = [e.get("error_code") for e in result["errors"]]
+    assert codes == [ErrorCode.SYNC_LOCAL_FILE_CHANGED], result
+    assert _remote_table(api, cid, "500") is None
+    assert ws.entry(cid).rows[0].metadata == entry_before
+    monkeypatch.undo()
+    assert ws.push()["errors"] == []
+    assert _remote_table(api, cid, "500") == "second"
+
+
+def test_a_new_row_edited_while_push_reads_it_is_not_created(
+    ws: Workspace, api: FakeStorage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cid, row_file = _pulled_with_row(ws, api)
+    new_file = _new_row(ws, cid, row_file, "first")
+    _flip_during_read(monkeypatch, new_file, "second")
+
+    result = ws.push()
+
+    assert [e.get("error_code") for e in result["errors"]] == [ErrorCode.SYNC_LOCAL_FILE_CHANGED], (
+        result
+    )
+    assert len(api.configs[cid]["rows"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# An edit during the write is kept; the stamp is what push sent / wrote
+# ---------------------------------------------------------------------------
+
+
+def test_a_row_edited_during_its_update_is_kept_and_pushed_next(
+    ws: Workspace, api: FakeStorage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cid, row_file = _pulled_with_row(ws, api)
+    _set_table(row_file, "sent")
+    real_update = api.update_config_row
+
+    def editor_saves_during_put(*args: Any, **kwargs: Any) -> Any:
+        _set_table(row_file, "edited")
+        return real_update(*args, **kwargs)
+
+    monkeypatch.setattr(api, "update_config_row", editor_saves_during_put)
+    result = ws.push()
+
+    assert result["errors"] == [], result
+    assert [w["code"] for w in result.get("warnings", [])] == ["LOCAL_EDIT_DURING_PUSH"]
+    assert _remote_table(api, cid, "500") == "sent"
+    assert yaml.safe_load(row_file.read_text(encoding="utf-8"))["parameters"]["table"] == "edited"
+    monkeypatch.undo()
+    assert _row_change(ws, "500") == "modified"
+    ws.push()
+    assert _remote_table(api, cid, "500") == "edited"
+
+
+def test_a_new_row_edited_during_its_create_is_kept_and_pushed_next(
+    ws: Workspace, api: FakeStorage
+) -> None:
+    cid, row_file = _pulled_with_row(ws, api)
+    new_file = _new_row(ws, cid, row_file, "sent")
+    api.on("create_config_row", "after", lambda _rid: _set_table(new_file, "edited"))
+
+    result = ws.push()
+
+    assert result["errors"] == [], result
+    assert [w["code"] for w in result.get("warnings", [])] == ["LOCAL_EDIT_DURING_PUSH"]
+    (created,) = [r for r in api.configs[cid]["rows"] if r["name"] == "Row new"]
+    assert created["configuration"]["parameters"]["table"] == "sent"
+    assert yaml.safe_load(new_file.read_text(encoding="utf-8"))["parameters"]["table"] == "edited"
+    assert _row_change(ws, created["id"]) == "modified"
+    ws.push()
+    assert created["configuration"]["parameters"]["table"] == "edited"
+    assert len(api.configs[cid]["rows"]) == 2
+
+
+def test_an_edit_saved_right_after_a_row_create_is_not_stamped(
+    ws: Workspace, api: FakeStorage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The baseline is the hash of the bytes push wrote, never a re-read after the write."""
+    cid, row_file = _pulled_with_row(ws, api)
+    new_file = _new_row(ws, cid, row_file, "sent")
+    real = _sync_push_ops.writeback_after_push
+
+    def edit_right_after_the_writeback(*args: Any, **kwargs: Any) -> Any:
+        written = real(*args, **kwargs)
+        if Path(args[2]) == new_file.parent:
+            _set_table(new_file, "edited after")
+        return written
+
+    monkeypatch.setattr(_sync_push_ops, "writeback_after_push", edit_right_after_the_writeback)
+    result = ws.push()
+
+    assert result["errors"] == [], result
+    (created,) = [r for r in api.configs[cid]["rows"] if r["name"] == "Row new"]
+    entry = next(r for r in ws.entry(cid).rows if r.id == created["id"])
+    current = hashlib.sha256(new_file.read_bytes()).hexdigest()
+    assert entry.metadata["pull_hash"] != current
+    monkeypatch.undo()
+    assert _row_change(ws, created["id"]) == "modified"
 
 
 # ---------------------------------------------------------------------------
