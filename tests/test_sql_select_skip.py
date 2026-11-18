@@ -196,3 +196,10 @@ def test_skipped_selects_in_configs() -> None:
 
 def test_skipped_selects_in_configs_ignores_a_non_list() -> None:
     assert skipped_selects_in_configs(SNOWFLAKE, {"error": "x"}) == []
+
+
+def test_whitespace_and_word_boundary_are_ascii_like_pcre() -> None:
+    """PCRE without /u: a non-breaking space is not whitespace, and a non-ASCII
+    letter after SELECT is not a word character."""
+    assert is_skipped_by_runtime(SNOWFLAKE, "\xa0SELECT 1;") is False
+    assert is_skipped_by_runtime(SNOWFLAKE, "SELECT\u00e9 1;") is True

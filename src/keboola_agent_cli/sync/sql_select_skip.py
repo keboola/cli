@@ -51,7 +51,10 @@ EXCERPT_MAX_CHARS = 80
 SNOWFLAKE_COMPONENT = "keboola.snowflake-transformation"
 
 # Snowflake requires SELECT as a whole word; BigQuery compares 6 characters.
-_SNOWFLAKE_SELECT = re.compile(r"SELECT\b", re.IGNORECASE)
+_SNOWFLAKE_SELECT = re.compile(r"SELECT\b", re.IGNORECASE | re.ASCII)
+# PCRE ``\s`` without the /u flag, and PHP's trim(): ASCII whitespace only. A
+# non-breaking space in front of SELECT is not whitespace for the runtime.
+_ASCII_WHITESPACE = " \t\n\r\f\v"
 _SKIPPED_PREFIX = "SELECT"
 
 
@@ -109,14 +112,14 @@ def strip_leading_comments(statement: str) -> str:
     Both runtimes ignore them: comments are removed by SqlFormatter, and the
     whitespace that remains does not change the decision.
     """
-    text = statement.lstrip()
+    text = statement.lstrip(_ASCII_WHITESPACE)
     while True:
         if text.startswith(("--", "#")):
             newline = text.find("\n")
-            text = "" if newline == -1 else text[newline:].lstrip()
+            text = "" if newline == -1 else text[newline:].lstrip(_ASCII_WHITESPACE)
         elif text.startswith("/*"):
             end = text.find("*/", 2)
-            text = "" if end == -1 else text[end + 2 :].lstrip()
+            text = "" if end == -1 else text[end + 2 :].lstrip(_ASCII_WHITESPACE)
         else:
             return text
 
