@@ -241,13 +241,31 @@ def update_if_unchanged(
     return PutAnswer(result if isinstance(result, dict) else {})
 
 
-def held_row_error(change: dict[str, Any]) -> dict[str, str]:
+def config_error_code(errors: list[dict[str, Any]], component_id: str, config_id: str) -> str:
+    """The code a configuration's own ``errors[]`` entry of this push carries.
+
+    ``UNEXPECTED_ERROR`` when the failure had no code of its own (a local
+    error such as a missing file).
+    """
+    for entry in reversed(errors):
+        if (
+            entry.get("component_id") == component_id
+            and entry.get("config_id") == config_id
+            and "parent_config_id" not in entry
+        ):
+            return str(entry.get("error_code") or ErrorCode.UNEXPECTED_ERROR)
+    return str(ErrorCode.UNEXPECTED_ERROR)
+
+
+def held_row_error(change: dict[str, Any], config_code: str) -> dict[str, str]:
     """The ``errors[]`` entry of a row not pushed because its configuration failed (F3).
 
     A row write raises its configuration's version and changes what the
     configuration holds, so after the configuration's update failed (a
-    conflict, a changed local file) no row of it is created, updated or
-    deleted in the same push.
+    conflict, a changed local file, a server error) no row of it is created,
+    updated or deleted in the same push. The row carries the configuration's
+    own code (*config_code*): a ``SYNC_LOCAL_FILE_CHANGED`` or a 5xx is not a
+    conflict, and the next step differs.
     """
     component_id, parent = change["component_id"], change.get("parent_config_id", "")
     return {
@@ -255,11 +273,12 @@ def held_row_error(change: dict[str, Any]) -> dict[str, str]:
         "component_id": component_id,
         "config_id": change.get("config_id", ""),
         "parent_config_id": parent,
-        "error_code": ErrorCode.SYNC_CONFLICT,
+        "error_code": config_code,
         "message": (
-            f"Row {change.get('config_id') or change.get('path', '')} was not pushed: the update "
-            f"of its configuration {component_id}/{parent} failed in this push (see its error). "
-            "Nothing was written for the row. Resolve the configuration, then push again."
+            f"Row {change.get('config_id') or change.get('path', '')} was not pushed because "
+            f"the update of its configuration {component_id}/{parent} failed in this push with "
+            f"{config_code} (see the configuration's error). Nothing was written for the row. "
+            "Resolve the configuration, then push again."
         ),
     }
 

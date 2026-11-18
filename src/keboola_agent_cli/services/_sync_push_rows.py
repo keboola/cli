@@ -48,6 +48,7 @@ from ._sync_push_ops import push_row_change
 from ._sync_push_update import (
     PUT_RESPONSE,
     ParentWrite,
+    config_error_code,
     held_row_error,
 )
 
@@ -187,7 +188,8 @@ def push_rows(phase: RowPhase, row_changes: list[dict[str, Any]]) -> RowTotals:
         source_row_id = change.get("source_row_id") or config_id  # risk 71
         parent_config_id = change.get("parent_config_id", "")
         if (component_id, parent_config_id) in phase.held:  # its config failed (#827 F3)
-            phase.errors.append(held_row_error(change))
+            code = config_error_code(phase.errors, component_id, parent_config_id)
+            phase.errors.append(held_row_error(change, code))
             continue
         try:
             # The parent's id on the target after Phase A: a placeholder

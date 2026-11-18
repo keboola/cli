@@ -228,7 +228,9 @@ directory, or keeps an edited one and reports it as `skipped`.
 *(since vNEXT, #827)* When the update of the parent config is refused
 (`SYNC_CONFLICT`: it or one of its rows changed in Keboola after push read
 it), push sends none of that config's row creates, updates or deletes; each
-gets its own `SYNC_CONFLICT` entry in `errors[]` naming the parent. Run
+gets its own entry in `errors[]` naming the parent. The row's `error_code` is
+the configuration's own: `SYNC_CONFLICT` for a conflict, `SYNC_LOCAL_FILE_CHANGED`
+or `API_ERROR` (a 5xx) when the configuration failed that way. Run
 `kbagent sync pull`, review, push again.
 
 *(since vNEXT, #827)* A row write itself sends no version precondition (the

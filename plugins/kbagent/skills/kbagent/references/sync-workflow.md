@@ -528,7 +528,8 @@ description, enabled state when sent) the update counts as done -- the case of
 a PUT the transport repeated after a lost answer. Otherwise push reports
 `SYNC_CONFLICT` under `errors[]` (exit 1), leaves the local files and the
 manifest entry as they were, and no later step of that push writes the config
-or its rows (each skipped row gets its own `SYNC_CONFLICT` entry).
+or its rows (each skipped row gets its own entry with the configuration's
+error code, *since vNEXT*: `SYNC_CONFLICT` only for a conflict).
 Run `kbagent sync pull`, review, push again. A listing without `version` sends
 no precondition.
 
