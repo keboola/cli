@@ -79,10 +79,11 @@ logger = logging.getLogger(__name__)
 # review). A plain `sync pull` keeps locally modified files, so it does not
 # bring the remote change in and the next push conflicts again.
 RESOLVE_STEPS = (
-    "A plain `kbagent sync pull` keeps your locally modified files, so it does not resolve "
-    "this. Either run `kbagent sync diff` and merge the remote change into the local files "
-    "by hand, or copy your local changes aside, run `kbagent sync pull --theirs` (it "
-    "discards every local change in this tree), re-apply your edit, then push again."
+    "A plain `kbagent sync pull` keeps your locally modified files, and a manual merge keeps "
+    "the old baseline (the next diff still calls it a conflict), so neither resolves this. "
+    "Copy the conflicting config folder(s) aside, run `kbagent sync pull --theirs` (it "
+    "overwrites every local change in this tree, so keep a copy of any other unpushed edit "
+    "too), re-apply your edit, then run `kbagent sync diff` and `kbagent sync push`."
 )
 
 

@@ -530,11 +530,12 @@ a PUT the transport repeated after a lost answer. Otherwise push reports
 manifest entry as they were, and no later step of that push writes the config
 or its rows (each skipped row gets its own entry with the configuration's
 error code, *since vNEXT*: `SYNC_CONFLICT` only for a conflict).
-A plain `kbagent sync pull` keeps the locally modified config, so the next push
-conflicts again. Resolve it either with `kbagent sync diff` and a merge of the
-remote change into the local files by hand, or copy your local changes aside,
-run `kbagent sync pull --project ALIAS --theirs` (it discards every local
-change in the tree), re-apply the edit and push. A listing without `version` sends
+A plain `kbagent sync pull` keeps the locally modified config, and a manual
+merge keeps the old baseline (the next diff calls it a conflict and push skips
+it). The one working path: copy the conflicting config folder(s) aside, run
+`kbagent sync pull --project ALIAS --theirs` (it overwrites every local change
+in the tree -- keep a copy of any other unpushed edit too), re-apply the edit,
+`kbagent sync diff --project ALIAS`, `kbagent sync push --project ALIAS`. A listing without `version` sends
 no precondition.
 
 Push reads each config's files once; a file that changes while push reads it
@@ -559,8 +560,10 @@ Rules for an agent:
   again.
 - On `SYNC_CONFLICT` do not re-run push and do not force the local version over
   the UI edit. Show the user what changed in Keboola (`kbagent sync diff`),
-  merge it into the local files, push. A plain `sync pull` does not help: it
-  keeps the locally modified config.
+  then copy the conflicting folder(s) aside, `sync pull --theirs` (it
+  overwrites every local change: keep a copy of other unpushed edits), re-apply,
+  `sync diff`, `sync push`. A plain `sync pull` or a manual merge does not
+  help: the baseline stays old and the next push skips the conflict.
 
 ### One kbagent run at a time per directory
 

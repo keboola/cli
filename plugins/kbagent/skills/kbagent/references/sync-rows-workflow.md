@@ -231,9 +231,10 @@ it), push sends none of that config's row creates, updates or deletes; each
 gets its own entry in `errors[]` naming the parent. The row's `error_code` is
 the configuration's own: `SYNC_CONFLICT` for a conflict, `SYNC_LOCAL_FILE_CHANGED`
 or `API_ERROR` (a 5xx) when the configuration failed that way. Resolve a
-conflict with `kbagent sync diff` and a merge by hand, or copy the local
-changes aside, `kbagent sync pull --project ALIAS --theirs`, re-apply, push; a
-plain `sync pull` keeps the locally modified files.
+conflict by copying the conflicting config folder(s) aside, running
+`kbagent sync pull --project ALIAS --theirs` (it overwrites every local change
+in the tree), re-applying the edit, then `sync diff` and `sync push`; a plain
+`sync pull` or a manual merge leaves the old baseline, so push skips it again.
 
 *(since vNEXT, #827)* A row write itself sends no version precondition (the
 Storage API has none for rows), so push reads the parent right before its

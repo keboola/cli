@@ -2515,8 +2515,9 @@ remain branch-aware because modifying a dev branch is the expected intent.
     A config DELETE and a config UPDATE are conditional (If-Match on the version push read):
     a config edited in the UI after that read is neither deleted nor overwritten -- errors[]
     entry SYNC_CONFLICT, exit 1, local files and manifest untouched, and its rows are not
-    pushed either (one entry each, with the config's own error code). A plain pull keeps
-    the local edit: merge via `sync diff` by hand, or copy it aside, pull --theirs, re-apply.
+    pushed either (one entry each, with the config's own error code). A plain pull or a
+    manual merge keeps the old baseline: copy the folder(s) aside, pull --theirs (overwrites
+    every local change), re-apply, sync diff, sync push.
     Push reads a config's files once: a file changed while it reads is SYNC_LOCAL_FILE_CHANGED
     (nothing sent; push again). A file edited during the update is not overwritten
     (warnings[] LOCAL_EDIT_DURING_PUSH) and stays a local change for the next push.
