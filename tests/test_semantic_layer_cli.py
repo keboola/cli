@@ -2094,3 +2094,88 @@ class TestReferenceDataDelete:
         body = json.loads(result.output)
         assert body["data"]["removed"]["id"] == "r1"
         mock.delete_reference_data.assert_called_once()
+
+
+_UNCHANGED_EDIT: dict = {
+    "status": "unchanged",
+    "updated": {"id": "d1", "attributes": {"name": "fact_x"}},
+    "cascaded_constraints": [],
+    "rollback": None,
+    "partial_state": False,
+    "recovery_hint": None,
+}
+
+
+class TestEditUnchanged:
+    """Spec R6: an edit that changes nothing says so instead of "Updated" (issue #833)."""
+
+    def test_dataset_human_says_no_change(self, store: ConfigStore) -> None:
+        mock = MagicMock()
+        mock.edit_dataset.return_value = dict(_UNCHANGED_EDIT)
+        result = _invoke(
+            [
+                "semantic-layer",
+                "edit",
+                "dataset",
+                "--project",
+                "prod",
+                "--name",
+                "fact_x",
+                "--new-description",
+                "same",
+            ],
+            store=store,
+            sl_mock=mock,
+        )
+        assert result.exit_code == 0, result.output
+        assert "No change" in result.output
+        assert "Updated" not in result.output
+
+    def test_metric_human_says_no_change(self, store: ConfigStore) -> None:
+        mock = MagicMock()
+        mock.edit_metric.return_value = {
+            **_UNCHANGED_EDIT,
+            "updated": {"id": "m1", "attributes": {"name": "rev"}},
+        }
+        result = _invoke(
+            [
+                "semantic-layer",
+                "edit",
+                "metric",
+                "--project",
+                "prod",
+                "--name",
+                "rev",
+                "--new-sql",
+                "1",
+                "--yes",
+            ],
+            store=store,
+            sl_mock=mock,
+        )
+        assert result.exit_code == 0, result.output
+        assert "No change" in result.output
+        assert "Updated" not in result.output
+        assert "updated." not in result.output
+
+    def test_json_carries_status_unchanged(self, store: ConfigStore) -> None:
+        mock = MagicMock()
+        mock.edit_dataset.return_value = dict(_UNCHANGED_EDIT)
+        result = _invoke(
+            [
+                "--json",
+                "semantic-layer",
+                "edit",
+                "dataset",
+                "--project",
+                "prod",
+                "--name",
+                "fact_x",
+                "--new-description",
+                "same",
+            ],
+            store=store,
+            sl_mock=mock,
+        )
+        assert result.exit_code == 0
+        assert json.loads(result.output)["data"]["status"] == "unchanged"

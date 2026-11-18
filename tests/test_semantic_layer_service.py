@@ -1952,18 +1952,65 @@ class TestEditPatchSemantics:
             "metrics": ["revenue"],
         }
 
-    def test_explicit_value_equal_to_the_read_one_is_still_sent(self, tmp_path: Path) -> None:
-        """The read may be stale: an asked-for value is written even when it looks unchanged."""
+    def test_value_equal_to_the_read_one_is_not_sent(self, tmp_path: Path) -> None:
+        """Only differing keys go out: resending a read value could undo a concurrent edit."""
         service, mock = _make_service(_make_store(tmp_path))
         metric = _child_item("semantic-metric", "m1", {"name": "rev", "sql": "1"})
         mock.list_items.side_effect = lambda t, m=None: (
             [_model_item("U", "m")] if t == "semantic-model" else [metric]
         )
-        service.edit_metric("prod", None, current_name="rev", new_name="rev", new_sql="1")
-        assert mock.patch_item.call_args.kwargs == {
-            "name": "rev",
-            "data": {"name": "rev", "sql": "1"},
-        }
+        mock.patch_item.return_value = metric
+        result = service.edit_metric("prod", None, current_name="rev", new_name="rev", new_sql="2")
+        assert mock.patch_item.call_args.kwargs == {"name": None, "data": {"sql": "2"}}
+        assert result["status"] == "updated"
+
+    def test_all_values_equal_is_unchanged_and_writes_nothing(self, tmp_path: Path) -> None:
+        """Spec R6: an edit that changes nothing reports status unchanged, exit 0, no write."""
+        service, mock = _make_service(_make_store(tmp_path))
+        metric = _child_item("semantic-metric", "m1", {"name": "rev", "sql": "1"})
+        mock.list_items.side_effect = lambda t, m=None: (
+            [_model_item("U", "m")] if t == "semantic-model" else [metric]
+        )
+        result = service.edit_metric(
+            "prod", None, current_name="rev", new_name="rev", new_sql="1", assume_yes=True
+        )
+        mock.patch_item.assert_not_called()
+        mock.put_item.assert_not_called()
+        assert result["status"] == "unchanged"
+        assert result["updated"]["id"] == "m1"
+        assert result["cascaded_constraints"] == []
+
+    def test_glossary_same_term_and_definition_is_unchanged(self, tmp_path: Path) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        g = _child_item("semantic-glossary", "g1", {"term": "ARR", "definition": "d"})
+        mock.list_items.side_effect = lambda t, m=None: (
+            [_model_item("U", "m")] if t == "semantic-model" else [g]
+        )
+        result = service.edit_glossary(
+            "prod", None, current_term="ARR", new_term="ARR", new_definition="d"
+        )
+        mock.patch_item.assert_not_called()
+        assert result["status"] == "unchanged"
+
+    def test_constraint_same_metrics_list_is_unchanged(self, tmp_path: Path) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        c = _child_item("semantic-constraint", "c1", {"name": "ok", "metrics": ["a", "b"]})
+        mock.list_items.side_effect = lambda t, m=None: (
+            [_model_item("U", "m")] if t == "semantic-model" else [c]
+        )
+        result = service.edit_constraint("prod", None, current_name="ok", new_metrics=["a", "b"])
+        mock.patch_item.assert_not_called()
+        assert result["status"] == "unchanged"
+
+    def test_real_change_reports_updated(self, tmp_path: Path) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        ds = _child_item("semantic-dataset", "d1", {"name": "x", "description": "old"})
+        mock.list_items.side_effect = lambda t, m=None: (
+            [_model_item("U", "m")] if t == "semantic-model" else [ds]
+        )
+        mock.patch_item.return_value = ds
+        result = service.edit_dataset("prod", None, current_name="x", new_description="new")
+        assert result["status"] == "updated"
 
     def test_empty_values_are_sent_not_dropped(self, tmp_path: Path) -> None:
         service, mock = _make_service(_make_store(tmp_path))
@@ -1986,6 +2033,7 @@ class TestEditPatchSemantics:
         mock.patch_item.assert_not_called()
         mock.put_item.assert_not_called()
         assert result["updated"]["id"] == "d1"
+        assert result["status"] == "unchanged"
 
     def test_name_conflict_on_rename_cascades_nothing(self, tmp_path: Path) -> None:
         service, mock = _make_service(_make_store(tmp_path))
