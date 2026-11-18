@@ -1407,8 +1407,8 @@ explicit Storage config version, never the empty shell the create writes.
     verbatim. Without --branch the source's branch.id is kept (the active
     branch is NOT applied). --address alone keeps the channel; --channel needs
     --address; expiry inherited unless --expires-at / --clear-expires-at.
-    Warnings: a copied phase.id when --config-id/--component-id is
-    overridden and phase.id is not; no branch filter. No prompt,
+    Warnings: a copied phase.id when the config or component is overridden
+    (option or --filter) and phase.id is not; no branch filter. No prompt,
     and EVERY run creates one more subscription: --dry-run first (one read,
     returns `planned`), ask the user, then run once. After a lost response
     check `notification list` before re-running.

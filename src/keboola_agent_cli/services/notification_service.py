@@ -412,8 +412,6 @@ def _extract_subscription_fields(sub: dict[str, Any]) -> dict[str, Any]:
 def _clone_warnings(
     filters: list[dict[str, Any]],
     incoming: list[dict[str, Any]],
-    component_id: str | None,
-    config_id: str | None,
 ) -> list[str]:
     """Warnings about a clone's planned filters that the caller may not expect."""
     warnings: list[str] = []
@@ -424,11 +422,10 @@ def _clone_warnings(
             "will add the default branch's id."
         )
     overridden = {item["field"] for item in incoming}
-    if (
-        (component_id or config_id)
-        and FILTER_FIELD_PHASE_ID in fields
-        and FILTER_FIELD_PHASE_ID not in overridden
-    ):
+    # The flow changes whether --component-id / --config-id or a --filter on
+    # the same field overrode it; ``incoming`` holds both.
+    flow_changed = bool(overridden & {FILTER_FIELD_COMPONENT_ID, FILTER_FIELD_CONFIG_ID})
+    if flow_changed and FILTER_FIELD_PHASE_ID in fields and FILTER_FIELD_PHASE_ID not in overridden:
         warnings.append(
             "The source's phase.id filter was copied, but that phase may not exist in "
             "the new flow. Override it with --filter 'phase.id=PHASE_ID' if needed."
@@ -957,7 +954,7 @@ class NotificationService(BaseService):
                 new_expires = expires_at
             else:
                 new_expires = source.get("expiresAt")
-            warnings = _clone_warnings(merge.filters, incoming, component_id, config_id)
+            warnings = _clone_warnings(merge.filters, incoming)
             report: dict[str, Any] = {
                 "project_alias": alias,
                 "source_subscription_id": str(subscription_id),

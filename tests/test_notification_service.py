@@ -1806,6 +1806,28 @@ class TestCloneSubscription:
 
         assert any("phase.id" in w for w in result["warnings"])
 
+    def test_inherited_phase_on_generic_config_filter_warns(self) -> None:
+        # Devin on #1010: a --filter on job.configuration.id changes the flow
+        # exactly like --config-id, so the inherited phase warning must fire.
+        source = copy.deepcopy(CLONE_SOURCE)
+        source["filters"].append({"field": "phase.id", "value": "ph-1"})
+        client = _clone_client(source)
+
+        result = _make_service(client).clone_subscription(
+            "prod", "500", filters=[parse_filter_expression("job.configuration.id=222")]
+        )
+
+        assert any("phase.id" in w for w in result["warnings"])
+
+    def test_inherited_phase_without_flow_change_does_not_warn(self) -> None:
+        source = copy.deepcopy(CLONE_SOURCE)
+        source["filters"].append({"field": "phase.id", "value": "ph-1"})
+        client = _clone_client(source)
+
+        result = _make_service(client).clone_subscription("prod", "500", address="new@example.com")
+
+        assert not any("phase.id" in w for w in result["warnings"])
+
     def test_overridden_phase_does_not_warn(self) -> None:
         source = copy.deepcopy(CLONE_SOURCE)
         source["filters"].append({"field": "phase.id", "value": "ph-1"})

@@ -139,8 +139,9 @@ kbagent --json notification clone --project P --subscription-id ID \
   subscription instead.
 - The branch is kept as the source has it. `branch use` does not change it;
   pass `--branch ID` to move the alert to another branch.
-- A `phase.id` filter is copied too. When you override `--config-id` or
-  `--component-id` (and not `phase.id`), the result warns: that phase id
+- A `phase.id` filter is copied too. When you override the config or the
+  component (`--config-id`, `--component-id`, or a `--filter` on
+  `job.configuration.id` / `job.component.id`) and not `phase.id`, the result warns: that phase id
   belongs to the old flow. Pass `--filter 'phase.id=NEW_PHASE'` or create a
   new subscription.
 - `--address` alone keeps the source channel. The source expiry is kept,
