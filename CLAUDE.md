@@ -1773,19 +1773,32 @@ kbagent schedule find [--cron-window START-END] [--not-run-since DAYS] [--projec
 
 kbagent notification list [--project NAME ... | --all-projects] [--event NAME] [--component-id ID] [--config-id ID]
 kbagent notification detail [--project NAME] --subscription-id ID
-kbagent notification create [--project ALIAS] --event NAME --channel email|webhook --address ADDR [--component-id ID] [--config-id ID] [--branch ID] [--expires-at TS] [--overtime-percent N]
+kbagent notification create [--project ALIAS] --event NAME --channel email|webhook --address ADDR [--component-id ID] [--config-id ID] [--branch ID] [--expires-at TS] [--overtime-percent N] [--filter 'FIELD<OP>VALUE' ...]
 kbagent notification delete [--project ALIAS] --subscription-id ID [--yes]
 kbagent notification replace-recipient [--project ALIAS] --subscription-id ID --address NEW_ADDR [--channel email|webhook] [--yes]
+kbagent notification clone [--project ALIAS] --subscription-id ID [--component-id ID] [--config-id ID] [--branch ID] [--overtime-percent N] [--filter 'FIELD<OP>VALUE' ...] [--address ADDR] [--channel email|webhook] [--expires-at TS | --clear-expires-at] [--dry-run]
+# --filter / clone (#989): --filter (repeatable, OP ==,=,<=,>=,<,>; quote it) adds any filter the
+#   service accepts for the event; VALUE is sent as a string; syntax-only check locally, the service
+#   refuses an unknown field; a dedicated option + --filter on one field, or one field+operator twice,
+#   is INVALID_ARGUMENT (exit 2). REST: `filters: [{field, operator?, value}]`. Row columns read
+#   equality filters only. `clone` (write) creates a NEW subscription from an existing one: event and
+#   project kept, each override replaces every source filter on its field (grouped), the rest copied
+#   verbatim, source branch.id kept (active branch never applied), recipient/expiry inherited
+#   unless overridden; returns filters_replaced/added/kept + warnings; --dry-run reads once and
+#   returns `planned`. Every run creates one more subscription. REST:
+#   POST /notifications/{project}/{subscription_id}/clone (body only, extra fields and any query
+#   parameter 422). Version gate lives in gotchas.md.
 # notification WRITE path (since 0.91.0, #690): the group is no longer read-only.
 #   --address carries the email address (--channel email) OR the webhook URL (--channel webhook) --
 #   channel-discriminated on the wire, same as the read path's single `address` column. An invalid
-#   --channel is a structured INVALID_ARGUMENT, exit 2. `create` WITHOUT --branch sends no branch.id
-#   filter; the Notification Service then stores the default branch's id itself (production only,
-#   like the UI; verified live).
+#   --channel is a structured INVALID_ARGUMENT, exit 2. `create` WITHOUT --branch and without a
+#   branch.id --filter sends no branch.id filter; the Notification Service then stores the default
+#   branch's id itself (production only, like the UI; verified live).
 #   --overtime-percent N (#989): whole percent 1-10000, only for job-processing-long /
 #   phase-job-processing-long (else INVALID_ARGUMENT, exit 2, before any API call); writes the UI's
 #   "job runs longer than usual" filter {field: durationOvertimePercentage, value: N/100,
-#   operator: ">="}. The service refuses 0. REST: `overtime_percent` (StrictInt) in the POST body.
+#   operator: ">="}. kbagent refuses 0 (a 0 threshold matches every overtime step the daemon reports, as
+#   no threshold does). REST: `overtime_percent` (StrictInt) in the POST body.
 #   Rows of list/detail/create/replace-recipient carry `overtime_percent` (null unless exactly one
 #   `>=` overtime filter). Version gate lives in gotchas.md.
 #   `replace-recipient` is delete+recreate -- the API has NO update primitive. It creates the NEW
@@ -1802,8 +1815,9 @@ kbagent notification replace-recipient [--project ALIAS] --subscription-id ID --
 #   flow's configuration JSON, so `flow detail` / `config detail` never showed them. The in-flow
 #   `type: "notification"` TASK is a different mechanism and stays visible there.
 #   Event names are kebab-case (job-failed, job-succeeded, job-succeeded-with-warning,
-#   job-processing-long + phase-job-* variants); --event is NOT validated (the API declares
-#   EventName as an open string). The service ACCEPTS ?event= and then IGNORES it (200 + the
+#   job-processing-long + phase-job-* variants); kbagent does NOT validate --event, the service
+#   checks it against its event registry on create and refuses an unknown one; on list a misspelled
+#   event just matches nothing. The service ACCEPTS ?event= and then IGNORES it (200 + the
 #   full list, verified live), so kbagent sends it AND narrows client-side -- a direct API
 #   caller must do the same or get a superset. Filter fields are dotted paths into the event
 #   payload (job.component.id, job.configuration.id, branch.id, phase.id) -- --component-id /

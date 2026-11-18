@@ -2190,24 +2190,46 @@
       "path": "notification",
       "kind": "group",
       "hidden": false,
-      "help": "Manage notification subscriptions across projects (Flow Notifications tab). 'list'/'detail' are read-only; 'create'/'replace-recipient' are gated as write, 'delete' as destructive."
+      "help": "Manage notification subscriptions across projects (Flow Notifications tab). 'list'/'detail' are read-only; 'create'/'replace-recipient'/'clone' are gated as write, 'delete' as destructive."
+    },
+    {
+      "path": "notification clone",
+      "kind": "command",
+      "hidden": false,
+      "category": "write",
+      "help": "Create a new subscription from an existing one, with overrides.\n\nThe event, the recipient, the filters and the expiry are copied from the\nsource; each option replaces one part. An override on a filter field\nreplaces every source filter on that field; the other filters are copied\nverbatim. The source is never changed or deleted. Without any override\nthe alert is duplicated, and every run creates one more subscription --\nrun with ``--dry-run`` first.",
+      "params": [
+        {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
+        {"kind": "option", "name": "subscription_id", "opts": ["--subscription-id"], "type": "text", "required": true, "default": null, "help": "Notification subscription ID to copy from"},
+        {"kind": "option", "name": "component_id", "opts": ["--component-id"], "type": "text", "default": null, "help": "Replace the job.component.id filter"},
+        {"kind": "option", "name": "config_id", "opts": ["--config-id"], "type": "text", "default": null, "help": "Replace the job.configuration.id filter (e.g. another flow)"},
+        {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Replace the branch.id filter. Omitted: the source's branch filter is kept (the active branch never changes it)."},
+        {"kind": "option", "name": "overtime_percent", "opts": ["--overtime-percent"], "type": "integer", "default": null, "help": "Fire only when the job runs at least this many percent longer than usual (50 = 50 %; 0 is refused: it would match every overtime step). Only for job-processing-long and phase-job-processing-long. Replaces the source's threshold."},
+        {"kind": "option", "name": "filter_exprs", "opts": ["--filter"], "type": "text", "multiple": true, "default": null, "help": "Extra filter on the event payload, FIELD<OP>VALUE with OP one of ==, =, <=, >=, <, > (= means ==). Repeatable; all filters must match. Quote it: < and > are shell redirections, e.g. --filter 'averageDuration>=60'. VALUE is sent as a string (numeric fields compare it as a number). The service checks that FIELD exists for the event. Replaces every source filter on the same FIELD."},
+        {"kind": "option", "name": "address", "opts": ["--address"], "type": "text", "default": null, "help": "New recipient address or webhook URL (keeps the source channel)"},
+        {"kind": "option", "name": "channel", "opts": ["--channel"], "type": "text", "default": null, "help": "New recipient channel: email | webhook. Needs --address."},
+        {"kind": "option", "name": "expires_at", "opts": ["--expires-at"], "type": "text", "default": null, "help": "New ISO-8601 expiry. Omitted: the source's expiry is kept."},
+        {"kind": "option", "name": "clear_expires_at", "opts": ["--clear-expires-at"], "type": "boolean", "is_flag": true, "default": false, "help": "Create the new subscription without an expiry"},
+        {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Read the source and show the planned subscription; create nothing"}
+      ]
     },
     {
       "path": "notification create",
       "kind": "command",
       "hidden": false,
       "category": "write",
-      "help": "Create a notification subscription.\n\n``--address`` carries the recipient's destination -- an email address for\n``--channel email``, or a callback URL for ``--channel webhook``.\n``--overtime-percent`` writes the threshold of the UI's \"job runs longer\nthan usual\" alert: a ``durationOvertimePercentage >= N/100`` filter.",
+      "help": "Create a notification subscription.\n\n``--address`` carries the recipient's destination -- an email address for\n``--channel email``, or a callback URL for ``--channel webhook``.\n``--overtime-percent`` writes the threshold of the UI's \"job runs longer\nthan usual\" alert: a ``durationOvertimePercentage >= N/100`` filter.\n``--filter`` adds any other filter the service accepts for the event; it\nmay not repeat a field a dedicated option already sets.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
-        {"kind": "option", "name": "event", "opts": ["--event"], "type": "text", "required": true, "default": null, "help": "Event name filter, e.g. 'job-failed'. Known events: job-failed, job-succeeded, job-succeeded-with-warning, job-processing-long, phase-job-failed, phase-job-succeeded, phase-job-succeeded-with-warning, phase-job-processing-long. Not validated against that list -- the service may add more."},
+        {"kind": "option", "name": "event", "opts": ["--event"], "type": "text", "required": true, "default": null, "help": "Event name filter, e.g. 'job-failed'. Known events: job-failed, job-succeeded, job-succeeded-with-warning, job-processing-long, phase-job-failed, phase-job-succeeded, phase-job-succeeded-with-warning, phase-job-processing-long. kbagent does not validate it; on create the service refuses an unknown event."},
         {"kind": "option", "name": "channel", "opts": ["--channel"], "type": "text", "required": true, "default": null, "help": "Recipient channel: email | webhook"},
         {"kind": "option", "name": "address", "opts": ["--address"], "type": "text", "required": true, "default": null, "help": "Email address (channel=email) or callback URL (channel=webhook)"},
         {"kind": "option", "name": "component_id", "opts": ["--component-id"], "type": "text", "default": null, "help": "Restrict to jobs of this component (e.g. keboola.flow)"},
         {"kind": "option", "name": "config_id", "opts": ["--config-id"], "type": "text", "default": null, "help": "Restrict to jobs of this configuration ID"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Restrict to jobs on this branch"},
         {"kind": "option", "name": "expires_at", "opts": ["--expires-at"], "type": "text", "default": null, "help": "Optional ISO-8601 expiry for the subscription"},
-        {"kind": "option", "name": "overtime_percent", "opts": ["--overtime-percent"], "type": "integer", "default": null, "help": "Fire only when the job runs at least this many percent longer than usual (50 = 50 %). Only for job-processing-long and phase-job-processing-long. Omitted: no overtime filter."}
+        {"kind": "option", "name": "overtime_percent", "opts": ["--overtime-percent"], "type": "integer", "default": null, "help": "Fire only when the job runs at least this many percent longer than usual (50 = 50 %; 0 is refused: it would match every overtime step). Only for job-processing-long and phase-job-processing-long. Omitted: no overtime filter."},
+        {"kind": "option", "name": "filter_exprs", "opts": ["--filter"], "type": "text", "multiple": true, "default": null, "help": "Extra filter on the event payload, FIELD<OP>VALUE with OP one of ==, =, <=, >=, <, > (= means ==). Repeatable; all filters must match. Quote it: < and > are shell redirections, e.g. --filter 'averageDuration>=60'. VALUE is sent as a string (numeric fields compare it as a number). The service checks that FIELD exists for the event."}
       ]
     },
     {
@@ -2242,7 +2264,7 @@
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "multiple": true, "default": null, "help": "Project alias or ID, repeatable (default: KBAGENT_PROJECT, then the active project, then the sole project; --all-projects for all projects)"},
         {"kind": "option", "name": "all_projects", "opts": ["--all-projects"], "type": "boolean", "is_flag": true, "default": false, "help": "Read all registered projects. Cannot be used with --project."},
-        {"kind": "option", "name": "event", "opts": ["--event"], "type": "text", "default": null, "help": "Event name filter, e.g. 'job-failed'. Known events: job-failed, job-succeeded, job-succeeded-with-warning, job-processing-long, phase-job-failed, phase-job-succeeded, phase-job-succeeded-with-warning, phase-job-processing-long. Not validated against that list -- the service may add more."},
+        {"kind": "option", "name": "event", "opts": ["--event"], "type": "text", "default": null, "help": "Event name filter, e.g. 'job-failed'. Known events: job-failed, job-succeeded, job-succeeded-with-warning, job-processing-long, phase-job-failed, phase-job-succeeded, phase-job-succeeded-with-warning, phase-job-processing-long. kbagent does not validate it; on create the service refuses an unknown event."},
         {"kind": "option", "name": "component_id", "opts": ["--component-id"], "type": "text", "default": null, "help": "Only subscriptions filtering on this component (e.g. keboola.flow)"},
         {"kind": "option", "name": "config_id", "opts": ["--config-id"], "type": "text", "default": null, "help": "Only subscriptions filtering on this configuration ID"}
       ]

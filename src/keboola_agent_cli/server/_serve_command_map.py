@@ -257,6 +257,7 @@ SERVE_COMMAND_MAP: dict[tuple[str, str], str] = {
     ("POST", "/members/{project}/remove"): "project member-remove",
     ("POST", "/members/{project}/set-role"): "project member-set-role",
     ("POST", "/notifications/{project}"): "notification create",
+    ("POST", "/notifications/{project}/{subscription_id}/clone"): "notification clone",
     (
         "POST",
         "/notifications/{project}/{subscription_id}/replace-recipient",

@@ -6,8 +6,8 @@ the flow's configuration, so `flow detail` and `config detail` never show
 them. The in-flow `type: "notification"` task is a different mechanism.
 
 Read commands work since 0.86.0; `create`, `delete` and `replace-recipient`
-since 0.91.0; `--overtime-percent` and the `overtime_percent` key since vNEXT
-(check `kbagent version` before you recommend it).
+since 0.91.0; `--overtime-percent`, the `overtime_percent` key, `--filter` and
+`clone` since vNEXT (check `kbagent version` before you recommend them).
 
 ## 1. Audit: who gets alerted for this flow
 
@@ -56,17 +56,41 @@ kbagent --json notification create --project P --event job-processing-long \
   percent up to 500 %, then every minute): a flood of mail.
 - The value is a whole percent, 1 to 10000 (`50` = at least 50 % longer than
   usual). Never pass the ratio you see in `filters` (`0.5`): it exits 2.
-  `0` exits 2 too; the service refuses it.
+  `0` exits 2 too: kbagent refuses it, because the platform reports only
+  overtime above 0, so a 0 threshold fires at every step, like no threshold.
+  `--filter 'durationOvertimePercentage>=0'` is accepted but behaves the
+  same way; use `--overtime-percent N` for a threshold.
 - On any other event the option exits 2 (`INVALID_ARGUMENT`) and creates
   nothing, because no other event carries the overtime value.
 - On kbagent older than vNEXT the option does not exist (`No such option`).
   There is no CLI workaround; tell the user to set the threshold in the
   Flow Builder, or to upgrade.
 - `--channel webhook` takes the URL in `--address`.
-- Without `--branch` the service stores the default branch's id, so the
-  alert fires for production jobs only. Pass `--branch ID` for a dev branch.
+- Without `--branch` (and without a `--filter 'branch.id=...'`) the service
+  stores the default branch's id, so the alert fires for production jobs
+  only. Pass `--branch ID` for a dev branch.
 - `create` is not idempotent: every call adds a subscription. Run step 1
   first and do not create a second identical one.
+
+Any other filter the service accepts for the event (vNEXT+), e.g. only for
+jobs whose usual run time is at least a minute:
+
+```bash
+kbagent --json notification create --project P --event job-processing-long \
+  --channel email --address team@example.com \
+  --config-id FLOW_ID --overtime-percent 50 --filter 'averageDuration>=60'
+```
+
+- Form `FIELD<OP>VALUE`, OP one of `==`, `=`, `<=`, `>=`, `<`, `>`.
+  Repeat `--filter` for more; all filters must match.
+- Always single-quote it: `<` and `>` are shell redirections.
+- VALUE is sent as a string; numeric fields compare it as a number.
+- kbagent checks only the syntax. The service refuses a field it does not
+  know for the event: report its error, do not guess another field name.
+- Do not set one field twice: `--config-id` with
+  `--filter 'job.configuration.id=...'`, or `--overtime-percent` with
+  `--filter 'durationOvertimePercentage...'`, exits 2. An upper bound alone
+  (`--filter 'durationOvertimePercentage<5'`) is fine.
 
 Verify with `notification detail --project P --subscription-id ID` (the `overtime_percent`
 and the raw filters must match what you asked for).
@@ -89,16 +113,52 @@ kbagent --json notification replace-recipient --project P \
 - The channel is kept unless you pass `--channel`. To move from email to a
   webhook, pass `--channel webhook --address URL`.
 - Filters, the overtime threshold included, are copied unchanged. To change
-  the threshold, create a new subscription and delete the old one.
+  the threshold, `clone` it with `--overtime-percent N` (section 4) and delete
+  the old one.
 
-## 4. Delete
+## 4. Clone an alert onto another flow
+
+Since vNEXT.
+
+```bash
+kbagent --json notification clone --project P --subscription-id ID \
+  --config-id OTHER_FLOW_ID --dry-run
+kbagent --json notification clone --project P --subscription-id ID \
+  --config-id OTHER_FLOW_ID
+```
+
+- Run `--dry-run` first and show the user `planned`, `filters_replaced` and
+  `warnings`. Ask before the real run: every run creates one more
+  subscription, also a run with no override (that duplicates the alert).
+- Overrides: `--component-id`, `--config-id`, `--branch`,
+  `--overtime-percent`, `--filter`, `--address` (`--channel`), `--expires-at`
+  or `--clear-expires-at`. The event and the project never change.
+- Each override replaces EVERY source filter on its field (a two-bound range
+  is replaced as a whole); all other filters are copied verbatim, unknown
+  ones included. There is no option to remove a filter: create a new
+  subscription instead.
+- The branch is kept as the source has it. `branch use` does not change it;
+  pass `--branch ID` to move the alert to another branch.
+- A `phase.id` filter is copied too. When you override the config or the
+  component (`--config-id`, `--component-id`, or a `--filter` on
+  `job.configuration.id` / `job.component.id`) and not `phase.id`, the result warns: that phase id
+  belongs to the old flow. Pass `--filter 'phase.id=NEW_PHASE'` or create a
+  new subscription.
+- `--address` alone keeps the source channel. The source expiry is kept,
+  even when it is in the past: pass `--expires-at` or `--clear-expires-at`.
+- After an error that says the subscription may have been created, run
+  `notification list` before you run `clone` again.
+- Use `new_subscription_id` from the result. The source is not changed;
+  delete it separately if the user wants it moved, not copied.
+
+## 5. Delete
 
 ```bash
 kbagent --json notification delete --project P --subscription-id ID --yes
 ```
 
 `delete` is destructive-class: `--deny-destructive` blocks it.
-`create` and `replace-recipient` are write-class. `delete` and
+`create`, `replace-recipient` and `clone` are write-class. `delete` and
 `replace-recipient` ask for confirmation on a terminal; without a terminal
 they refuse with `CONFIRMATION_REQUIRED` (exit 2). An agent has no terminal
 to answer the prompt, so ask the user first (name the subscription id, event

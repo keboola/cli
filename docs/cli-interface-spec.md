@@ -214,7 +214,7 @@ What stays as it is:
 - Checked by: `naming.kebab-case`.
 
 <a id="N2"></a><a id="naming.verb-vocabulary"></a>
-**N2 · MUST for new commands · now.** Use these verbs: `detail` reads one object; `get` and `set` read or write one attribute; `list` lists; `create` and `delete` create and destroy a server object; `update` changes one; `add` and `remove` register something locally, or attach and detach a relationship; `new` generates local files. `describe` never names a write. Existing outliers (the five `storage describe-*` writes, `flow new`, `config get-metadata`) keep their names.
+**N2 · MUST for new commands · now.** Use these verbs: `detail` reads one object; `get` and `set` read or write one attribute; `list` lists; `create` and `delete` create and destroy a server object; `update` changes one; `add` and `remove` register something locally, or attach and detach a relationship; `new` generates local files; `clone` creates a new server object from an existing one, with overrides (`config clone`, `notification clone`; `sync clone` and `storage clone-table` follow the same meaning), and the verb `copy` is not used. `describe` never names a write. Existing outliers (the five `storage describe-*` writes, `flow new`, `config get-metadata`) keep their names.
 
 - Checked by: `naming.verb-vocabulary` (deferred: the verb vocabulary file is not reviewed yet).
 

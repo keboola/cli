@@ -282,6 +282,7 @@ ROUTE_OPERATIONS: dict[tuple[str, str], str] = {
         "POST",
         "/notifications/{project}/{subscription_id}/replace-recipient",
     ): "notification.replace-recipient",
+    ("POST", "/notifications/{project}/{subscription_id}/clone"): "notification.clone",
     # ── lineage (all read-only; `build` is the only cache writer) ─────
     ("POST", "/lineage/build"): "lineage.build",
     ("GET", "/lineage/info"): "lineage.info",

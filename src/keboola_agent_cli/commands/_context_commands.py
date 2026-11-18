@@ -748,12 +748,19 @@ Merge requests: merge a development branch into production with review
 ### notification
 
 Manage notification subscriptions across projects (Flow Notifications tab).
-'list'/'detail' are read-only; 'create'/'replace-recipient' are gated as
-write, 'delete' as destructive.
+'list'/'detail' are read-only; 'create'/'replace-recipient'/'clone' are gated
+as write, 'delete' as destructive.
+
+  kbagent notification clone [--project PROJECT] --subscription-id ID
+      [--component-id ID] [--config-id ID] [--branch N] [--overtime-percent N]
+      [--filter FILTER ...] [--address ADDRESS] [--channel CHANNEL]
+      [--expires-at AT] [--clear-expires-at] [--dry-run]
+    Create a new subscription from an existing one, with overrides.
 
   kbagent notification create [--project PROJECT] --event EVENT
       --channel CHANNEL --address ADDRESS [--component-id ID] [--config-id ID]
       [--branch N] [--expires-at AT] [--overtime-percent N]
+      [--filter FILTER ...]
     Create a notification subscription.
 
   kbagent notification delete [--project PROJECT] --subscription-id ID [--yes]

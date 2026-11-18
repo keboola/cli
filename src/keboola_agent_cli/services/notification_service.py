@@ -37,9 +37,18 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
 
+import httpx
+
 from ..effective_branch import resolve_branch
-from ..errors import ConfigError, ErrorCode, KeboolaApiError
+from ..errors import ConfigError, ErrorCode, KeboolaApiError, request_outcome_unknown
 from ..models import ProjectConfig
+from ._notification_filters import (
+    check_incoming_filters,
+    is_equality,
+    merge_filters,
+    normalize_filters,
+    validate_source_filters,
+)
 from .base import BaseService
 
 logger = logging.getLogger(__name__)
@@ -59,8 +68,11 @@ OPERATOR_AT_LEAST = ">="
 # event never matches an overtime filter, so ``--overtime-percent`` is refused
 # there instead of creating a subscription that silently never fires.
 OVERTIME_EVENTS = ("job-processing-long", "phase-job-processing-long")
-# The service validates the value as ``numeric`` and ``> 0`` (the
-# ``*ProcessingLongNotification`` data constraints), so 0 % is refused there.
+# kbagent's own minimum, not the service's: the ``> 0`` constraint of the
+# ``*ProcessingLongNotification`` data is on the EVENT the job-queue daemon
+# sends, so the daemon only reports values above 0. A 0 % threshold would
+# match every overtime step -- the same as no threshold -- so it is refused.
+# (The UI can store 0; ``--filter 'durationOvertimePercentage>=0'`` also can.)
 # The upper bound is technical, not a business rule: the daemon keeps emitting
 # past 500 %, but the percent must stay representable once divided by 100.
 MIN_OVERTIME_PERCENT = 1
@@ -76,9 +88,9 @@ CHANNEL_EMAIL = "email"
 CHANNEL_WEBHOOK = "webhook"
 VALID_CHANNELS = (CHANNEL_EMAIL, CHANNEL_WEBHOOK)
 
-# ``EventName`` is an open string in the schema, not an enum -- this tuple is
-# for help text and hints only. Never reject an event name against it: the
-# service is free to add events without a kbagent release.
+# For help text and hints only. kbagent never rejects an event name against
+# it: the service validates the event against its own registry on create, and
+# may add events without a kbagent release.
 KNOWN_EVENTS = (
     "job-failed",
     "job-succeeded",
@@ -95,14 +107,18 @@ SCOPE_PROJECT_WIDE = "project-wide"
 
 
 def _filter_value(filters: list[Any], field: str) -> str:
-    """Return the stringified value of the first filter matching ``field``.
+    """Return the stringified value of the first EQUALITY filter matching ``field``.
 
     Filter values are declared as ``string | integer | boolean``, so every
     value is stringified here -- a numeric config ID must not reach the
     output columns (or an ``==`` comparison against a CLI option) as an int.
+
+    Only an equality filter (operator omitted or ``==``) names a value: a
+    ``branch.id < 123`` filter is not "branch 123", so it leaves the column
+    empty (#989).
     """
     for item in filters:
-        if isinstance(item, dict) and item.get("field") == field:
+        if isinstance(item, dict) and item.get("field") == field and is_equality(item):
             value = item.get("value")
             return "" if value is None else str(value)
     return ""
@@ -171,6 +187,15 @@ def _validate_overtime_percent(event: str, overtime_percent: object) -> None:
             ),
             error_code=ErrorCode.INVALID_ARGUMENT,
         )
+    _validate_overtime_value(overtime_percent)
+
+
+def _validate_overtime_value(overtime_percent: object) -> None:
+    """Refuse a non-integer (booleans included) or out-of-range threshold.
+
+    Raises:
+        KeboolaApiError: ``INVALID_ARGUMENT`` naming ``--overtime-percent``.
+    """
     if (
         isinstance(overtime_percent, bool)
         or not isinstance(overtime_percent, int)
@@ -250,6 +275,107 @@ def _build_filters(
     return filters
 
 
+def _dedicated_options(
+    component_id: str | None,
+    config_id: str | None,
+    branch_id: int | None,
+    overtime_percent: int | None,
+) -> list[tuple[str, str, bool]]:
+    """``(option, field, given)`` for each dedicated option, as ``_build_filters`` reads them."""
+    return [
+        ("--component-id", FILTER_FIELD_COMPONENT_ID, bool(component_id)),
+        ("--config-id", FILTER_FIELD_CONFIG_ID, bool(config_id)),
+        ("--branch", FILTER_FIELD_BRANCH_ID, branch_id is not None),
+        ("--overtime-percent", FILTER_FIELD_OVERTIME, overtime_percent is not None),
+    ]
+
+
+def _incoming_filters(
+    component_id: str | None,
+    config_id: str | None,
+    branch_id: int | None,
+    overtime_percent: int | None,
+    filters: list[Any] | None,
+) -> list[dict[str, Any]]:
+    """Validate and build the filters a caller asks for: dedicated first, then generic.
+
+    Raises:
+        KeboolaApiError: ``INVALID_ARGUMENT`` for a malformed filter, a dedicated
+            option and a filter on the same field, or a repeated field+operator.
+    """
+    # An explicit empty ID is not "omitted": it would silently skip the filter
+    # (and the conflict check below), so it is refused.
+    for option, value in (("--component-id", component_id), ("--config-id", config_id)):
+        if value is not None and not str(value).strip():
+            raise KeboolaApiError(
+                message=f"{option} is empty. Give an ID, or leave the option out.",
+                error_code=ErrorCode.INVALID_ARGUMENT,
+            )
+    # Type and range before _build_filters divides it (a string would raise
+    # TypeError there). The event check needs the event, so callers run it.
+    if overtime_percent is not None:
+        _validate_overtime_value(overtime_percent)
+    generic = normalize_filters(filters)
+    check_incoming_filters(
+        _dedicated_options(component_id, config_id, branch_id, overtime_percent), generic
+    )
+    return _build_filters(component_id, config_id, branch_id, overtime_percent) + generic
+
+
+_OUTCOME_UNKNOWN_HINT = (
+    "The subscription may have been created anyway: do not re-run this command; "
+    "check `kbagent notification list` first."
+)
+
+
+def _validate_expires_at(expires_at: str | None) -> None:
+    """Refuse an explicit empty expiry: it is not "omitted" (create) or "inherit" (clone)."""
+    if expires_at is not None and not expires_at.strip():
+        raise KeboolaApiError(
+            message="--expires-at is empty. Give an ISO-8601 time, or leave the option out.",
+            error_code=ErrorCode.INVALID_ARGUMENT,
+        )
+
+
+def _create_or_explain(
+    client: Any,
+    event: str,
+    recipient: dict[str, Any],
+    filters: list[dict[str, Any]] | None,
+    expires_at: str | None,
+) -> dict[str, Any]:
+    """POST a subscription; an unknown outcome says not to repeat it.
+
+    The HTTP layer never repeats this POST after a 5xx or a read timeout. When
+    the answer was lost the subscription may exist, so the error tells the
+    caller to look before running the command again, and is not retryable.
+    """
+    try:
+        return client.create_project_subscription(event, recipient, filters, expires_at)
+    except (httpx.RemoteProtocolError, httpx.ReadError, httpx.WriteError) as exc:
+        # Transport failures the HTTP layer does not wrap: the request may have
+        # reached the service, so the outcome is unknown, like a lost 5xx.
+        raise KeboolaApiError(
+            message=(
+                f"The connection failed while creating the subscription ({type(exc).__name__}). "
+                f"{_OUTCOME_UNKNOWN_HINT}"
+            ),
+            error_code=ErrorCode.CONNECTION_ERROR,
+            retryable=False,
+            details={"outcome_unknown": True},
+        ) from exc
+    except KeboolaApiError as exc:
+        if not request_outcome_unknown(exc):
+            raise
+        raise KeboolaApiError(
+            message=f"{exc.message} {_OUTCOME_UNKNOWN_HINT}",
+            status_code=exc.status_code,
+            error_code=exc.error_code,
+            retryable=False,
+            details=exc.details,
+        ) from exc
+
+
 def _extract_subscription_fields(sub: dict[str, Any]) -> dict[str, Any]:
     """Project a raw subscription dict into the canonical audit row.
 
@@ -281,6 +407,30 @@ def _extract_subscription_fields(sub: dict[str, Any]) -> dict[str, Any]:
         "overtime_percent": _overtime_percent(filters),
         "scope": SCOPE_CONFIG if config_id else SCOPE_PROJECT_WIDE,
     }
+
+
+def _clone_warnings(
+    filters: list[dict[str, Any]],
+    incoming: list[dict[str, Any]],
+) -> list[str]:
+    """Warnings about a clone's planned filters that the caller may not expect."""
+    warnings: list[str] = []
+    fields = {item["field"] for item in filters}
+    if FILTER_FIELD_BRANCH_ID not in fields:
+        warnings.append(
+            "The new subscription has no branch.id filter; the Notification Service "
+            "will add the default branch's id."
+        )
+    overridden = {item["field"] for item in incoming}
+    # The flow changes whether --component-id / --config-id or a --filter on
+    # the same field overrode it; ``incoming`` holds both.
+    flow_changed = bool(overridden & {FILTER_FIELD_COMPONENT_ID, FILTER_FIELD_CONFIG_ID})
+    if flow_changed and FILTER_FIELD_PHASE_ID in fields and FILTER_FIELD_PHASE_ID not in overridden:
+        warnings.append(
+            "The source's phase.id filter was copied, but that phase may not exist in "
+            "the new flow. Override it with --filter 'phase.id=PHASE_ID' if needed."
+        )
+    return warnings
 
 
 @dataclass
@@ -367,7 +517,8 @@ class NotificationService(BaseService):
 
     ``list_subscriptions`` / ``get_subscription_detail`` are read-only. Since
     issue #690, ``create_subscription`` / ``delete_subscription`` /
-    ``replace_subscription_recipient`` add a write path.
+    ``replace_subscription_recipient`` add a write path; since #989,
+    ``clone_subscription`` too.
     """
 
     # ------------------------------------------------------------------
@@ -485,14 +636,15 @@ class NotificationService(BaseService):
         branch_id: int | None = None,
         expires_at: str | None = None,
         overtime_percent: int | None = None,
+        filters: list[Any] | None = None,
     ) -> dict[str, Any]:
         """Create a notification subscription and return its audit row.
 
         Args:
             alias: Registered project alias.
-            event: Kebab-case event name (see ``KNOWN_EVENTS`` for hints --
-                the service treats ``EventName`` as an open string, so this
-                is never validated against a fixed set).
+            event: Kebab-case event name (see ``KNOWN_EVENTS`` for hints).
+                kbagent does not validate it; the service checks it against
+                its own event registry.
             channel: ``"email"`` or ``"webhook"`` -- see :data:`VALID_CHANNELS`.
             address: Email address (``email``) or callback URL (``webhook``).
             component_id: Optional ``job.component.id`` filter.
@@ -504,6 +656,9 @@ class NotificationService(BaseService):
                 ``*-processing-long`` events (50 = the job runs 50 % longer
                 than usual), sent as a ``durationOvertimePercentage >=``
                 filter. ``None`` adds no filter.
+            filters: Extra ``{field, operator?, value}`` filters (any event
+                payload field), appended after the dedicated ones. ``None``
+                and ``[]`` add none. See :func:`normalize_filters`.
 
         Returns:
             The same shape as :meth:`get_subscription_detail`: the created
@@ -513,23 +668,25 @@ class NotificationService(BaseService):
         Raises:
             ConfigError: ``alias`` not registered, or ``channel`` invalid.
             KeboolaApiError: ``INVALID_ARGUMENT`` for an unusable
-                ``overtime_percent`` (see :func:`_validate_overtime_percent`),
-                or the API rejected the subscription.
+                ``overtime_percent`` (see :func:`_validate_overtime_percent`)
+                or ``filters`` (see :func:`_incoming_filters`), or the API
+                rejected the subscription.
         """
         if overtime_percent is not None:
             _validate_overtime_percent(event, overtime_percent)
+        _validate_expires_at(expires_at)
+        wire_filters = _incoming_filters(
+            component_id, config_id, branch_id, overtime_percent, filters
+        )
         projects = self.resolve_projects([alias])
         project = projects[alias]
         effective_branch = resolve_branch(self._config_store, alias, branch_id, role="source")
 
         recipient = _build_recipient(channel, address)
-        filters = _build_filters(component_id, config_id, branch_id, overtime_percent)
 
         client = self._client_factory(project.stack_url, project.token)
         try:
-            created = client.create_project_subscription(
-                event, recipient, filters or None, expires_at
-            )
+            created = _create_or_explain(client, event, recipient, wire_filters or None, expires_at)
             row = _extract_subscription_fields(created)
             row["project_alias"] = alias
             self._stamp_config_names(client, [row], effective_branch)
@@ -690,6 +847,150 @@ class NotificationService(BaseService):
         finally:
             client.close()
 
+    def clone_subscription(
+        self,
+        alias: str,
+        subscription_id: str,
+        component_id: str | None = None,
+        config_id: str | None = None,
+        branch_id: int | None = None,
+        overtime_percent: int | None = None,
+        filters: list[Any] | None = None,
+        address: str | None = None,
+        channel: str | None = None,
+        expires_at: str | None = None,
+        clear_expires_at: bool = False,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Create a new subscription from an existing one, with overrides (#989).
+
+        The source is read once and never changed. Its event and project are
+        kept. Filters use grouped replacement (:func:`merge_filters`): every
+        field an override names loses all its source filters and gets the new
+        ones; every other source filter is copied verbatim. Without
+        ``branch_id`` the source's ``branch.id`` filters are kept as they are --
+        the active branch never changes the scope (it is read only for the
+        config-name join).
+
+        Recipient: untouched, the source's raw recipient dict is reused;
+        ``address`` alone keeps the source channel; ``channel`` needs
+        ``address``. Expiry: inherited, replaced by ``expires_at``, or dropped
+        by ``clear_expires_at`` (the two exclude each other).
+
+        ``dry_run`` reads the source and returns the planned body; nothing is
+        created. A clone without any override duplicates the alert -- the
+        caller asked for exactly that. Running a clone twice creates two.
+
+        Returns:
+            ``source_subscription_id``, ``dry_run``, ``filters_replaced``
+            (``[{field, old, new}]``), ``filters_added``, ``filters_kept``,
+            ``warnings``, and either ``planned`` (dry run) or
+            ``new_subscription_id`` plus the new subscription's audit row.
+
+        Raises:
+            ConfigError: ``alias`` not registered, or the source channel is
+                empty/unknown and ``address`` is given without ``channel``.
+            KeboolaApiError: ``INVALID_ARGUMENT`` for conflicting or malformed
+                overrides, a source whose filters cannot be copied, or an
+                overtime threshold on an event that has none; any API error.
+        """
+        if channel is not None and address is None:
+            raise KeboolaApiError(
+                message="--channel needs --address: give the new recipient's address too.",
+                error_code=ErrorCode.INVALID_ARGUMENT,
+            )
+        if channel is not None and channel not in VALID_CHANNELS:
+            raise KeboolaApiError(
+                message=f"Invalid --channel '{channel}'. Valid channels: {', '.join(VALID_CHANNELS)}.",
+                error_code=ErrorCode.INVALID_ARGUMENT,
+            )
+        _validate_expires_at(expires_at)
+        if expires_at is not None and clear_expires_at:
+            raise KeboolaApiError(
+                message="--expires-at and --clear-expires-at exclude each other.",
+                error_code=ErrorCode.INVALID_ARGUMENT,
+            )
+        incoming = _incoming_filters(component_id, config_id, branch_id, overtime_percent, filters)
+
+        projects = self.resolve_projects([alias])
+        project = projects[alias]
+        effective_branch = resolve_branch(self._config_store, alias, None, role="source")
+
+        client = self._client_factory(project.stack_url, project.token)
+        try:
+            source = client.get_project_subscription(subscription_id)
+            event = str(source.get("event", ""))
+            if overtime_percent is not None:
+                _validate_overtime_percent(event, overtime_percent)
+            source_filters = validate_source_filters(str(subscription_id), source)
+            merge = merge_filters(source_filters, incoming)
+
+            raw_recipient = source.get("recipient")
+            if address is None:
+                if not isinstance(raw_recipient, dict):
+                    raise KeboolaApiError(
+                        message=(
+                            f"Subscription {subscription_id} has no recipient kbagent can "
+                            "copy; pass --address (and --channel)."
+                        ),
+                        error_code=ErrorCode.INVALID_ARGUMENT,
+                    )
+                recipient: dict[str, Any] = raw_recipient
+            else:
+                source_channel = (
+                    raw_recipient.get("channel", "") if isinstance(raw_recipient, dict) else ""
+                )
+                new_channel = channel or str(source_channel)
+                if not new_channel:
+                    raise ConfigError(
+                        "The source subscription's recipient channel is empty or "
+                        "unknown; pass --channel with --address."
+                    )
+                recipient = _build_recipient(new_channel, address)
+
+            if clear_expires_at:
+                new_expires = None
+            elif expires_at is not None:
+                new_expires = expires_at
+            else:
+                new_expires = source.get("expiresAt")
+            warnings = _clone_warnings(merge.filters, incoming)
+            report: dict[str, Any] = {
+                "project_alias": alias,
+                "source_subscription_id": str(subscription_id),
+                "dry_run": dry_run,
+                "filters_replaced": merge.replaced,
+                "filters_added": merge.added,
+                "filters_kept": merge.kept,
+                "warnings": warnings,
+            }
+            if dry_run:
+                report["planned"] = {
+                    "event": event,
+                    "recipient": recipient,
+                    "filters": merge.filters,
+                    "expiresAt": new_expires,
+                }
+                return report
+
+            created = _create_or_explain(
+                client,
+                event,
+                recipient,
+                merge.filters or None,
+                new_expires,
+            )
+            row = _extract_subscription_fields(created)
+            row["project_alias"] = alias
+            if not self._stamp_config_names(client, [row], effective_branch):
+                warnings.append(
+                    "The configuration name of the new subscription could not be read; "
+                    "the subscription was created."
+                )
+            return {**row, **report, "new_subscription_id": row["subscription_id"]}
+        finally:
+            client.close()
+
     # ------------------------------------------------------------------
     # internals
     # ------------------------------------------------------------------
@@ -779,8 +1080,8 @@ class NotificationService(BaseService):
         client: Any,
         rows: list[dict[str, Any]],
         branch_id: int | None,
-    ) -> None:
-        """Stamp ``config_name`` on every row, in place.
+    ) -> bool:
+        """Stamp ``config_name`` on every row, in place; ``False`` when the lookup failed.
 
         The single ``list_components_with_configs`` round-trip is skipped
         entirely when no row is config-scoped: its payload is proportional to
@@ -805,7 +1106,7 @@ class NotificationService(BaseService):
 
         scoped = [row for row in rows if row["config_id"]]
         if not scoped:
-            return
+            return True
 
         index = ConfigNameIndex()
         try:
@@ -821,10 +1122,11 @@ class NotificationService(BaseService):
                         )
         except Exception as exc:
             logger.debug("Config-name join failed for notification subscriptions: %s", exc)
-            return
+            return False
 
         for row in rows:
             row["config_name"] = _resolve_config_name(row, index)
+        return True
 
 
 __all__ = [

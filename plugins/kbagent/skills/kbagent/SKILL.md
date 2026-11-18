@@ -240,6 +240,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Create a notification subscription | `kbagent notification create --project PROJECT --event EVENT --channel CHANNEL --address ADDRESS` |
 | Delete a notification subscription | `kbagent notification delete --project PROJECT --subscription-id SUBSCRIPTION-ID` |
 | Replace a subscription's recipient | `kbagent notification replace-recipient --project PROJECT --subscription-id SUBSCRIPTION-ID --address ADDRESS` |
+| Create a new subscription from an existing one, with overrides | `kbagent notification clone --project PROJECT --subscription-id SUBSCRIPTION-ID` |
 | List development branches of the active project, the given projects, or all projects | `kbagent branch list --project PROJECT` |
 | Create a new development branch and auto-activate it | `kbagent branch create --project PROJECT --name NAME` |
 | Set an existing development branch as active | `kbagent branch use --project PROJECT --branch BRANCH` |
@@ -472,7 +473,7 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | Bucket sharing & linking | [sharing-workflow](references/sharing-workflow.md) |
 | **Project members & invitations** (single + bulk via CSV, role change, remove) | [member-workflow](references/member-workflow.md) |
 | **Billing / PAYG credits** (balance only; the shape of the invoice-history gap; PAYG_NOT_AVAILABLE; units) | [billing-workflow](references/billing-workflow.md) |
-| **Notifications** (who gets alerted for a flow; failure and slow-job alerts with `--overtime-percent`; recipient swap mints a new id) | [notification-workflow](references/notification-workflow.md) |
+| **Notifications** (who gets alerted for a flow; failure and slow-job alerts with `--overtime-percent`; recipient swap mints a new id; `clone` copies an alert to another flow) | [notification-workflow](references/notification-workflow.md) |
 | Dev branches | [branch-workflow](references/branch-workflow.md) |
 | **Conditional flows** (author / validate / update; **run the whole flow or only some tasks** with `flow run --task-id` / `--from-phase-id`: a partial run ignores conditions, `--dry-run` + user OK first, read `failed_task_ids`) | [flow-workflow](references/flow-workflow.md) |
 | Schedules (list / detail / find stale or overlapping cron schedules) | [schedule-workflow](references/schedule-workflow.md) |

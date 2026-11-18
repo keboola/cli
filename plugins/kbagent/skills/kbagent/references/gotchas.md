@@ -121,9 +121,20 @@ These lists keep `error`, because their entries are not failed items with an err
 
 - **`--overtime-percent N` is a whole percent: 50 means the job runs at least 50 % longer than usual.** kbagent sends `{"field": "durationOvertimePercentage", "value": N/100, "operator": ">="}`, the filter the Keboola UI writes. Do not pass the ratio from `filters` (`0.5`): it is not a whole number and exits 2 with `INVALID_ARGUMENT`.
 - **Only for `job-processing-long` and `phase-job-processing-long`.** Any other event with the option is `INVALID_ARGUMENT`, exit 2, before any API call: no other event carries the run-time overtime, so the subscription would never fire. REST: `overtime_percent` in the `POST /notifications/{project}` body (a strict integer: `true` or `"50"` is HTTP 422; a wrong event or range is HTTP 400).
-- **The range is 1 to 10000.** The Notification Service refuses `0` (its value check is `> 0`). Without the option no overtime filter is written, as before: the subscription then fires at every overtime step the job-queue daemon reports (each new whole percent up to 500 %, then every minute).
+- **The range is 1 to 10000.** kbagent refuses `0`: the job-queue daemon only reports overtime values above 0, so a 0 threshold matches every overtime step, the same as no threshold. (The service itself stores a 0 threshold, and the UI can set one; `--filter 'durationOvertimePercentage>=0'` is accepted too, since a generic filter has no local value rule, and behaves like no threshold. Use `--overtime-percent N` for a threshold.) Without the option no overtime filter is written, as before: the subscription then fires at every overtime step the job-queue daemon reports (each new whole percent up to 500 %, then every minute).
 - **Rows of `notification list` / `detail` / `create` / `replace-recipient` carry `overtime_percent`**: the percent (`50`, or `12.5` when the stored ratio is not a whole percent) when the subscription has exactly one `durationOvertimePercentage` filter with operator `>=`; otherwise null. The raw `filters` stay in the row. `replace-recipient` copies the threshold filter verbatim.
-- **Without `--branch` the service adds the default branch.** kbagent sends no `branch.id` filter; the Notification Service stores one with the default branch's id (verified live, with and without an overtime filter). The 0.91.0 note that such a subscription fires on every branch was wrong.
+- **Without `--branch` the service adds the default branch.** kbagent sends no `branch.id` filter (unless a `--filter 'branch.id=...'` gives one, since vNEXT); the Notification Service stores one with the default branch's id (verified live, with and without an overtime filter). The 0.91.0 note that such a subscription fires on every branch was wrong.
+
+## `notification create --filter` and `notification clone`
+
+*(since vNEXT)* (#989)
+
+- **`--filter 'FIELD<OP>VALUE'` writes any filter the Notification Service accepts.** OP is `==`, `=` (same as `==`), `<=`, `>=`, `<` or `>`. Always quote it: `<` and `>` are shell redirections, and an unquoted `--filter averageDuration>60` writes a file named `60`. VALUE is sent as a STRING for every operator (`00123` stays `00123`; numeric fields compare `"60"` as 60). kbagent checks only the syntax; the service checks that FIELD exists for the event and refuses an unknown one (HTTP 400, passed through with its code). A malformed expression is `INVALID_ARGUMENT`, exit 2, naming `--filter`.
+- **A dedicated option and a `--filter` on the same field are refused** (`--overtime-percent` + `--filter 'durationOvertimePercentage<5'`, `--config-id` + `--filter 'job.configuration.id=...'`), and so is one field+operator twice. A range (`>=` and `<` on one field) is allowed. REST: `filters: [{field, operator?, value}]` with typed values (`value` required, null allowed; list, object, NaN, extra keys are HTTP 422).
+- **`branch_id` / `config_id` / `component_id` / `phase_id` in rows read only EQUALITY filters.** A `branch.id < 123` filter is not branch 123: `branch_id` stays empty. Likewise a `job.configuration.id >= 5` filter leaves `config_id` empty, so the row's `scope` is `project-wide` (scope comes from a config EQUALITY filter only) and `notification list --config-id` does not match it. The raw `filters` stay in the row.
+- **`notification clone --subscription-id ID` always creates one more subscription** -- also with no override, and again on every run. Run `--dry-run` first (one read, nothing created; `--deny-writes` blocks it too) and ask the user before running it. After a lost response (5xx, timeout) the error says so: check `notification list` before running it again.
+- **Clone replaces filters per field, as a group.** `--config-id`, `--component-id`, `--branch`, `--overtime-percent` and each `--filter` FIELD remove every source filter on that field and add the new ones; every other source filter (unknown fields, omitted operators, null values) is copied verbatim. The event and the project never change. Without `--branch` the source's `branch.id` stays -- the active branch (`branch use`) is NOT applied. When the config or component is overridden (`--config-id`, `--component-id`, or a `--filter` on `job.configuration.id` / `job.component.id`) and `phase.id` is not, a copied `phase.id` filter gets a warning: that phase may not exist in the new flow. No warning otherwise.
+- **Clone recipient and expiry.** Untouched, the source recipient is copied as is. `--address` alone keeps the source channel; `--channel` without `--address` is `INVALID_ARGUMENT`. The source expiry is inherited, also when it is already past: pass `--expires-at` or `--clear-expires-at` (not both).
 
 ## `sync push` updates a config only at the version it read, and never writes over a local edit
 
@@ -2993,14 +3004,14 @@ events and emits a final `done` SSE frame mirroring the same record.
   platform service and is **not** in the configuration at all. Auditing "who
   gets paged when this flow breaks" by reading flow configs answers only half
   the question; `kbagent notification list` answers the other half.
-- **Event names are kebab-case, and the field is an open string.**
+- **Event names are kebab-case.**
   `job-failed`, `job-succeeded`, `job-succeeded-with-warning`,
   `job-processing-long`, plus the `phase-job-*` variants -- *not* the
-  camelCase `jobFailed` spelling. `--event` is deliberately not validated
-  against a fixed list, because the API declares `EventName` as
-  `type: string` with no enum. A misspelled event therefore returns an empty
-  list, not an error -- if a query comes back empty, re-check the spelling
-  before concluding nobody is subscribed.
+  camelCase `jobFailed` spelling. kbagent does not validate `--event`; on
+  `create` the service checks it against its event registry and refuses an
+  unknown one. On `list` a misspelled event returns an empty list, not an
+  error -- if a query comes back empty, re-check the spelling before
+  concluding nobody is subscribed.
 - **The service IGNORES `?event=`; kbagent narrows client-side**
   (verified live, not from the swagger). A filtered request answers `200` with
   the project's FULL subscription list -- the documented query parameter has

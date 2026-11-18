@@ -1345,8 +1345,8 @@ explicit Storage config version, never the empty shell the create writes.
     scope, filters.
     Event names are kebab-case: job-failed, job-succeeded,
     job-succeeded-with-warning, job-processing-long, and the phase-job-*
-    variants. --event is NOT validated against that list (the API declares
-    EventName as an open string).
+    variants. --event is NOT validated by kbagent (the service checks it
+    against its own registry on create).
     ALL filtering is CLIENT-SIDE, --event included: the service accepts
     ?event= and then IGNORES it, answering 200 with the project's full
     subscription list (verified live). kbagent still sends the parameter and
@@ -1362,6 +1362,8 @@ explicit Storage config version, never the empty shell the create writes.
     Builder always writes a branch.id filter and uses the DEFAULT branch's
     numeric id for production. A filled Branch column does NOT mean
     "dev-branch only" -- cross-check `branch list` to tell them apart.
+    The component_id/config_id/branch_id/phase_id columns read only EQUALITY
+    filters (since vNEXT): a branch.id < 123 filter leaves branch_id empty.
 
   notification detail
     One subscription with every filter printed verbatim, including the
@@ -1372,12 +1374,20 @@ explicit Storage config version, never the empty shell the create writes.
     (--channel email) or the webhook URL (--channel webhook) -- the wire shape
     is channel-discriminated, the CLI takes one flag either way. An invalid
     --channel is a structured INVALID_ARGUMENT, exit 2.
-    WITHOUT --branch kbagent sends no branch.id filter; the Notification
-    Service stores the default branch's id itself (production only).
+    WITHOUT --branch (and without a --filter 'branch.id=...') kbagent sends
+    no branch.id filter; the Notification Service stores the default
+    branch's id itself (production only).
     --overtime-percent N: the "job runs longer than usual" threshold, a whole
-    percent 1-10000 (50 = 50 % longer), only for job-processing-long and
+    percent 1-10000 (50 = 50 % longer; kbagent refuses 0, which would match
+    every overtime step like no threshold), only for job-processing-long and
     phase-job-processing-long (else INVALID_ARGUMENT, exit 2). Rows carry
     overtime_percent.
+    --filter 'FIELD<OP>VALUE' (since vNEXT, repeatable, OP ==,=,<=,>=,<,>):
+    any filter the service accepts for the event, e.g.
+    --filter 'averageDuration>=60'. QUOTE it (< and > are shell
+    redirections). VALUE is sent as a string. The service refuses an unknown
+    field. A --filter on a field a dedicated option sets, or one
+    field+operator twice, is INVALID_ARGUMENT, exit 2, before any call.
 
   notification delete
     Delete a subscription (since 0.91.0). Confirms unless --yes or --json.
@@ -1393,9 +1403,25 @@ explicit Storage config version, never the empty shell the create writes.
     subscription. --channel defaults to the old subscription's channel.
     Confirms unless --yes or --json.
 
-  Permission classes: notification.create and notification.replace-recipient
-  are `write`, notification.delete is `destructive`. --deny-writes blocks all
-  three; --deny-destructive blocks only delete. list/detail stay `read`.
+  notification clone
+    Create a NEW subscription from an existing one with overrides (since
+    vNEXT), e.g. the same alert on another flow: --config-id K. Event and
+    project never change; the source is untouched. Each override
+    (--component-id, --config-id, --branch, --overtime-percent, each --filter
+    FIELD) replaces EVERY source filter on that field; the rest is copied
+    verbatim. Without --branch the source's branch.id is kept (the active
+    branch is NOT applied). --address alone keeps the channel; --channel needs
+    --address; expiry inherited unless --expires-at / --clear-expires-at.
+    Warnings: a copied phase.id when the config or component is overridden
+    (option or --filter) and phase.id is not; no branch filter. No prompt,
+    and EVERY run creates one more subscription: --dry-run first (one read,
+    returns `planned`), ask the user, then run once. After a lost response
+    check `notification list` before re-running.
+
+  Permission classes: notification.create, notification.replace-recipient and
+  notification.clone are `write`, notification.delete is `destructive`.
+  --deny-writes blocks all of them (clone --dry-run too); --deny-destructive
+  blocks only delete. list/detail stay `read`.
 """,
     "org": """\
 #### Organization Management
