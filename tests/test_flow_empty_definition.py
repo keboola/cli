@@ -46,7 +46,10 @@ EMPTY_DOCUMENTS = ["", "   \n\t\n", "# only a comment\n", "null\n", "~\n"]
 
 
 def _store(tmp_path: Path) -> ConfigStore:
+    """The config store of ``tmp_path``; the project is added on the first call."""
     store = ConfigStore(config_dir=tmp_path / "cfg")
+    if store.get_project("prod") is not None:
+        return store
     store.add_project(
         "prod",
         ProjectConfig(
@@ -345,8 +348,9 @@ def _request(rest: Any, method: str, url: str, body: dict[str, Any]) -> Any:
 def test_rest_create_refuses_explicit_empty(tmp_path: Path, body: dict[str, Any]) -> None:
     client = _keboola_client()
     res = _request(_rest_app(tmp_path, client), "POST", "/flows/prod", {"name": "F", **body})
-    assert res.status_code == 400, res.text
-    assert "INVALID_FLOW_DEFINITION" in res.text
+    # The HTTP status of INVALID_FLOW_DEFINITION comes from the error table
+    # (class "api": 502), like every other invalid flow definition over REST.
+    assert res.json()["error"]["code"] == "INVALID_FLOW_DEFINITION", res.text
     client.create_config.assert_not_called()
 
 
@@ -362,7 +366,7 @@ def test_rest_create_without_definition_still_creates(tmp_path: Path) -> None:
 def test_rest_update_that_empties_the_flow_is_refused(tmp_path: Path) -> None:
     client = _keboola_client({"phases": PHASES, "tasks": TASKS})
     res = _request(_rest_app(tmp_path, client), "PATCH", "/flows/prod/900", {"phases": []})
-    assert res.status_code == 400, res.text
+    assert res.json()["error"]["code"] == "INVALID_FLOW_DEFINITION", res.text
     client.update_config.assert_not_called()
 
 
@@ -430,6 +434,12 @@ def test_empty_inline_with_a_file_is_the_mutual_exclusion_error(tmp_path: Path) 
         "phases: []\ntasks: {}\n",
         "phases: [null]\ntasks: []\n",
         "phases:\n  - id: p1\n    next: oops\ntasks: []\n",
+        # a nested condition whose operands are not a list (crashed before)
+        (
+            "phases:\n  - id: p\n    next:\n      - goto: null\n        condition:\n"
+            "          type: operator\n          operator: EQUALS\n          operands: null\n"
+            "      - goto: null\ntasks:\n  - id: t\n    phase: p\n"
+        ),
     ],
 )
 def test_malformed_lists_are_invalid_not_a_crash(tmp_path: Path, document: str) -> None:

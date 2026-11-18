@@ -100,8 +100,8 @@ kbagent --json flow validate --definition-file flow.yaml --project prod
 kbagent --json flow new --project prod --name "Daily ETL" --definition-file flow.yaml
 ```
 
-A definition you pass must hold `phases` and `tasks` only, with at least one
-phase. An empty file, a `null` list, an unknown top-level key (`task:` instead
+A definition you pass must hold `phases` and/or `tasks` only, and the flow it
+leaves must have at least one phase (`flow update` keeps the side you leave out). An empty file, a `null` list, an unknown top-level key (`task:` instead
 of `tasks:`) or the whole `flow detail --json` output is refused with
 `VALIDATION_ERROR` (exit 2) and nothing is written. `flow new` WITHOUT
 `--definition`/`--definition-file` creates an empty flow on purpose; fill it

@@ -40,6 +40,8 @@ def _condition_arity_errors(condition: Any) -> list[str]:
     errors: list[str] = []
     ctype = condition.get("type")
     operands = condition.get("operands", [])
+    if not isinstance(operands, list):
+        return [f"Condition 'operands' must be a list, got {type(operands).__name__}"]
 
     if ctype == "operator":
         op = condition.get("operator")
