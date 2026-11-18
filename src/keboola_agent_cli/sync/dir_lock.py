@@ -117,8 +117,9 @@ def _acquire(root: Path) -> Any:
     try:
         lock_dir.mkdir(parents=True, exist_ok=True)
         # A linked .keboola/ or lock/ would put the lock (and the .gitignore
-        # written next to it) outside the project.
-        if lock_dir.resolve() != lock_dir:
+        # written next to it) outside the project. The root is resolved again
+        # now that it exists (a Windows short name expands only then).
+        if lock_dir.resolve() != root.resolve() / KEBOOLA_DIR_NAME / LOCK_DIR:
             raise ConfigError(f"The sync lock directory {lock_dir} resolves outside {root}.")
         ensure_self_ignore(lock_dir / IGNORE_FILENAME)
         lock = _NativeFileLock(
