@@ -25,7 +25,8 @@ from typing import Any
 
 import yaml
 
-from ..constants import CONFIG_FILENAME
+from ..constants import CONFIG_FILENAME, KEBOOLA_DIR_NAME
+from .dir_lock import LOCK_DIR
 
 # Duplicated here (not imported from sync_service) to avoid a circular import --
 # clone.py is imported *by* sync_service.
@@ -53,16 +54,44 @@ def _write_yaml(path: Path, data: dict[str, Any]) -> None:
     )
 
 
+def is_fresh_target(target_dir: Path) -> bool:
+    """True iff *target_dir* does not exist, is empty, or holds nothing but its sync lock (L5).
+
+    Clone takes the target's directory lock before it copies, and the lock
+    lives in ``.keboola/lock/`` -- so a target that holds only that folder is
+    still a fresh one, like an empty one (#827 round 2).
+    """
+    if not target_dir.is_dir():
+        return not target_dir.exists()
+    if not any(target_dir.iterdir()):
+        return True
+    keboola = target_dir / KEBOOLA_DIR_NAME
+    if not keboola.is_dir():
+        return False
+    return [p.name for p in target_dir.iterdir()] == [KEBOOLA_DIR_NAME] and [
+        p.name for p in keboola.iterdir()
+    ] == [LOCK_DIR]
+
+
 def copy_reference_tree(source_dir: Path, target_dir: Path) -> None:
     """Copy a reference project tree to a fresh target dir (incl. code files).
 
+    The source's lock folder is never copied, and the target's own (its
+    clone holds it) is never replaced.
+
     Raises:
-        FileExistsError: if ``target_dir`` already exists (the caller decides
-            whether an existing target means "already cloned, just push").
+        FileExistsError: if ``target_dir`` holds anything but its lock (the
+            caller decides whether an existing target means "already cloned,
+            just push").
     """
-    if target_dir.exists():
+    if not is_fresh_target(target_dir):
         raise FileExistsError(f"Target directory already exists: {target_dir}")
-    shutil.copytree(source_dir, target_dir)
+    source_keboola = (source_dir / KEBOOLA_DIR_NAME).resolve()
+
+    def skip_lock(directory: str, names: list[str]) -> list[str]:
+        return [LOCK_DIR] if Path(directory).resolve() == source_keboola else []
+
+    shutil.copytree(source_dir, target_dir, ignore=skip_lock, dirs_exist_ok=True)
 
 
 def repoint_manifest_project(

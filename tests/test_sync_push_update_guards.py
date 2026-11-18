@@ -207,6 +207,36 @@ def test_a_conflict_leaves_the_file_the_manifest_and_later_phases_alone(
     assert api.script(cid) == ["SELECT 'ui'"]
 
 
+def test_a_conflict_names_steps_that_resolve_it(ws: Workspace, api: FakeStorage) -> None:
+    """PR #1005 review: only copy aside + `pull --theirs` + re-apply resolves a conflict.
+
+    A hand merge leaves the old baseline: the next diff calls it a conflict and
+    push skips it (review round 1, item 3). The message names only the working
+    path, and following it pushes the local edit on top of the UI edit.
+    """
+    cid, d = _pulled(ws, api)
+    ws.edit_description(d, "local")
+    api.on("update_config", "before", lambda _cid: api.ui_edit(cid, ["SELECT 'ui'"]))
+    message = ws.push()["errors"][0]["message"]
+
+    assert "by hand" not in message
+    assert "copy" in message and "aside" in message
+    assert "kbagent sync pull --theirs" in message
+    assert "every local change" in message
+    assert (
+        message.index("--theirs")
+        < message.index("kbagent sync diff")
+        < message.index("kbagent sync push")
+    )
+    # The advised path: pull --theirs, re-apply the edit, push.
+    ws.pull(theirs=True)
+    ws.edit_description(d, "local")
+    result = ws.push()
+    assert result["errors"] == [], result
+    assert api.configs[cid]["description"] == "local"
+    assert api.script(cid) == ["SELECT 'ui'"]
+
+
 # --------------------------------------------------------------------- D6, R9
 
 

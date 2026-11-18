@@ -19,7 +19,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from ..constants import CONFIG_FILENAME
 from ..errors import ErrorCode, KeboolaApiError
 from ..sync.branch_scope import (
     UNKNOWN_BASE_KEY,
@@ -48,8 +47,15 @@ from ._sync_disabled import (
     pushed_disabled,
     record_disabled,
 )
+from ._sync_local_snapshot import (
+    RowInput,
+    capture_row_input,
+    local_edit_warning,
+    row_file_unchanged,
+)
 from ._sync_models import AUTHORED_ROW_KEY, CREATED_FROM_KEY, PROMOTED_ROW_KEY, CreateOutcome
 from ._sync_push_create import (
+    PlannedCreate,
     differs_from_local,
     pending_config_creates,
     plan_create,
@@ -281,17 +287,18 @@ def create_refusals(
                     "error_code": str(exc.error_code),
                 }
             )
-            refusals += _dependent_row_refusals(change, changes)
+            refusals += _dependent_row_refusals(str(exc.error_code), change, changes)
     return refusals
 
 
 def _dependent_row_refusals(
-    parent: dict[str, Any], changes: list[dict[str, Any]]
+    parent_code: str, parent: dict[str, Any], changes: list[dict[str, Any]]
 ) -> list[dict[str, str]]:
     """The planned rows of a refused new config: the real push skips them too (round 8).
 
     They name the refused config by its directory (``parent_path``) -- or, for
-    a placeholder config (a clone), by its placeholder id.
+    a placeholder config (a clone), by its placeholder id. Either way it
+    carries the config's own code (*parent_code*), as in the real push (#827).
     """
     path, config_id = parent.get("path", ""), parent.get("config_id", "")
     return [
@@ -303,7 +310,7 @@ def _dependent_row_refusals(
                 f"Row {row.get('path', '')} would not be created: its config "
                 f"{parent['component_id']} at {path} is refused (see its error)."
             ),
-            "error_code": str(ErrorCode.PARENT_CONFIG_NOT_TRACKED),
+            "error_code": parent_code,
         }
         for row in changes
         if row.get("is_row")
@@ -703,12 +710,13 @@ def _push_create_row(
     *link_rows_in* (the manifest, on any other push) links the promote
     entries of *source_tree* to the new row before the checkpoint (risk 74).
 
+    The file is read once (:func:`capture_row_input`); an edit saved while
+    the row is created is not written over (#827 item 8).
+
     Returns the API-assigned row id.
     """
-    local_data = service._read_config_file(row_dir)
-    if local_data is None:
-        raise FileNotFoundError(f"Row file not found: {row_dir / CONFIG_FILENAME}")
-
+    read = capture_row_input(service, row_dir)
+    local_data = read.data
     pristine_data = copy.deepcopy(local_data)
     name, description, configuration = local_row_to_api(local_data, component_id)
     if remap is not None:
@@ -795,17 +803,16 @@ def _push_create_row(
     # Write-back: encrypted secrets land in the local file so a subsequent diff
     # sees local == remote. ``config_id=""`` tells the shared helper to skip
     # writing a config_id into ``_keboola`` (rows use ``row_id``).
-    writeback_after_push(
+    file_hash = settle_row_file(
         service,
-        pristine_data,
+        read,
         row_dir,
-        "",
         configuration,
-        is_row=True,
+        pristine=pristine_data,
         row_id=new_row_id if remap is None else "",
+        label=f"{component_id}/{parent_config_id}/rows/{new_row_id}",
+        warnings=warnings,
     )
-
-    row_file = row_dir / CONFIG_FILENAME
     stamp = row_baseline(
         client,
         component_id=component_id,
@@ -814,7 +821,7 @@ def _push_create_row(
         branch_id=branch_id,
         response=result,
     )
-    row_entry.metadata["pull_hash"] = service._file_hash(row_file) if row_file.exists() else ""
+    row_entry.metadata["pull_hash"] = file_hash
     row_entry.metadata["pull_config_hash"] = stamp.cfg_hash
     row_entry.metadata.pop(UNKNOWN_BASE_KEY, None)  # the row now has a known base
     record_disabled(row_entry.metadata, disabled=file_disables(pristine_data))
@@ -847,11 +854,11 @@ def push_update_row(
     not leave a permanent phantom diff behind. A missing key re-enables the
     row when its recorded baseline file had ``is_disabled: true``
     (``_sync_disabled``); the record read is the one of the row this update
-    re-stamps, under the target branch's entry.
+    re-stamps, under the target branch's entry. The file is read once and an
+    edit saved during the update is not written over (#827 item 8).
     """
-    local_data = service._read_config_file(row_dir)
-    if local_data is None:
-        raise FileNotFoundError(f"Row file not found: {row_dir / CONFIG_FILENAME}")
+    read = capture_row_input(service, row_dir)
+    local_data = read.data
     row_entry = next((r for r in parent.rows if r.id == row_id), None)
 
     pristine_data = copy.deepcopy(local_data)
@@ -887,15 +894,16 @@ def push_update_row(
 
     # The baseline is the hash of the bytes written, never a re-read: an edit
     # saved right after the write stays a local change (#827, F7).
-    new_file_hash = writeback_after_push(
+    new_file_hash = settle_row_file(
         service,
-        pristine_data,
+        read,
         row_dir,
-        "",
         configuration,
-        is_row=True,
+        pristine=pristine_data,
         row_id=row_id if remap is None else "",
-    ).file_hash
+        label=f"{component_id}/{parent_config_id}/rows/{row_id}",
+        warnings=warnings,
+    )
     stamp = row_baseline(
         client,
         component_id=component_id,
@@ -910,6 +918,42 @@ def push_update_row(
         row_entry.metadata["pull_hash"] = new_file_hash
         record_disabled(row_entry.metadata, disabled=file_disables(pristine_data))
         apply_row_stamp(row_entry.metadata, stamp)
+
+
+def settle_row_file(
+    service: SyncService,
+    read: RowInput,
+    row_dir: Path,
+    configuration: dict[str, Any],
+    *,
+    pristine: dict[str, Any],
+    row_id: str,
+    label: str,
+    warnings: list[dict[str, Any]] | None,
+) -> str:
+    """Write the pushed row back unless its file changed; return the hash to stamp (D7, D8).
+
+    The hash describes bytes push knows: the ones it wrote, else -- when an
+    edit was saved during the write and is kept (``LOCAL_EDIT_DURING_PUSH``)
+    -- the ones it read and sent. Never a fresh read of the file. *pristine*
+    is the row as read, before ``local_row_to_api`` touched it.
+    """
+    if not row_file_unchanged(service, row_dir, read):
+        found: dict[str, str] = {}
+        collect_secrets(pristine, "", found)
+        if warnings is not None:
+            component_id, _, rest = label.partition("/")
+            warnings.append(local_edit_warning(component_id, rest, row_dir, secrets=bool(found)))
+        return read.file_hash
+    return writeback_after_push(
+        service,
+        copy.deepcopy(pristine),
+        row_dir,
+        "",
+        configuration,
+        is_row=True,
+        row_id=row_id,
+    ).file_hash
 
 
 def _push_delete_row(
@@ -1019,6 +1063,7 @@ def push_create(
     # The remap starts from the source-id payload, once (D24).
     configuration = remap.apply(component_id, original) if remap is not None else original
 
+    planned: PlannedCreate | None = None  # the data-app path plans no id (#926)
     if component_id == DATA_APP_COMPONENT_ID and ds_client is not None:
         # Carry the DS runtime type into the target (CLI-8): create the DS
         # /apps record with the type, then fill the Storage config body.
@@ -1139,4 +1184,5 @@ def push_create(
         config_dir=config_dir,
         file_config_id="" if promote else str(new_config_id),
         pending_refs=remap.pending_refs(component_id, original) if remap is not None else [],
+        recovered=planned is not None and planned.existing is not None,
     )

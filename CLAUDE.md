@@ -1409,6 +1409,21 @@ kbagent sync push [--project ALIAS] [--all-projects] [--dry-run] [--force] [--al
 #   match the --project project (also --all-projects), else CONFIG_ERROR (exit 5) naming both project IDs, before
 #   any API call. A project without a stored project_id costs one token verification call. Copy configs between
 #   projects with `sync clone`. Version gate lives in gotchas.md (no `(since vNEXT)` on `# ` lines).
+# sync directory lock (#827 follow-up): init/pull (its auto-init too)/push/diff/status/branch-*/clone
+#   (source while copied, target for the whole clone), config new --output-dir into a tree (before
+#   --push creates the config) and config rename --directory (before the remote rename) hold
+#   .keboola/lock/sync.lock (an OS lock via filelock's native class, file kept, lock/ ignores itself
+#   in git; per-thread ownership, the owner thread nests). A second run fails at once with
+#   SYNC_DIRECTORY_BUSY (exit 1, conflict, retryable, details.directory/lock_file), also per project
+#   under --all-projects; a lock kbagent cannot create is CONFIG_ERROR (exit 5). sync/dir_lock.py.
+#   A folder without .keboola/: status/diff/push/branch-* stop with the no-manifest error first
+#   (REFUSE); config new/rename decide at their start: no .keboola/ then = a plain folder for the
+#   whole command (no lock, no manifest read or written). CREATE: init/pull.
+#   Row precheck: push Phase B (services/_sync_push_rows.py) reads each parent before its first
+#   row write; a version other than the diff's parent_remote_version (or push's own PUT answer),
+#   a 412-readback update, a missing version or a failed read blocks its rows (errors[]
+#   SYNC_CONFLICT or the read's code). The window after the check is not bounded. Version gate
+#   lives in gotchas.md.
 kbagent sync clone --source DIR --target ALIAS --target-dir DIR [--bucket-map FILE] [--variable-values FILE] [--instance-rename FILE] [--no-create-buckets] [--dry-run] [--branch ID]
 # `sync clone` (0.63.0+) copies a reference synced tree into a fresh target project + parameterizes it: applies bucket_map / variable_values / instance_rename overrides (JSON/YAML files), then pushes so every config CREATEs fresh -- keboola.flow and keboola.orchestrator task configIds (and configRowIds), schedule targets, and transformation variable and shared-code links are remapped reference->ULID by push Phase C/D (`link_remaps` counts each kind; a link it cannot set is an `errors[]` entry, and a failed PUT is sent again by the next push). Schedules are never activated and data apps never deployed: `warnings[]` (also on --dry-run, human mode prints them) lists those, copied `KBC::` values the target cannot decrypt, and tasks that run a config not in the tree. Only the run that creates the configs reports them; a re-run returns `warnings: []`. Idempotent: re-run with an existing --target-dir reports no_changes. Fails fast if the target already contains the reference's configs (clone needs a fresh target). Override files must be flat {id: scalar} mappings (0.89.0+): a nested mapping/list/null value is rejected with CONFIG_ERROR naming the key + actual type, instead of being silently stringified into a bogus ID. `--branch` is optional on a fresh clone. It defaults to the target's production branch, resolved from the API like `sync init`. An active branch set with `branch use` on the target wins over production. Pass `--branch` only to target a dev branch of the target. Clone recreates the reference tree's storage buckets in the target from the `storage/buckets.json` pull export BY DEFAULT -- `--no-create-buckets` skips it. Idempotent: an existing bucket is skipped, a per-bucket failure is collected in `bucket_errors`, a linked (shared) bucket is linked to the same source as in the reference (listed in `linked_buckets`; the source's sharing settings decide, a refused link lands in `bucket_errors`). Only the buckets are created, never their tables or data (the export carries no table data). Version gate in gotchas.md.
 kbagent sync branch-link [--project ALIAS] (--branch-id ID | --branch-name NAME) [--directory DIR]

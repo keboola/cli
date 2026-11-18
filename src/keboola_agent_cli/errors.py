@@ -126,6 +126,8 @@ class ErrorCode(StrEnum):
     SYNC_LOCAL_FILE_INVALID = "SYNC_LOCAL_FILE_INVALID"
     # `sync push` read a config's files while they were being edited (#827).
     SYNC_LOCAL_FILE_CHANGED = "SYNC_LOCAL_FILE_CHANGED"
+    # Another kbagent run holds the sync directory's lock (#827 follow-up).
+    SYNC_DIRECTORY_BUSY = "SYNC_DIRECTORY_BUSY"
 
     # Encryption
     ENCRYPTION_FAILED = "ENCRYPTION_FAILED"
@@ -328,6 +330,20 @@ class SyncConflictError(Exception):
         self.error_code = ErrorCode.SYNC_CONFLICT
 
 
+class SyncInitError(Exception):
+    """``sync pull`` could not initialize a directory that had no manifest yet.
+
+    Raised by the auto-init that runs inside pull's directory lock; the
+    command reports it as ``INIT_ERROR`` and ``--all-projects`` reports the
+    underlying error (``cause``), as before the init moved into the service.
+    """
+
+    def __init__(self, cause: Exception) -> None:
+        super().__init__(str(cause))
+        self.cause = cause
+        self.message = str(cause)
+
+
 class PermissionDeniedError(Exception):
     """Raised when an operation is blocked by the permission policy."""
 
@@ -502,6 +518,7 @@ ERROR_CODE_TABLE: dict[str, ErrorClass] = {
     ErrorCode.COMPANION_UNREADABLE: ErrorClass("conflict", 1),
     ErrorCode.SYNC_LOCAL_FILE_INVALID: ErrorClass("validation", 1),
     ErrorCode.SYNC_LOCAL_FILE_CHANGED: ErrorClass("conflict", 1),
+    ErrorCode.SYNC_DIRECTORY_BUSY: ErrorClass("conflict", 1),
     # Encryption
     ErrorCode.ENCRYPTION_FAILED: ErrorClass("api", 1),
     # Job / queue: local --timeout elapsed and the remote job was cancelled.

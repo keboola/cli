@@ -61,6 +61,7 @@ from ..sync.config_format import (
     local_row_to_api,
 )
 from ..sync.diff_engine import compute_changeset, compute_row_changeset, config_hash
+from ..sync.dir_lock import CREATE, REFUSE, UNLOCKED, locks_tree
 from ..sync.git_utils import get_default_branch, is_git_repo
 from ..sync.manifest import (
     Manifest,
@@ -132,7 +133,11 @@ from ._sync_local_files import check_local_files, drop_held, load_config_yaml
 from ._sync_models import LocalConfigHashes
 from ._sync_moves import move_fields, persist_moves, relocate, settle_moves, status_moves
 from ._sync_pending_removals import RemovalJournal, recover_pending_removals, relocate_records
-from ._sync_project_guard import adopt_existing_manifest, load_project_manifest
+from ._sync_project_guard import (
+    adopt_existing_manifest,
+    init_missing_tree,
+    load_project_manifest,
+)
 from ._sync_promote_remap import (
     PromoteRemap,
     diff_decisions,
@@ -158,10 +163,10 @@ from ._sync_push_create import (
     checkpoint_manifest,
     is_fatal_push_error,
     record_created_config,
-    register_adopted_parent,
 )
-from ._sync_push_ops import detect_name_drift, plan_push, push_create, push_row_change
-from ._sync_push_update import held_row_error, push_modified
+from ._sync_push_ops import detect_name_drift, plan_push, push_create
+from ._sync_push_rows import RowPhase, push_rows
+from ._sync_push_update import ParentWrite, push_modified
 from ._sync_stale import (
     apply_stale_sweep,
     find_stale_entries,
@@ -345,6 +350,7 @@ class SyncService(BaseService):
     # init
     # ------------------------------------------------------------------
 
+    @locks_tree(outside=CREATE)
     def init_sync(
         self,
         alias: str,
@@ -474,6 +480,7 @@ class SyncService(BaseService):
     # pull
     # ------------------------------------------------------------------
 
+    @locks_tree(outside=CREATE)
     def pull(
         self,
         alias: str,
@@ -488,6 +495,7 @@ class SyncService(BaseService):
         max_samples: int = DEFAULT_MAX_SAMPLES,
         branch_override: int | None = None,
         theirs: bool = False,
+        init_if_missing: bool = False,
     ) -> dict[str, Any]:
         """Download all configurations from Keboola to local filesystem.
 
@@ -509,10 +517,15 @@ class SyncService(BaseService):
             max_samples: Max number of tables to sample (default 50).
             branch_override: If set, pull from this branch ID rather than
                 the resolved active/manifest branch (CLI ``--branch``).
+            init_if_missing: Initialize a directory with no manifest first,
+                under the same directory lock as the pull (L5); a failed
+                init raises :class:`SyncInitError`.
 
         Returns:
             Dict with pull statistics (configs, rows, files written).
         """
+        if init_if_missing:
+            init_missing_tree(self, alias, project_root)
         projects = self.resolve_projects([alias])
         project = projects[alias]
 
@@ -978,6 +991,7 @@ class SyncService(BaseService):
     # status
     # ------------------------------------------------------------------
 
+    @locks_tree(outside=REFUSE)
     def status(self, project_root: Path) -> dict[str, Any]:
         """Compare local state against the manifest to detect changes.
 
@@ -1059,6 +1073,7 @@ class SyncService(BaseService):
     # diff
     # ------------------------------------------------------------------
 
+    @locks_tree(outside=REFUSE)
     def diff(
         self,
         alias: str,
@@ -1431,6 +1446,7 @@ class SyncService(BaseService):
     # push
     # ------------------------------------------------------------------
 
+    @locks_tree(outside=REFUSE)
     def push(
         self,
         alias: str,
@@ -1617,6 +1633,8 @@ class SyncService(BaseService):
 
             # A config whose update failed: no later phase writes it (#827 D4).
             held: set[tuple[str, str]] = set()
+            # Configs Phase A updated: their version for the row precheck (R2).
+            parent_writes: dict[tuple[str, str], ParentWrite] = {}
             # ---- Phase A: config creates / updates / deletes -------------
             for change in config_changes:
                 change_type = change["change_type"]
@@ -1663,7 +1681,7 @@ class SyncService(BaseService):
                             pushed_details.append(change)
 
                     elif change_type == "modified":
-                        push_modified(
+                        parent_writes[(component_id, config_id)] = push_modified(
                             self,
                             client,
                             change,
@@ -1711,77 +1729,39 @@ class SyncService(BaseService):
                         raise
                     manifest_dirty |= change_type == "modified"  # an entry put back (D3)
                     self._record_push_error(errors, change_type, component_id, config_id, exc)
+                    if change_type == "added":  # its new rows carry this code (round 1, 5)
+                        ledger.record_failed_create(component_id, config_path_str, config_id, exc)
 
-            # ---- Phase B: row creates / updates / deletes ----------------
-            for change in row_changes:
-                change_type = change["change_type"]
-                component_id = change["component_id"]
-                config_id = change["config_id"]
-                source_row_id = change.get("source_row_id") or config_id  # risk 71
-                config_path_str = change.get("path", "")
-                parent_config_id = change.get("parent_config_id", "")
-                if (component_id, parent_config_id) in held:  # its config failed (#827 F3)
-                    errors.append(held_row_error(change))
-                    continue
-                manifest_dirty = True  # before a create's checkpoint (D25)
-                try:
-                    # The parent's id on the target after Phase A: a placeholder
-                    # maps to its ULID (KFR-05), a new config dir to the config
-                    # created there (D7) -- a parent that was not created skips
-                    # the row with an error. An adopted dir is registered (D8).
-                    effective_parent_id = ledger.row_parent(change)
-                    if change.get("parent_path") and parent_config_id:
-                        register_adopted_parent(
-                            self,
-                            client,
-                            manifest=manifest,
-                            target=target,
-                            component_id=component_id,
-                            config_id=parent_config_id,
-                            config_path=change["parent_path"],
-                        )
-                    if remap is not None:
-                        remap.refresh(
-                            manifest, branch_id, ledger.created_id_map, created_row_id_map
-                        )
-                    new_row_id = push_row_change(
-                        self,
-                        client,
-                        change_type=change_type,
-                        component_id=component_id,
-                        parent_config_id=effective_parent_id,
-                        row_id=config_id,
-                        source_row_id=source_row_id,
-                        row_path_str=config_path_str,
-                        project_root=project_root,
-                        manifest=manifest,
-                        branch_id=branch_id,
-                        allow_plaintext_fallback=allow_plaintext_fallback,
-                        warnings=warnings,
-                        known_secrets=known_secrets,
-                        checkpoint=checkpoint,
-                        remap=remap,
-                    )
-                    if change_type == "added":
-                        created += 1
-                        if new_row_id:
-                            if source_row_id:
-                                created_row_id_map[(effective_parent_id, source_row_id)] = (
-                                    new_row_id
-                                )
-                            created_rows_by_parent.setdefault(effective_parent_id, []).append(
-                                new_row_id
-                            )
-                    elif change_type == "modified":
-                        updated += 1
-                    elif change_type == "deleted":
-                        deleted += 1
-                    pushed_details.append(change)
-
-                except Exception as exc:
-                    if is_fatal_push_error(exc):
-                        raise
-                    self._record_push_error(errors, change_type, component_id, config_id, exc)
+            # ---- Phase B: rows, behind the parent version check (R1-R4) --
+            rows = push_rows(
+                RowPhase(
+                    self,
+                    client,
+                    project_root,
+                    manifest,
+                    branch_id,
+                    target,
+                    ledger,
+                    remap,
+                    checkpoint,
+                    held,
+                    parent_writes,
+                    allow_plaintext_fallback,
+                    warnings,
+                    known_secrets,
+                    errors,
+                    pushed_details,
+                    created_row_id_map,
+                    created_rows_by_parent,
+                ),
+                row_changes,
+            )
+            created, updated, deleted = (
+                created + rows.created,
+                updated + rows.updated,
+                deleted + rows.deleted,
+            )
+            manifest_dirty |= rows.manifest_dirty
 
             # ---- Promote path: references to configs created this push (D24)
             # Also after a pull moved promoted entries into their own tree.
@@ -2001,6 +1981,7 @@ class SyncService(BaseService):
     # branch mapping
     # ------------------------------------------------------------------
 
+    @locks_tree(outside=REFUSE)
     def branch_link(
         self,
         alias: str,
@@ -2011,10 +1992,12 @@ class SyncService(BaseService):
         """Link the current git branch to a Keboola dev branch (see ``_sync_branch``)."""
         return _branch_link(self, alias, project_root, branch_id, branch_name)
 
+    @locks_tree(outside=REFUSE)
     def branch_unlink(self, project_root: Path) -> dict[str, Any]:
         """Remove the branch mapping for the current git branch (see ``_sync_branch``)."""
         return _branch_unlink(project_root)
 
+    @locks_tree(outside=REFUSE)
     def branch_status(self, project_root: Path) -> dict[str, Any]:
         """Show the branch mapping status for the current git branch (see ``_sync_branch``)."""
         return _branch_status(project_root)
@@ -2150,6 +2133,7 @@ class SyncService(BaseService):
             logger.warning("%s %s", config_file, parsed.problem)
         return parsed.data
 
+    @locks_tree(outside=UNLOCKED)
     def register_branch_dir(
         self,
         alias: str,
@@ -2164,6 +2148,7 @@ class SyncService(BaseService):
         projects = self.resolve_projects([alias])
         return register_branch_dir(projects[alias], project_root, branch_id, self._client_factory)
 
+    @locks_tree(outside=UNLOCKED)
     def resolve_scaffold_placement(
         self,
         alias: str,

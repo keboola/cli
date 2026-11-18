@@ -2515,11 +2515,21 @@ remain branch-aware because modifying a dev branch is the expected intent.
     A config DELETE and a config UPDATE are conditional (If-Match on the version push read):
     a config edited in the UI after that read is neither deleted nor overwritten -- errors[]
     entry SYNC_CONFLICT, exit 1, local files and manifest untouched, and its rows are not
-    pushed either (one SYNC_CONFLICT entry each); pull first.
+    pushed either (one entry each, with the config's own error code). A plain pull or a
+    manual merge keeps the old baseline: copy the folder(s) aside, pull --theirs (overwrites
+    every local change), re-apply, sync diff, sync push.
     Push reads a config's files once: a file changed while it reads is SYNC_LOCAL_FILE_CHANGED
     (nothing sent; push again). A file edited during the update is not overwritten
     (warnings[] LOCAL_EDIT_DURING_PUSH) and stays a local change for the next push.
     Do not edit the tree while push runs; never re-run push blindly after SYNC_CONFLICT.
+    Rows (since vNEXT): push reads the parent config right before its first row write and
+    blocks all its rows (errors[] SYNC_CONFLICT or the read's code, nothing written) unless
+    the version matches what diff read (parent_remote_version) or what push's own update
+    answered. The window after that check is not bounded: run sync diff right before push.
+    One run per folder (since vNEXT): every sync command (and config new --output-dir /
+    config rename --directory into a tree) holds .keboola/lock; a second run fails at once
+    with SYNC_DIRECTORY_BUSY (exit 1, retryable): wait for the other run, then run it again.
+    Never delete .keboola/lock (a crashed run frees it). Needs a local disk.
     sync pull records folders it deletes under manifest pendingRemovals first: never edit
     that key, never run an older kbagent on such a tree (it re-creates them);
     PENDING_REMOVAL_KEPT = ask the user to delete or move the folder.
