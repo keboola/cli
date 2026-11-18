@@ -488,7 +488,11 @@ def test_rows_of_a_failed_cloned_config_carry_the_create_code(
     result = world.clone()
 
     (config_error,) = [
-        e for e in result["errors"] if e["component_id"] == VARS and not e.get("parent_config_id")
+        e
+        for e in result["errors"]
+        if e["component_id"] == VARS
+        and e.get("config_id") == "var-ref"
+        and not e.get("parent_config_id")
     ]
     rows = [e for e in result["errors"] if e.get("parent_config_id") == "var-ref"]
     assert rows, result["errors"]
