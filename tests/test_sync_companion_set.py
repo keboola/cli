@@ -935,11 +935,8 @@ def test_dry_run_refuses_the_rows_of_a_refused_new_config(tmp_path: Path) -> Non
     dry = sim.svc.push(alias="prod", project_root=sim.root, dry_run=True)
     real = _push(sim)
 
-    assert sorted(e["error_code"] for e in dry["errors"]) == [
-        "COMPANION_UNREADABLE",
-        "PARENT_CONFIG_NOT_TRACKED",
-        "PARENT_CONFIG_NOT_TRACKED",
-    ]
+    # The rows carry their refused config's own code (#827 round 1, item 5).
+    assert sorted(e["error_code"] for e in dry["errors"]) == ["COMPANION_UNREADABLE"] * 3
     assert push_summary(dry).startswith("3 config(s) planned, 3 refused, 0 would be pushed")
     assert real["created"] == 0
     assert sorted(e["error_code"] for e in real["errors"]) == sorted(
