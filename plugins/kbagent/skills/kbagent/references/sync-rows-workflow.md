@@ -230,7 +230,9 @@ directory, or keeps an edited one and reports it as `skipped`.
 it), push sends none of that config's row creates, updates or deletes; each
 gets its own entry in `errors[]` naming the parent. The row's `error_code` is
 the configuration's own: `SYNC_CONFLICT` for a conflict, `SYNC_LOCAL_FILE_CHANGED`
-or `API_ERROR` (a 5xx) when the configuration failed that way. Resolve a
+or `API_ERROR` (a 5xx) when the configuration failed that way; a new row under a
+new config folder whose create failed carries the create's code (with
+`parent_path`), not `PARENT_CONFIG_NOT_TRACKED`. Resolve a
 conflict by copying the conflicting config folder(s) aside, running
 `kbagent sync pull --project ALIAS --theirs` (it overwrites every local change
 in the tree), re-applying the edit, then `sync diff` and `sync push`; a plain

@@ -317,6 +317,9 @@ class CreateLedger:
     # ``(component_id, config id)`` of a config an earlier push created and
     # this push only recovered (#926) -> the version it saw then (None: none).
     recovered_versions: dict[tuple[str, str], int | None] = field(default_factory=dict)
+    # ``(component_id, config dir path)`` of a new config whose create failed
+    # in this push -> its error code, for the rows under it (round 1, item 5).
+    failed_creates: dict[tuple[str, str], str] = field(default_factory=dict)
 
     def uncreated_claims(self) -> set[tuple[str, str]]:
         """``(component_id, placeholder)`` planned for a new dir this push did not create."""

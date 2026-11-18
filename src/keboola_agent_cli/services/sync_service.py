@@ -27,7 +27,7 @@ from ..constants import (
     KEBOOLA_DIR_NAME,
     MANIFEST_VERSION,
 )
-from ..errors import ConfigError, KeboolaApiError, SyncConflictError
+from ..errors import ConfigError, ErrorCode, KeboolaApiError, SyncConflictError
 from ..sync.branch_registry import (
     ScaffoldPlacement,
     ensure_branch_registered,
@@ -1728,6 +1728,10 @@ class SyncService(BaseService):
                         raise
                     manifest_dirty |= change_type == "modified"  # an entry put back (D3)
                     self._record_push_error(errors, change_type, component_id, config_id, exc)
+                    if change_type == "added":  # its new rows carry this code (round 1, 5)
+                        ledger.failed_creates[(component_id, config_path_str)] = str(
+                            getattr(exc, "error_code", "") or ErrorCode.UNEXPECTED_ERROR
+                        )
 
             # ---- Phase B: rows, behind the parent version check (R1-R4) --
             rows = push_rows(

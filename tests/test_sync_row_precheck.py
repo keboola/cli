@@ -21,7 +21,7 @@ from typing import Any
 import pytest
 import yaml
 
-from formal_sync_fake import FakeStorage, Workspace, not_found, precondition_failed
+from formal_sync_fake import Crash, FakeStorage, Workspace, not_found, precondition_failed
 from keboola_agent_cli.constants import CONFIG_FILENAME
 from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
 
@@ -314,3 +314,123 @@ def test_rows_are_grouped_by_parent_in_first_seen_order() -> None:
 
     ordered = group_by_parent([row("1", "a"), row("2", "b"), row("1", "c"), row("2", "d")])
     assert [r["config_id"] for r in ordered] == ["a", "c", "b", "d"]
+
+
+# ---------------------------------------------------------------------------
+# Review round 1 (items 2, 4, 5)
+# ---------------------------------------------------------------------------
+
+
+def _crash(*_: Any) -> None:
+    raise Crash("killed before the manifest recorded the create")
+
+
+def test_a_blocked_row_says_push_again_and_a_second_push_writes_it(
+    ws: Workspace, api: FakeStorage
+) -> None:
+    """Item 4: a parent edited after the diff blocks the rows; a plain re-push resolves it.
+
+    The next diff reads the new version, so the check passes and the row is
+    written. The message says so and never sends the user to `pull --theirs`.
+    """
+    cid = _with_rows(api)
+    ws.init_and_pull()
+    _edit_rows(ws, cid, "z")
+    api.on("list_components_with_configs", "after", lambda: api.ui_describe(cid, "ui text"))
+
+    first = ws.push()
+
+    errors = _row_errors(first)
+    assert len(errors) == 2, first
+    message = errors[0]["message"]
+    assert "kbagent sync push` again" in message
+    assert "--theirs" not in message
+    assert _remote_tables(api, cid) == ["a", "b"]
+    second = ws.push()
+    assert _row_errors(second) == [], second
+    assert _remote_tables(api, cid) == ["z", "z"]
+    assert api.configs[cid]["description"] == "ui text"
+
+
+def test_a_readback_blocked_row_says_push_again(ws: Workspace, api: FakeStorage) -> None:
+    """Item 4: the read-back case gets the same advice (usually our own repeated PUT)."""
+    cid = _with_rows(api)
+    ws.init_and_pull()
+    ws.edit_description(ws.dir_of(cid), "new text")
+    _edit_rows(ws, cid, "z")
+
+    def lost_answer(config_id: str) -> None:
+        version = api.configs[cid]["version"]
+        raise precondition_failed(config_id, version, version - 1)
+
+    api.on("update_config", "after", lost_answer)
+    errors = _row_errors(ws.push())
+
+    assert len(errors) == 2
+    assert "kbagent sync push` again" in errors[0]["message"]
+    assert "--theirs" not in errors[0]["message"]
+
+
+def _new_config_with_rows(ws: Workspace, api: FakeStorage) -> tuple[str, Path]:
+    """A pulled config with two rows, and a new local config dir copied from it (no ids)."""
+    template_cid = _with_rows(api)
+    ws.init_and_pull()
+    new_dir = ws.new_local_config(ws.dir_of(template_cid), "Fresh")
+    for path in (new_dir / "rows").rglob(CONFIG_FILENAME):
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        data.get("_keboola", {}).pop("row_id", None)
+        data.get("_keboola", {}).pop("config_id", None)
+        path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    return template_cid, new_dir
+
+
+def test_a_recovered_create_is_checked_before_its_rows(
+    ws: Workspace, api: FakeStorage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Item 2: a config an earlier push created (answer lost) is not "created here".
+
+    The next push recovers it by reading it at version 1; an edit made after
+    that read must block its rows, like for any existing config.
+    """
+    _new_config_with_rows(ws, api)
+    api.on("create_config", "after", _crash)
+    with pytest.raises(Crash):
+        ws.push()
+    (fresh,) = api.live_named("Fresh")
+    real_detail = api.get_config_detail
+    edited: list[str] = []
+
+    def edit_after_the_recovery_read(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        answer = real_detail(*args, **kwargs)
+        config_id = str(kwargs.get("config_id", args[1] if len(args) > 1 else ""))
+        if config_id == fresh["id"] and not edited:
+            edited.append(fresh["id"])
+            api.ui_describe(fresh["id"], "edited in the UI")
+        return answer
+
+    monkeypatch.setattr(api, "get_config_detail", edit_after_the_recovery_read)
+    result = ws.push()
+
+    errors = _row_errors(result)
+    assert len(errors) == 2, result
+    assert {e["error_code"] for e in errors} == {ErrorCode.SYNC_CONFLICT}
+    assert api.configs[fresh["id"]]["rows"] == []
+
+
+def test_rows_of_a_failed_new_config_carry_the_create_error_code(
+    ws: Workspace, api: FakeStorage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Item 5: not PARENT_CONFIG_NOT_TRACKED -- the parent create's own code."""
+    _new_config_with_rows(ws, api)
+
+    def refused(*_: Any, **__: Any) -> dict[str, Any]:
+        raise KeboolaApiError("Internal error", status_code=500, error_code=ErrorCode.API_ERROR)
+
+    monkeypatch.setattr(api, "create_config", refused)
+    result = ws.push()
+
+    rows = [e for e in result["errors"] if e["change_type"] == "added" and e.get("parent_path")]
+    rows = rows or [e for e in result["errors"] if "Row" in e["message"]]
+    assert len(rows) == 2, result
+    assert {e["error_code"] for e in rows} == {ErrorCode.API_ERROR}
+    assert all("API_ERROR" in e["message"] for e in rows)

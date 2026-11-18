@@ -170,6 +170,25 @@ def check_parent(phase: RowPhase, change: dict[str, Any], parent_id: str) -> dic
     return None
 
 
+def _failed_parent_error(change: dict[str, Any], code: str) -> dict[str, str]:
+    """The errors[] entry of a new row whose new configuration failed to be created."""
+    component_id, parent_path = change["component_id"], change.get("parent_path", "")
+    return {
+        "change_type": change["change_type"],
+        "component_id": component_id,
+        "config_id": change.get("config_id", ""),
+        "parent_config_id": "",
+        "parent_path": parent_path,
+        "error_code": code,
+        "message": (
+            f"Row {parent_path}/{change.get('path', '')} was not created because the create of "
+            f"its configuration {component_id} at {parent_path} failed in this push with {code} "
+            "(see the configuration's error). Nothing was written for the row. The next "
+            "`kbagent sync push` creates both."
+        ),
+    }
+
+
 def _row_error(change: dict[str, Any], template: dict[str, str]) -> dict[str, str]:
     return {
         "change_type": change["change_type"],
@@ -193,6 +212,10 @@ def push_rows(phase: RowPhase, row_changes: list[dict[str, Any]]) -> RowTotals:
         if (component_id, parent_config_id) in phase.held:  # its config failed (#827 F3)
             code = config_error_code(phase.errors, component_id, parent_config_id)
             phase.errors.append(held_row_error(change, code))
+            continue
+        failed = ledger.failed_creates.get((component_id, change.get("parent_path", "")))
+        if failed is not None and not parent_config_id:  # its new config failed (item 5)
+            phase.errors.append(_failed_parent_error(change, failed))
             continue
         try:
             # The parent's id on the target after Phase A: a placeholder
