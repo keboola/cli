@@ -19,7 +19,9 @@ diff/push.
 
 from __future__ import annotations
 
+import os
 import shutil
+import stat
 from pathlib import Path
 from typing import Any
 
@@ -92,6 +94,24 @@ def copy_reference_tree(source_dir: Path, target_dir: Path) -> None:
         return [LOCK_DIR] if Path(directory).resolve() == source_keboola else []
 
     shutil.copytree(source_dir, target_dir, ignore=skip_lock, dirs_exist_ok=True)
+    # copytree copies the source's modes too: a read-only reference (a shared
+    # copy this user cannot write) would give a clone that the push after the
+    # copy cannot write. The clone is this user's own tree, so it gets the
+    # owner's write bit back (on Windows this clears the read-only attribute).
+    _make_owner_writable(target_dir)
+
+
+def _make_owner_writable(root: Path) -> None:
+    """Add the owner write bit to *root* and everything under it."""
+    paths = [root]
+    for folder, dirs, files in os.walk(root):
+        paths.extend(Path(folder, name) for name in (*dirs, *files))
+    for path in paths:
+        if path.is_symlink():
+            continue
+        mode = path.stat().st_mode
+        if not mode & stat.S_IWUSR:
+            path.chmod(stat.S_IMODE(mode) | stat.S_IWUSR)
 
 
 def repoint_manifest_project(

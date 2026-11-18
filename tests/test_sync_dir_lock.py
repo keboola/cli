@@ -829,6 +829,8 @@ def test_clone_reads_a_source_it_cannot_write(tmp_path: Path, tmp_config_dir: Pa
     assert result["status"] == "cloned", result
     assert result["errors"] == []
     assert not (world.ref_dir / ".keboola" / "lock").exists()
+    for path in [world.clone_dir, *world.clone_dir.rglob("*")]:
+        assert path.stat().st_mode & 0o200, path
 
 
 def test_an_unwritable_tree_still_fails_for_a_writer(tmp_path: Path) -> None:
