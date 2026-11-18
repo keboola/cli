@@ -115,12 +115,17 @@ def item_failure(
     else:
         code = fallback_code
         message = sanitize_unexpected_error(exc)
-    return {
+    entry = {
         **keys,
         "error_code": str(code),
         "retryable": bool(getattr(exc, "retryable", False)),
         "message": message,
     }
+    # A busy sync directory names the directory and its lock file (L6).
+    details = getattr(exc, "details", None)
+    if code == ErrorCode.SYNC_DIRECTORY_BUSY and details:
+        entry["details"] = details
+    return entry
 
 
 def project_error_entry(

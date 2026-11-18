@@ -247,13 +247,29 @@ kbagent --json semantic-layer show --project prod --model core_model --type cons
 #    These joins WILL silently start returning empty rows otherwise.
 ```
 
-Edits are an in-place `PUT`, so if the update fails (e.g. the new name
-collides) nothing was deleted and nothing needs rolling back -- the item is
-exactly as it was (the envelope's `rollback` field is always `null`). Items
-keep their id, scope and revision history across an edit.
+Edits are an in-place `PATCH` that carries only the keys you pass
+*(since vNEXT; before: a whole-record `PUT` that overwrote a concurrent change
+to another field)*, so if the update is refused (e.g. the new name collides)
+nothing was deleted and nothing needs rolling back -- the item is exactly as it
+was (the envelope's `rollback` field is always `null`). Items keep their id,
+scope and revision history across an edit.
+
+What an edit does NOT protect against *(since vNEXT)*:
+
+- Two edits of the SAME key at the same time: the last one wins.
+- Two concurrent renames of one metric, or a constraint that starts referencing
+  the metric while the rename runs (the cascade misses it). Run
+  `kbagent semantic-layer validate` after every metric rename.
+- A `PATCH` that failed with a 5xx or a read timeout is not retried and may have
+  been applied. Re-read with `kbagent semantic-layer show` before you repeat it.
+- When every value you pass equals the stored one, nothing is
+  written (no new revision) and the result has `status: "unchanged"` (exit 0);
+  a real write has `status: "updated"`. Key on `status`, not on the message.
+- `import --overwrite` and `promote` still replace the whole item (`PUT`): do
+  not run them while someone edits the target model.
 
 **Partial cascade state**: each cascaded constraint is
-updated independently (an in-place PUT, no rollback needed).
+updated independently (a `PATCH` of its `metrics` only, no rollback needed).
 If the metric rename succeeds but M of N dependent constraints fail
 to repoint, the envelope sets `partial_state: true` at the top level
 and a `recovery_hint` string. Human-mode CLI prints a bright red
@@ -270,7 +286,7 @@ kbagent semantic-layer edit constraint --project prod --model core_model \
 ```
 
 Atomic two-phase commit was rejected as disproportionate: every cascade
-'stage' is itself a PUT that can fail; true atomicity would require
+'stage' is itself a write that can fail; true atomicity would require
 side-staging every cascade item.
 
 ---
@@ -522,10 +538,13 @@ Quick reminders:
   the fix-deployed path avoids the `MAX_RETRIES` round-trips the 500 path
   still pays.
 - **DELETE -> 204** empty body.
-- **Data edits are a `PUT`** (revisioned, in place; `PATCH` only changes
-  the scope). kbagent's `edit metric / dataset / relationship / constraint
-  / glossary` (five sub-subcommands matching `add`) keep the item's id,
-  scope and grants, and a failed PUT changes nothing. Same five types are
+- **Data edits:** `PUT` replaces the whole record, `PATCH` merges only the
+  top-level `data` keys it carries (under a row lock) and can also change the
+  scope (never in the same request as `name`/`data`). Both are revisioned and
+  in place. *(since vNEXT)* kbagent's `edit metric / dataset / relationship /
+  constraint / glossary` send a `PATCH` with only the keys you pass (before: a
+  whole-record `PUT`); they keep the item's id, scope and grants.
+  `import --overwrite` and `promote` keep the `PUT`. Same five types are
   available under `remove`.
 - **`X-StorageApi-Token` is the only auth** -- no separate metastore
   token. `kbagent semantic-layer token --project prod --encrypt` encrypts the

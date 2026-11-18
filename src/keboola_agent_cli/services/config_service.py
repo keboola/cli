@@ -18,6 +18,7 @@ from ..ai_client import AiServiceClient
 from ..config_store import ConfigStore
 from ..constants import (
     CONFIG_STATE_MAX_BYTES,
+    KEBOOLA_DIR_NAME,
     ROOT_LEVEL_CONFIG_COMPONENTS,
 )
 from ..effective_branch import record_branch, resolve_branch
@@ -33,6 +34,7 @@ from ._config_folder import set_config_folder_method
 from ._config_set_guard import validate_set_paths
 from ._encryption import collect_secrets, encrypt_secrets_in_config, find_plaintext_secret_keys
 from ._sync_moves import SKIPPED_OTHER_BRANCH, rename_entries
+from ._sync_project_guard import sync_tree_scope
 from .base import (
     BaseService,
     ClientFactory,
@@ -1284,53 +1286,59 @@ class ConfigService(BaseService):
             ConfigError: If the alias is not found.
             KeboolaApiError: If the API call fails.
         """
-        projects = self.resolve_projects([alias])
-        project = projects[alias]
-        effective_branch_id = resolve_branch(self._config_store, alias, branch_id)
+        # A sync tree it renames in is locked before the remote rename (L5).
+        # Decided once: a directory that is no sync tree now is never read or
+        # written as one, not even when a first pull creates a manifest there
+        # meanwhile (#827 round 2).
+        with sync_tree_scope(directory) as sync_tree:
+            directory = directory if sync_tree else None
+            projects = self.resolve_projects([alias])
+            project = projects[alias]
+            effective_branch_id = resolve_branch(self._config_store, alias, branch_id)
 
-        client = self._client_factory(project.stack_url, project.token)
-        try:
-            # Fetch current state to get old name
-            current = client.get_config_detail(
-                component_id, config_id, branch_id=effective_branch_id
-            )
-            old_name = current.get("name", "")
+            client = self._client_factory(project.stack_url, project.token)
+            try:
+                # Fetch current state to get old name
+                current = client.get_config_detail(
+                    component_id, config_id, branch_id=effective_branch_id
+                )
+                old_name = current.get("name", "")
 
-            # Update name via API
-            client.update_config(
+                # Update name via API
+                client.update_config(
+                    component_id=component_id,
+                    config_id=config_id,
+                    name=name,
+                    change_description=f"Renamed via kbagent config rename: {old_name} -> {name}",
+                    branch_id=effective_branch_id,
+                )
+            finally:
+                client.close()
+
+            result: dict[str, Any] = {
+                "status": "renamed",
+                "project_alias": alias,
+                "component_id": component_id,
+                "config_id": config_id,
+                "old_name": old_name,
+                "new_name": name,
+                "branch_id": effective_branch_id,
+            }
+
+            # Attempt local sync directory rename if applicable
+            sync_result = self._rename_sync_directory(
+                directory=directory,
                 component_id=component_id,
                 config_id=config_id,
-                name=name,
-                change_description=f"Renamed via kbagent config rename: {old_name} -> {name}",
+                new_name=name,
                 branch_id=effective_branch_id,
             )
-        finally:
-            client.close()
+            if sync_result and "skipped" in sync_result:
+                result["sync_skipped"] = sync_result["skipped"]  # local tree not changed (F3)
+            elif sync_result:
+                result["sync"] = sync_result
 
-        result: dict[str, Any] = {
-            "status": "renamed",
-            "project_alias": alias,
-            "component_id": component_id,
-            "config_id": config_id,
-            "old_name": old_name,
-            "new_name": name,
-            "branch_id": effective_branch_id,
-        }
-
-        # Attempt local sync directory rename if applicable
-        sync_result = self._rename_sync_directory(
-            directory=directory,
-            component_id=component_id,
-            config_id=config_id,
-            new_name=name,
-            branch_id=effective_branch_id,
-        )
-        if sync_result and "skipped" in sync_result:
-            result["sync_skipped"] = sync_result["skipped"]  # local tree not changed (F3)
-        elif sync_result:
-            result["sync"] = sync_result
-
-        return result
+            return result
 
     def _rename_sync_directory(
         self,
@@ -1352,7 +1360,7 @@ class ConfigService(BaseService):
         if directory is None:
             return None
 
-        from ..constants import KEBOOLA_DIR_NAME, MANIFEST_FILENAME
+        from ..constants import MANIFEST_FILENAME
 
         manifest_path = directory / KEBOOLA_DIR_NAME / MANIFEST_FILENAME
         if not manifest_path.exists():

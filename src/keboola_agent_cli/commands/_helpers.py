@@ -34,19 +34,23 @@ from ..update_crossing import print_held_warning, refusal_for
 from ._context_commands import ALIASES
 
 
-def resolve_manage_token(*, allow_env: bool = False) -> str:
-    """Resolve the manage token from a permitted source.
+def manage_token_if_available(*, allow_env: bool = False) -> str | None:
+    """The Manage API token from a permitted source, or None when there is none.
 
-    Default-deny: KBC_MANAGE_API_TOKEN is ignored unless ``allow_env=True``
-    (set by the top-level ``--allow-env-manage-token`` flag). The change
-    closes the AI-exfiltration risk where any subprocess running as the
-    same user can read the env var; the new default is "human at a TTY".
+    The one implementation of the Manage-token policy; :func:`resolve_manage_token`
+    calls it. Default-deny: KBC_MANAGE_API_TOKEN is ignored unless
+    ``allow_env=True`` (set by the top-level ``--allow-env-manage-token``
+    flag). The change closes the AI-exfiltration risk where any subprocess
+    running as the same user can read the env var; the default is "human at
+    a TTY".
 
     Resolution order:
     1. ``KBC_MANAGE_API_TOKEN`` env var, IF ``allow_env`` is True. Otherwise
-       a one-shot stderr warning is emitted and the env var is ignored.
+       the env var is ignored; the caller shows
+       :func:`ignored_env_manage_token_warning`.
     2. Interactive prompt with hidden input (if stdin is a TTY).
-    3. Exit 2 with an actionable error naming the opt-in flag.
+    3. None, with nothing printed. ``project refresh`` uses this form: a
+       project it cannot mint for is a per-project failure (#955).
 
     Args:
         allow_env: When True, restores the legacy env-var-first behaviour
@@ -54,25 +58,47 @@ def resolve_manage_token(*, allow_env: bool = False) -> str:
             ``--allow-env-manage-token`` flag via ``ctx.obj``.
 
     Returns:
-        The manage API token.
-
-    Raises:
-        typer.Exit: If no token can be resolved (exit code 2).
+        The Manage API token, or None when no source can supply one.
     """
     env_token = os.environ.get(ENV_KBC_MANAGE_API_TOKEN)
-    if env_token:
-        if allow_env:
-            return env_token
-        typer.echo(
-            f"Warning: {ENV_KBC_MANAGE_API_TOKEN} found in environment "
-            "but ignored. Pass --allow-env-manage-token to opt in.",
-            err=True,
-        )
+    if env_token and allow_env:
+        return env_token
 
     is_tty = hasattr(sys.stdin, "isatty") and sys.stdin.isatty()
     if is_tty:
         return typer.prompt("Manage API token", hide_input=True)
+    return None
 
+
+def ignored_env_manage_token_warning(*, allow_env: bool = False) -> str | None:
+    """The warning for a KBC_MANAGE_API_TOKEN that is set but not allowed, or None.
+
+    :func:`manage_token_if_available` ignores such a variable silently; each
+    caller shows this text before it asks for the token.
+    """
+    if os.environ.get(ENV_KBC_MANAGE_API_TOKEN) and not allow_env:
+        return (
+            f"Warning: {ENV_KBC_MANAGE_API_TOKEN} found in environment "
+            "but ignored. Pass --allow-env-manage-token to opt in."
+        )
+    return None
+
+
+def resolve_manage_token(*, allow_env: bool = False) -> str:
+    """Resolve the Manage API token, or exit 2 when no source can supply one.
+
+    :func:`manage_token_if_available` with the old ending: when it finds no
+    token, an actionable error naming the opt-in flag and exit 2.
+
+    Raises:
+        typer.Exit: If no token can be resolved (exit code 2).
+    """
+    warning = ignored_env_manage_token_warning(allow_env=allow_env)
+    if warning:
+        typer.echo(warning, err=True)
+    token = manage_token_if_available(allow_env=allow_env)
+    if token is not None:
+        return token
     typer.echo(
         "Error: No manage token available. Run interactively, or pass "
         f"--allow-env-manage-token to read {ENV_KBC_MANAGE_API_TOKEN} "

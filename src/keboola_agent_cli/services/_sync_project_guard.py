@@ -9,11 +9,15 @@ host is compared too. ``sync init --adopt-existing`` has its own check here.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
-from ..errors import ConfigError, KeboolaApiError
+from ..constants import KEBOOLA_DIR_NAME, MANIFEST_FILENAME
+from ..errors import ConfigError, KeboolaApiError, SyncInitError
+from ..sync.dir_lock import sync_dir_lock
 from ..sync.manifest import Manifest, load_manifest, save_manifest
 
 if TYPE_CHECKING:
@@ -134,3 +138,35 @@ def adopt_existing_manifest(
         "sync_workspaces": existing.sync_workspaces,
         "files_created": [],
     }
+
+
+def init_missing_tree(service: SyncService, alias: str, project_root: Path) -> None:
+    """``sync init`` *project_root* when it has no manifest yet (pull's auto-init, L5).
+
+    Runs inside pull's directory lock, so two first pulls of one directory
+    never both see "no manifest". A failed init is :class:`SyncInitError`.
+    """
+    if (project_root / KEBOOLA_DIR_NAME / MANIFEST_FILENAME).exists():
+        return
+    try:
+        service.init_sync(alias, project_root)
+    except Exception as exc:
+        raise SyncInitError(exc) from exc
+
+
+@contextmanager
+def sync_tree_scope(directory: Path | None) -> Iterator[bool]:
+    """Decide once whether *directory* is a sync tree, and lock it for the block (L5).
+
+    Yields True for a folder that has ``.keboola/`` now: it is locked until the
+    block ends (``SYNC_DIRECTORY_BUSY`` / ``ConfigError`` before the block).
+    Yields False otherwise: a plain folder for the whole block -- not locked,
+    and the caller must never read or write a manifest there, not even one a
+    first `sync pull` creates meanwhile (#827 round 2). Used by
+    ``config new --output-dir`` and ``config rename --directory``.
+    """
+    if directory is None or not (directory / KEBOOLA_DIR_NAME).is_dir():
+        yield False
+        return
+    with sync_dir_lock(directory):
+        yield True

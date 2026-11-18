@@ -1,9 +1,9 @@
 """Per-change push CRUD operations (create/update/delete config + rows).
 
 Extracted from sync_service.py. ``push()`` first splits the diff with
-:func:`plan_push`, then calls :func:`push_create`,
-:func:`push_update`, and :func:`push_row_change`; the row dispatcher fans out to
-the create/update/delete row helpers. Each reads a local ``_config.yml``,
+:func:`plan_push`, then calls :func:`push_create` and
+:func:`push_row_change` (an update is ``_sync_push_update``); the row
+dispatcher fans out to the create/update/delete row helpers. Each reads a local ``_config.yml``,
 encrypts ``#``-prefixed secrets (fail-closed), POSTs/PUTs/DELETEs, then writes
 the API-assigned id + encrypted secrets back to disk and refreshes the manifest
 hashes. Free functions taking the ``SyncService`` for the on-disk helpers it owns
@@ -19,7 +19,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from ..constants import CONFIG_FILENAME
 from ..errors import ErrorCode, KeboolaApiError
 from ..sync.branch_scope import (
     UNKNOWN_BASE_KEY,
@@ -44,19 +43,25 @@ from ._sync_companions import require_decided_packages
 from ._sync_data_app import create_synced_data_app, require_creatable_data_app_type
 from ._sync_deletes import fold_covered_rows
 from ._sync_disabled import (
-    baseline_entry,
     file_disables,
     pushed_disabled,
     record_disabled,
 )
+from ._sync_local_snapshot import (
+    RowInput,
+    capture_row_input,
+    local_edit_warning,
+    row_file_unchanged,
+)
 from ._sync_models import AUTHORED_ROW_KEY, CREATED_FROM_KEY, PROMOTED_ROW_KEY, CreateOutcome
 from ._sync_push_create import (
+    PlannedCreate,
     differs_from_local,
     pending_config_creates,
     plan_create,
     settle_create,
 )
-from ._sync_workspace import SANDBOXES_COMPONENT_ID, warn_on_backend_size_change
+from ._sync_workspace import SANDBOXES_COMPONENT_ID
 from ._sync_writeback import (
     link_promote_rows,
     manifest_folder,
@@ -282,17 +287,18 @@ def create_refusals(
                     "error_code": str(exc.error_code),
                 }
             )
-            refusals += _dependent_row_refusals(change, changes)
+            refusals += _dependent_row_refusals(str(exc.error_code), change, changes)
     return refusals
 
 
 def _dependent_row_refusals(
-    parent: dict[str, Any], changes: list[dict[str, Any]]
+    parent_code: str, parent: dict[str, Any], changes: list[dict[str, Any]]
 ) -> list[dict[str, str]]:
     """The planned rows of a refused new config: the real push skips them too (round 8).
 
     They name the refused config by its directory (``parent_path``) -- or, for
-    a placeholder config (a clone), by its placeholder id.
+    a placeholder config (a clone), by its placeholder id. Either way it
+    carries the config's own code (*parent_code*), as in the real push (#827).
     """
     path, config_id = parent.get("path", ""), parent.get("config_id", "")
     return [
@@ -304,7 +310,7 @@ def _dependent_row_refusals(
                 f"Row {row.get('path', '')} would not be created: its config "
                 f"{parent['component_id']} at {path} is refused (see its error)."
             ),
-            "error_code": str(ErrorCode.PARENT_CONFIG_NOT_TRACKED),
+            "error_code": parent_code,
         }
         for row in changes
         if row.get("is_row")
@@ -704,12 +710,13 @@ def _push_create_row(
     *link_rows_in* (the manifest, on any other push) links the promote
     entries of *source_tree* to the new row before the checkpoint (risk 74).
 
+    The file is read once (:func:`capture_row_input`); an edit saved while
+    the row is created is not written over (#827 item 8).
+
     Returns the API-assigned row id.
     """
-    local_data = service._read_config_file(row_dir)
-    if local_data is None:
-        raise FileNotFoundError(f"Row file not found: {row_dir / CONFIG_FILENAME}")
-
+    read = capture_row_input(service, row_dir)
+    local_data = read.data
     pristine_data = copy.deepcopy(local_data)
     name, description, configuration = local_row_to_api(local_data, component_id)
     if remap is not None:
@@ -796,17 +803,16 @@ def _push_create_row(
     # Write-back: encrypted secrets land in the local file so a subsequent diff
     # sees local == remote. ``config_id=""`` tells the shared helper to skip
     # writing a config_id into ``_keboola`` (rows use ``row_id``).
-    writeback_after_push(
+    file_hash = settle_row_file(
         service,
-        pristine_data,
+        read,
         row_dir,
-        "",
         configuration,
-        is_row=True,
+        pristine=pristine_data,
         row_id=new_row_id if remap is None else "",
+        label=f"{component_id}/{parent_config_id}/rows/{new_row_id}",
+        warnings=warnings,
     )
-
-    row_file = row_dir / CONFIG_FILENAME
     stamp = row_baseline(
         client,
         component_id=component_id,
@@ -815,7 +821,7 @@ def _push_create_row(
         branch_id=branch_id,
         response=result,
     )
-    row_entry.metadata["pull_hash"] = service._file_hash(row_file) if row_file.exists() else ""
+    row_entry.metadata["pull_hash"] = file_hash
     row_entry.metadata["pull_config_hash"] = stamp.cfg_hash
     row_entry.metadata.pop(UNKNOWN_BASE_KEY, None)  # the row now has a known base
     record_disabled(row_entry.metadata, disabled=file_disables(pristine_data))
@@ -848,11 +854,11 @@ def push_update_row(
     not leave a permanent phantom diff behind. A missing key re-enables the
     row when its recorded baseline file had ``is_disabled: true``
     (``_sync_disabled``); the record read is the one of the row this update
-    re-stamps, under the target branch's entry.
+    re-stamps, under the target branch's entry. The file is read once and an
+    edit saved during the update is not written over (#827 item 8).
     """
-    local_data = service._read_config_file(row_dir)
-    if local_data is None:
-        raise FileNotFoundError(f"Row file not found: {row_dir / CONFIG_FILENAME}")
+    read = capture_row_input(service, row_dir)
+    local_data = read.data
     row_entry = next((r for r in parent.rows if r.id == row_id), None)
 
     pristine_data = copy.deepcopy(local_data)
@@ -886,18 +892,18 @@ def push_update_row(
     )
     logger.info("Updated row %s/%s/%s", component_id, parent_config_id, row_id)
 
-    writeback_after_push(
+    # The baseline is the hash of the bytes written, never a re-read: an edit
+    # saved right after the write stays a local change (#827, F7).
+    new_file_hash = settle_row_file(
         service,
-        pristine_data,
+        read,
         row_dir,
-        "",
         configuration,
-        is_row=True,
+        pristine=pristine_data,
         row_id=row_id if remap is None else "",
+        label=f"{component_id}/{parent_config_id}/rows/{row_id}",
+        warnings=warnings,
     )
-
-    row_file = row_dir / CONFIG_FILENAME
-    new_file_hash = service._file_hash(row_file) if row_file.exists() else ""
     stamp = row_baseline(
         client,
         component_id=component_id,
@@ -912,6 +918,42 @@ def push_update_row(
         row_entry.metadata["pull_hash"] = new_file_hash
         record_disabled(row_entry.metadata, disabled=file_disables(pristine_data))
         apply_row_stamp(row_entry.metadata, stamp)
+
+
+def settle_row_file(
+    service: SyncService,
+    read: RowInput,
+    row_dir: Path,
+    configuration: dict[str, Any],
+    *,
+    pristine: dict[str, Any],
+    row_id: str,
+    label: str,
+    warnings: list[dict[str, Any]] | None,
+) -> str:
+    """Write the pushed row back unless its file changed; return the hash to stamp (D7, D8).
+
+    The hash describes bytes push knows: the ones it wrote, else -- when an
+    edit was saved during the write and is kept (``LOCAL_EDIT_DURING_PUSH``)
+    -- the ones it read and sent. Never a fresh read of the file. *pristine*
+    is the row as read, before ``local_row_to_api`` touched it.
+    """
+    if not row_file_unchanged(service, row_dir, read):
+        found: dict[str, str] = {}
+        collect_secrets(pristine, "", found)
+        if warnings is not None:
+            component_id, _, rest = label.partition("/")
+            warnings.append(local_edit_warning(component_id, rest, row_dir, secrets=bool(found)))
+        return read.file_hash
+    return writeback_after_push(
+        service,
+        copy.deepcopy(pristine),
+        row_dir,
+        "",
+        configuration,
+        is_row=True,
+        row_id=row_id,
+    ).file_hash
 
 
 def _push_delete_row(
@@ -1021,6 +1063,7 @@ def push_create(
     # The remap starts from the source-id payload, once (D24).
     configuration = remap.apply(component_id, original) if remap is not None else original
 
+    planned: PlannedCreate | None = None  # the data-app path plans no id (#926)
     if component_id == DATA_APP_COMPONENT_ID and ds_client is not None:
         # Carry the DS runtime type into the target (CLI-8): create the DS
         # /apps record with the type, then fill the Storage config body.
@@ -1141,158 +1184,5 @@ def push_create(
         config_dir=config_dir,
         file_config_id="" if promote else str(new_config_id),
         pending_refs=remap.pending_refs(component_id, original) if remap is not None else [],
+        recovered=planned is not None and planned.existing is not None,
     )
-
-
-def push_update(
-    service: SyncService,
-    client: Any,
-    component_id: str,
-    config_id: str,
-    config_path_str: str,
-    project_root: Path,
-    manifest: Manifest,
-    branch_id: int | None,
-    *,
-    allow_plaintext_fallback: bool = False,
-    warnings: list[dict[str, Any]] | None = None,
-    known_secrets: SecretCache | None = None,
-    remap: PromoteRemap | None = None,
-) -> dict[str, Any]:
-    """Update an existing config from a local _config.yml file.
-
-    On the promote path (*remap* given) the payload's references are remapped
-    to the target's ids (D24) and the local file keeps its own id (D23).
-
-    Returns the API response so the caller can stamp the manifest baseline
-    from the remote's own view of the config (issue #686). ``warnings``
-    accumulates the ``script[]`` normalization records of
-    :func:`guard_script_shape` for the push envelope, and for a workspace a
-    ``parameters.backendSize`` change (CLI-25).
-    """
-    branch_path = service._resolve_source_branch_path(manifest, project_root, branch_id)
-    config_dir = project_root / branch_path / config_path_str
-    local_data = service._read_config_file(config_dir)
-    if local_data is None:
-        raise FileNotFoundError(f"Config file not found: {config_dir / CONFIG_FILENAME}")
-
-    # Preserve pristine data for writeback (merge_code_files mutates local_data
-    # by injecting parameters.blocks which should not end up in _config.yml).
-    pristine_data = copy.deepcopy(local_data)
-
-    # Merge code files (transform.sql, transform.py, code.py) back into config
-    merge_code_files(component_id, local_data, config_dir)
-    # Packages a silent pyproject.toml left undecided: the target's own (T1).
-    require_decided_packages(
-        client,
-        component_id=component_id,
-        config_id=config_id,
-        branch_id=branch_id,
-        local_data=local_data,
-        config_path=config_path_str,
-    )
-
-    name, description, configuration = local_config_to_api(local_data)
-    baseline = baseline_entry(
-        manifest,
-        component_id=component_id,
-        config_id=config_id,
-        branch_id=branch_id,
-        source_tree=branch_path,
-        path=config_path_str,
-    )
-
-    # Runtime-safety backstop on the assembled API body (issues #245/#274).
-    configuration = guard_script_shape(
-        component_id, configuration, warnings, config_id=config_id, config_path=config_path_str
-    )
-    # Encrypt #-prefixed secrets before sending to API
-    project_id = manifest.project.id if manifest.project else None
-    original = encrypt_secrets_in_config(
-        client,
-        project_id,
-        component_id,
-        configuration,
-        allow_plaintext_fallback=allow_plaintext_fallback,
-        known=known_secrets,
-    )
-    configuration = original
-    if remap is not None:
-        # The remap starts from the source-id payload, once (D24).
-        configuration = remap.apply(component_id, original)
-        if component_id == DATA_APP_COMPONENT_ID:
-            configuration = copy.deepcopy(configuration)
-            _keep_target_app_id(client, config_id, branch_id, configuration)
-        # rebind_pending is on disk before the PUT that may need it.
-        remap.before_update(component_id, config_id, original)
-
-    if component_id == SANDBOXES_COMPONENT_ID and warnings is not None:
-        warn_on_backend_size_change(
-            client,
-            config_id=config_id,
-            configuration=configuration,
-            branch_id=branch_id,
-            warnings=warnings,
-        )
-
-    result = client.update_config(
-        component_id=component_id,
-        config_id=config_id,
-        name=name,
-        configuration=configuration,
-        description=description,
-        change_description="Updated via kbagent sync push",
-        # Explicit key in the local YAML pushes the state; an absent key
-        # leaves the remote state untouched (issue #467) unless the baseline
-        # file the push's diff compared against had the line -- then
-        # deleting it re-enables (``_sync_disabled``).
-        is_disabled=pushed_disabled(local_data, baseline.metadata if baseline else None),
-        branch_id=branch_id,
-    )
-    logger.info("Updated config %s/%s", component_id, config_id)
-    if remap is not None:
-        remap.after_update(component_id, config_id, original)
-        remap.record(
-            component_id,
-            config_id,
-            config_dir=config_dir,
-            config_path=config_path_str,
-            original=original,
-            configuration=configuration,
-        )
-
-    # Write back: update local file with encrypted secrets. Use pristine_data so
-    # blocks/code stay only in their code files. Never the target id on the
-    # promote path (D23): main/ keeps the source branch's id.
-    promote = branch_path != branch_tree_path(manifest, branch_id)
-    writeback_after_push(
-        service,
-        pristine_data,
-        config_dir,
-        "" if promote else config_id,
-        configuration,
-        component_id=component_id,
-        warnings=warnings,
-    )
-
-    return result if isinstance(result, dict) else {}
-
-
-def _keep_target_app_id(
-    client: Any, config_id: str, branch_id: int | None, configuration: dict[str, Any]
-) -> None:
-    """Send the target branch's data-app id, never the one main/ names.
-
-    A data app's ``parameters.id`` points at its Data Science app. On the
-    promote path main/ keeps the production app id (D23), so an update read
-    from main/ would re-point the dev branch's config at the production app.
-    The id is read from the config on the target branch itself; a failed read
-    fails this update rather than send the wrong id.
-    """
-    remote = client.get_config_detail(
-        component_id=DATA_APP_COMPONENT_ID, config_id=config_id, branch_id=branch_id
-    )
-    target_params = ((remote or {}).get("configuration") or {}).get("parameters") or {}
-    params = configuration.get("parameters")
-    if target_params.get("id") and isinstance(params, dict):
-        params["id"] = target_params["id"]

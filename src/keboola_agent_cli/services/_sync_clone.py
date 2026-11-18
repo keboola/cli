@@ -10,6 +10,8 @@ what the target still needs in ``warnings``.
 
 from __future__ import annotations
 
+import contextlib
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
@@ -22,9 +24,11 @@ from ..sync.clone import (
     apply_variable_values,
     copy_reference_tree,
     drop_source_pull_marks,
+    is_fresh_target,
     repoint_default_branch_configs,
     repoint_manifest_project,
 )
+from ..sync.dir_lock import sync_dir_lock
 from ..sync.manifest import load_manifest, save_manifest
 from ._sync_clone_warnings import collect_clone_warnings, read_encrypted_values
 from ._sync_project_guard import verified_project_id
@@ -124,6 +128,7 @@ def clone_project(
     create_buckets = bool(overrides.get("create_buckets", True))
     source_dir = Path(source)
     target_path = Path(target_dir)
+    _reject_overlap(source_dir, target_path)
 
     # Validate the reference is a synced project.
     try:
@@ -136,10 +141,86 @@ def clone_project(
 
     target_project = service.resolve_projects([target_alias])[target_alias]
 
+    # The source is read as one snapshot and the target is written by this
+    # clone alone: source lock while the tree is prepared, target lock for
+    # the whole clone (L5). Taken in that order; a failure releases both.
+    # A source this user cannot write (a read-only shared copy) is read
+    # without its lock: no run of this user can write it either.
+    # An existing directory that is neither fresh nor a clone is refused
+    # before its lock folder is created there (item 6); _prepare_target checks
+    # again under the lock.
+    if not is_fresh_target(target_path):
+        load_manifest(target_path)
+    target_hold = contextlib.ExitStack()
+    with sync_dir_lock(source_dir, read_only_ok=True):
+        target_hold.enter_context(sync_dir_lock(target_path))
+        try:
+            prepared = _prepare_target(
+                service,
+                source_dir,
+                target_path,
+                target_alias,
+                target_project,
+                branch_override=branch_override,
+                overrides=(bucket_map, variable_values, instance_rename),
+            )
+        except BaseException:
+            target_hold.close()
+            raise
+    with target_hold:
+        return _clone_prepared(
+            service,
+            target_alias,
+            target_path,
+            target_project,
+            prepared,
+            bucket_map=bucket_map,
+            create_buckets=create_buckets,
+            dry_run=dry_run,
+            branch_override=branch_override,
+        )
+
+
+@dataclass(frozen=True)
+class _Prepared:
+    """The target tree after the copy step: whether it existed, and the override counts."""
+
+    already_cloned: bool
+    bucket_rewrites: int = 0
+    variable_overrides: int = 0
+    renamed_instances: int = 0
+
+
+def _reject_overlap(source_dir: Path, target_path: Path) -> None:
+    """Refuse a target that is the source, or inside it, or holds it (L5, risk 3)."""
+    source_root, target_root = source_dir.resolve(), target_path.resolve()
+    if (
+        source_root == target_root
+        or source_root in target_root.parents
+        or target_root in source_root.parents
+    ):
+        raise ConfigError(
+            f"The clone target {target_path} must not be the source {source_dir} or inside "
+            "it, and the source must not be inside the target. Use a separate directory."
+        )
+
+
+def _prepare_target(
+    service: SyncService,
+    source_dir: Path,
+    target_path: Path,
+    target_alias: str,
+    target_project: Any,
+    *,
+    branch_override: int | None,
+    overrides: tuple[dict[str, Any], dict[str, Any], dict[str, Any]],
+) -> _Prepared:
+    """Copy and parameterize a fresh target, or repair an existing clone's manifest."""
+    bucket_map, variable_values, instance_rename = overrides
     bucket_rewrites = 0
     variable_overrides = 0
     renamed_instances = 0
-    already_cloned = target_path.exists()
+    already_cloned = not is_fresh_target(target_path)
     # The manifest must name the real target project, or the diff and push
     # below refuse the tree (CLI-31). A clone made before that wrote id 0
     # when the alias had no stored project_id; such a manifest is repaired.
@@ -197,10 +278,27 @@ def clone_project(
         renamed_instances = apply_instance_rename(target_path, manifest, instance_rename)
         save_manifest(target_path, manifest)
 
+    return _Prepared(already_cloned, bucket_rewrites, variable_overrides, renamed_instances)
+
+
+def _clone_prepared(
+    service: SyncService,
+    target_alias: str,
+    target_path: Path,
+    target_project: Any,
+    prepared: _Prepared,
+    *,
+    bucket_map: dict[str, Any],
+    create_buckets: bool,
+    dry_run: bool,
+    branch_override: int | None,
+) -> dict[str, Any]:
+    """Diff, guard and push a prepared target (under its directory lock)."""
+    already_cloned = prepared.already_cloned
     override_counts = {
-        "bucket_rewrites": bucket_rewrites,
-        "variable_overrides": variable_overrides,
-        "renamed_instances": renamed_instances,
+        "bucket_rewrites": prepared.bucket_rewrites,
+        "variable_overrides": prepared.variable_overrides,
+        "renamed_instances": prepared.renamed_instances,
     }
 
     # Every run reads the diff before it pushes: the dry run reports it, the

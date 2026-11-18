@@ -413,8 +413,8 @@ class MetastoreClient(BaseHttpClient):
     ) -> dict[str, Any]:
         """Replace an item in place via ``PUT`` (revisioned update).
 
-        ``PUT`` updates the record in place (``edit``, ``import --overwrite`` and
-        ``promote`` use it) and increments
+        ``PUT`` replaces the whole record in place (``import --overwrite`` and
+        ``promote`` use it; ``edit`` uses :meth:`patch_item`, issue #833) and increments
         ``meta.revision`` server-side, preserving the metastore's revision
         history. ``data`` is the inner ``attributes`` payload; the outer
         envelope is added here.
@@ -461,8 +461,12 @@ class MetastoreClient(BaseHttpClient):
         unlike :meth:`put_item`. A ``null`` value removes its key and a patched key
         that the schema of a closed object does not know is refused (metastore
         v0.15.2; before it the key was saved, and ``null`` was stored as ``null``).
-        Caveat: the server validates only the patched keys, never the merged
-        record, so the caller must validate the merged result itself. Never sends ``scope`` (a scope step-up cannot be combined with
+        The server validates each patched key against the schema and, inside the
+        same transaction, the merged record's references and the schema rules
+        that combine several fields (go-monorepo AJDA-3460, 2026-10-16; before it
+        only the patched keys). It does NOT re-check ``required`` or
+        ``additionalProperties`` on the merged record, so a ``null`` that removes
+        a required key is not caught there. Never sends ``scope`` (a scope step-up cannot be combined with
         name/data -- :meth:`elevate_to_organization`).
 
         Raises ``NOT_FOUND`` on 404 and ``ALREADY_EXISTS`` on 409 (a rename to

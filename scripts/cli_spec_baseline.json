@@ -245,8 +245,6 @@
       "commands/storage.py:storage_unload_table",
       "commands/storage.py:storage_upload_table",
       "commands/sync.py:sync_branch_link",
-      "commands/sync.py:sync_branch_status",
-      "commands/sync.py:sync_branch_unlink",
       "commands/sync.py:sync_clone",
       "commands/sync.py:sync_diff",
       "commands/sync.py:sync_init",

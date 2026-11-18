@@ -23,7 +23,7 @@ dependencies = [
     "kai-client>=0.11.0",
     "croniter>=2.0",
     "cryptography>=48.0.1",
-    "filelock>=3.13",
+    "filelock>=3.30",
 ]
 
 [project.optional-dependencies]

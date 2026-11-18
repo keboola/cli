@@ -10,7 +10,7 @@ from typing import Any
 import typer
 
 from ..constants import SYNC_ORPHAN_PREVIEW_LIMIT
-from ..errors import ConfigError, ErrorCode, KeboolaApiError, SyncConflictError
+from ..errors import ConfigError, ErrorCode, KeboolaApiError, SyncConflictError, SyncInitError
 from ..sync.branch_scope import REASON_PROMOTED
 from ._all_projects import FANOUT_ONE_PROJECT_HELP
 from ._helpers import (
@@ -27,6 +27,7 @@ from ._helpers import (
 from ._project_ref import PROJECT_HELP
 from ._sync_clone_render import clone_summary, clone_total, print_clone_result
 from ._sync_diff_render import covered_suffix, has_remote_only, print_moves, print_remote_only_rows
+from ._sync_errors import sync_errors
 from ._sync_push_render import (
     REMOTE_CHANGE_LABELS,
     dry_run_line,
@@ -693,19 +694,12 @@ def sync_pull(
 
     project_root = _resolve_project_root(directory, project)
 
-    # Auto-init if no manifest exists (same as --all-projects behavior)
-    manifest_path = project_root / KEBOOLA_DIR / MANIFEST_FILE
-    if not manifest_path.exists():
-        try:
-            service.init_sync(project, project_root)
-        except Exception as exc:
-            formatter.error(message=str(exc), error_code=ErrorCode.INIT_ERROR)
-            raise typer.Exit(code=1) from None
-
     try:
+        # No manifest yet: init first, inside the pull's directory lock (L5).
         result = service.pull(
             alias=project,
             project_root=project_root,
+            init_if_missing=True,
             force=force,
             dry_run=dry_run,
             job_limit=job_limit,
@@ -717,6 +711,9 @@ def sync_pull(
             branch_override=branch,
             theirs=theirs,
         )
+    except SyncInitError as exc:
+        formatter.error(message=exc.message, error_code=ErrorCode.INIT_ERROR)
+        raise typer.Exit(code=1) from None
     except SyncConflictError as exc:
         if not formatter.json_mode:
             _format_conflict_list(formatter, exc.conflicts)
@@ -763,11 +760,8 @@ def sync_status(
     service = get_service(ctx, "sync_service")
     project_root = directory.resolve()
 
-    try:
+    with sync_errors(formatter):
         result = service.status(project_root=project_root)
-    except FileNotFoundError as exc:
-        formatter.error(message=str(exc), error_code=ErrorCode.NOT_INITIALIZED)
-        raise typer.Exit(code=1) from None
 
     if formatter.json_mode:
         formatter.output(result)
@@ -1380,14 +1374,8 @@ def sync_branch_unlink(
     service = get_service(ctx, "sync_service")
     project_root = directory.resolve()
 
-    try:
+    with sync_errors(formatter):
         result = service.branch_unlink(project_root=project_root)
-    except FileNotFoundError as exc:
-        formatter.error(message=str(exc), error_code=ErrorCode.NOT_INITIALIZED)
-        raise typer.Exit(code=1) from None
-    except ConfigError as exc:
-        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
-        raise typer.Exit(code=5) from None
 
     if formatter.json_mode:
         formatter.output(result)
@@ -1410,19 +1398,8 @@ def sync_branch_status(
     service = get_service(ctx, "sync_service")
     project_root = directory.resolve()
 
-    try:
+    with sync_errors(formatter):
         result = service.branch_status(project_root=project_root)
-    except FileNotFoundError as exc:
-        formatter.error(message=str(exc), error_code=ErrorCode.NOT_INITIALIZED)
-        raise typer.Exit(code=1) from None
-    except ConfigError as exc:
-        # Corrupted .keboola/branch-mapping.json -- surface as clean
-        # exit-5 envelope so the user sees the descriptive message
-        # ("Failed to parse ...: Invalid branch ID ...") instead of a
-        # Python traceback. Mirrors the handler other sync commands
-        # already have (issue #269 sec-20 follow-up).
-        formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
-        raise typer.Exit(code=5) from None
 
     if formatter.json_mode:
         formatter.output(result)

@@ -342,7 +342,7 @@ def test_put_items_edit_metric(http_session: dict[str, Any]) -> None:
     assert res.status_code == 200, res.text
     body = res.json()
     new_id = body["updated"]["id"]
-    # Edits are in-place PUTs, so ids are normally unchanged; re-track anyway so
+    # Edits are in-place PATCHes, so ids are normally unchanged; re-track anyway so
     # cleanup hits the right rows whichever ids come back.
     http_session["created_items"] = [
         (t, i)

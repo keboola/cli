@@ -4,30 +4,52 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel, ConfigDict, field_validator
 
+from ...constants import DEFAULT_JOB_RUN_TIMEOUT
 from ...services.base import resolve_fanout_aliases
+from ...services.flow_run_selection import FlowRunError, FlowWarning
 from ...services.flow_service import FLOW_COMPONENT_ID, get_flow_examples
 from ...services.flow_validation import find_unreachable_phases, validate_conditional_flow
 from ..dependencies import ALL_PROJECTS_HELP, ServiceRegistry, get_registry
+from ..response_meta import add_warning
 
 router = APIRouter(prefix="/flows", tags=["flows"])
 
 
-class FlowCreate(BaseModel):
-    name: str
-    description: str = ""
+class _FlowDefinitionBody(BaseModel):
+    """``phases`` / ``tasks`` of a create or update body.
+
+    Unknown fields are refused (spec V5), so a typo like ``phase`` is a 422,
+    not a body read as "no definition". An omitted list keeps its meaning
+    (create: empty flow when both are omitted; update: keep the current one);
+    an explicit ``null`` is refused, never read as omitted.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
     phases: list[dict[str, Any]] | None = None
     tasks: list[dict[str, Any]] | None = None
+
+    @field_validator("phases", "tasks")
+    @classmethod
+    def _not_null(cls, value: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+        # Runs only for a value that was sent; an omitted field keeps the default.
+        if value is None:
+            raise ValueError("must be a list; leave the field out instead of sending null")
+        return value
+
+
+class FlowCreate(_FlowDefinitionBody):
+    name: str
+    description: str = ""
     branch_id: int | None = None
 
 
-class FlowUpdate(BaseModel):
+class FlowUpdate(_FlowDefinitionBody):
     name: str | None = None
     description: str | None = None
-    phases: list[dict[str, Any]] | None = None
-    tasks: list[dict[str, Any]] | None = None
     branch_id: int | None = None
 
 
@@ -39,7 +61,43 @@ class FlowSchedule(BaseModel):
     branch_id: int | None = None
 
 
+class FlowRun(BaseModel):
+    """Body of ``POST /flows/{project}/{flow_id}/run`` (spec V5: unknown fields are refused).
+
+    ``task_ids`` omitted or null = no task selector; an empty list or a blank
+    entry is refused (400), never read as "the whole flow".
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    task_ids: list[str] | None = None
+    from_phase_id: str | None = None
+    branch_id: int | None = None
+    variable_values_id: str | None = None
+    no_variables: bool = False
+    dry_run: bool = False
+
+
+# The query parameters of the run route; any other is refused (spec V5).
+_FLOW_RUN_QUERY = frozenset({"wait", "timeout"})
+
+
+def _reject_unknown_run_query(request: Request) -> None:
+    unknown = sorted(set(request.query_params) - _FLOW_RUN_QUERY)
+    if unknown:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Unknown query parameter(s): {', '.join(unknown)}. This route takes "
+                f"{', '.join(sorted(_FLOW_RUN_QUERY))} in the query and the selection in "
+                "the JSON body. The request was refused and nothing was run."
+            ),
+        )
+
+
 class FlowValidate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     phases: list[dict[str, Any]] = []
     tasks: list[dict[str, Any]] = []
     project: str | None = None
@@ -210,6 +268,52 @@ def list_triggers(
     trigger (issue #714).
     """
     return registry.flow.get_flow_triggers(alias=project, config_id=config_id, branch_id=branch_id)
+
+
+@router.post(
+    "/{project}/{flow_id}/run",
+    summary="Run a flow or a selection of its tasks",
+    dependencies=[Depends(_reject_unknown_run_query)],
+)
+def run(
+    project: str,
+    flow_id: str,
+    body: FlowRun,
+    wait: bool = False,
+    timeout: float = DEFAULT_JOB_RUN_TIMEOUT,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """Run a whole flow, or only some tasks. Mirrors `kbagent flow run`.
+
+    A partial run ignores transition conditions (``PARTIAL_RUN_IGNORES_CONDITIONS``
+    in ``Kbagent-Warnings``). Under ``wait`` a partial run returns
+    ``task_results`` / ``failed_task_ids``; a failed selected task answers
+    HTTP 200 with a ``SELECTED_TASK_FAILED`` warning, never a dropped payload.
+    """
+    try:
+        outcome = registry.flow.run_flow(
+            alias=project,
+            flow_id=flow_id,
+            task_ids=body.task_ids,
+            from_phase_id=body.from_phase_id,
+            branch_id=body.branch_id,
+            variable_values_id=body.variable_values_id,
+            no_variables=body.no_variables,
+            wait=wait,
+            timeout=timeout,
+            dry_run=body.dry_run,
+        )
+    except FlowRunError as exc:
+        # The error body's `warnings` (V3) still lists the run's warnings.
+        _add_warnings(exc.warnings)
+        raise
+    _add_warnings(outcome.warnings)
+    return outcome.payload
+
+
+def _add_warnings(warnings: list[FlowWarning]) -> None:
+    for warning in warnings:
+        add_warning(warning.message, code=warning.code, **warning.extra)
 
 
 @router.post("/{project}/{config_id}/schedule", summary="Set a cron schedule on a flow")

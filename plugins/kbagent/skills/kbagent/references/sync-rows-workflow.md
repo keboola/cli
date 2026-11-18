@@ -225,6 +225,42 @@ after file deletion) show as `deleted` -- `push --force` DELETEs them via
 as `remote_deleted`; push never re-creates it. `sync pull` deletes its
 directory, or keeps an edited one and reports it as `skipped`.
 
+*(since vNEXT, #827)* When the update of the parent config is refused
+(`SYNC_CONFLICT`: it or one of its rows changed in Keboola after push read
+it), push sends none of that config's row creates, updates or deletes; each
+gets its own entry in `errors[]` naming the parent. The row's `error_code` is
+the configuration's own: `SYNC_CONFLICT` for a conflict, `SYNC_LOCAL_FILE_CHANGED`
+or `API_ERROR` (a 5xx) when the configuration failed that way; a new row under a
+new config folder whose create failed carries the create's code (with
+`parent_path`), not `PARENT_CONFIG_NOT_TRACKED`. Resolve a
+conflict by copying the conflicting config folder(s) aside, running
+`kbagent sync pull --project ALIAS --theirs` (it overwrites every local change
+in the tree), re-applying the edit, then `sync diff` and `sync push`; a plain
+`sync pull` or a manual merge leaves the old baseline, so push skips it again.
+
+*(since vNEXT, #827)* A row write itself sends no version precondition (the
+Storage API has none for rows), so push reads the parent right before its
+first row write and compares its version with the one the diff read
+(`parent_remote_version` on each row change) or with the version push's own
+update answered. Any doubt -- a different version, an update confirmed only by
+a read-back after a 412, a missing version, a failed read -- blocks every row
+of that parent with an `errors[]` entry (`SYNC_CONFLICT`, or the read's own
+code) and writes nothing for them. Run `kbagent sync push --project ALIAS`
+again: its diff reads the current version and writes the row; a row changed in
+Keboola itself then shows as a conflict and is not pushed. The time between the check and the parent's last row write is
+not bounded (many rows, retries), so a UI edit in it is still overwritten --
+run `sync diff` right before the push and keep pushes short. See
+[sync-workflow.md](sync-workflow.md) "Row writes check the configuration's
+version first".
+*(since vNEXT, #827)* A row file is read once, like a config's: a file that
+changes while push reads it is not sent (`SYNC_LOCAL_FILE_CHANGED`, push
+again); one edited during the row's create or update is not written over
+(`warnings[]` `LOCAL_EDIT_DURING_PUSH`) and stays a local change, because the
+row's baseline is the hash of the bytes push wrote or sent, never a re-read.
+
+A row folder that pull is removing is recorded under `pendingRemovals` first;
+until a pull finishes the removal, diff and push never read it as a new row.
+
 Human-mode diff output prints row-level changes with the same `+`/`~`/`-`/`=`
 prefixes as parent configs, e.g.:
 

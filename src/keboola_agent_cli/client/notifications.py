@@ -14,8 +14,8 @@ are easy to guess wrong:
 
 - Event names are **kebab-case** (``job-failed``, ``job-succeeded``,
   ``job-succeeded-with-warning``, ``job-processing-long`` and their
-  ``phase-job-*`` variants) and ``EventName`` is an open string, not an enum --
-  so nothing here validates the value against a fixed set.
+  ``phase-job-*`` variants). Nothing here validates the value: the service
+  checks it against its own event registry on create.
 - ``filters[].field`` values are **dotted paths into the event payload**
   (``job.component.id``, ``job.configuration.id``, ``branch.id``, ``phase.id``,
   ``durationOvertimePercentage``), not flat keys.
@@ -34,6 +34,20 @@ from typing import Any
 from urllib.parse import quote
 
 from ._core import _CoreClient
+
+
+def _subscription_path(subscription_id: str) -> str:
+    """Path of one subscription; the id is an opaque path segment.
+
+    ``quote(safe="")`` encodes ``/``, but leaves a bare ``.`` or ``..`` as it
+    is, and httpx resolves such a dot segment -- ``/project-subscriptions/..``
+    would address the service root. A segment made only of dots is therefore
+    sent percent-encoded (#989).
+    """
+    segment = quote(str(subscription_id), safe="")
+    if segment and set(segment) == {"."}:
+        segment = segment.replace(".", "%2E")
+    return f"/project-subscriptions/{segment}"
 
 
 class _NotificationsMixin(_CoreClient):
@@ -72,7 +86,7 @@ class _NotificationsMixin(_CoreClient):
         Returns:
             The subscription dict verbatim from the API.
         """
-        path = f"/project-subscriptions/{quote(str(subscription_id), safe='')}"
+        path = _subscription_path(subscription_id)
         return self._notification_request("GET", path).json()
 
     def create_project_subscription(
@@ -85,9 +99,8 @@ class _NotificationsMixin(_CoreClient):
         """Create a notification subscription for the token's project.
 
         Args:
-            event: Kebab-case event name (e.g. ``job-failed``); the service
-                treats ``EventName`` as an open string, so nothing here
-                validates it against a fixed set.
+            event: Kebab-case event name (e.g. ``job-failed``); not validated
+                here -- the service checks it against its event registry.
             recipient: Discriminated on ``channel`` -- an email recipient
                 carries ``address``, a webhook recipient carries ``url``.
             filters: Optional list of ``{"field": ..., "value": ...}`` (or
@@ -113,5 +126,5 @@ class _NotificationsMixin(_CoreClient):
         Args:
             subscription_id: Numeric-string subscription ID.
         """
-        path = f"/project-subscriptions/{quote(str(subscription_id), safe='')}"
+        path = _subscription_path(subscription_id)
         self._notification_request("DELETE", path)

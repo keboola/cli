@@ -8484,7 +8484,7 @@ class TestProjectRefresh:
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
             patch("keboola_agent_cli.cli.OrgService") as MockOrgService,
             patch(
-                "keboola_agent_cli.commands.project.resolve_manage_token",
+                "keboola_agent_cli.commands.project.manage_token_if_available",
                 return_value="manage-token-123456789012345678",
             ),
         ):
@@ -8582,7 +8582,7 @@ class TestProjectRefresh:
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
             patch("keboola_agent_cli.cli.OrgService") as MockOrgService,
             patch(
-                "keboola_agent_cli.commands.project.resolve_manage_token",
+                "keboola_agent_cli.commands.project.manage_token_if_available",
                 return_value="manage-token-123456789012345678",
             ),
         ):
@@ -8637,7 +8637,7 @@ class TestProjectRefresh:
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
             patch("keboola_agent_cli.cli.OrgService") as MockOrgService,
             patch(
-                "keboola_agent_cli.commands.project.resolve_manage_token",
+                "keboola_agent_cli.commands.project.manage_token_if_available",
                 return_value="manage-token-123456789012345678",
             ),
         ):
@@ -8680,7 +8680,7 @@ class TestProjectRefresh:
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
             patch("keboola_agent_cli.cli.OrgService") as MockOrgService,
             patch(
-                "keboola_agent_cli.commands.project.resolve_manage_token",
+                "keboola_agent_cli.commands.project.manage_token_if_available",
                 return_value="manage-token-123456789012345678",
             ),
         ):
@@ -8721,7 +8721,7 @@ class TestProjectRefresh:
             patch("keboola_agent_cli.cli.ConfigStore") as MockStore,
             patch("keboola_agent_cli.cli.OrgService") as MockOrgService,
             patch(
-                "keboola_agent_cli.commands.project.resolve_manage_token",
+                "keboola_agent_cli.commands.project.manage_token_if_available",
                 return_value="manage-token-123456789012345678",
             ),
         ):

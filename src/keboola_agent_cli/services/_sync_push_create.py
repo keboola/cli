@@ -314,6 +314,39 @@ class CreateLedger:
     # ``(component_id, config dir path)`` of a NEW config -> the row
     # placeholders its row dirs share: recorded on its entry when it is created.
     ambiguous_rows: dict[tuple[str, str], set[str]] = field(default_factory=dict)
+    # ``(component_id, config id)`` of a config an earlier push created and
+    # this push only recovered (#926) -> the version it saw then (None: none).
+    recovered_versions: dict[tuple[str, str], int | None] = field(default_factory=dict)
+    # ``(component_id, config dir path)`` of a new config whose create failed
+    # in this push -> its error code, for the rows under it (round 1, item 5).
+    failed_creates: dict[tuple[str, str], str] = field(default_factory=dict)
+    # The same by the placeholder id the config carried (a clone keeps the
+    # reference id until the create succeeds): its rows name that id.
+    failed_create_ids: dict[tuple[str, str], str] = field(default_factory=dict)
+
+    def record_failed_create(
+        self, component_id: str, config_path: str, placeholder: str, exc: Exception
+    ) -> None:
+        """Remember a failed create by folder and by placeholder id, with its code."""
+        code = str(getattr(exc, "error_code", "") or ErrorCode.UNEXPECTED_ERROR)
+        self.failed_creates[(component_id, config_path)] = code
+        if placeholder:
+            self.failed_create_ids[(component_id, placeholder)] = code
+
+    def failed_parent_code(self, change: dict[str, Any]) -> str | None:
+        """The create code of a row change's parent when that create failed in this push.
+
+        The parent is named by its folder (a new config dir) or by a
+        placeholder id that never got mapped to a created config (a clone).
+        """
+        component_id = change["component_id"]
+        parent_config_id = change.get("parent_config_id", "")
+        if parent_config_id:
+            mapped = self.parent_id(component_id, parent_config_id) != parent_config_id
+            if mapped:
+                return None
+            return self.failed_create_ids.get((component_id, parent_config_id))
+        return self.failed_creates.get((component_id, change.get("parent_path", "")))
 
     def uncreated_claims(self) -> set[tuple[str, str]]:
         """``(component_id, placeholder)`` planned for a new dir this push did not create."""
@@ -381,6 +414,21 @@ class CreateLedger:
                 )
         ledger.row_warnings = _plan_rows(service, manifest, changes, target, ledger.ambiguous_rows)
         return ledger
+
+    def created_here(self, component_id: str, config_id: str) -> bool:
+        """True iff this push created *component_id* / *config_id* (the row precheck, R3).
+
+        A config recovered from an earlier push's lost answer is not: someone
+        may have edited it since (review round 1, item 2).
+        """
+        if (component_id, config_id) in self.recovered_versions:
+            return False
+        made = (self.created_id_map, self.promoted_id_map, self.created_by_path)
+        return any(
+            comp == component_id and new_id == config_id
+            for ids in made
+            for (comp, _), new_id in ids.items()
+        )
 
     def parent_id(self, component_id: str, parent_config_id: str) -> str:
         """The id a row change's parent has on the target after this push's creates."""
@@ -526,6 +574,13 @@ def record_created_config(
         raise fatal from fatal.__cause__
 
     ledger.created_by_path[(component_id, config_path_str)] = new_id
+    if outcome.recovered:
+        # The row precheck expects the version the recovery read (or our own
+        # update after it) saw; an edit made since blocks the rows (item 2).
+        version = outcome.result.get("version")
+        ledger.recovered_versions[(component_id, new_id)] = (
+            version if isinstance(version, int) and not isinstance(version, bool) else None
+        )
     writeback_after_push(
         service,
         outcome.pristine_data,

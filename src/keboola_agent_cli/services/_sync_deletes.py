@@ -28,7 +28,7 @@ on the config change as ``covered_rows``. A failed or timed-out config DELETE
 therefore never falls back to deleting its rows one by one.
 
 A config DELETE is conditional (#934). The diff records the version of every
-config it calls ``deleted`` (:func:`stamp_delete_versions`), and push sends it
+config it calls ``deleted`` (:func:`stamp_remote_versions`), and push sends it
 as ``If-Match`` (:func:`delete_config_if_unchanged`). The Storage API deletes
 the config only while it is still at that version. An edit of the config or of
 one of its rows raises the version, so an edit that lands between the diff and
@@ -176,7 +176,8 @@ def settle_deletions(
 ) -> None:
     """Make every local delete in *changes* three-way, rows included (D1-D3). Mutates *changes*.
 
-    A config delete that stays ``deleted`` gets the remote version the diff read (#934).
+    A config delete that stays ``deleted``, and a config ``modified``, gets the
+    remote version the diff read (#934, #827).
     """
     for change in changes:
         if change.change_type == "deleted":
@@ -204,17 +205,37 @@ def settle_deletions(
             change.change_type, change.refused_delete = "conflict", True
             why = f"its configuration {parent[0]}/{parent[1]} cannot be deleted (see its conflict)"
             change.details = [delete_conflict_detail(target, _row_key(change), why)]
-    stamp_delete_versions(changes, inputs.remote_raw)
+    stamp_remote_versions(changes, inputs.remote_raw)
 
 
-def stamp_delete_versions(
+def stamp_remote_versions(
     changes: list[ConfigChange], remote_raw: dict[str, dict[str, Any]]
 ) -> None:
-    """Record on every config ``deleted`` change the remote version the diff read (#934)."""
+    """Record on every config ``deleted`` or ``modified`` change the remote version the diff read.
+
+    Push sends it as the ``If-Match`` precondition of the DELETE (#934) and of
+    the PUT (#827). *remote_raw* is the listing of the TARGET branch, keyed by
+    the target's component and config id -- on the promote path too. A listing
+    without an integer ``version`` records none, and push then sends no
+    precondition. Every row change also records its parent's version
+    (``parent_remote_version``): push compares it with the parent's version
+    right before the parent's first row write (R1, R3).
+    """
     for change in changes:
-        if change.change_type == "deleted" and not change.is_row:
+        if change.is_row:
+            # The parent's version, for push's row precheck (R1). A row of a
+            # new parent dir names no parent id: push creates the parent.
+            if change.change_type in ("added", "modified", "deleted") and change.parent_config_id:
+                parent = remote_raw.get(f"{change.component_id}/{change.parent_config_id}", {})
+                change.parent_remote_version = _int_version(parent.get("version"))
+        elif change.change_type in ("deleted", "modified"):
             version = remote_raw.get(f"{change.component_id}/{change.config_id}", {}).get("version")
-            change.remote_version = version if isinstance(version, int) else None
+            change.remote_version = _int_version(version)
+
+
+def _int_version(version: Any) -> int | None:
+    """A listing's ``version``, or None when it is not an integer."""
+    return version if isinstance(version, int) and not isinstance(version, bool) else None
 
 
 def delete_config_if_unchanged(client: Any, change: dict[str, Any], branch_id: int | None) -> None:

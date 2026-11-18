@@ -515,6 +515,141 @@ and the Storage API has no precondition for a row delete, so a UI edit of a
 row made between the read and the DELETE of that single row is not protected.
 Review `sync diff` right before a `sync push --force` that deletes single rows.
 
+### A config update is conditional, and an edit during push is kept
+
+*(since vNEXT)* (#827)
+
+Push sends the version `sync diff` read (`remote_version` of a `modified`
+change; on the promote path the target branch's version) as `If-Match` on the
+config PUT. When the config or one of its rows was edited in the UI after that
+read, the Storage API answers 412. Push reads the config back: if it holds
+exactly what push sent (configuration with the ciphertexts as sent, name,
+description, enabled state when sent) the update counts as done -- the case of
+a PUT the transport repeated after a lost answer. Otherwise push reports
+`SYNC_CONFLICT` under `errors[]` (exit 1), leaves the local files and the
+manifest entry as they were, and no later step of that push writes the config
+or its rows (each skipped row gets its own entry with the configuration's
+error code, *since vNEXT*: `SYNC_CONFLICT` only for a conflict).
+A plain `kbagent sync pull` keeps the locally modified config, and a manual
+merge keeps the old baseline (the next diff calls it a conflict and push skips
+it). The one working path: copy the conflicting config folder(s) aside, run
+`kbagent sync pull --project ALIAS --theirs` (it overwrites every local change
+in the tree -- keep a copy of any other unpushed edit too), re-apply the edit,
+`kbagent sync diff --project ALIAS`, `kbagent sync push --project ALIAS`. A listing without `version` sends
+no precondition.
+
+Push reads each config's files once; a file that changes while push reads it
+is not sent (`SYNC_LOCAL_FILE_CHANGED`, push again). A file edited while the
+update runs is not written back over (`warnings[]` entry
+`LOCAL_EDIT_DURING_PUSH`): the manifest records what was sent, so
+the newer content stays a local change for the next push (a comment-only edit
+has nothing to send). The baseline is
+always the hash of the bytes push wrote, never a second read of the folder.
+
+Limits: an editor save in the instant between push's last check and its
+write-back is overwritten (no file locking); the link backfill PUTs and
+data-app writes send no precondition; row writes send none either, push checks
+the configuration's version before them (below).
+
+Rules for an agent:
+
+- Do not edit files of the sync tree while `sync push` runs (also not from a
+  parallel tool call or a background job). Push would hold the config
+  (`SYNC_LOCAL_FILE_CHANGED`) or keep the edit unpushed
+  (`LOCAL_EDIT_DURING_PUSH`); after either, run `kbagent sync diff` and push
+  again.
+- On `SYNC_CONFLICT` do not re-run push and do not force the local version over
+  the UI edit. Show the user what changed in Keboola (`kbagent sync diff`),
+  then copy the conflicting folder(s) aside, `sync pull --theirs` (it
+  overwrites every local change: keep a copy of other unpushed edits), re-apply,
+  `sync diff`, `sync push`. A plain `sync pull` or a manual merge does not
+  help: the baseline stays old and the next push skips the conflict.
+
+### One kbagent run at a time per directory
+
+*(since vNEXT)* (#827)
+
+Every command that reads or writes a sync tree holds its lock
+(`.keboola/lock/sync.lock`, an OS lock) for the whole run: `sync init`,
+`pull` (with its auto-init and `--dry-run`), `push` (also `--dry-run`),
+`diff`, `status`, `branch-link`, `branch-unlink`, `branch-status`, `clone`
+(source while copied -- a source you cannot write is read without the lock --,
+target for the whole clone), `config new --output-dir`
+into a sync tree (taken before `--push` creates the config) and
+`config rename --directory` (before the remote rename). A second run in the
+same folder stops at once with `SYNC_DIRECTORY_BUSY` (exit 1,
+`retryable: true`, `details.directory`, `details.lock_file`) and changes
+nothing, locally or in Keboola. `--all-projects` reports it per project.
+
+Rules for an agent:
+
+- On `SYNC_DIRECTORY_BUSY` wait for the other run (another tool call, a
+  background job, a teammate's terminal) to finish, then run the command
+  again. Do not run two sync commands on one folder in parallel.
+- Never delete `.keboola/lock/`: a crashed run frees the lock with its
+  process, so the error always means a live run. The folder ignores itself
+  in git.
+- The lock needs a local disk. On a network drive it may not exclude a run on
+  another machine. A lock kbagent cannot create is `CONFIG_ERROR` (exit 5).
+  Every sync command needs write access to `.keboola/lock/` -- `status`,
+  `diff`, `branch-status` and the source of `sync clone` too, since they take
+  the lock there. On a read-only checkout, copy the tree to a writable place
+  first.
+- `sync clone` refuses a target that is the source, inside it or contains it.
+
+### Row writes check the configuration's version first
+
+*(since vNEXT)* (#827)
+
+Row creates, updates and deletes take no `If-Match` in the Storage API. Push
+therefore reads the parent configuration right before its first row write and
+compares its version with the one `sync diff` read (`parent_remote_version` on
+row changes), or with the version push's own update of that configuration
+answered. A configuration created in the same push is not checked. A
+different version, an update confirmed only by reading it back after a 412, a
+missing version, a 404 or a failed read blocks all its rows: `errors[]`
+entries (`SYNC_CONFLICT`, or the read's own code) with `parent_config_id`,
+nothing written for them, their files and manifest entries unchanged. Run
+`kbagent sync push --project ALIAS` again: its diff reads the current version,
+so the check passes and the row is written; a row that was itself changed in
+Keboola then shows as a conflict and is not pushed. Do not run
+`sync pull --theirs` for a blocked row (it overwrites every local change).
+
+The check narrows the window, it does not close it: a UI edit between the
+check and the configuration's last row write is still overwritten, and that
+time is not bounded (many rows, retries). Rows are pushed grouped by
+configuration. Only `If-Match` on the row endpoints closes it.
+
+### `sync pull` journals the folders it deletes
+
+*(since vNEXT)* (#827)
+
+Pull drops a config or row the remote no longer lists from the manifest and
+records it under `pendingRemovals` BEFORE it deletes the folder; its final save
+clears the record. A pull killed in between no longer leaves an entry for a
+missing folder that a later `push --force` deletes on the remote. While a
+record exists, diff and push treat the folder (and everything below it) as
+absent. The next pull finishes the removal first, and only while the folder is
+unchanged; an edited folder is kept and stays recorded (`warnings[]`
+`PENDING_REMOVAL_KEPT`; diff and push keep ignoring it, so a remotely deleted
+config is never re-created from it -- delete the folder or move it out of the
+sync tree), a failed delete is reported (`PENDING_REMOVAL_FAILED`) and retried
+by the next pull. A folder inside another planned folder goes with the outer
+one.
+
+Pull deletes a folder by first renaming it into `.keboola/removing/` (one step)
+and then deleting it there, so an interrupted delete never leaves a partly
+deleted folder in the tree; the next pull empties `.keboola/removing/`. A
+promote entry of a dev branch (`push --branch DEV` from `main/`) does not keep
+the `main/` folder of a production config deleted remotely: the folder and the
+promote entry go, the dev-branch config is not touched.
+
+Rules for an agent: never edit or delete `pendingRemovals` in
+`.keboola/manifest.json` by hand, and never run an older kbagent on a tree whose
+manifest has it (an older push re-creates or adopts the recorded folders). On
+`PENDING_REMOVAL_KEPT`, ask the user whether to delete the folder or move it out
+of the sync tree; do not push it back as a new config.
+
 ### Rows across `sync pull --branch` and promote pushes
 
 *(since 1.0.0)*
@@ -732,6 +867,13 @@ sync skips `keboola.sandboxes` exactly as before.
   a `workspace_backend_size` warning: an existing session keeps its size, the
   new size applies only to a session created later. Dev branches work the
   same way (config only).
+- **A `SYNC_CONFLICT` on a shared workspace is a real concurrent edit**
+  *(since vNEXT)*. The SQL Editor raises the workspace config's version only
+  when a user saves the code (also when its AI assistant saves); running
+  queries, opening sessions and loading tables do not write the config. So
+  someone saved SQL in the editor after the diff read it: resolve it like any
+  other conflict (copy the folder aside,
+  `kbagent sync pull --project ALIAS --theirs`, re-apply, `sync diff`, push).
 - **Push delete** needs `--force`, like every delete: a plain push lists the
   workspace under `skipped_deletions` and touches neither its sessions nor its
   configuration; `skipped_deletions_reason` then says what `--force` also
