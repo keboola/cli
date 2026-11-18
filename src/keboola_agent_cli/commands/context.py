@@ -1558,8 +1558,8 @@ explicit Storage config version, never the empty shell the create writes.
     In a local .kbagent/ directory an INVALID_TOKEN project first takes the
     one verified token the global config holds for it (`projects_adopted`);
     the Manage token is asked for only when a token must be minted. Without
-    one (no terminal, no --allow-env-manage-token) those projects fail
-    MANAGE_TOKEN_REQUIRED (exit 1) and the adoptions are still written. A
+    one (no terminal, no --allow-env-manage-token) a --json or --yes run fails
+    those projects MANAGE_TOKEN_REQUIRED (exit 1) and still writes the adoptions. A
     global token with fewer rights than a new one is not taken
     (`global_token_not_used`, reason `scoped`).
     Agents: --dry-run first, then ask the user; never edit config.json and

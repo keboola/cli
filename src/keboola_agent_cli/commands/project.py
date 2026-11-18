@@ -567,8 +567,8 @@ def project_refresh(
     new token from the Manage API: interactive hidden prompt, or top-level
     --allow-env-manage-token to read KBC_MANAGE_API_TOKEN (CI/CD).
     The Manage token is asked for only when a token must be created; without
-    one, those projects fail (MANAGE_TOKEN_REQUIRED, exit 1) and the tokens
-    taken from the global config are still written. A global token with
+    one, a --json or --yes run fails those projects (MANAGE_TOKEN_REQUIRED,
+    exit 1) and still writes the tokens taken from the global config. A global token with
     fewer rights than a new token is not taken.
 
     \b
