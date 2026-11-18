@@ -496,7 +496,7 @@ Ask the Keboola documentation natural-language questions
     "doctor": """\
 ### doctor
 
-  kbagent doctor
+  kbagent doctor [--check skipped-selects ...]
     Run health checks on CLI configuration and project connectivity.
 """,
     "encrypt": """\
