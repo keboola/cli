@@ -189,14 +189,18 @@ def _failed_parent_error(change: dict[str, Any], code: str) -> dict[str, str]:
     }
 
 
-def _row_error(change: dict[str, Any], template: dict[str, str]) -> dict[str, str]:
-    return {
+def _row_error(change: dict[str, Any], template: dict[str, str], parent_id: str) -> dict[str, str]:
+    """A blocked row's errors[] entry; names its parent's id (also a recovered new one)."""
+    entry = {
         "change_type": change["change_type"],
         "component_id": change["component_id"],
         "config_id": change.get("config_id", ""),
-        "parent_config_id": change.get("parent_config_id", ""),
+        "parent_config_id": change.get("parent_config_id") or parent_id,
         **template,
     }
+    if change.get("parent_path"):
+        entry["parent_path"] = change["parent_path"]
+    return entry
 
 
 def push_rows(phase: RowPhase, row_changes: list[dict[str, Any]]) -> RowTotals:
@@ -228,7 +232,7 @@ def push_rows(phase: RowPhase, row_changes: list[dict[str, Any]]) -> RowTotals:
                 totals.checks[key] = check_parent(phase, change, effective_parent_id)
             blocked = totals.checks[key]
             if blocked is not None:
-                phase.errors.append(_row_error(change, blocked))
+                phase.errors.append(_row_error(change, blocked, effective_parent_id))
                 continue
             totals.manifest_dirty = True  # before a create's checkpoint (D25)
             if change.get("parent_path") and parent_config_id:

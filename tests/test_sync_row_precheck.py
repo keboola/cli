@@ -76,7 +76,7 @@ def _gets(api: FakeStorage, cid: str) -> int:
 
 
 def _row_errors(result: dict[str, Any]) -> list[dict[str, Any]]:
-    return [e for e in result["errors"] if e.get("parent_config_id")]
+    return [e for e in result["errors"] if e.get("parent_config_id") or e.get("parent_path")]
 
 
 def _snapshot(ws: Workspace, cid: str) -> tuple[list[bytes], list[dict[str, Any]]]:
