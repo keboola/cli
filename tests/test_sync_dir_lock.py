@@ -11,6 +11,7 @@ wrapper, and that a killed holder never blocks the next run.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -754,3 +755,42 @@ def test_clone_into_an_existing_empty_directory_clones(
     world.clone_dir.mkdir()
     result = world.clone(dry_run=dry_run)
     assert result["status"] == ("dry_run" if dry_run else "cloned"), result
+
+
+# ---------------------------------------------------------------------------
+# PR #1016 review NB-2: a read-only tree
+# ---------------------------------------------------------------------------
+
+
+def _make_read_only(paths: list[Path]) -> None:
+    for path in paths:
+        path.chmod(0o555 if path.is_dir() else 0o444)
+
+
+def test_readers_work_on_a_read_only_tree_writers_still_refuse(ws: Workspace) -> None:
+    """NB-2: no kbagent writer can change a tree it cannot write, so a read runs unlocked.
+
+    A writer (push) still fails with CONFIG_ERROR naming the lock file; a lock
+    held by another run stays SYNC_DIRECTORY_BUSY (covered above).
+    """
+    if sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0):
+        pytest.skip("chmod does not make a directory read-only here")
+    ws.init_and_pull()
+    keboola = ws.root / ".keboola"
+    lock_dir = keboola / "lock"
+    targets = [lock_dir / "sync.lock", lock_dir, keboola]
+    _make_read_only(targets)
+    try:
+        try:
+            with open(lock_dir / "sync.lock", "r+b"):
+                pytest.skip("the file system does not enforce the read-only mode")
+        except PermissionError:
+            pass
+        assert ws.service().status(project_root=ws.root)["total_tracked"] == 1
+        assert "changes" in ws.diff()
+        with pytest.raises(ConfigError) as caught:
+            ws.push()
+        assert "sync.lock" in caught.value.message
+    finally:
+        for path in reversed(targets):
+            path.chmod(0o755 if path.is_dir() else 0o644)

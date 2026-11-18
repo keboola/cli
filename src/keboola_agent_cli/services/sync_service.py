@@ -991,7 +991,7 @@ class SyncService(BaseService):
     # status
     # ------------------------------------------------------------------
 
-    @locks_tree(outside=REFUSE)
+    @locks_tree(outside=REFUSE, reader=True)
     def status(self, project_root: Path) -> dict[str, Any]:
         """Compare local state against the manifest to detect changes.
 
@@ -1073,7 +1073,7 @@ class SyncService(BaseService):
     # diff
     # ------------------------------------------------------------------
 
-    @locks_tree(outside=REFUSE)
+    @locks_tree(outside=REFUSE, reader=True)
     def diff(
         self,
         alias: str,
@@ -1998,7 +1998,7 @@ class SyncService(BaseService):
         """Remove the branch mapping for the current git branch (see ``_sync_branch``)."""
         return _branch_unlink(project_root)
 
-    @locks_tree(outside=REFUSE)
+    @locks_tree(outside=REFUSE, reader=True)
     def branch_status(self, project_root: Path) -> dict[str, Any]:
         """Show the branch mapping status for the current git branch (see ``_sync_branch``)."""
         return _branch_status(project_root)
