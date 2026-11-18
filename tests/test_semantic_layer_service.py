@@ -1998,9 +1998,15 @@ class TestEditPatchSemantics:
     def test_constraint_same_metrics_list_is_unchanged(self, tmp_path: Path) -> None:
         service, mock = _make_service(_make_store(tmp_path))
         c = _child_item("semantic-constraint", "c1", {"name": "ok", "metrics": ["a", "b"]})
-        mock.list_items.side_effect = lambda t, m=None: (
-            [_model_item("U", "m")] if t == "semantic-model" else [c]
-        )
+        metrics = [
+            _child_item("semantic-metric", "ma", {"name": "a"}),
+            _child_item("semantic-metric", "mb", {"name": "b"}),
+        ]
+        mock.list_items.side_effect = lambda t, m=None: {
+            "semantic-model": [_model_item("U", "m")],
+            "semantic-metric": metrics,
+            "semantic-constraint": [c],
+        }.get(t, [])
         result = service.edit_constraint("prod", None, current_name="ok", new_metrics=["a", "b"])
         mock.patch_item.assert_not_called()
         assert result["status"] == "unchanged"
