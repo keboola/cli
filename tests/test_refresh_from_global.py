@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+import click
 import pytest
 from typer.testing import CliRunner
 
@@ -57,8 +58,27 @@ def _verified(project_id: int, name: str = "Renamed") -> TokenVerifyResponse:
     )
 
 
+# The rights a minted token gets (manage_client.create_project_token defaults).
+FULL_RIGHTS = {
+    "canManageBuckets": True,
+    "canReadAllFileUploads": True,
+    "canReadAllProjectEvents": True,
+    "canManageDevBranches": True,
+    "canManageTokens": True,
+}
+
+
+def _raw(project_id: int, rights: dict[str, Any], name: str = "Renamed") -> dict[str, Any]:
+    """A raw `GET /v2/storage/tokens/verify` response with the given rights flags."""
+    return {"id": "t", "owner": {"id": project_id, "name": name}, **rights}
+
+
 class Storage:
-    """Storage client factory: each token maps to a verify result or an exception."""
+    """Storage client factory: each token maps to a verify result or an exception.
+
+    A ``TokenVerifyResponse`` outcome also answers ``get_project_info`` as a
+    full-rights token; a ``dict`` outcome is the raw verify response.
+    """
 
     def __init__(self, behaviour: dict[str, Any]) -> None:
         self.behaviour = behaviour
@@ -71,8 +91,17 @@ class Storage:
         outcome = self.behaviour[token]
         if isinstance(outcome, Exception):
             client.verify_token.side_effect = outcome
+            client.get_project_info.side_effect = outcome
+        elif isinstance(outcome, dict):
+            client.get_project_info.return_value = outcome
+            client.verify_token.return_value = _verified(
+                outcome["owner"]["id"], outcome["owner"]["name"]
+            )
         else:
             client.verify_token.return_value = outcome
+            client.get_project_info.return_value = _raw(
+                outcome.project_id, FULL_RIGHTS, outcome.project_name
+            )
         return client
 
 
@@ -665,7 +694,7 @@ def _invoke(
         stack.enter_context(patch("keboola_agent_cli.cli.OrgService", build))
         if resolver is not None:
             stack.enter_context(
-                patch("keboola_agent_cli.commands.project.resolve_manage_token", resolver)
+                patch("keboola_agent_cli.commands.project.manage_token_if_available", resolver)
             )
         return runner.invoke(app, ["--config-dir", str(local_dir), *args])
 
@@ -676,10 +705,9 @@ def _no_manage_token_in_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 class TestCommand:
-    def test_mixed_adopt_and_mint_without_manage_token_exits_2_and_writes_nothing(
-        self, tmp_path: Path
-    ) -> None:
-        """R2a: no TTY, --json, no Manage token -- exit 2 and the adoption is NOT written."""
+    def test_mixed_run_without_manage_token_adopts_and_fails_the_rest(self, tmp_path: Path) -> None:
+        """R2: no TTY, --json, no Manage token -- the adoption is written, the
+        project that needs a new token fails MANAGE_TOKEN_REQUIRED, exit 1."""
         local = _store(
             tmp_path / "local", {"prod": _project(DEAD_LOCAL), "b": _project(DEAD_LOCAL_B, 200)}
         )
@@ -692,8 +720,38 @@ class TestCommand:
             tmp_path / "local", storage, ["--json", "project", "refresh", "--all-projects"]
         )
 
-        assert result.exit_code == 2, result.output
-        assert _token(local, "prod") == DEAD_LOCAL
+        assert result.exit_code == 1, result.output
+        payload = json.loads(result.output)
+        data = payload["data"]
+        assert [p["alias"] for p in data["projects_adopted"]] == ["prod"]
+        assert data["projects_refreshed"] == []
+        [failed] = data["projects_failed"]
+        assert failed["alias"] == "b"
+        assert failed["project_id"] == 200
+        assert failed["error_code"] == "MANAGE_TOKEN_REQUIRED"
+        assert failed["retryable"] is False
+        assert "kbagent project refresh --project b" in failed["message"]
+        assert _token(local, "prod") == GLOBAL_TOKEN
+        assert _token(local, "b") == DEAD_LOCAL_B
+        assert GLOBAL_TOKEN not in result.output
+
+    def test_single_project_without_manage_token_is_an_item_failure(self, tmp_path: Path) -> None:
+        """R3: one project, no Manage token -- exit 1 with the payload, not an
+        UNKNOWN_ERROR envelope at exit 2."""
+        local = _store(tmp_path / "local", {"b": _project(DEAD_LOCAL_B, 200)})
+        storage = Storage({DEAD_LOCAL_B: _invalid()})
+
+        result = _invoke(
+            tmp_path / "local", storage, ["--json", "project", "refresh", "--project", "b"]
+        )
+
+        assert result.exit_code == 1, result.output
+        payload = json.loads(result.output)
+        assert "error" not in payload
+        assert [p["error_code"] for p in payload["data"]["projects_failed"]] == [
+            "MANAGE_TOKEN_REQUIRED"
+        ]
+        assert "UNKNOWN_ERROR" not in result.output
         assert _token(local, "b") == DEAD_LOCAL_B
 
     def test_all_adoptable_needs_no_manage_token(self, tmp_path: Path) -> None:
@@ -830,3 +888,209 @@ class TestGlobalStoreLookup:
         link = tmp_path / "link"
         link.symlink_to(global_config_dir(), target_is_directory=True)
         assert global_store_for(ConfigStore(config_dir=link, source="env-var")) is None
+
+
+# ── No Manage token, scoped global tokens (#955 follow-up) ──────────────
+
+SCOPED_NOT_USED = {"global_alias": "g-prod", "reason": "scoped"}
+
+
+def _mixed(tmp_path: Path) -> tuple[ConfigStore, ConfigStore, Storage]:
+    """`prod` is adoptable from the global config, `b` needs a new token."""
+    local = _store(
+        tmp_path / "local", {"prod": _project(DEAD_LOCAL), "b": _project(DEAD_LOCAL_B, 200)}
+    )
+    global_store = _global({"g-prod": _project(GLOBAL_TOKEN)})
+    storage = Storage(
+        {
+            DEAD_LOCAL: _invalid(),
+            DEAD_LOCAL_B: _invalid(),
+            GLOBAL_TOKEN: _verified(100),
+            MINTED: _verified(200),
+        }
+    )
+    return local, global_store, storage
+
+
+class TestNoManageToken:
+    @pytest.mark.parametrize(
+        "error",
+        [RuntimeError("prompt broke"), click.exceptions.Abort(), KeyboardInterrupt()],
+        ids=["runtime-error", "click-abort", "keyboard-interrupt"],
+    )
+    def test_provider_exception_writes_nothing(self, tmp_path: Path, error: BaseException) -> None:
+        """R1: any provider exception propagates and nothing is written."""
+        local, global_store, storage = _mixed(tmp_path)
+        manage = _manage()
+
+        with pytest.raises(type(error)):
+            _service(local, storage, manage).refresh_tokens(
+                global_store=global_store, manage_token_provider=MagicMock(side_effect=error)
+            )
+
+        assert _token(local, "prod") == DEAD_LOCAL
+        assert _token(local, "b") == DEAD_LOCAL_B
+        manage.create_project_token.assert_not_called()
+
+    def test_provider_none_writes_adoptions_and_fails_the_mints(self, tmp_path: Path) -> None:
+        """D3: no Manage token -- adoptions written, mints fail, nothing minted."""
+        local, global_store, storage = _mixed(tmp_path)
+        manage = _manage()
+        provider = MagicMock(return_value=None)
+
+        result = _service(local, storage, manage).refresh_tokens(
+            global_store=global_store, manage_token_provider=provider
+        )
+
+        provider.assert_called_once()
+        assert [p["alias"] for p in result["projects_adopted"]] == ["prod"]
+        assert result["projects_refreshed"] == []
+        [failed] = result["projects_failed"]
+        assert failed["alias"] == "b"
+        assert failed["project_id"] == 200
+        assert failed["project_name"] == "P200"
+        assert failed["error_code"] == ErrorCode.MANAGE_TOKEN_REQUIRED
+        assert failed["retryable"] is False
+        assert "--allow-env-manage-token" in failed["message"]
+        assert _token(local, "prod") == GLOBAL_TOKEN
+        assert _token(local, "b") == DEAD_LOCAL_B
+        manage.verify_token.assert_not_called()
+        manage.create_project_token.assert_not_called()
+
+    def test_rejected_manage_token_is_an_api_failure(self, tmp_path: Path) -> None:
+        """R5: a supplied Manage token the API rejects is not MANAGE_TOKEN_REQUIRED."""
+        local, global_store, storage = _mixed(tmp_path)
+        manage = _manage()
+        manage.verify_token.side_effect = KeboolaApiError(
+            message="Invalid manage token", status_code=401, error_code=ErrorCode.INVALID_TOKEN
+        )
+        manage.create_project_token.side_effect = KeboolaApiError(
+            message="Invalid manage token", status_code=401, error_code=ErrorCode.INVALID_TOKEN
+        )
+
+        result = _service(local, storage, manage).refresh_tokens(
+            global_store=global_store, manage_token_provider=MagicMock(return_value="bad")
+        )
+
+        [failed] = result["projects_failed"]
+        assert failed["alias"] == "b"
+        assert failed["error_code"] == ErrorCode.INVALID_TOKEN
+        assert _token(local, "prod") == GLOBAL_TOKEN
+
+
+class TestScopedGlobalToken:
+    @pytest.mark.parametrize(
+        ("rights", "adopted"),
+        [
+            ({**FULL_RIGHTS, "canReadAllFileUploads": False}, False),
+            ({k: v for k, v in FULL_RIGHTS.items() if k != "canManageTokens"}, False),
+            ({"canManageBuckets": True}, False),
+            ({"isMasterToken": False, **{k: "true" for k in FULL_RIGHTS}}, False),
+            ({"isMasterToken": True}, True),
+            (FULL_RIGHTS, True),
+        ],
+        ids=[
+            "file-uploads-false",
+            "manage-tokens-missing",
+            "buckets-only",
+            "string-flags",
+            "master-flags-absent",
+            "all-five-true",
+        ],
+    )
+    def test_only_a_token_as_strong_as_a_minted_one_is_adopted(
+        self, tmp_path: Path, rights: dict[str, Any], adopted: bool
+    ) -> None:
+        """R6."""
+        local = _store(tmp_path / "local", {"prod": _project(DEAD_LOCAL)})
+        global_store = _global({"g-prod": _project(GLOBAL_TOKEN)})
+        storage = Storage(
+            {DEAD_LOCAL: _invalid(), GLOBAL_TOKEN: _raw(100, rights), MINTED: _verified(100)}
+        )
+
+        result = _service(local, storage, _manage()).refresh_tokens(
+            global_store=global_store, manage_token=MANAGE
+        )
+
+        if adopted:
+            assert [p["alias"] for p in result["projects_adopted"]] == ["prod"]
+            assert _token(local, "prod") == GLOBAL_TOKEN
+        else:
+            assert result["projects_adopted"] == []
+            [refreshed] = result["projects_refreshed"]
+            assert refreshed["global_token_not_used"] == {
+                "global_alias": "g-prod",
+                "reason": "scoped",
+            }
+            assert _token(local, "prod") == MINTED
+
+    def _scoped(self, tmp_path: Path) -> tuple[ConfigStore, ConfigStore, Storage]:
+        local = _store(tmp_path / "local", {"prod": _project(DEAD_LOCAL)})
+        global_store = _global({"g-prod": _project(GLOBAL_TOKEN)})
+        scoped = _raw(100, {**FULL_RIGHTS, "canManageTokens": False})
+        storage = Storage({DEAD_LOCAL: _invalid(), GLOBAL_TOKEN: scoped, MINTED: _verified(100)})
+        return local, global_store, storage
+
+    def test_reason_survives_a_dry_run(self, tmp_path: Path) -> None:
+        """R7: dry run."""
+        local, global_store, storage = self._scoped(tmp_path)
+        result = _service(local, storage, _manage()).refresh_tokens(
+            global_store=global_store, dry_run=True
+        )
+        [entry] = result["projects_refreshed"]
+        assert entry["action"] == "would_refresh"
+        assert entry["global_token_not_used"] == SCOPED_NOT_USED
+
+    def test_reason_survives_a_missing_manage_token(self, tmp_path: Path) -> None:
+        """R7: D3 failure."""
+        local, global_store, storage = self._scoped(tmp_path)
+        result = _service(local, storage, _manage()).refresh_tokens(
+            global_store=global_store, manage_token_provider=MagicMock(return_value=None)
+        )
+        [failed] = result["projects_failed"]
+        assert failed["error_code"] == ErrorCode.MANAGE_TOKEN_REQUIRED
+        assert failed["global_token_not_used"] == SCOPED_NOT_USED
+        assert _token(local, "prod") == DEAD_LOCAL
+
+    def test_reason_survives_a_mint_api_failure(self, tmp_path: Path) -> None:
+        """R7: mint API failure."""
+        local, global_store, storage = self._scoped(tmp_path)
+        manage = _manage()
+        manage.create_project_token.side_effect = KeboolaApiError(
+            message="boom", status_code=500, error_code=ErrorCode.API_ERROR
+        )
+        result = _service(local, storage, manage).refresh_tokens(
+            global_store=global_store, manage_token=MANAGE
+        )
+        [failed] = result["projects_failed"]
+        assert failed["error_code"] == ErrorCode.API_ERROR
+        assert failed["global_token_not_used"] == SCOPED_NOT_USED
+
+    def test_verify_failure_and_other_project_carry_no_reason(self, tmp_path: Path) -> None:
+        """Only a scoped token gets a reason; other rejections keep today's shape."""
+        for outcome in (_invalid(), _raw(999, FULL_RIGHTS)):
+            local = _store(tmp_path / f"local-{id(outcome)}", {"prod": _project(DEAD_LOCAL)})
+            global_store = _global({"g-prod": _project(GLOBAL_TOKEN)})
+            storage = Storage({DEAD_LOCAL: _invalid(), GLOBAL_TOKEN: outcome})
+            result = _service(local, storage, _manage()).refresh_tokens(
+                global_store=global_store, dry_run=True
+            )
+            [entry] = result["projects_refreshed"]
+            assert "global_token_not_used" not in entry
+
+    def test_human_output_names_the_unused_global_token(self, tmp_path: Path) -> None:
+        local, _, storage = self._scoped(tmp_path)
+        result = _invoke(
+            tmp_path / "local",
+            storage,
+            ["project", "refresh", "--all-projects", "--yes"],
+            MagicMock(return_value=MANAGE),
+        )
+        assert result.exit_code == 0, result.output
+        text = " ".join(result.output.split())
+        assert (
+            "Global token of 'prod' (global alias 'g-prod') has fewer rights than a new token; "
+            "not used." in text
+        )
+        assert GLOBAL_TOKEN not in result.output
+        assert _token(local, "prod") == MINTED

@@ -153,6 +153,11 @@ config's working token:
      `INVALID_TOKEN` (a timeout, 5xx or `AUTH_REJECTED` skips it) and exactly
      one distinct global static token for the same project and stack, other
      than the local one. Retry a transient error first.
+   - `global_token_not_used: {global_alias, reason: "scoped"}` on an entry
+     (since vNEXT): the global config holds a token for the project, but it
+     has fewer rights than a new token, so it is not taken and a new token is
+     needed. Tell the user; never edit `config.json` to force the global
+     token in.
    - `data.projects_valid[]` (left alone), `data.projects_skipped[]` (session
      or no project ID), `data.projects_failed[]` (check failed; exit 1, also
      in a dry-run).
@@ -165,13 +170,16 @@ config's working token:
    `kbagent --json project refresh --project ALIAS`. When only adoptions are
    needed it succeeds without a Manage token. When something must be minted
    it asks for the Manage token on a terminal (`--json` does not suppress that
-   prompt); without a terminal it exits 2 and writes **nothing**, the
-   adoptions included. Then ask the user to run
-   `kbagent project refresh --project ALIAS` (or `--all-projects`) themselves
-   in a terminal, from the same directory. Never ask for the Manage token in
-   chat, never pass `--allow-env-manage-token` on your own. Exit 1 means some
-   project landed in `data.projects_failed`; only the entries in
-   `projects_adopted` and `projects_refreshed` were written.
+   prompt). Without a terminal (since vNEXT) the run still writes the
+   `projects_adopted` entries -- those aliases are fixed -- and exits 1 with
+   each project that needs a new token in `data.projects_failed`,
+   `error_code: MANAGE_TOKEN_REQUIRED`. For those, ask the user to run
+   `kbagent project refresh --project ALIAS` themselves in a terminal, from
+   the same directory, one alias per failed entry (or `--all-projects`).
+   Never ask for the Manage token in chat, never pass
+   `--allow-env-manage-token` on your own. Exit 1 means some project landed
+   in `data.projects_failed`; only the entries in `projects_adopted` and
+   `projects_refreshed` were written.
 4. **Verify**: `kbagent --json project status --project ALIAS` returns
    `data[].status == "ok"`.
 

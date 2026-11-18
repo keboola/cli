@@ -593,11 +593,15 @@ kbagent project refresh --all-projects [--dry-run] [--force] [--yes] [--token-de
 #   path; also with --config-dir / KBAGENT_CONFIG_DIR) a project whose token is INVALID_TOKEN first takes
 #   the one distinct verified token the global config holds for the same project_id + normalized stack
 #   (projects_adopted: alias, project_id, project_name, global_alias, action; never a token). A transient
-#   check error, --force, several global tokens or a failed verify mint as before. Two phases: check and
-#   plan, then the Manage token (lazy provider, once, only when minting, before any write; exit 2 =
-#   nothing written), then writes. An adoption is written only if the alias is unchanged since the plan
-#   (else projects_failed, CONFIG_ERROR). The global config is never written. org setup --refresh and
-#   POST /org/refresh do not consult it. Version gate lives in gotchas.md.
+#   check error, --force, several global tokens or a failed verify mint as before. A global token is
+#   taken only when it is a master token or has all five rights a minted token gets (canManageBuckets,
+#   canReadAllFileUploads, canReadAllProjectEvents, canManageDevBranches, canManageTokens); a weaker one
+#   is minted for, entry key global_token_not_used {global_alias, reason: scoped}. Two phases: check and
+#   plan, then the Manage token (lazy provider manage_token_if_available, once, only when minting, before
+#   any write; a provider exception = nothing written; None = adoptions written, every mint is a
+#   projects_failed MANAGE_TOKEN_REQUIRED entry, exit 1), then writes. An adoption is written only if the
+#   alias is unchanged since the plan (else projects_failed, CONFIG_ERROR). The global config is never
+#   written. org setup --refresh and POST /org/refresh do not consult it. Version gate lives in gotchas.md.
 kbagent project description-get [--project NAME]
 kbagent project description-set [--project NAME] (--description STR | --description-file PATH)
 kbagent project use ALIAS
