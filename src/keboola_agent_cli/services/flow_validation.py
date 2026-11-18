@@ -43,6 +43,11 @@ def _condition_arity_errors(condition: Any) -> list[str]:
     if not isinstance(operands, list):
         return [f"Condition 'operands' must be a list, got {type(operands).__name__}"]
 
+    for key in ("operator", "function"):
+        if key in condition and not isinstance(condition[key], str):
+            # An unhashable value would crash the set lookups below.
+            return [f"Condition '{key}' must be a string, got {type(condition[key]).__name__}"]
+
     if ctype == "operator":
         op = condition.get("operator")
         if op in _BINARY_OPERATORS and len(operands) != 2:

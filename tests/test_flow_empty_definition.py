@@ -42,7 +42,7 @@ TASKS = [
 ]
 
 # Documents that carry no definition at all.
-EMPTY_DOCUMENTS = ["", "   \n\t\n", "# only a comment\n", "null\n", "~\n"]
+EMPTY_DOCUMENTS = ["", "   \n   \n", "# only a comment\n", "null\n", "~\n"]
 
 
 def _store(tmp_path: Path) -> ConfigStore:
@@ -143,6 +143,21 @@ def test_empty_inline_definition_is_refused(
     assert _error(result)["code"] == "VALIDATION_ERROR"
     client.create_config.assert_not_called()
     client.update_config.assert_not_called()
+
+
+def test_tab_only_file_is_refused(tmp_path: Path) -> None:
+    """YAML refuses a tab; the result is the same load error, nothing written."""
+    client = _keboola_client()
+    path = tmp_path / "flow.yaml"
+    path.write_text("\t\n", encoding="utf-8")
+
+    result = _invoke(
+        _store(tmp_path), _service(_store(tmp_path), client), [*NEW, "--definition-file", str(path)]
+    )
+
+    assert result.exit_code == 2, result.output
+    assert _error(result)["code"] == "VALIDATION_ERROR"
+    client.create_config.assert_not_called()
 
 
 def test_empty_stdin_definition_is_refused(tmp_path: Path) -> None:
@@ -350,6 +365,7 @@ def test_rest_create_refuses_explicit_empty(tmp_path: Path, body: dict[str, Any]
     res = _request(_rest_app(tmp_path, client), "POST", "/flows/prod", {"name": "F", **body})
     # The HTTP status of INVALID_FLOW_DEFINITION comes from the error table
     # (class "api": 502), like every other invalid flow definition over REST.
+    assert res.status_code == 502, res.text
     assert res.json()["error"]["code"] == "INVALID_FLOW_DEFINITION", res.text
     client.create_config.assert_not_called()
 
@@ -366,6 +382,7 @@ def test_rest_create_without_definition_still_creates(tmp_path: Path) -> None:
 def test_rest_update_that_empties_the_flow_is_refused(tmp_path: Path) -> None:
     client = _keboola_client({"phases": PHASES, "tasks": TASKS})
     res = _request(_rest_app(tmp_path, client), "PATCH", "/flows/prod/900", {"phases": []})
+    assert res.status_code == 502, res.text
     assert res.json()["error"]["code"] == "INVALID_FLOW_DEFINITION", res.text
     client.update_config.assert_not_called()
 
@@ -457,6 +474,22 @@ def test_malformed_lists_are_invalid_not_a_crash(tmp_path: Path, document: str) 
     data = json.loads(result.stdout)["data"]
     assert data["valid"] is False
     assert data["errors"]
+
+
+@pytest.mark.parametrize(
+    "condition",
+    [
+        {"type": "operator", "operator": [], "operands": []},
+        {"type": "function", "function": {}, "operands": []},
+        {"type": "operator", "operator": "AND", "operands": [{"type": "operator", "operator": []}]},
+    ],
+)
+def test_condition_with_a_non_string_operator_is_invalid_not_a_crash(
+    condition: dict[str, Any],
+) -> None:
+    phases = [{"id": "p", "next": [{"goto": None, "condition": condition}, {"goto": None}]}]
+    errors = validate_conditional_flow(phases, [{"id": "t", "phase": "p"}])
+    assert any("must be a string" in e for e in errors)
 
 
 def test_service_create_refuses_malformed_lists(tmp_path: Path) -> None:
