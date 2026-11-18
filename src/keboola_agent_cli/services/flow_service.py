@@ -550,30 +550,35 @@ class FlowService(BaseService):
             KeboolaApiError: On API failure or definition validation error
                 (error_code='INVALID_FLOW_DEFINITION').
         """
-        phases = phases or []
-        tasks = tasks or []
+        # Neither given = an empty flow to fill later (the UI's "Create flow"
+        # makes one too). Anything given is validated, so an empty list is
+        # refused: "Flow definition has no phases".
+        scaffold = phases is None and tasks is None
+        phases = [] if phases is None else phases
+        tasks = [] if tasks is None else tasks
 
         projects = self.resolve_projects([alias])
         project = projects[alias]
         effective_branch = resolve_branch(self._config_store, alias, branch_id)
 
-        fetch = self._fetch_flow_schema(project)
         warnings: list[str] = []
-        if fetch.schema is None:
-            warnings.append(f"structural schema validation skipped: {fetch.reason}")
+        if not scaffold:
+            fetch = self._fetch_flow_schema(project)
+            if fetch.schema is None:
+                warnings.append(f"structural schema validation skipped: {fetch.reason}")
 
-        definition_errors = validate_conditional_flow(phases, tasks, fetch.schema)
-        if definition_errors:
-            raise KeboolaApiError(
-                message="Flow definition is invalid: " + "; ".join(definition_errors),
-                status_code=400,
-                error_code=ErrorCode.INVALID_FLOW_DEFINITION,
-                retryable=False,
+            definition_errors = validate_conditional_flow(phases, tasks, fetch.schema)
+            if definition_errors:
+                raise KeboolaApiError(
+                    message="Flow definition is invalid: " + "; ".join(definition_errors),
+                    status_code=400,
+                    error_code=ErrorCode.INVALID_FLOW_DEFINITION,
+                    retryable=False,
+                )
+            warnings.extend(
+                f"Phase '{pid}' is unreachable from the entry phase"
+                for pid in find_unreachable_phases(phases)
             )
-        warnings.extend(
-            f"Phase '{pid}' is unreachable from the entry phase"
-            for pid in find_unreachable_phases(phases)
-        )
 
         configuration: dict[str, Any] = {"phases": phases, "tasks": tasks}
 

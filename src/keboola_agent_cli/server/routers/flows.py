@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from ...constants import DEFAULT_JOB_RUN_TIMEOUT
 from ...services.base import resolve_fanout_aliases
@@ -18,19 +18,38 @@ from ..response_meta import add_warning
 router = APIRouter(prefix="/flows", tags=["flows"])
 
 
-class FlowCreate(BaseModel):
-    name: str
-    description: str = ""
+class _FlowDefinitionBody(BaseModel):
+    """``phases`` / ``tasks`` of a create or update body.
+
+    Unknown fields are refused (spec V5), so a typo like ``phase`` is a 422,
+    not a body read as "no definition". An omitted list keeps its meaning
+    (create: empty flow when both are omitted; update: keep the current one);
+    an explicit ``null`` is refused, never read as omitted.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
     phases: list[dict[str, Any]] | None = None
     tasks: list[dict[str, Any]] | None = None
+
+    @field_validator("phases", "tasks")
+    @classmethod
+    def _not_null(cls, value: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+        # Runs only for a value that was sent; an omitted field keeps the default.
+        if value is None:
+            raise ValueError("must be a list; leave the field out instead of sending null")
+        return value
+
+
+class FlowCreate(_FlowDefinitionBody):
+    name: str
+    description: str = ""
     branch_id: int | None = None
 
 
-class FlowUpdate(BaseModel):
+class FlowUpdate(_FlowDefinitionBody):
     name: str | None = None
     description: str | None = None
-    phases: list[dict[str, Any]] | None = None
-    tasks: list[dict[str, Any]] | None = None
     branch_id: int | None = None
 
 
@@ -77,6 +96,8 @@ def _reject_unknown_run_query(request: Request) -> None:
 
 
 class FlowValidate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     phases: list[dict[str, Any]] = []
     tasks: list[dict[str, Any]] = []
     project: str | None = None
