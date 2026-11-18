@@ -1890,9 +1890,8 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
     lost (5xx, read timeout) may have been applied and is not retried --
     re-read with `show` first. Two edits of the SAME key: the last one wins.
     Run `validate` after a metric rename (a constraint that starts
-    referencing the metric while the rename runs is missed). A value equal
-    to the stored one is not sent; when nothing differs nothing is written
-    and the result has status "unchanged" (exit 0), else "updated".
+    referencing the metric while the rename runs is missed). When every
+    value passed equals the stored one nothing is written and the result has status "unchanged" (exit 0), else "updated".
 
   semantic-layer remove metric|dataset|constraint|relationship|glossary ...
     Destructive. `remove metric` pre-scans constraints whose metrics[] includes

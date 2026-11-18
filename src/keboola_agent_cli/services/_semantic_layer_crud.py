@@ -15,8 +15,8 @@ key against the schema, and inside the same transaction the merged record's
 references and the schema rules that combine several fields (go-monorepo
 AJDA-3460, 2026-10-16). It does NOT re-check ``required`` or
 ``additionalProperties`` on the merged record; that is safe because a PATCH from
-here only sets keys and never removes one (no ``null`` values). A key equal to
-the value just read is not sent, and an edit that sends nothing reports
+here only sets keys and never removes one (no ``null`` values). An edit whose every
+given value equals the value just read sends nothing and reports
 ``status: "unchanged"`` (spec R6).
 ``import --overwrite`` and ``promote`` keep the ``PUT``: they must make the
 target equal to the source, and a PATCH would keep target-only keys.
@@ -304,18 +304,20 @@ def _patch_changes(
     id_key: str,
     changes: dict[str, Any],
 ) -> tuple[dict[str, Any], bool]:
-    """PATCH the keys whose given value differs from the read one; return ``(item, changed)``.
+    """PATCH every given key unless all equal the read values; return ``(item, changed)``.
 
-    ``None`` means "not given". A given value equal to the value just read is
-    not sent: resending it could undo a concurrent edit of that key, and the
-    edit is then ordered at the moment of the read. The identity key (``name``,
-    or ``term`` for glossary) is sent together with the envelope ``name`` so the
-    two never disagree. With nothing to change, nothing is written (no new
-    revision) and the item as read is returned with ``changed`` False.
+    ``None`` means "not given". When every given value equals the value just
+    read, nothing is written (no new revision): the edit is then ordered at the
+    moment of the read, and the item as read is returned with ``changed`` False.
+    Otherwise ALL given keys are sent, also the equal ones: dropping only those
+    would let a concurrent edit win one key and lose another, a state no
+    serial order of the two edits produces. The identity key (``name``, or
+    ``term`` for glossary) is sent together with the envelope ``name`` so the
+    two never disagree.
     """
     attrs = target.get("attributes") or {}
-    data = {k: v for k, v in changes.items() if v is not None and attrs.get(k) != v}
-    if not data:
+    data = {k: v for k, v in changes.items() if v is not None}
+    if all(attrs.get(k) == v for k, v in data.items()):
         return target, False
     return client.patch_item(item_type, target["id"], name=data.get(id_key), data=data), True
 

@@ -1952,8 +1952,8 @@ class TestEditPatchSemantics:
             "metrics": ["revenue"],
         }
 
-    def test_value_equal_to_the_read_one_is_not_sent(self, tmp_path: Path) -> None:
-        """Only differing keys go out: resending a read value could undo a concurrent edit."""
+    def test_equal_value_is_sent_when_another_key_changes(self, tmp_path: Path) -> None:
+        """All given keys go out together, so two concurrent edits never mix key by key."""
         service, mock = _make_service(_make_store(tmp_path))
         metric = _child_item("semantic-metric", "m1", {"name": "rev", "sql": "1"})
         mock.list_items.side_effect = lambda t, m=None: (
@@ -1961,7 +1961,10 @@ class TestEditPatchSemantics:
         )
         mock.patch_item.return_value = metric
         result = service.edit_metric("prod", None, current_name="rev", new_name="rev", new_sql="2")
-        assert mock.patch_item.call_args.kwargs == {"name": None, "data": {"sql": "2"}}
+        assert mock.patch_item.call_args.kwargs == {
+            "name": "rev",
+            "data": {"name": "rev", "sql": "2"},
+        }
         assert result["status"] == "updated"
 
     def test_all_values_equal_is_unchanged_and_writes_nothing(self, tmp_path: Path) -> None:
