@@ -1090,6 +1090,10 @@ explicit Storage config version, never the empty shell the create writes.
     is membership, not execution order). With --wait read failed_task_ids / task_results: exit 1
     when a selected task failed or left no result; when the flow job itself ended in error
     (QUEUE_JOB_FAILED) they are in error.details. A --timeout never stops the job (exit 4).
+    Refused before any job is created, --dry-run too, because the job queue would refuse it:
+    a repeated phase/task id, a goto to an undefined phase or not exactly one first phase
+    (INVALID_FLOW_DEFINITION, exit 1); a selected phase the first phase cannot reach, or
+    needed phases that form a loop (INVALID_ARGUMENT, exit 2). Only the selected tasks run.
 """,
     "http": """\
 #### Self-call HTTP (inside `kbagent serve` subprocesses)

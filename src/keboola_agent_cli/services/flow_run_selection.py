@@ -216,7 +216,15 @@ def _repeated(values: list[str]) -> list[str]:
     return [value for value in _dedupe(values) if counts[value] > 1]
 
 
-def _structure_errors(configuration: dict[str, Any]) -> tuple[list[str], str | None]:
+@dataclass(frozen=True)
+class _Structure:
+    """What ``_structure_errors`` found: the refusals, and the first phase when there is one."""
+
+    errors: list[str]
+    root: str | None
+
+
+def _structure_errors(configuration: dict[str, Any]) -> _Structure:
     """The reasons the daemon refuses ANY run of this flow, and its first phase.
 
     Repeated phase or task ids, a ``goto`` to a phase the flow does not
@@ -244,7 +252,7 @@ def _structure_errors(configuration: dict[str, Any]) -> tuple[list[str], str | N
             "the flow must have exactly one first phase (a phase no transition goes to); "
             f"found: {found}"
         )
-    return errors, roots[0] if len(roots) == 1 else None
+    return _Structure(errors=errors, root=roots[0] if len(roots) == 1 else None)
 
 
 def _reachable(start: str, edges: dict[str, list[str]]) -> list[str]:
@@ -435,15 +443,17 @@ def select_flow_tasks(
             a malformed default transition, or an empty final selection.
     """
     check_selector_values(task_ids, from_phase_id)
-    structure, root = _structure_errors(configuration)
-    if structure:
+    structure = _structure_errors(configuration)
+    root = structure.root
+    if structure.errors:
         # The flow itself is broken, not the selection: the code flow new/update use.
         raise KeboolaApiError(
             message=(
                 "The job queue would refuse this flow, so it was not started: "
-                + "; ".join(structure)
+                + "; ".join(structure.errors)
                 + ". Fix the flow (kbagent flow detail shows it)."
             ),
+            # REST answers 502 for it anyway: the status comes from the error table.
             status_code=400,
             error_code=ErrorCode.INVALID_FLOW_DEFINITION,
             retryable=False,

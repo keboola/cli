@@ -174,7 +174,7 @@ A command that fails with an error code exits with the code's `Exit` value below
 | Code | Exit | Type | Description |
 |---|---|---|---|
 | `SCHEDULE_DELETE_FAILED` | 1 | `api` | Deleting or deregistering a flow schedule failed |
-| `INVALID_FLOW_DEFINITION` | 1 | `api` | Flow definition failed schema or semantic validation |
+| `INVALID_FLOW_DEFINITION` | 1 | `api` | Flow definition failed schema or semantic validation (`flow new` / `update`), or `flow run` found a flow the job queue refuses for every run (repeated phase or task id, transition to an undefined phase, not exactly one first phase) |
 
 ### Data Apps
 
