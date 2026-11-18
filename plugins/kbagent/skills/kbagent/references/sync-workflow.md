@@ -859,6 +859,13 @@ sync skips `keboola.sandboxes` exactly as before.
   a `workspace_backend_size` warning: an existing session keeps its size, the
   new size applies only to a session created later. Dev branches work the
   same way (config only).
+- **A `SYNC_CONFLICT` on a shared workspace is a real concurrent edit**
+  *(since vNEXT)*. The SQL Editor raises the workspace config's version only
+  when a user saves the code (also when its AI assistant saves); running
+  queries, opening sessions and loading tables do not write the config. So
+  someone saved SQL in the editor after the diff read it: resolve it like any
+  other conflict (`kbagent sync diff` and merge, or copy aside,
+  `kbagent sync pull --project ALIAS --theirs`, re-apply, push).
 - **Push delete** needs `--force`, like every delete: a plain push lists the
   workspace under `skipped_deletions` and touches neither its sessions nor its
   configuration; `skipped_deletions_reason` then says what `--force` also
