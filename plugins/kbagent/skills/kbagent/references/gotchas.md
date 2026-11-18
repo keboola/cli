@@ -120,7 +120,7 @@ These lists keep `error`, because their entries are not failed items with an err
 
 - **`--overtime-percent N` is a whole percent: 50 means the job runs at least 50 % longer than usual.** kbagent sends `{"field": "durationOvertimePercentage", "value": N/100, "operator": ">="}`, the filter the Keboola UI writes. Do not pass the ratio from `filters` (`0.5`): it is not a whole number and exits 2 with `INVALID_ARGUMENT`.
 - **Only for `job-processing-long` and `phase-job-processing-long`.** Any other event with the option is `INVALID_ARGUMENT`, exit 2, before any API call: no other event carries the run-time overtime, so the subscription would never fire. REST: `overtime_percent` in the `POST /notifications/{project}` body (a strict integer: `true` or `"50"` is HTTP 422; a wrong event or range is HTTP 400).
-- **The range is 1 to 10000.** The Notification Service refuses `0` (its value check is `> 0`). Without the option no overtime filter is written, as before: the subscription then fires at every overtime step the job-queue daemon reports (each new whole percent up to 500 %, then every minute).
+- **The range is 1 to 10000.** kbagent refuses `0`: the job-queue daemon only reports overtime values above 0, so a 0 threshold matches every overtime step, the same as no threshold. (The service itself stores a 0 threshold, and the UI can set one; `--filter 'durationOvertimePercentage>=0'` is accepted too, since a generic filter has no local value rule, and behaves like no threshold. Use `--overtime-percent N` for a threshold.) Without the option no overtime filter is written, as before: the subscription then fires at every overtime step the job-queue daemon reports (each new whole percent up to 500 %, then every minute).
 - **Rows of `notification list` / `detail` / `create` / `replace-recipient` carry `overtime_percent`**: the percent (`50`, or `12.5` when the stored ratio is not a whole percent) when the subscription has exactly one `durationOvertimePercentage` filter with operator `>=`; otherwise null. The raw `filters` stay in the row. `replace-recipient` copies the threshold filter verbatim.
 - **Without `--branch` the service adds the default branch.** kbagent sends no `branch.id` filter (unless a `--filter 'branch.id=...'` gives one, since vNEXT); the Notification Service stores one with the default branch's id (verified live, with and without an overtime filter). The 0.91.0 note that such a subscription fires on every branch was wrong.
 
@@ -3003,14 +3003,14 @@ events and emits a final `done` SSE frame mirroring the same record.
   platform service and is **not** in the configuration at all. Auditing "who
   gets paged when this flow breaks" by reading flow configs answers only half
   the question; `kbagent notification list` answers the other half.
-- **Event names are kebab-case, and the field is an open string.**
+- **Event names are kebab-case.**
   `job-failed`, `job-succeeded`, `job-succeeded-with-warning`,
   `job-processing-long`, plus the `phase-job-*` variants -- *not* the
-  camelCase `jobFailed` spelling. `--event` is deliberately not validated
-  against a fixed list, because the API declares `EventName` as
-  `type: string` with no enum. A misspelled event therefore returns an empty
-  list, not an error -- if a query comes back empty, re-check the spelling
-  before concluding nobody is subscribed.
+  camelCase `jobFailed` spelling. kbagent does not validate `--event`; on
+  `create` the service checks it against its event registry and refuses an
+  unknown one. On `list` a misspelled event returns an empty list, not an
+  error -- if a query comes back empty, re-check the spelling before
+  concluding nobody is subscribed.
 - **The service IGNORES `?event=`; kbagent narrows client-side**
   (verified live, not from the swagger). A filtered request answers `200` with
   the project's FULL subscription list -- the documented query parameter has

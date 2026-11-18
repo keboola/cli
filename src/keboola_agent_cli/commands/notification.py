@@ -72,7 +72,7 @@ notification_app = typer.Typer(
 _EVENT_HELP = (
     "Event name filter, e.g. 'job-failed'. Known events: "
     + ", ".join(KNOWN_EVENTS)
-    + ". Not validated against that list -- the service may add more."
+    + ". kbagent does not validate it; on create the service refuses an unknown event."
 )
 
 _FILTER_HELP = (
@@ -85,7 +85,8 @@ _FILTER_HELP = (
 
 _OVERTIME_HELP = (
     "Fire only when the job runs at least this many percent longer than usual "
-    f"(50 = 50 %). Only for {' and '.join(OVERTIME_EVENTS)}. "
+    "(50 = 50 %; 0 is refused: it would match every overtime step). "
+    f"Only for {' and '.join(OVERTIME_EVENTS)}. "
 )
 
 

@@ -1373,7 +1373,8 @@ explicit Storage config version, never the empty shell the create writes.
     no branch.id filter; the Notification Service stores the default
     branch's id itself (production only).
     --overtime-percent N: the "job runs longer than usual" threshold, a whole
-    percent 1-10000 (50 = 50 % longer), only for job-processing-long and
+    percent 1-10000 (50 = 50 % longer; kbagent refuses 0, which would match
+    every overtime step like no threshold), only for job-processing-long and
     phase-job-processing-long (else INVALID_ARGUMENT, exit 2). Rows carry
     overtime_percent.
     --filter 'FIELD<OP>VALUE' (since vNEXT, repeatable, OP ==,=,<=,>=,<,>):

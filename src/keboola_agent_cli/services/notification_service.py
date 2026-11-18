@@ -68,8 +68,11 @@ OPERATOR_AT_LEAST = ">="
 # event never matches an overtime filter, so ``--overtime-percent`` is refused
 # there instead of creating a subscription that silently never fires.
 OVERTIME_EVENTS = ("job-processing-long", "phase-job-processing-long")
-# The service validates the value as ``numeric`` and ``> 0`` (the
-# ``*ProcessingLongNotification`` data constraints), so 0 % is refused there.
+# kbagent's own minimum, not the service's: the ``> 0`` constraint of the
+# ``*ProcessingLongNotification`` data is on the EVENT the job-queue daemon
+# sends, so the daemon only reports values above 0. A 0 % threshold would
+# match every overtime step -- the same as no threshold -- so it is refused.
+# (The UI can store 0; ``--filter 'durationOvertimePercentage>=0'`` also can.)
 # The upper bound is technical, not a business rule: the daemon keeps emitting
 # past 500 %, but the percent must stay representable once divided by 100.
 MIN_OVERTIME_PERCENT = 1

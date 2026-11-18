@@ -56,7 +56,10 @@ kbagent --json notification create --project P --event job-processing-long \
   percent up to 500 %, then every minute): a flood of mail.
 - The value is a whole percent, 1 to 10000 (`50` = at least 50 % longer than
   usual). Never pass the ratio you see in `filters` (`0.5`): it exits 2.
-  `0` exits 2 too; the service refuses it.
+  `0` exits 2 too: kbagent refuses it, because the platform reports only
+  overtime above 0, so a 0 threshold fires at every step, like no threshold.
+  `--filter 'durationOvertimePercentage>=0'` is accepted but behaves the
+  same way; use `--overtime-percent N` for a threshold.
 - On any other event the option exits 2 (`INVALID_ARGUMENT`) and creates
   nothing, because no other event carries the overtime value.
 - On kbagent older than vNEXT the option does not exist (`No such option`).

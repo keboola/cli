@@ -1794,7 +1794,8 @@ kbagent notification clone [--project ALIAS] --subscription-id ID [--component-i
 #   --overtime-percent N (#989): whole percent 1-10000, only for job-processing-long /
 #   phase-job-processing-long (else INVALID_ARGUMENT, exit 2, before any API call); writes the UI's
 #   "job runs longer than usual" filter {field: durationOvertimePercentage, value: N/100,
-#   operator: ">="}. The service refuses 0. REST: `overtime_percent` (StrictInt) in the POST body.
+#   operator: ">="}. kbagent refuses 0 (a 0 threshold matches every overtime step the daemon reports, as
+#   no threshold does). REST: `overtime_percent` (StrictInt) in the POST body.
 #   Rows of list/detail/create/replace-recipient carry `overtime_percent` (null unless exactly one
 #   `>=` overtime filter). Version gate lives in gotchas.md.
 #   `replace-recipient` is delete+recreate -- the API has NO update primitive. It creates the NEW
