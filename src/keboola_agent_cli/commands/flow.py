@@ -632,6 +632,10 @@ def flow_validate(
 # ---------------------------------------------------------------------------
 
 
+# The top-level keys of a flow definition document (`flow schema`).
+_DEFINITION_KEYS = ("phases", "tasks")
+
+
 def _load_flow_yaml(inline: str | None, file: Path | None) -> dict[str, Any] | None:
     """The flow definition of ``--definition`` (inline YAML/JSON) or ``--definition-file``.
 
@@ -668,10 +672,6 @@ def _load_flow_yaml(inline: str | None, file: Path | None) -> dict[str, Any] | N
             f"'{nulls[0]}' is null. Give a list, or leave the key out to keep the current value."
         )
     return parsed
-
-
-# The top-level keys of a flow definition document (`flow schema`).
-_DEFINITION_KEYS = ("phases", "tasks")
 
 
 @flow_app.command("new")

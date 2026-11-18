@@ -1049,11 +1049,15 @@ explicit Storage config version, never the empty shell the create writes.
     structural check skipped, semantic checks still run, a warning is surfaced.
     IDs are STRINGS; phases use next[].goto (a phase id or null); tasks are typed
     (job/notification/variable). Execute with: flow run --flow-id ID.
+    Omit the definition to create an EMPTY flow on purpose; a given definition that
+    is empty, null, has a key other than phases/tasks, or has no phases is refused
+    (VALIDATION_ERROR exit 2 / INVALID_FLOW_DEFINITION exit 1), nothing written.
+    Fill an empty flow with ONE flow update carrying the phases AND their tasks.
 
   flow update
     Update a flow's name, description, or phases/tasks. --definition / --definition-file
-    replaces both phases and tasks.
-    Omitting --file leaves the flow body unchanged. Validated against the live conditional-flow
+    replaces the side(s) it carries (phases and/or tasks); the other is kept.
+    Omitting the definition leaves the flow body unchanged. Validated against the live conditional-flow
     schema on write (merge-aware; INVALID_FLOW_DEFINITION on failure; schema-fetch failure ->
     semantic-only + warning).
 
