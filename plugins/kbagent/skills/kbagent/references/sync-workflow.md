@@ -573,7 +573,8 @@ Every command that reads or writes a sync tree holds its lock
 (`.keboola/lock/sync.lock`, an OS lock) for the whole run: `sync init`,
 `pull` (with its auto-init and `--dry-run`), `push` (also `--dry-run`),
 `diff`, `status`, `branch-link`, `branch-unlink`, `branch-status`, `clone`
-(source while copied, target for the whole clone), `config new --output-dir`
+(source while copied -- a source you cannot write is read without the lock --,
+target for the whole clone), `config new --output-dir`
 into a sync tree (taken before `--push` creates the config) and
 `config rename --directory` (before the remote rename). A second run in the
 same folder stops at once with `SYNC_DIRECTORY_BUSY` (exit 1,

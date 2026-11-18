@@ -10,6 +10,7 @@ wrapper, and that a killed holder never blocks the next run.
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import subprocess
@@ -794,3 +795,88 @@ def test_readers_need_a_writable_lock_folder(ws: Workspace, operation: str) -> N
     finally:
         for path in reversed(targets):
             path.chmod(0o755 if path.is_dir() else 0o644)
+
+
+# ---------------------------------------------------------------------------
+# A clone source this user cannot write (review of #1005, NB-1)
+# ---------------------------------------------------------------------------
+
+
+def _make_read_only(root: Path) -> list[Path]:
+    """Drop write rights on every folder of *root*; return them for the restore."""
+    folders = [root, *(p for p in root.rglob("*") if p.is_dir())]
+    for folder in folders:
+        folder.chmod(0o555)
+    return folders
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX folder modes")
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0, reason="root ignores modes")
+def test_clone_reads_a_source_it_cannot_write(tmp_path: Path, tmp_config_dir: Path) -> None:
+    """A read-only reference tree is cloned; nothing is created in it."""
+    import shutil
+
+    from test_sync_clone_links import World
+
+    world = World(tmp_path, tmp_config_dir)
+    shutil.rmtree(world.ref_dir / ".keboola" / "lock", ignore_errors=True)
+    folders = _make_read_only(world.ref_dir)
+    try:
+        result = world.clone()
+    finally:
+        for folder in folders:
+            folder.chmod(0o755)
+    assert result["status"] == "cloned", result
+    assert result["errors"] == []
+    assert not (world.ref_dir / ".keboola" / "lock").exists()
+
+
+def test_an_unwritable_tree_still_fails_for_a_writer(tmp_path: Path) -> None:
+    """Only a reader may enter an unwritable tree unlocked; a writer gets the ConfigError."""
+    from keboola_agent_cli.sync import dir_lock
+
+    root = tmp_path / "tree"
+    (root / ".keboola").mkdir(parents=True)
+    denied = MagicMock()
+    denied.return_value.acquire.side_effect = PermissionError(errno.EACCES, "denied")
+    with patch.object(dir_lock, "_NativeFileLock", denied):
+        with (
+            pytest.raises(dir_lock.UnwritableLockError, match="writable"),
+            dir_lock.sync_dir_lock(root),
+        ):
+            pytest.fail("a writer ran without the lock")
+        ran = []
+        with dir_lock.sync_dir_lock(root, read_only_ok=True):
+            ran.append(True)
+    assert ran == [True]
+
+
+def test_a_reader_still_fails_on_other_lock_errors(tmp_path: Path) -> None:
+    """A full disk (or any error other than missing write rights) is never skipped."""
+    from keboola_agent_cli.sync import dir_lock
+
+    root = tmp_path / "tree"
+    (root / ".keboola").mkdir(parents=True)
+    broken = MagicMock()
+    broken.return_value.acquire.side_effect = OSError(errno.ENOSPC, "no space")
+    with (
+        patch.object(dir_lock, "_NativeFileLock", broken),
+        pytest.raises(ConfigError) as caught,
+        dir_lock.sync_dir_lock(root, read_only_ok=True),
+    ):
+        pytest.fail("ran without the lock")
+    assert not isinstance(caught.value, dir_lock.UnwritableLockError)
+
+
+def test_a_busy_source_is_refused_even_for_a_reader(ws: Workspace) -> None:
+    """read_only_ok never skips a lock another run holds."""
+    from keboola_agent_cli.sync.dir_lock import sync_dir_lock
+
+    ws.init_and_pull()
+    with held_by_other_thread(ws.root):
+        with (
+            pytest.raises(KeboolaApiError) as caught,
+            sync_dir_lock(ws.root, read_only_ok=True),
+        ):
+            pytest.fail("entered a busy tree")
+        _assert_busy(caught.value, ws.root)

@@ -1410,7 +1410,7 @@ kbagent sync push [--project ALIAS] [--all-projects] [--dry-run] [--force] [--al
 #   any API call. A project without a stored project_id costs one token verification call. Copy configs between
 #   projects with `sync clone`. Version gate lives in gotchas.md (no `(since vNEXT)` on `# ` lines).
 # sync directory lock (#827 follow-up): init/pull (its auto-init too)/push/diff/status/branch-*/clone
-#   (source while copied, target for the whole clone), config new --output-dir into a tree (before
+#   (source while copied, unlocked when this user cannot write it; target for the whole clone), config new --output-dir into a tree (before
 #   --push creates the config) and config rename --directory (before the remote rename) hold
 #   .keboola/lock/sync.lock (an OS lock via filelock's native class, file kept, lock/ ignores itself
 #   in git; per-thread ownership, the owner thread nests). A second run fails at once with

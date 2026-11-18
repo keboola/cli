@@ -31,6 +31,7 @@ process, but the same file to the OS, so it fails busy instead of nesting.
 from __future__ import annotations
 
 import contextlib
+import errno
 import functools
 import inspect
 import os
@@ -68,6 +69,13 @@ class _Hold:
 _owner = threading.local()
 # The stand-in lock of a directory entered UNLOCKED (no sync tree yet).
 _UNLOCKED = object()
+# OS errors that mean "this folder is not writable for this user": a read-only
+# reference tree (a shared or mounted copy) that `sync clone` only reads.
+_UNWRITABLE_ERRNOS = frozenset({errno.EACCES, errno.EPERM, errno.EROFS})
+
+
+class UnwritableLockError(ConfigError):
+    """The lock folder cannot be created or opened: the tree is not writable."""
 
 
 def _holds() -> dict[Path, _Hold]:
@@ -136,7 +144,8 @@ def _acquire(root: Path) -> Any:
     except Timeout:
         raise busy_error(root) from None
     except (OSError, SelfIgnoreError) as exc:
-        raise ConfigError(
+        unwritable = isinstance(exc, OSError) and exc.errno in _UNWRITABLE_ERRNOS
+        raise (UnwritableLockError if unwritable else ConfigError)(
             f"Could not lock the sync directory {root} ({lock_file}): {exc}. The lock needs a "
             "writable .keboola/lock/ folder on a local disk."
         ) from exc
@@ -159,12 +168,18 @@ UNLOCKED = "unlocked"
 
 
 @contextlib.contextmanager
-def sync_dir_lock(project_root: Path | str, *, outside: str = CREATE) -> Iterator[None]:
+def sync_dir_lock(
+    project_root: Path | str, *, outside: str = CREATE, read_only_ok: bool = False
+) -> Iterator[None]:
     """Hold the lock of *project_root* for the ``with`` block (L1-L4).
 
     The thread that already holds the tree -- or entered it UNLOCKED -- just
     nests. *outside* decides for a directory that has no ``.keboola/`` yet:
-    :data:`CREATE`, :data:`REFUSE` or :data:`UNLOCKED`.
+    :data:`CREATE`, :data:`REFUSE` or :data:`UNLOCKED`. *read_only_ok* is for
+    a caller that only reads the tree (the `sync clone` source): a tree this
+    user cannot write is entered without the lock instead of failing. A
+    writer would need the same rights, so no kbagent run of this user can
+    change it meanwhile; a busy tree is still refused.
     """
     root = Path(project_root).resolve()
     holds = _holds()
@@ -179,7 +194,13 @@ def sync_dir_lock(project_root: Path | str, *, outside: str = CREATE) -> Iterato
     no_tree = outside != CREATE and not (root / KEBOOLA_DIR_NAME).is_dir()
     if no_tree and outside == REFUSE:
         load_manifest(root)  # raises the "no manifest" FileNotFoundError
-    lock: Any = _UNLOCKED if no_tree and outside == UNLOCKED else _acquire(root)
+    lock: Any = _UNLOCKED
+    if not (no_tree and outside == UNLOCKED):
+        try:
+            lock = _acquire(root)
+        except UnwritableLockError:
+            if not read_only_ok:
+                raise
     holds[root] = _Hold(lock=lock, depth=1)
     try:
         yield
