@@ -7,11 +7,13 @@ error accumulation, and exit codes for ConfigError / KeboolaApiError.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
+import typer.rich_utils as typer_rich_utils
 from typer.testing import CliRunner
 
 from keboola_agent_cli.cli import app
@@ -940,11 +942,16 @@ class TestNotificationCreateFilterCli:
         assert "--filter" in error["message"]
         service.create_subscription.assert_not_called()
 
-    def test_help_tells_to_quote_the_expression(self) -> None:
+    def test_help_tells_to_quote_the_expression(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Typer forces a colour terminal when GITHUB_ACTIONS is set (CI) and
+        # the ANSI codes split "--filter". Force it here too, so the test sees
+        # what CI sees on every host, and compare the text without the codes.
+        monkeypatch.setattr(typer_rich_utils, "FORCE_TERMINAL", True)
         result = runner.invoke(app, ["notification", "create", "--help"])
         assert result.exit_code == 0
-        assert "--filter" in result.output
-        assert "quote" in result.output.lower()
+        plain = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+        assert "--filter" in plain
+        assert "quote" in plain.lower()
 
 
 class TestNotificationCloneCli:
