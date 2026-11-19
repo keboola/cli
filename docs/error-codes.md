@@ -66,7 +66,7 @@ A command that fails with an error code exits with the code's `Exit` value below
 | `INVALID_FORMAT` | 2 | `api` | Input is not in the expected format |
 | `USAGE_ERROR` | 2 | `validation` | Incorrect CLI flag combination or missing required argument |
 | `CONFIRMATION_REQUIRED` | 2 | `validation` | A command that asks for confirmation ran in human mode without a terminal and without `--yes`. Nothing was changed. Run the command again with `--yes`. An AI agent asks the user first (since 1.0.0) |
-| `MANAGE_TOKEN_REQUIRED` | 2 | `validation` | `project refresh` needs a new Storage token for a project and no Manage API token is available: no terminal to ask on, and `KBC_MANAGE_API_TOKEN` is read only with `--allow-env-manage-token`. Reported per project in `projects_failed` (the run exits 1); tokens taken from the global config are still written. Run `kbagent project refresh --project ALIAS` in a terminal (since vNEXT) |
+| `MANAGE_TOKEN_REQUIRED` | 2 | `validation` | `project refresh` needs a new Storage token for a project and no Manage API token is available: no terminal to ask on, and `KBC_MANAGE_API_TOKEN` is read only with `--allow-env-manage-token`. Reported per project in `projects_failed` (the run exits 1); tokens taken from the global config are still written. Run `kbagent project refresh --project ALIAS` in a terminal (since 1.4.0) |
 | `MISSING_PARAMETER` | 2 | `validation` | A required parameter was not supplied |
 | `UNKNOWN_ERROR` | 1 | `api` | Catch-all for unclassified errors |
 | `UNEXPECTED_ERROR` | 1 | `api` | Per-project fallback in a multi-project command: that project raised an error carrying no code of its own. Other projects in the same run still report their own outcome |

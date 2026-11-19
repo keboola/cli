@@ -124,7 +124,7 @@ pitfall 2.2.
    [gotchas.md](gotchas.md) "Keys removed from `--json` output in 1.0.0").
 4. **Branch on `data.status` of `sync push`**: `pushed`, `dry_run` or
    `no_changes`. The shapes differ -- see pitfall 5.2.
-5. **Never retry `sync push` blindly after `SYNC_CONFLICT`** *(since vNEXT, #827)*.
+5. **Never retry `sync push` blindly after `SYNC_CONFLICT`** *(since 1.4.0, #827)*.
    A config (or its rows) changed in Keboola after push read it, so push left
    it alone. A re-run gives the same answer or, worse, a person resolves it by
    overwriting the UI edit. Fail the job, then copy the conflicting config

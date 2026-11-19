@@ -73,7 +73,7 @@ kbagent transformation edit --project prod --config-id 123456 \
 
 ## Stop a transformation on purpose (data checks)
 
-*(since vNEXT)*
+*(since 1.4.0)*
 
 A data check that must fail the job when the data is wrong (a sum that must be
 0, a table that must not be empty) is written with `ABORT_TRANSFORMATION`, never

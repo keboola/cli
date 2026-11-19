@@ -248,13 +248,13 @@ kbagent --json semantic-layer show --project prod --model core_model --type cons
 ```
 
 Edits are an in-place `PATCH` that carries only the keys you pass
-*(since vNEXT; before: a whole-record `PUT` that overwrote a concurrent change
+*(since 1.4.0; before: a whole-record `PUT` that overwrote a concurrent change
 to another field)*, so if the update is refused (e.g. the new name collides)
 nothing was deleted and nothing needs rolling back -- the item is exactly as it
 was (the envelope's `rollback` field is always `null`). Items keep their id,
 scope and revision history across an edit.
 
-What an edit does NOT protect against *(since vNEXT)*:
+What an edit does NOT protect against *(since 1.4.0)*:
 
 - Two edits of the SAME key at the same time: the last one wins.
 - Two concurrent renames of one metric, or a constraint that starts referencing
@@ -541,7 +541,7 @@ Quick reminders:
 - **Data edits:** `PUT` replaces the whole record, `PATCH` merges only the
   top-level `data` keys it carries (under a row lock) and can also change the
   scope (never in the same request as `name`/`data`). Both are revisioned and
-  in place. *(since vNEXT)* kbagent's `edit metric / dataset / relationship /
+  in place. *(since 1.4.0)* kbagent's `edit metric / dataset / relationship /
   constraint / glossary` send a `PATCH` with only the keys you pass (before: a
   whole-record `PUT`); they keep the item's id, scope and grants.
   `import --overwrite` and `promote` keep the `PUT`. Same five types are
