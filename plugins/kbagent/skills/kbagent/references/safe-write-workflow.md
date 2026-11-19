@@ -133,7 +133,7 @@ once `.kbagent/` exists, you can run from any subdirectory of the repo.
 
 ### After a token rotation: `INVALID_TOKEN` in a local `.kbagent/`
 
-*(since vNEXT)* (#955) `init --from-global` copies the tokens **once**; the
+*(since 1.4.0)* (#955) `init --from-global` copies the tokens **once**; the
 local directory is not linked to the global config. When the old tokens stop
 working (expired, or revoked after the user minted new ones in the global
 config), commands in the local directory that call Keboola report
@@ -154,7 +154,7 @@ config's working token:
      one distinct global static token for the same project and stack, other
      than the local one. Retry a transient error first.
    - `global_token_not_used: {global_alias, reason: "scoped"}` on an entry
-     (since vNEXT): the global config holds a token for the project, but it
+     (since 1.4.0): the global config holds a token for the project, but it
      has fewer rights than a new token, so it is not taken and a new token is
      needed. Tell the user; never edit `config.json` to force the global
      token in.
@@ -170,7 +170,7 @@ config's working token:
    `kbagent --json project refresh --project ALIAS`. When only adoptions are
    needed it succeeds without a Manage token. When something must be minted
    it asks for the Manage token on a terminal (`--json` does not suppress that
-   prompt). Without a terminal (since vNEXT) the run still writes the
+   prompt). Without a terminal (since 1.4.0) the run still writes the
    `projects_adopted` entries -- those aliases are fixed -- and exits 1 with
    each project that needs a new token in `data.projects_failed`,
    `error_code: MANAGE_TOKEN_REQUIRED`. For those, ask the user to run

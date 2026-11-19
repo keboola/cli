@@ -59,9 +59,9 @@ These lists keep `error`, because their entries are not failed items with an err
 
 ## `flow new` / `flow update` / `flow validate`: an empty or malformed definition is refused
 
-*(since vNEXT)*
+*(since 1.4.0)*
 
-- **A definition that is given must be a phases/tasks document, and the flow it leaves must have at least one phase.** (`flow update` may still send only `tasks` or only `phases`; the other side is kept.) `--definition ""`, an empty, whitespace-only or comments-only file (or stdin), a YAML `null`, a document with neither `phases` nor `tasks`, a top-level key other than those two (a typo like `task:`, or a whole `flow detail --json` envelope) and `phases: null` / `tasks: null` are `VALIDATION_ERROR`, exit 2, nothing written. `phases: []` (or a `tasks`-only `flow new`, or an update that leaves the flow with no phases) is `INVALID_FLOW_DEFINITION`, exit 1, "Flow definition has no phases". `flow validate` gives the same `VALIDATION_ERROR` for the first group and `valid: false` (exit 2) for no phases. Before vNEXT an empty file created a flow with no phases (exit 0), and `flow update --name X --definition-file empty.yaml` only renamed the flow.
+- **A definition that is given must be a phases/tasks document, and the flow it leaves must have at least one phase.** (`flow update` may still send only `tasks` or only `phases`; the other side is kept.) `--definition ""`, an empty, whitespace-only or comments-only file (or stdin), a YAML `null`, a document with neither `phases` nor `tasks`, a top-level key other than those two (a typo like `task:`, or a whole `flow detail --json` envelope) and `phases: null` / `tasks: null` are `VALIDATION_ERROR`, exit 2, nothing written. `phases: []` (or a `tasks`-only `flow new`, or an update that leaves the flow with no phases) is `INVALID_FLOW_DEFINITION`, exit 1, "Flow definition has no phases". `flow validate` gives the same `VALIDATION_ERROR` for the first group and `valid: false` (exit 2) for no phases. Before 1.4.0 an empty file created a flow with no phases (exit 0), and `flow update --name X --definition-file empty.yaml` only renamed the flow.
 - **Omitting the definition still creates an empty flow** (`flow new --name X` with no `--definition`/`--definition-file`, or REST `POST /flows/{project}` with neither `phases` nor `tasks`). Fill it with ONE `flow update` that has the phases AND their tasks: every phase needs an enabled task, so phases first and tasks later is refused.
 - **Feed `flow update` the definition only**: take `phases` and `tasks` from `flow detail --json` (`.data.phases`, `.data.tasks`), not the whole output.
 - **REST**: `POST /flows/{project}`, `PATCH /flows/{project}/{id}` and `POST /flows/validate` answer 422 for an unknown field (including the legacy `component_id`, which used to be dropped silently) and for `phases: null` / `tasks: null`.
@@ -69,31 +69,31 @@ These lists keep `error`, because their entries are not failed items with an err
 
 ## `flow run`: partial flow runs ignore conditions; the flow status can hide a failed task
 
-*(since vNEXT)*
+*(since 1.4.0)*
 
 - **New command `kbagent flow run --project ALIAS --flow-id ID`** runs a whole flow, or with `--task-id` (repeatable) / `--from-phase-id` only some tasks (`onlyFlowTaskIds` on the Queue job, the UI's "Run selected tasks"). Older versions have no way to run part of a flow; `job run --component-id keboola.flow` always runs all of it.
 - **A partial run does not evaluate transition conditions.** Every selected task runs, phase after phase, also after one failed; routing-only phases may run empty; only the selected tasks run, so unselected tasks of every type (job, variable, notification) do not run. Every partial run carries the `PARTIAL_RUN_IGNORES_CONDITIONS` warning.
-- **A flow or selection the job queue would refuse is refused before the job is created, `--dry-run` included** *(since vNEXT)*. Every run: a repeated phase or task id, a transition to an undefined phase, or not exactly one first phase (a phase no transition goes to) is `INVALID_FLOW_DEFINITION`, exit 1. A partial run: a selected phase not reachable from the first phase, or needed phases that form a loop, is `INVALID_ARGUMENT`, exit 2 (HTTP 400). Before vNEXT the dry run said yes and the real job failed after it was created; a repeated task id was silently selected once.
+- **A flow or selection the job queue would refuse is refused before the job is created, `--dry-run` included** *(since 1.4.0)*. Every run: a repeated phase or task id, a transition to an undefined phase, or not exactly one first phase (a phase no transition goes to) is `INVALID_FLOW_DEFINITION`, exit 1. A partial run: a selected phase not reachable from the first phase, or needed phases that form a loop, is `INVALID_ARGUMENT`, exit 2 (HTTP 400). Before 1.4.0 the dry run said yes and the real job failed after it was created; a repeated task id was silently selected once.
 - **The flow job's status is the status of its last phase**, so a partial run can end `success` with a failed selected task. Under `--wait`, read `failed_task_ids` / `task_results` (a task absent from `result.tasks` is `missing`): kbagent exits 1 with the payload and a `SELECTED_TASK_FAILED` warning when that list is not empty -- also when the parent job is `terminated`, `cancelled` or `warning`. Over REST the answer is HTTP 200 with the same keys and the warning in `Kbagent-Warnings`. When the flow job itself ended in `error` (typically its last phase failed), the error stays `QUEUE_JOB_FAILED` (exit 1, REST 502) and `task_results` / `failed_task_ids` are in `error.details`; the warnings are still in the error envelope's `warnings`.
-- **`--from-phase-id` follows default transitions only** (the `next[]` entry with no `condition` key; `condition: null` or `{}` counts as a condition). Phases with an enabled task that are not on the default path, and are reachable from it only through a conditional transition, are named in `CONDITIONAL_PHASES_SKIPPED`. A task id or phase id with a comma, and a selected task whose `phase` the flow does not define, are `INVALID_ARGUMENT`. Two default transitions is `INVALID_ARGUMENT`; a transition to an unknown phase is `INVALID_FLOW_DEFINITION` (since vNEXT, see the next bullets); a phase retrying itself stops the path and sets `selection.default_path_cycle`. A retry back to an earlier phase on the route is a loop the job queue refuses for a partial run (since vNEXT).
+- **`--from-phase-id` follows default transitions only** (the `next[]` entry with no `condition` key; `condition: null` or `{}` counts as a condition). Phases with an enabled task that are not on the default path, and are reachable from it only through a conditional transition, are named in `CONDITIONAL_PHASES_SKIPPED`. A task id or phase id with a comma, and a selected task whose `phase` the flow does not define, are `INVALID_ARGUMENT`. Two default transitions is `INVALID_ARGUMENT`; a transition to an unknown phase is `INVALID_FLOW_DEFINITION` (since 1.4.0, see the next bullets); a phase retrying itself stops the path and sets `selection.default_path_cycle`. A retry back to an earlier phase on the route is a loop the job queue refuses for a partial run (since 1.4.0).
 - **A blank `--task-id " "` is `INVALID_ARGUMENT`, never a whole-flow run**; over REST `task_ids: []` is HTTP 400 (`null` = no selector).
 - **A `--timeout` never stops the job** (unlike `job run --wait`, which kills it and exits 7): `QUEUE_JOB_TIMEOUT`, exit 4, `retryable: false`; follow it with `kbagent job detail --project P --job-id ID`.
 - **`job run --wait` and `flow run --wait`: a `QUEUE_JOB_FAILED` error now carries `details.job_id`** (additive), so the failed job can be read with `job detail` without parsing the message.
-- **Permission key `flow.run` (write) also needs `job.run`** *(since vNEXT)*. `flow run` creates a Queue job like `job run`, so a policy that denies `job.run` (or `job.*`) blocks `flow run` too, exit 6 / HTTP 403, also `--dry-run`; the message names `job.run`. An allow-list policy (`--mode deny`) must allow both `flow.run` and `job.run`. Before vNEXT a `job.run` deny did not stop `flow run`.
+- **Permission key `flow.run` (write) also needs `job.run`** *(since 1.4.0)*. `flow run` creates a Queue job like `job run`, so a policy that denies `job.run` (or `job.*`) blocks `flow run` too, exit 6 / HTTP 403, also `--dry-run`; the message names `job.run`. An allow-list policy (`--mode deny`) must allow both `flow.run` and `job.run`. Before 1.4.0 a `job.run` deny did not stop `flow run`.
 
 ## `job run --wait` / `flow run --wait`: a failure while polling is not retryable
 
-*(since vNEXT)*
+*(since 1.4.0)*
 
 - **Every error after the job was created carries `details.job_id` and `retryable: false`.** That is: `QUEUE_JOB_FAILED` (the job ended `error`, exit 1); `JOB_TIMEOUT_TERMINATED` (a `job run` timeout whose kill request was accepted, or whose job a follow-up read showed already finished, exit 7; `details.job` and `details.logTail` stay; `details.job.status` is the last status seen and may still be `terminating`, so exit 7 does not prove the stop is complete); `QUEUE_JOB_TIMEOUT` (a `flow run` timeout, or a `job run` timeout whose kill failed or could not be confirmed, exit 4); and a connection error, HTTP 5xx, read timeout or exhausted retries while polling (`CONNECTION_ERROR` / `TIMEOUT` / `RETRY_EXHAUSTED` exit 4, `API_ERROR` exit 1). These codes and exit codes are unchanged. Except for `QUEUE_JOB_FAILED` and `JOB_TIMEOUT_TERMINATED`, the message says the job was created and may still be running, and names `kbagent job detail --project P --job-id ID`.
 - **The job read, the kill and the log tail that enrich these errors are best effort.** An odd answer from one of them (a job detail that is not an object, a `null` event) no longer replaces the error with a crash: the error keeps its code and `details.job_id` (the log tail may be missing).
-- **Do not start the job again.** Before vNEXT such an error could say `retryable: true` with no job id, and a retry created a second run. Read the job with `job detail` first. Over REST (`POST /flows/{project}/{flow_id}/run?wait=true`) the error body has the same `retryable` and `details.job_id`.
-- **Behaviour change for errors the HTTP layer did not translate.** Before vNEXT, a reset connection or protocol error while polling, and a poll answer that is not JSON or not a job object, crashed the command: `INTERNAL_ERROR`, exit 1, no job id. Now a transport error is `CONNECTION_ERROR` (exit **4**) and an unreadable answer is `API_ERROR` (exit 1), both with `retryable: false` and `details.job_id`.
+- **Do not start the job again.** Before 1.4.0 such an error could say `retryable: true` with no job id, and a retry created a second run. Read the job with `job detail` first. Over REST (`POST /flows/{project}/{flow_id}/run?wait=true`) the error body has the same `retryable` and `details.job_id`.
+- **Behaviour change for errors the HTTP layer did not translate.** Before 1.4.0, a reset connection or protocol error while polling, and a poll answer that is not JSON or not a job object, crashed the command: `INTERNAL_ERROR`, exit 1, no job id. Now a transport error is `CONNECTION_ERROR` (exit **4**) and an unreadable answer is `API_ERROR` (exit 1), both with `retryable: false` and `details.job_id`.
 - **SDK `Client.run_job(wait=True)` follows the same rule**: every error after the create (also `QUEUE_JOB_FAILED` and the local timeout, which never stops the job) has `retryable=False` and `details["job_id"]`; read the job with `Client.raw.get_job_detail(job_id)`.
 
 ## `project refresh` in a local directory takes the new token from the global config
 
-*(since vNEXT)* (#955)
+*(since 1.4.0)* (#955)
 
 - **`kbagent init --from-global` copies the tokens once.** After a token rotation in the global config, a local `.kbagent/` keeps the dead copies and every command there fails `INVALID_TOKEN`. Run `kbagent project refresh --project ALIAS` (or `--all-projects`) inside the local directory: for each project whose token the Storage API rejects as `INVALID_TOKEN`, it takes the global config's token of the same project (same project ID and stack) when exactly one such token exists and it verifies. No new flag, and no Manage token is needed for these. Before, refresh always minted a new token and always asked for the Manage token.
 - **Only a definitively invalid token is replaced from the global config.** A valid local token is never touched, and a timeout, 5xx or other check error keeps the old path (a new token is minted). Several different global tokens for the project, a global token that fails verification or belongs to another project: the old path. `--force` never takes from the global config. A missing or unreadable global config is not an error. The global config is only read, never written.
@@ -108,7 +108,7 @@ These lists keep `error`, because their entries are not failed items with an err
 
 ## A SQL transformation statement that starts with SELECT never runs: `SQL_SELECT_SKIPPED_BY_RUNTIME`
 
-*(since vNEXT)*
+*(since 1.4.0)*
 
 - **The Snowflake and BigQuery transformation runtime skips every `script[]` statement whose text starts with `SELECT`** after comments and leading whitespace are removed (`keboola.snowflake-transformation`, `keboola.google-bigquery-transformation`). The job succeeds, even when the SELECT names a table that does not exist. So `SELECT * FROM missing_table;` is no way to test a failure: use `CREATE TABLE t AS SELECT * FROM missing_table;`. A SELECT has no effect in a transformation anyway.
 - **Leading whitespace and comments do not matter**: `  SELECT`, a newline, `-- note` + newline and `/* x */ SELECT` are all skipped (Snowflake since keboola/snowflake-transformation#42; a Snowflake component release before it still ran them). **What runs**: `WITH ... SELECT`, `CREATE TABLE ... AS SELECT`, `INSERT ... SELECT`, and a statement after a `//` comment (SqlFormatter does not remove `//`). On Snowflake `SELECT` must be a whole word (`SELECTT ...` runs and fails); BigQuery compares the first 6 characters (`SELECTT ...` is skipped).
@@ -130,17 +130,17 @@ These lists keep `error`, because their entries are not failed items with an err
 
 ## `notification create --overtime-percent` writes the "job runs longer than usual" threshold
 
-*(since vNEXT)* (#989)
+*(since 1.4.0)* (#989)
 
 - **`--overtime-percent N` is a whole percent: 50 means the job runs at least 50 % longer than usual.** kbagent sends `{"field": "durationOvertimePercentage", "value": N/100, "operator": ">="}`, the filter the Keboola UI writes. Do not pass the ratio from `filters` (`0.5`): it is not a whole number and exits 2 with `INVALID_ARGUMENT`.
 - **Only for `job-processing-long` and `phase-job-processing-long`.** Any other event with the option is `INVALID_ARGUMENT`, exit 2, before any API call: no other event carries the run-time overtime, so the subscription would never fire. REST: `overtime_percent` in the `POST /notifications/{project}` body (a strict integer: `true` or `"50"` is HTTP 422; a wrong event or range is HTTP 400).
 - **The range is 1 to 10000.** kbagent refuses `0`: the job-queue daemon only reports overtime values above 0, so a 0 threshold matches every overtime step, the same as no threshold. (The service itself stores a 0 threshold, and the UI can set one; `--filter 'durationOvertimePercentage>=0'` is accepted too, since a generic filter has no local value rule, and behaves like no threshold. Use `--overtime-percent N` for a threshold.) Without the option no overtime filter is written, as before: the subscription then fires at every overtime step the job-queue daemon reports (each new whole percent up to 500 %, then every minute).
 - **Rows of `notification list` / `detail` / `create` / `replace-recipient` carry `overtime_percent`**: the percent (`50`, or `12.5` when the stored ratio is not a whole percent) when the subscription has exactly one `durationOvertimePercentage` filter with operator `>=`; otherwise null. The raw `filters` stay in the row. `replace-recipient` copies the threshold filter verbatim.
-- **Without `--branch` the service adds the default branch.** kbagent sends no `branch.id` filter (unless a `--filter 'branch.id=...'` gives one, since vNEXT); the Notification Service stores one with the default branch's id (verified live, with and without an overtime filter). The 0.91.0 note that such a subscription fires on every branch was wrong.
+- **Without `--branch` the service adds the default branch.** kbagent sends no `branch.id` filter (unless a `--filter 'branch.id=...'` gives one, since 1.4.0); the Notification Service stores one with the default branch's id (verified live, with and without an overtime filter). The 0.91.0 note that such a subscription fires on every branch was wrong.
 
 ## `notification create --filter` and `notification clone`
 
-*(since vNEXT)* (#989)
+*(since 1.4.0)* (#989)
 
 - **`--filter 'FIELD<OP>VALUE'` writes any filter the Notification Service accepts.** OP is `==`, `=` (same as `==`), `<=`, `>=`, `<` or `>`. Always quote it: `<` and `>` are shell redirections, and an unquoted `--filter averageDuration>60` writes a file named `60`. VALUE is sent as a STRING for every operator (`00123` stays `00123`; numeric fields compare `"60"` as 60). kbagent checks only the syntax; the service checks that FIELD exists for the event and refuses an unknown one (HTTP 400, passed through with its code). A malformed expression is `INVALID_ARGUMENT`, exit 2, naming `--filter`.
 - **A dedicated option and a `--filter` on the same field are refused** (`--overtime-percent` + `--filter 'durationOvertimePercentage<5'`, `--config-id` + `--filter 'job.configuration.id=...'`), and so is one field+operator twice. A range (`>=` and `<` on one field) is allowed. REST: `filters: [{field, operator?, value}]` with typed values (`value` required, null allowed; list, object, NaN, extra keys are HTTP 422).
@@ -151,19 +151,19 @@ These lists keep `error`, because their entries are not failed items with an err
 
 ## `sync push` updates a config only at the version it read, and never writes over a local edit
 
-*(since vNEXT)* (#827)
+*(since 1.4.0)* (#827)
 
-- **A config UPDATE is conditional.** `sync push` sends the config version `sync diff` read as `If-Match` (a `modified` change of `sync diff --json` carries it as `remote_version`; on the promote path it is the target branch's version). The Storage API updates the config only while it is still at that version; an edit of the config or of one of its rows raises it. An edit made in the UI after push read the config gives an `errors[]` entry with `SYNC_CONFLICT` (exit 1): the remote edit stays, the local files and the manifest entry are left as they were, and no later step of the same push writes that config or its rows: its row creates, updates and deletes are skipped with their own entry naming the configuration (`parent_config_id`), and the promote rebind and the variable / flow link backfill leave it alone. The same holds for a config whose update failed in any other way. **To resolve a `SYNC_CONFLICT`** *(steps corrected in vNEXT)*: A plain `kbagent sync pull` keeps a locally modified config, and a manual merge keeps the old baseline (the next diff calls it a conflict and push skips it), so neither resolves it. Copy the conflicting config folder(s) aside, run `kbagent sync pull --project ALIAS --theirs` (it overwrites every local change in the tree: keep a copy of any other unpushed edit too), re-apply the edit, run `kbagent sync diff --project ALIAS`, then `kbagent sync push --project ALIAS`. A skipped row carries the configuration's own error code *(since vNEXT)*: `SYNC_CONFLICT` only when the configuration conflicted; `SYNC_LOCAL_FILE_CHANGED` (push again), `API_ERROR` after a 5xx (retry) and so on otherwise -- before, every such row said `SYNC_CONFLICT`. A new row under a new config folder whose create failed carries that create's code too (with `parent_path`), not `PARENT_CONFIG_NOT_TRACKED`. Before, the PUT had no precondition and such an edit was overwritten silently.
-- **In a `syncWorkspaces` tree, a `SYNC_CONFLICT` on a shared SQL workspace is a real edit** *(since vNEXT)*: the SQL Editor writes the workspace config only when a user saves the code (also its AI assistant); queries, sessions and table loads never do. Someone saved SQL after the diff read it -- resolve it like any other conflict.
+- **A config UPDATE is conditional.** `sync push` sends the config version `sync diff` read as `If-Match` (a `modified` change of `sync diff --json` carries it as `remote_version`; on the promote path it is the target branch's version). The Storage API updates the config only while it is still at that version; an edit of the config or of one of its rows raises it. An edit made in the UI after push read the config gives an `errors[]` entry with `SYNC_CONFLICT` (exit 1): the remote edit stays, the local files and the manifest entry are left as they were, and no later step of the same push writes that config or its rows: its row creates, updates and deletes are skipped with their own entry naming the configuration (`parent_config_id`), and the promote rebind and the variable / flow link backfill leave it alone. The same holds for a config whose update failed in any other way. **To resolve a `SYNC_CONFLICT`** *(steps corrected in 1.4.0)*: A plain `kbagent sync pull` keeps a locally modified config, and a manual merge keeps the old baseline (the next diff calls it a conflict and push skips it), so neither resolves it. Copy the conflicting config folder(s) aside, run `kbagent sync pull --project ALIAS --theirs` (it overwrites every local change in the tree: keep a copy of any other unpushed edit too), re-apply the edit, run `kbagent sync diff --project ALIAS`, then `kbagent sync push --project ALIAS`. A skipped row carries the configuration's own error code *(since 1.4.0)*: `SYNC_CONFLICT` only when the configuration conflicted; `SYNC_LOCAL_FILE_CHANGED` (push again), `API_ERROR` after a 5xx (retry) and so on otherwise -- before, every such row said `SYNC_CONFLICT`. A new row under a new config folder whose create failed carries that create's code too (with `parent_path`), not `PARENT_CONFIG_NOT_TRACKED`. Before, the PUT had no precondition and such an edit was overwritten silently.
+- **In a `syncWorkspaces` tree, a `SYNC_CONFLICT` on a shared SQL workspace is a real edit** *(since 1.4.0)*: the SQL Editor writes the workspace config only when a user saves the code (also its AI assistant); queries, sessions and table loads never do. Someone saved SQL after the diff read it -- resolve it like any other conflict.
 - **A 412 is read back, and the "requested state" counts.** When the config then holds exactly what push sent (the configuration with its encrypted values as sent, name, description, and the enabled state when push sent one), the update counts as done: this is the case of a PUT whose answer was lost and that the transport repeated. It proves the state, not that this push wrote it. Without `version` in the listing push sends no precondition, as before.
-- **Push reads a config's files once.** A `_config.yml` or companion file (`transform.sql`, `pyproject.toml`, ...) that changes while push reads it is not sent: `SYNC_LOCAL_FILE_CHANGED` in `errors[]` (exit 1), nothing written for that config. Run `sync push` again. Rows do the same *(since vNEXT)*: a row's `_config.yml` is read once, a row file changed during the read is not created or updated (`SYNC_LOCAL_FILE_CHANGED` for that row), a row file edited during its create or update is not written over (`LOCAL_EDIT_DURING_PUSH`) and the row's baseline is the hash of the bytes push wrote or sent -- before, a new row's baseline was a fresh read after the write, so an edit saved in that moment was never pushed.
+- **Push reads a config's files once.** A `_config.yml` or companion file (`transform.sql`, `pyproject.toml`, ...) that changes while push reads it is not sent: `SYNC_LOCAL_FILE_CHANGED` in `errors[]` (exit 1), nothing written for that config. Run `sync push` again. Rows do the same *(since 1.4.0)*: a row's `_config.yml` is read once, a row file changed during the read is not created or updated (`SYNC_LOCAL_FILE_CHANGED` for that row), a row file edited during its create or update is not written over (`LOCAL_EDIT_DURING_PUSH`) and the row's baseline is the hash of the bytes push wrote or sent -- before, a new row's baseline was a fresh read after the write, so an edit saved in that moment was never pushed.
 - **An edit saved during the update is kept.** Push then does not write the encrypted values and the id back into the folder; a `warnings[]` entry `code: LOCAL_EDIT_DURING_PUSH` names it, and the manifest records what was sent, so the newer content stays a local change for the next push (an edit of comments or formatting only has nothing to send and diffs clean). A file that had plain-text secrets still holds them (the warning says so). Before, the write-back replaced the edit with the version push had sent.
 - **An edit saved right after push wrote the folder stays a local change.** The manifest baseline is the hash of the bytes push wrote (`_config.yml` and `pyproject.toml`), never a second read of the folder; the final stamp of a promote push uses the same record. Before, such an edit became the baseline and was never pushed. A comment-only edit still diffs clean (diff compares content).
 - **Limits, not fixed:** an editor save that lands in the instant between push's last check and its write-back is overwritten (no file locking); the link backfill PUTs and data-app writes send no precondition; row writes send none either -- push checks the configuration's version before them instead (next sections but one). Two kbagent runs in one folder are now refused (`SYNC_DIRECTORY_BUSY`, next section).
 
 ## `sync pull` journals the folders it deletes
 
-*(since vNEXT)* (#827)
+*(since 1.4.0)* (#827)
 
 - **Pull saves the manifest before it deletes a folder.** A config or row the remote no longer lists is first dropped from `.keboola/manifest.json` and recorded under `pendingRemovals`, then its folder is deleted; the final save clears the record. Before, a pull killed between the delete and its final save left a manifest entry for a missing folder, and if the config or row was restored in the UI, the next `sync push --force` deleted it again.
 - **A folder still listed under `pendingRemovals` is absent for `sync diff` / `sync push`** (with everything below it): never created, adopted, moved to or read as a new row.
@@ -175,7 +175,7 @@ These lists keep `error`, because their entries are not failed items with an err
 
 ## One kbagent run at a time per sync directory: `SYNC_DIRECTORY_BUSY`
 
-*(since vNEXT)* (#827)
+*(since 1.4.0)* (#827)
 
 - **Every command that reads or writes a sync tree takes the directory's lock first** and holds it for its whole run: `sync init`, `pull` (also `--dry-run` and its auto-init), `push` (also `--dry-run`), `diff`, `status`, `branch-link`, `branch-unlink`, `branch-status`, `sync clone` (the source while it is copied, the target for the whole clone, also `--dry-run`; a source folder you cannot write, such as a read-only shared copy, is read without its lock and gets no `.keboola/lock/`, and the clone gets your write rights back (before, it copied the read-only modes and the push into it failed), but a source another run holds is still refused), `config new --output-dir` into a sync tree (with `--push` the lock is taken before the config is created in Keboola) and `config rename --directory` (before the remote rename). Before, two runs in one folder (a second push while the first ran, a pull during a push) silently undid each other's manifest and file changes.
 - **A second run fails at once, writes nothing and creates nothing in Keboola:** `SYNC_DIRECTORY_BUSY`, exit 1, `error_type` `conflict`, `retryable: true`, `details.directory` and `details.lock_file`. **Wait for the other run to finish, then run the command again.** There is no waiting option. `--all-projects` reports a busy project as a failed project with the same code, `retryable` and `details`; the other projects run.
@@ -187,13 +187,13 @@ These lists keep `error`, because their entries are not failed items with an err
 
 ## `sync push` checks a configuration's version before it writes its rows
 
-*(since vNEXT)* (#827)
+*(since 1.4.0)* (#827)
 
 - **Row creates, updates and deletes take no `If-Match` in the Storage API**, so a change made in the Keboola UI to a configuration or its rows after the diff read it used to be overwritten silently. Push now reads the configuration right before its first row write and compares the version: the one `sync diff` read (`parent_remote_version` on every row change of `sync diff --json` / `push --dry-run`), or, for a configuration the same push updated, the version its own update answered. A configuration the push created is not checked; one an earlier push created (its answer was lost) and this push only found again is checked against the version it found.
 - **Any doubt blocks the rows of that configuration:** a different version, an update that was confirmed only by reading the configuration back after a 412 (that proves its own fields, never its rows), a listing or read without a version, a 404 or a failed read. Each of its row changes gets an `errors[]` entry -- `SYNC_CONFLICT`, or the failed read's own code (`NOT_FOUND`, `API_ERROR`, ...) -- with `parent_config_id`; exit 1. Nothing is written for those rows: their files, their manifest entries, an adopted folder's registration all stay as they were, and no later step of the push writes that configuration. What the push already did for the configuration itself stays done.
 - **What to do:** run `kbagent sync push --project ALIAS` again. Its diff reads the configuration's current version, so the check passes and the row is written; a row that was itself changed in Keboola then shows as a conflict and is not pushed (resolve that one like any other conflict). Do not run `sync pull --theirs` for a blocked row: it overwrites every local change.
 - **The check narrows the window, it does not close it.** A UI edit between the check and the configuration's last row write is still overwritten, and that time is not bounded (many rows, HTTP retries). Rows are pushed grouped by configuration to keep it short. Only `If-Match` on the Storage row endpoints closes it (requested upstream).
-- **A stack that reports no configuration version blocks every row write of that configuration** *(since vNEXT)*: the `errors[]` entry says the stack "did not report a version" and that pushing again will not help. Current Keboola Storage always lists and returns `version`, so this should not happen: report it with the stack URL; the rows stay unwritten until the stack reports versions (a config-only change still pushes, without `If-Match`).
+- **A stack that reports no configuration version blocks every row write of that configuration** *(since 1.4.0)*: the `errors[]` entry says the stack "did not report a version" and that pushing again will not help. Current Keboola Storage always lists and returns `version`, so this should not happen: report it with the stack URL; the rows stay unwritten until the stack reports versions (a config-only change still pushes, without `If-Match`).
 - **One extra read per configuration whose rows change.**
 
 ## `kbagent context <group>` prints one group
@@ -2224,7 +2224,7 @@ record per member. Consequences an agent must internalize:
   and `set` the whole thing back. There is no per-member endpoint.
 - **It uses the metastore's real `PUT`** (revisioned update, `meta.revision`
   increments, history preserved) when a record for that dimension already
-  exists — as `edit metric|…` did from 0.97.0 (before, DELETE+POST; since vNEXT
+  exists — as `edit metric|…` did from 0.97.0 (before, DELETE+POST; since 1.4.0
   `edit` sends a `PATCH` of only the changed keys).
   A brand-new dimension is `POST`-ed.
 - **The envelope `name` is the dimension, unique per project per type, so
@@ -2788,7 +2788,7 @@ events and emits a final `done` SSE frame mirroring the same record.
   (`metrics[]` rewritten to the new name). *(updated 0.97.0)* Each is an
   in-place update -- same id, scope, grants and revision history, and a refused
   update changes nothing; before, every "edit" was a delete-then-create with
-  a rollback re-POST. *(since vNEXT)* The update is a `PATCH` of only the
+  a rollback re-POST. *(since 1.4.0)* The update is a `PATCH` of only the
   changed keys (each constraint: only `metrics`), no longer a whole-record `PUT`.
 - The `CODE_METRIC` derived value (used in downstream SQL joins on
   `DIM_METRIC_THRESHOLD` / `FACT_METRIC_*` lookups) is computed via
@@ -2810,7 +2810,7 @@ events and emits a final `done` SSE frame mirroring the same record.
   re-POSTed `original_attrs`).
 - **Partial-state envelope signal (updated v0.41.10 -- closes #294)**:
   the cascade is per-item only (each constraint is updated on its own;
-  *since 0.97.0* an in-place update, since vNEXT a `PATCH`, so there is nothing to roll back), NOT whole-operation atomicity. If the
+  *since 0.97.0* an in-place update, since 1.4.0 a `PATCH`, so there is nothing to roll back), NOT whole-operation atomicity. If the
   metric rename succeeds but M of N dependent constraints fail to
   repoint, the response envelope sets `partial_state: true` and
   `recovery_hint: "<text pointing at validate + manual re-cascade>"`
@@ -3064,7 +3064,7 @@ events and emits a final `done` SSE frame mirroring the same record.
   `durationOvertimePercentage` -- *not* flat keys like `configurationId` or
   `component`. The first four have dedicated output columns, and a single
   `>=` `durationOvertimePercentage` filter is also shown as
-  `overtime_percent` (since vNEXT); everything else rides along in the raw
+  `overtime_percent` (since 1.4.0); everything else rides along in the raw
   `filters` list (`notification detail` prints it verbatim).
 - **`--component-id` / `--config-id` filter client-side** -- as does
   `--event` (see above). The endpoint has no server-side filter that works at
@@ -4137,9 +4137,9 @@ Every error code has exactly one exit code and one `error.error_type` (since 1.0
   - **Errors:** `error.details.logTail` carries the tail when the job surfaces as an exception (exit 1 / `QUEUE_JOB_FAILED`, exit 4 / `QUEUE_JOB_TIMEOUT`).
   - **Non-error terminals** (`warning` / `terminated`): `logTail` is attached to the top-level result dict (exit 0).
 - `--timeout N` is a **local** deadline. When it elapses, kbagent issues `POST /jobs/{id}/kill` against the Queue API. Two outcomes:
-  - Kill accepted (or the job was already finished) -> exit **7** with `details.job` + `details.logTail` (+ `details.job_id`, *since vNEXT*). The stop is requested, not necessarily complete: `details.job.status` may still be `terminating`; check `job detail` before relying on it.
-  - Kill failed -> exit **4** with `details.logTail` and `details.job_id`, `retryable=false` (*since vNEXT*; `retryable=True` before). The remote **may still be running**; read it with `job detail` before running again.
-- *(since vNEXT)* Any other polling failure (connection error, HTTP 5xx, retries exhausted) keeps its code and exit code but carries `details.job_id` and `retryable=false`: the job was created, so do not start it again.
+  - Kill accepted (or the job was already finished) -> exit **7** with `details.job` + `details.logTail` (+ `details.job_id`, *since 1.4.0*). The stop is requested, not necessarily complete: `details.job.status` may still be `terminating`; check `job detail` before relying on it.
+  - Kill failed -> exit **4** with `details.logTail` and `details.job_id`, `retryable=false` (*since 1.4.0*; `retryable=True` before). The remote **may still be running**; read it with `job detail` before running again.
+- *(since 1.4.0)* Any other polling failure (connection error, HTTP 5xx, retries exhausted) keeps its code and exit code but carries `details.job_id` and `retryable=false`: the job was created, so do not start it again.
 - Inspecting events outside of `job run`: `kbagent job detail --project X --job-id N --log-tail-lines N` (since v0.88.0). For the raw event stream, call the Storage Events API directly (`GET /v2/storage/events?runId=<job id>`) with the project token -- pass the plain job **id**, not the job's `runId`: a nested job (inside a flow, or a child row job) has a dotted `runId` (`<parent>.<child>.<id>`) that matches zero events.
 
 ## `--deny-writes` / `--deny-destructive` firewall (since 0.22.0)
@@ -7429,7 +7429,7 @@ examples. Surprises worth knowing before you touch this:
   (later schema versions add `organization`/`targeted`), so pinning `1.0.0` on a plain
   create would make the item impossible to elevate later. With the key
   omitted, the server uses the stack's default schema (`1.1.0` or later where
-  the PSGO-140 migrations ran). An update (`PUT`, or since vNEXT the `PATCH` of `edit`) never changes the stored version.
+  the PSGO-140 migrations ran). An update (`PUT`, or since 1.4.0 the `PATCH` of `edit`) never changes the stored version.
 - **`--scope` omitted means "inherit" for child items.** `add
   metric|dataset|relationship|constraint|glossary` take their model's scope
   (and, for `targeted`, its target projects) when `--scope` is not given;
@@ -7502,7 +7502,7 @@ examples. Surprises worth knowing before you touch this:
   organization-scoped object -- so a 403 never leaks "an object owned by
   some other project exists." Do not collapse the two when surfacing errors.
 - **`edit`, `import --overwrite` and `promote` update in place** (`edit` a
-  `PATCH` of the changed keys since vNEXT, the other two a `PUT`). The
+  `PATCH` of the changed keys since 1.4.0, the other two a `PUT`). The
   item keeps its id, scope, grants and pending elevation request. They used to
   DELETE+POST, which reset an organization/targeted item to `project` scope
   (`import --overwrite`, `promote`) or could lose the item when the re-create
@@ -7971,7 +7971,7 @@ production or in the Keboola UI.
 
 ## `semantic-layer edit` overwrote a concurrent change to another field
 
-*(since vNEXT)* `semantic-layer edit metric|dataset|constraint|relationship|glossary`
+*(since 1.4.0)* `semantic-layer edit metric|dataset|constraint|relationship|glossary`
 read the whole item, applied the change and wrote the WHOLE record back with a
 metastore `PUT`. A change that someone else made to another field between the
 read and the write was silently overwritten: two concurrent `edit metric` runs,

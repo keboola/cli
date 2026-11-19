@@ -28,6 +28,89 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "1.4.0": [
+        "BREAKING (#1005, #827): `sync push` no longer overwrites a config or its rows that "
+        "changed in Keboola after `sync diff` read them. Push sends the version that the diff "
+        "read with each config update, and it reads the config again before it writes the rows. "
+        "A config at another version gets an `errors[]` entry with `SYNC_CONFLICT` (exit 1). "
+        "The change in Keboola stays, and push writes nothing for that config and its rows. "
+        "Before, push overwrote the change. `sync diff --json` adds `remote_version` to a "
+        "modified config and `parent_remote_version` to a row change.",
+        "BREAKING (#1005, #827): only one kbagent run at a time can use a sync directory. Each "
+        "`sync` command locks `.keboola/lock/` for its whole run, also `sync status` and "
+        "`sync diff`. A second run fails at once with `SYNC_DIRECTORY_BUSY` (exit 1, "
+        "retryable) and writes nothing. Wait for the other run to finish, then run the command "
+        "again. Every sync command now needs write access to `.keboola/lock/`. Do not delete "
+        "the folder to get past the error.",
+        "BREAKING (#1005, #1009): `flow new`, `flow update` and `flow validate` refuse an empty "
+        "or malformed flow definition. An empty `--definition` or file, a YAML `null` or an "
+        "unknown top-level key is `VALIDATION_ERROR` (exit 2). In `flow new` and `flow update`, "
+        "a definition with no phases is `INVALID_FLOW_DEFINITION` (exit 1). Before, such a "
+        "definition created a flow with no phases, or `flow update` changed only the name. To "
+        "create an empty flow, leave out the definition. Over `kbagent serve`, the flow routes "
+        "answer 422 for an unknown field, such as the old `component_id`.",
+        "New (#1005, #725): `kbagent flow run` runs a whole flow or only some of its tasks. "
+        "`--task-id` (repeat it for each task) selects tasks, and `--from-phase-id` runs a "
+        "phase and the phases after it on the default path. A partial run does not evaluate "
+        "transition conditions: every selected task runs, also after a failed one. kbagent "
+        "refuses a flow or selection that the job queue would refuse before it creates the job, "
+        "also with `--dry-run`. With `--wait`, the command exits 1 when a selected task failed, "
+        "also when the flow job ends with `success`. A `--timeout` does not stop the job. A "
+        "policy that denies `job.run` also blocks `flow run`. `kbagent serve` has "
+        "`POST /flows/{project}/{flow_id}/run`.",
+        "Change (#1005, #725): an error that `job run --wait` or `flow run --wait` reports after "
+        "the job was created is not retryable. The error carries `details.job_id` and "
+        "`retryable: false`, so read the job with `job detail` before you run it again. Before, "
+        "some of these errors said `retryable: true` without a job ID, and a retry started a "
+        "second job. A connection error while kbagent waits for the job is now "
+        "`CONNECTION_ERROR` (exit 4) instead of `INTERNAL_ERROR`. The SDK "
+        "`Client.run_job(wait=True)` follows the same rule.",
+        "New (#1005, #989): `notification create --overtime-percent N` sends a "
+        "`job-processing-long` alert only when the job runs at least N % longer than usual. "
+        "N is a whole percent from 1 to 10000, and the option works with `job-processing-long` "
+        "and `phase-job-processing-long`. `--filter` writes any other filter that the "
+        "Notification Service accepts, for example `--filter 'averageDuration>60'`. Quote it, "
+        "because `<` and `>` are shell redirections. The rows of `notification list`, `detail`, "
+        "`create` and `replace-recipient` add `overtime_percent`.",
+        "New (#1005, #989): `notification clone` creates a copy of a subscription with all its "
+        "filters. Options replace the filters of one field, the recipient or the expiry. Each "
+        "run creates one more subscription, so run it with `--dry-run` first.",
+        "New (#994): `transformation create`, `transformation edit` and `sync push` warn about "
+        "SQL statements that the runtime does not run. The Snowflake and BigQuery "
+        "transformation runtime skips a statement that starts with `SELECT`, so "
+        "`SELECT * FROM missing_table` does not fail the job. kbagent adds one "
+        "`SQL_SELECT_SKIPPED_BY_RUNTIME` warning for each such statement and still writes the "
+        "configuration. `kbagent doctor --check skipped-selects` lists these statements in the "
+        "production branch of each project. `config update` does not check.",
+        "Fix (#1020): `kbagent serve --ui` works in the standalone binary. Before, the binary in "
+        "the zip archives, Homebrew, Chocolatey, WinGet and the deb, rpm and apk packages did "
+        "not contain the server packages, and `serve` exited with `missing: uvicorn`. The "
+        "release pipeline now starts `serve --ui` from each binary before it publishes the "
+        "release.",
+        "Fix (#1005, #955): `project refresh` in a local `.kbagent` directory takes the working "
+        "token from the global config after a token rotation. Before, it created a new token "
+        "and needed a Manage token. kbagent takes the global token only for a project whose "
+        "local token is invalid, and only when the global token has at least the rights of a "
+        "new token. It asks for the Manage token only when it must create a token, and "
+        "`--dry-run` never asks. The JSON output adds `projects_adopted`.",
+        "Fix (#1005, #827): `sync push` keeps an edit that you save while the push runs. "
+        "Before, push wrote the encrypted values back over the edit, or recorded the edit as "
+        "pushed. A file that changes while push reads it is not sent: push reports "
+        "`SYNC_LOCAL_FILE_CHANGED` (exit 1), and the next push sends it.",
+        "Fix (#1005, #827): a `sync pull` that stops in the middle no longer leaves a manifest "
+        "entry for a deleted folder. Pull records each folder that it deletes under "
+        "`pendingRemovals` in `.keboola/manifest.json`, and the next pull completes the "
+        "deletion. An older kbagent ignores this key and can then create a copy of a deleted "
+        "config. Run `sync pull` with the current version before you use an older one on the "
+        "same tree.",
+        "Fix (#1005, #833): `semantic-layer edit` changes only the fields that you give. It "
+        "sends a `PATCH` of the changed keys. Before, it wrote the whole item, and a change to "
+        "another field made at the same time was lost. The result has `status`: `updated`, or "
+        "`unchanged` when all values were already stored. An unchanged edit writes no new "
+        "revision.",
+        "Note (#999): the `/kbagent:review` command of the plugin takes the test results from "
+        "CI and does not run the test suite on the local machine. No change for kbagent users.",
+    ],
     "1.3.1": [
         "Change (#986): kbagent starts faster, because a command imports only its own module and "
         "the services it uses. Before, each call imported all command and service modules. In a "

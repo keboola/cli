@@ -121,11 +121,11 @@ been retired, so its absence is NOT a promise (see §1 Rule 6).
 | Deploy configs from git in CI | [gitops-cicd-workflow.md](../skills/kbagent/references/gitops-cicd-workflow.md) | -- | `push --force` without a reviewed dry run |
 | What starts this flow automatically / is this flow scheduled | `kbagent flow triggers --project P --flow-id ID` (0.92.0+) -- cron schedules AND table triggers in one call | `kbagent schedule list --project P` for the cron half only | concluding "this flow has no trigger" from an empty result -- `cross_project_triggers_checked` is `false`, so empty means "no trigger that kbagent CHECKED"; reading `last_run: null` as "disabled" (it means never fired); expecting table triggers on a dev branch (the Storage route is production-only) |
 | Who gets notified when a flow fails | `kbagent notification list --project P [--component-id keboola.flow]` (0.86.0+) -- recipients live in a separate service, NOT the flow config | `flow detail` for in-flow `notification` TASKS | reading "nobody is notified" off a flow config, or off a filtered run (check `project_wide_excluded`); camelCase event names (they are kebab-case) |
-| Add / remove / re-point a notification recipient | `kbagent notification create --project P --event job-failed --channel email\|webhook --address A [--config-id K] [--branch ID]` / `notification delete --subscription-id ID` / `notification replace-recipient --subscription-id ID --address NEW` (0.91.0+); copy to a flow: `notification clone --subscription-id ID --config-id K` (vNEXT+); slow-job alert: `--event job-processing-long --overtime-percent 50` (vNEXT+) | -- | caching the old id after a replace (it is delete+recreate -- a NEW `subscription_id` is always minted; a failed delete leaves a duplicate as `old_deleted: false`); no `--overtime-percent` on `*job-processing-long` (alerts each overtime step; 1-10000 %) |
+| Add / remove / re-point a notification recipient | `kbagent notification create --project P --event job-failed --channel email\|webhook --address A [--config-id K] [--branch ID]` / `notification delete --subscription-id ID` / `notification replace-recipient --subscription-id ID --address NEW` (0.91.0+); copy to a flow: `notification clone --subscription-id ID --config-id K` (1.4.0+); slow-job alert: `--event job-processing-long --overtime-percent 50` (1.4.0+) | -- | caching the old id after a replace (it is delete+recreate -- a NEW `subscription_id` is always minted; a failed delete leaves a duplicate as `old_deleted: false`); no `--overtime-percent` on `*job-processing-long` (alerts each overtime step; 1-10000 %) |
 | Create SQL transformation | `kbagent transformation create --project P --name N (--sql '...' \| --sql-file F) [--created-table T ...]` -- dialect from the project `default_backend`, statements split, output mapping from the name; a leading `SELECT` never runs | `kbagent config new --component-id keboola.snowflake-transformation --name N --project P --push --no-files` then `config update --set ...` | raw `POST /v2/storage/components/.../configs` |
 | Edit SQL transformation blocks/codes | `kbagent transformation show` (FRESH ids) then `kbagent transformation edit --project P --config-id K --change-description T --op '{"op":"set_code",...}'` -- 9 ops, ids `b{i}` / `b{i}.c{j}`, `--storage` REPLACES wholesale | `kbagent config update --project P --configuration-file body.json` (auto-normalizes `script[]`) | `transformation edit` without a fresh `show` (positional ids renumber); raw `PUT` (skips `script[]` normalization) |
 | Run a job (and wait) | `kbagent job run --project P --component-id C --config-id K --wait` | -- | `job run` without `--wait` when the user expects the result |
-| Run some flow tasks | `flow run -p P --flow-id F --task-id T` / `--from-phase-id PH` (vNEXT+), `--dry-run` first | -- | treating a partial run as a test of conditions or notification tasks (it ignores conditions, runs only the selected tasks); reporting success from the flow status (read `failed_task_ids`); re-running after a timeout or polling error (`job detail` of `error.details.job_id` first) |
+| Run some flow tasks | `flow run -p P --flow-id F --task-id T` / `--from-phase-id PH` (1.4.0+), `--dry-run` first | -- | treating a partial run as a test of conditions or notification tasks (it ignores conditions, runs only the selected tasks); reporting success from the flow status (read `failed_task_ids`); re-running after a timeout or polling error (`job detail` of `error.details.job_id` first) |
 | Provision / read an OTLP Data Streams endpoint | `kbagent stream create-source -p P --name N --type otlp [--if-not-exists]` (auto-creates logs/metrics/traces sinks) then `stream detail --name N -p P --reveal` | `stream list`; `--no-sinks` for a bare source | deriving the `stream-in` URL yourself (use `source.otlp.url`); printing the secret unasked |
 | Mint / rotate / revoke a scoped Storage token | `kbagent token create -p P --description DESC [--bucket-write B ...] [--expires-in N]` / `token refresh` / `token delete --token-id ID` -- `create` needs a MASTER token (0.89.0+ pre-flight `MISSING_MASTER_TOKEN`; `canManageTokens` alone = server 500, #599), refresh/list/delete need only `canManageTokens`; secret shown ONCE (persist `id` + `expires` only); `token list` (0.86.0+) is the only source of an existing `--token-id` | same ops on the SDK facade: `Client.create_scoped_token / refresh_token / delete_token` | `--component-access` / `--can-read-all-file-uploads` for an UPLOAD token (uploads need `--bucket-write` on the sink bucket; those flags gate READING others' uploads); claiming `stream create-source` needs a master token |
 | Search items by name across projects | `kbagent search QUERY (--project P \| --all-projects) [--type table\|bucket\|config\|flow\|data-app\|transformation] [--search-type textual\|config-based] [--regex]` -- `--regex` matches WHOLE terms on entity names: `report` does NOT match `monthly_report`, write `.*report.*` | -- | `--regex` with `--search-type config-based` (exit 2) |
@@ -265,7 +265,7 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   something else) and `MISSING_MASTER_TOKEN` (a
   semantic-layer write on a non-admin token). Accept all three before
   concluding the credential is bad. gotchas.md.
-- `INVALID_TOKEN` in local `.kbagent/` after a global rotation (vNEXT+):
+- `INVALID_TOKEN` in local `.kbagent/` after a global rotation (1.4.0+):
   `project refresh --dry-run`, ask, `project refresh` (Manage token
   only to mint). No config.json edits or `--force`. safe-write-workflow.md.
 
@@ -344,7 +344,7 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
 - **Sync rows/deletes/companions** (1.0.0, #931/#933): `push --force` never
   deletes a remotely changed or baseline-less config/row (`refused_deletions[]`);
   UI-added rows: `remote_only_rows[]`; ignoring a component keeps local work.
-  vNEXT+ (#827): updates are conditional -- `SYNC_CONFLICT` = edited in Keboola
+  1.4.0+ (#827): updates are conditional -- `SYNC_CONFLICT` = edited in Keboola
   after push read it, its rows held: pull, review, push; never retry blindly.
   Don't edit the tree during push. Never use an older kbagent on a manifest
   with `pendingRemovals`. gotchas.md.
@@ -496,7 +496,7 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
 
 - constraint `rule` is a STRING (not `{bounds:...}`); `severity` is
   `error|warning|info`, the 4-band health is the name suffix (`_critical`...).
-- `edit` PATCHes only the keys you pass; all equal: no write, `status` unchanged (vNEXT+); two edits of the SAME key:
+- `edit` PATCHes only the keys you pass; all equal: no write, `status` unchanged (1.4.0+); two edits of the SAME key:
   last wins. A 5xx/read timeout isn't retried, may have applied: `show` before
   repeating. `edit metric --new-name` cascades into constraints' `metrics[]` and
   changes CODE_METRIC (downstream joins break: surface it); `validate`

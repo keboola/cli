@@ -171,7 +171,7 @@ kbagent --json flow update --project prod --flow-id 111 --definition-file update
 
 ## Run a flow
 
-*(`flow run` since vNEXT; on older kbagent only the whole flow can run, via
+*(`flow run` since 1.4.0; on older kbagent only the whole flow can run, via
 `job run --project P --component-id keboola.flow --config-id ID`.)*
 
 Running a flow starts real jobs that write data and spend credits. Treat it
@@ -267,19 +267,19 @@ before any job is created, when:
   `skipped_disabled_task_ids`); a selected task's phase does not exist; nothing
   is left to run. These are listed together in one message;
 - the `--from-phase-id` path meets a malformed default transition (see above).
-- *(since vNEXT)* the job queue would refuse the selection: a phase with a
+- *(since 1.4.0)* the job queue would refuse the selection: a phase with a
   selected task cannot be reached from the flow's first phase, or the phases
   the run needs reach each other (a loop: a partial run cannot enter a phase
   twice). kbagent runs the job queue's own check, so a `--dry-run` that
   succeeds is a run the queue accepts.
 
-*(since vNEXT)* Every run, whole or partial, `--dry-run` included, fails with
+*(since 1.4.0)* Every run, whole or partial, `--dry-run` included, fails with
 `INVALID_FLOW_DEFINITION`, exit 1, before any job is created when the flow
 itself is one the job queue refuses: a repeated phase id or task id (also a
 disabled one), a transition to a phase the flow does not define, or not
 exactly one first phase (a phase no transition goes to; a transition back to
 the first phase leaves none). Fix the flow; `flow validate` does not check
-all of these. Before vNEXT the dry run said yes and the job failed after it
+all of these. Before 1.4.0 the dry run said yes and the job failed after it
 was created.
 
 A cycle on the default path that stays inside one phase (a phase retrying

@@ -135,7 +135,7 @@ if job.failed:
     raise RuntimeError(f"job {job.id} ended {job.status}")
 ```
 
-**Errors with `wait=True`** *(since vNEXT)*. Every failure after the job was created -- the job ended in `error` (`QUEUE_JOB_FAILED`), the local `timeout` ran out (`QUEUE_JOB_TIMEOUT`; the job keeps running, it is never killed), or polling failed (`CONNECTION_ERROR`, `TIMEOUT`, `RETRY_EXHAUSTED`, `API_ERROR`, also for a raw transport error or an unreadable poll response) -- raises `KeboolaApiError` with its own `error_code`, `retryable=False` and `details["job_id"]`. Read the job with `kbc.raw.get_job_detail(job_id)`; calling `run_job` again creates a second job. Before vNEXT a polling failure could say `retryable=True` and carried no job id.
+**Errors with `wait=True`** *(since 1.4.0)*. Every failure after the job was created -- the job ended in `error` (`QUEUE_JOB_FAILED`), the local `timeout` ran out (`QUEUE_JOB_TIMEOUT`; the job keeps running, it is never killed), or polling failed (`CONNECTION_ERROR`, `TIMEOUT`, `RETRY_EXHAUSTED`, `API_ERROR`, also for a raw transport error or an unreadable poll response) -- raises `KeboolaApiError` with its own `error_code`, `retryable=False` and `details["job_id"]`. Read the job with `kbc.raw.get_job_detail(job_id)`; calling `run_job` again creates a second job. Before 1.4.0 a polling failure could say `retryable=True` and carried no job id.
 
 Full signature knobs: `config_row_ids`, `variable_values_id` (the facade does **not** auto-resolve linked variable values — pass it explicitly if the config needs one), `branch_id`, `mode` (`run`/`debug`/`forceRun`), `poll_strategy`, and the idempotency pair below.
 

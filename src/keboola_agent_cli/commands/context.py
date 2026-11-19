@@ -1363,7 +1363,7 @@ explicit Storage config version, never the empty shell the create writes.
     numeric id for production. A filled Branch column does NOT mean
     "dev-branch only" -- cross-check `branch list` to tell them apart.
     The component_id/config_id/branch_id/phase_id columns read only EQUALITY
-    filters (since vNEXT): a branch.id < 123 filter leaves branch_id empty.
+    filters (since 1.4.0): a branch.id < 123 filter leaves branch_id empty.
 
   notification detail
     One subscription with every filter printed verbatim, including the
@@ -1382,7 +1382,7 @@ explicit Storage config version, never the empty shell the create writes.
     every overtime step like no threshold), only for job-processing-long and
     phase-job-processing-long (else INVALID_ARGUMENT, exit 2). Rows carry
     overtime_percent.
-    --filter 'FIELD<OP>VALUE' (since vNEXT, repeatable, OP ==,=,<=,>=,<,>):
+    --filter 'FIELD<OP>VALUE' (since 1.4.0, repeatable, OP ==,=,<=,>=,<,>):
     any filter the service accepts for the event, e.g.
     --filter 'averageDuration>=60'. QUOTE it (< and > are shell
     redirections). VALUE is sent as a string. The service refuses an unknown
@@ -1405,7 +1405,7 @@ explicit Storage config version, never the empty shell the create writes.
 
   notification clone
     Create a NEW subscription from an existing one with overrides (since
-    vNEXT), e.g. the same alert on another flow: --config-id K. Event and
+    1.4.0), e.g. the same alert on another flow: --config-id K. Event and
     project never change; the source is untouched. Each override
     (--component-id, --config-id, --branch, --overtime-percent, each --filter
     FIELD) replaces EVERY source filter on that field; the rest is copied
@@ -2522,11 +2522,11 @@ remain branch-aware because modifying a dev branch is the expected intent.
     (nothing sent; push again). A file edited during the update is not overwritten
     (warnings[] LOCAL_EDIT_DURING_PUSH) and stays a local change for the next push.
     Do not edit the tree while push runs; never re-run push blindly after SYNC_CONFLICT.
-    Rows (since vNEXT): push reads the parent config right before its first row write and
+    Rows (since 1.4.0): push reads the parent config right before its first row write and
     blocks all its rows (errors[] SYNC_CONFLICT or the read's code, nothing written) unless
     the version matches what diff read (parent_remote_version) or what push's own update
     answered. The window after that check is not bounded: run sync diff right before push.
-    One run per folder (since vNEXT): every sync command (and config new --output-dir /
+    One run per folder (since 1.4.0): every sync command (and config new --output-dir /
     config rename --directory into a tree) holds .keboola/lock; a second run fails at once
     with SYNC_DIRECTORY_BUSY (exit 1, retryable): wait for the other run, then run it again.
     Never delete .keboola/lock (a crashed run frees it). Needs a local disk.

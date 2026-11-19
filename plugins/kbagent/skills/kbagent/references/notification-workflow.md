@@ -7,7 +7,7 @@ them. The in-flow `type: "notification"` task is a different mechanism.
 
 Read commands work since 0.86.0; `create`, `delete` and `replace-recipient`
 since 0.91.0; `--overtime-percent`, the `overtime_percent` key, `--filter` and
-`clone` since vNEXT (check `kbagent version` before you recommend them).
+`clone` since 1.4.0 (check `kbagent version` before you recommend them).
 
 ## 1. Audit: who gets alerted for this flow
 
@@ -42,7 +42,7 @@ kbagent --json notification create --project P --event job-failed \
   --component-id keboola.flow --config-id FLOW_ID
 ```
 
-Slow-job alert, as the UI's "job runs longer than usual" (vNEXT+):
+Slow-job alert, as the UI's "job runs longer than usual" (1.4.0+):
 
 ```bash
 kbagent --json notification create --project P --event job-processing-long \
@@ -62,7 +62,7 @@ kbagent --json notification create --project P --event job-processing-long \
   same way; use `--overtime-percent N` for a threshold.
 - On any other event the option exits 2 (`INVALID_ARGUMENT`) and creates
   nothing, because no other event carries the overtime value.
-- On kbagent older than vNEXT the option does not exist (`No such option`).
+- On kbagent older than 1.4.0 the option does not exist (`No such option`).
   There is no CLI workaround; tell the user to set the threshold in the
   Flow Builder, or to upgrade.
 - `--channel webhook` takes the URL in `--address`.
@@ -72,7 +72,7 @@ kbagent --json notification create --project P --event job-processing-long \
 - `create` is not idempotent: every call adds a subscription. Run step 1
   first and do not create a second identical one.
 
-Any other filter the service accepts for the event (vNEXT+), e.g. only for
+Any other filter the service accepts for the event (1.4.0+), e.g. only for
 jobs whose usual run time is at least a minute:
 
 ```bash
@@ -118,7 +118,7 @@ kbagent --json notification replace-recipient --project P \
 
 ## 4. Clone an alert onto another flow
 
-Since vNEXT.
+Since 1.4.0.
 
 ```bash
 kbagent --json notification clone --project P --subscription-id ID \

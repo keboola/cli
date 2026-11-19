@@ -225,7 +225,7 @@ after file deletion) show as `deleted` -- `push --force` DELETEs them via
 as `remote_deleted`; push never re-creates it. `sync pull` deletes its
 directory, or keeps an edited one and reports it as `skipped`.
 
-*(since vNEXT, #827)* When the update of the parent config is refused
+*(since 1.4.0, #827)* When the update of the parent config is refused
 (`SYNC_CONFLICT`: it or one of its rows changed in Keboola after push read
 it), push sends none of that config's row creates, updates or deletes; each
 gets its own entry in `errors[]` naming the parent. The row's `error_code` is
@@ -238,7 +238,7 @@ conflict by copying the conflicting config folder(s) aside, running
 in the tree), re-applying the edit, then `sync diff` and `sync push`; a plain
 `sync pull` or a manual merge leaves the old baseline, so push skips it again.
 
-*(since vNEXT, #827)* A row write itself sends no version precondition (the
+*(since 1.4.0, #827)* A row write itself sends no version precondition (the
 Storage API has none for rows), so push reads the parent right before its
 first row write and compares its version with the one the diff read
 (`parent_remote_version` on each row change) or with the version push's own
@@ -252,7 +252,7 @@ not bounded (many rows, retries), so a UI edit in it is still overwritten --
 run `sync diff` right before the push and keep pushes short. See
 [sync-workflow.md](sync-workflow.md) "Row writes check the configuration's
 version first".
-*(since vNEXT, #827)* A row file is read once, like a config's: a file that
+*(since 1.4.0, #827)* A row file is read once, like a config's: a file that
 changes while push reads it is not sent (`SYNC_LOCAL_FILE_CHANGED`, push
 again); one edited during the row's create or update is not written over
 (`warnings[]` `LOCAL_EDIT_DURING_PUSH`) and stays a local change, because the

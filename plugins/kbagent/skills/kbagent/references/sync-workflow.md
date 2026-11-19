@@ -517,7 +517,7 @@ Review `sync diff` right before a `sync push --force` that deletes single rows.
 
 ### A config update is conditional, and an edit during push is kept
 
-*(since vNEXT)* (#827)
+*(since 1.4.0)* (#827)
 
 Push sends the version `sync diff` read (`remote_version` of a `modified`
 change; on the promote path the target branch's version) as `If-Match` on the
@@ -529,7 +529,7 @@ a PUT the transport repeated after a lost answer. Otherwise push reports
 `SYNC_CONFLICT` under `errors[]` (exit 1), leaves the local files and the
 manifest entry as they were, and no later step of that push writes the config
 or its rows (each skipped row gets its own entry with the configuration's
-error code, *since vNEXT*: `SYNC_CONFLICT` only for a conflict).
+error code, *since 1.4.0*: `SYNC_CONFLICT` only for a conflict).
 A plain `kbagent sync pull` keeps the locally modified config, and a manual
 merge keeps the old baseline (the next diff calls it a conflict and push skips
 it). The one working path: copy the conflicting config folder(s) aside, run
@@ -567,7 +567,7 @@ Rules for an agent:
 
 ### One kbagent run at a time per directory
 
-*(since vNEXT)* (#827)
+*(since 1.4.0)* (#827)
 
 Every command that reads or writes a sync tree holds its lock
 (`.keboola/lock/sync.lock`, an OS lock) for the whole run: `sync init`,
@@ -599,7 +599,7 @@ Rules for an agent:
 
 ### Row writes check the configuration's version first
 
-*(since vNEXT)* (#827)
+*(since 1.4.0)* (#827)
 
 Row creates, updates and deletes take no `If-Match` in the Storage API. Push
 therefore reads the parent configuration right before its first row write and
@@ -622,7 +622,7 @@ configuration. Only `If-Match` on the row endpoints closes it.
 
 ### `sync pull` journals the folders it deletes
 
-*(since vNEXT)* (#827)
+*(since 1.4.0)* (#827)
 
 Pull drops a config or row the remote no longer lists from the manifest and
 records it under `pendingRemovals` BEFORE it deletes the folder; its final save
@@ -868,7 +868,7 @@ sync skips `keboola.sandboxes` exactly as before.
   new size applies only to a session created later. Dev branches work the
   same way (config only).
 - **A `SYNC_CONFLICT` on a shared workspace is a real concurrent edit**
-  *(since vNEXT)*. The SQL Editor raises the workspace config's version only
+  *(since 1.4.0)*. The SQL Editor raises the workspace config's version only
   when a user saves the code (also when its AI assistant saves); running
   queries, opening sessions and loading tables do not write the config. So
   someone saved SQL in the editor after the diff read it: resolve it like any

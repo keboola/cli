@@ -162,7 +162,7 @@ them.
 
 ## Workflow 4 -- Editing a scoped item
 
-`semantic-layer edit <kind>` (a `PATCH` of only the changed keys, since vNEXT),
+`semantic-layer edit <kind>` (a `PATCH` of only the changed keys, since 1.4.0),
 `import --overwrite` and `promote` (a whole-record `PUT`) update the item
 **in place**: it keeps its id, scope, target projects and any pending elevation
 request, and a refused update changes nothing. Nothing to do

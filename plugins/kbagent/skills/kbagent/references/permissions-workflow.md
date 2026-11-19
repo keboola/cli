@@ -5,7 +5,7 @@ Use this to restrict AI agents to read-only mode or block specific destructive o
 
 ## Operations that need another key
 
-*(since vNEXT)* `flow.run` also needs `job.run`: `flow run` creates a Queue job
+*(since 1.4.0)* `flow.run` also needs `job.run`: `flow run` creates a Queue job
 like `job run`, so a policy that denies `job.run` (or `job.*`) blocks `flow run`
 too, `--dry-run` included (exit 6, HTTP 403 on `POST /flows/{project}/{flow_id}/run`).
 The message names `job.run`. An allow-list policy (`--mode deny`) must allow
