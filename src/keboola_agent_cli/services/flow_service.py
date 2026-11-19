@@ -796,6 +796,7 @@ class FlowService(BaseService):
                 no_variables=values_id is None,
                 only_flow_task_ids=selection.task_ids if selection.partial else None,
                 kill_on_timeout=False,
+                check_flow=False,
             )
         except KeboolaApiError as exc:
             # F1: the selection warnings stay on the error envelope / REST body.

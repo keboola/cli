@@ -155,7 +155,12 @@ def check_selector_values(task_ids: list[str] | None, from_phase_id: str | None)
             )
 
 
-def _id(value: Any) -> str:
+def _shown(value: str) -> str:
+    """An id in a message; quoted when spaces around it would otherwise be invisible."""
+    return repr(value) if value != value.strip() else value
+
+
+def normalize_id(value: Any) -> str:
     """An id as the job-queue daemon compares it: PHP's string cast.
 
     ``1`` and ``"1"`` are one id, and so is ``1.0`` (PHP casts an integral
@@ -172,7 +177,7 @@ def _phases_by_id(configuration: dict[str, Any]) -> dict[str, dict[str, Any]]:
     phases: dict[str, dict[str, Any]] = {}
     for phase in configuration.get("phases") or []:
         if isinstance(phase, dict) and phase.get("id") is not None:
-            phases.setdefault(_id(phase["id"]), phase)
+            phases.setdefault(normalize_id(phase["id"]), phase)
     return phases
 
 
@@ -206,8 +211,10 @@ def _edges(configuration: dict[str, Any]) -> dict[str, list[str]]:
     """Phase id -> its distinct ``goto`` targets in ``next[]`` order, conditional ones too."""
     edges: dict[str, list[str]] = {}
     for phase in _phase_list(configuration):
-        targets = [_id(t["goto"]) for t in _transitions(phase) if t.get("goto") is not None]
-        edges[_id(phase["id"])] = _dedupe(targets)
+        targets = [
+            normalize_id(t["goto"]) for t in _transitions(phase) if t.get("goto") is not None
+        ]
+        edges[normalize_id(phase["id"])] = _dedupe(targets)
     return edges
 
 
@@ -232,8 +239,8 @@ def _structure_errors(configuration: dict[str, Any]) -> _Structure:
     daemon's "Flow must have exactly one first step").
     """
     errors: list[str] = []
-    phase_ids = [_id(phase["id"]) for phase in _phase_list(configuration)]
-    task_ids = [_id(task["id"]) for task in _tasks(configuration)]
+    phase_ids = [normalize_id(phase["id"]) for phase in _phase_list(configuration)]
+    task_ids = [normalize_id(task["id"]) for task in _tasks(configuration)]
     if repeated := _repeated(phase_ids):
         errors.append(f"repeated phase id(s): {', '.join(repeated)}")
     if repeated := _repeated(task_ids):
@@ -253,6 +260,39 @@ def _structure_errors(configuration: dict[str, Any]) -> _Structure:
             f"found: {found}"
         )
     return _Structure(errors=errors, root=roots[0] if len(roots) == 1 else None)
+
+
+def first_phase_ids(phases: list[dict[str, Any]]) -> list[str]:
+    """The phases no transition goes to, in configuration order (the daemon's first step).
+
+    A runnable flow has exactly one; ``flow validate`` reports any other count.
+    """
+    edges = _edges({"phases": phases})
+    incoming = {target for targets in edges.values() for target in targets}
+    return [pid for pid in edges if pid not in incoming]
+
+
+def check_runnable_flow(configuration: dict[str, Any]) -> str | None:
+    """Raise when the job queue refuses every run of this flow; return its first phase.
+
+    The checks of ``_structure_errors``. ``INVALID_FLOW_DEFINITION``, exit 1,
+    like a broken definition in ``flow new`` / ``flow update``. Used by
+    ``flow run`` and by ``job run --component-id keboola.flow``.
+    """
+    structure = _structure_errors(configuration)
+    if structure.errors:
+        raise KeboolaApiError(
+            message=(
+                "The job queue would refuse this flow, so it was not started: "
+                + "; ".join(structure.errors)
+                + ". Fix the flow (kbagent flow detail shows it)."
+            ),
+            # REST answers 502 for it anyway: the status comes from the error table.
+            status_code=400,
+            error_code=ErrorCode.INVALID_FLOW_DEFINITION,
+            retryable=False,
+        )
+    return structure.root
 
 
 def _reachable(start: str, edges: dict[str, list[str]]) -> list[str]:
@@ -354,7 +394,7 @@ def _default_path(phases: dict[str, dict[str, Any]], start: str) -> _DefaultPath
             )
         if not defaults or defaults[0].get("goto") is None:
             break
-        target = _id(defaults[0]["goto"])
+        target = normalize_id(defaults[0]["goto"])
         if target not in phases:
             return _DefaultPath(
                 path,
@@ -377,7 +417,7 @@ def _conditional_reach(phases: dict[str, dict[str, Any]], path: list[str]) -> se
     then follows every transition, so a deeper branch is included. Cycle-safe.
     """
     stack = [
-        _id(t["goto"])
+        normalize_id(t["goto"])
         for pid in path
         for t in _transitions(phases[pid])
         if "condition" in t and t.get("goto") is not None
@@ -388,7 +428,9 @@ def _conditional_reach(phases: dict[str, dict[str, Any]], path: list[str]) -> se
         if pid in reached or pid not in phases:
             continue
         reached.add(pid)
-        stack.extend(_id(t["goto"]) for t in _transitions(phases[pid]) if t.get("goto") is not None)
+        stack.extend(
+            normalize_id(t["goto"]) for t in _transitions(phases[pid]) if t.get("goto") is not None
+        )
     return reached
 
 
@@ -397,9 +439,9 @@ def _task_view(task: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(inner, dict):
         inner = {}
     return {
-        "id": _id(task["id"]),
+        "id": normalize_id(task["id"]),
         "name": task.get("name"),
-        "phase_id": None if task.get("phase") is None else _id(task.get("phase")),
+        "phase_id": None if task.get("phase") is None else normalize_id(task.get("phase")),
         "type": inner.get("type"),
     }
 
@@ -413,7 +455,7 @@ def _phase_blocks(
 ) -> list[dict[str, Any]]:
     by_phase: dict[str, list[str]] = {}
     for view in selected:
-        by_phase.setdefault(_id(view["phase_id"]), []).append(view["id"])
+        by_phase.setdefault(normalize_id(view["phase_id"]), []).append(view["id"])
     return [
         {"id": pid, "name": phase.get("name"), "task_ids": by_phase[pid]}
         for pid, phase in phases.items()
@@ -443,21 +485,7 @@ def select_flow_tasks(
             a malformed default transition, or an empty final selection.
     """
     check_selector_values(task_ids, from_phase_id)
-    structure = _structure_errors(configuration)
-    root = structure.root
-    if structure.errors:
-        # The flow itself is broken, not the selection: the code flow new/update use.
-        raise KeboolaApiError(
-            message=(
-                "The job queue would refuse this flow, so it was not started: "
-                + "; ".join(structure.errors)
-                + ". Fix the flow (kbagent flow detail shows it)."
-            ),
-            # REST answers 502 for it anyway: the status comes from the error table.
-            status_code=400,
-            error_code=ErrorCode.INVALID_FLOW_DEFINITION,
-            retryable=False,
-        )
+    root = check_runnable_flow(configuration)
     phases = _phases_by_id(configuration)
     tasks = _tasks(configuration)
     if task_ids is None and from_phase_id is None:
@@ -468,35 +496,44 @@ def select_flow_tasks(
             from_phase_id=None,
             phases=_phase_blocks(phases, enabled),
             tasks=enabled,
-            skipped_disabled_task_ids=[_id(t["id"]) for t in tasks if not _is_enabled(t)],
+            skipped_disabled_task_ids=[normalize_id(t["id"]) for t in tasks if not _is_enabled(t)],
             default_path_cycle=False,
             conditional_phase_ids=[],
         )
 
-    by_id = {_id(t["id"]): t for t in tasks}
-    requested = _dedupe(task_id.strip() for task_id in task_ids or [])
+    by_id = {normalize_id(t["id"]): t for t in tasks}
+    # Exact ids, as the daemon compares them: " t " is not "t".
+    requested = _dedupe(task_ids or [])
     errors: list[str] = []
     unknown = [tid for tid in requested if tid not in by_id]
     if unknown:
-        errors.append(f"unknown task id(s): {', '.join(unknown)}")
+        errors.append(f"unknown task id(s): {', '.join(map(_shown, unknown))}")
     disabled = [tid for tid in requested if tid in by_id and not _is_enabled(by_id[tid])]
     if disabled:
         errors.append(f"disabled task(s) cannot be selected: {', '.join(disabled)}")
 
-    start = from_phase_id.strip() if from_phase_id is not None else None
+    start = from_phase_id
     path = _DefaultPath([], cycle=False, errors=[])
     if start is not None:
         if start in phases:
             path = _default_path(phases, start)
             errors.extend(path.errors)
         else:
-            errors.append(f"unknown phase id: {start}")
+            errors.append(f"unknown phase id: {_shown(start)}")
 
     on_path = set(path.phase_ids)
     wanted = set(requested)
-    chosen = [t for t in tasks if _id(t["id"]) in wanted or _id(t.get("phase")) in on_path]
+    chosen = [
+        t
+        for t in tasks
+        if normalize_id(t["id"]) in wanted or normalize_id(t.get("phase")) in on_path
+    ]
     selected = [_task_view(t) for t in chosen if _is_enabled(t)]
-    skipped = [_id(t["id"]) for t in chosen if not _is_enabled(t) and _id(t["id"]) not in wanted]
+    skipped = [
+        normalize_id(t["id"])
+        for t in chosen
+        if not _is_enabled(t) and normalize_id(t["id"]) not in wanted
+    ]
     orphans = [view["id"] for view in selected if view["phase_id"] not in phases]
     if orphans:
         errors.append(f"task(s) in a phase that the flow does not define: {', '.join(orphans)}")
@@ -515,7 +552,7 @@ def select_flow_tasks(
     reach = _conditional_reach(phases, path.phase_ids) if start is not None else set()
     # Only phases with an enabled task: for an empty routing phase or a
     # disabled-only phase, "add its tasks with --task-id" is no advice (F6).
-    actionable = {_id(t.get("phase")) for t in tasks if _is_enabled(t)}
+    actionable = {normalize_id(t.get("phase")) for t in tasks if _is_enabled(t)}
     conditional = [
         pid
         for pid in phases
