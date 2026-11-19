@@ -16,6 +16,7 @@ from collections import deque
 from typing import Any
 
 from ..json_utils import draft7_errors
+from .flow_run_selection import first_phase_ids
 
 # Operand arity per operator (semantic; the schema cannot express these counts).
 _BINARY_OPERATORS = frozenset(
@@ -128,6 +129,16 @@ def _semantic_errors(phases: list[dict[str, Any]], tasks: list[dict[str, Any]]) 
         if enabled_by_phase.get(pid, 0) == 0:
             errors.append(f"Phase '{pid}' has no enabled task")
 
+    # Exactly one first phase: the job queue refuses any other flow ("Flow
+    # must have exactly one first step"), whole run or partial.
+    roots = first_phase_ids(phases)
+    if len(roots) != 1:
+        found = ", ".join(roots) if roots else "none"
+        errors.append(
+            "The flow must have exactly one first phase (a phase no transition goes to); "
+            f"found: {found}"
+        )
+
     # Condition operand arity (recursive).
     for phase in phases:
         for transition in phase.get("next", []):
@@ -191,18 +202,48 @@ def _shape_errors(phases: Any, tasks: Any) -> list[str]:
         nexts = phase.get("next", [])
         if not isinstance(nexts, list) or not all(isinstance(t, dict) for t in nexts):
             errors.append(f"Phase '{phase.get('id', '?')}': 'next' must be a list of objects")
+            continue
+        for transition in nexts:
+            condition = transition.get("condition")
+            if condition is not None and not isinstance(condition, dict):
+                errors.append(
+                    f"Phase '{phase.get('id', '?')}': a transition 'condition' must be an "
+                    f"object, got {type(condition).__name__}"
+                )
+    # Ids the daemon compares as strings: a list, an object, a boolean or a
+    # missing id cannot name a phase or a task.
+    for kind, items, keys in (("Phase", phases, ("id",)), ("Task", tasks, ("id", "phase"))):
+        for item in items:
+            for key in keys:
+                value = item.get(key)
+                if isinstance(value, bool) or not isinstance(value, str | int | float):
+                    errors.append(
+                        f"{kind} '{item.get('id', '?')}': '{key}' must be a string or a "
+                        f"number, got {type(value).__name__}"
+                    )
+    for task in tasks:
+        if "enabled" in task and not isinstance(task["enabled"], bool):
+            errors.append(
+                f"Task '{task.get('id', '?')}': 'enabled' must be true or false, "
+                f"got {type(task['enabled']).__name__}"
+            )
     return errors
 
 
 def find_unreachable_phases(phases: list[dict[str, Any]]) -> list[str]:
-    """Return ids of phases not reachable from the entry phase (first in the
-    list) by following next[].goto edges. WARNING-level only -- never blocks a
+    """Return ids of phases not reachable from the entry phase (the one no
+    transition goes to) by following next[].goto edges. WARNING-level only -- never blocks a
     write. Returns ids in the order they appear in ``phases``.
     """
     if not phases or _shape_errors(phases, []):
         return []
+    # The entry is the phase no transition goes to, as the job queue starts
+    # it -- not the first one listed. No single entry is an error of its own.
+    roots = first_phase_ids(phases)
+    if len(roots) != 1:
+        return []
     by_id = {str(p.get("id")): p for p in phases}
-    entry = str(phases[0].get("id"))
+    entry = roots[0]
     reachable: set[str] = set()
     queue: deque[str] = deque([entry])
     while queue:

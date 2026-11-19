@@ -29,9 +29,14 @@ from ..errors import ErrorCode, KeboolaApiError
 from ..job_wait_errors import RAW_POLL_ERRORS, created_job_error, raw_poll_error
 from ..models import ProjectConfig
 from .base import BaseService, item_failure
+from .flow_run_selection import check_runnable_flow
 from .job_idempotency_store import JobIdempotencyStore, run_idempotent_job
 
 logger = logging.getLogger(__name__)
+
+# A `job run` of this component reads the flow and checks it first. Not imported
+# from flow_service, which imports this module.
+FLOW_COMPONENT_ID = "keboola.flow"
 
 # Terminal statuses for which we surface a log-tail.
 _LOG_TAIL_STATUSES: frozenset[str] = frozenset({"error", "warning", "terminated"})
@@ -568,6 +573,7 @@ class JobService(BaseService):
         force_rerun: bool = False,
         only_flow_task_ids: list[str] | None = None,
         kill_on_timeout: bool = True,
+        check_flow: bool = True,
     ) -> dict[str, Any]:
         """Create and optionally wait for a Queue API job.
 
@@ -634,6 +640,9 @@ class JobService(BaseService):
                 (``flow run``, spec LR2): the job keeps running and the error is
                 ``QUEUE_JOB_TIMEOUT`` with ``retryable: false``, naming the job
                 and the ``job detail`` command that follows it.
+            check_flow: keboola.flow only: read the flow and refuse one the job
+                queue refuses for every run (``INVALID_FLOW_DEFINITION``) before
+                the create. ``flow run`` passes ``False``: it checked its own read.
 
         Returns:
             Job dict with ``project_alias``. If wait=True, returns the
@@ -673,14 +682,28 @@ class JobService(BaseService):
 
         client = self._client_factory(project.stack_url, project.token)
         try:
+            # A flow the job queue refuses for every run is refused here, before the
+            # job is created (as `flow run` does). `flow run` checked it already.
+            configuration: dict[str, Any] | None = None
+            if component_id == FLOW_COMPONENT_ID and check_flow:
+                detail = client.get_config_detail(
+                    component_id=component_id, config_id=config_id, branch_id=branch_id
+                )
+                configuration = detail.get("configuration") or {}
+                check_runnable_flow(configuration)
             resolved_values_id = variable_values_id
             if resolved_values_id is None and not no_variables:
-                resolved_values_id = self.resolve_variable_values_id(
-                    client=client,
-                    component_id=component_id,
-                    config_id=config_id,
-                    branch_id=branch_id,
-                )
+                if configuration is not None:
+                    resolved_values_id = self.resolve_variable_values_from_configuration(
+                        client=client, configuration=configuration, branch_id=branch_id
+                    )
+                else:
+                    resolved_values_id = self.resolve_variable_values_id(
+                        client=client,
+                        component_id=component_id,
+                        config_id=config_id,
+                        branch_id=branch_id,
+                    )
 
             def _create() -> dict[str, Any]:
                 return client.create_job(

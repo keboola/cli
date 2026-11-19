@@ -155,6 +155,11 @@ def check_selector_values(task_ids: list[str] | None, from_phase_id: str | None)
             )
 
 
+def _shown(value: str) -> str:
+    """An id in a message; quoted when spaces around it would otherwise be invisible."""
+    return repr(value) if value != value.strip() else value
+
+
 def _id(value: Any) -> str:
     """An id as the job-queue daemon compares it: PHP's string cast.
 
@@ -253,6 +258,39 @@ def _structure_errors(configuration: dict[str, Any]) -> _Structure:
             f"found: {found}"
         )
     return _Structure(errors=errors, root=roots[0] if len(roots) == 1 else None)
+
+
+def first_phase_ids(phases: list[dict[str, Any]]) -> list[str]:
+    """The phases no transition goes to, in configuration order (the daemon's first step).
+
+    A runnable flow has exactly one; ``flow validate`` reports any other count.
+    """
+    edges = _edges({"phases": phases})
+    incoming = {target for targets in edges.values() for target in targets}
+    return [pid for pid in edges if pid not in incoming]
+
+
+def check_runnable_flow(configuration: dict[str, Any]) -> str | None:
+    """Raise when the job queue refuses every run of this flow; return its first phase.
+
+    The checks of ``_structure_errors``. ``INVALID_FLOW_DEFINITION``, exit 1,
+    like a broken definition in ``flow new`` / ``flow update``. Used by
+    ``flow run`` and by ``job run --component-id keboola.flow``.
+    """
+    structure = _structure_errors(configuration)
+    if structure.errors:
+        raise KeboolaApiError(
+            message=(
+                "The job queue would refuse this flow, so it was not started: "
+                + "; ".join(structure.errors)
+                + ". Fix the flow (kbagent flow detail shows it)."
+            ),
+            # REST answers 502 for it anyway: the status comes from the error table.
+            status_code=400,
+            error_code=ErrorCode.INVALID_FLOW_DEFINITION,
+            retryable=False,
+        )
+    return structure.root
 
 
 def _reachable(start: str, edges: dict[str, list[str]]) -> list[str]:
@@ -443,21 +481,7 @@ def select_flow_tasks(
             a malformed default transition, or an empty final selection.
     """
     check_selector_values(task_ids, from_phase_id)
-    structure = _structure_errors(configuration)
-    root = structure.root
-    if structure.errors:
-        # The flow itself is broken, not the selection: the code flow new/update use.
-        raise KeboolaApiError(
-            message=(
-                "The job queue would refuse this flow, so it was not started: "
-                + "; ".join(structure.errors)
-                + ". Fix the flow (kbagent flow detail shows it)."
-            ),
-            # REST answers 502 for it anyway: the status comes from the error table.
-            status_code=400,
-            error_code=ErrorCode.INVALID_FLOW_DEFINITION,
-            retryable=False,
-        )
+    root = check_runnable_flow(configuration)
     phases = _phases_by_id(configuration)
     tasks = _tasks(configuration)
     if task_ids is None and from_phase_id is None:
@@ -474,23 +498,24 @@ def select_flow_tasks(
         )
 
     by_id = {_id(t["id"]): t for t in tasks}
-    requested = _dedupe(task_id.strip() for task_id in task_ids or [])
+    # Exact ids, as the daemon compares them: " t " is not "t".
+    requested = _dedupe(task_ids or [])
     errors: list[str] = []
     unknown = [tid for tid in requested if tid not in by_id]
     if unknown:
-        errors.append(f"unknown task id(s): {', '.join(unknown)}")
+        errors.append(f"unknown task id(s): {', '.join(map(_shown, unknown))}")
     disabled = [tid for tid in requested if tid in by_id and not _is_enabled(by_id[tid])]
     if disabled:
         errors.append(f"disabled task(s) cannot be selected: {', '.join(disabled)}")
 
-    start = from_phase_id.strip() if from_phase_id is not None else None
+    start = from_phase_id
     path = _DefaultPath([], cycle=False, errors=[])
     if start is not None:
         if start in phases:
             path = _default_path(phases, start)
             errors.extend(path.errors)
         else:
-            errors.append(f"unknown phase id: {start}")
+            errors.append(f"unknown phase id: {_shown(start)}")
 
     on_path = set(path.phase_ids)
     wanted = set(requested)
