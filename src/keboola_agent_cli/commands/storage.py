@@ -1194,7 +1194,8 @@ def storage_add_column(
         "--column",
         help=(
             "Column spec: 'name', 'name:TYPE', or 'name:TYPE(length)' "
-            "(e.g. 'status:VARCHAR(20)', 'amount:NUMBER(18,2)')."
+            "(e.g. 'status:VARCHAR(20)', 'amount:NUMBER(18,2)'). "
+            "An untyped table takes only a bare 'name'."
         ),
     ),
     not_null: bool = typer.Option(
@@ -1213,12 +1214,13 @@ def storage_add_column(
         help="Dev branch ID (defaults to active branch if set via 'branch use')",
     ),
 ) -> None:
-    """Add a single column to an existing table (typed; waits for the job).
+    """Add a single column to an existing table (waits for the job).
 
-    Mirrors ``create-table --column``: ``name:TYPE(length)`` creates a typed
-    column; a bare ``name`` adds an untyped STRING column. The command waits
-    for the Storage job, so a following table-detail lists the column; a
-    failed job is reported as an error.
+    Mirrors ``create-table --column``: on a typed table ``name:TYPE(length)``
+    creates a typed column and a bare ``name`` a STRING column. An untyped
+    table takes only a bare ``name`` (no type, --not-null or --default).
+    The command waits for the Storage job, so a following table-detail lists
+    the column; a failed job is reported as an error.
     """
     formatter = get_formatter(ctx)
     service = get_service(ctx, "storage_service")
@@ -1247,7 +1249,7 @@ def storage_add_column(
     if formatter.json_mode:
         formatter.output(result)
     else:
-        col_type = result["definition"].get("type", "STRING")
+        col_type = (result["definition"] or {}).get("type", "untyped")
         formatter.console.print(
             f"[bold green]Added column:[/bold green] {result['column']} "
             f"({col_type}) to {result['table_id']}"

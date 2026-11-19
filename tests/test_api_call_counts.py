@@ -482,6 +482,31 @@ class TestStorageCallCounts:
         assert _data(result)["file_id"] == 77
         assert_api_calls(httpx_mock, [("GET", "/v2/storage/jobs/555")])
 
+    @pytest.mark.parametrize("is_typed", [False, True])
+    def test_storage_add_column_reads_table_once(
+        self, tmp_config_dir: Path, httpx_mock, is_typed: bool
+    ) -> None:
+        """One table GET (isTyped decides whether `definition` is sent), then one POST."""
+        setup_single_project(tmp_config_dir)
+        table = {"id": "in.c-main.t0", "isTyped": is_typed, "columns": ["id"]}
+        mock_api_routes(
+            httpx_mock,
+            {
+                ("GET", "/v2/storage/tables/in.c-main.t0"): table,
+                ("POST", "/v2/storage/tables/in.c-main.t0/columns"): table,
+            },
+        )
+        args = ["storage", "add-column", "--project", "prod", "--table-id", "in.c-main.t0"]
+        result = _invoke(tmp_config_dir, *args, "--column", "notes")
+        assert _data(result)["column"] == "notes"
+        assert_api_calls(
+            httpx_mock,
+            [
+                ("GET", "/v2/storage/tables/in.c-main.t0"),
+                ("POST", "/v2/storage/tables/in.c-main.t0/columns"),
+            ],
+        )
+
 
 # flow ------------------------------------------------------------------------
 
