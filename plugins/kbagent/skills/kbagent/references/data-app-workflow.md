@@ -118,9 +118,8 @@ kbagent data-app deploy --project P --app-id <ID> --wait   # pins the LATEST ver
 The redeploy is required -- a config change alone does not reach the running
 container.
 
-> Not gated on any project feature. The `data-apps-storage-workspace` flag is
-> being enabled everywhere and then removed, so the config option is the sole
-> control. kbagent deliberately does **not** implement MCP's legacy
+> Not gated on any project feature: the config option is the sole control.
+> kbagent deliberately does **not** implement MCP's legacy
 > `parameters.dataApp.secrets.WORKSPACE_ID` fallback.
 
 ## Quick recipes
