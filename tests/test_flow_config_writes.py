@@ -196,13 +196,25 @@ def test_create_with_a_broken_flow_writes_nothing(
     assert not _written(client)
 
 
-def test_create_of_an_empty_flow_is_allowed(tmp_path: Path) -> None:
-    """No phases and no tasks key: the empty flow `flow new` makes without a definition."""
+def test_create_without_a_body_is_the_empty_flow(tmp_path: Path) -> None:
+    """No --configuration: the empty flow `flow new` makes without a definition."""
     client = _client()
-    _service(tmp_path, client).create_config(
-        alias="prod", component_id="keboola.flow", name="F", configuration={}, validate=False
-    )
+    _service(tmp_path, client).create_config(alias="prod", component_id="keboola.flow", name="F")
     client.create_config.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "body", [{}, {"configuration": {"phases": [], "tasks": []}}, {"variables_id": "7"}]
+)
+def test_create_with_a_body_without_phases_is_refused(tmp_path: Path, body: dict[str, Any]) -> None:
+    """An explicit body is checked whole: {} or a wrapped envelope has no phases."""
+    client = _client()
+    with pytest.raises(KeboolaApiError) as exc:
+        _service(tmp_path, client).create_config(
+            alias="prod", component_id="keboola.flow", name="F", configuration=body
+        )
+    assert exc.value.error_code == ErrorCode.INVALID_FLOW_DEFINITION
+    assert not _written(client)
 
 
 def test_create_with_no_validate_skips_the_check(tmp_path: Path) -> None:
@@ -241,6 +253,39 @@ def test_clone_with_set_that_breaks_the_flow_writes_nothing(tmp_path: Path, dry_
 
 def test_clone_of_a_valid_flow_is_copied(tmp_path: Path) -> None:
     client = _client()
+    _service(tmp_path, client).clone_config(
+        alias="prod", component_id="keboola.flow", config_id="01flow", name="F copy"
+    )
+    client.create_config_copy.assert_called_once()
+
+
+def test_update_merge_with_an_empty_body_keeps_the_flow(tmp_path: Path) -> None:
+    """`--merge '{}'` merges nothing; before, it wrote an empty body over the flow."""
+    client = _client()
+    _service(tmp_path, client).update_config(
+        alias="prod",
+        component_id="keboola.flow",
+        config_id="01flow",
+        configuration={},
+        merge=True,
+    )
+    assert client.update_config.call_args.kwargs["configuration"]["phases"] == VALID["phases"]
+
+
+@pytest.mark.parametrize("body", [{}, {"configuration": {"phases": [], "tasks": []}}])
+def test_update_with_a_body_without_phases_is_refused(tmp_path: Path, body: dict[str, Any]) -> None:
+    client = _client()
+    with pytest.raises(KeboolaApiError) as exc:
+        _service(tmp_path, client).update_config(
+            alias="prod", component_id="keboola.flow", config_id="01flow", configuration=body
+        )
+    assert exc.value.error_code == ErrorCode.INVALID_FLOW_DEFINITION
+    assert not _written(client)
+
+
+def test_clone_without_set_copies_the_source_as_it_is(tmp_path: Path) -> None:
+    """No --set: the copy is the source body, checked or not (it is not changed)."""
+    client = _client({"phases": [], "tasks": []})
     _service(tmp_path, client).clone_config(
         alias="prod", component_id="keboola.flow", config_id="01flow", name="F copy"
     )

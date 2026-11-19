@@ -392,8 +392,10 @@ def clone_config(
     planned_body = _apply_overrides(source_body, set_overrides)
     if cross_project:
         planned_body = _apply_secret_overrides(planned_body, parent_secrets)
-    # The copy of a keboola.flow gets the `flow new` checks, dry run too.
-    check_flow_configuration(component_id, planned_body)
+    # A keboola.flow copy whose body --set changes gets the `flow update` checks,
+    # dry run too. A copy without --set is the source body as it is.
+    if set_overrides:
+        check_flow_configuration(component_id, planned_body)
 
     if dry_run:
         return {

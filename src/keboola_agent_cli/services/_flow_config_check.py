@@ -20,13 +20,13 @@ def check_flow_configuration(component_id: str, configuration: dict[str, Any] | 
     """Raise ``INVALID_FLOW_DEFINITION`` when a keboola.flow body would be broken.
 
     The semantic checks of ``validate_conditional_flow`` (no schema fetch: the
-    `flow` commands add the live schema). A body with neither ``phases`` nor
-    ``tasks`` is an empty flow, which `flow new` without a definition creates
-    on purpose, so it passes. Other components are not checked.
+    `flow` commands add the live schema), on the body the write leaves. Every
+    body is checked, ``{}`` too ("no phases"); the callers skip the check only
+    where nothing is written to the body: `config new` without
+    ``--configuration`` (the empty flow `flow new` makes without a definition)
+    and a metadata-only `config update`. Other components are not checked.
     """
     if component_id != FLOW_COMPONENT_ID or not isinstance(configuration, dict):
-        return
-    if "phases" not in configuration and "tasks" not in configuration:
         return
     errors = validate_conditional_flow(
         configuration.get("phases", []), configuration.get("tasks", [])
