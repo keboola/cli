@@ -726,6 +726,10 @@ kbagent job run [--project NAME] --component-id ID --config-id ID [--row-id ID .
 kbagent job terminate [--project NAME] (--job-id ID [--job-id ID ...] | --status any|created|waiting|processing [--component-id ID] [--config-id ID] [--branch ID] [--limit N]) [--dry-run] [--yes]
 # job terminate --status --branch 0 (CLI-21): matches only jobs whose branchId is the default branch
 #   ID (read from GET /v2/storage/dev-branches). Before, it matched no job. Version gate in gotchas.md.
+# job run --component-id keboola.flow: reads the flow first and refuses one the job queue refuses for
+#   every run (repeated phase/task id, goto to an undefined phase, not exactly one first phase) with
+#   INVALID_FLOW_DEFINITION, exit 1, before the create (check_runnable_flow, shared with flow run; the
+#   same read resolves the variables). Version gate in gotchas.md.
 # job run --idempotency-key: a pending entry is recorded BEFORE the create. A definite failure (4xx,
 #   refused connection, connect timeout) removes it; an unknown outcome (read timeout, 5xx, exhausted
 #   retries) keeps it, because the job may exist. A replay that finds the pending entry exits with INVALID_ARGUMENT (1 before 1.0.0, 2 from 1.0.0, HTTP 400 over serve) and

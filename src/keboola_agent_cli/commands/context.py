@@ -1155,6 +1155,8 @@ explicit Storage config version, never the empty shell the create writes.
   job run
     Run a Queue API job. --row-id selects specific config rows (repeatable; omit to run entire config).
     --wait polls until job finishes. --timeout sets max wait in seconds (default 300). Branch-aware.
+    For keboola.flow it reads the flow first: one the job queue refuses for every run is
+    INVALID_FLOW_DEFINITION (exit 1) before any job is created. Prefer `flow run` for flows.
     When the config has linked variables (configuration.variables_id), kbagent auto-resolves
     a variableValuesId so the job binds to the deployed values row. --variable-values-id
     overrides; --no-variables skips resolution. Error code NO_VARIABLE_ROWS when the linked

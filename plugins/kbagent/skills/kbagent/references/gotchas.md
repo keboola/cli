@@ -57,6 +57,15 @@ These lists keep `error`, because their entries are not failed items with an err
 - **Removed short flags** (a usage error, exit 2): `-c` (`permissions list --category`, `lineage show --column`), `-r` (`search` and `config search --regex`, `project invite` and `project member-set-role --role`), `-d` on `http post/patch --body`, `permissions set --deny` and `token create --description`, `-f` on `lineage show --format`, `-l` on `search --limit` and `-n` on `changelog` and `kai history --limit` (use `-L`), `-m` on `permissions set --mode`, and `-v` on `changelog --full` (`-v` is the global `--verbose`).
 - **In documents and agent commands, use the long names.** They work on 0.x and 1.x.
 
+## Flow checks agree with the job queue: `job run` on a flow, `flow validate`, exact task ids
+
+*(since vNEXT)*
+
+- **`job run --component-id keboola.flow` reads the flow first** and refuses one the job queue refuses for every run (a repeated phase or task id, a transition to an undefined phase, not exactly one first phase) with `INVALID_FLOW_DEFINITION`, exit 1, before the job is created -- like `flow run` since 1.4.0. Before vNEXT the job was created and then failed. The read also serves the variables (no second read). Other components are not read. The SDK `Client.run_job` does not read the flow.
+- **`flow validate`, `flow new` and `flow update` refuse a flow without exactly one first phase** (a phase no transition goes to; a transition back to the first phase leaves none) -- the job queue never runs such a flow. The unreachable-phase warning now starts from that first phase, not from the first phase listed.
+- **Schema-less validation checks value types**: a phase or task `id` and a task `phase` must be a string or a number, `enabled` must be `true` or `false` (the string `"false"` used to count as enabled), and a transition `condition` must be an object (or absent / `null`). The live schema catches more when it can be fetched.
+- **`flow run` selects ids exactly**: `--task-id " t1 "` is not `t1` (it used to be trimmed). An unknown id with spaces is quoted in the error, so the spaces are visible.
+
 ## `flow new` / `flow update` / `flow validate`: an empty or malformed definition is refused
 
 *(since 1.4.0)*
