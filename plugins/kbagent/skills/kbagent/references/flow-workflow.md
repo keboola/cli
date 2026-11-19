@@ -106,6 +106,8 @@ of `tasks:`) or the whole `flow detail --json` output is refused with
 `VALIDATION_ERROR` (exit 2) and nothing is written. `flow new` WITHOUT
 `--definition`/`--definition-file` creates an empty flow on purpose; fill it
 with one `flow update` that carries the phases and their tasks together.
+`config new --push` / `config update` / `config clone` on `keboola.flow` refuse
+the same broken bodies (since vNEXT), but prefer the `flow` commands.
 
 ## Conditions cookbook
 

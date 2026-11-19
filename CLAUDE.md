@@ -633,6 +633,10 @@ kbagent config rename [--project NAME] --component-id ID --config-id ID --name "
 kbagent config delete [--project NAME] --component-id ID --config-id ID [--branch ID] [--dry-run]
 kbagent config restore [--project NAME] --component-id ID --config-id ID [--branch ID]
 kbagent config trash-list [--project NAME] [--component-id ID] [--branch ID]
+# config new --push / update / clone on keboola.flow: the body (after --set / merge) gets the semantic
+#   checks of flow new/update (services/_flow_config_check.py, no schema fetch) -> INVALID_FLOW_DEFINITION,
+#   exit 1, nothing written, dry run too; an empty body (no phases/tasks key) and a metadata-only update
+#   pass; config new --no-validate skips it. Version gate in gotchas.md.
 # config delete (0.89.0+ safety): SOFT delete into the Storage trash, with a locate-first guard.
 #   The raw API purges PERMANENTLY when DELETE hits a config already in the trash -- the classic
 #   agent retry after a timeout. kbagent now looks the config up first: live -> trash it;

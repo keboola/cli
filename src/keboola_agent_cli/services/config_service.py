@@ -33,6 +33,7 @@ from ._config_clone import clone_config_method
 from ._config_folder import set_config_folder_method
 from ._config_set_guard import validate_set_paths
 from ._encryption import collect_secrets, encrypt_secrets_in_config, find_plaintext_secret_keys
+from ._flow_config_check import check_flow_configuration
 from ._sync_moves import SKIPPED_OTHER_BRANCH, rename_entries
 from ._sync_project_guard import sync_tree_scope
 from .base import (
@@ -742,6 +743,8 @@ class ConfigService(BaseService):
                 final_config, normalizations = normalize_blocks_codes_script(
                     component_id, final_config
                 )
+                # A keboola.flow body gets the `flow update` checks (dry run too).
+                check_flow_configuration(component_id, final_config)
 
             change_desc = change_description or _default_change_description(
                 "config update", has_metadata=has_metadata, has_content=has_content
@@ -1904,6 +1907,8 @@ class ConfigService(BaseService):
         # validated (and typically fails for the same reason) -- pass
         # ``--no-validate`` or omit ``--configuration`` to skip.
         if validate and body_was_explicit:
+            # A keboola.flow body gets the `flow new` checks (dry run too).
+            check_flow_configuration(component_id, effective_config)
             validation_status, validation_errors = self._validate_config_body(
                 project, component_id, effective_config
             )
