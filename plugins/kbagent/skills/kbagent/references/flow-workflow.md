@@ -107,7 +107,7 @@ of `tasks:`) or the whole `flow detail --json` output is refused with
 `--definition`/`--definition-file` creates an empty flow on purpose; fill it
 with one `flow update` that carries the phases and their tasks together.
 `config new --push` / `config update` / `config clone` on `keboola.flow` refuse
-the same broken bodies (since vNEXT), but prefer the `flow` commands.
+the same broken bodies (since 1.4.1), but prefer the `flow` commands.
 
 ## Conditions cookbook
 
@@ -173,7 +173,7 @@ kbagent --json flow update --project prod --flow-id 111 --definition-file update
 
 ## Run a flow
 
-*(since vNEXT)* `job run --component-id keboola.flow` refuses a flow the job
+*(since 1.4.1)* `job run --component-id keboola.flow` refuses a flow the job
 queue would refuse, like `flow run` (see Validation below). Prefer `flow run`:
 it also checks a partial selection and reports every task.
 
@@ -390,14 +390,14 @@ live schema) to see them. Common causes:
 - the definition has no phases (`phases: []`, or a `tasks`-only `flow new`);
 - `phases` / `tasks` / `next` is not a list of objects; an `id` or task `phase`
   is not a string or number; `enabled` is not `true`/`false`; a `condition` is
-  not an object (since vNEXT);
+  not an object (since 1.4.1);
 - the flow has not exactly one first phase, a phase no transition goes to
-  (since vNEXT; the job queue runs no other flow);
+  (since 1.4.1; the job queue runs no other flow);
 - a task references an unknown `phase`, or a phase has no enabled task;
 - operator/function operand-arity violations.
 
 Unreachable phases are reported as **warnings** (never block a write), counted
-from the first phase (the one no transition goes to, since vNEXT). A `goto`
+from the first phase (the one no transition goes to, since 1.4.1). A `goto`
 loop after the first phase (a retry) is legal and is NOT flagged; a loop back
 to the first phase leaves the flow without a first phase, which the job queue
 refuses ("Flow must have exactly one first step"), so validation refuses it.

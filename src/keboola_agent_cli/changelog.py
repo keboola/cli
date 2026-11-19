@@ -28,6 +28,35 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
+    "1.4.1": [
+        "Fix (#1026, #725): `config update --merge` with an empty body no longer erases the "
+        "configuration. `--configuration '{}'` with `--merge` (also on `config row-update`) now "
+        "changes nothing. Before, it replaced the whole configuration with `{}`, for every "
+        "component.",
+        "Fix (#1025, #725): `job run --component-id keboola.flow` refuses a flow the job queue "
+        "would refuse, before it creates the job. That is a flow with a repeated phase or task "
+        "id, a transition to an undefined phase, or not exactly one first phase. The error is "
+        "`INVALID_FLOW_DEFINITION` (exit 1), as in `flow run` since 1.4.0. Before, the job was "
+        "created and then failed.",
+        "Change (#1025, #725): `flow validate`, `flow new` and `flow update` refuse a flow "
+        "without exactly one first phase. A transition back to the first phase leaves none, so "
+        "it is refused too. Without the live schema they also check value types: an `id` or "
+        "task `phase` must be a string or a number, `enabled` must be `true` or `false` (the "
+        'string `"false"` used to count as enabled), and a `condition` must be an object. The '
+        "job queue never ran such a flow.",
+        "Change (#1026, #725): `config new --push`, `config update` and `config clone` on "
+        "`keboola.flow` run the `flow new` checks. A body they would refuse is "
+        "`INVALID_FLOW_DEFINITION` (exit 1) and nothing is written, also with `--dry-run`. "
+        "`config new` without `--configuration`, a name-only update, a `config clone` without "
+        "`--set` and `config new --no-validate` are not checked. `sync push` is not covered.",
+        "Fix (#1025, #725): `flow run --task-id` and `--from-phase-id` compare ids exactly. A "
+        "value with spaces around it is no longer trimmed, so it names an unknown id instead of "
+        "selecting another task.",
+        "Note (#1023, #955): the 1.4.0 entry now also lists the `project refresh` run without a "
+        "Manage token.",
+        "Note (#1022): the README says how to install the signed binary with WinGet when Windows "
+        "blocks the uv install.",
+    ],
     "1.4.0": [
         "BREAKING (#1005, #827): `sync push` no longer overwrites a config or its rows that "
         "changed in Keboola after `sync diff` read them. Push sends the version that the diff "
