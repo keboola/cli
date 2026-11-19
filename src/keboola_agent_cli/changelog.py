@@ -93,9 +93,9 @@ CHANGELOG: dict[str, list[str]] = {
         "local token is invalid, and only when the global token has at least the rights of a "
         "new token. It asks for the Manage token only when it must create a token, and "
         "`--dry-run` never asks. The JSON output adds `projects_adopted`.",
-        "Change (#1005, #955): `project refresh --json` or `--yes` with no Manage token (no "
-        "terminal, and no `--allow-env-manage-token`) still writes the tokens taken from the "
-        "global config. Each project that needs a new token is a `projects_failed` entry with "
+        "Change (#1005, #955): `project refresh` without a Manage token still saves the tokens "
+        "taken from the global config. This applies to a `--json` or `--yes` run with no "
+        "terminal and no `--allow-env-manage-token`. Each project that needs a new token is a `projects_failed` entry with "
         "the new error code `MANAGE_TOKEN_REQUIRED`, and the run exits 1. Before, such a run "
         "exited 2 with `UNKNOWN_ERROR` and wrote nothing. A global token with fewer rights than "
         "a new token is not taken; the project's entry carries `global_token_not_used` "
