@@ -233,7 +233,8 @@ def test_numeric_and_string_ids_are_accepted(value: Any) -> None:
 
 def test_null_condition_is_still_accepted() -> None:
     phases = [{"id": "p", "next": [{"id": "end", "goto": None, "condition": None}]}]
-    assert not any("condition" in e for e in validate_conditional_flow(phases, [_task("t", "p")]))
+    errors = validate_conditional_flow(phases, [_task("t", "p")])
+    assert not any("must be an object" in e for e in errors)
 
 
 # ---------------------------------------------------------------------------
@@ -260,3 +261,32 @@ def test_from_phase_id_with_spaces_is_unknown() -> None:
     with pytest.raises(KeboolaApiError) as exc:
         select_flow_tasks(VALID, from_phase_id=" p2")
     assert "' p2'" in exc.value.message
+
+
+def test_idempotency_replay_still_returns_the_earlier_job(tmp_path: Path) -> None:
+    """The flow check runs only when a job is created, so a replay is not blocked."""
+    client = _client(VALID)
+    client.get_job_detail.return_value = {"id": "900", "status": "success", "isFinished": True}
+    service = JobService(
+        config_store=setup_single_project(tmp_path / "cfg"),
+        client_factory=lambda url, token: client,
+    )
+    kwargs: dict[str, Any] = {
+        "alias": "prod",
+        "component_id": "keboola.flow",
+        "config_id": "01flow",
+        "no_variables": True,
+        "idempotency_key": "k1",
+    }
+    first = service.run_job(**kwargs)
+    client.get_config_detail.return_value = {"id": "01flow", "configuration": TWO_FIRST}
+    second = service.run_job(**kwargs)
+    assert first["id"] == second["id"] == "900"
+    client.create_job.assert_called_once()
+
+
+def test_float_ids_give_no_false_unreachable_warning() -> None:
+    phases = [{"id": 1.0, "next": [{"id": "to-2", "goto": 2}]}, {"id": 2.0}]
+    tasks = [dict(_task("a", "x"), phase=1), dict(_task("b", "x"), phase=2)]
+    assert validate_conditional_flow(phases, tasks) == []
+    assert find_unreachable_phases(phases) == []

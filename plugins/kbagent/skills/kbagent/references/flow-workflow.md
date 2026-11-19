@@ -395,8 +395,10 @@ live schema) to see them. Common causes:
 - operator/function operand-arity violations.
 
 Unreachable phases are reported as **warnings** (never block a write), counted
-from the first phase (the one no transition goes to, since vNEXT). `goto`
-loops are legal at runtime and are NOT flagged.
+from the first phase (the one no transition goes to, since vNEXT). A `goto`
+loop after the first phase (a retry) is legal and is NOT flagged; a loop back
+to the first phase leaves the flow without a first phase, which the job queue
+refuses ("Flow must have exactly one first step"), so validation refuses it.
 
 ### Graceful degradation when the schema can't be fetched
 

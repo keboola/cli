@@ -682,20 +682,27 @@ class JobService(BaseService):
 
         client = self._client_factory(project.stack_url, project.token)
         try:
-            # A flow the job queue refuses for every run is refused here, before the
-            # job is created (as `flow run` does). `flow run` checked it already.
-            configuration: dict[str, Any] | None = None
-            if component_id == FLOW_COMPONENT_ID and check_flow:
-                detail = client.get_config_detail(
-                    component_id=component_id, config_id=config_id, branch_id=branch_id
-                )
-                configuration = detail.get("configuration") or {}
-                check_runnable_flow(configuration)
+            # A flow the job queue refuses for every run is refused before the job
+            # is created (as `flow run` does; `flow run` checked its own read and
+            # passes check_flow=False). The check runs in _create, so an
+            # --idempotency-key replay still returns the earlier job. One read of
+            # the flow serves the check and the variables.
+            check_this_flow = component_id == FLOW_COMPONENT_ID and check_flow
+            flow_read: list[dict[str, Any]] = []
+
+            def _flow_configuration() -> dict[str, Any]:
+                if not flow_read:
+                    detail = client.get_config_detail(
+                        component_id=component_id, config_id=config_id, branch_id=branch_id
+                    )
+                    flow_read.append(detail.get("configuration") or {})
+                return flow_read[0]
+
             resolved_values_id = variable_values_id
             if resolved_values_id is None and not no_variables:
-                if configuration is not None:
+                if check_this_flow:
                     resolved_values_id = self.resolve_variable_values_from_configuration(
-                        client=client, configuration=configuration, branch_id=branch_id
+                        client=client, configuration=_flow_configuration(), branch_id=branch_id
                     )
                 else:
                     resolved_values_id = self.resolve_variable_values_id(
@@ -706,6 +713,8 @@ class JobService(BaseService):
                     )
 
             def _create() -> dict[str, Any]:
+                if check_this_flow:
+                    check_runnable_flow(_flow_configuration())
                 return client.create_job(
                     component_id=component_id,
                     config_id=config_id,

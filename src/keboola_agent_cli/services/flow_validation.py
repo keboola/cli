@@ -16,7 +16,7 @@ from collections import deque
 from typing import Any
 
 from ..json_utils import draft7_errors
-from .flow_run_selection import first_phase_ids
+from .flow_run_selection import first_phase_ids, normalize_id
 
 # Operand arity per operator (semantic; the schema cannot express these counts).
 _BINARY_OPERATORS = frozenset(
@@ -71,7 +71,7 @@ def _semantic_errors(phases: list[dict[str, Any]], tasks: list[dict[str, Any]]) 
     errors: list[str] = []
 
     # Unique phase ids
-    phase_ids: list[str] = [str(p.get("id")) for p in phases]
+    phase_ids: list[str] = [normalize_id(p.get("id")) for p in phases]
     seen: set[str] = set()
     for pid in phase_ids:
         if pid in seen:
@@ -82,14 +82,14 @@ def _semantic_errors(phases: list[dict[str, Any]], tasks: list[dict[str, Any]]) 
     # Unique task ids
     seen_tasks: set[str] = set()
     for task in tasks:
-        tid = str(task.get("id"))
+        tid = normalize_id(task.get("id"))
         if tid in seen_tasks:
             errors.append(f"Duplicate task id '{tid}'")
         seen_tasks.add(tid)
 
     # task.phase references an existing phase
     for task in tasks:
-        ref = str(task.get("phase"))
+        ref = normalize_id(task.get("phase"))
         if ref not in valid_phase_ids:
             errors.append(f"Task '{task.get('id', '?')}' references unknown phase '{ref}'")
 
@@ -97,7 +97,7 @@ def _semantic_errors(phases: list[dict[str, Any]], tasks: list[dict[str, Any]]) 
     for phase in phases:
         for transition in phase.get("next", []):
             goto = transition.get("goto")
-            if goto is not None and str(goto) not in valid_phase_ids:
+            if goto is not None and normalize_id(goto) not in valid_phase_ids:
                 errors.append(
                     f"Phase '{phase.get('id', '?')}' transition goto '{goto}' "
                     f"is not an existing phase id (use null to end the flow)"
@@ -118,14 +118,14 @@ def _semantic_errors(phases: list[dict[str, Any]], tasks: list[dict[str, Any]]) 
             )
 
     # Every phase must have at least one enabled task.
-    enabled_by_phase: dict[str, int] = {str(p.get("id")): 0 for p in phases}
+    enabled_by_phase: dict[str, int] = {normalize_id(p.get("id")): 0 for p in phases}
     for task in tasks:
         if task.get("enabled", True):
-            enabled_by_phase[str(task.get("phase"))] = (
-                enabled_by_phase.get(str(task.get("phase")), 0) + 1
+            enabled_by_phase[normalize_id(task.get("phase"))] = (
+                enabled_by_phase.get(normalize_id(task.get("phase")), 0) + 1
             )
     for phase in phases:
-        pid = str(phase.get("id"))
+        pid = normalize_id(phase.get("id"))
         if enabled_by_phase.get(pid, 0) == 0:
             errors.append(f"Phase '{pid}' has no enabled task")
 
@@ -242,7 +242,7 @@ def find_unreachable_phases(phases: list[dict[str, Any]]) -> list[str]:
     roots = first_phase_ids(phases)
     if len(roots) != 1:
         return []
-    by_id = {str(p.get("id")): p for p in phases}
+    by_id = {normalize_id(p.get("id")): p for p in phases}
     entry = roots[0]
     reachable: set[str] = set()
     queue: deque[str] = deque([entry])
@@ -254,5 +254,5 @@ def find_unreachable_phases(phases: list[dict[str, Any]]) -> list[str]:
         for transition in by_id[pid].get("next", []):
             goto = transition.get("goto")
             if goto is not None:
-                queue.append(str(goto))
-    return [str(p.get("id")) for p in phases if str(p.get("id")) not in reachable]
+                queue.append(normalize_id(goto))
+    return [normalize_id(p.get("id")) for p in phases if normalize_id(p.get("id")) not in reachable]

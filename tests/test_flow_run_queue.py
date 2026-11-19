@@ -72,6 +72,7 @@ class TestTimeoutPolicy:
                 timeout=1,
                 no_variables=True,
                 kill_on_timeout=False,
+                check_flow=False,
             )
         assert exc.value.error_code == ErrorCode.QUEUE_JOB_TIMEOUT
         assert exc.value.retryable is False
@@ -103,6 +104,7 @@ class TestTimeoutPolicy:
             config_id="9",
             no_variables=True,
             only_flow_task_ids=["t1"],
+            check_flow=False,
         )
         assert client.create_job.call_args.kwargs["only_flow_task_ids"] == ["t1"]
 
