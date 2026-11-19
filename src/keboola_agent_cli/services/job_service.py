@@ -684,8 +684,9 @@ class JobService(BaseService):
         try:
             # A flow the job queue refuses for every run is refused before the job
             # is created (as `flow run` does; `flow run` checked its own read and
-            # passes check_flow=False). The check runs in _create, so an
-            # --idempotency-key replay still returns the earlier job. One read of
+            # passes check_flow=False). The check runs after a replay is ruled out
+            # and before the pending entry: a replay still returns the earlier job,
+            # and a failed read leaves no false "pending" entry. One read of
             # the flow serves the check and the variables.
             check_this_flow = component_id == FLOW_COMPONENT_ID and check_flow
             flow_read: list[dict[str, Any]] = []
@@ -712,9 +713,11 @@ class JobService(BaseService):
                         branch_id=branch_id,
                     )
 
-            def _create() -> dict[str, Any]:
+            def _check_flow() -> None:
                 if check_this_flow:
                     check_runnable_flow(_flow_configuration())
+
+            def _create() -> dict[str, Any]:
                 return client.create_job(
                     component_id=component_id,
                     config_id=config_id,
@@ -735,6 +738,7 @@ class JobService(BaseService):
                 force_rerun=force_rerun,
                 create=_create,
                 fetch=client.get_job_detail,
+                before_create=_check_flow,
             )
             job_id = str(job.get("id", ""))
 

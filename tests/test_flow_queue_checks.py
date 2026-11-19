@@ -290,3 +290,50 @@ def test_float_ids_give_no_false_unreachable_warning() -> None:
     tasks = [dict(_task("a", "x"), phase=1), dict(_task("b", "x"), phase=2)]
     assert validate_conditional_flow(phases, tasks) == []
     assert find_unreachable_phases(phases) == []
+
+
+def test_failed_flow_read_leaves_no_pending_idempotency_entry(tmp_path: Path) -> None:
+    """A read error before the create is not an unknown create outcome."""
+    client = _client(VALID)
+    client.get_config_detail.side_effect = KeboolaApiError(
+        message="Service unavailable", status_code=503, error_code="API_ERROR", retryable=True
+    )
+    service = JobService(
+        config_store=setup_single_project(tmp_path / "cfg"),
+        client_factory=lambda url, token: client,
+    )
+    kwargs: dict[str, Any] = {
+        "alias": "prod",
+        "component_id": "keboola.flow",
+        "config_id": "01flow",
+        "no_variables": True,
+        "idempotency_key": "k2",
+    }
+    with pytest.raises(KeboolaApiError) as exc:
+        service.run_job(**kwargs)
+    assert exc.value.status_code == 503
+    client.get_config_detail.side_effect = None
+    client.get_config_detail.return_value = {"id": "01flow", "configuration": VALID}
+    job = service.run_job(**kwargs)  # no "pending run" refusal
+    assert job["id"] == "900"
+    client.create_job.assert_called_once()
+
+
+def test_broken_flow_with_a_key_leaves_no_pending_entry(tmp_path: Path) -> None:
+    client = _client(TWO_FIRST)
+    service = JobService(
+        config_store=setup_single_project(tmp_path / "cfg"),
+        client_factory=lambda url, token: client,
+    )
+    kwargs: dict[str, Any] = {
+        "alias": "prod",
+        "component_id": "keboola.flow",
+        "config_id": "01flow",
+        "no_variables": True,
+        "idempotency_key": "k3",
+    }
+    with pytest.raises(KeboolaApiError) as exc:
+        service.run_job(**kwargs)
+    assert exc.value.error_code == ErrorCode.INVALID_FLOW_DEFINITION
+    client.get_config_detail.return_value = {"id": "01flow", "configuration": VALID}
+    assert service.run_job(**kwargs)["id"] == "900"
