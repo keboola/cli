@@ -28,7 +28,6 @@ from ._helpers import (
     get_formatter,
     get_service,
     map_error_to_exit_code,
-    split_multi,
 )
 from ._project_ref import PROJECT_HELP
 
@@ -197,7 +196,9 @@ def register(app: typer.Typer) -> None:
         formatter = get_formatter(ctx)
         service = get_service(ctx, "flow_service")
         _check_blank_selectors(formatter, task_id, from_phase_id)
-        task_ids = split_multi(task_id, label="--task-id") if task_id else None
+        # Exact ids, as the job queue compares them: no trimming here (split_multi
+        # trims). The service refuses a blank id or a comma, like over REST.
+        task_ids = list(task_id) if task_id else None
 
         try:
             outcome = service.run_flow(

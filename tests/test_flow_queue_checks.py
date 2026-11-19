@@ -337,3 +337,27 @@ def test_broken_flow_with_a_key_leaves_no_pending_entry(tmp_path: Path) -> None:
     assert exc.value.error_code == ErrorCode.INVALID_FLOW_DEFINITION
     client.get_config_detail.return_value = {"id": "01flow", "configuration": VALID}
     assert service.run_job(**kwargs)["id"] == "900"
+
+
+def test_cli_task_id_with_spaces_is_not_trimmed(tmp_path: Path) -> None:
+    """The CLI passes --task-id as given; before, it trimmed " t1 " to t1 and ran t1."""
+    from keboola_agent_cli.services.flow_service import FlowService
+
+    client = _client(VALID)
+    store = setup_single_project(tmp_path / "cfg")
+    args = ["--json", "flow", "run", "--project", "prod", "--flow-id", "01flow"]
+    args += ["--task-id", " t1 ", "--dry-run"]
+    with (
+        patch("keboola_agent_cli.cli.ConfigStore") as mock_store,
+        patch("keboola_agent_cli.cli.FlowService") as mock_flow,
+    ):
+        mock_store.return_value = store
+        mock_flow.return_value = FlowService(
+            config_store=store, client_factory=lambda url, token: client
+        )
+        result = runner.invoke(app, args)
+    assert result.exit_code == 2, result.output
+    error = json.loads(result.stdout)["error"]
+    assert error["code"] == ErrorCode.INVALID_ARGUMENT
+    assert "' t1 '" in error["message"]
+    client.create_job.assert_not_called()
