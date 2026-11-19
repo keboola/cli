@@ -290,3 +290,27 @@ def test_clone_without_set_copies_the_source_as_it_is(tmp_path: Path) -> None:
         alias="prod", component_id="keboola.flow", config_id="01flow", name="F copy"
     )
     client.create_config_copy.assert_called_once()
+
+
+def test_merge_with_an_empty_body_keeps_any_component(tmp_path: Path) -> None:
+    """The --merge '{}' fix is not flow-specific: an extractor keeps its body too."""
+    client = _client({"parameters": {"table": "t"}})
+    _service(tmp_path, client).update_config(
+        alias="prod", component_id="keboola.ex-db", config_id="01", configuration={}, merge=True
+    )
+    assert client.update_config.call_args.kwargs["configuration"] == {"parameters": {"table": "t"}}
+
+
+def test_row_update_merge_with_an_empty_body_keeps_the_row(tmp_path: Path) -> None:
+    client = _client()
+    client.get_config_row.return_value = {"id": "r1", "configuration": {"parameters": {"a": 1}}}
+    client.update_config_row.return_value = {"id": "r1"}
+    _service(tmp_path, client).update_config_row(
+        alias="prod",
+        component_id="keboola.ex-db",
+        config_id="01",
+        row_id="r1",
+        configuration={},
+        merge=True,
+    )
+    assert client.update_config_row.call_args.kwargs["configuration"] == {"parameters": {"a": 1}}
