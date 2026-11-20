@@ -230,6 +230,7 @@ SERVE_COMMAND_MAP: dict[tuple[str, str], str] = {
     ("POST", "/flows/validate"): "flow validate",
     ("POST", "/flows/{project}"): "flow new",
     ("POST", "/flows/{project}/{config_id}/schedule"): "flow schedule",
+    ("POST", "/flows/{project}/{flow_id}/run"): "flow run",
     ("POST", "/jobs/{project}/run"): "job run",
     ("POST", "/jobs/{project}/terminate"): "job terminate",
     ("POST", "/kai/ask"): "kai ask",
@@ -256,6 +257,7 @@ SERVE_COMMAND_MAP: dict[tuple[str, str], str] = {
     ("POST", "/members/{project}/remove"): "project member-remove",
     ("POST", "/members/{project}/set-role"): "project member-set-role",
     ("POST", "/notifications/{project}"): "notification create",
+    ("POST", "/notifications/{project}/{subscription_id}/clone"): "notification clone",
     (
         "POST",
         "/notifications/{project}/{subscription_id}/replace-recipient",

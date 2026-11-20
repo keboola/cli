@@ -490,6 +490,7 @@ class _ConfigsMixin(_CoreClient):
         branch_id: int | None = None,
         is_disabled: bool | None = None,
         folder: str | None = None,
+        expected_version: int | None = None,
     ) -> dict[str, Any]:
         """Update an existing configuration.
 
@@ -500,6 +501,14 @@ class _ConfigsMixin(_CoreClient):
         untouched (mirrors ``update_config_row``). ``folder`` sets the UI
         folder; an empty string clears it. Setting the folder creates no
         configuration version.
+
+        ``expected_version`` is the configuration version the caller decided
+        on. It is sent as ``If-Match: "<version>"``: the Storage API updates
+        the configuration only while it is still at that version and answers
+        412 otherwise (a row change also raises the version). ``None`` sends
+        no precondition. The transport may repeat the PUT after a timeout or
+        a 5xx; every attempt carries the same precondition, so a repeat after
+        a PUT that landed answers 412 instead of writing again (#827).
 
         Returns:
             Updated configuration dict.
@@ -518,10 +527,12 @@ class _ConfigsMixin(_CoreClient):
             data["folder"] = folder
         if change_description:
             data["changeDescription"] = change_description
+        headers = {} if expected_version is None else {"If-Match": f'"{expected_version}"'}
         resp = self._request(
             "PUT",
             f"{prefix}/components/{quote(component_id)}/configs/{quote(config_id)}",
             data=data,
+            headers=headers,
         )
         return resp.json()
 

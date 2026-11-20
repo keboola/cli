@@ -162,9 +162,10 @@ them.
 
 ## Workflow 4 -- Editing a scoped item
 
-`semantic-layer edit <kind>`, `import --overwrite` and `promote` update the
-item **in place** (PUT): it keeps its id, scope, target projects and any
-pending elevation request, and a failed update changes nothing. Nothing to do
+`semantic-layer edit <kind>` (a `PATCH` of only the changed keys, since 1.4.0),
+`import --overwrite` and `promote` (a whole-record `PUT`) update the item
+**in place**: it keeps its id, scope, target projects and any pending elevation
+request, and a refused update changes nothing. Nothing to do
 here; this is just so you don't have to re-grant after every rename.
 
 ## Over `kbagent serve`

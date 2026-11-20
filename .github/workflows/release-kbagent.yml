@@ -261,10 +261,12 @@ jobs:
       - name: Build SPA into the package (for serve --ui)
         run: uv build --wheel
 
+      # --extra server bundles FastAPI and uvicorn. Without it `serve --ui` exits
+      # with "missing: uvicorn" (#1018).
       - name: Freeze with PyInstaller
         shell: bash
         run: |
-          uv run --with "pyinstaller==6.11.1" pyinstaller --onefile \
+          uv run --extra server --with "pyinstaller==6.11.1" pyinstaller --onefile \
             --name "$BIN_NAME" \
             --collect-all keboola_agent_cli \
             --distpath dist \
@@ -293,6 +295,12 @@ jobs:
             dist/*.zip
             dist/*.sha256
             dist/${{ env.BIN_NAME }}*
+
+      # The last step of the job, so a server process that outlives `kill` cannot
+      # lock the binary for the sign and zip steps. A failure here stops the release.
+      - name: Check that serve --ui starts from the binary
+        shell: bash
+        run: bash build/package/check_serve_ui.sh "dist/${BIN_NAME}"
 
   # ── Package the Linux binaries into deb/rpm with nfpm (language-agnostic).
   package-linux:

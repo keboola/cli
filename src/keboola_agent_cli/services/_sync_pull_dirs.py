@@ -27,12 +27,19 @@ from ..sync.branch_scope import (
     branch_tree_path,
     find_untracked_configs,
     is_production,
+    pending_removal_paths,
     promoted_from,
     same_branch,
 )
 from ..sync.config_format import api_row_to_local
 from ..sync.diff_engine import config_hash
-from ..sync.manifest import Manifest, ManifestConfigRow, ManifestConfiguration
+from ..sync.manifest import (
+    Manifest,
+    ManifestConfigRow,
+    ManifestConfiguration,
+    PendingPaths,
+    under_pending,
+)
 from ..sync.naming import config_row_path
 from ._sync_disabled import DISABLED_BASELINE_KEY, carry_disabled, file_disables, record_disabled
 from ._sync_local_files import UNREADABLE_SKIP_REASON
@@ -55,6 +62,7 @@ from ._sync_stale import sweep_stale_rows
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
+    from ._sync_pending_removals import RemovalJournal
     from .sync_service import SyncService
 
 # Pull ``details[].reason`` for a kept row file that only carries the row id.
@@ -319,18 +327,23 @@ def finalize_kept_entries(
     component is carried untouched: the ignore filter keeps it out of diff and
     push, and it is back in scope, still associated, once the component is
     un-ignored -- dropping it made the next promote create a duplicate (risk
-    75). It is dropped -- its files are never touched -- only when its source
-    config is gone from the manifest and its directory is gone too (D13c).
+    75) -- while its source folder exists: a promote entry never outlives the
+    folder it reads from (#1007 E1). It is dropped -- its files are never
+    touched -- when its source config is gone from the manifest and its
+    directory is gone too (D13c).
     """
     paths = {(c.component_id, c.id): c.path for c in pulled}
     carried: list[ManifestConfiguration] = []
     for entry in kept:
-        if entry.component_id in ignored_components:
-            carried.append(entry)  # untouched until the component is un-ignored
-            continue
         association = promoted_from(entry)
         if association is not None and branch_dir.parent / association.tree != branch_dir:
             carried.append(entry)  # its source tree was not pulled: unchanged (D27)
+            continue
+        if entry.component_id in ignored_components:
+            # Untouched until the component is un-ignored -- but never past its
+            # source folder: a pull that removed that folder drops it (#1007 E1).
+            if association is None or (branch_dir / entry.path / CONFIG_FILENAME).exists():
+                carried.append(entry)
             continue
         source = association.config_id if association is not None else ""
         if source and (entry.component_id, source) in paths:
@@ -387,7 +400,45 @@ def scan_config_dirs(
             found.add(f"{item['component_id']}/{item['config_id']}", item["path"])
         else:
             found.paths.add(item["path"])  # authored, never pushed: reserved too (D26)
+    # A directory whose delete failed is reserved, never adopted (#827, D11).
+    found.paths |= pending_removal_paths(manifest, branch_dir_name).paths
     return found
+
+
+def without_pending(
+    dirs: IdDirs,
+    pending: PendingPaths,
+    config_path: str,
+    hidden_rows: frozenset[str] = frozenset(),
+) -> IdDirs:
+    """*dirs* (row folders of *config_path*) with every pending one kept reserved only (#827, F5).
+
+    Such a folder is one an interrupted pull has not finished deleting: it is
+    never adopted by the id it carries nor taken for a moved row, but no new
+    row is written into it either. Judged on the tree-relative path, so the
+    tracked folders' exemptions apply exactly as in diff and push (H1, I1).
+    *hidden_rows* are this configuration's pending row folders by identity
+    (relative to it), hidden wherever the configuration is now (D1).
+    """
+    if not pending.paths and not hidden_rows:
+        return dirs
+
+    def hidden(row_path: str) -> bool:
+        if any(row_path == h or row_path.startswith(f"{h}/") for h in hidden_rows):
+            return True
+        return under_pending(f"{config_path}/{row_path}", pending)
+
+    out = IdDirs(paths=set(dirs.paths))
+    for key, path in dirs.by_id.items():
+        if not hidden(path):
+            out.by_id[key] = path
+    for key, paths in dirs.ambiguous.items():
+        kept = [p for p in paths if not hidden(p)]
+        if len(kept) > 1:
+            out.ambiguous[key] = kept
+        elif kept:
+            out.by_id[key] = kept[0]
+    return out
 
 
 def scan_row_dirs(service: SyncService, config_dir: Path) -> IdDirs:
@@ -508,6 +559,8 @@ class RowPullContext:
     adopt: bool
     theirs: bool
     dry_run: bool
+    # Where a stale row directory is recorded for deletion (#827, D10).
+    journal: RemovalJournal | None = None
 
 
 def pull_config_rows(
@@ -529,6 +582,13 @@ def pull_config_rows(
     """
     result = RowPullResult(rows=[])
     dirs = scan_row_dirs(service, ctx.config_dir)
+    if ctx.journal is not None:  # a pending row dir is reserved, never adopted (F5)
+        dirs = without_pending(
+            dirs,
+            ctx.journal.pending,
+            ctx.rel_path,
+            ctx.journal.rows_hidden(ctx.component_id, ctx.config_id),
+        )
     warnings += ambiguous_id_warnings(dirs, parent=f"{ctx.component_id}/{ctx.config_id}")
     # A row dir carrying an id is adopted by that id under a tracked parent
     # too, unless a manifest row owns its path (D22 guards a differing file).
@@ -567,6 +627,7 @@ def pull_config_rows(
         pull_details=pull_details,
         carried=carried,
         deleted_rows=result.deleted_rows,
+        journal=ctx.journal,
     )
     return result
 

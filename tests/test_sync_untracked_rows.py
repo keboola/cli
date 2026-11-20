@@ -194,8 +194,10 @@ def test_rows_of_a_parent_that_was_not_created_wait_for_it(tmp_path: Path) -> No
     )
 
     first = _push(sim)
-    row_errors = [e for e in first["errors"] if e.get("error_code") == "PARENT_CONFIG_NOT_TRACKED"]
+    # The rows carry the failed create's own code (#827 round 1, item 5).
+    row_errors = [e for e in first["errors"] if e.get("parent_path")]
     assert len(row_errors) == 2
+    assert {e["error_code"] for e in row_errors} == {ErrorCode.API_ERROR}
     assert _created(sim, PROD, "Name tk901z") == []
 
     second = _push(sim)

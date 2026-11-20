@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Self, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -1499,7 +1499,7 @@ class TestEditMetric:
             return []
 
         mock.list_items.side_effect = _list
-        mock.put_item.side_effect = [
+        mock.patch_item.side_effect = [
             {"id": "m_new", "attributes": {"name": "revenue"}},
             {"id": "c_new", "attributes": dict(c_attrs, name="rev_warning")},
         ]
@@ -1512,8 +1512,14 @@ class TestEditMetric:
             assume_yes=True,
         )
         assert result["updated"]["id"] == "m_new"
-        # in-place PUTs: the metric and its cascaded constraint, nothing deleted
-        assert mock.put_item.call_count == 2
+        # in-place PATCHes: the metric and its cascaded constraint, nothing deleted
+        assert mock.patch_item.call_count == 2
+        metric_call, constraint_call = mock.patch_item.call_args_list
+        assert metric_call.args == ("semantic-metric", "m1")
+        assert metric_call.kwargs == {"name": "revenue", "data": {"name": "revenue"}}
+        # the cascade sends only `metrics`, never the constraint's other keys
+        assert constraint_call.args == ("semantic-constraint", "c1")
+        assert constraint_call.kwargs == {"data": {"metrics": ["revenue"]}}
         mock.delete_item.assert_not_called()
         # cascade list populated
         assert result["cascaded_constraints"][0]["status"] == "updated"
@@ -1531,7 +1537,7 @@ class TestEditMetric:
             return []
 
         mock.list_items.side_effect = _list
-        mock.put_item.return_value = {"id": "m_new", "attributes": {"name": "rev"}}
+        mock.patch_item.return_value = {"id": "m_new", "attributes": {"name": "rev"}}
 
         result = service.edit_metric(
             "prod",
@@ -1557,8 +1563,8 @@ class TestEditMetric:
             service.edit_metric("prod", None, current_name="ghost", new_sql="1")
         assert excinfo.value.error_code == ErrorCode.NOT_FOUND
 
-    def test_failed_put_leaves_original_untouched(self, tmp_path: Path) -> None:
-        """Edit is an in-place PUT: a failure never deletes anything, so nothing needs rolling back."""
+    def test_failed_patch_never_deletes(self, tmp_path: Path) -> None:
+        """Edit is an in-place PATCH: a failure never deletes anything, so nothing needs rolling back."""
         store = _make_store(tmp_path)
         service, mock = _make_service(store)
         original = _child_item("semantic-metric", "m1", {"name": "rev", "sql": "1"})
@@ -1571,7 +1577,7 @@ class TestEditMetric:
             return []
 
         mock.list_items.side_effect = _list
-        mock.put_item.side_effect = KeboolaApiError(
+        mock.patch_item.side_effect = KeboolaApiError(
             message="boom", status_code=500, error_code=ErrorCode.API_ERROR
         )
 
@@ -1581,7 +1587,7 @@ class TestEditMetric:
         mock.post_item.assert_not_called()
 
     def test_edit_keeps_scope_and_item_id(self, tmp_path: Path) -> None:
-        """PUT in place: the item keeps its id and (untouched by a PUT) its scope."""
+        """PATCH in place: the item keeps its id; scope is never sent, so it is untouched."""
         store = _make_store(tmp_path)
         service, mock = _make_service(store)
         original = _child_item("semantic-metric", "m1", {"name": "rev", "sql": "1"})
@@ -1593,11 +1599,11 @@ class TestEditMetric:
             return [original] if item_type == "semantic-metric" else []
 
         mock.list_items.side_effect = _list
-        mock.put_item.return_value = {"id": "m1", "attributes": {"name": "rev"}}
+        mock.patch_item.return_value = {"id": "m1", "attributes": {"name": "rev"}}
         service.edit_metric("prod", None, current_name="rev", new_sql="2")
-        args, kwargs = mock.put_item.call_args
-        assert args[:3] == ("semantic-metric", "m1", "rev")
-        assert kwargs == {}
+        args, kwargs = mock.patch_item.call_args
+        assert args == ("semantic-metric", "m1")
+        assert kwargs == {"name": None, "data": {"sql": "2"}}
         mock.post_item.assert_not_called()
 
     def test_partial_state_false_when_cascade_succeeds(self, tmp_path: Path) -> None:
@@ -1618,7 +1624,7 @@ class TestEditMetric:
             return []
 
         mock.list_items.side_effect = _list
-        mock.put_item.side_effect = [
+        mock.patch_item.side_effect = [
             {"id": "m_new", "attributes": {"name": "revenue"}},
             {"id": "c_new", "attributes": dict(c_attrs, name="rev_warning")},
         ]
@@ -1648,7 +1654,7 @@ class TestEditMetric:
 
         mock.list_items.side_effect = _list
         # PUT sequence: metric rename ok, c1 cascade ok, c2 cascade fails.
-        mock.put_item.side_effect = [
+        mock.patch_item.side_effect = [
             {"id": "m_new", "attributes": {"name": "revenue"}},
             {"id": "c1_new", "attributes": {"name": "rev_ok", "metrics": ["revenue"]}},
             KeboolaApiError(message="boom", status_code=500, error_code=ErrorCode.API_ERROR),
@@ -1708,7 +1714,7 @@ class TestEditConstraint:
 
 class TestEditRelationship:
     def test_updates_endpoint(self, tmp_path: Path) -> None:
-        """Happy path: --new-from rewrites the source tableId via DELETE+POST."""
+        """Happy path: --new-from PATCHes only `from`; the other endpoints are not sent."""
         store = _make_store(tmp_path)
         service, mock = _make_service(store)
 
@@ -1732,7 +1738,7 @@ class TestEditRelationship:
             return []
 
         mock.list_items.side_effect = _list
-        mock.put_item.return_value = {
+        mock.patch_item.return_value = {
             "id": "r2",
             "attributes": {"name": "fact_to_dim", "from": "out.c.fact_v2"},
         }
@@ -1743,10 +1749,8 @@ class TestEditRelationship:
             new_from="out.c.fact_v2",
         )
         mock.delete_item.assert_not_called()
-        # The POST payload retains the unchanged endpoints but rewrites `from`.
-        put_args = mock.put_item.call_args.args
-        assert put_args[3]["from"] == "out.c.fact_v2"
-        assert put_args[3]["to"] == "out.c.dim"
+        assert mock.patch_item.call_args.args == ("semantic-relationship", "r1")
+        assert mock.patch_item.call_args.kwargs == {"name": None, "data": {"from": "out.c.fact_v2"}}
         assert result["rollback"] is None
         assert result["cascaded_constraints"] == []
 
@@ -1797,7 +1801,7 @@ class TestEditGlossary:
             return []
 
         mock.list_items.side_effect = _list
-        mock.put_item.return_value = {
+        mock.patch_item.return_value = {
             "id": "g2",
             "attributes": {"term": "MRR", "definition": "Updated def"},
         }
@@ -1808,9 +1812,11 @@ class TestEditGlossary:
             new_definition="Updated def",
         )
         mock.delete_item.assert_not_called()
-        put_args = mock.put_item.call_args.args
-        assert put_args[3]["term"] == "MRR"
-        assert put_args[3]["definition"] == "Updated def"
+        assert mock.patch_item.call_args.args == ("semantic-glossary", "g1")
+        assert mock.patch_item.call_args.kwargs == {
+            "name": None,
+            "data": {"definition": "Updated def"},
+        }
         assert result["rollback"] is None
 
     def test_rename_term(self, tmp_path: Path) -> None:
@@ -1826,16 +1832,18 @@ class TestEditGlossary:
             return []
 
         mock.list_items.side_effect = _list
-        mock.put_item.return_value = {"id": "g2", "attributes": {"term": "RECURRING_REVENUE"}}
+        mock.patch_item.return_value = {"id": "g2", "attributes": {"term": "RECURRING_REVENUE"}}
         service.edit_glossary(
             "prod",
             None,
             current_term="MRR",
             new_term="RECURRING_REVENUE",
         )
-        put_args = mock.put_item.call_args.args
-        assert put_args[3]["term"] == "RECURRING_REVENUE"
-        assert put_args[2] == "RECURRING_REVENUE"
+        # the envelope name and the `term` attribute travel together
+        assert mock.patch_item.call_args.kwargs == {
+            "name": "RECURRING_REVENUE",
+            "data": {"term": "RECURRING_REVENUE"},
+        }
 
     def test_not_found(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
@@ -1855,6 +1863,215 @@ class TestEditGlossary:
 # ---------------------------------------------------------------------------
 # remove (preview + delete)
 # ---------------------------------------------------------------------------
+
+
+class _FakeMetastore:
+    """In-memory metastore with the server's PUT and PATCH semantics (issue #833).
+
+    ``put_item`` replaces the whole record; ``patch_item`` merges the given
+    top-level keys into the stored record. ``list_items`` returns the snapshot
+    frozen by :meth:`freeze`, so two edits can both read the same, soon stale,
+    record before either writes -- the interleaving that lost an update live.
+    """
+
+    def __init__(self, items: list[dict[str, Any]]) -> None:
+        self.stored = {i["id"]: dict(i, attributes=dict(i["attributes"])) for i in items}
+        self.frozen: list[dict[str, Any]] | None = None
+
+    def freeze(self) -> None:
+        self.frozen = [dict(i, attributes=dict(i["attributes"])) for i in self.stored.values()]
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        return False
+
+    def list_items(self, item_type: str, model_uuid: str | None = None) -> list[dict[str, Any]]:
+        if item_type == "semantic-model":
+            return [_model_item("U", "m")]
+        source = self.frozen if self.frozen is not None else list(self.stored.values())
+        return [dict(i, attributes=dict(i["attributes"])) for i in source if i["type"] == item_type]
+
+    def put_item(
+        self, item_type: str, item_id: str, name: str, data: dict[str, Any]
+    ) -> dict[str, Any]:
+        self.stored[item_id]["attributes"] = dict(data)
+        return self.stored[item_id]
+
+    def patch_item(
+        self,
+        item_type: str,
+        item_id: str,
+        *,
+        name: str | None = None,
+        data: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        self.stored[item_id]["attributes"].update(data or {})
+        return self.stored[item_id]
+
+
+class TestEditPatchSemantics:
+    """`edit` sends only the changed keys, so a concurrent edit survives (issue #833)."""
+
+    @staticmethod
+    def _service(tmp_path: Path, fake: _FakeMetastore) -> SemanticLayerService:
+        return SemanticLayerService(
+            config_store=_make_store(tmp_path),
+            metastore_client_factory=lambda url, token: cast(Any, fake),
+        )
+
+    def test_concurrent_edits_of_different_keys_both_survive(self, tmp_path: Path) -> None:
+        fake = _FakeMetastore(
+            [_child_item("semantic-metric", "m1", {"name": "rev", "sql": "1", "description": "d0"})]
+        )
+        service = self._service(tmp_path, fake)
+        fake.freeze()  # both edits read the record as it was before either wrote
+        service.edit_metric("prod", None, current_name="rev", new_description="d1")
+        service.edit_metric("prod", None, current_name="rev", new_sql="2")
+        assert fake.stored["m1"]["attributes"] == {"name": "rev", "sql": "2", "description": "d1"}
+
+    def test_concurrent_edit_of_a_cascaded_constraint_survives(self, tmp_path: Path) -> None:
+        fake = _FakeMetastore(
+            [
+                _child_item("semantic-metric", "m1", {"name": "rev", "sql": "1"}),
+                _child_item(
+                    "semantic-constraint",
+                    "c1",
+                    {"name": "rev_ok", "rule": "r0", "metrics": ["rev"]},
+                ),
+            ]
+        )
+        service = self._service(tmp_path, fake)
+        fake.freeze()
+        service.edit_constraint("prod", None, current_name="rev_ok", new_rule="r1")
+        service.edit_metric("prod", None, current_name="rev", new_name="revenue", assume_yes=True)
+        assert fake.stored["c1"]["attributes"] == {
+            "name": "rev_ok",
+            "rule": "r1",
+            "metrics": ["revenue"],
+        }
+
+    def test_equal_value_is_sent_when_another_key_changes(self, tmp_path: Path) -> None:
+        """All given keys go out together, so two concurrent edits never mix key by key."""
+        service, mock = _make_service(_make_store(tmp_path))
+        metric = _child_item("semantic-metric", "m1", {"name": "rev", "sql": "1"})
+        mock.list_items.side_effect = lambda t, m=None: (
+            [_model_item("U", "m")] if t == "semantic-model" else [metric]
+        )
+        mock.patch_item.return_value = metric
+        result = service.edit_metric("prod", None, current_name="rev", new_name="rev", new_sql="2")
+        assert mock.patch_item.call_args.kwargs == {
+            "name": "rev",
+            "data": {"name": "rev", "sql": "2"},
+        }
+        assert result["status"] == "updated"
+
+    def test_all_values_equal_is_unchanged_and_writes_nothing(self, tmp_path: Path) -> None:
+        """Spec R6: an edit that changes nothing reports status unchanged, exit 0, no write."""
+        service, mock = _make_service(_make_store(tmp_path))
+        metric = _child_item("semantic-metric", "m1", {"name": "rev", "sql": "1"})
+        mock.list_items.side_effect = lambda t, m=None: (
+            [_model_item("U", "m")] if t == "semantic-model" else [metric]
+        )
+        result = service.edit_metric(
+            "prod", None, current_name="rev", new_name="rev", new_sql="1", assume_yes=True
+        )
+        mock.patch_item.assert_not_called()
+        mock.put_item.assert_not_called()
+        assert result["status"] == "unchanged"
+        assert result["updated"]["id"] == "m1"
+        assert result["cascaded_constraints"] == []
+
+    def test_glossary_same_term_and_definition_is_unchanged(self, tmp_path: Path) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        g = _child_item("semantic-glossary", "g1", {"term": "ARR", "definition": "d"})
+        mock.list_items.side_effect = lambda t, m=None: (
+            [_model_item("U", "m")] if t == "semantic-model" else [g]
+        )
+        result = service.edit_glossary(
+            "prod", None, current_term="ARR", new_term="ARR", new_definition="d"
+        )
+        mock.patch_item.assert_not_called()
+        assert result["status"] == "unchanged"
+
+    def test_constraint_same_metrics_list_is_unchanged(self, tmp_path: Path) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        c = _child_item("semantic-constraint", "c1", {"name": "ok", "metrics": ["a", "b"]})
+        metrics = [
+            _child_item("semantic-metric", "ma", {"name": "a"}),
+            _child_item("semantic-metric", "mb", {"name": "b"}),
+        ]
+        mock.list_items.side_effect = lambda t, m=None: {
+            "semantic-model": [_model_item("U", "m")],
+            "semantic-metric": metrics,
+            "semantic-constraint": [c],
+        }.get(t, [])
+        result = service.edit_constraint("prod", None, current_name="ok", new_metrics=["a", "b"])
+        mock.patch_item.assert_not_called()
+        assert result["status"] == "unchanged"
+
+    def test_relationship_same_values_is_unchanged(self, tmp_path: Path) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        r = _child_item("semantic-relationship", "r1", {"name": "j", "type": "left"})
+        mock.list_items.side_effect = lambda t, m=None: (
+            [_model_item("U", "m")] if t == "semantic-model" else [r]
+        )
+        result = service.edit_relationship("prod", None, current_name="j", new_type="left")
+        mock.patch_item.assert_not_called()
+        assert result["status"] == "unchanged"
+
+    def test_real_change_reports_updated(self, tmp_path: Path) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        ds = _child_item("semantic-dataset", "d1", {"name": "x", "description": "old"})
+        mock.list_items.side_effect = lambda t, m=None: (
+            [_model_item("U", "m")] if t == "semantic-model" else [ds]
+        )
+        mock.patch_item.return_value = ds
+        result = service.edit_dataset("prod", None, current_name="x", new_description="new")
+        assert result["status"] == "updated"
+
+    def test_empty_values_are_sent_not_dropped(self, tmp_path: Path) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        ds = _child_item(
+            "semantic-dataset", "d1", {"name": "x", "description": "old", "grain": "g"}
+        )
+        mock.list_items.side_effect = lambda t, m=None: (
+            [_model_item("U", "m")] if t == "semantic-model" else [ds]
+        )
+        service.edit_dataset("prod", None, current_name="x", new_description="")
+        assert mock.patch_item.call_args.kwargs == {"name": None, "data": {"description": ""}}
+
+    def test_nothing_to_change_writes_nothing(self, tmp_path: Path) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        ds = _child_item("semantic-dataset", "d1", {"name": "x"})
+        mock.list_items.side_effect = lambda t, m=None: (
+            [_model_item("U", "m")] if t == "semantic-model" else [ds]
+        )
+        result = service.edit_dataset("prod", None, current_name="x")
+        mock.patch_item.assert_not_called()
+        mock.put_item.assert_not_called()
+        assert result["updated"]["id"] == "d1"
+        assert result["status"] == "unchanged"
+
+    def test_name_conflict_on_rename_cascades_nothing(self, tmp_path: Path) -> None:
+        service, mock = _make_service(_make_store(tmp_path))
+        metric = _child_item("semantic-metric", "m1", {"name": "rev", "sql": "1"})
+        constraint = _child_item(
+            "semantic-constraint", "c1", {"name": "rev_ok", "metrics": ["rev"]}
+        )
+        mock.list_items.side_effect = lambda t, m=None: {
+            "semantic-model": [_model_item("U", "m")],
+            "semantic-metric": [metric],
+            "semantic-constraint": [constraint],
+        }.get(t, [])
+        mock.patch_item.side_effect = KeboolaApiError(
+            message="taken", status_code=409, error_code=ErrorCode.ALREADY_EXISTS
+        )
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.edit_metric("prod", None, current_name="rev", new_name="other", assume_yes=True)
+        assert excinfo.value.error_code == ErrorCode.ALREADY_EXISTS
+        assert mock.patch_item.call_count == 1  # the constraint was never touched
 
 
 class TestRemove:

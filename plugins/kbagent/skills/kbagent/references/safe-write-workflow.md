@@ -101,8 +101,9 @@ separate steps. Reasons:
 - The user may want to inspect the new config in the UI first.
 - The user may want to schedule the run for off-hours.
 
-Wait for an explicit user instruction before calling `job run` or any other
-execution endpoint.
+Wait for an explicit user instruction before calling `job run`, `flow run` or
+any other execution endpoint. For `flow run`, show the `--dry-run` selection and
+its warnings first ([flow-workflow](flow-workflow.md#run-a-flow)).
 
 ## Working from a git repository
 
@@ -129,6 +130,85 @@ this directory or any subdirectory. The lookup order is:
 
 This eliminates the "kbagent only works from home directory" friction --
 once `.kbagent/` exists, you can run from any subdirectory of the repo.
+
+### After a token rotation: `INVALID_TOKEN` in a local `.kbagent/`
+
+*(since 1.4.0)* (#955) `init --from-global` copies the tokens **once**; the
+local directory is not linked to the global config. When the old tokens stop
+working (expired, or revoked after the user minted new ones in the global
+config), commands in the local directory that call Keboola report
+`INVALID_TOKEN` (exit 3; `project status` shows an error row and exits 1),
+while the same project works from `~`. Fix it with
+`project refresh` in the local directory, which first takes the global
+config's working token:
+
+1. **Preview**, keeping the same target and working directory:
+   `kbagent --json project refresh --project ALIAS --dry-run` (or
+   `--all-projects`). It never asks for a Manage token. Read every list:
+   - `data.projects_adopted[]`, `action: would_adopt_from_global`: the global
+     config holds a working token for it (`global_alias` names the entry).
+   - `data.projects_refreshed[]`, `action: would_refresh`: a NEW token would
+     be minted, which needs the Manage token. This does not prove the global
+     config has no working token: adoption also needs the local check to say
+     `INVALID_TOKEN` (a timeout, 5xx or `AUTH_REJECTED` skips it) and exactly
+     one distinct global static token for the same project and stack, other
+     than the local one. Retry a transient error first.
+   - `global_token_not_used: {global_alias, reason: "scoped"}` on an entry
+     (since 1.4.0): the global config holds a token for the project, but it
+     has fewer rights than a new token, so it is not taken and a new token is
+     needed. Tell the user; never edit `config.json` to force the global
+     token in.
+   - `data.projects_valid[]` (left alone), `data.projects_skipped[]` (session
+     or no project ID), `data.projects_failed[]` (check failed; exit 1, also
+     in a dry-run).
+2. **Tell the user what will happen and get a yes** (it rewrites the local
+   config; `--json` skips the CLI's own confirmation): which aliases take the
+   global token, and that the taken token is whatever the global config holds
+   for the project, possibly with a broader scope than the dead one (a
+   restricted read-only token can become an admin token).
+3. **Run it** with the same selector:
+   `kbagent --json project refresh --project ALIAS`. When only adoptions are
+   needed it succeeds without a Manage token. When something must be minted
+   it asks for the Manage token on a terminal (`--json` does not suppress that
+   prompt). Without a terminal (since 1.4.0) the run still writes the
+   `projects_adopted` entries -- those aliases are fixed -- and exits 1 with
+   each project that needs a new token in `data.projects_failed`,
+   `error_code: MANAGE_TOKEN_REQUIRED`. For those, ask the user to run
+   `kbagent project refresh --project ALIAS` themselves in a terminal, from
+   the same directory, one alias per failed entry (or `--all-projects`).
+   Never ask for the Manage token in chat, never pass
+   `--allow-env-manage-token` on your own. Exit 1 means some project landed
+   in `data.projects_failed`; only the entries in `projects_adopted` and
+   `projects_refreshed` were written.
+4. **Verify**: `kbagent --json project status --project ALIAS` returns
+   `data[].status == "ok"`.
+
+Do not:
+- **Edit `.kbagent/config.json` or copy tokens by hand.** Never read either
+  config file; `project refresh` moves the token without printing it.
+- **Pass `--force`** to "make it work": `--force` never takes the global
+  token, always mints new ones (Manage token needed) and also replaces
+  tokens that still work.
+- **Delete `.kbagent/` and re-run `init`.** That loses the active project,
+  the active branch, the permission policy and local-only aliases.
+
+Notes:
+- Only adoption from the global config is limited to a token the API rejects
+  as `INVALID_TOKEN`; a valid local token is never touched. Another API error
+  during the check (timeout, 5xx, `AUTH_REJECTED`) falls back to minting; a
+  non-API failure lands the project in `projects_failed`.
+- `projects_failed` with "changed concurrently": another process edited the
+  alias during the run; run the command again. If the message says a new
+  Storage token was created but not saved, give the user its ID so they can
+  delete it (Keboola UI or `token delete --token-id ID`) before rerunning.
+- A read-only directory (`init --read-only`, `deny cli:write`) refuses
+  `project refresh`, the dry-run included (exit 6): the user must lift the
+  policy themselves.
+- Browser-login (session) projects are skipped; their remedy is
+  `kbagent auth login`, not `project refresh`.
+- `--token-description` / `--token-expires-in` apply to minted tokens only.
+- Minting a token in the global config does not revoke the old one: a local
+  directory needs this only once its own copy stops working.
 
 ## Anti-patterns
 

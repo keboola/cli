@@ -2243,6 +2243,76 @@ class TestDeleteConfigBranch:
         assert request.headers["If-Match"] == '"5"'
 
 
+class TestUpdateConfigPrecondition:
+    """#827: ``update_config(expected_version=...)`` sends ``If-Match``."""
+
+    URL = "https://connection.keboola.com/v2/storage/components/keboola.ex-http/configs/cfg-1"
+
+    def test_update_config_sends_no_precondition_by_default(self, httpx_mock) -> None:
+        httpx_mock.add_response(method="PUT", url=self.URL, json={"id": "cfg-1"})
+
+        with KeboolaClient(
+            stack_url="https://connection.keboola.com",
+            token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
+        ) as client:
+            client.update_config("keboola.ex-http", "cfg-1", name="n")
+
+        assert "If-Match" not in httpx_mock.get_request().headers
+
+    def test_update_config_sends_the_expected_version_as_if_match(self, httpx_mock) -> None:
+        """A 412 surfaces with its status code and is not retried."""
+        httpx_mock.add_response(
+            method="PUT",
+            url=self.URL,
+            status_code=412,
+            json={"error": "Configuration cfg-1 is at version 6, expected version 5"},
+        )
+
+        with (
+            KeboolaClient(
+                stack_url="https://connection.keboola.com",
+                token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
+            ) as client,
+            pytest.raises(KeboolaApiError) as exc_info,
+        ):
+            client.update_config("keboola.ex-http", "cfg-1", name="n", expected_version=5)
+
+        assert exc_info.value.status_code == 412
+        (request,) = httpx_mock.get_requests()
+        assert request.headers["If-Match"] == '"5"'
+
+    def test_a_retried_put_carries_the_same_if_match(self, httpx_mock) -> None:
+        """A PUT whose response was lost is repeated with the same precondition (R4)."""
+        httpx_mock.add_exception(httpx.ReadTimeout("Read timed out"), method="PUT", url=self.URL)
+        httpx_mock.add_response(
+            method="PUT",
+            url=self.URL,
+            status_code=412,
+            json={"error": "Configuration cfg-1 is at version 6, expected version 5"},
+        )
+
+        import keboola_agent_cli.http_base as http_base_module
+
+        original_sleep = http_base_module.time.sleep
+        http_base_module.time.sleep = _noop_sleep  # ty: ignore[invalid-assignment]
+        try:
+            with (
+                KeboolaClient(
+                    stack_url="https://connection.keboola.com",
+                    token="901-55555-fakeTestTokenDoNotUseXXXXXXXX",
+                ) as client,
+                pytest.raises(KeboolaApiError) as exc_info,
+            ):
+                client.update_config("keboola.ex-http", "cfg-1", name="n", expected_version=5)
+        finally:
+            http_base_module.time.sleep = original_sleep
+
+        assert exc_info.value.status_code == 412
+        requests = httpx_mock.get_requests()
+        assert len(requests) == 2
+        assert [r.headers["If-Match"] for r in requests] == ['"5"', '"5"']
+
+
 class TestConfigRowMethods:
     """Tests for create_config_row / update_config_row / delete_config_row.
 

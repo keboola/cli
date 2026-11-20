@@ -49,6 +49,7 @@ from ._sync_models import (
     SCHEDULER_COMPONENT_ID,
     SHARED_CODE_COMPONENT_ID,
     VARIABLES_COMPONENT_ID,
+    LocalConfigHashes,
 )
 from ._sync_writeback import promote_shadow, stamp_updated_config
 
@@ -90,12 +91,18 @@ class SentPayload:
     ``original`` is the payload before any remap (source ids, secrets
     encrypted); every remap starts from it, so a reference is mapped exactly
     once from its source identity, never again from an id already mapped.
+    ``receipt`` is the local-file hashes the update stamped (#827, D9): the
+    final rebind stamps them again rather than read the files, which may
+    hold an edit saved since.
     """
 
     config_dir: Path
     config_path: str
     original: dict[str, Any]
     configuration: dict[str, Any]
+    receipt: LocalConfigHashes | None = None
+    # Sent by an update (not a create): stamped from its receipt only (F4).
+    update: bool = False
 
 
 @dataclass
@@ -470,6 +477,7 @@ class PromoteRemap:
         config_path: str,
         original: dict[str, Any],
         configuration: dict[str, Any],
+        update: bool = False,
     ) -> None:
         """Keep the payload a referencing config was sent with, for the final rebind."""
         if has_references(component_id, original):
@@ -478,7 +486,14 @@ class PromoteRemap:
                 config_path=config_path,
                 original=original,
                 configuration=configuration,
+                update=update,
             )
+
+    def keep_receipt(self, component_id: str, config_id: str, hashes: LocalConfigHashes) -> None:
+        """Remember the local-file hashes an update stamped, for the final rebind (D9)."""
+        sent = self.sent.get((component_id, config_id))
+        if sent is not None:
+            sent.receipt = hashes
 
     def before_update(self, component_id: str, config_id: str, original: dict[str, Any]) -> None:
         """Checkpoint ``rebind_pending`` before an update naming a config this push creates.
@@ -516,6 +531,7 @@ def finish_promote_rebind(
     errors: list[dict[str, str]],
     diff_changes: dict[tuple[str, str], str],
     ignored_components: frozenset[str],
+    held: set[tuple[str, str]] | frozenset[tuple[str, str]] = frozenset(),
 ) -> bool:
     """Finish the references of a promote push; True when the manifest changed.
 
@@ -532,7 +548,8 @@ def finish_promote_rebind(
        ignored component, drops the flag; one out of the diff's scope keeps it.
 
     The new flag is what the target still holds in source form (D32); a
-    failed PUT keeps the old one.
+    failed PUT keeps the old one. A config in *held* -- its update failed
+    earlier in this push -- is not written again (#827, D4).
 
     Without *remap* (a push from the branch's own tree, after a pull moved
     the promoted entries there) only step 2 runs, with the map the manifest
@@ -548,6 +565,8 @@ def finish_promote_rebind(
         remap.refresh(manifest, branch_id, {}, {})
     remap.use_target(client, branch_id)  # target rows as they are after this push's creates
     for (component_id, config_id), sent in remap.sent.items():
+        if (component_id, config_id) in held:
+            continue  # its update failed after the PUT: not sent again (#827 F4)
         payload = _with_target_identity(
             component_id, remap.apply(component_id, sent.original), sent
         )
@@ -577,7 +596,7 @@ def finish_promote_rebind(
     }
     for component_id, config_id, _refs in pending:
         key = (component_id, config_id)
-        if key in remap.sent:
+        if key in remap.sent or key in held:
             continue
         if component_id in ignored_components or diff_changes.get(key) == "remote_deleted":
             _clear_pending(manifest, component_id, config_id, branch_id)
@@ -834,6 +853,8 @@ def _stamp(
     response: Any,
     warnings: list[dict[str, Any]],
 ) -> None:
+    if sent.update and sent.receipt is None:
+        return  # an update without a receipt failed locally; never a fresh read (F4)
     stamp_updated_config(
         client,
         manifest=manifest,
@@ -841,7 +862,9 @@ def _stamp(
         config_id=config_id,
         branch_id=target.branch_id,
         config_path_str=sent.config_path,
-        hashes=service._compute_config_hashes(sent.config_dir, component_id),
+        # The update's receipt, never a fresh read (#827, D9); a create's
+        # entry was stamped from disk by its own path.
+        hashes=sent.receipt or service._compute_config_hashes(sent.config_dir, component_id),
         response=response,
         warnings=warnings,
         source_tree=target.branch_path,

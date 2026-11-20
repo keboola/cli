@@ -413,7 +413,7 @@ class TestChildScopeInheritance:
 
 
 class TestEditAndOverwriteKeepScope:
-    def test_edit_dataset_puts_in_place_with_the_items_scope(self, tmp_path: Path) -> None:
+    def test_edit_dataset_patches_in_place_without_scope(self, tmp_path: Path) -> None:
         service, mock = _make_service(_make_store(tmp_path))
         dataset = _child_item(
             "semantic-dataset",
@@ -424,11 +424,13 @@ class TestEditAndOverwriteKeepScope:
         mock.list_items.side_effect = lambda t, m=None: (
             [_model_item("U", "m")] if t == "semantic-model" else [dataset]
         )
-        mock.put_item.return_value = {"id": "d1", "attributes": {"name": "x"}}
+        mock.patch_item.return_value = {"id": "d1", "attributes": {"name": "x"}}
         service.edit_dataset("prod", None, current_name="x", new_description="d")
-        args, kwargs = mock.put_item.call_args
-        assert args[:2] == ("semantic-dataset", "d1")
-        assert kwargs == {}
+        args, kwargs = mock.patch_item.call_args
+        assert args == ("semantic-dataset", "d1")
+        # only the changed key: no scope, grants or tableId are sent
+        assert kwargs == {"name": None, "data": {"description": "d"}}
+        mock.put_item.assert_not_called()
         mock.delete_item.assert_not_called()
         mock.post_item.assert_not_called()
 

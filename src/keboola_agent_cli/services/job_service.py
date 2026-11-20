@@ -26,11 +26,17 @@ from ..constants import (
 )
 from ..effective_branch import resolve_branch
 from ..errors import ErrorCode, KeboolaApiError
+from ..job_wait_errors import RAW_POLL_ERRORS, created_job_error, raw_poll_error
 from ..models import ProjectConfig
 from .base import BaseService, item_failure
+from .flow_run_selection import check_runnable_flow
 from .job_idempotency_store import JobIdempotencyStore, run_idempotent_job
 
 logger = logging.getLogger(__name__)
+
+# A `job run` of this component reads the flow and checks it first. Not imported
+# from flow_service, which imports this module.
+FLOW_COMPONENT_ID = "keboola.flow"
 
 # Terminal statuses for which we surface a log-tail.
 _LOG_TAIL_STATUSES: frozenset[str] = frozenset({"error", "warning", "terminated"})
@@ -194,8 +200,14 @@ def _safe_fetch_log_tail(client: Any, job: dict[str, Any], limit: int) -> list[d
     # rely on that: sort defensively by `created` DESC so a future API
     # ordering change cannot silently invert the tail. Events without a
     # `created` key sort last (they lose the race to timestamped peers).
-    events_list = list(events)
-    events_list.sort(key=lambda e: e.get("created") or "", reverse=True)
+    # Only event objects: an odd answer ([null], a bare object) must not
+    # turn the tail into a crash that hides the job's own error.
+    try:
+        events_list = [e for e in events if isinstance(e, dict)]
+    except TypeError:
+        logger.debug("fetch_job_events(%s) returned %r; surfacing empty logTail", run_id, events)
+        return []
+    events_list.sort(key=lambda e: str(e.get("created") or ""), reverse=True)
     # Cap at limit in case the server ignored ?limit.
     return events_list[:limit]
 
@@ -217,6 +229,13 @@ def _enrich_with_tail(
     if tail:
         merged["logTail"] = tail
     return merged or None
+
+
+def _finished_job(job: Any) -> dict[str, Any] | None:
+    """``job`` when it is a job object that says it finished, else None."""
+    if isinstance(job, dict) and job.get("isFinished"):
+        return job
+    return None
 
 
 def _terminate_and_wait(
@@ -251,15 +270,14 @@ def _terminate_and_wait(
         except Exception:
             logger.debug("terminate: kill failed AND GET failed for %s; giving up", job_id)
             return None
-        if job.get("isFinished"):
-            return job
-        logger.debug(
-            "terminate: kill failed, GET succeeded but job %s still not terminal "
-            "(status=%r); returning None (remote may still be running)",
-            job_id,
-            job.get("status"),
-        )
-        return None
+        finished = _finished_job(job)
+        if finished is None:
+            logger.debug(
+                "terminate: kill failed and job %s is not seen terminal; "
+                "returning None (remote may still be running)",
+                job_id,
+            )
+        return finished
     except Exception as exc:
         logger.debug("kill_job(%s) raised %r; giving up", job_id, exc)
         return None
@@ -274,18 +292,23 @@ def _terminate_and_wait(
         except Exception:
             time.sleep(min(JOB_TERMINATE_POLL_INTERVAL, remaining))
             continue
-        if job.get("isFinished"):
-            return job
+        finished = _finished_job(job)
+        if finished is not None:
+            return finished
         # Cap the sleep so we never overshoot the grace deadline by a
         # full poll interval (caller may be latency-sensitive).
         time.sleep(min(JOB_TERMINATE_POLL_INTERVAL, max(0.0, deadline - time.monotonic())))
 
     # Remote still wasn't terminal within the grace window; return whatever
-    # the last GET saw so callers can surface the actual state.
+    # the last GET saw so callers can surface the actual state. A read that
+    # is not a job object leaves the outcome unknown: None, like a failed kill.
     try:
         final = client.get_job_detail(job_id)
     except Exception:
         logger.debug("terminate: grace window exhausted and final GET failed for %s", job_id)
+        return None
+    if not isinstance(final, dict):
+        logger.debug("terminate: final GET for %s returned %r; outcome unknown", job_id, final)
         return None
     logger.debug(
         "terminate: grace window exhausted; job %s status=%r isFinished=%r",
@@ -294,6 +317,43 @@ def _terminate_and_wait(
         final.get("isFinished"),
     )
     return final
+
+
+def _cli_follow_up(alias: str, job_id: str) -> str:
+    return f"`kbagent job detail --project {alias} --job-id {job_id}`"
+
+
+def _unenriched_wait_error(exc: KeboolaApiError, job_id: str, alias: str) -> KeboolaApiError:
+    """The polling error ``exc`` without enrichment, when enriching it broke.
+
+    ``QUEUE_JOB_FAILED`` keeps its message (the job ended); anything else,
+    a timeout included (the kill outcome is unknown, so it counts as a failed
+    kill), is reported as a failure after the job was created.
+    """
+    if exc.error_code == ErrorCode.QUEUE_JOB_FAILED:
+        return QueueJobFailedError(
+            message=exc.message,
+            status_code=exc.status_code,
+            error_code=exc.error_code,
+            retryable=False,
+            details={**(exc.details or {}), "job_id": job_id},
+        )
+    return created_job_error(exc, job_id=job_id, follow_up=_cli_follow_up(alias, job_id))
+
+
+class QueueJobFailedError(KeboolaApiError):
+    """``QUEUE_JOB_FAILED`` from :meth:`JobService.run_job`, with the failed job it read.
+
+    ``failed_job`` is the job detail ``_handle_wait_error`` already fetched
+    (``None`` when that read failed). It is a Python attribute, never a
+    ``details`` key: ``flow run`` builds its per-task results from it without
+    a second read. ``details`` itself carries ``job_id`` (spec LR3), in the
+    ``job run --wait`` error too.
+    """
+
+    def __init__(self, *args: Any, failed_job: dict[str, Any] | None = None, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.failed_job = failed_job
 
 
 class JobService(BaseService):
@@ -511,6 +571,9 @@ class JobService(BaseService):
         mode: str = DEFAULT_JOB_MODE,
         idempotency_key: str | None = None,
         force_rerun: bool = False,
+        only_flow_task_ids: list[str] | None = None,
+        kill_on_timeout: bool = True,
+        check_flow: bool = True,
     ) -> dict[str, Any]:
         """Create and optionally wait for a Queue API job.
 
@@ -570,6 +633,16 @@ class JobService(BaseService):
                 wrong job.
             force_rerun: If True, ignore any recorded ``idempotency_key`` entry
                 and always create a fresh job (overwriting the stored entry).
+            only_flow_task_ids: keboola.flow only: the flow tasks to run
+                (``onlyFlowTaskIds``). ``None`` or empty runs the whole flow.
+            kill_on_timeout: ``True`` (``job run``): a local wait timeout kills
+                the remote job (``JOB_TIMEOUT_TERMINATED``). ``False``
+                (``flow run``, spec LR2): the job keeps running and the error is
+                ``QUEUE_JOB_TIMEOUT`` with ``retryable: false``, naming the job
+                and the ``job detail`` command that follows it.
+            check_flow: keboola.flow only: read the flow and refuse one the job
+                queue refuses for every run (``INVALID_FLOW_DEFINITION``) before
+                the create. ``flow run`` passes ``False``: it checked its own read.
 
         Returns:
             Job dict with ``project_alias``. If wait=True, returns the
@@ -609,14 +682,40 @@ class JobService(BaseService):
 
         client = self._client_factory(project.stack_url, project.token)
         try:
+            # A flow the job queue refuses for every run is refused before the job
+            # is created (as `flow run` does; `flow run` checked its own read and
+            # passes check_flow=False). The check runs after a replay is ruled out
+            # and before the pending entry: a replay still returns the earlier job,
+            # and a failed read leaves no false "pending" entry. One read of
+            # the flow serves the check and the variables.
+            check_this_flow = component_id == FLOW_COMPONENT_ID and check_flow
+            flow_read: list[dict[str, Any]] = []
+
+            def _flow_configuration() -> dict[str, Any]:
+                if not flow_read:
+                    detail = client.get_config_detail(
+                        component_id=component_id, config_id=config_id, branch_id=branch_id
+                    )
+                    flow_read.append(detail.get("configuration") or {})
+                return flow_read[0]
+
             resolved_values_id = variable_values_id
             if resolved_values_id is None and not no_variables:
-                resolved_values_id = self.resolve_variable_values_id(
-                    client=client,
-                    component_id=component_id,
-                    config_id=config_id,
-                    branch_id=branch_id,
-                )
+                if check_this_flow:
+                    resolved_values_id = self.resolve_variable_values_from_configuration(
+                        client=client, configuration=_flow_configuration(), branch_id=branch_id
+                    )
+                else:
+                    resolved_values_id = self.resolve_variable_values_id(
+                        client=client,
+                        component_id=component_id,
+                        config_id=config_id,
+                        branch_id=branch_id,
+                    )
+
+            def _check_flow() -> None:
+                if check_this_flow:
+                    check_runnable_flow(_flow_configuration())
 
             def _create() -> dict[str, Any]:
                 return client.create_job(
@@ -626,6 +725,7 @@ class JobService(BaseService):
                     branch_id=branch_id,
                     variable_values_id=resolved_values_id,
                     mode=mode,
+                    only_flow_task_ids=only_flow_task_ids,
                 )
 
             store = self._default_idempotency_store() if idempotency_key else None
@@ -638,6 +738,7 @@ class JobService(BaseService):
                 force_rerun=force_rerun,
                 create=_create,
                 fetch=client.get_job_detail,
+                before_create=_check_flow,
             )
             job_id = str(job.get("id", ""))
 
@@ -649,13 +750,28 @@ class JobService(BaseService):
                         poll_strategy=poll_strategy,
                     )
                 except KeboolaApiError as exc:
-                    job = self._handle_wait_error(
-                        client=client,
+                    try:
+                        job = self._handle_wait_error(
+                            client=client,
+                            job_id=job_id,
+                            exc=exc,
+                            log_tail_lines=log_tail_lines,
+                            timeout=timeout,
+                            kill_on_timeout=kill_on_timeout,
+                            alias=alias,
+                        )
+                    except RAW_POLL_ERRORS as broken:
+                        # The job read, the kill or the log tail broke on an odd
+                        # answer. They are best effort: the polling error stays.
+                        logger.debug("run_job: wait-error enrichment failed: %r", broken)
+                        raise _unenriched_wait_error(exc, job_id, alias) from exc
+                except RAW_POLL_ERRORS as exc:
+                    # The job exists either way: report it like any other poll failure.
+                    raise created_job_error(
+                        raw_poll_error(exc),
                         job_id=job_id,
-                        exc=exc,
-                        log_tail_lines=log_tail_lines,
-                        timeout=timeout,
-                    )
+                        follow_up=_cli_follow_up(alias, job_id),
+                    ) from exc
                 else:
                     # Successful poll: still attach log tail for warning /
                     # terminated statuses (not raised; just surfaced).
@@ -689,10 +805,12 @@ class JobService(BaseService):
         exc: KeboolaApiError,
         log_tail_lines: int,
         timeout: float,
+        kill_on_timeout: bool = True,
+        alias: str = "",
     ) -> dict[str, Any]:
         """Handle a terminal wait_for_queue_job error.
 
-        Two error classes land here:
+        Errors that land here:
 
         - ``QUEUE_JOB_FAILED`` -- remote job reached ``error`` status on its
           own. Fetch the log tail so the caller sees the last events and
@@ -702,6 +820,14 @@ class JobService(BaseService):
           briefly for termination, fetch the log tail and re-raise with a
           distinct ``JOB_TIMEOUT_TERMINATED`` code so shells can tell
           "we cancelled the job" from "job failed on its own".
+          With ``kill_on_timeout=False`` (spec LR2) nothing is killed: the
+          error stays ``QUEUE_JOB_TIMEOUT`` with ``retryable: false`` and says
+          the job keeps running and how to follow it.
+
+        Every other error (connection, HTTP 5xx, auth, retries exhausted)
+        keeps its code but is raised as a failure after the job was created:
+        ``retryable: false``, ``details.job_id``, a message that names
+        ``kbagent job detail``. The same holds for a timeout whose kill failed.
 
         We never swallow the error; on any failure path we re-raise so the
         command layer maps to the correct exit code.
@@ -710,18 +836,36 @@ class JobService(BaseService):
         if code == "QUEUE_JOB_FAILED":
             # GET the job to resolve runId (required for Storage events)
             # and to enrich the error details with the failed job payload.
+            fetched: dict[str, Any] | None = None
             try:
-                failed_job = client.get_job_detail(job_id)
+                fetched = client.get_job_detail(job_id)
             except Exception:
-                failed_job = {"id": job_id}
+                fetched = None
+            failed_job = fetched if isinstance(fetched, dict) else {"id": job_id}
             tail = _safe_fetch_log_tail(client, failed_job, log_tail_lines)
             details = _enrich_with_tail(exc.details, tail)
-            raise KeboolaApiError(
+            raise QueueJobFailedError(
                 message=exc.message,
                 status_code=exc.status_code,
                 error_code=exc.error_code,
                 retryable=exc.retryable,
-                details=details or {},
+                # The job id travels with the failure (spec LR3), so a caller
+                # such as `flow run` can read the failed job's task results.
+                details={**(details or {}), "job_id": job_id},
+                failed_job=fetched if isinstance(fetched, dict) else None,
+            ) from exc
+
+        if code == "QUEUE_JOB_TIMEOUT" and not kill_on_timeout:
+            raise KeboolaApiError(
+                message=(
+                    f"Queue job {job_id} did not finish within the local --timeout "
+                    f"({timeout:g}s). The job keeps running on the server; follow it with "
+                    f"`kbagent job detail --project {alias} --job-id {job_id}`."
+                ),
+                status_code=exc.status_code,
+                error_code=ErrorCode.QUEUE_JOB_TIMEOUT,
+                retryable=False,
+                details={"job_id": job_id},
             ) from exc
 
         if code == "QUEUE_JOB_TIMEOUT":
@@ -739,26 +883,26 @@ class JobService(BaseService):
                     status_code=504,
                     error_code=ErrorCode.JOB_TIMEOUT_TERMINATED,
                     retryable=False,
-                    details={"job": cancelled, "logTail": tail},
+                    details={"job_id": job_id, "job": cancelled, "logTail": tail},
                 ) from exc
-            # kill failed: surface the original timeout but keep the tail.
+            # kill failed: the job may still run. Surface the original timeout
+            # with the tail, as a failure after the job was created.
             details = _enrich_with_tail(exc.details, tail)
-            raise KeboolaApiError(
-                message=exc.message,
-                status_code=exc.status_code,
-                error_code=exc.error_code,
-                retryable=exc.retryable,
+            raise created_job_error(
+                exc,
+                job_id=job_id,
+                follow_up=_cli_follow_up(alias, job_id),
                 details=details or {},
             ) from exc
 
-        # Anything else (network, auth, a future Queue error code we
-        # don't specialise) bubbles up unchanged so the command layer
-        # maps it through map_error_to_exit_code().
-        logger.debug(
-            "run_job: unhandled wait error code=%s; bubbling up unchanged",
-            code,
-        )
-        raise exc
+        # Anything else (network, HTTP 5xx, auth, retries exhausted, a future
+        # Queue error code we don't specialise) keeps its code, so the command
+        # layer maps it to the same exit code. But the job was created and may
+        # still run: never retryable, with the job id (spec LR3).
+        logger.debug("run_job: wait error code=%s after the job was created", code)
+        raise created_job_error(
+            exc, job_id=job_id, follow_up=_cli_follow_up(alias, job_id)
+        ) from exc
 
     @staticmethod
     def resolve_variable_values_id(
@@ -794,7 +938,25 @@ class JobService(BaseService):
             config_id=config_id,
             branch_id=branch_id,
         )
-        configuration = detail.get("configuration") or {}
+        return JobService.resolve_variable_values_from_configuration(
+            client=client,
+            configuration=detail.get("configuration") or {},
+            branch_id=branch_id,
+        )
+
+    @staticmethod
+    def resolve_variable_values_from_configuration(
+        client: Any,
+        configuration: dict[str, Any],
+        branch_id: int | None = None,
+    ) -> str | None:
+        """:meth:`resolve_variable_values_id` from an already read ``configuration`` body.
+
+        ``flow run`` reads the flow configuration once and resolves both the
+        task selection and the variables from that one read, so they cannot
+        come from two revisions (#725). Only the linked ``keboola.variables``
+        rows are read here.
+        """
         variables_id = configuration.get("variables_id")
         if not variables_id:
             return None

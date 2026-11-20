@@ -76,9 +76,13 @@ class ConfigChange:
         # A local delete push refuses (sync group 3, D4): ``details[0]`` says
         # why and what to do. Serialized as ``refused_delete: true``.
         self.refused_delete = False
-        # The remote version of a config that push deletes (#934). Push sends
-        # it as the ``If-Match`` precondition of the DELETE.
+        # The remote version of a config that push deletes (#934) or updates
+        # (#827). Push sends it as the ``If-Match`` precondition of the
+        # DELETE or the PUT.
         self.remote_version: int | None = None
+        # A row change: its parent config's version in the listing the diff
+        # read. Push checks it before the parent's first row write (R1, R3).
+        self.parent_remote_version: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to dict for JSON output."""
@@ -97,6 +101,8 @@ class ConfigChange:
                 data["source_row_id"] = self.source_row_id
             if self.parent_path:
                 data["parent_path"] = self.parent_path
+            if self.parent_remote_version is not None:
+                data["parent_remote_version"] = self.parent_remote_version
         if self.refused_delete:
             data["refused_delete"] = True
         if self.remote_version is not None:

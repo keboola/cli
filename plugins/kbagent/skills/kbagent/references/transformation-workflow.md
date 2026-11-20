@@ -70,3 +70,37 @@ kbagent transformation edit --project prod --config-id 123456 \
 - `transformation edit` preserves non-`blocks` keys inside `parameters`
   (variables links etc.) -- a deliberate improvement over the upstream tool,
   which replaced `parameters` wholesale.
+
+## Stop a transformation on purpose (data checks)
+
+*(since 1.4.0)*
+
+A data check that must fail the job when the data is wrong (a sum that must be
+0, a table that must not be empty) is written with `ABORT_TRANSFORMATION`, never
+as a `SELECT`:
+
+```sql
+SET ABORT_TRANSFORMATION = (
+  SELECT IFF(COUNT(*) = 0, 'Check failed: MON_EXPORT_GATE is empty', '')
+  FROM "MON_EXPORT_GATE"
+);
+```
+
+- An empty string lets the job go on. Any other value stops it, and the job
+  fails with `Transformation aborted with message "<value>"`, which sends the
+  usual failure notification.
+- Snowflake (`keboola.snowflake-transformation`) and BigQuery
+  (`keboola.google-bigquery-transformation`) both support it. BigQuery declares
+  the variable itself, so use `SET`, not `DECLARE`.
+- **Never write the check as `SELECT ... 1/0`** (or a failing cast). The runtime
+  never runs a statement that starts with `SELECT`, so such a check never stops
+  the job. Until Snowflake transformation 1.7.1 a comment or a line break before
+  the `SELECT` made it run by accident; since 1.7.1 it is skipped in every format,
+  and the job succeeds with bad data and without a notification.
+- `transformation create` / `edit` and `sync push` warn about every skipped
+  `SELECT` (`SQL_SELECT_SKIPPED_BY_RUNTIME`). `kbagent doctor --check skipped-selects` lists them in all
+  connected projects (`details.statements[]`; a plain `doctor` only names the
+  check and its command);
+  `ran_before_fix: true` marks a statement that ran until 1.7.1 -- the first
+  candidates to rewrite as above. Rewrite only after the owner agrees: turning
+  a skipped check back on makes jobs fail again.
