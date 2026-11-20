@@ -4837,6 +4837,12 @@ emits a warning (both in the human-readable output and as a `warnings` array
 in `--json` mode) with a hint about the expected layouts. In JSON mode, inspect
 `result["data"]["warnings"]` to detect this situation programmatically.
 
+Cross-project bucket links (since vNEXT) come from the synced
+`storage/buckets.json` files, not a live `sharing edges` call. To trace across
+projects, sync both ends with storage metadata enabled. If the build warns
+that sharing metadata is missing, outdated, or invalid, re-run
+`sync pull --all-projects` before rebuilding the cache.
+
 ## Sync and dev branches
 
 When an active branch is set (`branch use --branch ID`), sync commands automatically
