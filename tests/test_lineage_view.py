@@ -754,8 +754,8 @@ class TestReviewFixes:
 
         assert '"ext:Slack"' in code
         rels = [ln for ln in code.splitlines() if '"ext:Slack"' in ln and " : " in ln]
-        assert any("p:t" in ln for ln in rels), code
-        assert any("p:a" in ln for ln in rels), code
+        assert any('"p:in.c-t.t"' in ln for ln in rels), code
+        assert any('"p:out.c-a.a"' in ln for ln in rels), code
 
     def test_er_external_only_config_is_not_empty(self, tmp_path: Path) -> None:
         graph = LineageGraph()
@@ -787,3 +787,39 @@ class TestReviewFixes:
         assert len(names) == 2
         assert names[0].endswith("_columns.html") or names[1].endswith("_columns.html")
         assert sum(n.endswith("_columns.html") for n in names) == 1
+
+
+class TestErEntityIdentity:
+    @pytest.mark.parametrize("columns", [False, True])
+    def test_same_name_tables_in_different_buckets(self, tmp_path: Path, columns: bool) -> None:
+        graph = _column_chain()
+        graph.configurations[MID_CFG].external = [{"system": "CRM", "op": "read"}]
+        code = _service(tmp_path).diagram(
+            graph, SRC, "downstream", 10, view="er", show_columns=columns
+        )
+        flags = ["--columns"] if columns else []
+        cli = _show(tmp_path, graph, "--downstream", SRC, "--format", "er", *flags)
+        assert cli.exit_code == 0, cli.output
+
+        for rendered in (code, cli.output):
+            entities = re.findall(r'^    "([^"]+)" \{$', rendered, re.MULTILINE)
+            assert sorted(entities) == sorted([SRC, MID, END])
+            assert f'"{SRC}" ||--o{{ "{MID}" : "Clean"' in rendered
+            assert f'"{MID}" ||--o{{ "{END}" : "Report"' in rendered
+            assert f'"{SRC}" }}o--o{{ "ext:CRM"' in rendered
+            assert f'"{MID}" }}o--o{{ "ext:CRM"' in rendered
+
+    def test_project_prefix_distinguishes_same_table_id(self, tmp_path: Path) -> None:
+        graph = LineageGraph()
+        other = SRC.replace("p:", "other:")
+        _table(graph, SRC)
+        _table(graph, other)
+        _config(graph, MID_CFG, "Copy")
+        _reads(graph, SRC, MID_CFG)
+        _writes(graph, MID_CFG, other)
+
+        code = _service(tmp_path).diagram(graph, SRC, "downstream", 3, view="er")
+
+        assert f'"{SRC}" {{' in code
+        assert f'"{other}" {{' in code
+        assert f'"{SRC}" ||--o{{ "{other}" : "Copy"' in code

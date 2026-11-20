@@ -33,7 +33,7 @@ def _config_label(graph: LineageGraph, cfg_fqn: str) -> str:
 
 def _table_entity(graph: LineageGraph, fqn: str) -> str:
     t = graph.tables[fqn]
-    return _esc(f"{t.project_alias}:{t.name}")
+    return _esc(t.fqn)
 
 
 def _column_comment(
