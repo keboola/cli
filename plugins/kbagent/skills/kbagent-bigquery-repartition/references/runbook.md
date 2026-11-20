@@ -220,9 +220,13 @@ Check that no job runs before the copy:
 kbagent --json job list --project ALIAS --status processing
 ```
 
-- **Streaming.** The copy starts only when `streamingBuffer` is absent. The
-  operator reads it with the `bq show` command of section 1. BigQuery may
-  refuse the swap for about 5 hours after the last streaming write.
+- **Streaming.** Ask the owner for the time of the last streaming write and
+  record it. Rows that were streamed recently can be invisible to the copy
+  for up to 90 minutes. The copy starts only when both hold: at least 90
+  minutes passed since the last streaming write, and `streamingBuffer` is
+  absent. The operator reads it with the `bq show` command of section 1.
+  BigQuery refuses to rename a table for about 5 hours after the last
+  streaming write, sometimes longer. Section 6 checks this before the swap.
 - **DML.** A running DML statement on the table blocks the rename.
 
 Read `rows_count` and `last_import_date` once more right before the copy
@@ -403,6 +407,32 @@ again. Both must equal the values recorded before the copy.
 that follows this runbook prints the command in full, waits for the person to
 confirm that it was run, and then reads the result. It never runs the command
 itself.**
+
+### Before the swap: BigQuery allows the rename
+
+A table that received streaming writes (section 3) is swapped only when all
+of these hold:
+
+- At least 5 hours passed since the last streaming write that the owner
+  recorded in section 3.
+- `streamingBuffer` is absent on `B.T`. The operator reads it again:
+
+  ```bash
+  bq --project_id=GCP_PROJECT show --format=prettyjson DATASET.T
+  ```
+
+- No DML statement runs on the table, and no job of the project writes it
+  (the `job list` command of section 3).
+
+When one of them does not hold, wait and check again. Do not swap. The 5
+hours are a lower bound: when the swap job still fails because BigQuery
+refuses the rename, do not re-run it at once. Read both tables first (the
+commands of section 9) and confirm that neither table moved. Then wait, and
+swap again only with the owner's yes.
+
+A table that never received streaming writes skips the first two checks.
+
+### The swap
 
 ```bash
 kbagent --json storage swap-tables --project ALIAS --table-id B.T --target-table-id B.T_repart --branch 0 --dry-run
