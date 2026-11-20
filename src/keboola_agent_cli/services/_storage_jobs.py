@@ -19,11 +19,12 @@ import gzip
 import math
 import shlex
 import zlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from ..client import storage_job_error_message
 from ..errors import ErrorCode, KeboolaApiError
+from ..models import ImportMethod
 
 # The first two bytes of every gzip stream (RFC 1952). Sniffed instead of
 # trusting the file extension: a `.csv` that is really gzip, or a `.gz` that
@@ -34,6 +35,10 @@ _GZIP_MAGIC = b"\x1f\x8b"
 # A recovery command omits a flag that would only restate its default.
 DEFAULT_IMPORT_DELIMITER = ","
 DEFAULT_IMPORT_ENCLOSURE = '"'
+
+# Storage's string code for an explicit `importMethod` on a non-Snowflake table
+# (HTTP 400, keboola/connection TableImportMethodNotSupportedException).
+IMPORT_METHOD_NOT_SUPPORTED_CODE = "storage.tables.importMethodNotSupported"
 
 
 @dataclass(frozen=True)
@@ -50,6 +55,7 @@ class ImportOptions:
     delimiter: str = DEFAULT_IMPORT_DELIMITER
     enclosure: str = DEFAULT_IMPORT_ENCLOSURE
     branch_id: int | None = None
+    import_method: ImportMethod = ImportMethod.auto
 
 
 def validate_wait_timeout(timeout: float | None) -> None:
@@ -184,6 +190,8 @@ def _load_file_command(alias: str, file_id: Any, table_id: str, options: ImportO
         args += ["--delimiter", options.delimiter]
     if options.enclosure != DEFAULT_IMPORT_ENCLOSURE:
         args += ["--enclosure", options.enclosure]
+    if options.import_method != ImportMethod.auto:
+        args += ["--import-method", options.import_method.value]
     args += _branch_args(options.branch_id)
     return shlex.join(args)
 
@@ -235,6 +243,43 @@ def with_job_timeout_hint(
     return _with_hint(exc, hint)
 
 
+def _import_method_not_supported(
+    exc: KeboolaApiError, alias: str, table_id: str, options: ImportOptions
+) -> KeboolaApiError:
+    """The Storage refusal of an explicit import method, as a usage error.
+
+    Storage answers an explicit ``importMethod`` on a non-Snowflake table with
+    HTTP 400 ``storage.tables.importMethodNotSupported``; nothing was
+    imported. It is the caller's option that is wrong, so the error is
+    ``INVALID_ARGUMENT`` (exit 2) and names the option. Details are kept
+    (``api_error_code``, ``file_id``). The ``load-file`` command for an
+    already-uploaded file leaves the method out, because repeating it fails
+    the same way.
+    """
+    params = exc.details.get("api_error_params")
+    backend = params.get("backend") if isinstance(params, dict) else None
+    where = f"the {backend} backend" if isinstance(backend, str) and backend else "its backend"
+    message = (
+        f"Import method '{options.import_method.value}' works only on Snowflake tables, "
+        f"and table {table_id} is on {where}. Run the import without --import-method "
+        f"(import_method over kbagent serve) or with the value 'auto'. Storage said: {exc.message}"
+    )
+    file_id = exc.details.get("file_id")
+    if file_id is not None and exc.details.get("job_id") is None:
+        retry = replace(options, import_method=ImportMethod.auto)
+        message += (
+            f" The file is already in Storage; import it with: "
+            f"{_load_file_command(alias, file_id, table_id, retry)}"
+        )
+    return KeboolaApiError(
+        message=message,
+        status_code=exc.status_code,
+        error_code=ErrorCode.INVALID_ARGUMENT,
+        retryable=False,
+        details=exc.details,
+    )
+
+
 def with_import_hint(
     exc: KeboolaApiError, alias: str, table_id: str, options: ImportOptions
 ) -> KeboolaApiError:
@@ -252,9 +297,20 @@ def with_import_hint(
       ``job_id``): the file is in Storage -- import it with ``storage
       load-file``, repeating every option of the original import.
 
+    An explicit ``--import-method`` that Storage refuses for the table's
+    backend becomes ``INVALID_ARGUMENT`` (see
+    :func:`_import_method_not_supported`). With ``auto`` kbagent sent no
+    method, so the same refusal stays the API error it is.
+
     Anything else comes back as an equal copy, so a caller can always
     ``raise with_import_hint(exc, ...) from exc``.
     """
+    if (
+        options.import_method != ImportMethod.auto
+        and exc.status_code == 400
+        and exc.details.get("api_error_code") == IMPORT_METHOD_NOT_SUPPORTED_CODE
+    ):
+        return _import_method_not_supported(exc, alias, table_id, options)
     job_id = exc.details.get("job_id")
     file_id = exc.details.get("file_id")
     if exc.error_code == ErrorCode.STORAGE_JOB_TIMEOUT and job_id is not None:
@@ -276,6 +332,34 @@ def with_import_hint(
     else:
         hint = ""
     return _with_hint(exc, hint)
+
+
+def with_auto_created_note(
+    exc: KeboolaApiError, table_id: str, *, bucket: bool, table: bool
+) -> KeboolaApiError:
+    """Say what ``upload-table`` auto-created before Storage refused the import method.
+
+    Auto-create runs before the import, so a refused ``--import-method`` can
+    leave a new, empty bucket or table behind. Any other error comes back
+    unchanged.
+    """
+    refused = (
+        exc.error_code == ErrorCode.INVALID_ARGUMENT
+        and exc.details.get("api_error_code") == IMPORT_METHOD_NOT_SUPPORTED_CODE
+    )
+    created = []
+    if bucket:
+        created.append(f"bucket {table_id.rsplit('.', 1)[0]}")
+    if table:
+        created.append(f"table {table_id}")
+    if not refused or not created:
+        return exc
+    return _with_hint(
+        exc,
+        f" This command created the {' and the '.join(created)} before the import was "
+        f"refused. Nothing was imported; the import without --import-method uses "
+        f"{'them' if len(created) > 1 else 'it'}.",
+    )
 
 
 def read_csv_header(file_path: str, delimiter: str = ",", enclosure: str = '"') -> list[str]:

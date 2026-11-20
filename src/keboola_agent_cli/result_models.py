@@ -148,6 +148,10 @@ class UploadTableResult(_ApiResultModel):
 
     table_id: str = Field(default="", description="Target table ID.")
     incremental: bool = Field(default=False, description="True = rows appended; False = full load.")
+    import_method: str = Field(
+        default="auto",
+        description="Import method requested (auto | single_statement | multi_statement).",
+    )
     imported_rows: int | None = Field(
         default=None,
         validation_alias=AliasChoices("imported_rows", "importedRowsCount"),
