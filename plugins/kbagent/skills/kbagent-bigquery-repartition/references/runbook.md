@@ -46,7 +46,7 @@ kbagent --json project status --project ALIAS
 kbagent --json branch reset --project ALIAS
 ```
 
-## 1. Preflight (read only)
+## 1. Preflight (no write to the table)
 
 Nothing in this section writes to the table. Record each value in the
 preflight record at the end of the section.
@@ -624,7 +624,10 @@ support restores.
 - Do not run any other write on either table.
 - The owner keeps the writers paused.
 
-Collect evidence, read only:
+Collect evidence. Nothing here writes to either table. The table detail
+commands and the query only read. `workspace load` writes to the helper
+workspace: it replaces the two views there, so it waits for a yes like every
+other write.
 
 ```bash
 kbagent --json storage table-detail --project ALIAS --table-id B.T
