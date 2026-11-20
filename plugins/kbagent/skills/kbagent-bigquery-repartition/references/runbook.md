@@ -122,8 +122,13 @@ kbagent --json storage tables --project ALIAS
   the table. The second condition of tag
   propagation is the backend capability `policyTagsEnabled`. kbagent cannot
   read it: it is in the Manage API and a project token does not reach it.
-  Nobody has to read it up front. Section 4c checks the result on the copy
-  instead, and the operator refuses the table there when a tag is missing.
+  When any column carries a policy tag, have a person with Manage API access
+  read the capability of the project's backend now, and record the answer.
+  Refuse the table when it is false or unknown. The project feature can stay
+  enabled after the backend was disabled by hand, and a path A copy is
+  created with its rows already in it: an untagged copy of protected data
+  exists from that moment, readable by every dataset reader, and the check
+  of section 4c can only refuse and drop it afterwards, not undo the read.
 - **Writers and readers.** Record `used_by` of `B.T`, and the flows with
   schedules that run those configurations.
 - **Aliases.** kbagent shows that a table is an alias (`is_alias`), but not
@@ -206,6 +211,8 @@ Refuse the table, and change nothing, when one of these holds:
   policies are not converted in this version.
 - A column carries a policy tag in BigQuery and the project has no
   `bigquery-policy-tags` feature.
+- A column carries a policy tag in BigQuery and the backend capability
+  `policyTagsEnabled` is false or could not be read (section 1).
 - The BigQuery-native objects are unknown, because nobody could read them.
 - The recorded statement of a search index is incomplete.
 - The operator cannot apply the recorded IAM bindings to the copy.
@@ -232,6 +239,7 @@ Column defaults (column_details[].default):
 policyTagState per column (Storage, last observed):
 Policy tags per column (bq show):
 Project feature bigquery-policy-tags (yes / no):
+Backend capability policyTagsEnabled (yes / no / unknown):
 sql_path:
 Bucket sharing:
 Sharing edges with the bucket as source:
