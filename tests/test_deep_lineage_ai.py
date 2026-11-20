@@ -12,7 +12,6 @@ Covers:
 import json
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
 
 import yaml
 
@@ -83,11 +82,6 @@ def _config_entry(config_id: str, path: str, **extra: Any) -> dict:
     return entry
 
 
-def _build(service: DeepLineageService, root: Path, **kwargs: Any) -> dict:
-    with patch.object(service, "_add_cross_project_lineage"):
-        return service.build_lineage(root, **kwargs)
-
-
 # ---------------------------------------------------------------------------
 # A1/A2: branch tree resolution
 # ---------------------------------------------------------------------------
@@ -110,20 +104,20 @@ class TestBranchTreeResolution:
 
     def test_branch_id_zero_resolves_to_default_tree(self, tmp_path: Path) -> None:
         root = self._project(tmp_path, {"branchId": 0})
-        result = _build(_service(tmp_path), root)
+        result = _service(tmp_path).build_lineage(root)
         assert result["configurations"]["proj:keboola.snowflake-transformation/c1"][
             "config_name"
         ] == ("From production tree")
 
     def test_missing_branch_id_resolves_to_default_tree(self, tmp_path: Path) -> None:
         root = self._project(tmp_path, {})
-        result = _build(_service(tmp_path), root)
+        result = _service(tmp_path).build_lineage(root)
         cfg = result["configurations"]["proj:keboola.snowflake-transformation/c1"]
         assert cfg["config_name"] == "From production tree"
 
     def test_registered_branch_id_uses_its_tree(self, tmp_path: Path) -> None:
         root = self._project(tmp_path, {"branchId": 555})
-        result = _build(_service(tmp_path), root)
+        result = _service(tmp_path).build_lineage(root)
         cfg = result["configurations"]["proj:keboola.snowflake-transformation/c1"]
         assert cfg["config_name"] == "From production tree"
 
@@ -149,7 +143,7 @@ class TestBranchTreeResolution:
         _write_config(proj / "main" / "transformation/x/prod", name="Prod")
         _write_config(proj / "dev-feature" / "transformation/x/dev", name="Dev")
 
-        result = _build(_service(tmp_path), root)
+        result = _service(tmp_path).build_lineage(root)
 
         assert list(result["configurations"]) == ["proj:keboola.snowflake-transformation/prod"]
         assert len(result["warnings"]) == 1
@@ -191,7 +185,7 @@ class TestRowPaths:
             outputs=[{"source": "accounts", "destination": "in.c-src.accounts"}],
         )
 
-        result = _build(_service(tmp_path), root)
+        result = _service(tmp_path).build_lineage(root)
 
         targets = [e["target_fqn"] for e in result["edges"] if e["detection"] == "output_mapping"]
         assert targets == ["proj:in.c-src.accounts"]
@@ -222,7 +216,7 @@ class TestAiTaskCodeFile:
         )
         service._config_store.save(app_config)
 
-        result = _build(service, root, generate_ai_tasks=True)
+        result = service.build_lineage(root, generate_ai_tasks=True)
 
         assert result["ai_status"]["ai_tasks_generated"] == 1
         tasks = json.loads((root / AI_TASKS_FILE).read_text())["tasks"]
@@ -526,23 +520,19 @@ class TestLineageBuildHumanOutput:
             json.dumps({"results": [{"config_fqn": f"ws:{SQL_COMPONENT}/c1", "outputs": outputs}]})
         )
 
-        with patch(
-            "keboola_agent_cli.services.deep_lineage_service."
-            "DeepLineageService._add_cross_project_lineage"
-        ):
-            result = CliRunner().invoke(
-                app,
-                [
-                    "--config-dir",
-                    str(tmp_path / "cfg"),
-                    "lineage",
-                    "build",
-                    "--directory",
-                    str(root),
-                    "--output",
-                    str(tmp_path / "lineage.json"),
-                ],
-            )
+        result = CliRunner().invoke(
+            app,
+            [
+                "--config-dir",
+                str(tmp_path / "cfg"),
+                "lineage",
+                "build",
+                "--directory",
+                str(root),
+                "--output",
+                str(tmp_path / "lineage.json"),
+            ],
+        )
 
         assert result.exit_code == 0, result.output
         assert "AI outputs not resolved to a table: 12" in result.output

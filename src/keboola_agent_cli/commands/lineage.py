@@ -142,7 +142,7 @@ def lineage_build(
         print_ai_status(formatter, result.get("ai_status", {}))
         # Surface warnings (e.g. empty scan) so users notice layout issues.
         for warning in result.get("warnings", []) or []:
-            formatter.console.print(f"\n[yellow]Warning:[/yellow] {warning}")
+            formatter.console.print(f"\n[yellow]Warning:[/yellow] {escape(warning)}")
         formatter.console.print(f"\n  Saved to: {output}")
 
 
