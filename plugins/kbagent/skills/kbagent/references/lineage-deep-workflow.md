@@ -275,7 +275,9 @@ Diagrams *(since 0.99.1)*:
   with an `AI` badge (`-.->|writes · AI|`).
 - Table nodes show the table name, then its bucket; configs show their name and
   component id. The project alias is prefixed only when the diagram spans more
-  than one project. ER labels are unchanged.
+  than one project. ER table entities always use the full
+  `project-alias:bucket-id.table-name`, for example `p:in.c-src.customers` and
+  `p:out.c-clean.customers`, so same-name tables stay distinct (since vNEXT).
 - AI-recorded external systems render as dashed stadium nodes
   (`system -> config` for read, `config -> system` for write).
 - `--columns` now also reaches the flowcharts (column lists in table nodes);
