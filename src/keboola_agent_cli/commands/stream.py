@@ -29,6 +29,7 @@ from ._helpers import (
     get_formatter,
     get_service,
     map_error_to_exit_code,
+    structured_input,
 )
 from ._project_ref import PROJECT_HELP
 
@@ -183,7 +184,18 @@ def stream_create_source(
     no_sinks: bool = typer.Option(
         False,
         "--no-sinks",
-        help="Skip auto-creating the logs/metrics/traces sinks for an OTLP source",
+        help="Create a bare source without Storage table sinks",
+    ),
+    table_id: str | None = typer.Option(
+        None,
+        "--table-id",
+        help="HTTP destination table (default: in.c-data-stream-<source_id>.events)",
+    ),
+    columns: str | None = typer.Option(
+        None, "--columns", help="HTTP table column definitions as a JSON array"
+    ),
+    columns_file: str | None = typer.Option(
+        None, "--columns-file", help="Read HTTP column definitions from a JSON file (- for stdin)"
     ),
     reveal: bool = typer.Option(False, "--reveal", help="Print the full endpoint incl. secret"),
 ) -> None:
@@ -191,7 +203,8 @@ def stream_create_source(
 
     For an OTLP source the three standard sinks (logs/metrics/traces) are
     auto-created so data lands in Storage (bucket in.c-otlp-<source>); pass
-    --no-sinks to create a bare source without them.
+    --no-sinks to create a bare source without them. HTTP sources get one table
+    sink, defaulting to id (uuid), datetime, ip, body and headers columns.
     """
     formatter = get_formatter(ctx)
     report_branch_ref(ctx.obj["config_store"], project, branch)
@@ -205,7 +218,12 @@ def stream_create_source(
             if_not_exists=if_not_exists,
             reveal=reveal,
             provision_sinks=not no_sinks,
+            table_id=table_id,
+            columns=structured_input(columns, columns_file, label="columns"),
         )
+    except ValueError as exc:
+        formatter.error(error_code=ErrorCode.USAGE_ERROR, message=str(exc))
+        raise typer.Exit(code=2) from None
     except (ConfigError, KeboolaApiError) as exc:
         _handle_errors(formatter, exc)
     formatter.output(result, _format_detail)
