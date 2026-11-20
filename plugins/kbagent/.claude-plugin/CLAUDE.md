@@ -1,8 +1,9 @@
 # kbagent plugin — operational guidance
 
-This plugin exposes a CLI (`kbagent`), three skills (`kbagent`,
-`kbagent-cicd-migration`, `kbagent-promotion-pipeline`), three slash
-commands (`/kbagent:setup`, `/keboola`, `/kbagent:review`), and two
+This plugin exposes a CLI (`kbagent`), four skills (`kbagent`,
+`kbagent-cicd-migration`, `kbagent-promotion-pipeline`,
+`kbagent-bigquery-repartition`), three slash commands (`/kbagent:setup`,
+`/keboola`, `/kbagent:review`), and two
 specialist subagents (`keboola-expert`, `kbagent-pr-reviewer`). All are
 namespaced under `kbagent:`.
 
