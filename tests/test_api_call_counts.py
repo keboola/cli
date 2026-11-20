@@ -46,8 +46,10 @@ from helpers import (
     setup_single_project,
     setup_two_projects,
 )
+from keboola_agent_cli.auth.state_store import AuthStateStore
 from keboola_agent_cli.cli import app
 from keboola_agent_cli.constants import ENV_AUTO_UPDATE
+from test_auth_register_projects import STACK_URL, _live_session
 
 runner = CliRunner()
 
@@ -56,6 +58,26 @@ SIZES = [1, 10]
 # The tokens `helpers.setup_two_projects` gives the `prod` and `dev` projects.
 PROD_TOKEN = "901-xxx"
 DEV_TOKEN = "7012-yyy"
+
+
+@pytest.mark.parametrize("size", SIZES)
+def test_auth_projects_call_count(tmp_path, httpx_mock, size) -> None:
+    AuthStateStore(tmp_path).put_session(_live_session())
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{STACK_URL}/v1/auth/token/introspect",
+        json={
+            "active": True,
+            "sessionId": "sess-1",
+            "projects": [{"id": i, "name": f"Project {i}", "role": "admin"} for i in range(size)],
+        },
+    )
+    result = runner.invoke(
+        app, ["--json", "--config-dir", str(tmp_path), "auth", "projects", "--stack", STACK_URL]
+    )
+    assert result.exit_code == 0, result.output
+    assert len(json.loads(result.output)["data"]["projects"]) == size
+    assert_api_calls(httpx_mock, [("GET", "/v1/auth/token/introspect")])
 
 
 @pytest.fixture(autouse=True)

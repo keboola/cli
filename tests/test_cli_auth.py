@@ -27,6 +27,7 @@ from keboola_agent_cli.permissions import OPERATION_REGISTRY
 from keboola_agent_cli.services import auth_service as svc_mod
 from keboola_agent_cli.services.auth_service import (
     SESSION_UNSUPPORTED_FEATURES,
+    AccessibleProjectsResult,
     AuthService,
     AuthStatusResult,
     LoginResult,
@@ -50,6 +51,40 @@ SECRET_ACCESS_TOKEN = "kbc_at_should_never_leak_00000000"
 SECRET_REFRESH_TOKEN = "kbc_rt_should_never_leak_00000000"
 
 runner = CliRunner()
+
+
+@pytest.mark.parametrize("json_mode", [False, True])
+@pytest.mark.parametrize("empty", [False, True])
+def test_projects(tmp_path: Path, json_mode: bool, empty: bool) -> None:
+    service = MagicMock()
+    projects = (
+        []
+        if empty
+        else [{"id": 101, "name": "Prod Project", "role": "admin", "registered_alias": "prod"}]
+    )
+    service.list_projects.return_value = AccessibleProjectsResult(STACK_URL, projects)
+    args = (["--json"] if json_mode else []) + ["auth", "projects", "--stack", STACK_URL]
+    result = _invoke(tmp_path, service, args)
+    assert result.exit_code == 0, result.output
+    service.list_projects.assert_called_once_with(stack=STACK_URL)
+    if json_mode:
+        assert json.loads(result.output)["data"] == {"stack_url": STACK_URL, "projects": projects}
+    elif empty:
+        assert "No accessible projects." in result.output
+    else:
+        assert "Registered alias" in result.output
+        assert "Prod Project" in result.output
+        assert "prod" in result.output
+
+
+def test_projects_missing_session(tmp_path: Path) -> None:
+    service = MagicMock()
+    service.list_projects.side_effect = KeboolaApiError(
+        "Log in first", error_code=ErrorCode.SESSION_NOT_FOUND
+    )
+    result = _invoke(tmp_path, service, ["--json", "auth", "projects", "--stack", STACK_URL])
+    assert result.exit_code == 3
+    assert json.loads(result.output)["error"]["code"] == ErrorCode.SESSION_NOT_FOUND
 
 
 def _invoke(config_dir: Path, svc: MagicMock, args: list[str], input_text: str | None = None):

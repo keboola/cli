@@ -26,11 +26,7 @@ OPERATION_REGISTRY: dict[str, str] = {
     # tokens, never a real credential) -- same risk class as login/logout,
     # not the "admin" class `project add` uses for a pasted static token.
     "auth.register-projects": "write",
-    # Serve-only (since 0.90.1): `GET /auth/projects` lists the session's
-    # registerable project candidates. It has no CLI leaf command -- the
-    # terminal equivalent is the interactive picker inside
-    # `auth register-projects` -- so it is exempted from the dead-key check
-    # in scripts/check_command_sync.py via SERVE_ONLY_OPERATIONS below.
+    # Session project listing and the server's registration candidates.
     "auth.projects": "read",
     # Project management
     "project.add": "admin",
@@ -532,7 +528,6 @@ IMPLIED_OPERATIONS: dict[str, tuple[str, ...]] = {
 # its "key matching no live command" check.
 SERVE_ONLY_OPERATIONS: frozenset[str] = frozenset(
     {
-        "auth.projects",
         "merge-request.by-branch",
         # Both back a web-UI affordance with no terminal equivalent: the
         # dashboard's Local AI chat tile and the workspace SQL editor's

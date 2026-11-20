@@ -9,19 +9,20 @@ auth, and the concepts behind these routes live in
 [`web-server.md`](web-server.md); a running server serves the same spec
 interactively at `/docs` (Swagger) and `/openapi.json`.
 
-**276 operations** across **233 paths** and **34 routers**.
+**277 operations** across **234 paths** and **34 routers**.
 
 Paths are shown as the server registers them. Reaching them through the
 Node BFF (or single-process `--ui` mode) prefixes every path with `/api`.
 
 ## Project Management
 
-### `auth` (3 operations)
+### `auth` (4 operations)
 
 Read/audit the current browser-login session and register its accessible projects as local aliases. `login` / `login-password` / `logout` have no endpoint here -- see `server/routers/auth.py`. Mirrors `kbagent auth status|register-projects` (partially).
 
 | Method | Path | Summary |
 |---|---|---|
+| `GET` | `/auth/accessible-projects` | List projects accessible to the current session |
 | `GET` | `/auth/projects` | List the session's registerable project candidates |
 | `POST` | `/auth/register-projects` | Register accessible projects as local aliases |
 | `GET` | `/auth/status` | Session health for a stack |

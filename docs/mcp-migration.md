@@ -48,6 +48,7 @@ generated, authoritative list).
 | `modify_python_js_data_app` | `kbagent data-app create` | update via `config update` + `data-app secrets-set` |
 | `modify_streamlit_data_app` | `kbagent data-app create` | update via `config update` + `data-app secrets-set` |
 | `get_project_info` | `kbagent project info` | |
+| `get_accessible_projects` | `kbagent auth projects` | Read-only session listing; includes `registered_alias`, without SQL dialect or organization enrichment |
 | `update_project_description` | `kbagent project description-set` | |
 | `query_data` | `kbagent workspace query` | intentionally unported (#390): `workspace query` composes multi-step SQL over a persistent workspace instead of an implicit one-shot SELECT |
 | `find_component_id` | `kbagent component list` | use `--query` |

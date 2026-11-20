@@ -435,10 +435,8 @@ class TestOperationRegistryEntry:
     def test_auth_projects_is_a_read_operation(self) -> None:
         assert OPERATION_REGISTRY["auth.projects"] == "read"
 
-    def test_auth_projects_is_exempt_from_the_command_sync_gate(self) -> None:
-        # It has no CLI leaf command, so the dead-key check in
-        # scripts/check_command_sync.py must skip it.
-        assert "auth.projects" in SERVE_ONLY_OPERATIONS
+    def test_auth_projects_has_a_cli_command(self) -> None:
+        assert "auth.projects" not in SERVE_ONLY_OPERATIONS
 
     def test_serve_only_operations_are_all_registered(self) -> None:
         assert set(OPERATION_REGISTRY) >= SERVE_ONLY_OPERATIONS

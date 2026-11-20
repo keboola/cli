@@ -182,6 +182,47 @@ def _introspect(projects: list[AuthProject], session_id: str = "sess-1") -> Intr
 # ----------------------------------------------------------------------------
 
 
+class TestListProjects:
+    @pytest.mark.parametrize("size", [0, 1, 10])
+    def test_listing_is_read_only(self, store, state_store, size) -> None:
+        store.add_project(
+            "local", ProjectConfig(stack_url=STACK_URL, token=STATIC_TOKEN, project_id=1)
+        )
+        store.add_project(
+            "other-stack",
+            ProjectConfig(
+                stack_url="https://connection.eu-central-1.keboola.com",
+                token=STATIC_TOKEN,
+                project_id=2,
+            ),
+        )
+        before = store.config_path.read_bytes()
+        state_store.put_session(_live_session())
+        client = _FakeAuthClient()
+        client.introspect_response = _introspect(
+            [AuthProject(id=i, name=f"Project {i}", role="admin") for i in range(1, size + 1)]
+        )
+        result = _make_service(store, state_store, client).list_projects(stack=STACK_URL)
+        assert result.stack_url == STACK_URL
+        assert result.projects == [
+            {
+                "id": i,
+                "name": f"Project {i}",
+                "role": "admin",
+                "registered_alias": "local" if i == 1 else None,
+            }
+            for i in range(1, size + 1)
+        ]
+        assert store.config_path.read_bytes() == before
+        assert client.introspect_calls == 1
+
+    def test_missing_session(self, store, state_store) -> None:
+        with pytest.raises(KeboolaApiError) as exc:
+            _make_service(store, state_store, _FakeAuthClient()).list_projects(stack=STACK_URL)
+        assert exc.value.error_code == ErrorCode.SESSION_NOT_FOUND
+        assert not store.config_path.exists()
+
+
 class TestCandidatesFromProjects:
     def test_simple_project_gets_slugified_alias(self, store, state_store) -> None:
         service = _make_service(store, state_store, _FakeAuthClient())

@@ -464,6 +464,9 @@ kbagent auth login [--stack URL|alias] [--device-code] [--register-projects] [--
 #   opens nothing. Version gate lives in gotchas.md.
 kbagent auth login-password --email EMAIL (--password PASSWORD | --password-stdin) [--totp-secret SECRET] [--stack URL|alias] [--register-projects]
 kbagent auth status [--stack URL|alias]
+kbagent auth projects [--stack URL|alias]
+# Read-only session listing with id/name/role/registered_alias; never registers aliases.
+# REST: GET /auth/accessible-projects; /auth/projects retains picker candidates.
 kbagent auth logout [--stack URL|alias] [--remove-projects] [--yes]
 kbagent auth register-projects [--stack URL|alias] [--all] [--project-id ID ...] [--alias ID=ALIAS ...] [--yes]
 # auth stack (CLI-32): without --stack every auth command (and serve's /auth/* without ?stack=) takes the

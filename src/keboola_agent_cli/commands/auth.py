@@ -37,6 +37,7 @@ from ..constants import ENV_KBC_LOGIN_EMAIL, ENV_KBC_LOGIN_PASSWORD, ENV_KBC_LOG
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..output import OutputFormatter
 from ..services.auth_service import (
+    AccessibleProjectsResult,
     AuthService,
     AuthStatusResult,
     LoginResult,
@@ -155,7 +156,12 @@ def _render_session_restrictions(console: Console, features: Sequence[str]) -> N
     )
 
 
-def _render_accessible_projects_table(console: Console, projects: Sequence[dict[str, Any]]) -> None:
+def _render_accessible_projects_table(
+    console: Console,
+    projects: Sequence[dict[str, Any]],
+    *,
+    show_alias: bool = False,
+) -> None:
     """Render the shared "Accessible projects" table for login and status."""
     if not projects:
         return
@@ -163,11 +169,15 @@ def _render_accessible_projects_table(console: Console, projects: Sequence[dict[
     table.add_column("ID", justify="right")
     table.add_column("Name")
     table.add_column("Role")
+    if show_alias:
+        table.add_column("Registered alias")
     for project in projects:
+        alias_cells = [escape(str(project.get("registered_alias") or "—"))] if show_alias else []
         table.add_row(
             str(project.get("id", "")),
             escape(str(project.get("name", ""))),
             escape(str(project.get("role", ""))),
+            *alias_cells,
         )
     console.print(table)
 
@@ -628,6 +638,34 @@ def auth_logout(
     except (ConfigError, KeboolaApiError) as exc:
         _handle_errors(formatter, exc)
     formatter.output(result, _format_logout_result)
+
+
+def _format_projects_result(console: Console, result: AccessibleProjectsResult) -> None:
+    console.print(f"Stack: {escape(result.stack_url)}")
+    if not result.projects:
+        console.print("No accessible projects.")
+    _render_accessible_projects_table(console, result.projects, show_alias=True)
+
+
+@auth_app.command("projects")
+def auth_projects(
+    ctx: typer.Context,
+    stack: str | None = typer.Option(
+        None, "--stack", help="Stack URL or a registered project alias"
+    ),
+) -> None:
+    """List projects the current session can access, without registering aliases.
+
+    Includes each project's ID, name, role and registered local alias (if any).
+    Requires a session established with `auth login`; refreshes it when needed.
+    """
+    formatter = get_formatter(ctx)
+    service: AuthService = get_service(ctx, "auth_service")
+    try:
+        result = service.list_projects(stack=stack)
+    except (ConfigError, KeboolaApiError) as exc:
+        _handle_errors(formatter, exc)
+    formatter.output(result, _format_projects_result)
 
 
 @auth_app.command("register-projects")
