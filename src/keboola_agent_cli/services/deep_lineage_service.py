@@ -602,7 +602,9 @@ class DeepLineageService:
             return "graph LR\n  error[" + result["error"].replace('"', "'") + "]"
         warnings = result.get("warnings")
         if view == "er":
-            return self.render_er_diagram(result["edges"], graph, result["node"], warnings=warnings)
+            return self.render_er_diagram(
+                result["edges"], graph, result["node"], show_columns=show_columns, warnings=warnings
+            )
         return self.render_mermaid(
             result["edges"], graph, direction, result["node"], show_columns, warnings
         )

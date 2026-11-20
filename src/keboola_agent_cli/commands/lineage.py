@@ -256,7 +256,7 @@ def lineage_show(
         False,
         "--columns",
         help="Show column detail: mappings per edge in the text tree, column lists in "
-        "mermaid/html table nodes (--format er always lists columns).",
+        "mermaid/html table nodes and ER entities.",
     ),
     project: str | None = typer.Option(
         None,
@@ -270,8 +270,8 @@ def lineage_show(
     format: str = typer.Option(
         "text",
         "--format",
-        help="Output format: text, mermaid, html, or er (entity-relationship, always "
-        "with table columns).",
+        help="Output format: text, mermaid, html, or er (entity-relationship; "
+        "row/column counts by default, full columns with --columns).",
     ),
 ) -> None:
     """Query upstream/downstream dependencies from a cached lineage graph.
@@ -292,7 +292,7 @@ def lineage_show(
 
       html     Self-contained HTML file with embedded mermaid diagram
 
-      er       Mermaid entity-relationship diagram (tables with their columns)
+      er       Mermaid entity-relationship diagram (counts; --columns for full detail)
 
     Examples:
 
