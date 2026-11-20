@@ -71,7 +71,10 @@ Read from the result:
 - `definition.timePartitioning`, `rangePartitioning`, `clustering`: the
   current layout.
 - `definition.columns[] | {name, policyTagState}`: `protected`, `unprotected`
-  or `unknown` per column.
+  or `unknown` per column. This is the state that Storage observed last, not
+  the state in BigQuery now, and `unknown` says nothing. Record it, but never
+  compare two tables with it. The comparison uses the policy tags that the
+  operator reads from BigQuery ("BigQuery-native objects" below).
 - `sql_path`: the BigQuery path of the table.
 
 ### Sharing, features, writers, readers, aliases
@@ -88,8 +91,9 @@ kbagent --json storage tables --project ALIAS
 - **Sharing.** Record `sharing` of the bucket and every edge in which the
   bucket is the source.
 - **Policy tags.** Look for the project feature `bigquery-policy-tags` in
-  `features` of the project info. When any column is `protected` and the
-  feature is missing, refuse the table. The second condition of tag
+  `features` of the project info. When any column carries a policy tag in
+  BigQuery (the `bq show` output below) and the feature is missing, refuse
+  the table. The second condition of tag
   propagation is the backend capability `policyTagsEnabled`. kbagent cannot
   read it: it is in the Manage API and a project token does not reach it.
   Nobody has to read it up front. Section 4c checks the result on the copy
@@ -146,6 +150,17 @@ Record each object together with what is needed to create it again:
   cannot be reconstructed completely, refuse the table.
 - **Streaming buffer**: the key `streamingBuffer` in the output of the last
   command. Present means that a streaming writer wrote recently (section 3).
+- **Policy tags per column**: from the output of the last command. This
+  filter prints the tags of every column, with the tags of fields nested in
+  a RECORD column counted to that column:
+
+  ```bash
+  bq --project_id=GCP_PROJECT show --format=prettyjson DATASET.T \
+    | jq '[.schema.fields[] | {name, tags: ([.. | objects | .policyTags? | select(. != null) | .names[]] | sort)}]'
+  ```
+
+  Record the result. It is the reference for the copy (sections 4c and 5)
+  and for the table after the swap (section 6).
 
 When the operator cannot read these objects, refuse the table.
 
@@ -154,8 +169,8 @@ When the operator cannot read these objects, refuse the table.
 Refuse the table, and change nothing, when one of these holds:
 
 - The table is an alias.
-- A column is `protected` and the project has no `bigquery-policy-tags`
-  feature.
+- A column carries a policy tag in BigQuery and the project has no
+  `bigquery-policy-tags` feature.
 - The BigQuery-native objects are unknown, because nobody could read them.
 - The recorded statement of a search index is incomplete.
 - The operator cannot apply the recorded IAM bindings or row access policies
@@ -178,7 +193,8 @@ primary_key:
 last_import_date:
 Columns and types:
 Current layout (timePartitioning / rangePartitioning / clustering):
-policyTagState per column:
+policyTagState per column (Storage, last observed):
+Policy tags per column (bq show):
 Project feature bigquery-policy-tags (yes / no):
 sql_path:
 Bucket sharing:
@@ -323,16 +339,20 @@ The table must never be under the production name without its policy tags,
 its IAM bindings and its row access policies. A rename keeps all three on the
 renamed table, so they are put on the copy first. Keep this order:
 
-1. **Policy tags.** Read the state on the copy:
+1. **Policy tags.** The operator reads the tags of the copy from BigQuery,
+   with the filter of section 1:
 
    ```bash
-   kbagent --json storage table-detail --project ALIAS --table-id B.T_repart \
-     | jq '[.data.definition.columns[] | {name, policyTagState}]'
+   bq --project_id=GCP_PROJECT show --format=prettyjson DATASET.T_repart \
+     | jq '[.schema.fields[] | {name, tags: ([.. | objects | .policyTags? | select(. != null) | .names[]] | sort)}]'
    ```
 
-   When a column that is `protected` on `B.T` is not `protected` on the copy,
-   stop and refuse the table. Do not set the tag outside Storage: a tag that
-   is written to the BigQuery schema directly bypasses Storage.
+   Compare the result with the one recorded for `B.T` in section 1, column
+   by column. When a column of the copy lacks a tag that the same column of
+   `B.T` has, stop and refuse the table. Do not compare `policyTagState` of
+   the two tables: it is the last observed state, and `unknown` on both
+   sides proves nothing. Do not set the tag outside Storage: a tag that is
+   written to the BigQuery schema directly bypasses Storage.
 
 2. **Table IAM bindings.** A person applies the recorded policy to the copy.
    Save the policy JSON of section 1 to a file and remove its `etag` key
@@ -372,9 +392,10 @@ Every check must pass. On a mismatch, stop and do not swap.
 - **Primary key.** `primary_key` is equal.
 - **Layout.** `definition.timePartitioning` and `definition.clustering` of the
   copy are as requested.
-- **Policy tags.** `policyTagState` of each column equals the source. A
-  `protected` source column that is not `protected` on the copy stops the
-  conversion.
+- **Policy tags.** The tags of each column, read from BigQuery in section
+  4c, equal the tags recorded for the source in section 1. A source column
+  with a tag that the copy lacks stops the conversion. `policyTagState` is
+  not part of this check.
 - **Table IAM bindings.** The bindings of the copy equal the recorded ones.
 - **Row access policies.** The policies of the copy equal the recorded ones.
 - **Path B, NULL count.** The count of NULL in `COL` is equal on both tables.
@@ -447,9 +468,9 @@ table. Then, in this order:
    `B.T`.
 2. **Security objects.** The IAM bindings and row access policies of section
    4c and the propagated policy tags travelled with the rename. The operator
-   reads them once more on `B.T` (the `get-iam-policy` and
-   `ls --row_access_policies` commands of section 1; `policyTagState` from the
-   table detail). Stop on a difference. The old physical table, now
+   reads them once more on `B.T` (the `get-iam-policy`,
+   `ls --row_access_policies` and policy tag commands of section 1). Stop on
+   a difference from the values recorded in section 1. The old physical table, now
    `T_repart`, keeps its own bindings and policies.
 3. **Search indexes.** A person creates each recorded index again on `B.T`.
    A person runs:
