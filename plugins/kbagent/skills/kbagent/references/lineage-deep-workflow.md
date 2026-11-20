@@ -257,7 +257,7 @@ kbagent lineage show --file lineage.json --downstream "my-project:in.c-main.user
 # Mermaid diagram (paste into mermaid.live or GitHub markdown)
 kbagent lineage show --file lineage.json --downstream "my-project:in.c-main.users" --format mermaid
 
-# ER diagram (entity-relationship style; always lists table columns)
+# ER diagram (entity-relationship style; compact row/column counts by default)
 kbagent lineage show --file lineage.json --downstream "my-project:in.c-main.users" --format er
 
 # Self-contained HTML page with interactive diagram
@@ -265,6 +265,11 @@ kbagent lineage show --file lineage.json --downstream "my-project:in.c-main.user
 ```
 
 Formats: `text` (default), `mermaid`, `html`, `er`.
+
+ER entities show one row/column count line by default; add `--columns` for full
+column lists with PK markers and mapping comments (since vNEXT). The server's
+Columns checkbox controls the same detail. External systems and external-only
+configs render in both modes (since 0.99.1).
 
 Diagrams *(since 0.99.1)*:
 
