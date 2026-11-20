@@ -521,11 +521,17 @@ def merge_request_merge(
             "`kbagent branch reset` and `kbagent sync branch-unlink` if this project's active "
             "branch pointed at the merged branch",
         )
+    elif result.get("status") == "already_in_merge":
+        _hint_next(formatter, "`merge-request detail` -- wait until the merge finishes")
     else:
         _hint_next(formatter, "`merge-request list` -- the merged request now shows as merged")
 
 
 def _render_merge_result(console: Any, data: dict[str, Any]) -> None:
+    if data.get("status") == "already_in_merge":
+        # Not a success yet: the running merge can still fail and roll back.
+        console.print(f"[bold yellow]Merging:[/bold yellow] {escape(str(data['message']))}")
+        return
     console.print(f"[bold green]Success:[/bold green] {escape(str(data['message']))}")
     if data.get("cleanup_skipped"):
         # Keyed on the structured flag, never on warning text: the local

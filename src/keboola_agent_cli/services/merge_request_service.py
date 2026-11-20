@@ -247,7 +247,9 @@ def derive_merge_blockers(mr: dict[str, Any], conflicts: list[dict[str, Any]] | 
       the requirement (insufficient approvals is the only way to sit there).
       No count is reported until Connection serializes it (DMD-1969).
     - ``state``: ``in_merge`` / ``published`` / ``canceled`` -- merge is not
-      applicable.
+      applicable. An unknown (or missing) raw state blocks too: when unsure
+      the answer is "not mergeable", never ``mergeable: true`` (the MCP
+      server's ``derive_merge_blockers`` behaves the same).
 
     Purely informational, NOT a guard: the backend stays the authority via
     the merge 409 (conflicts are validated live on every attempt). Note a
@@ -265,7 +267,7 @@ def derive_merge_blockers(mr: dict[str, Any], conflicts: list[dict[str, Any]] | 
         blockers.append("conflicts")
     if state == "in_review":
         blockers.append("approvals")
-    if state in ("in_merge", "published", "canceled"):
+    if state in ("in_merge", "published", "canceled") or state not in _DERIVED_STATE_BY_RAW:
         blockers.append("state")
     return blockers
 
@@ -794,19 +796,24 @@ class MergeRequestService(BaseService):
             ).get("branchFromId")
             branch_from_id = _coerce_branch_id(raw_branch_from)
             record_branch(self._config_store, alias, branch_from_id, "merge_request", role="source")
+            was_active = branch_from_id is not None and project.active_branch_id == branch_from_id
             merged_earlier: dict[str, Any] | None = None
             try:
                 job = client.merge_requests.merge(merge_request_id)
             except KeboolaApiError as exc:
-                merged_earlier = self._merged_by_earlier_call(client, merge_request_id, exc)
-                if merged_earlier is None:
+                underway = self._merge_underway_or_done(client, merge_request_id, exc)
+                if underway is None:
                     self._remap_merge_conflict(exc)
                     raise
+                if underway.get("state") == "in_merge":
+                    return self._merge_running_result(
+                        alias, merge_request_id, branch_from_id, was_active, underway
+                    )
+                merged_earlier = underway
                 job = None
         finally:
             client.close()
 
-        was_active = branch_from_id is not None and project.active_branch_id == branch_from_id
         mapping_cleanup: dict[str, Any] | None = None
         warnings: list[str] = []
         cleanup_skipped = raw_branch_from is not None and branch_from_id is None
@@ -912,15 +919,16 @@ class MergeRequestService(BaseService):
             result["warnings"] = warnings
         return result
 
-    def _merged_by_earlier_call(
+    def _merge_underway_or_done(
         self, client: Any, merge_request_id: int, exc: KeboolaApiError
     ) -> dict[str, Any] | None:
-        """Return the MR when a not-ready 409 hides a merge that already happened.
+        """Return the MR when a not-ready 409 hides a merge that is running or done.
 
-        A merge whose response was lost has already merged the MR, so a repeat
-        gets ``notReadyToMerge``. Read the MR once: state ``published`` means
-        the earlier call merged it. Any other state, or a failed read, returns
-        ``None`` and the 409 is reported as before.
+        A merge whose response was lost has already started, so a repeat gets
+        ``notReadyToMerge``. Read the MR once: state ``published`` means the
+        merge finished, ``in_merge`` means a merge job is still running. Any
+        other state, or a failed read, returns ``None`` and the 409 is reported
+        as before.
         """
         if exc.status_code != 409 or exc.details.get("api_error_code") != self._NOT_READY_CODE:
             return None
@@ -929,9 +937,39 @@ class MergeRequestService(BaseService):
         except KeboolaApiError as read_exc:
             logger.warning("Merge request read after a not-ready 409 failed: %s", read_exc)
             return None
-        if isinstance(current, dict) and current.get("state") == "published":
+        if isinstance(current, dict) and current.get("state") in ("published", "in_merge"):
             return current
         return None
+
+    @staticmethod
+    def _merge_running_result(
+        alias: str,
+        merge_request_id: int,
+        branch_from_id: int | None,
+        was_active: bool,
+        mr: dict[str, Any],
+    ) -> dict[str, Any]:
+        """The result for a merge that is already running: not a refusal.
+
+        The merge can still fail and roll the MR back to ``approved``, so the
+        local cleanup does not run here -- the source branch may survive.
+        """
+        return {
+            "alias": alias,
+            "merge_request_id": merge_request_id,
+            "branch_from_id": branch_from_id,
+            "was_active": was_active,
+            "job": None,
+            "status": "already_in_merge",
+            "state": "in_merge",
+            "derived_state": derive_state(mr),
+            "allowed_actions": derive_allowed_actions(mr),
+            "message": (
+                f"Merge request {merge_request_id} is already being merged; no second "
+                "merge was started. Check `merge-request detail` until its state is "
+                "merged (or back to approved if the merge failed)."
+            ),
+        }
 
     def _remap_merge_conflict(self, exc: KeboolaApiError) -> None:
         """Raise the RFC's dedicated error for a known merge 409; return for others.
