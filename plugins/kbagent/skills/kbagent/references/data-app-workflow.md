@@ -529,6 +529,8 @@ yours at runtime.
 | Remove a key | `data-app secrets-remove --app-id N --key KEY --yes` (`#` optional; idempotent) |
 | Pre-flight a repo before create | `data-app validate-repo --git-repo URL` (GitHub-only, python-js for now) |
 | Triage a stuck deploy or runtime crash | `data-app logs --app-id N [--lines N \| --since ISO8601]` (since 0.43.8; plain-text container log tail, default `--lines 500`, `--lines 0` for full buffer) |
+| Preview a Git branch without deploying to production | `data-app draft-create --config-id ID --git-branch BRANCH`, then `data-app preview-link --config-id ID --draft-id UUID` |
+| Remove a draft but keep the Git branch | `data-app draft-delete --config-id ID --draft-id UUID`; for a legacy draft, pass its own config ID and omit the UUID |
 | Tear it all down | `data-app delete --app-id N` (Storage config goes to the trash) |
 
 ## What this command group deliberately does NOT cover

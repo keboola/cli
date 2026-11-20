@@ -48,12 +48,14 @@ from typing import Any, Self
 from urllib.parse import quote
 
 import httpx
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
 
 from .constants import (
     DATA_SCIENCE_APPS_MAX_PAGES,
     DATA_SCIENCE_APPS_PAGE_SIZE,
     DEFAULT_TIMEOUT,
 )
+from .errors import ErrorCode, KeboolaApiError
 from .http_base import BaseHttpClient
 
 logger = logging.getLogger(__name__)
@@ -61,6 +63,25 @@ logger = logging.getLogger(__name__)
 
 def _app_path(app_id: str) -> str:
     return f"/v2/apps/{quote(str(app_id), safe='')}"
+
+
+def _draft_path(app_id: str, draft_id: str) -> str:
+    return f"{_app_path(app_id)}/drafts/{quote(draft_id, safe='')}"
+
+
+class DataAppDraft(BaseModel):
+    draft_id: str = Field(validation_alias="id")
+    git_branch: str = Field(validation_alias=AliasChoices("gitBranch", "git_branch"))
+    url: str | None = None
+    run_state: str = Field(validation_alias=AliasChoices("runState", "run_state"))
+    created_at: str = Field(validation_alias=AliasChoices("createdAt", "created_at"))
+
+
+class DataAppPreviewLink(BaseModel):
+    model_config = ConfigDict(hide_input_in_errors=True)
+
+    url: str = Field(repr=False)
+    link_expires_at: str = Field(validation_alias=AliasChoices("linkExpiresAt", "link_expires_at"))
 
 
 class DataScienceClient(BaseHttpClient):
@@ -130,6 +151,40 @@ class DataScienceClient(BaseHttpClient):
         """Fetch a single app record by numeric app id."""
         response = self._do_request("GET", _app_path(app_id))
         return response.json()
+
+    def list_drafts(self, app_id: str) -> list[DataAppDraft]:
+        response = self._do_request("GET", f"{_app_path(app_id)}/drafts")
+        return [DataAppDraft.model_validate(item) for item in response.json()]
+
+    def create_draft(self, app_id: str, git_branch: str) -> DataAppDraft:
+        response = self._do_request(
+            "POST", f"{_app_path(app_id)}/drafts", json={"gitBranch": git_branch}, max_attempts=1
+        )
+        return DataAppDraft.model_validate(response.json())
+
+    def get_draft(self, app_id: str, draft_id: str, *, timeout: float) -> DataAppDraft:
+        response = self._do_request(
+            "GET", _draft_path(app_id, draft_id), timeout=timeout, max_attempts=1
+        )
+        return DataAppDraft.model_validate(response.json())
+
+    def delete_draft(self, app_id: str, draft_id: str) -> None:
+        self._do_request("DELETE", _draft_path(app_id, draft_id))
+
+    def create_preview_link(self, app_id: str, draft_id: str | None) -> DataAppPreviewLink:
+        path = (
+            f"/apps/{quote(str(app_id), safe='')}"
+            if draft_id is None
+            else _draft_path(app_id, draft_id)
+        )
+        response = self._do_request("POST", f"{path}/preview-link", json={})
+        try:
+            return DataAppPreviewLink.model_validate_json(response.content)
+        except ValidationError:
+            raise KeboolaApiError(
+                "Data Science API returned an invalid preview-link response.",
+                error_code=ErrorCode.API_ERROR,
+            ) from None
 
     def list_app_runs(
         self, app_id: str, *, limit: int = 5, offset: int = 0

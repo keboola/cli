@@ -536,6 +536,24 @@ def test_data_app_password_reveal_returns_the_password(tmp_path: Path) -> None:
     assert payload["password_delivered_to"] == "response"
 
 
+def test_data_app_draft_routes(tmp_path: Path) -> None:
+    service = MagicMock()
+    service.create_data_app_draft.return_value = {"draft": {"draft_id": "example"}}
+    service.delete_data_app_draft.return_value = {"response": "deleted"}
+    service.get_data_app_preview_link.return_value = {"url": "https://example.test/#t=fake"}
+    app = _make_app_with_registry(tmp_path, _mock_registry(data_app=service))
+    with TestClient(app) as client:
+        root = f"/data-apps/{PROJECT}/cfg"
+        created = client.post(f"{root}/drafts", json={"git_branch": "feature"}, headers=AUTH)
+        deleted = client.delete(f"{root}/drafts", params={"draft_id": "example"}, headers=AUTH)
+        preview = client.post(f"{root}/preview-link", params={"draft_id": "example"}, headers=AUTH)
+    assert created.status_code == deleted.status_code == preview.status_code == 200
+    assert preview.headers["Cache-Control"] == "no-store"
+    service.create_data_app_draft.assert_called_once_with(PROJECT, "cfg", "feature")
+    service.delete_data_app_draft.assert_called_once_with(PROJECT, "cfg", "example", dry_run=False)
+    service.get_data_app_preview_link.assert_called_once_with(PROJECT, "cfg", "example")
+
+
 # ---------------------------------------------------------------------------
 # configs.py  PUT /{p}/{c}/{cfg}/variables
 # Service: variables.set_variables(...)  -- must NOT receive dry_run kwarg

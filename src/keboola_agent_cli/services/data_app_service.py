@@ -48,6 +48,7 @@ from ._data_app_bodies import (
     git_backfill_warning,
     resolve_effective_version,
 )
+from ._data_app_drafts import DataAppDraftService
 from ._data_app_git_source import (
     MAX_GIT_BRANCH_LENGTH,
     GitSource,
@@ -64,7 +65,7 @@ from ._data_app_password import (
     data_app_auth_kind,
     require_password_auth,
 )
-from .base import BaseService, ClientFactory, make_session_aware_client_factory, project_error_entry
+from .base import ClientFactory, make_session_aware_client_factory, project_error_entry
 from .encrypt_service import EncryptService
 
 logger = logging.getLogger(__name__)
@@ -144,7 +145,7 @@ SECRET_KEY_PATTERN = re.compile(r"^#[A-Za-z][A-Za-z0-9_-]{0,63}$")
 SECRET_OR_PLAIN_KEY_PATTERN = re.compile(r"^#?[A-Za-z][A-Za-z0-9_-]{0,63}$")
 
 
-class DataAppService(BaseService):
+class DataAppService(DataAppDraftService):
     """Lifecycle service for Keboola data apps.
 
     Wires together the Data Science API (deployment record), the Storage

@@ -1051,6 +1051,32 @@
       ]
     },
     {
+      "path": "data-app draft-create",
+      "kind": "command",
+      "hidden": false,
+      "category": "write",
+      "help": "Start a python-js draft on a Git branch without deploying or affecting production.",
+      "params": [
+        {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
+        {"kind": "option", "name": "config_id", "opts": ["--config-id"], "type": "text", "required": true, "default": null, "help": "Production app Storage config ID."},
+        {"kind": "option", "name": "git_branch", "opts": ["--git-branch"], "type": "text", "required": true, "default": null, "help": "Existing branch on the app's Git remote."}
+      ]
+    },
+    {
+      "path": "data-app draft-delete",
+      "kind": "command",
+      "hidden": false,
+      "category": "destructive",
+      "help": "Delete a draft without deleting its Git branch or production app.",
+      "params": [
+        {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
+        {"kind": "option", "name": "config_id", "opts": ["--config-id"], "type": "text", "required": true, "default": null, "help": "Production app config ID, or legacy draft config ID."},
+        {"kind": "option", "name": "draft_id", "opts": ["--draft-id"], "type": "text", "default": null, "help": "Draft UUID. Omit only when targeting a legacy draft."},
+        {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Check the target without deleting it."},
+        {"kind": "option", "name": "yes", "opts": ["--yes", "-y"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip the confirmation prompt."}
+      ]
+    },
+    {
       "path": "data-app git-auth-set",
       "kind": "command",
       "hidden": false,
@@ -1142,6 +1168,18 @@
         {"kind": "option", "name": "copy", "opts": ["--copy"], "type": "boolean", "is_flag": true, "default": false, "help": "Copy the data-app password to the clipboard at once, without the terminal prompt. The only way to copy it when there is no terminal (an AI agent, CI) or with --json. On create / deploy it needs --wait."},
         {"kind": "option", "name": "reveal", "opts": ["--reveal"], "type": "boolean", "is_flag": true, "default": false, "help": "Print the data-app password (human and --json output). For scripts and CI; in an AI agent session the password then goes into the chat history. On create / deploy it needs --wait."},
         {"kind": "option", "name": "open_app", "opts": ["--open"], "type": "boolean", "is_flag": true, "default": false, "help": "Also open the app URL in the browser."}
+      ]
+    },
+    {
+      "path": "data-app preview-link",
+      "kind": "command",
+      "hidden": false,
+      "category": "write",
+      "help": "Mint a private, short-lived login link. Open it only in a browser; do not share it.",
+      "params": [
+        {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
+        {"kind": "option", "name": "config_id", "opts": ["--config-id"], "type": "text", "required": true, "default": null, "help": "Production app config ID, or legacy draft config ID."},
+        {"kind": "option", "name": "draft_id", "opts": ["--draft-id"], "type": "text", "default": null, "help": "Draft UUID. Omit only when targeting a legacy draft."}
       ]
     },
     {
