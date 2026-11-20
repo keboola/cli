@@ -497,6 +497,15 @@ swap again only with the owner's yes.
 
 A table that never received streaming writes skips the first two checks.
 
+### Before the swap: outside the consumers' schedule
+
+The swap is a chain of renames, so for a moment no table exists under the
+name `T`. A reader that runs in that moment fails. This also holds for a
+reader in a project that links the bucket. Run the swap at a time when no
+reader recorded in section 1 is scheduled, and agree on that time with the
+owner. Check that no reader runs now with the `job list` command of
+section 3.
+
 ### The swap
 
 ```bash
@@ -551,13 +560,33 @@ kbagent --json job list --project ALIAS --limit 20
 kbagent --json storage table-detail --project ALIAS --table-id B.T
 ```
 
+Watch the next read of each consumer too. For every reader recorded in
+section 1, wait for its next run after the swap and confirm that it ended
+with success (the `job list` command above; `job detail` for a failed run).
+kbagent does not see a reader in another project that links the bucket, or a
+reader outside Keboola. Ask the owner to confirm the next read of each of
+them.
+
 When the table loads incrementally and its primary key contains `COL`,
 recommend `partition_aware_import` in the output mapping to the owner. The
 runbook does not change the configuration.
 
 ## 8. Keep the old table 7 days, then drop it
 
-While `B.T_repart` exists, the rollback is a second swap:
+For these 7 days `B.T_repart` is a second copy of the data, personal data
+included. A deletion request that arrives in this time applies to both
+tables. Tell the owner: the owner applies it to `B.T` and to `B.T_repart`.
+
+While `B.T_repart` exists, the rollback is a second swap. Before it:
+
+- The owner pauses the writers again, as in section 3, and the operator
+  runs the two checks at the top of section 6 (BigQuery allows the rename;
+  outside the consumers' schedule).
+- Rows that were loaded after the first swap exist only in the new table. A
+  rollback does not move them: after it they are in `B.T_repart`, and `B.T`
+  holds the old table as it was at the first swap. Tell the owner before the
+  rollback. The owner loads those rows into `B.T` again after it, and
+  `B.T_repart` is not dropped before that is done.
 
 ```bash
 kbagent --json storage swap-tables --project ALIAS --table-id B.T --target-table-id B.T_repart --branch 0 --yes --timeout 3600
