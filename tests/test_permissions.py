@@ -587,3 +587,34 @@ class TestValidatorEngineParity:
         for pattern in self.REJECTED_PATTERNS:
             assert pattern_matches_known_operation(pattern) is False, pattern
             assert not any(_matches_pattern(op, pattern) for op in known_ops), pattern
+
+
+class TestImpliedOperations:
+    """`flow.run` also needs `job.run` (IMPLIED_OPERATIONS): a flow run starts a Queue job."""
+
+    def test_job_run_deny_blocks_flow_run(self) -> None:
+        engine = PermissionEngine(PermissionPolicy(mode="allow", deny=["job.run"]))
+        assert engine.is_allowed("job.run") is False
+        assert engine.is_allowed("flow.run") is False
+        assert engine.is_allowed("flow.list") is True
+
+    def test_job_glob_deny_blocks_flow_run(self) -> None:
+        engine = PermissionEngine(PermissionPolicy(mode="allow", deny=["job.*"]))
+        assert engine.is_allowed("flow.run") is False
+
+    def test_flow_run_deny_leaves_job_run(self) -> None:
+        engine = PermissionEngine(PermissionPolicy(mode="allow", deny=["flow.run"]))
+        assert engine.is_allowed("flow.run") is False
+        assert engine.is_allowed("job.run") is True
+
+    def test_allow_list_needs_both_keys(self) -> None:
+        only_flow = PermissionEngine(PermissionPolicy(mode="deny", allow=["flow.run"]))
+        assert only_flow.is_allowed("flow.run") is False
+        both = PermissionEngine(PermissionPolicy(mode="deny", allow=["flow.run", "job.run"]))
+        assert both.is_allowed("flow.run") is True
+
+    def test_refusal_names_the_implied_key(self) -> None:
+        engine = PermissionEngine(PermissionPolicy(mode="allow", deny=["job.run"]))
+        with pytest.raises(PermissionDeniedError) as excinfo:
+            engine.check_or_raise("flow.run")
+        assert "job.run" in str(excinfo.value)

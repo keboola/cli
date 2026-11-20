@@ -124,6 +124,18 @@ pitfall 2.2.
    [gotchas.md](gotchas.md) "Keys removed from `--json` output in 1.0.0").
 4. **Branch on `data.status` of `sync push`**: `pushed`, `dry_run` or
    `no_changes`. The shapes differ -- see pitfall 5.2.
+5. **Never retry `sync push` blindly after `SYNC_CONFLICT`** *(since 1.4.0, #827)*.
+   A config (or its rows) changed in Keboola after push read it, so push left
+   it alone. A re-run gives the same answer or, worse, a person resolves it by
+   overwriting the UI edit. Fail the job, then copy the conflicting config
+   folder(s) aside, run `kbagent sync pull --project ALIAS --theirs` (it
+   overwrites every local change in the tree), re-apply the edit, run
+   `kbagent sync diff --project ALIAS`, commit, and push again. A plain
+   `kbagent sync pull` or a manual merge keeps the old baseline, so the
+   conflict stays. `SYNC_LOCAL_FILE_CHANGED` means a file of the
+   tree changed while push read it: in CI something else writes the checkout --
+   fix that, then re-run. A `warnings[]` entry `LOCAL_EDIT_DURING_PUSH` means
+   the same during the update: run `kbagent sync diff` after the job.
 5. **Default every optional list to empty.** Many keys appear only when not
    empty -- see pitfall 5.3.
 

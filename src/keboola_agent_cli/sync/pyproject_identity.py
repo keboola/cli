@@ -16,8 +16,10 @@ line edit cannot change safely is left alone (the push then warns).
 from __future__ import annotations
 
 import copy
+import hashlib
 import re
 import tomllib
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -41,9 +43,44 @@ def _value_pattern(key: str) -> re.Pattern[str]:
     return re.compile(rf"^(\s*{re.escape(key)}\s*=\s*)" + _STRING_VALUE)
 
 
+@dataclass(frozen=True)
+class PyprojectRefresh:
+    """What :func:`refresh_pyproject` did to a ``pyproject.toml``.
+
+    Attributes:
+        refreshed: The owned fields now hold the config's values (or the
+            component owns no ``pyproject.toml``, or there is none). False:
+            the file was left as it was.
+        file_hash: SHA-256 of the bytes the file holds as this call knows
+            them -- the bytes it wrote, or the bytes it read when it wrote
+            nothing. Empty when there is no file it owns, or it could not be
+            read. Never a fresh read after the write: a push stamps this hash,
+            so an edit saved after the write stays visible to ``sync diff``
+            (#827).
+        edited: *expected_hash* was given and the file no longer had it: it
+            was edited after push read it. Nothing was written.
+    """
+
+    refreshed: bool
+    file_hash: str = ""
+    edited: bool = False
+
+
 def refresh_pyproject_identity(
     component_id: str, config_dir: Path, *, name: str, config_id: str
 ) -> bool:
+    """True iff :func:`refresh_pyproject` left the owned fields pointing at the config."""
+    return refresh_pyproject(component_id, config_dir, name=name, config_id=config_id).refreshed
+
+
+def refresh_pyproject(
+    component_id: str,
+    config_dir: Path,
+    *,
+    name: str,
+    config_id: str,
+    expected_hash: str | None = None,
+) -> PyprojectRefresh:
     """Point the owned fields of *config_dir*'s ``pyproject.toml`` at the config.
 
     *name* is the config's name; *config_id* its id, or ``""`` when the file
@@ -55,23 +92,33 @@ def refresh_pyproject_identity(
     number) could turn into invalid TOML or a second definition, so the result
     is parsed and must equal the file's own content with only the owned values
     changed. When it does not -- or the file is no valid TOML to begin with,
-    or cannot be read or written -- the file is left as it was and False is returned: the remote
-    write already happened, so the caller warns instead of failing.
+    or cannot be read or written -- the file is left as it was and ``refreshed`` is False: the
+    remote write already happened, so the caller warns instead of failing.
+
+    *expected_hash* is the hash of the file push read and sent. A file that
+    no longer has it was edited during the push: it is left as it is
+    (``edited``), so the edit is neither overwritten nor taken for synced.
     """
     path = config_dir / PYPROJECT_FILENAME
     if PYPROJECT_FILENAME not in owned_companions(component_id) or not path.is_file():
-        return True
+        return PyprojectRefresh(refreshed=True)
     try:
         original = path.read_bytes()
+    except OSError:
+        return PyprojectRefresh(refreshed=False)
+    read_hash = _sha256(original)
+    if expected_hash is not None and read_hash != expected_hash:
+        return PyprojectRefresh(refreshed=False, edited=True)
+    try:
         text = original.decode("utf-8")
         before = _parse(text)
-    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
-        return False
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return PyprojectRefresh(refreshed=False, file_hash=read_hash)
     expected = _expected(before, component_id, name=name, config_id=config_id)
     if expected is None:
-        return False
+        return PyprojectRefresh(refreshed=False, file_hash=read_hash)
     if expected == before:
-        return True
+        return PyprojectRefresh(refreshed=True, file_hash=read_hash)
     lines = text.splitlines(keepends=True)
     project = before.get("project")
     if isinstance(project, dict) and expected["project"].get("name") != project.get("name"):
@@ -90,17 +137,22 @@ def refresh_pyproject_identity(
     updated = "".join(lines)
     try:
         if _parse(updated) != expected:
-            return False
+            return PyprojectRefresh(refreshed=False, file_hash=read_hash)
     except tomllib.TOMLDecodeError:
-        return False
+        return PyprojectRefresh(refreshed=False, file_hash=read_hash)
+    generated = updated.encode("utf-8")
     try:
-        path.write_bytes(updated.encode("utf-8"))
+        path.write_bytes(generated)
     except OSError:
         # A read-only file: the remote write already happened, so the push
         # warns and still stamps its baseline. Opening for write fails before
         # any byte is written, so the file is as it was.
-        return False
-    return True
+        return PyprojectRefresh(refreshed=False, file_hash=read_hash)
+    return PyprojectRefresh(refreshed=True, file_hash=_sha256(generated))
+
+
+def _sha256(content: bytes) -> str:
+    return hashlib.sha256(content).hexdigest()
 
 
 def _parse(text: str) -> dict[str, Any]:

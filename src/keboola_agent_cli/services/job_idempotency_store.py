@@ -232,6 +232,7 @@ def run_idempotent_job(
     force_rerun: bool,
     create: Callable[[], dict[str, Any]],
     fetch: Callable[[str], dict[str, Any]],
+    before_create: Callable[[], None] | None = None,
 ) -> tuple[dict[str, Any], bool]:
     """Probe-before-create dispatch for an idempotent job run.
 
@@ -257,6 +258,9 @@ def run_idempotent_job(
         create: Thunk that creates the job and returns its dict.
         fetch: ``job_id -> job dict`` (Queue ``get_job_detail``); used to
             resurrect a prior job's current state.
+        before_create: Runs after a replay was ruled out and before the
+            pending entry is recorded (``job run`` reads and checks a flow
+            here). Its error leaves the store as it was: no job was created.
 
     Raises:
         KeboolaApiError: If ``key`` was already recorded for a different
@@ -264,6 +268,8 @@ def run_idempotent_job(
             an unknown outcome (both ``ErrorCode.INVALID_ARGUMENT``).
     """
     if not key or store is None:
+        if before_create is not None:
+            before_create()
         return create(), False
 
     existing = store.lookup(key)
@@ -307,6 +313,8 @@ def run_idempotent_job(
             return prior, True
         # Prior run failed / was purged -> fall through and re-run.
 
+    if before_create is not None:
+        before_create()
     store.record(
         key,
         job_id="",

@@ -205,6 +205,11 @@ def project_not_registered_error(alias: str) -> ConfigError:
     )
 
 
+def global_config_dir() -> Path:
+    """The global config directory of the running user (platformdirs)."""
+    return Path(platformdirs.user_config_dir("keboola-agent-cli"))
+
+
 def resolve_config_dir(cli_config_dir: str | None = None) -> tuple[Path, str]:
     """Resolve the config directory using the priority chain.
 
@@ -228,7 +233,7 @@ def resolve_config_dir(cli_config_dir: str | None = None) -> tuple[Path, str]:
     try:
         current = Path.cwd().resolve()
     except OSError:
-        return Path(platformdirs.user_config_dir("keboola-agent-cli")), "global"
+        return global_config_dir(), "global"
 
     home = Path.home().resolve()
     while True:
@@ -239,7 +244,7 @@ def resolve_config_dir(cli_config_dir: str | None = None) -> tuple[Path, str]:
             break
         current = current.parent
 
-    return Path(platformdirs.user_config_dir("keboola-agent-cli")), "global"
+    return global_config_dir(), "global"
 
 
 class ConfigStore:
@@ -255,7 +260,7 @@ class ConfigStore:
 
     def __init__(self, config_dir: Path | None = None, source: str = "global") -> None:
         if config_dir is None:
-            self._config_dir = Path(platformdirs.user_config_dir("keboola-agent-cli"))
+            self._config_dir = global_config_dir()
         else:
             self._config_dir = config_dir
         self._config_path = self._config_dir / self.CONFIG_FILENAME

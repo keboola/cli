@@ -134,6 +134,7 @@ class FakeApi:
     def _list(self, branch_id: int | None = None, **_: Any) -> list[dict[str, Any]]:
         by_comp: dict[str, list[dict[str, Any]]] = {}
         for (comp, _cid), cfg in sorted(self.remote[self._b(branch_id)].items()):
+            cfg.setdefault("version", 1)
             by_comp.setdefault(comp, []).append(copy.deepcopy(cfg))
         return [
             {"id": comp, "type": COMPONENT_TYPES[comp], "configurations": cfgs}
@@ -158,13 +159,21 @@ class FakeApi:
             "configuration": copy.deepcopy(configuration),
             "rows": [],
             "isDisabled": bool(is_disabled),
+            "version": 1,
         }
         self.remote[self._b(branch_id)][(component_id, cid)] = cfg
         return copy.deepcopy(cfg)
 
+    @staticmethod
+    def _bump(cfg: dict) -> None:
+        """Storage raises a config's version on every write to it or to one of its rows."""
+        cfg["version"] = cfg.get("version", 1) + 1
+
     def _cfg(self, component_id: str, config_id: str, branch_id: int | None) -> dict:
         try:
-            return self.remote[self._b(branch_id)][(component_id, str(config_id))]
+            cfg = self.remote[self._b(branch_id)][(component_id, str(config_id))]
+            cfg.setdefault("version", 1)
+            return cfg
         except KeyError:
             raise KeboolaApiError(
                 f"Configuration {config_id} not found", 404, ErrorCode.NOT_FOUND
@@ -191,6 +200,7 @@ class FakeApi:
             cfg["description"] = description
         if is_disabled is not None:
             cfg["isDisabled"] = bool(is_disabled)
+        self._bump(cfg)
         return copy.deepcopy(cfg)
 
     def _delete(
@@ -222,6 +232,7 @@ class FakeApi:
             "isDisabled": bool(is_disabled),
         }
         cfg["rows"].append(row)
+        self._bump(cfg)
         return copy.deepcopy(row)
 
     def _row(self, component_id: str, config_id: str, row_id: str, branch_id: int | None) -> dict:
@@ -253,6 +264,7 @@ class FakeApi:
             row["description"] = description
         if is_disabled is not None:
             row["isDisabled"] = bool(is_disabled)
+        self._bump(self._cfg(component_id, config_id, branch_id))
         return copy.deepcopy(row)
 
     def _delete_row(
@@ -260,6 +272,7 @@ class FakeApi:
     ) -> None:
         cfg = self._cfg(component_id, config_id, branch_id)
         cfg["rows"] = [r for r in cfg["rows"] if r["id"] != str(row_id)]
+        self._bump(cfg)
 
     def _get_row(
         self, component_id: str, config_id: str, row_id: str, branch_id: int | None = None, **_: Any

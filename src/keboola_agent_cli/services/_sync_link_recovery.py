@@ -30,18 +30,18 @@ from typing import TYPE_CHECKING, Any
 
 from ..errors import ErrorCode, KeboolaApiError
 from ..sync.branch_scope import find_branch_entry
-from ..sync.config_format import api_config_to_local
-from ..sync.diff_engine import config_hash
 from ..sync.manifest import Manifest, ManifestConfiguration
 from ._sync_bindings import (
     SharedCodeLink,
-    _local_hash,
     _refresh_binding_hashes,
     _repoint_shared_code,
     _rewrite_list_placeholders,
-    _rewrite_script_files,
     put_configuration_only,
+    read_in_step,
     resolve_transformation_bindings,
+    rewrite_scripts_from,
+    snapshot_receipt,
+    unchanged_since_read,
 )
 from ._sync_link_pending import (
     LinkMaps,
@@ -107,12 +107,15 @@ def resolve_transformation_links(
     manifest: Manifest,
     branch_id: int | None,
     source_dir: Path | None,
+    held: set[tuple[str, str]] | frozenset[tuple[str, str]] = frozenset(),
 ) -> VariableBindingResult:
     """Phase C: the in-push link backfill, then the pending links of earlier pushes.
 
     *ledger* carries this push's creates and its planned placeholder claims
     (:meth:`CreateLedger.plan`): a variables id any of them claims -- also one
     whose create failed -- is never bound to another config by the fallback.
+    A pending config in *held* (its update failed in this push) is not
+    written (#827, D4); it stays pending.
     """
     created_configs = ledger.created_configs
     created_id_map = ledger.created_id_map
@@ -144,6 +147,7 @@ def resolve_transformation_links(
         for entry in link_pending_entries(manifest, branch_id)
         if entry.component_id not in RUN_TARGET_COMPONENTS
         and (entry.component_id, entry.id) not in failed
+        and (entry.component_id, entry.id) not in held
     ]
     if not pending:
         return result
@@ -354,16 +358,24 @@ def _apply_to_api(configuration: dict[str, Any], links: TransformationLinks) -> 
 
 
 def _apply_to_local(
-    created: CreatedConfig, local_data: dict[str, Any], links: TransformationLinks
-) -> None:
+    created: CreatedConfig,
+    local_data: dict[str, Any],
+    links: TransformationLinks,
+    contents: dict[str, bytes],
+) -> dict[str, str]:
+    """Rewrite the links in *local_data* and the script files (from the bytes read once).
+
+    Returns the scripts' hashes as written (or read, when unchanged) -- G3.
+    """
     extra = local_data.setdefault("_configuration_extra", {})
     if links.variables_id:
         extra["variables_id"] = links.variables_id
     if links.variables_values_id:
         extra["variables_values_id"] = links.variables_values_id
-    if links.shared_code is not None:
-        _repoint_shared_code(local_data, links.shared_code)
-        _rewrite_script_files(created.config_dir, links.shared_code.row_id_map)
+    if links.shared_code is None:
+        return {}
+    _repoint_shared_code(local_data, links.shared_code)
+    return rewrite_scripts_from(created.config_dir, contents, links.shared_code.row_id_map)
 
 
 def _recover(
@@ -392,10 +404,7 @@ def _recover(
         return links.pending
     rewritten = copy.deepcopy(configuration)
     _apply_to_api(rewritten, links)
-    local_data = service._read_config_file(created.config_dir)
-    in_step = local_data is not None and _local_hash(created, local_data) == config_hash(
-        api_config_to_local(created.component_id, remote, created.config_id)
-    )
+    captured = read_in_step(service, created, remote)
     try:
         response = put_configuration_only(
             client,
@@ -411,9 +420,10 @@ def _recover(
     result.configs_rewritten += 1
     if links.shared_code is not None:
         result.shared_code_links += 1
-    if in_step and local_data is not None:
-        _apply_to_local(created, local_data, links)
-        service._write_config_file(created.config_dir, local_data)
+    if captured is not None and unchanged_since_read(service, created, captured, result.warnings):
+        local_data = copy.deepcopy(captured.data)
+        scripts = _apply_to_local(created, local_data, links, captured.contents)
+        written = service._write_config_file(created.config_dir, local_data)
         _refresh_binding_hashes(
             service,
             client,
@@ -422,6 +432,7 @@ def _recover(
             branch_id=branch_id,
             response=response,
             warnings=result.warnings,
+            receipt=snapshot_receipt(captured, file_hash=written, rewritten=scripts),
         )
     return links.pending
 

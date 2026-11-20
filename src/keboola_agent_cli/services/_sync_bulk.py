@@ -18,7 +18,7 @@ from ..constants import (
     DEFAULT_SAMPLE_LIMIT,
     KEBOOLA_DIR_NAME,
 )
-from ..errors import SyncConflictError
+from ..errors import SyncConflictError, SyncInitError
 from .base import item_failure
 
 if TYPE_CHECKING:
@@ -52,13 +52,12 @@ def pull_all(
     def _worker(alias: str) -> None:
         nonlocal success_count, failed_count
         project_root = base_dir / alias
-        manifest_path = project_root / KEBOOLA_DIR_NAME / "manifest.json"
         try:
-            if not manifest_path.exists():
-                service.init_sync(alias, project_root)
+            # The init runs inside the pull's directory lock (L5).
             result = service.pull(
                 alias,
                 project_root,
+                init_if_missing=True,
                 force=force,
                 dry_run=dry_run,
                 job_limit=job_limit,
@@ -77,6 +76,9 @@ def pull_all(
             # other error and read the conflicting configs -- the single-project
             # path emits the same code + conflicts.
             results[alias] = item_failure(exc, conflicts=exc.conflicts)
+            failed_count += 1
+        except SyncInitError as exc:
+            results[alias] = item_failure(exc.cause)
             failed_count += 1
         except Exception as exc:
             results[alias] = item_failure(exc)
@@ -138,7 +140,8 @@ def diff_all(service: SyncService, base_dir: Path) -> dict[str, Any]:
             else:
                 success_count += 1
         except Exception as exc:
-            results[alias] = {"error": str(exc)}
+            # Code, retryable and (busy) details kept; `error` as before (L6).
+            results[alias] = {"error": str(exc), **item_failure(exc)}
             failed_count += 1
 
     max_workers = min(len(actionable), service._resolve_max_workers()) if actionable else 1
@@ -212,7 +215,8 @@ def push_all(
             else:
                 success_count += 1
         except Exception as exc:
-            results[alias] = {"error": str(exc)}
+            # Code, retryable and (busy) details kept; `error` as before (L6).
+            results[alias] = {"error": str(exc), **item_failure(exc)}
             failed_count += 1
 
     max_workers = min(len(actionable), service._resolve_max_workers()) if actionable else 1

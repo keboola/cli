@@ -16,6 +16,7 @@ from collections import deque
 from typing import Any
 
 from ..json_utils import draft7_errors
+from .flow_run_selection import first_phase_ids, normalize_id
 
 # Operand arity per operator (semantic; the schema cannot express these counts).
 _BINARY_OPERATORS = frozenset(
@@ -40,6 +41,13 @@ def _condition_arity_errors(condition: Any) -> list[str]:
     errors: list[str] = []
     ctype = condition.get("type")
     operands = condition.get("operands", [])
+    if not isinstance(operands, list):
+        return [f"Condition 'operands' must be a list, got {type(operands).__name__}"]
+
+    for key in ("operator", "function"):
+        if key in condition and not isinstance(condition[key], str):
+            # An unhashable value would crash the set lookups below.
+            return [f"Condition '{key}' must be a string, got {type(condition[key]).__name__}"]
 
     if ctype == "operator":
         op = condition.get("operator")
@@ -63,7 +71,7 @@ def _semantic_errors(phases: list[dict[str, Any]], tasks: list[dict[str, Any]]) 
     errors: list[str] = []
 
     # Unique phase ids
-    phase_ids: list[str] = [str(p.get("id")) for p in phases]
+    phase_ids: list[str] = [normalize_id(p.get("id")) for p in phases]
     seen: set[str] = set()
     for pid in phase_ids:
         if pid in seen:
@@ -74,14 +82,14 @@ def _semantic_errors(phases: list[dict[str, Any]], tasks: list[dict[str, Any]]) 
     # Unique task ids
     seen_tasks: set[str] = set()
     for task in tasks:
-        tid = str(task.get("id"))
+        tid = normalize_id(task.get("id"))
         if tid in seen_tasks:
             errors.append(f"Duplicate task id '{tid}'")
         seen_tasks.add(tid)
 
     # task.phase references an existing phase
     for task in tasks:
-        ref = str(task.get("phase"))
+        ref = normalize_id(task.get("phase"))
         if ref not in valid_phase_ids:
             errors.append(f"Task '{task.get('id', '?')}' references unknown phase '{ref}'")
 
@@ -89,7 +97,7 @@ def _semantic_errors(phases: list[dict[str, Any]], tasks: list[dict[str, Any]]) 
     for phase in phases:
         for transition in phase.get("next", []):
             goto = transition.get("goto")
-            if goto is not None and str(goto) not in valid_phase_ids:
+            if goto is not None and normalize_id(goto) not in valid_phase_ids:
                 errors.append(
                     f"Phase '{phase.get('id', '?')}' transition goto '{goto}' "
                     f"is not an existing phase id (use null to end the flow)"
@@ -110,16 +118,26 @@ def _semantic_errors(phases: list[dict[str, Any]], tasks: list[dict[str, Any]]) 
             )
 
     # Every phase must have at least one enabled task.
-    enabled_by_phase: dict[str, int] = {str(p.get("id")): 0 for p in phases}
+    enabled_by_phase: dict[str, int] = {normalize_id(p.get("id")): 0 for p in phases}
     for task in tasks:
         if task.get("enabled", True):
-            enabled_by_phase[str(task.get("phase"))] = (
-                enabled_by_phase.get(str(task.get("phase")), 0) + 1
+            enabled_by_phase[normalize_id(task.get("phase"))] = (
+                enabled_by_phase.get(normalize_id(task.get("phase")), 0) + 1
             )
     for phase in phases:
-        pid = str(phase.get("id"))
+        pid = normalize_id(phase.get("id"))
         if enabled_by_phase.get(pid, 0) == 0:
             errors.append(f"Phase '{pid}' has no enabled task")
+
+    # Exactly one first phase: the job queue refuses any other flow ("Flow
+    # must have exactly one first step"), whole run or partial.
+    roots = first_phase_ids(phases)
+    if len(roots) != 1:
+        found = ", ".join(roots) if roots else "none"
+        errors.append(
+            "The flow must have exactly one first phase (a phase no transition goes to); "
+            f"found: {found}"
+        )
 
     # Condition operand arity (recursive).
     for phase in phases:
@@ -152,22 +170,80 @@ def validate_conditional_flow(
     ALWAYS run -- with or without a schema -- because the Storage API does not
     validate flow configurations server-side.
     """
+    shape = _shape_errors(phases, tasks)
+    if shape:
+        return shape
     if schema:
         structural = _structural_errors(phases, tasks, schema)
         if structural:
             return structural
+    if not phases:
+        # Checked here, not in the schema: a flow with no phases runs nothing,
+        # and `flow new --definition-file empty.yaml` used to create one.
+        return ["Flow definition has no phases"]
     return _semantic_errors(phases, tasks)
 
 
+def _shape_errors(phases: Any, tasks: Any) -> list[str]:
+    """The lists the semantic checks iterate are lists of objects.
+
+    Checked before the schema, so a malformed document gets an error instead
+    of a crash also when no schema could be fetched.
+    """
+    errors: list[str] = []
+    for name, items in (("phases", phases), ("tasks", tasks)):
+        if not isinstance(items, list):
+            errors.append(f"'{name}' must be a list, got {type(items).__name__}")
+        elif not all(isinstance(item, dict) for item in items):
+            errors.append(f"Every entry of '{name}' must be an object")
+    if errors:
+        return errors
+    for phase in phases:
+        nexts = phase.get("next", [])
+        if not isinstance(nexts, list) or not all(isinstance(t, dict) for t in nexts):
+            errors.append(f"Phase '{phase.get('id', '?')}': 'next' must be a list of objects")
+            continue
+        for transition in nexts:
+            condition = transition.get("condition")
+            if condition is not None and not isinstance(condition, dict):
+                errors.append(
+                    f"Phase '{phase.get('id', '?')}': a transition 'condition' must be an "
+                    f"object, got {type(condition).__name__}"
+                )
+    # Ids the daemon compares as strings: a list, an object, a boolean or a
+    # missing id cannot name a phase or a task.
+    for kind, items, keys in (("Phase", phases, ("id",)), ("Task", tasks, ("id", "phase"))):
+        for item in items:
+            for key in keys:
+                value = item.get(key)
+                if isinstance(value, bool) or not isinstance(value, str | int | float):
+                    errors.append(
+                        f"{kind} '{item.get('id', '?')}': '{key}' must be a string or a "
+                        f"number, got {type(value).__name__}"
+                    )
+    for task in tasks:
+        if "enabled" in task and not isinstance(task["enabled"], bool):
+            errors.append(
+                f"Task '{task.get('id', '?')}': 'enabled' must be true or false, "
+                f"got {type(task['enabled']).__name__}"
+            )
+    return errors
+
+
 def find_unreachable_phases(phases: list[dict[str, Any]]) -> list[str]:
-    """Return ids of phases not reachable from the entry phase (first in the
-    list) by following next[].goto edges. WARNING-level only -- never blocks a
+    """Return ids of phases not reachable from the entry phase (the one no
+    transition goes to) by following next[].goto edges. WARNING-level only -- never blocks a
     write. Returns ids in the order they appear in ``phases``.
     """
-    if not phases:
+    if not phases or _shape_errors(phases, []):
         return []
-    by_id = {str(p.get("id")): p for p in phases}
-    entry = str(phases[0].get("id"))
+    # The entry is the phase no transition goes to, as the job queue starts
+    # it -- not the first one listed. No single entry is an error of its own.
+    roots = first_phase_ids(phases)
+    if len(roots) != 1:
+        return []
+    by_id = {normalize_id(p.get("id")): p for p in phases}
+    entry = roots[0]
     reachable: set[str] = set()
     queue: deque[str] = deque([entry])
     while queue:
@@ -178,5 +254,5 @@ def find_unreachable_phases(phases: list[dict[str, Any]]) -> list[str]:
         for transition in by_id[pid].get("next", []):
             goto = transition.get("goto")
             if goto is not None:
-                queue.append(str(goto))
-    return [str(p.get("id")) for p in phases if str(p.get("id")) not in reachable]
+                queue.append(normalize_id(goto))
+    return [normalize_id(p.get("id")) for p in phases if normalize_id(p.get("id")) not in reachable]

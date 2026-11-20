@@ -192,7 +192,8 @@ def test_goto_references_missing_phase():
 
 def test_goto_null_is_allowed():
     phases = _valid_phases()
-    phases[0]["next"] = [{"id": "x", "goto": None}]
+    phases[0]["next"] = [{"id": "x", "goto": "transform"}]
+    phases[1]["next"] = [{"id": "end", "goto": None}]
     assert validate_conditional_flow(phases, _valid_tasks()) == []
 
 
@@ -278,18 +279,23 @@ def test_all_phases_reachable():
 
 
 def test_unreachable_phase_reported():
+    # island and island2 only reach each other; start is the one first phase.
+    # (A phase nothing goes to is a second first phase: a validation error.)
     phases = [
         {"id": "start", "name": "Start", "next": [{"id": "x", "goto": None}]},
-        {"id": "island", "name": "Island"},  # never targeted
+        {"id": "island", "name": "Island", "next": [{"id": "y", "goto": "island2"}]},
+        {"id": "island2", "name": "Island 2", "next": [{"id": "z", "goto": "island"}]},
     ]
-    assert find_unreachable_phases(phases) == ["island"]
+    assert find_unreachable_phases(phases) == ["island", "island2"]
 
 
 def test_goto_loop_is_not_an_error():
-    # start -> loop -> start ... legal at runtime, must NOT be flagged
+    # start -> loop -> loop ... a retry loop after the first phase is legal at runtime.
+    # (A loop back to the first phase leaves no first phase: the job queue refuses the
+    # flow, "Flow must have exactly one first step", verified live; see test_flow_queue_checks.)
     phases = [
         {"id": "start", "name": "Start", "next": [{"id": "a", "goto": "loop"}]},
-        {"id": "loop", "name": "Loop", "next": [{"id": "b", "goto": "start"}]},
+        {"id": "loop", "name": "Loop", "next": [{"id": "b", "goto": "loop"}]},
     ]
     assert find_unreachable_phases(phases) == []
     assert (

@@ -34,7 +34,6 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -48,6 +47,7 @@ from ._sync_models import RETIRED_DELETION_KEY
 from ._sync_workspace import SANDBOXES_COMPONENT_ID
 
 if TYPE_CHECKING:
+    from ._sync_pending_removals import RemovalJournal
     from .sync_service import SyncService
 
 logger = logging.getLogger(__name__)
@@ -378,19 +378,6 @@ def remote_deleted_conflicts(stale: list[StaleEntry]) -> list[dict[str, str]]:
     ]
 
 
-def _remove_dir(orphan_dir: Path, branch_dir: Path) -> None:
-    """rmtree ``orphan_dir`` and prune now-empty parents up to ``branch_dir``."""
-    if not (orphan_dir.exists() and orphan_dir.is_dir()):
-        return
-    shutil.rmtree(orphan_dir)
-    logger.info("Removed orphaned directory: %s", orphan_dir)
-    parent = orphan_dir.parent
-    while parent != branch_dir and parent.exists() and not any(parent.iterdir()):
-        parent.rmdir()
-        logger.info("Removed empty parent directory: %s", parent)
-        parent = parent.parent
-
-
 SYMLINK_ROOT_REASON = "the config directory is a symbolic link; kbagent does not delete through it"
 SYMLINK_INSIDE_REASON = (
     "it contains a symbolic link; kbagent does not decide ownership through links"
@@ -454,6 +441,7 @@ def apply_stale_sweep(
     dry_run: bool,
     new_configurations: list[ManifestConfiguration],
     pull_details: list[dict[str, str]],
+    journal: RemovalJournal | None = None,
 ) -> None:
     """Report stale entries and delete their directories, safely, in two passes (round 12).
 
@@ -464,6 +452,8 @@ def apply_stale_sweep(
     reported ``skipped`` with its reason. Pass 2 deletes the rest.
     ``--force`` never reaches an edited entry -- the conflict guard has
     already aborted. A path an entry of this pull owns is never deleted.
+    A directory to delete is only recorded in *journal*: the pull checkpoints
+    the manifest without its entry, then deletes it (#827, D10).
     """
     live_paths = {c.path for c in new_configurations}
     reasons = _keep_reasons(stale, branch_dir, live_paths, theirs=theirs)
@@ -488,8 +478,18 @@ def apply_stale_sweep(
                 "path": item.entry.path,
             }
         )
-        if not dry_run and item.entry.path and item.entry.path not in live_paths:
-            _remove_dir(branch_dir / item.entry.path, branch_dir)
+        if (
+            not dry_run
+            and journal is not None
+            and item.entry.path
+            and item.entry.path not in live_paths
+        ):
+            journal.plan(
+                item.entry.path,
+                "config",
+                component_id=item.entry.component_id,
+                config_id=item.entry.id,
+            )
 
 
 def sweep_stale_rows(
@@ -505,6 +505,7 @@ def sweep_stale_rows(
     pull_details: list[dict[str, str]],
     carried: set[str] | None = None,
     deleted_rows: dict[str, str] | None = None,
+    journal: RemovalJournal | None = None,
 ) -> list[ManifestConfigRow]:
     """Handle the tracked rows of one config that are gone from the remote.
 
@@ -521,6 +522,9 @@ def sweep_stale_rows(
     *deleted_rows* receives, for every row removed, its id and last
     ``pull_config_hash``: the record a later promote push weighs a target row
     with the same id against (D7).
+
+    A row directory to delete is only recorded in *journal*; the pull deletes
+    it after checkpointing the manifest without the row (#827, D10).
 
     Returns the entries to keep in the manifest.
     """
@@ -574,6 +578,14 @@ def sweep_stale_rows(
         pull_details.append({**detail, "action": "removed"})
         if deleted_rows is not None:
             deleted_rows[row_id] = tracked["pull_config_hash"]
-        if not dry_run and row_dir.is_dir():
-            shutil.rmtree(row_dir)
+        if not dry_run and journal is not None:
+            component_id, config_id = row_key_prefix.rstrip("/").split("/", 1)
+            journal.plan(
+                f"{rel_path}/{tracked['path']}",
+                "row",
+                component_id=component_id,
+                config_id=config_id,
+                row_id=row_id,
+                row_path=tracked["path"],
+            )
     return kept

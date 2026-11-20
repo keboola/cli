@@ -705,7 +705,7 @@ class TestCommands:
         (tmp_path / "version_cache.json").write_text(json.dumps(cache))
         monkeypatch.setattr(
             "keboola_agent_cli.services.doctor_service.DoctorService.run_checks",
-            lambda self: {"checks": [], "summary": {}},
+            lambda self, optional_checks=(): {"checks": [], "summary": {}},
         )
 
         result = CliRunner().invoke(app, ["--json", "doctor"])

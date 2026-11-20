@@ -135,6 +135,8 @@ if job.failed:
     raise RuntimeError(f"job {job.id} ended {job.status}")
 ```
 
+**Errors with `wait=True`** *(since 1.4.0)*. Every failure after the job was created -- the job ended in `error` (`QUEUE_JOB_FAILED`), the local `timeout` ran out (`QUEUE_JOB_TIMEOUT`; the job keeps running, it is never killed), or polling failed (`CONNECTION_ERROR`, `TIMEOUT`, `RETRY_EXHAUSTED`, `API_ERROR`, also for a raw transport error or an unreadable poll response) -- raises `KeboolaApiError` with its own `error_code`, `retryable=False` and `details["job_id"]`. Read the job with `kbc.raw.get_job_detail(job_id)`; calling `run_job` again creates a second job. Before 1.4.0 a polling failure could say `retryable=True` and carried no job id.
+
 Full signature knobs: `config_row_ids`, `variable_values_id` (the facade does **not** auto-resolve linked variable values — pass it explicitly if the config needs one), `branch_id`, `mode` (`run`/`debug`/`forceRun`), `poll_strategy`, and the idempotency pair below.
 
 **Idempotency** ([#427](https://github.com/keboola/cli/issues/427)). The Queue API has no server-side idempotency, so the facade does it client-side against a store *you* supply (it has no config-dir to default to):
@@ -382,6 +384,7 @@ The importable surface is a **committed contract**, so changing it is a delibera
 | `query` returns only the **last** result set | multi-statement SQL | split, or put the SELECT last |
 | `run_job` ignores **linked variable values** | the facade is not config-aware | pass `variable_values_id` explicitly |
 | `upload_table` **won't create** the table | no service/config context | create it first, or use the CLI |
+| `run_job(wait=True)` error after the create | the job exists and may still run | `retryable` is `False`: read `details["job_id"]` with `raw.get_job_detail`, never call `run_job` again |
 | `upload_table` timeout does **not** stop the import | the Storage job runs server-side | follow `details["job_id"]` with `storage_job(..., wait=True)`; never re-upload incrementally |
 | `idempotency_key` raises without a store | stateless facade has no config-dir | pass `idempotency_store=` |
 | `read_bytes` loads the **whole file** into RAM | convenience over streaming | stream via `Client.raw` for huge tables |
