@@ -113,14 +113,23 @@ Create a helper workspace and load the table as a view:
 ```bash
 kbagent --json workspace create --project ALIAS --name repartition-T
 kbagent --json workspace load --project ALIAS --workspace-id WS_ID --table-id B.T --load-type view
-kbagent --json workspace query --project ALIAS --workspace-id WS_ID --sql "SELECT COUNT(DISTINCT DATE(COL)) AS days, COUNT(DISTINCT DATE_TRUNC(DATE(COL), MONTH)) AS months, MIN(COL) AS min_value, MAX(COL) AS max_value, COUNTIF(COL IS NULL) AS nulls FROM T"
+kbagent --json workspace query --project ALIAS --workspace-id WS_ID --sql "SELECT COUNT(DISTINCT DAY_EXPR) AS days, COUNT(DISTINCT DATE_TRUNC(DAY_EXPR, MONTH)) AS months, MIN(COL) AS min_value, MAX(COL) AS max_value, COUNTIF(COL IS NULL) AS nulls FROM T"
 ```
 
 `workspace create` and `workspace load` write to the project (a workspace and
 a view), not to the table. They still wait for a yes.
 
-For a STRING column run the profile query of section 4a first. Then run the
-query above with `SAFE.PARSE_DATE('%Y-%m-%d', COL)` in place of `DATE(COL)`.
+`DAY_EXPR` is the day of a row as a DATE. It depends on the type of `COL`.
+Replace it in every query of this runbook:
+
+| Type of `COL` | `DAY_EXPR` |
+|---|---|
+| DATE | `COL` |
+| DATETIME | `DATE(COL)` |
+| TIMESTAMP | `DATE(COL)` (the UTC day, which is how BigQuery partitions a TIMESTAMP column) |
+| STRING (path B) | `SAFE.PARSE_DATE('%Y-%m-%d', COL)`, with the owner's format string in place of `%Y-%m-%d` |
+
+For a STRING column run the profile query of section 4a first.
 
 A cluster-only table skips this query.
 
@@ -421,15 +430,33 @@ bq --project_id=GCP_PROJECT ls --row_access_policies --format=prettyjson DATASET
 ```
 
 Tables over 5 TiB, and every path B table, also get a row count per
-partition:
+partition. A cluster-only table has no partitions and skips it.
 
 ```bash
-kbagent --json workspace query --project ALIAS --workspace-id WS_ID --full --sql "SELECT COALESCE(o.p, n.p) AS p, o.c AS old_rows, n.c AS new_rows FROM (SELECT DATE_TRUNC(DATE(COL), MONTH) AS p, COUNT(*) AS c FROM T GROUP BY p) o FULL OUTER JOIN (SELECT DATE_TRUNC(COL, MONTH) AS p, COUNT(*) AS c FROM T_repart GROUP BY p) n ON o.p = n.p WHERE o.c IS DISTINCT FROM n.c"
+kbagent --json workspace query --project ALIAS --workspace-id WS_ID --full --sql "SELECT p, SUM(old_c) AS old_rows, SUM(new_c) AS new_rows FROM (SELECT PART_OLD AS p, COUNT(*) AS old_c, 0 AS new_c FROM T GROUP BY p UNION ALL SELECT PART_NEW AS p, 0 AS old_c, COUNT(*) AS new_c FROM T_repart GROUP BY p) GROUP BY p HAVING SUM(old_c) != SUM(new_c)"
 ```
 
-An empty result passes. On a path B table whose format is not `%Y-%m-%d`,
-replace `DATE(COL)` of the old table with `SAFE.PARSE_DATE` and the owner's
-format string.
+`PART_OLD` and `PART_NEW` are the partition of a row as a DATE, on the old
+and on the new table. Both follow the granularity that section 2 chose, so
+the query counts per partition of the new table:
+
+| Granularity | Partition expression |
+|---|---|
+| DAY | `DAY_EXPR` |
+| MONTH | `DATE_TRUNC(DAY_EXPR, MONTH)` |
+
+Build both from `DAY_EXPR` of section 1, with the type that `COL` has on
+that table:
+
+- Path A: `COL` has the same type on both tables, so `PART_OLD` and
+  `PART_NEW` are the same expression.
+- Path B: on the old table `COL` is a STRING, so `PART_OLD` uses
+  `SAFE.PARSE_DATE` with the format string of section 4a. On the new table
+  `COL` is a DATE, so `PART_NEW` uses `COL`.
+
+Rows with NULL in `COL` form one group with `p` NULL on each table, and the
+query compares the two groups like any other partition. An empty result
+passes.
 
 Right before the swap, count the rows of both tables once more with the
 count query at the top of this section. It is the last command before the
