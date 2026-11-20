@@ -2383,6 +2383,7 @@ remain branch-aware because modifying a dev branch is the expected intent.
     --progress reports the --download transfer as on download-table (nothing to report without --download).
     --file-type parquet produces a sliced Parquet file (CSV default). With --download, --output
     is a directory that will hold one .parquet file per slice plus _manifest.json.
+    --compression snappy opts in to Parquet compression; the default is none (since vNEXT).
     Default parquet directory: ./{project}/{table_id}.parquet/ (mirrors Keboola addressing).
 """,
     "stream": """\

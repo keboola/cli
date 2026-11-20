@@ -4012,6 +4012,7 @@
         {"kind": "option", "name": "output", "opts": ["--output", "-o"], "type": "text", "default": null, "help": "Output file path (only with --download)"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID (defaults to active branch if set via 'branch use')"},
         {"kind": "option", "name": "file_type", "opts": ["--file-type"], "type": "text", "default": "csv", "help": "Output format: 'csv' (default) or 'parquet'. Parquet output is always sliced; with --download each slice is saved as its own file under --output (treated as a directory)."},
+        {"kind": "option", "name": "compression", "opts": ["--compression"], "type": "text", "default": "none", "help": "Parquet compression: 'none' (default) or 'snappy'. Snappy requires --file-type parquet."},
         {"kind": "option", "name": "keep_slices", "opts": ["--keep-slices"], "type": "boolean", "is_flag": true, "default": false, "help": "CSV-only with --download: write each slice as its own file under --output (treated as a directory) instead of concatenating into a single CSV. Mirrors the parquet download layout. Ignored for parquet (always sliced) and for non-sliced exports."},
         {"kind": "option", "name": "progress", "opts": ["--progress"], "type": "boolean", "is_flag": true, "default": false, "help": "Always report transfer progress on stderr (percent, speed, elapsed, ETA), also with --json and without a terminal: a bar on a terminal, otherwise one line every 10s. stdout is untouched."}
       ]
