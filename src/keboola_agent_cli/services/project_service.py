@@ -82,7 +82,7 @@ class ProjectService(BaseService):
 
         became_active = self._config_store.add_project(alias, project)
 
-        return {
+        result = {
             "alias": alias,
             "project_name": token_info.project_name,
             "project_id": token_info.project_id,
@@ -92,6 +92,16 @@ class ProjectService(BaseService):
             "org_name": token_info.org_name,
             "active_project_set": alias if became_active else None,
         }
+        if not token_info.is_master_token:
+            result["warnings"] = [
+                (
+                    f"Token for '{alias}' is not a master token. `config oauth-url` and "
+                    "`token create` require a master Storage API token from the Keboola UI. "
+                    "`project refresh` does NOT produce a master token, even though its "
+                    "tokens have canManageTokens=true."
+                )
+            ]
+        return result
 
     def remove_project(self, alias: str, dry_run: bool = False) -> dict[str, Any]:
         """Remove a project from the configuration.

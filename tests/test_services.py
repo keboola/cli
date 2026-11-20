@@ -18,6 +18,26 @@ from keboola_agent_cli.services.project_service import ProjectService
 class TestAddProject:
     """Tests for ProjectService.add_project()."""
 
+    @pytest.mark.parametrize("master", [True, False])
+    def test_non_master_warning(self, tmp_config_dir: Path, master: bool) -> None:
+        store = ConfigStore(config_dir=tmp_config_dir)
+        client = make_mock_client()
+        client.verify_token.return_value.is_master_token = master
+        service = ProjectService(config_store=store, client_factory=lambda url, token: client)
+
+        result = service.add_project("prod", "https://connection.keboola.com", "test-token")
+
+        assert store.get_project("prod") is not None
+        if master:
+            assert "warnings" not in result
+        else:
+            warning = result["warnings"][0]
+            assert "Token for 'prod' is not a master token" in warning
+            assert "`config oauth-url`" in warning
+            assert "`token create`" in warning
+            assert "Keboola UI" in warning
+            assert "`project refresh` does NOT produce a master token" in warning
+
     def test_add_project_success(self, tmp_config_dir: Path) -> None:
         """add_project verifies token, saves to config, returns project info."""
         store = ConfigStore(config_dir=tmp_config_dir)
