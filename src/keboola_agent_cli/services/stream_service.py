@@ -104,6 +104,8 @@ class StreamService:
         if_not_exists: bool = False,
         reveal: bool = False,
         provision_sinks: bool = True,
+        table_id: str | None = None,
+        columns: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Create a source, poll the async task, and return its assembled detail.
 
@@ -111,11 +113,33 @@ class StreamService:
         are auto-provisioned so data actually lands in Storage -- the raw Stream
         API ``POST /sources`` creates only the bare source, unlike the Keboola
         UI. Pass ``provision_sinks=False`` to skip that and create a bare source.
+        HTTP sources get one table sink with MCP-compatible defaults. A sink
+        failure leaves the source available for retry with ``if_not_exists``.
 
         With ``if_not_exists`` an existing source matching ``name`` (by name or
         sourceId) is returned untouched with ``status="skipped"`` (its sinks are
         also reconciled when ``provision_sinks`` so a half-set-up source heals).
         """
+        if source_type != "http" and (table_id is not None or columns is not None):
+            raise ConfigError("--table-id and --columns apply only to HTTP sources.")
+        if not provision_sinks and (table_id is not None or columns is not None):
+            raise ConfigError("--table-id and --columns cannot be combined with --no-sinks.")
+        if table_id is not None and not table_id.strip():
+            raise ConfigError("--table-id must not be empty.")
+        if columns is not None and (
+            not isinstance(columns, list)
+            or any(
+                not isinstance(col, dict)
+                or not isinstance(col.get("name"), str)
+                or not col["name"].strip()
+                or col.get("type")
+                not in ("uuid", "datetime", "ip", "body", "headers", "path", "template")
+                for col in columns
+            )
+        ):
+            raise ConfigError(
+                "--columns must be a JSON array of column objects with name and type."
+            )
         creds = self._resolve_project(alias)
         branch = _branch_ref(branch_id)
         client = self._stream_client_factory(creds.stack_url, creds.token)
@@ -123,8 +147,10 @@ class StreamService:
             if if_not_exists:
                 existing = self._find_source(client, branch, name)
                 if existing is not None:
-                    if provision_sinks and source_type == "otlp":
+                    if provision_sinks and existing.get("type") == "otlp":
                         self._provision_otlp_sinks(client, branch, existing.get("sourceId", name))
+                    elif provision_sinks and existing.get("type") == "http":
+                        self._provision_http_sink(client, branch, existing, table_id, columns)
                     detail = self._assemble_detail(client, branch, existing, reveal=reveal)
                     detail.update({"alias": alias, "status": "skipped"})
                     return detail
@@ -135,11 +161,42 @@ class StreamService:
             if provision_sinks and source_type == "otlp":
                 self._provision_otlp_sinks(client, branch, source_id)
             source = client.get_source(branch, source_id)
+            if provision_sinks and source_type == "http":
+                self._provision_http_sink(client, branch, source, table_id, columns)
             detail = self._assemble_detail(client, branch, source, reveal=reveal)
             detail.update({"alias": alias, "status": "created"})
             return detail
         finally:
             client.close()
+
+    def _provision_http_sink(
+        self,
+        client: StreamClient,
+        branch: str,
+        source: dict[str, Any],
+        table_id: str | None,
+        columns: list[dict[str, Any]] | None,
+    ) -> None:
+        source_id = source["sourceId"]
+        destination = table_id or f"in.c-data-stream-{source_id}.events"
+        sinks = client.list_sinks(branch, source_id).get("sinks", [])
+        if any((sink.get("table") or {}).get("tableId") == destination for sink in sinks):
+            return
+        task = client.create_sink(
+            branch,
+            source_id,
+            name=source.get("name") or source_id,
+            table_id=destination,
+            columns=columns
+            or [
+                {"name": "id", "type": "uuid"},
+                {"name": "datetime", "type": "datetime"},
+                {"name": "ip", "type": "ip"},
+                {"name": "body", "type": "body"},
+                {"name": "headers", "type": "headers"},
+            ],
+        )
+        client.wait_for_task(task)
 
     def _provision_otlp_sinks(self, client: StreamClient, branch: str, source_id: str) -> None:
         """Create the standard logs/metrics/traces sinks for an OTLP source.
@@ -277,7 +334,7 @@ class StreamService:
         source_type = source.get("type", "")
         otlp = source.get("otlp") or {}
         http = source.get("http") or {}
-        secret = otlp.get("secret") or ""
+        secret = otlp.get("secret") or http.get("secret") or ""
         base_endpoint = otlp.get("baseUrl", "")
         full_endpoint = otlp.get("url", "") or http.get("url", "")
 

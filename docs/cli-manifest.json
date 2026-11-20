@@ -4047,14 +4047,17 @@
       "kind": "command",
       "hidden": false,
       "category": "write",
-      "help": "Create an OTLP (or HTTP) source and return its endpoint.\n\nFor an OTLP source the three standard sinks (logs/metrics/traces) are\nauto-created so data lands in Storage (bucket in.c-otlp-<source>); pass\n--no-sinks to create a bare source without them.",
+      "help": "Create an OTLP (or HTTP) source and return its endpoint.\n\nFor an OTLP source the three standard sinks (logs/metrics/traces) are\nauto-created so data lands in Storage (bucket in.c-otlp-<source>); pass\n--no-sinks to create a bare source without them. HTTP sources get one table\nsink, defaulting to id (uuid), datetime, ip, body and headers columns.",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "name", "opts": ["--name", "-n"], "type": "text", "required": true, "default": null, "help": "Human-readable source name"},
         {"kind": "option", "name": "source_type", "opts": ["--type", "-t"], "type": "choice", "choices": ["otlp", "http"], "default": "otlp", "help": "Source type (otlp | http)"},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "text", "default": null, "help": "Branch ref (default branch if unset)"},
         {"kind": "option", "name": "if_not_exists", "opts": ["--if-not-exists"], "type": "boolean", "is_flag": true, "default": false, "help": "Return the existing source instead of failing if it exists"},
-        {"kind": "option", "name": "no_sinks", "opts": ["--no-sinks"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip auto-creating the logs/metrics/traces sinks for an OTLP source"},
+        {"kind": "option", "name": "no_sinks", "opts": ["--no-sinks"], "type": "boolean", "is_flag": true, "default": false, "help": "Create a bare source without Storage table sinks"},
+        {"kind": "option", "name": "table_id", "opts": ["--table-id"], "type": "text", "default": null, "help": "HTTP destination table (default: in.c-data-stream-<source_id>.events)"},
+        {"kind": "option", "name": "columns", "opts": ["--columns"], "type": "text", "default": null, "help": "HTTP table column definitions as a JSON array"},
+        {"kind": "option", "name": "columns_file", "opts": ["--columns-file"], "type": "text", "default": null, "help": "Read HTTP column definitions from a JSON file (- for stdin)"},
         {"kind": "option", "name": "reveal", "opts": ["--reveal"], "type": "boolean", "is_flag": true, "default": false, "help": "Print the full endpoint incl. secret"}
       ]
     },
