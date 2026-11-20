@@ -70,6 +70,12 @@ Read from the result:
   On an untyped table every column is STRING, so an untyped table is path B.
 - `definition.timePartitioning`, `rangePartitioning`, `clustering`: the
   current layout.
+- `definition.requirePartitionFilter`. Refuse the table when it is true. Every
+  query of this runbook (the partition-value profile, the row counts of
+  sections 3 and 5) reads the whole table without a partition predicate, and
+  BigQuery enforces that requirement through the Storage view as well, so the
+  conversion cannot complete. Removing the requirement is the owner's
+  decision, outside this runbook.
 - `definition.columns[] | {name, policyTagState}`: `protected`, `unprotected`
   or `unknown` per column. This is the state that Storage observed last, not
   the state in BigQuery now, and `unknown` says nothing. Record it, but never
@@ -195,6 +201,7 @@ When the operator cannot read these objects, refuse the table.
 Refuse the table, and change nothing, when one of these holds:
 
 - The table is an alias.
+- `definition.requirePartitionFilter` is true.
 - The table has at least one row access policy. Tables with row access
   policies are not converted in this version.
 - A column carries a policy tag in BigQuery and the project has no
@@ -220,6 +227,8 @@ primary_key:
 last_import_date:
 Columns and types:
 Current layout (timePartitioning / rangePartitioning / clustering):
+requirePartitionFilter (must be false):
+Column defaults (column_details[].default):
 policyTagState per column (Storage, last observed):
 Policy tags per column (bq show):
 Project feature bigquery-policy-tags (yes / no):
@@ -329,18 +338,29 @@ query to the owner. No table is created.
 
 Every column keeps its type from `column_details`. On an untyped table every
 column is `STRING`. `COL` becomes `DATE`. NOT NULL and the primary key are the
-same as on the source.
+same as on the source. Every column default recorded in section 1
+(`column_details[].default`) is repeated with `--default name=value`: the copy
+does not inherit a default, and a column that loses it writes NULL on the next
+insert that omits it, or fails its NOT NULL constraint.
 
 ```bash
 kbagent --json storage create-table --project ALIAS --bucket-id B --name T_repart \
   --column PK:STRING --column COL:DATE --column C1:STRING --column OTHER:STRING \
-  --primary-key PK --not-null-column PK \
+  --primary-key PK --not-null-column PK --default OTHER=0 \
   --time-partitioning-type DAY --time-partitioning-field COL --clustering-field C1
 ```
 
 List the columns in the order of the source.
 
 #### Fill the table with a transformation (after 4b)
+
+When any column of `B.T` carries a policy tag (section 1), check the tags of
+the empty `B.T_repart` with the `bq show` filter of section 4c **before the
+fill**, and refuse the table when a tag is missing. Output mapping does not
+propagate policy tags, so a filled but untagged copy exposes the protected
+values of every row to anyone with dataset read access, for the whole window
+until section 4c refuses and the copy is dropped. On an empty table that
+window carries no data.
 
 A BigQuery SQL transformation reads `B.T` and its output mapping loads into
 `B.T_repart`. The load is a full load, and the table keeps its layout. Create
@@ -423,6 +443,8 @@ Every check must pass. On a mismatch, stop and do not swap.
 - **Columns and types.** The column list and the types are equal. Path B:
   only `COL` differs, and it is `DATE`.
 - **Primary key.** `primary_key` is equal.
+- **Column defaults.** `column_details[].default` of each column equals the
+  value recorded for `B.T` in section 1. A missing default is a mismatch.
 - **Layout.** `definition.timePartitioning` and `definition.clustering` of the
   copy are as requested.
 - **Policy tags.** The tags of each column, read from BigQuery in section
