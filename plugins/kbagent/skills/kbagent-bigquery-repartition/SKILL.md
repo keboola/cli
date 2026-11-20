@@ -45,6 +45,9 @@ It does not:
 - Delete the old table before day 7.
 - Run a `bq` command that writes. A person runs it (see Guardrails).
 - Set a policy tag on the BigQuery schema directly. That bypasses Storage.
+- Convert a table that has a row access policy. Tables with row access
+  policies are not converted in v1: the preflight stops, and the table stays
+  as it is (the same rule as for a table created from time travel).
 
 ## Classification
 
@@ -86,7 +89,7 @@ Then follow [references/runbook.md](references/runbook.md) from section 0.
   `storage.tables.swapMetadataFailed`, stop and go to runbook section 9. Do
   not re-run the swap and do not write to either table.
 - **A person runs every `bq` write.** The runbook prints each `bq` command
-  that writes (table IAM policy, row access policy, search index) in full,
+  that writes (table IAM policy, search index) in full,
   with an explicit `--project_id=GCP_PROJECT` and the full `DATASET.TABLE`.
   The skill and the agent that follows it never run such a command. They wait
   for the person to confirm that it was run, then read the result.

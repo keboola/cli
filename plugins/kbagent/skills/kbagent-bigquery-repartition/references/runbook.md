@@ -77,6 +77,26 @@ Read from the result:
   operator reads from BigQuery ("BigQuery-native objects" below).
 - `sql_path`: the BigQuery path of the table.
 
+### Row access policies (stop rule)
+
+Read the row access policies of the table before anything is created.
+kbagent cannot read them. The operator runs:
+
+```bash
+bq --project_id=GCP_PROJECT ls --row_access_policies --format=prettyjson DATASET.T
+```
+
+When the table has at least one row access policy, stop here. Create
+nothing: no workspace, no copy. Name the policies to the owner. The table
+stays as it is, and its owner decides what to do with it outside this skill.
+
+The reason: the Storage copy reads the table through the policy. It copies
+only the rows that the service account of the project can see, and it
+reports no error. The validation counts through the same filter, so it can
+pass on a copy that lacks rows.
+
+When the operator cannot read the policies, refuse the table.
+
 ### Sharing, features, writers, readers, aliases
 
 ```bash
@@ -135,14 +155,13 @@ A cluster-only table skips this query.
 
 ### BigQuery-native objects
 
-The swap is a rename of two physical tables. Four kinds of BigQuery objects
-are outside Storage, and kbagent can neither read nor write them: table IAM
-bindings, row access policies, search indexes and the streaming buffer. The
-operator reads them with `bq`:
+The swap is a rename of two physical tables. Three more kinds of BigQuery
+objects are outside Storage, and kbagent can neither read nor write them:
+table IAM bindings, search indexes and the streaming buffer. The operator
+reads them with `bq`:
 
 ```bash
 bq --project_id=GCP_PROJECT get-iam-policy --format=prettyjson DATASET.T
-bq --project_id=GCP_PROJECT ls --row_access_policies --format=prettyjson DATASET.T
 bq --project_id=GCP_PROJECT query --use_legacy_sql=false 'SELECT index_name, index_status, ddl FROM DATASET.INFORMATION_SCHEMA.SEARCH_INDEXES WHERE table_name = "T"'
 bq --project_id=GCP_PROJECT show --format=prettyjson DATASET.T
 ```
@@ -151,8 +170,6 @@ Record each object together with what is needed to create it again:
 
 - **Table IAM bindings**: the policy JSON. An empty `bindings` list means
   there is nothing to carry.
-- **Row access policies**: the `CREATE ROW ACCESS POLICY` statement of each
-  policy (name, grantees, filter expression).
 - **Search indexes**: the `CREATE SEARCH INDEX` statement of each index.
   Check that each statement is complete: the index name, the indexed columns
   or `ALL COLUMNS`, and every option of the existing index. When a statement
@@ -178,12 +195,13 @@ When the operator cannot read these objects, refuse the table.
 Refuse the table, and change nothing, when one of these holds:
 
 - The table is an alias.
+- The table has at least one row access policy. Tables with row access
+  policies are not converted in this version.
 - A column carries a policy tag in BigQuery and the project has no
   `bigquery-policy-tags` feature.
 - The BigQuery-native objects are unknown, because nobody could read them.
 - The recorded statement of a search index is incomplete.
-- The operator cannot apply the recorded IAM bindings or row access policies
-  to the copy.
+- The operator cannot apply the recorded IAM bindings to the copy.
 - The copy was created without a policy tag that the source has (section 4c).
 - No partition column and no clustering column is confirmed.
 - `data_size_bytes` is over 5 TiB and the owner has not decided on the ranged
@@ -213,7 +231,7 @@ Readers:
 Aliases that point at the table:
 Distinct days / months, min, max, nulls of the partition column:
 Table IAM policy JSON:
-Row access policies (CREATE statements):
+Row access policies (must be none):
 Search indexes (CREATE statements):
 Streaming buffer (present / absent):
 Owner who pauses the writers:
@@ -355,9 +373,10 @@ confirm that it was run, and then reads the result. It never runs the command
 itself.**
 
 This section runs after the copy of path A or path B, and before section 5.
-The table must never be under the production name without its policy tags,
-its IAM bindings and its row access policies. A rename keeps all three on the
-renamed table, so they are put on the copy first. Keep this order:
+The table must never be under the production name without its policy tags
+and its IAM bindings. A rename keeps both on the renamed table, so they are
+put on the copy first. A table with a row access policy never reaches this
+section (section 1). Keep this order:
 
 1. **Policy tags.** The operator reads the tags of the copy from BigQuery,
    with the filter of section 1:
@@ -382,14 +401,7 @@ renamed table, so they are put on the copy first. Keep this order:
    bq --project_id=GCP_PROJECT set-iam-policy DATASET.T_repart T.iam.json
    ```
 
-3. **Row access policies.** A person runs each recorded statement against the
-   copy, with the table name changed to the copy. A person runs:
-
-   ```bash
-   bq --project_id=GCP_PROJECT query --use_legacy_sql=false 'CREATE ROW ACCESS POLICY POLICY_NAME ON DATASET.T_repart GRANT TO ("GRANTEE") FILTER USING (FILTER_EXPRESSION)'
-   ```
-
-4. **Search indexes** are not created here. A rename drops them, so they are
+3. **Search indexes** are not created here. A rename drops them, so they are
    created again in section 6.
 
 When one of these steps cannot be done, stop. Do not swap. Drop `B.T_repart`
@@ -418,15 +430,12 @@ Every check must pass. On a mismatch, stop and do not swap.
   with a tag that the copy lacks stops the conversion. `policyTagState` is
   not part of this check.
 - **Table IAM bindings.** The bindings of the copy equal the recorded ones.
-- **Row access policies.** The policies of the copy equal the recorded ones.
 - **Path B, NULL count.** The count of NULL in `COL` is equal on both tables.
 
-kbagent cannot read IAM bindings and row access policies. The operator reads
-both on the copy:
+kbagent cannot read IAM bindings. The operator reads them on the copy:
 
 ```bash
 bq --project_id=GCP_PROJECT get-iam-policy --format=prettyjson DATASET.T_repart
-bq --project_id=GCP_PROJECT ls --row_access_policies --format=prettyjson DATASET.T_repart
 ```
 
 Tables over 5 TiB, and every path B table, also get a row count per
@@ -519,12 +528,11 @@ table. Then, in this order:
 
 1. **Layout.** Verify `definition.timePartitioning` and `clustering` on
    `B.T`.
-2. **Security objects.** The IAM bindings and row access policies of section
-   4c and the propagated policy tags travelled with the rename. The operator
-   reads them once more on `B.T` (the `get-iam-policy`,
-   `ls --row_access_policies` and policy tag commands of section 1). Stop on
-   a difference from the values recorded in section 1. The old physical table, now
-   `T_repart`, keeps its own bindings and policies.
+2. **Security objects.** The IAM bindings of section 4c and the propagated
+   policy tags travelled with the rename. The operator reads them once more
+   on `B.T` (the `get-iam-policy` and policy tag commands of section 1).
+   Stop on a difference from the values recorded in section 1. The old
+   physical table, now `T_repart`, keeps its own bindings.
 3. **Search indexes.** A person creates each recorded index again on `B.T`.
    A person runs:
 
@@ -594,7 +602,7 @@ kbagent --json storage table-detail --project ALIAS --table-id B.T
 ```
 
 After a rollback the original physical table is back at `B.T`, with its IAM
-bindings and row access policies. A person creates the search indexes again
+bindings. A person creates the search indexes again
 (section 6, step 3). After a path B rollback the owner also reverts the
 writers to STRING.
 
