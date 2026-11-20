@@ -36,13 +36,18 @@ kbagent --json storage load-file --project P --file-id 123 \
   omitted). To see which method Storage actually used, read the
   `tableImportDone` event of the table: its params `importMethod` and
   `importMethodSource` (`request`, `projectFeature` or `default`).
-- A refusal on a non-Snowflake table is `INVALID_ARGUMENT`, exit 2, with
-  `details.api_error_code` = `storage.tables.importMethodNotSupported`. Run the
-  import again without `--import-method`. After `upload-table` the file is
-  already in Storage: the error names the `storage load-file` command that
-  imports it without the method -- use it instead of uploading again.
-  A bucket or table that `upload-table` auto-created before the refusal stays,
-  empty; the message names it.
+- A refusal on a non-Snowflake table is `INVALID_ARGUMENT`, exit 2. Run the
+  import again without `--import-method`.
+  - `upload-table` reads the bucket's backend first (a bucket it would
+    auto-create gets the project's default backend) and refuses before it
+    creates or uploads anything: `details` = `table_id`, `backend`,
+    `import_method`.
+  - `load-file`, and `upload-table` when no backend can be read, get the
+    refusal from Storage: `details.api_error_code` =
+    `storage.tables.importMethodNotSupported`. After `upload-table` the file
+    is then already in Storage: the error names the `storage load-file`
+    command that imports it without the method, and any bucket or table it
+    auto-created.
 - Over `kbagent serve`: the form field `import_method` on
   `POST /storage/tables/{project}/upload` and the body field `import_method`
   on `POST /storage/files/{project}/load-to-table`. A refusal is HTTP 400

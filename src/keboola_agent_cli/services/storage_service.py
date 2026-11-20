@@ -15,6 +15,7 @@ from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..models import ImportMethod, ProjectConfig
 from ._column_descriptions import ColumnDescriptionsMixin, is_unchanged_description
+from ._import_method import refuse_unsupported_import_method
 from ._storage_downloads import (
     DownloadProgress,
     file_download_target,
@@ -920,7 +921,7 @@ class StorageService(ColumnDescriptionsMixin):
         wait: bool = True,
         timeout: float | None = None,
         on_progress: Callable[[int, int], None] | None = None,
-        import_method: ImportMethod = ImportMethod.auto,
+        import_method: ImportMethod | str = ImportMethod.auto,
     ) -> dict[str, Any]:
         """Upload a CSV file into a storage table.
 
@@ -966,6 +967,9 @@ class StorageService(ColumnDescriptionsMixin):
 
         client = self._client_factory(project.stack_url, project.token)
         try:
+            import_method = refuse_unsupported_import_method(
+                client, table_id, import_method, branch_id, creates_missing_bucket=auto_create
+            )
             if auto_create:
                 parts = table_id.split(".")
                 if len(parts) == 3:
@@ -1025,7 +1029,7 @@ class StorageService(ColumnDescriptionsMixin):
                 delimiter=delimiter,
                 enclosure=enclosure,
                 branch_id=branch_id,
-                import_method=import_method,
+                import_method=ImportMethod(import_method),
             )
             hinted = with_import_hint(exc, alias, table_id, options)
             raise with_auto_created_note(
@@ -2109,7 +2113,7 @@ class StorageService(ColumnDescriptionsMixin):
         *,
         wait: bool = True,
         timeout: float | None = None,
-        import_method: ImportMethod = ImportMethod.auto,
+        import_method: ImportMethod | str = ImportMethod.auto,
     ) -> dict[str, Any]:
         """Load an existing Storage File into a table.
 
@@ -2134,8 +2138,8 @@ class StorageService(ColumnDescriptionsMixin):
         """
         branch_id = resolve_branch(self._config_store, alias, branch_id)
         validate_wait_timeout(timeout)
-        projects = self.resolve_projects([alias])
-        project = projects[alias]
+        project = self.resolve_projects([alias])[alias]
+        import_method = ImportMethod(import_method)
 
         client = self._client_factory(project.stack_url, project.token)
         try:

@@ -52,6 +52,7 @@ from .constants import (
     STREAM_DEFAULT_BRANCH,
 )
 from .errors import ErrorCode, KeboolaApiError
+from .models import ImportMethod
 from .result_models import (
     ConfigDetailResult,
     JobResult,
@@ -62,6 +63,7 @@ from .result_models import (
     TokenListEntryResult,
     UploadTableResult,
 )
+from .services._import_method import refuse_unsupported_import_method
 from .services._token_last_used import dormancy_rank, enrich_tokens
 from .services.job_idempotency_store import JobIdempotencyStore, run_idempotent_job
 
@@ -543,6 +545,7 @@ class Client:
         branch_id: int | None = None,
         wait: bool = True,
         timeout: float | None = None,
+        import_method: ImportMethod | str = ImportMethod.auto,
     ) -> UploadTableResult:
         """Import a CSV into an **existing** Storage table -> :class:`UploadTableResult`.
 
@@ -563,15 +566,25 @@ class Client:
                 itself is always awaited); ``imported_rows`` is then None and
                 :meth:`storage_job` follows the job by ``job_id``.
             timeout: Import wait budget in seconds (``None`` = 600).
+            import_method: How a Snowflake import writes the table
+                (``auto`` | ``single_statement`` | ``multi_statement``).
+                ``auto`` sends nothing (platform default). Any other value
+                reads the bucket's backend first and is refused before the
+                upload when it is not Snowflake.
 
         Raises:
-            KeboolaApiError: On a wait timeout ``STORAGE_JOB_TIMEOUT``, NOT
+            ValueError: ``import_method`` is not an :class:`ImportMethod` value.
+            KeboolaApiError: ``INVALID_ARGUMENT`` for an import method on a
+                non-Snowflake table (nothing uploaded). On a wait timeout ``STORAGE_JOB_TIMEOUT``, NOT
                 retryable -- the import keeps running; ``details`` carries
                 ``job_id`` and ``file_id``. Any failure after the upload
                 carries ``details["file_id"]``.
         """
         effective_branch = branch_id if branch_id is not None else self._resolved_branch_id
         file_size_bytes = Path(file_path).stat().st_size
+        import_method = refuse_unsupported_import_method(
+            self._client, table_id, import_method, effective_branch, creates_missing_bucket=False
+        )
         try:
             outcome = self._client.upload_table_with_outcome(
                 table_id=table_id,
@@ -582,6 +595,7 @@ class Client:
                 branch_id=effective_branch,
                 wait=wait,
                 max_wait=timeout,
+                import_method=import_method,
             )
         except KeboolaApiError as exc:
             raise _with_uploaded_file_hint(exc) from exc
@@ -602,6 +616,7 @@ class Client:
             {
                 "table_id": table_id,
                 "incremental": incremental,
+                "import_method": import_method.value,
                 "file_size_bytes": file_size_bytes,
                 "imported_rows": results.get("importedRowsCount"),
                 "warnings": results.get("warnings", []),

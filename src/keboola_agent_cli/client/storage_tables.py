@@ -1014,11 +1014,15 @@ class _StorageTablesMixin(_CoreClient):
             :class:`TableUploadOutcome` -- the Storage file ID and the import job.
 
         Raises:
+            ValueError: ``import_method`` is not an :class:`ImportMethod`
+                value; raised before any request.
             KeboolaApiError: Any failure after the cloud upload carries
                 ``details["file_id"]`` so the file can be imported without
                 re-uploading. The message carries no recovery sentence: the
                 caller adds its own (see ``services._storage_jobs.with_import_hint``).
         """
+        # Checked before the upload: an unknown value must not cost a full upload.
+        import_method = ImportMethod(import_method)
         p = Path(file_path)
         size_bytes = p.stat().st_size
         upload_info = self.prepare_file_upload(name=p.name, size_bytes=size_bytes)

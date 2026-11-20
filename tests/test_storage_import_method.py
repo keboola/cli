@@ -5,6 +5,9 @@ Storage's ``import-async`` takes ``importMethod`` (``auto`` |
 
 - client: ``auto`` sends no ``importMethod`` (the platform default), any other
   value is sent as-is, an unknown value fails before any request;
+- pre-flight: an explicit method reads the bucket's backend (or the project
+  default for a bucket upload-table would create) and is refused before any
+  write; ``auto`` reads nothing; the SDK facade does the same;
 - service: the 400 ``storage.tables.importMethodNotSupported`` (explicit
   method on a non-Snowflake table) becomes ``INVALID_ARGUMENT`` naming the
   option, keeps its details, and its ``load-file`` recovery drops the method;
@@ -37,6 +40,7 @@ _BASE = "https://connection.keboola.com"
 _TOKEN = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
 _TABLE = "in.c-b.users"
 _IMPORT_URL = f"{_BASE}/v2/storage/tables/{_TABLE}/import-async"
+_BUCKET_URL = f"{_BASE}/v2/storage/buckets/in.c-b"
 _NOT_SUPPORTED_BODY = {
     "error": (
         'Import method "single_statement" is supported only on the Snowflake backend; '
@@ -139,9 +143,12 @@ class TestClientSendsImportMethod:
 
 
 class TestNonSnowflakeRefusal:
+    """The Storage 400, reached when the pre-flight cannot read a backend."""
+
     def test_upload_refusal_is_invalid_argument_and_drops_the_method(
         self, httpx_mock, tmp_path: Path
     ) -> None:
+        httpx_mock.add_response(url=_BUCKET_URL, method="GET", json={"id": "in.c-b"})
         httpx_mock.add_response(
             url=f"{_BASE}/v2/storage/files/prepare", method="POST", json={"id": 100}
         )
@@ -241,8 +248,27 @@ class TestNonSnowflakeRefusal:
             service.load_file_to_table(alias="test", file_id=7, table_id=_TABLE)
         assert exc_info.value.error_code == ErrorCode.API_ERROR
 
+    def test_auto_keeps_the_storage_refusal_as_api_error(self, tmp_path: Path) -> None:
+        # With auto kbagent sent no method, so "use auto" would be no advice.
+        refusal = KeboolaApiError(
+            "API error 400",
+            status_code=400,
+            error_code=ErrorCode.API_ERROR,
+            details={"api_error_code": "storage.tables.importMethodNotSupported"},
+        )
+        client = MagicMock()
+        client.import_table_async.side_effect = refusal
+        service = StorageService(
+            config_store=_make_store(tmp_path), client_factory=lambda url, token: client
+        )
+        with pytest.raises(KeboolaApiError) as exc_info:
+            service.load_file_to_table(alias="test", file_id=7, table_id=_TABLE)
+        assert exc_info.value.error_code == ErrorCode.API_ERROR
+        assert exc_info.value.message == "API error 400"
+
     def test_other_failure_hint_repeats_the_method(self, tmp_path: Path) -> None:
         client = MagicMock()
+        client.get_bucket_detail.return_value = {"id": "in.c-b", "backend": "snowflake"}
         client.upload_table_with_outcome.side_effect = KeboolaApiError(
             "Bad request",
             status_code=400,
@@ -284,6 +310,174 @@ class TestNonSnowflakeRefusal:
         assert result["import_method"] == "single_statement"
         default = service.load_file_to_table(alias="test", file_id=7, table_id=_TABLE, wait=False)
         assert default["import_method"] == "auto"
+
+
+# ---------------------------------------------------------------------------
+# Pre-flight: the backend is read before anything is written
+# ---------------------------------------------------------------------------
+
+
+def _upload(service: StorageService, tmp_path: Path, **kwargs: Any) -> dict[str, Any]:
+    return service.upload_table(
+        alias="test", table_id=_TABLE, file_path=str(_csv(tmp_path)), **kwargs
+    )
+
+
+class TestPreflight:
+    def test_bigquery_bucket_is_refused_before_any_write(self, httpx_mock, tmp_path: Path) -> None:
+        httpx_mock.add_response(
+            url=_BUCKET_URL, method="GET", json={"id": "in.c-b", "backend": "bigquery"}
+        )
+        with pytest.raises(KeboolaApiError) as exc_info:
+            _upload(_real_client_service(tmp_path), tmp_path, import_method="single_statement")
+        exc = exc_info.value
+        assert exc.error_code == ErrorCode.INVALID_ARGUMENT
+        assert exc.status_code == 400
+        assert exc.details == {
+            "table_id": _TABLE,
+            "backend": "bigquery",
+            "import_method": "single_statement",
+        }
+        assert "table in.c-b.users is in bucket in.c-b on the bigquery backend" in exc.message
+        assert "Nothing was created or uploaded." in exc.message
+        # The bucket read is the only request: no create, no prepare, no import.
+        assert [r.method for r in httpx_mock.get_requests()] == ["GET"]
+
+    def test_missing_bucket_uses_the_project_default_backend(
+        self, httpx_mock, tmp_path: Path
+    ) -> None:
+        httpx_mock.add_response(
+            url=_BUCKET_URL, method="GET", json={"error": "Bucket not found"}, status_code=404
+        )
+        httpx_mock.add_response(
+            url=f"{_BASE}/v2/storage/tokens/verify",
+            method="GET",
+            json={"id": "1", "owner": {"id": 1, "name": "p", "defaultBackend": "bigquery"}},
+        )
+        with pytest.raises(KeboolaApiError) as exc_info:
+            _upload(_real_client_service(tmp_path), tmp_path, import_method="multi_statement")
+        exc = exc_info.value
+        assert exc.error_code == ErrorCode.INVALID_ARGUMENT
+        assert "bucket in.c-b does not exist yet" in exc.message
+        assert "project's default backend, bigquery" in exc.message
+        assert all(r.method == "GET" for r in httpx_mock.get_requests())
+
+    def test_missing_bucket_without_auto_create_fails_before_the_upload(
+        self, tmp_path: Path
+    ) -> None:
+        client = MagicMock()
+        client.get_bucket_detail.side_effect = KeboolaApiError(
+            "Bucket not found", status_code=404, error_code=ErrorCode.NOT_FOUND
+        )
+        service = StorageService(
+            config_store=_make_store(tmp_path), client_factory=lambda url, token: client
+        )
+        with pytest.raises(KeboolaApiError) as exc_info:
+            _upload(service, tmp_path, auto_create=False, import_method="single_statement")
+        assert exc_info.value.error_code == ErrorCode.NOT_FOUND
+        client.verify_token.assert_not_called()
+        client.upload_table_with_outcome.assert_not_called()
+
+    def test_snowflake_bucket_proceeds(self, tmp_path: Path) -> None:
+        client = MagicMock()
+        client.get_bucket_detail.return_value = {"id": "in.c-b", "backend": "snowflake"}
+        client.list_tables.return_value = [{"name": "users"}]
+        client.upload_table_with_outcome.return_value = MagicMock(
+            file_id=100, job={"id": 5, "status": "waiting"}
+        )
+        service = StorageService(
+            config_store=_make_store(tmp_path), client_factory=lambda url, token: client
+        )
+        result = _upload(service, tmp_path, wait=False, import_method="single_statement")
+        assert result["import_method"] == "single_statement"
+        kwargs = client.upload_table_with_outcome.call_args.kwargs
+        assert kwargs["import_method"] is ImportMethod.single_statement
+
+    def test_auto_reads_no_backend(self, tmp_path: Path) -> None:
+        client = MagicMock()
+        client.upload_table_with_outcome.return_value = MagicMock(
+            file_id=100, job={"id": 5, "status": "waiting"}
+        )
+        service = StorageService(
+            config_store=_make_store(tmp_path), client_factory=lambda url, token: client
+        )
+        result = _upload(service, tmp_path, auto_create=False, wait=False)
+        assert result["import_method"] == "auto"
+        client.get_bucket_detail.assert_not_called()
+        client.verify_token.assert_not_called()
+
+    def test_string_method_is_coerced_by_the_service(self, tmp_path: Path) -> None:
+        client = MagicMock()
+        client.import_table_async.return_value = {"id": 5, "status": "waiting"}
+        service = StorageService(
+            config_store=_make_store(tmp_path), client_factory=lambda url, token: client
+        )
+        result = service.load_file_to_table(
+            alias="test",
+            file_id=7,
+            table_id=_TABLE,
+            wait=False,
+            import_method="multi_statement",
+        )
+        assert result["import_method"] == "multi_statement"
+        with pytest.raises(ValueError, match="merge"):
+            service.load_file_to_table(
+                alias="test",
+                file_id=7,
+                table_id=_TABLE,
+                import_method="merge",
+            )
+        assert client.import_table_async.call_count == 1
+
+    def test_client_upload_checks_the_value_before_any_request(
+        self, httpx_mock, tmp_path: Path
+    ) -> None:
+        with (
+            KeboolaClient(stack_url=_BASE, token=_TOKEN) as client,
+            pytest.raises(ValueError, match="merge"),
+        ):
+            client.upload_table(
+                table_id=_TABLE, file_path=str(_csv(tmp_path)), import_method="merge"
+            )
+        assert httpx_mock.get_requests() == []
+
+
+class TestSdkFacade:
+    def _client(self, kc: MagicMock):
+        from keboola_agent_cli.lib import Client
+
+        with patch("keboola_agent_cli.lib.KeboolaClient", return_value=kc):
+            return Client(url=_BASE, token=_TOKEN)
+
+    def test_method_is_passed_and_reported(self, tmp_path: Path) -> None:
+        kc = MagicMock()
+        kc.get_bucket_detail.return_value = {"id": "in.c-b", "backend": "snowflake"}
+        kc.upload_table_with_outcome.return_value = MagicMock(
+            file_id=7, job={"id": 9, "status": "waiting"}
+        )
+        result = self._client(kc).upload_table(
+            _TABLE, _csv(tmp_path), wait=False, import_method="single_statement"
+        )
+        assert result.import_method == "single_statement"
+        kwargs = kc.upload_table_with_outcome.call_args.kwargs
+        assert kwargs["import_method"] is ImportMethod.single_statement
+
+    def test_non_snowflake_is_refused_before_the_upload(self, tmp_path: Path) -> None:
+        kc = MagicMock()
+        kc.get_bucket_detail.return_value = {"id": "in.c-b", "backend": "bigquery"}
+        with pytest.raises(KeboolaApiError) as exc_info:
+            self._client(kc).upload_table(_TABLE, _csv(tmp_path), import_method="multi_statement")
+        assert exc_info.value.error_code == ErrorCode.INVALID_ARGUMENT
+        kc.upload_table_with_outcome.assert_not_called()
+
+    def test_default_reads_no_backend(self, tmp_path: Path) -> None:
+        kc = MagicMock()
+        kc.upload_table_with_outcome.return_value = MagicMock(
+            file_id=7, job={"id": 9, "status": "waiting"}
+        )
+        result = self._client(kc).upload_table(_TABLE, _csv(tmp_path), wait=False)
+        assert result.import_method == "auto"
+        kc.get_bucket_detail.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

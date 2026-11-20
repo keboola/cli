@@ -863,10 +863,13 @@ kbagent storage file-tag [--project NAME] --file-id ID [--add TAG ...] [--remove
 kbagent storage load-file [--project NAME] --file-id ID --table-id ID [--incremental] [--delimiter D] [--enclosure E] [--import-method auto|single_statement|multi_statement] [--wait/--no-wait] [--timeout SECONDS] [--branch ID]
 # --import-method on upload-table / load-file (DMD-2856): sent to import-async as importMethod, except auto (the
 #   default: nothing is sent, the platform default applies). single_statement = one MERGE / INSERT OVERWRITE,
-#   multi_statement = deduplication table + separate statements. Snowflake only: Storage answers another value on a
-#   non-Snowflake table with 400 storage.tables.importMethodNotSupported, mapped to INVALID_ARGUMENT (exit 2, HTTP 400
-#   over serve; services/_storage_jobs.py), whose load-file recovery command leaves the method out. The result carries
-#   import_method. serve: import_method form field (upload) / body field (load-to-table). Output-mapping key
+#   multi_statement = deduplication table + separate statements. Snowflake only: upload-table (and the SDK
+#   Client.upload_table) first read the bucket's backend (a missing bucket it will create: the project default
+#   backend; services/_import_method.py) and refuse another backend with INVALID_ARGUMENT (exit 2, HTTP 400 over
+#   serve) before creating or uploading anything. When no backend can be read, Storage's 400
+#   storage.tables.importMethodNotSupported is mapped to the same INVALID_ARGUMENT (services/_storage_jobs.py), whose
+#   load-file recovery command leaves the method out; load-file relies on that 400 (it writes nothing first). With
+#   auto that 400 stays an API error. The result carries import_method. serve: import_method form field (upload) / body field (load-to-table). Output-mapping key
 #   import_method: plugins/kbagent/skills/kbagent/references/import-method-workflow.md. Version gate in gotchas.md.
 kbagent storage job-detail [--project NAME] --job-id ID [--wait] [--timeout SECONDS]
 # storage job-detail (#834): read-class; shows a Storage API job (status, operation_name, table_id,

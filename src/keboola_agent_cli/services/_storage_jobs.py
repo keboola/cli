@@ -299,13 +299,15 @@ def with_import_hint(
 
     An explicit ``--import-method`` that Storage refuses for the table's
     backend becomes ``INVALID_ARGUMENT`` (see
-    :func:`_import_method_not_supported`).
+    :func:`_import_method_not_supported`). With ``auto`` kbagent sent no
+    method, so the same refusal stays the API error it is.
 
     Anything else comes back as an equal copy, so a caller can always
     ``raise with_import_hint(exc, ...) from exc``.
     """
     if (
-        exc.status_code == 400
+        options.import_method != ImportMethod.auto
+        and exc.status_code == 400
         and exc.details.get("api_error_code") == IMPORT_METHOD_NOT_SUPPORTED_CODE
     ):
         return _import_method_not_supported(exc, alias, table_id, options)

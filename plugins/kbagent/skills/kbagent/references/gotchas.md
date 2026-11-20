@@ -7829,12 +7829,14 @@ production or in the Keboola UI.
 nothing and keeps the platform default. Details and the output-mapping key `import_method`:
 `import-method-workflow.md`.
 
-- **Snowflake only.** Another value than `auto` on a table of another backend is refused by Storage
-  (HTTP 400 `storage.tables.importMethodNotSupported`); kbagent reports it as `INVALID_ARGUMENT`, exit 2
-  (HTTP 400 over serve), and nothing is imported. Run the import again without the option.
-- **After `upload-table` the file is already in Storage.** The refusal names the `storage load-file`
-  command that imports it without the method; use it instead of uploading again.
-  A table or bucket that `upload-table` auto-created before the refusal stays (empty); the message names it.
+- **Snowflake only.** Another value than `auto` on a table of another backend is `INVALID_ARGUMENT`,
+  exit 2 (HTTP 400 over serve), and nothing is imported. Run the import again without the option.
+- **`upload-table` refuses before it writes.** It reads the bucket's backend first (for a bucket it
+  would auto-create: the project's default backend), so nothing is created or uploaded. Only when no
+  backend can be read does Storage refuse the import itself (HTTP 400
+  `storage.tables.importMethodNotSupported`); the file is then already in Storage, and the error names
+  the `storage load-file` command that imports it without the method and any bucket or table it
+  auto-created. `load-file` relies on that 400 (it writes nothing before the import).
 - **The result echoes what you asked for, not what ran.** `import_method` in the result is the
   requested value. The `tableImportDone` event of the table has the method Storage used
   (`importMethod`) and why (`importMethodSource`: `request`, `projectFeature` or `default`).

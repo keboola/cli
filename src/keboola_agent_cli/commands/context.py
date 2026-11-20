@@ -2162,8 +2162,8 @@ remain branch-aware because modifying a dev branch is the expected intent.
     For long runs: `kbagent --json storage upload-table --project P ... --progress 2>progress.log`, then read the log.
     --import-method auto|single_statement|multi_statement: how a Snowflake import writes the table (one MERGE /
     INSERT OVERWRITE, or a deduplication table + separate statements). auto (default) sends nothing. Another value
-    on a non-Snowflake table: INVALID_ARGUMENT, exit 2, nothing imported -- re-run without it (the error names the
-    load-file command for the uploaded file). Output-mapping key import_method: see import-method-workflow.
+    on a non-Snowflake table: INVALID_ARGUMENT, exit 2, refused before anything is created or uploaded -- re-run
+    without it. Output-mapping key import_method: see import-method-workflow.
 
   storage download-table
     Export table data to a local CSV file. Async export with streaming download.
