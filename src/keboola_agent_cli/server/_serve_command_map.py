@@ -13,6 +13,7 @@ a route added, removed, or renamed fails CI, so the interfaces never diverge.
 """
 
 SERVE_COMMAND_MAP: dict[tuple[str, str], str] = {
+    ("GET", "/auth/accessible-projects"): "auth projects",
     ("DELETE", "/agents/{task_id}"): "agent delete",
     ("DELETE", "/branches/{project}/metadata/{metadata_id}"): "branch metadata-delete",
     ("DELETE", "/branches/{project}/{branch_id}"): "branch delete",

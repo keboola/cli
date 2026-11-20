@@ -48,6 +48,19 @@ router = APIRouter(
 )
 
 
+@router.get(
+    "/accessible-projects",
+    summary="List projects accessible to the current session",
+    dependencies=[Depends(require_permission("auth.projects"))],
+)
+def list_projects(
+    stack: str | None = None,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """Mirror `auth projects`; `/auth/projects` retains the picker's candidate contract."""
+    return asdict(registry.auth.list_projects(stack=stack))
+
+
 class RegisterProjectsBody(BaseModel):
     stack: str | None = None
     select_all: bool = Field(default=False, alias="all")

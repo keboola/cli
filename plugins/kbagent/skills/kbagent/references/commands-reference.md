@@ -18,6 +18,8 @@ Under `--json` the envelope has an optional top-level `warnings` list *(since 0.
 
 ## Programmatic Auth (Browser Login) (since v0.80.0)
 
+- `auth projects [--stack URL|alias]` *(since vNEXT)* -- read-only listing of projects accessible to the current login: `id`, `name`, `role`, and `registered_alias` (null when not locally registered on that stack, including static-token aliases when present). Requires `auth login`; refreshes stale session tokens but never registers aliases or writes `config.json`. Stack resolution matches `auth status`. REST: `GET /auth/accessible-projects`; the existing `GET /auth/projects` retains its registration-picker candidate response. SQL dialect and organization enrichment are omitted to avoid per-project token minting.
+
 Alternative to a static Storage API token: sign in via a real browser (PKCE
 authorization-code) or, when no browser is usable, an RFC 8628 device code --
 or, for CI/automation, a password grant (`auth login-password`, no browser).

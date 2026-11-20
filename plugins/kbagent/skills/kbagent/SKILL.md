@@ -78,6 +78,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Sign in via email + password (+ TOTP if the account has MFA) -- no browser | `kbagent auth login-password --email EMAIL` |
 | Show the programmatic-auth session health for a stack | `kbagent auth status` |
 | Revoke and clear the local programmatic-auth session for a stack | `kbagent auth logout` |
+| List projects the current session can access, without registering aliases | `kbagent auth projects` |
 | Register accessible projects from the current session as local aliases | `kbagent auth register-projects` |
 | Add a new Keboola project connection | `kbagent project add --alias ALIAS` |
 | Create a brand-new Keboola project -- no account, no token needed | `kbagent project create --url URL` |

@@ -76,6 +76,7 @@ ALIAS_OPTIONS: dict[tuple[str, ...], frozenset[str]] = {
     ("auth", "login"): frozenset({"--stack"}),
     ("auth", "login-password"): frozenset({"--stack"}),
     ("auth", "status"): frozenset({"--stack"}),
+    ("auth", "projects"): frozenset({"--stack"}),
     ("auth", "logout"): frozenset({"--stack"}),
     ("auth", "register-projects"): frozenset({"--stack"}),
     ("config", "clone"): frozenset({"--target-project"}),

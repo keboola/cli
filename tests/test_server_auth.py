@@ -39,6 +39,7 @@ from keboola_agent_cli.server import create_app
 from keboola_agent_cli.server.dependencies import ServiceRegistry, get_registry
 from keboola_agent_cli.services._auth_registration import SESSION_UNSUPPORTED_FEATURES
 from keboola_agent_cli.services.auth_service import (
+    AccessibleProjectsResult,
     AuthStatusResult,
     ProjectCandidate,
     ProjectCandidatesResult,
@@ -48,6 +49,18 @@ from keboola_agent_cli.services.auth_service import (
 
 AUTH = {"Authorization": "Bearer test-token"}
 STACK = "https://connection.keboola.com"
+
+
+def test_accessible_projects(tmp_path: Path) -> None:
+    service = MagicMock()
+    projects = [{"id": 1, "name": "Demo", "role": "admin", "registered_alias": None}]
+    service.list_projects.return_value = AccessibleProjectsResult(STACK, projects)
+    app = _make_app_with_registry(tmp_path, _mock_registry(auth=service))
+    with TestClient(app) as client:
+        response = client.get("/auth/accessible-projects", params={"stack": STACK}, headers=AUTH)
+    assert response.status_code == 200
+    assert response.json() == {"stack_url": STACK, "projects": projects}
+    service.list_projects.assert_called_once_with(stack=STACK)
 
 
 def _mock_registry(**services: Any) -> ServiceRegistry:

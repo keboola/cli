@@ -84,6 +84,9 @@ Programmatic browser login (PKCE / device code) -- user-scoped sessions
   kbagent auth logout [--stack STACK] [--remove-projects] [--yes]
     Revoke and clear the local programmatic-auth session for a stack.
 
+  kbagent auth projects [--stack STACK]
+    List projects the current session can access, without registering aliases.
+
   kbagent auth register-projects [--stack STACK] [--all] [--project-id N ...]
       [--alias ALIAS ...] [--yes]
     Register accessible projects from the current session as local aliases.

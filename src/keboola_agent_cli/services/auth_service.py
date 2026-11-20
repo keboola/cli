@@ -110,6 +110,14 @@ class _OrphanRetryOutcome:
 
 
 @dataclass(frozen=True)
+class AccessibleProjectsResult:
+    """Token-free listing of session projects and their local aliases."""
+
+    stack_url: str
+    projects: list[dict[str, Any]]
+
+
+@dataclass(frozen=True)
 class LoginResult:
     """Result of a completed `kbagent auth login`. Carries no token value."""
 
@@ -782,6 +790,24 @@ class AuthService:
             {"id": project.id, "name": project.name, "role": project.role}
             for project in introspection.projects
         ]
+
+    def list_projects(self, *, stack: str | None = None) -> AccessibleProjectsResult:
+        """List session-accessible projects without registering local aliases."""
+        stack_url = self._resolve_stack_url(stack)
+        projects = self._introspect_accessible_projects(stack_url)
+        aliases: dict[int, str] = {}
+        for alias, project in self._config_store.load().projects.items():
+            if (
+                project.project_id is not None
+                and normalize_stack_url(project.stack_url) == stack_url
+            ):
+                aliases.setdefault(project.project_id, alias)
+        return AccessibleProjectsResult(
+            stack_url=stack_url,
+            projects=[
+                {**project, "registered_alias": aliases.get(project["id"])} for project in projects
+            ],
+        )
 
     def list_project_candidates(self, *, stack: str | None = None) -> ProjectCandidatesResult:
         """Resolve the stack, require a stored session, introspect, and build candidates.

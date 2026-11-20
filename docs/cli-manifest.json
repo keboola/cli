@@ -237,6 +237,16 @@
       ]
     },
     {
+      "path": "auth projects",
+      "kind": "command",
+      "hidden": false,
+      "category": "read",
+      "help": "List projects the current session can access, without registering aliases.\n\nIncludes each project's ID, name, role and registered local alias (if any).\nRequires a session established with `auth login`; refreshes it when needed.",
+      "params": [
+        {"kind": "option", "name": "stack", "opts": ["--stack"], "type": "text", "default": null, "help": "Stack URL or a registered project alias"}
+      ]
+    },
+    {
       "path": "auth register-projects",
       "kind": "command",
       "hidden": false,

@@ -432,6 +432,31 @@ class TestAuthStatusCommand:
     `register-projects` writes into `config.json`.
     """
 
+    def test_projects_lists_session_access(
+        self, session_state_store: AuthStateStore, stack_url: str
+    ) -> None:
+        """List real accessible projects without registering local aliases."""
+        config_path = session_state_store.config_dir / "config.json"
+        before = config_path.read_bytes() if config_path.exists() else None
+        result = CliRunner().invoke(
+            app,
+            [
+                "--json",
+                "--config-dir",
+                str(session_state_store.config_dir),
+                "auth",
+                "projects",
+                "--stack",
+                stack_url,
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)["data"]
+        assert data["stack_url"] == stack_url
+        assert data["projects"]
+        assert all("registered_alias" in project for project in data["projects"])
+        assert (config_path.read_bytes() if config_path.exists() else None) == before
+
     def test_status_reports_a_live_session(
         self, session_state_store: AuthStateStore, stack_url: str
     ) -> None:
