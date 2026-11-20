@@ -245,8 +245,19 @@ kbagent --json job list --project ALIAS --status processing
   streaming write, sometimes longer. Section 6 checks this before the swap.
 - **DML.** A running DML statement on the table blocks the rename.
 
-Read `rows_count` and `last_import_date` once more right before the copy
-(the table detail command of section 1) and record both.
+Count the rows of the table right before the copy, with a query on the view
+that section 1 loaded, and record the result as the row count before the
+copy:
+
+```bash
+kbagent --json workspace query --project ALIAS --workspace-id WS_ID --sql "SELECT COUNT(*) AS row_count FROM T"
+```
+
+Do not use `rows_count` of the table detail for this. It is Storage
+metadata, and this runbook does not rely on it to move after a write that
+goes around a Storage import (a Direct Grant write, a streaming write). Read
+`rows_count` and `last_import_date` once more as well (the table detail
+command of section 1) and record both, as a second signal only.
 
 ## 4. Copy
 
@@ -385,8 +396,9 @@ kbagent --json workspace query --project ALIAS --workspace-id WS_ID --sql "SELEC
 
 Every check must pass. On a mismatch, stop and do not swap.
 
-- **Row count.** `old_rows` equals `new_rows`, and both equal the `rows_count`
-  recorded right before the copy. A difference means that a write landed.
+- **Row count.** `old_rows` equals `new_rows`, and both equal the row count
+  recorded right before the copy (section 3). A difference means that a
+  write landed.
 - **Columns and types.** The column list and the types are equal. Path B:
   only `COL` differs, and it is `DATE`.
 - **Primary key.** `primary_key` is equal.
@@ -419,8 +431,13 @@ An empty result passes. On a path B table whose format is not `%Y-%m-%d`,
 replace `DATE(COL)` of the old table with `SAFE.PARSE_DATE` and the owner's
 format string.
 
-Right before the swap, read `rows_count` and `last_import_date` of `B.T`
-again. Both must equal the values recorded before the copy.
+Right before the swap, count the rows of both tables once more with the
+count query at the top of this section. It is the last command before the
+swap commands of section 6. `old_rows` and `new_rows` must both equal the
+row count recorded before the copy. On a difference, stop and do not swap: a
+write landed after the copy. `rows_count` and `last_import_date` of `B.T`
+must also equal the values recorded before the copy, but equal values there
+do not replace the count.
 
 ## 6. Swap
 
