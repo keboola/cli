@@ -2206,6 +2206,8 @@ class StorageService(ColumnDescriptionsMixin):
         file_type: str = "csv",
         keep_slices: bool = False,
         on_progress: DownloadProgress | None = None,
+        *,
+        compression: str = "none",
     ) -> dict[str, Any]:
         """Export a table to a Storage File.
 
@@ -2218,15 +2220,14 @@ class StorageService(ColumnDescriptionsMixin):
             columns: Optional list of column names.
             limit: Optional max rows.
             tags: Tags to apply to the exported file.
-            download: If True, also download the file locally (CSV only for now).
+            download: If True, also download the file locally.
             output_path: Local output path (only used when download=True).
             branch_id: If set, target a specific dev branch.
             file_type: "csv" (default) or "parquet". Parquet output is sliced;
-                use the returned file_id with 'kbagent storage file-detail' to
-                work with the slices directly. Parquet + download is not
-                supported yet (slices cannot be concatenated into a single
-                valid parquet file).
+                local downloads save the slices as separate files.
+            keep_slices: Save sliced CSV downloads as separate files.
             on_progress: As for :meth:`download_table` (only with ``download``).
+            compression: "none" (default) or "snappy" (Parquet only).
 
         Returns:
             Dict with export metadata and file info.
@@ -2254,6 +2255,7 @@ class StorageService(ColumnDescriptionsMixin):
                 limit=limit,
                 branch_id=branch_id,
                 file_type=file_type,
+                compression=compression,
             )
 
             # Step 2: Get file ID from job results

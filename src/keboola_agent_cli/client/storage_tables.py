@@ -1444,6 +1444,7 @@ class _StorageTablesMixin(_CoreClient):
         branch_id: int | None = None,
         file_type: str = "csv",
         *,
+        compression: str = "none",
         where_column: str | None = None,
         where_operator: str = "eq",
         where_values: list[str] | None = None,
@@ -1458,8 +1459,9 @@ class _StorageTablesMixin(_CoreClient):
             limit: Optional max number of rows to export.
             branch_id: If set, target a specific dev branch.
             file_type: Output format, either "csv" (default) or "parquet".
-                Parquet exports are always sliced and Snappy-compressed inside
-                the parquet format (not gzipped at the slice level).
+                Parquet exports are always sliced and uncompressed by default.
+            compression: "none" (default) or "snappy" (Parquet only). Snappy
+                compresses the Parquet data, not the slice files themselves.
             where_column: Filter to rows where this column matches ``where_values``.
             where_operator: ``"eq"`` (default) or ``"neq"``.
             where_values: Values for the ``where_column`` filter.
@@ -1471,9 +1473,16 @@ class _StorageTablesMixin(_CoreClient):
         """
         if file_type not in ("csv", "parquet"):
             raise ValueError(f"file_type must be 'csv' or 'parquet', got {file_type!r}")
+        if compression not in ("none", "snappy"):
+            raise ValueError(f"compression must be 'none' or 'snappy', got {compression!r}")
+        if compression == "snappy" and file_type != "parquet":
+            raise ValueError("Snappy compression requires file_type='parquet'")
         prefix = f"/v2/storage/branch/{branch_id}" if branch_id else "/v2/storage"
         safe_id = quote(table_id, safe="")
         params: dict[str, Any] = {"fileType": file_type}
+        if compression == "snappy":
+            # Storage API's gzip flag selects Snappy for Parquet, not gzip.
+            params["gzip"] = "true"
         if columns:
             params["columns"] = ",".join(columns)
         if limit is not None:

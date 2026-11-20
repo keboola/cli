@@ -338,7 +338,7 @@ class _StorageFilesMixin(_CoreClient):
 
         Gzip-compressed slices (typical for CSV) are decompressed transparently
         and the ``.gz`` suffix is stripped from the written filename. Parquet
-        slices are written as-is (Snappy compression lives inside the format).
+        slices are written as-is, preserving their internal compression.
 
         Args:
             file_detail: Full file info dict from get_file_info() with

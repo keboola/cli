@@ -2093,6 +2093,12 @@ def storage_unload_table(
         "always sliced; with --download each slice is saved as its own file "
         "under --output (treated as a directory).",
     ),
+    compression: str = typer.Option(
+        "none",
+        "--compression",
+        help="Parquet compression: 'none' (default) or 'snappy'. "
+        "Snappy requires --file-type parquet.",
+    ),
     keep_slices: bool = typer.Option(
         False,
         "--keep-slices",
@@ -2124,6 +2130,18 @@ def storage_unload_table(
         )
         raise typer.Exit(code=2) from None
     formatter = get_formatter(ctx)
+    if compression not in ("none", "snappy"):
+        formatter.error(
+            message=f"--compression must be 'none' or 'snappy', got {compression!r}",
+            error_code=ErrorCode.INVALID_ARGUMENT,
+        )
+        raise typer.Exit(code=2) from None
+    if compression == "snappy" and file_type != "parquet":
+        formatter.error(
+            message="--compression snappy requires --file-type parquet",
+            error_code=ErrorCode.INVALID_ARGUMENT,
+        )
+        raise typer.Exit(code=2) from None
     columns = split_multi(columns, label="--column") or None
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
@@ -2156,6 +2174,7 @@ def storage_unload_table(
                 branch_id=effective_branch,
                 file_type=file_type,
                 keep_slices=keep_slices,
+                compression=compression,
                 on_progress=on_progress,
             )
     except ConfigError as exc:
