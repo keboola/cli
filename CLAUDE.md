@@ -1251,6 +1251,9 @@ kbagent data-app deploy [--project NAME] --app-id ID [--config-version N] [--wai
 kbagent data-app start [--project NAME] --app-id ID [--wait] [--timeout SECONDS]
 kbagent data-app stop [--project NAME] --app-id ID [--wait] [--timeout SECONDS]
 kbagent data-app delete [--project NAME] --app-id ID [--yes]
+kbagent data-app draft-create [--project NAME] --config-id ID --git-branch BRANCH
+kbagent data-app draft-delete [--project NAME] --config-id ID [--draft-id UUID] [--dry-run] [--yes]
+kbagent data-app preview-link [--project NAME] --config-id ID [--draft-id UUID]
 kbagent data-app password [--project NAME] --app-id ID [--copy] [--reveal] [--open]
 # data-app password: never prints the password unless --reveal, so it does not go into an AI
 #   agent's context. Project token only (static or session) -- the Manage token and its prompt are

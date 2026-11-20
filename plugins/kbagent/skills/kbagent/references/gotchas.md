@@ -3535,6 +3535,14 @@ delete. Pass `--yes` to all of them in scripts.
   `delete-bucket`, `swap-tables`. Schema preservation does not
   downgrade the row-data destruction.
 
+## Python-JS drafts are separate from production
+
+*(since vNEXT)*
+
+- Draft commands use the Storage `--config-id` on the production Keboola branch, not the numeric `--app-id` or the active Keboola branch. For a new draft pass a remote `--git-branch` that already exists; no deploy is needed.
+- A draft may exist even if creation returns an error or no URL. Check the app's drafts before retrying. Never use `data-app delete` to clean up a draft of a production app.
+- A `preview-link` URL contains a secret. Use it only to start a browser session before the expiry; do not share it or fetch it with curl.
+
 ## `data-app create --auth public` writes the canonical noneProxyAuthorization shape (since v0.29.0; fixes v0.27.0 silent HTTP 503)
 
 - **What changed.** v0.27.0's `--auth public` wrote NO `authorization`

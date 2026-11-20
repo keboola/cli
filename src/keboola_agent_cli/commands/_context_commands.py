@@ -363,6 +363,15 @@ Keboola data-app lifecycle (create, deploy, manage)
   kbagent data-app detail [--project PROJECT] --app-id ID [--branch N]
     Show merged Data Science + Storage detail for one data app.
 
+  kbagent data-app draft-create [--project PROJECT] --config-id ID
+      --git-branch BRANCH
+    Start a python-js draft on a Git branch without deploying or affecting
+    production.
+
+  kbagent data-app draft-delete [--project PROJECT] --config-id ID
+      [--draft-id ID] [--dry-run] [--yes]
+    Delete a draft without deleting its Git branch or production app.
+
   kbagent data-app git-auth-set [--project PROJECT] --app-id ID
       --git-auth AUTH [--git-repo REPO] [--git-branch BRANCH] [--branch N]
       [--dry-run]
@@ -389,6 +398,11 @@ Keboola data-app lifecycle (create, deploy, manage)
   kbagent data-app password [--project PROJECT] --app-id ID [--copy]
       [--reveal] [--open]
     Copy the password of a password-protected data app to the clipboard.
+
+  kbagent data-app preview-link [--project PROJECT] --config-id ID
+      [--draft-id ID]
+    Mint a private, short-lived login link. Open it only in a browser; do not
+    share it.
 
   kbagent data-app runs [--project PROJECT] --app-id ID [--limit N]
     List a data app's recent deployment attempts (runs), newest first.

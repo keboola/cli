@@ -9940,6 +9940,54 @@ class TestE2EDataAppLifecycle:
                 print(f"  WARN: failed to delete data app {app_id}: {exc}")
 
     @skip_without_data_app_public
+    def test_data_app_draft_lifecycle(self) -> None:
+        created = _json_ok(
+            _invoke(
+                self.config_dir,
+                [
+                    "--json",
+                    "data-app",
+                    "create",
+                    "--project",
+                    self.alias,
+                    "--name",
+                    f"E2E Draft {RUN_ID}",
+                    "--slug",
+                    f"e2e-draft-{RUN_ID}"[:60],
+                    "--git-repo",
+                    os.environ[ENV_DATA_APP_GIT_REPO_PUBLIC],
+                    "--git-public",
+                    "--no-deploy",
+                ],
+            )
+        )["data"]
+        self._created_app_ids.append(created["app_id"])
+        target = ["--project", self.alias, "--config-id", created["config_id"]]
+        draft = _json_ok(
+            _invoke(
+                self.config_dir,
+                ["--json", "data-app", "draft-create", *target, "--git-branch", "main"],
+            )
+        )["data"]["draft"]
+        target.extend(["--draft-id", draft["draft_id"]])
+        try:
+            assert draft["url"], "Draft did not receive a URL"
+            # The normal E2E wrapper prints response summaries; don't use it for the link.
+            with patch(
+                "keboola_agent_cli.cli.ConfigStore",
+                return_value=ConfigStore(config_dir=self.config_dir),
+            ):
+                preview = runner.invoke(app, ["--json", "data-app", "preview-link", *target])
+            assert preview.exit_code == 0, "Preview link could not be minted"
+            data = json.loads(preview.output)["data"]
+            assert set(data) == {"url", "link_expires_at"}
+        finally:
+            deleted = _json_ok(
+                _invoke(self.config_dir, ["--json", "data-app", "draft-delete", *target])
+            )
+            assert deleted["data"]["response"] == "deleted"
+
+    @skip_without_data_app_public
     def test_data_app_lifecycle_public(self) -> None:
         _step(1, "Create public-repo data app", "no auth gate, no encryption")
         repo = os.environ[ENV_DATA_APP_GIT_REPO_PUBLIC]

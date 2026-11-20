@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, ConfigDict
 
 from ...services.base import resolve_fanout_aliases
@@ -244,6 +244,50 @@ def delete(
 ) -> dict[str, Any]:
     """Delete a data app and its configuration. Mirrors `kbagent data-app delete`."""
     return registry.data_app.delete_data_app(alias=project, app_id=app_id)
+
+
+class DataAppDraftCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    git_branch: str
+
+
+@router.post("/{project}/{config_id}/drafts", summary="Create a python-js data app draft")
+def draft_create(
+    project: str,
+    config_id: str,
+    body: DataAppDraftCreate,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """Start a draft on a Git branch. Mirrors `kbagent data-app draft-create`."""
+    return registry.data_app.create_data_app_draft(project, config_id, body.git_branch)
+
+
+@router.delete("/{project}/{config_id}/drafts", summary="Delete a python-js data app draft")
+def draft_delete(
+    project: str,
+    config_id: str,
+    draft_id: str | None = None,
+    dry_run: bool = False,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """Delete a draft by UUID, or a legacy draft by config ID if no UUID was given."""
+    return registry.data_app.delete_data_app_draft(project, config_id, draft_id, dry_run=dry_run)
+
+
+@router.post(
+    "/{project}/{config_id}/preview-link", summary="Mint a short-lived data app preview link"
+)
+def preview_link(
+    project: str,
+    config_id: str,
+    response: Response,
+    draft_id: str | None = None,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, str]:
+    """Mint a browser-only login link. Mirrors `kbagent data-app preview-link`."""
+    response.headers["Cache-Control"] = "no-store"
+    return registry.data_app.get_data_app_preview_link(project, config_id, draft_id)
 
 
 @router.get(
