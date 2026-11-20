@@ -53,6 +53,7 @@ class _TokensMixin(_CoreClient):
         response = TokenVerifyResponse(
             token_id=str(data.get("id", "")),
             token_description=data.get("description", ""),
+            is_master_token=data.get("isMasterToken", False),
             project_id=owner.get("id"),
             project_name=owner.get("name", ""),
             owner_name=owner.get("name", ""),

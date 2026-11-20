@@ -60,6 +60,18 @@ VERIFY_TOKEN_RESPONSE_WITH_FEATURES = {
 class TestVerifyToken:
     """Tests for verify_token() success and failure paths."""
 
+    @pytest.mark.parametrize("master", [True, False, None])
+    def test_verify_token_master_flag(self, httpx_mock, master: bool | None) -> None:
+        data: dict[str, Any] = dict(VERIFY_TOKEN_RESPONSE)
+        data.pop("isMasterToken", None)
+        if master is not None:
+            data["isMasterToken"] = master
+        httpx_mock.add_response(json=data)
+        with KeboolaClient(
+            stack_url="https://connection.keboola.com", token="test-token"
+        ) as client:
+            assert client.verify_token().is_master_token is (master is True)
+
     def test_verify_token_success(self, httpx_mock) -> None:
         """verify_token() returns TokenVerifyResponse with project info on success."""
         httpx_mock.add_response(

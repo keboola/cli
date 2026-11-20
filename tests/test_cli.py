@@ -76,6 +76,10 @@ class TestProjectAdd:
         assert output["data"]["project_id"] == 5678
         # Token should be masked
         assert "55555" not in output["data"]["token"]
+        assert output["warnings"][0]["code"] == "WARNING"
+        assert output["warnings"][0]["message"] == output["data"]["warnings"][0]
+        assert "not a master token" in output["warnings"][0]["message"]
+        assert result.stderr == ""
 
     def _add(self, tmp_path: Path, *args: str) -> Any:
         """Run `kbagent --json project add ARGS` against a mocked client."""
@@ -143,6 +147,8 @@ class TestProjectAdd:
         assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
         assert "test" in result.output
         assert "Success" in result.output or "Test Project" in result.output
+        assert "not a master token" in result.stderr
+        assert "not a master token" not in result.stdout
 
     def test_project_add_invalid_token_exit_code_3(self, tmp_path: Path) -> None:
         """project add with invalid token returns exit code 3."""
@@ -186,6 +192,7 @@ class TestProjectAdd:
         output = json.loads(result.output)
         assert output["status"] == "error"
         assert output["error"]["code"] == "INVALID_TOKEN"
+        assert "warnings" not in output
 
     def test_project_add_timeout_exit_code_4(self, tmp_path: Path) -> None:
         """project add with network timeout returns exit code 4."""

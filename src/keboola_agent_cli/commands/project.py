@@ -232,6 +232,8 @@ def project_add(
 
     try:
         result = service.add_project(alias=alias, stack_url=url, token=resolved_token)
+        for warning in result.get("warnings", []):
+            formatter.warning(escape(str(warning)))
         formatter.output(result, _format_add_result)
         discard_token_file(token_file, keep=keep_token_file)
     except KeboolaApiError as exc:
