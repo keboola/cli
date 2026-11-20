@@ -43,7 +43,7 @@ branch is active for the project, and reset it when one is:
 
 ```bash
 kbagent --json project status --project ALIAS
-kbagent branch reset --project ALIAS
+kbagent --json branch reset --project ALIAS
 ```
 
 ## 1. Preflight (read only)
