@@ -1133,6 +1133,45 @@ class TestMerge:
         assert "Local cleanup skipped" in result.output and "0123x" in result.output
         assert "branch reset" in result.output and "sync branch-unlink" in result.output
 
+    @staticmethod
+    def _in_merge() -> dict[str, Any]:
+        return {
+            **_merged(),
+            "job": None,
+            "status": "already_in_merge",
+            "state": "in_merge",
+            "derived_state": "in_merge",
+            "allowed_actions": ["update"],
+            "message": "Merge request 7 is already being merged; no second merge was started.",
+        }
+
+    def test_already_in_merge_json_is_exit_0(self, tmp_path, service) -> None:
+        # DMD-2246: a not-ready 409 while the merge runs is reported, not refused.
+        service.merge.return_value = self._in_merge()
+        result = _run(
+            ["--json", "merge-request", "merge", "--project", ALIAS, "--merge-request-id", "7"],
+            _store(tmp_path),
+            service,
+        )
+        assert result.exit_code == 0, result.output
+        data = _json(result)["data"]
+        assert data["status"] == "already_in_merge"
+        assert data["state"] == "in_merge"
+        assert data["job"] is None
+
+    def test_already_in_merge_human_is_not_reported_as_success(self, tmp_path, service) -> None:
+        service.merge.return_value = self._in_merge()
+        result = _run(
+            ["merge-request", "merge", "--project", ALIAS, "--merge-request-id", "7", "--yes"],
+            _store(tmp_path),
+            service,
+        )
+        assert result.exit_code == 0, result.output
+        assert "Merging:" in result.output
+        assert "Success:" not in result.output
+        assert "merge-request detail" in result.output
+        assert "now shows as merged" not in result.output
+
     def test_warning_text_with_markup_does_not_crash(self, tmp_path, service) -> None:
         service.merge.return_value = {
             **_merged(),

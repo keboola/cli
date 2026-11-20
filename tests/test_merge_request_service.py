@@ -373,6 +373,15 @@ class TestGetMergeRequest:
         assert detail["mergeable"] is False
         assert "conflicts" not in detail
 
+    def test_unknown_state_is_never_mergeable(self, store, client_factory) -> None:
+        # DMD-2246: a raw state kbagent does not know never reads as mergeable.
+        factory, mock = client_factory
+        mock.merge_requests.get.return_value = _wire_mr(7, "some_future_state")
+        mock.merge_requests.conflicts.return_value = []
+        detail = _svc(store, factory).get_merge_request(ALIAS, 7)
+        assert detail["merge_blockers"] == ["state"]
+        assert detail["mergeable"] is False
+
     def test_activity_log_flag_passes_through(self, store, client_factory) -> None:
         factory, mock = client_factory
         mock.merge_requests.get.return_value = _wire_mr(7, "published", branch_from=None)

@@ -237,6 +237,19 @@ class TestStateTransitionsAreNotRepeated:
         assert exc_info.value.status_code == 503
         assert len(httpx_mock.get_requests()) == 1
 
+    def test_merge_read_timeout_is_not_retried(self, client, httpx_mock, monkeypatch) -> None:
+        """A read timeout means the merge PUT was delivered: the merge may be running,
+        so it is sent once and the outcome is left to the caller (DMD-2246)."""
+        monkeypatch.setattr("keboola_agent_cli.http_base.time.sleep", lambda *_: None)
+        httpx_mock.add_exception(
+            httpx.ReadTimeout("Read timed out"), method="PUT", url=f"{MR_BASE}/42/merge"
+        )
+
+        with pytest.raises(KeboolaApiError):
+            client.merge_requests.merge(42)
+
+        assert len(httpx_mock.get_requests()) == 1
+
 
 class TestMerge:
     """merge() awaits the Storage job implicitly, like every job-backed client method."""
