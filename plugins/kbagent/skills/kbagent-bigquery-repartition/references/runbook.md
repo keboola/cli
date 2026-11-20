@@ -370,10 +370,15 @@ the transformation without `--created-table`, then set both mappings:
 kbagent --json transformation create --project ALIAS --component-id keboola.google-bigquery-transformation \
   --name "repartition T" --sql "CREATE TABLE T_repart AS SELECT PK, SAFE.PARSE_DATE('%Y-%m-%d', COL) AS COL, C1, OTHER FROM T"
 kbagent --json transformation edit --project ALIAS --config-id CFG_ID --change-description "map repartition tables" \
-  --storage '{"input": {"tables": [{"source": "B.T", "destination": "T"}]}, "output": {"tables": [{"source": "T_repart", "destination": "B.T_repart"}]}}'
+  --storage '{"input": {"tables": [{"source": "B.T", "destination": "T"}]}, "output": {"tables": [{"source": "T_repart", "destination": "B.T_repart", "primary_key": ["PK"]}]}}'
 kbagent --json job run --project ALIAS --component-id keboola.google-bigquery-transformation --config-id CFG_ID --wait --timeout 3600
 kbagent --json config delete --project ALIAS --component-id keboola.google-bigquery-transformation --config-id CFG_ID
 ```
+
+`primary_key` of the output mapping lists the same columns, in the same
+order, as `--primary-key` of section 4b. An output mapping whose key differs
+from the key of the destination table does not load as it is. Omit
+`primary_key` only when the table has no primary key.
 
 The column list in the SELECT is the full column list of the source, in the
 order of the source. Run `config delete` only after a successful job: it
