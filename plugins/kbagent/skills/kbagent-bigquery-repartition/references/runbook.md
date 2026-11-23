@@ -55,8 +55,12 @@ preflight record at the end of the section.
 
 ```bash
 kbagent --json storage table-detail --project ALIAS --table-id B.T \
-  | jq '.data | {is_alias, rows_count, data_size_bytes, primary_key, last_import_date, sql_path, column_details, layout: (.definition | {timePartitioning, rangePartitioning, clustering}), policy_tags: [.definition.columns[] | {name, policyTagState}]}'
+  | jq '.data | {is_alias, rows_count, data_size_bytes, primary_key, last_import_date, sql_path, column_details, layout: ((.definition // {}) | {timePartitioning, rangePartitioning, clustering, requirePartitionFilter}), policy_tags: [(.definition.columns // [])[] | {name, policyTagState}]}'
 ```
+
+The filter prints `definition.requirePartitionFilter` as
+`layout.requirePartitionFilter`. It still prints the other keys when
+`definition` or `definition.columns` is null: `policy_tags` is then empty.
 
 Never print `definition.partitions`. It has one entry per physical partition
 and is unbounded.
