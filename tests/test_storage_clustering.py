@@ -154,6 +154,13 @@ class TestClusteringService:
         )
         client.close.assert_called_once()
 
+    def test_dev_branch_reaches_both_reads_and_the_put(self, tmp_path: Path) -> None:
+        client = _client(None, ["a"])
+        result = self._run(tmp_path, client, fields=["a"], branch_id=7)
+        assert result["branch_id"] == 7
+        assert [c.kwargs["branch_id"] for c in client.get_table_detail.call_args_list] == [7, 7]
+        assert client.update_table_definition.call_args.kwargs["branch_id"] == 7
+
     def test_same_fields_is_unchanged_without_put(self, tmp_path: Path) -> None:
         client = _client(["a", "b"])
         result = self._run(tmp_path, client, fields=["a", "b"])
