@@ -143,7 +143,22 @@ class TableClusteringMixin(BaseService):
                 raise with_job_timeout_hint(
                     _not_allowed_as_invalid_argument(exc), alias, table_id, branch_id
                 ) from exc
-            after = stored_clustering(client.get_table_detail(table_id, branch_id=branch_id))
+            warnings: list[dict[str, str]] = []
+            try:
+                after = stored_clustering(client.get_table_detail(table_id, branch_id=branch_id))
+            except KeboolaApiError as exc:
+                # The job already succeeded; a failed read-back must not report a failure.
+                after = requested
+                warnings.append(
+                    {
+                        "code": "CLUSTERING_REREAD_FAILED",
+                        "message": (
+                            "The clustering job succeeded, but reading the table back failed "
+                            f"({exc.message}); 'clustering' shows the requested value. Verify "
+                            "with 'kbagent storage table-detail'."
+                        ),
+                    }
+                )
         finally:
             client.close()
         action = "removed from" if requested is None else "set on"
@@ -154,5 +169,6 @@ class TableClusteringMixin(BaseService):
             "status": "updated",
             "job_id": job.get("id"),
             "result": job,
+            "warnings": warnings,
             "message": f"Clustering {action} table '{table_id}' in project '{alias}'.",
         }

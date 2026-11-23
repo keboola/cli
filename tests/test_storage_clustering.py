@@ -245,6 +245,19 @@ class TestClusteringService:
         assert exc_info.value.error_code == ErrorCode.ACCESS_DENIED
         assert exc_info.value.status_code == 403
 
+    def test_failed_reread_after_job_reports_updated_with_warning(self, tmp_path: Path) -> None:
+        client = _client(["x"])
+        client.get_table_detail.side_effect = [
+            _table(["x"]),
+            KeboolaApiError(message="Bad gateway", status_code=502, error_code=ErrorCode.API_ERROR),
+        ]
+        result = self._run(tmp_path, client, fields=["a"])
+        assert result["status"] == "updated"
+        assert result["job_id"] == 555
+        assert result["clustering"] == ["a"]
+        assert [w["code"] for w in result["warnings"]] == ["CLUSTERING_REREAD_FAILED"]
+        client.close.assert_called_once()
+
     def test_timeout_names_job_detail_and_table_detail(self, tmp_path: Path) -> None:
         client = _client(None)
         client.update_table_definition.side_effect = _timeout()

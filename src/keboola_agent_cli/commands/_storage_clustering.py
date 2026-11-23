@@ -49,6 +49,8 @@ def _render(formatter: OutputFormatter, result: dict[str, Any]) -> None:
         formatter.success(f"Clustering removed: {table} (job {job})")
     else:
         formatter.success(f"Clustering set: {table} -> {_fields(clustering)} (job {job})")
+    for warning in result.get("warnings", []):
+        formatter.warning(escape(warning["message"]))
     formatter.console.print(
         "[dim]BigQuery clusters data written after the change; "
         "existing rows keep their order until rewritten.[/dim]"
