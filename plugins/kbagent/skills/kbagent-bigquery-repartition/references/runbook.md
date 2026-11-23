@@ -72,6 +72,8 @@ Read from the result:
 - `column_details[].native_type`: the type of every column. The type of `COL`
   decides the path. DATE, DATETIME or TIMESTAMP is path A. STRING is path B.
   On an untyped table every column is STRING, so an untyped table is path B.
+  A table that has any `column_details[].default` is path B as well, whatever
+  the type of `COL` is (section 4, path A, "Column defaults").
 - `definition.timePartitioning`, `rangePartitioning`, `clustering`: the
   current layout.
 - `definition.requirePartitionFilter`. Refuse the table when it is true. Every
@@ -338,6 +340,15 @@ Use the granularity of section 2. For a cluster-only table omit both
 
 The copy keeps the columns, their types and NOT NULL of the source. It keeps
 the primary key that the command requests.
+
+**Column defaults.** `create-table --source-table-id` refuses `--default`
+(`services/storage_service.py`: "`--default` is not valid with
+`--source-table-id`"), and the copy does not inherit a default from the
+source. So when any column recorded in section 1 has a
+`column_details[].default`, a path A copy can never satisfy the column-default
+check of section 5. Take the table through **path B** instead: it lists the
+columns explicitly and repeats every default with `--default name=value`.
+Refuse the table only when path B is not possible either.
 
 On exit 4 with `STORAGE_JOB_TIMEOUT` the job still runs. Wait for it, and
 never re-run the copy:
