@@ -1701,7 +1701,11 @@ authors policies. Query Service enforces them (its policy-engine sidecar) on a g
 workspace (`workspace create --governed`, then `workspace query` -- no
 `workspace load`: the engine reads the Storage table by its bucket name); it always enforces a governed workspace, whatever the project.
 In a project with the `row-level-security` feature the MCP server creates such a
-workspace for its `query_data` tool. An ordinary reader
+workspace for its `query_data` tool. The same feature is required to deploy a Data
+App whose config sets `runtime.workspace.rlsPolicies` / `clsPolicies` (refused
+otherwise: `... requires the "row-level-security" project feature, which this
+project does not have.`); during the public beta (until 28 February 2027) a
+project admin turns it on in Project settings -> Features, later only Keboola. An ordinary reader
 who may not read a table (no policy on it, or no rule selects them) gets an empty result;
 an administrator behind a Storage token gets the refusal `Row-level security does not
 allow this query`. The identity that queries needs a matching rule.
