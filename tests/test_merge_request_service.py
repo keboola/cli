@@ -644,9 +644,9 @@ class TestMerge:
         self, store, client_factory, monkeypatch
     ) -> None:
         """A merge that started (lost response, a concurrent call, the auto-merge
-        scheduler) is reported as running, not as blocked. It stays the retryable
-        MR_NOT_READY_TO_MERGE (exit 1): exit 0 means merged, and the running merge
-        can still fail -- so no local cleanup runs either (DMD-2246)."""
+        scheduler) is reported as MR_MERGE_RUNNING -- not a refusal, not a success:
+        exit 0 means merged, and the running merge can still fail, so no local
+        cleanup runs either (DMD-2246)."""
         factory, mock = client_factory
         mock.merge_requests.get.side_effect = [
             _wire_mr(7, "approved", branch_from=123),
@@ -662,10 +662,9 @@ class TestMerge:
         with pytest.raises(KeboolaApiError) as exc_info:
             _svc(store, factory).merge(ALIAS, 7)
         exc = exc_info.value
-        assert exc.error_code == ErrorCode.MR_NOT_READY_TO_MERGE
-        assert exc.retryable is True
+        assert exc.error_code == ErrorCode.MR_MERGE_RUNNING
+        assert exc.retryable is False
         assert "already being merged" in exc.message
-        assert exc.details["merge_running"] is True
         assert exc.details["state"] == "in_merge"
         assert exc.details["derived_state"] == "in_merge"
         mock.merge_requests.merge.assert_called_once()

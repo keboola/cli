@@ -147,7 +147,7 @@ kbagent mr resolve --project P --component-id C --config-id I --resolved-file re
 | `NOT_FOUND` from the resolver | the branch has no merge request | `mr create` |
 | `MR_NOT_READY_TO_MERGE` (retryable) | merge lock, wrong state, another MR merging | retry |
 | `status: "already_merged"` (exit 0, not an error) | `merge` repeated after an earlier merge whose response was lost | nothing to do |
-| `MR_NOT_READY_TO_MERGE` with `details.merge_running: true` | `merge` repeated while an earlier merge job still runs | poll `mr detail` until `merged` (or back to `approved` if it failed); a retry is harmless |
+| `MR_MERGE_RUNNING` (exit 4) | `merge` repeated while an earlier merge job still runs | poll `mr detail` until `merged` (or back to `approved` if it failed); do not merge again |
 | `STORAGE_JOB_TIMEOUT` (exit 4) | merge ran past 10 min; it continues server-side | poll `mr detail` |
 
 ## Requesting review emails people

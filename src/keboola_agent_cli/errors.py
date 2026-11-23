@@ -181,6 +181,10 @@ class ErrorCode(StrEnum):
     # knows the 409 came from the merge endpoint.
     MR_NOT_READY_TO_MERGE = "MR_NOT_READY_TO_MERGE"
     MR_MERGE_CONFLICT = "MR_MERGE_CONFLICT"
+    # A not-ready 409 whose re-read MR is `in_merge`: a merge started earlier
+    # (lost response, a concurrent call, the auto-merge scheduler) still runs.
+    # Neither a refusal nor a success (DMD-2246); exit 4 like STORAGE_JOB_TIMEOUT.
+    MR_MERGE_RUNNING = "MR_MERGE_RUNNING"
 
     # Updates (#791, CLI-51). After an automatic update to a higher major the
     # first write or destructive command is refused once (exit 6). Reads before
@@ -558,6 +562,7 @@ ERROR_CODE_TABLE: dict[str, ErrorClass] = {
     # Merge requests
     ErrorCode.MR_NOT_READY_TO_MERGE: ErrorClass("conflict", 1),
     ErrorCode.MR_MERGE_CONFLICT: ErrorClass("conflict", 1),
+    ErrorCode.MR_MERGE_RUNNING: ErrorClass("conflict", 4),
     # Interrupted under --json: Ctrl+C exits 130 (an aborted prompt keeps Typer's exit 1).
     ErrorCode.INTERRUPTED: ErrorClass("api", 130),
 }

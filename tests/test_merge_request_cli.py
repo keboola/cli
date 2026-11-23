@@ -1138,24 +1138,24 @@ class TestMerge:
         return KeboolaApiError(
             message="Merge request 7 is already being merged (state in_merge); no second merge was started.",
             status_code=409,
-            error_code=ErrorCode.MR_NOT_READY_TO_MERGE,
-            retryable=True,
-            details={"merge_running": True, "state": "in_merge", "derived_state": "in_merge"},
+            error_code=ErrorCode.MR_MERGE_RUNNING,
+            retryable=False,
+            details={"state": "in_merge", "derived_state": "in_merge"},
         )
 
-    def test_merge_running_json_keeps_exit_1_and_carries_the_state(self, tmp_path, service) -> None:
-        # DMD-2246: a running merge is reported as such, but exit 0 still means merged.
+    def test_merge_running_json_is_exit_4_and_carries_the_state(self, tmp_path, service) -> None:
+        # DMD-2246: a running merge is neither a refusal nor exit 0 (which means merged).
         service.merge.side_effect = self._merge_running()
         result = _run(
             ["--json", "merge-request", "merge", "--project", ALIAS, "--merge-request-id", "7"],
             _store(tmp_path),
             service,
         )
-        assert result.exit_code == 1
+        assert result.exit_code == 4
         error = _json(result)["error"]
-        assert error["code"] == ErrorCode.MR_NOT_READY_TO_MERGE
-        assert error["retryable"] is True
-        assert error["details"]["merge_running"] is True
+        assert error["code"] == ErrorCode.MR_MERGE_RUNNING
+        assert error["error_type"] == "conflict"
+        assert error["retryable"] is False
         assert error["details"]["state"] == "in_merge"
 
     def test_merge_running_human_says_it_is_running(self, tmp_path, service) -> None:
@@ -1165,7 +1165,7 @@ class TestMerge:
             _store(tmp_path),
             service,
         )
-        assert result.exit_code == 1
+        assert result.exit_code == 4
         assert "already being merged" in result.output
         assert "Success:" not in result.output
 

@@ -943,32 +943,28 @@ class MergeRequestService(BaseService):
     def _merge_running_error(
         merge_request_id: int, mr: dict[str, Any], exc: KeboolaApiError
     ) -> KeboolaApiError:
-        """The not-ready 409 of a merge that is already running, said as such.
+        """The not-ready 409 of a merge that is already running: ``MR_MERGE_RUNNING``.
 
-        Still ``MR_NOT_READY_TO_MERGE`` with exit 1 and ``retryable: true``:
-        exit 0 from ``merge`` keeps meaning "merged" (spec C1 -- turning this
-        into a success would change an exit code), and a running merge can
-        still fail and roll the MR back to ``approved``. What changes is the
-        message and ``details`` (``state`` / ``derived_state`` /
-        ``merge_running``), so a caller can tell "a merge runs" from "blocked"
-        without a second read. A retry is harmless: it gets this error again
-        while the merge runs and ``already_merged`` once it landed. No local
-        cleanup runs (the source branch may survive a failed merge).
+        Not a refusal (DMD-2246: a started merge is never reported as refused)
+        and not a success: exit 0 from ``merge`` keeps meaning "merged", while a
+        running merge can still fail and roll the MR back to ``approved``. Exit 4
+        and ``retryable: false``, like ``STORAGE_JOB_TIMEOUT`` -- something keeps
+        running server-side and repeating the call is not the way to wait for
+        it (after a failed merge a repeat would start a new one). No local
+        cleanup runs: the source branch survives a failed merge.
         """
         return KeboolaApiError(
             message=(
                 f"Merge request {merge_request_id} is already being merged (state in_merge); "
-                "no second merge was started. Wait and check `kbagent merge-request detail` "
-                "until it is merged (or back to approved if the merge failed). Running "
-                "`merge` again is harmless: once the merge landed it answers "
-                "status already_merged."
+                "no second merge was started. Do not merge again: check "
+                "`kbagent merge-request detail` until it is merged (or back to approved if "
+                "the merge failed)."
             ),
             status_code=409,
-            error_code=ErrorCode.MR_NOT_READY_TO_MERGE,
-            retryable=True,
+            error_code=ErrorCode.MR_MERGE_RUNNING,
+            retryable=False,
             details={
                 **exc.details,
-                "merge_running": True,
                 "state": "in_merge",
                 "derived_state": derive_state(mr),
             },
