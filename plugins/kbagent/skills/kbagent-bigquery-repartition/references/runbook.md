@@ -385,7 +385,7 @@ List the columns in the order of the source.
 
 When any column of `B.T` carries a policy tag (section 1), check the tags of
 the empty `B.T_repart` with the `bq show` filter of section 4c **before the
-fill**, and refuse the table when a tag is missing. Output mapping does not
+fill**, and refuse the table when a tag is missing (abort step, section 4d). Output mapping does not
 propagate policy tags, so a filled but untagged copy exposes the protected
 values of every row to anyone with dataset read access, for the whole window
 until section 4c refuses and the copy is dropped. On an empty table that
@@ -411,7 +411,9 @@ from the key of the destination table does not load as it is. Omit
 
 The column list in the SELECT is the full column list of the source, in the
 order of the source. Run `config delete` only after a successful job: it
-moves the helper configuration to the trash.
+moves the helper configuration to the trash. When the job fails, stop and
+run the abort step (section 4d), which drops the copy, this configuration
+and the helper workspace.
 
 kbagent has no command that imports a workspace table into a Storage table.
 That is why the fill goes through a transformation and its output mapping.
@@ -458,8 +460,36 @@ section (section 1). Keep this order:
 3. **Search indexes** are not created here. A rename drops them, so they are
    created again in section 6.
 
-When one of these steps cannot be done, stop. Do not swap. Drop `B.T_repart`
-with the owner's yes, and refuse the table.
+When one of these steps cannot be done, stop. Do not swap. Run the abort
+step (section 4d), and refuse the table.
+
+## 4d. Abort before the swap
+
+Every stop between the copy and the swap ends here: a failed path B job, a
+missing policy tag (section 4b or 4c), a step of section 4c that cannot be
+done, a failed check of section 5. Until this step runs, `B.T_repart` is a
+full second copy of the data, personal data included, possibly without its
+policy tags, and readable by every dataset reader.
+
+Run it only before the swap. After the swap `B.T_repart` is the old
+production table, and section 8 decides about it.
+
+With the owner's yes, in this order:
+
+```bash
+kbagent --json storage delete-table --project ALIAS --table-id B.T_repart --dry-run
+kbagent --json storage delete-table --project ALIAS --table-id B.T_repart --yes
+kbagent --json config delete --project ALIAS --component-id keboola.google-bigquery-transformation --config-id CFG_ID
+kbagent --json workspace delete --project ALIAS --workspace-id WS_ID --yes
+```
+
+- The copy goes first: it is the object that holds data.
+- `config delete` applies to path B only, and only when `CFG_ID` still
+  exists (the fill job failed, so section 4 did not delete it).
+- Read `B.T` once more with `storage table-detail` and confirm that it is
+  unchanged: the layout and `rows_count` of section 1.
+- Tell the owner that the dropped copy stays reachable through BigQuery time
+  travel for a time (section 8), and that the writers can resume.
 
 ## 5. Validate (refuse the swap on any mismatch)
 
@@ -469,7 +499,9 @@ kbagent --json workspace load --project ALIAS --workspace-id WS_ID --table-id B.
 kbagent --json workspace query --project ALIAS --workspace-id WS_ID --sql "SELECT (SELECT COUNT(*) FROM T) AS old_rows, (SELECT COUNT(*) FROM T_repart) AS new_rows"
 ```
 
-Every check must pass. On a mismatch, stop and do not swap.
+Every check must pass. On a mismatch, stop, do not swap, and run the abort
+step (section 4d): it drops the copy, the helper configuration and the
+helper workspace.
 
 - **Row count.** `old_rows` equals `new_rows`, and both equal the row count
   recorded right before the copy (section 3). A difference means that a
@@ -526,8 +558,8 @@ passes.
 Right before the swap, count the rows of both tables once more with the
 count query at the top of this section. It is the last command before the
 swap commands of section 6. `old_rows` and `new_rows` must both equal the
-row count recorded before the copy. On a difference, stop and do not swap: a
-write landed after the copy. `rows_count` and `last_import_date` of `B.T`
+row count recorded before the copy. On a difference, stop, do not swap, and
+run the abort step (section 4d): a write landed after the copy. `rows_count` and `last_import_date` of `B.T`
 must also equal the values recorded before the copy, but equal values there
 do not replace the count.
 
