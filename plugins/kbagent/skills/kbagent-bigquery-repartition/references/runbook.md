@@ -72,6 +72,8 @@ Read from the result:
 - `column_details[].native_type`: the type of every column. The type of `COL`
   decides the path. DATE, DATETIME or TIMESTAMP is path A. STRING is path B.
   On an untyped table every column is STRING, so an untyped table is path B.
+- `column_details[].nullable`: whether each column accepts NULL. Record it
+  per column. Section 5 compares it with the copy.
   A table that has any `column_details[].default` is path B as well, whatever
   the type of `COL` is (section 4, path A, "Column defaults").
 - `definition.timePartitioning`, `rangePartitioning`, `clustering`: the
@@ -252,6 +254,7 @@ data_size_bytes:
 primary_key:
 last_import_date:
 Columns and types:
+Nullable per column (column_details[].nullable):
 Current layout (timePartitioning / rangePartitioning / clustering):
 requirePartitionFilter (must be false):
 Column defaults (column_details[].default):
@@ -378,7 +381,8 @@ query to the owner. No table is created. Delete the helper workspace (the
 
 Every column keeps its type from `column_details`. On an untyped table every
 column is `STRING`. `COL` becomes `DATE`. NOT NULL and the primary key are the
-same as on the source. Every column default recorded in section 1
+same as on the source: pass one `--not-null-column` for every column recorded
+with `nullable: false` in section 1. Every column default recorded in section 1
 (`column_details[].default`) is repeated with `--default name=value`: the copy
 does not inherit a default, and a column that loses it writes NULL on the next
 insert that omits it, or fails its NOT NULL constraint.
@@ -519,6 +523,10 @@ helper workspace.
   write landed.
 - **Columns and types.** The column list and the types are equal. Path B:
   only `COL` differs, and it is `DATE`.
+- **Nullability.** `column_details[].nullable` of each column equals the
+  value recorded for `B.T` in section 1. A column that is NOT NULL on one
+  table and nullable on the other is a mismatch: after the swap the table
+  would accept or reject inserts differently.
 - **Primary key.** `primary_key` is equal.
 - **Column defaults.** `column_details[].default` of each column equals the
   value recorded for `B.T` in section 1. A missing default is a mismatch.
