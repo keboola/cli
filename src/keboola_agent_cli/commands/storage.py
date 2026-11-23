@@ -2196,6 +2196,9 @@ _register_snapshot_commands(storage_app)
 from ._storage_describe import register as _register_describe_commands  # noqa: E402
 
 _register_describe_commands(storage_app)
+from ._storage_clustering import register as _register_clustering_commands  # noqa: E402
+
+_register_clustering_commands(storage_app)
 
 
 # `job-detail` (issue #834) lives in a private module for the same reason.

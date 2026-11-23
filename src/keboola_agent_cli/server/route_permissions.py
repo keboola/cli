@@ -195,6 +195,7 @@ ROUTE_OPERATIONS: dict[tuple[str, str], str] = {
     ("DELETE", "/storage/tables/{project}"): "storage.delete-table",
     ("POST", "/storage/tables/{project}/truncate"): "storage.truncate-table",
     ("POST", "/storage/tables/{project}/{table_id:path}/swap"): "storage.swap-tables",
+    ("PUT", "/storage/tables/{project}/{table_id:path}/clustering"): "storage.clustering-set",
     ("POST", "/storage/tables/{project}/{table_id:path}/pull"): "storage.clone-table",
     ("POST", "/storage/tables/{project}/{table_id:path}/describe"): "storage.describe-table",
     # ── storage: columns ─────────────────────────────────────────────

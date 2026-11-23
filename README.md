@@ -322,6 +322,7 @@ kbagent flow        list | detail | schema | validate | new | update | delete | 
 kbagent storage     buckets | bucket-detail | create-bucket | delete-bucket
                     tables | table-detail | create-table | upload-table | download-table
                     delete-table | truncate-table | delete-column | swap-tables | clone-table
+                    clustering-set
                     describe-bucket | describe-table | describe-column | describe-batch
                     files | file-detail | file-upload | file-download | file-tag | file-delete
                     load-file | unload-table

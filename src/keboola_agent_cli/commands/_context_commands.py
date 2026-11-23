@@ -1222,6 +1222,12 @@ Browse and manage storage buckets, tables, and files
       [--dry-run]
     Clone (pull) a production table into a development branch.
 
+  kbagent storage clustering-set [--project PROJECT] --table-id ID
+      [--clustering-field FIELD ...] [--clear] [--branch N] [--dry-run]
+      [--timeout N]
+    Set or remove the clustering of a BigQuery table in place (waits for the
+    job).
+
   kbagent storage create-bucket [--project PROJECT] --stage STAGE --name NAME
       [--description DESCRIPTION] [--backend BACKEND] [--branch N]
     Create a new storage bucket.

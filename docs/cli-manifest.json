@@ -3582,6 +3582,22 @@
       ]
     },
     {
+      "path": "storage clustering-set",
+      "kind": "command",
+      "hidden": false,
+      "category": "write",
+      "help": "Set or remove the clustering of a BigQuery table in place (waits for the job).\n\nNo copy and no swap: Storage changes the clustering of the existing\ntable. Typed BigQuery tables only. BigQuery applies the new clustering\nto data written after the change; existing rows keep their order until\nthey are rewritten (for example by a full load). Verify with\n'storage table-detail'. The result reports status 'updated', or\n'unchanged' when the table already has the requested clustering.\n\n\b\nExamples:\n  kbagent storage clustering-set --project P --table-id in.c-b.t \\\n    --clustering-field country --clustering-field city\n  kbagent storage clustering-set --project P --table-id in.c-b.t --clear\n  kbagent storage clustering-set --project P --table-id in.c-b.t \\\n    --clustering-field country --dry-run",
+      "params": [
+        {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
+        {"kind": "option", "name": "table_id", "opts": ["--table-id"], "type": "text", "required": true, "default": null, "help": "Table ID (e.g. 'in.c-bucket.table')"},
+        {"kind": "option", "name": "clustering_fields", "opts": ["--clustering-field"], "type": "text", "multiple": true, "default": null, "help": "Column to cluster by, in order (BigQuery, 1 to 4). Repeatable. Replaces the current clustering."},
+        {"kind": "option", "name": "clear", "opts": ["--clear"], "type": "boolean", "is_flag": true, "default": false, "help": "Remove the clustering. Mutually exclusive with --clustering-field."},
+        {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Dev branch ID (defaults to active branch; 0 is production)"},
+        {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Show the current and the requested clustering without writing"},
+        {"kind": "option", "name": "timeout", "opts": ["--timeout"], "type": "float", "default": 60.0, "help": "Seconds to wait for the storage job (default 60). On timeout the job KEEPS RUNNING server-side -- kbagent stops watching, it does not cancel."}
+      ]
+    },
+    {
       "path": "storage create-bucket",
       "kind": "command",
       "hidden": false,

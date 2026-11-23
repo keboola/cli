@@ -203,6 +203,8 @@ MAX_RETRY_AFTER_SECONDS: int = 60
 # --- Storage Job Polling ---
 STORAGE_JOB_POLL_INTERVAL: float = 1.0  # seconds between polls
 STORAGE_JOB_MAX_WAIT: float = 60.0  # max seconds to wait for a storage job
+# Same limit as Connection's TableDefinitionUpdateRequest::CLUSTERING_MAX_FIELDS.
+BIGQUERY_CLUSTERING_MAX_FIELDS: int = 4
 IMPORT_JOB_MAX_WAIT: float = 600.0  # 10 min for table import jobs (large files)
 MERGE_JOB_MAX_WAIT: float = 600.0  # 10 min for merge-request merge jobs (many-config branches)
 # Server-side caps on merge-request fields (MergeRequestRejectRequest::REASON_MAX_LENGTH,
@@ -647,6 +649,8 @@ STORAGE_BRANCHES_FEATURE: str = "storage-branches"
 # stored description sent again) and for other validation failures, so the
 # code alone does not prove the request was a no-op.
 DEFINITION_VALIDATION_ERROR_CODE: str = "storage.tables.definitionUpdateValidationFailed"
+# Error `code` of the HTTP 422 Storage answers when it refuses a clustering change.
+CLUSTERING_UPDATE_NOT_ALLOWED_CODE: str = "storage.tables.clusteringUpdateNotAllowed"
 
 # --- Merge Requests (Branches 2.0) ---
 # Feature flag gating the non-SOX merge-request flow. Layer 3

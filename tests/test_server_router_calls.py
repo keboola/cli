@@ -3474,6 +3474,45 @@ def test_swap_tables_route_rejects_bad_timeout(tmp_path: Path, bad: str) -> None
     storage_svc.swap_tables.assert_not_called()
 
 
+def test_clustering_set_route_forwards_kwargs(tmp_path: Path) -> None:
+    storage_svc = MagicMock()
+    storage_svc.set_table_clustering.return_value = {"status": "updated"}
+    app = _make_app_with_registry(tmp_path, _mock_registry(storage=storage_svc))
+
+    with TestClient(app) as client:
+        res = client.put(
+            f"/storage/tables/{PROJECT}/in.c-b.a/clustering?dry_run=true",
+            headers=AUTH,
+            json={"clustering_fields": ["x", "y"], "branch_id": 7, "timeout": 120},
+        )
+
+    assert res.status_code == 200, res.text
+    storage_svc.set_table_clustering.assert_called_once_with(
+        alias=PROJECT,
+        table_id="in.c-b.a",
+        fields=["x", "y"],
+        clear=False,
+        branch_id=7,
+        dry_run=True,
+        timeout=120,
+    )
+
+
+def test_clustering_set_route_rejects_extra_field(tmp_path: Path) -> None:
+    storage_svc = MagicMock()
+    app = _make_app_with_registry(tmp_path, _mock_registry(storage=storage_svc))
+
+    with TestClient(app) as client:
+        res = client.put(
+            f"/storage/tables/{PROJECT}/in.c-b.a/clustering",
+            headers=AUTH,
+            json={"clear": True, "fields": ["x"]},
+        )
+
+    assert res.status_code == 422, res.text
+    storage_svc.set_table_clustering.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # merge_requests.py -- the REST mirror of `kbagent merge-request *` (DMD-1900)
 # Service: MergeRequestService.<method>(project, merge_request_id, ...)

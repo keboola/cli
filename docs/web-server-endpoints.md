@@ -9,7 +9,7 @@ auth, and the concepts behind these routes live in
 [`web-server.md`](web-server.md); a running server serves the same spec
 interactively at `/docs` (Swagger) and `/openapi.json`.
 
-**276 operations** across **233 paths** and **34 routers**.
+**277 operations** across **234 paths** and **34 routers**.
 
 Paths are shown as the server registers them. Reaching them through the
 Node BFF (or single-process `--ui` mode) prefixes every path with `/api`.
@@ -167,7 +167,7 @@ Encrypt secret values for a specific project + component using the Keboola encry
 
 ## Data
 
-### `storage` (33 operations)
+### `storage` (34 operations)
 
 Buckets, tables, columns, files. Create, upload, download, describe, swap, delete. Mirrors `kbagent storage *`.
 
@@ -189,6 +189,7 @@ Buckets, tables, columns, files. Create, upload, download, describe, swap, delet
 | `DELETE` | `/storage/columns/{project}/{table_id}` | Delete table columns |
 | `POST` | `/storage/columns/{project}/{table_id}` | Add a table column |
 | `POST` | `/storage/tables/{project}/{table_id}/swap` | Swap two tables |
+| `PUT` | `/storage/tables/{project}/{table_id}/clustering` | Set or remove table clustering |
 | `POST` | `/storage/tables/{project}/{table_id}/pull` | Clone a table into a dev branch |
 | `POST` | `/storage/tables/{project}/{table_id}/snapshots` | Create a table snapshot |
 | `GET` | `/storage/snapshots/{project}/{table_id}` | List table snapshots |

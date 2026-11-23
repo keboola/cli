@@ -38,6 +38,7 @@ from ._storage_tables import (
     normalize_table_rows,
     refuse_production_clone,
 )
+from ._table_clustering import TableClusteringMixin
 from ._table_detail import build_table_detail
 from .base import item_failure
 from .table_usage import collect_table_usage, fetch_usage_components
@@ -231,7 +232,7 @@ def _ensure_bucket_exists_in_branch(
     return True
 
 
-class StorageService(ColumnDescriptionsMixin):
+class StorageService(ColumnDescriptionsMixin, TableClusteringMixin):
     """Business logic for storage bucket and table operations.
 
     Supports multi-project parallel queries for listing operations.
