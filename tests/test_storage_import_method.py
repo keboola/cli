@@ -362,21 +362,68 @@ class TestPreflight:
         assert "project's default backend, bigquery" in exc.message
         assert all(r.method == "GET" for r in httpx_mock.get_requests())
 
-    def test_missing_bucket_without_auto_create_fails_before_the_upload(
-        self, tmp_path: Path
+    @pytest.mark.parametrize(
+        ("status_code", "error_code"),
+        [(404, ErrorCode.NOT_FOUND), (403, ErrorCode.ACCESS_DENIED)],
+    )
+    def test_unreadable_bucket_without_auto_create_is_left_to_storage(
+        self, tmp_path: Path, status_code: int, error_code: ErrorCode
     ) -> None:
         client = MagicMock()
         client.get_bucket_detail.side_effect = KeboolaApiError(
-            "Bucket not found", status_code=404, error_code=ErrorCode.NOT_FOUND
+            "bucket read failed", status_code=status_code, error_code=error_code
+        )
+        client.upload_table_with_outcome.return_value = MagicMock(
+            file_id=100, job={"id": 5, "status": "waiting"}
         )
         service = StorageService(
             config_store=_make_store(tmp_path), client_factory=lambda url, token: client
         )
-        with pytest.raises(KeboolaApiError) as exc_info:
-            _upload(service, tmp_path, auto_create=False, import_method="single_statement")
-        assert exc_info.value.error_code == ErrorCode.NOT_FOUND
+        result = _upload(
+            service, tmp_path, auto_create=False, wait=False, import_method="single_statement"
+        )
+        assert result["import_method"] == "single_statement"
         client.verify_token.assert_not_called()
-        client.upload_table_with_outcome.assert_not_called()
+        kwargs = client.upload_table_with_outcome.call_args.kwargs
+        assert kwargs["import_method"] is ImportMethod.single_statement
+
+    def test_forbidden_bucket_with_auto_create_is_not_refused_by_the_check(
+        self, tmp_path: Path
+    ) -> None:
+        client = MagicMock()
+        forbidden = KeboolaApiError(
+            "forbidden", status_code=403, error_code=ErrorCode.ACCESS_DENIED
+        )
+        client.get_bucket_detail.side_effect = forbidden
+        service = StorageService(
+            config_store=_make_store(tmp_path), client_factory=lambda url, token: client
+        )
+        # The check passes; the auto-create step's own bucket read then fails.
+        with pytest.raises(KeboolaApiError) as exc_info:
+            _upload(service, tmp_path, import_method="single_statement")
+        assert exc_info.value.error_code == ErrorCode.ACCESS_DENIED
+        assert client.get_bucket_detail.call_count == 2
+        client.verify_token.assert_not_called()
+        client.create_bucket.assert_not_called()
+
+    def test_unreadable_default_backend_is_left_to_storage(self, tmp_path: Path) -> None:
+        client = MagicMock()
+        client.get_bucket_detail.side_effect = KeboolaApiError(
+            "Bucket not found", status_code=404, error_code=ErrorCode.NOT_FOUND
+        )
+        client.verify_token.side_effect = KeboolaApiError(
+            "verify failed", status_code=500, error_code=ErrorCode.API_ERROR
+        )
+        client.list_tables.return_value = []
+        client.upload_table_with_outcome.return_value = MagicMock(
+            file_id=100, job={"id": 5, "status": "waiting"}
+        )
+        service = StorageService(
+            config_store=_make_store(tmp_path), client_factory=lambda url, token: client
+        )
+        result = _upload(service, tmp_path, wait=False, import_method="multi_statement")
+        assert result["import_method"] == "multi_statement"
+        client.create_bucket.assert_called_once()
 
     def test_snowflake_bucket_proceeds(self, tmp_path: Path) -> None:
         client = MagicMock()
@@ -469,6 +516,22 @@ class TestSdkFacade:
             self._client(kc).upload_table(_TABLE, _csv(tmp_path), import_method="multi_statement")
         assert exc_info.value.error_code == ErrorCode.INVALID_ARGUMENT
         kc.upload_table_with_outcome.assert_not_called()
+
+    def test_unreadable_bucket_is_left_to_storage(self, tmp_path: Path) -> None:
+        kc = MagicMock()
+        kc.get_bucket_detail.side_effect = KeboolaApiError(
+            "forbidden", status_code=403, error_code=ErrorCode.ACCESS_DENIED
+        )
+        kc.upload_table_with_outcome.return_value = MagicMock(
+            file_id=7, job={"id": 9, "status": "waiting"}
+        )
+        result = self._client(kc).upload_table(
+            _TABLE, _csv(tmp_path), wait=False, import_method="single_statement"
+        )
+        assert result.import_method == "single_statement"
+        kc.verify_token.assert_not_called()
+        kwargs = kc.upload_table_with_outcome.call_args.kwargs
+        assert kwargs["import_method"] is ImportMethod.single_statement
 
     def test_default_reads_no_backend(self, tmp_path: Path) -> None:
         kc = MagicMock()

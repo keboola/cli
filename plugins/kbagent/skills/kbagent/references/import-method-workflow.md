@@ -42,7 +42,9 @@ kbagent --json storage load-file --project P --file-id 123 \
     auto-create gets the project's default backend) and refuses before it
     creates or uploads anything: `details` = `table_id`, `backend`,
     `import_method`.
-  - `load-file`, and `upload-table` when no backend can be read, get the
+  - `load-file`, and `upload-table` when no backend can be read (the
+    bucket read fails, e.g. 403, or 404 with `--no-auto-create`; the check
+    then does not stop the upload), get the
     refusal from Storage: `details.api_error_code` =
     `storage.tables.importMethodNotSupported`. After `upload-table` the file
     is then already in Storage: the error names the `storage load-file`

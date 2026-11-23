@@ -37,9 +37,10 @@ def refuse_unsupported_import_method(
 
     ``auto`` costs no request. Any other value reads the bucket's backend; a
     missing bucket that the caller will create gets the project's default
-    backend (what ``create_bucket`` without a backend uses). A missing bucket
-    the caller will not create, or a backend Storage does not report, is left
-    to Storage.
+    backend (what ``create_bucket`` without a backend uses). A bucket or token
+    read that fails (a missing bucket the caller will not create, 403, any
+    other API error), or a backend Storage does not report, is left to
+    Storage: the method is returned and the request goes on.
 
     Raises:
         ValueError: ``import_method`` is not an :class:`ImportMethod` value.
@@ -55,8 +56,13 @@ def refuse_unsupported_import_method(
         where = f"table {table_id} is in bucket {bucket_id} on the {{backend}} backend"
     except KeboolaApiError as exc:
         if exc.status_code != 404 or not creates_missing_bucket:
-            raise
-        backend = client.verify_token().default_backend
+            # An unreadable bucket (403, or 404 the caller will not create)
+            # is not this check's error: the request goes on and Storage decides.
+            return method
+        try:
+            backend = client.verify_token().default_backend
+        except KeboolaApiError:
+            return method
         where = (
             f"bucket {bucket_id} does not exist yet; a new bucket gets the project's "
             "default backend, {backend}"
