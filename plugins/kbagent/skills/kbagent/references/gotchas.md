@@ -6521,12 +6521,10 @@ the web UI.
 
   `data-app deploy` pins the LATEST config version, so the plain form is
   correct here -- do not pass `--config-version`.
-- **Not gated on any project feature.** The `data-apps-storage-workspace`
-  project flag is being enabled everywhere and then removed, so the config
-  option is the sole control. kbagent deliberately does **not** implement
-  MCP's legacy fallback of injecting `WORKSPACE_ID` through
-  `parameters.dataApp.secrets` (`keboola-mcp-server` still does that when the
-  feature is off) -- do not add it, and do not expect to see it.
+- **Not gated on any project feature.** The config option is the sole
+  control. kbagent deliberately does **not** implement MCP's legacy fallback
+  of injecting `WORKSPACE_ID` through `parameters.dataApp.secrets` -- do not
+  add it, and do not expect to see it.
 - **`--json` reports it:** the create envelope gains a `workspace` boolean,
   and the human output prints the Storage-access state on every create --
   loudly when it is off. The REST surface mirrors the flag as
