@@ -1126,8 +1126,9 @@ kbagent merge-request resolve --component-id C --config-id I (--take ours|theirs
 #   scoped Storage token 403s (ACCESS_DENIED) on everything but `list`. `MR_MERGE_CONFLICT` /
 #   `MR_NOT_READY_TO_MERGE` (exit 1; the latter retryable) come from the merge 409. After
 #   MR_NOT_READY_TO_MERGE, `merge` reads the MR: state `published` (an earlier call merged it) answers
-#   status "already_merged", exit 0; state `in_merge` (a merge job still runs) answers status
-#   "already_in_merge", exit 0, without local cleanup. The four state-change PUTs are never repeated by the HTTP layer.
+#   status "already_merged", exit 0; state `in_merge` (a merge job still runs) keeps MR_NOT_READY_TO_MERGE,
+#   exit 1, but the message says the merge is running and `details` carries `merge_running: true` +
+#   `state: "in_merge"` (no local cleanup). The four state-change PUTs are never repeated by the HTTP layer.
 #   Version gate lives in gotchas.md. A truncated conflict
 #   list in the error carries `details.api_error_params_truncated: true` -- run `conflicts` for the full set.
 #   `merge` blocks for up to 10 minutes (no --wait/--timeout). Every result may carry `warnings[]`

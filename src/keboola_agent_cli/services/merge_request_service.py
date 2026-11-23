@@ -806,9 +806,7 @@ class MergeRequestService(BaseService):
                     self._remap_merge_conflict(exc)
                     raise
                 if underway.get("state") == "in_merge":
-                    return self._merge_running_result(
-                        alias, merge_request_id, branch_from_id, was_active, underway
-                    )
+                    raise self._merge_running_error(merge_request_id, underway, exc) from exc
                 merged_earlier = underway
                 job = None
         finally:
@@ -942,34 +940,39 @@ class MergeRequestService(BaseService):
         return None
 
     @staticmethod
-    def _merge_running_result(
-        alias: str,
-        merge_request_id: int,
-        branch_from_id: int | None,
-        was_active: bool,
-        mr: dict[str, Any],
-    ) -> dict[str, Any]:
-        """The result for a merge that is already running: not a refusal.
+    def _merge_running_error(
+        merge_request_id: int, mr: dict[str, Any], exc: KeboolaApiError
+    ) -> KeboolaApiError:
+        """The not-ready 409 of a merge that is already running, said as such.
 
-        The merge can still fail and roll the MR back to ``approved``, so the
-        local cleanup does not run here -- the source branch may survive.
+        Still ``MR_NOT_READY_TO_MERGE`` with exit 1 and ``retryable: true``:
+        exit 0 from ``merge`` keeps meaning "merged" (spec C1 -- turning this
+        into a success would change an exit code), and a running merge can
+        still fail and roll the MR back to ``approved``. What changes is the
+        message and ``details`` (``state`` / ``derived_state`` /
+        ``merge_running``), so a caller can tell "a merge runs" from "blocked"
+        without a second read. A retry is harmless: it gets this error again
+        while the merge runs and ``already_merged`` once it landed. No local
+        cleanup runs (the source branch may survive a failed merge).
         """
-        return {
-            "alias": alias,
-            "merge_request_id": merge_request_id,
-            "branch_from_id": branch_from_id,
-            "was_active": was_active,
-            "job": None,
-            "status": "already_in_merge",
-            "state": "in_merge",
-            "derived_state": derive_state(mr),
-            "allowed_actions": derive_allowed_actions(mr),
-            "message": (
-                f"Merge request {merge_request_id} is already being merged; no second "
-                "merge was started. Check `merge-request detail` until its state is "
-                "merged (or back to approved if the merge failed)."
+        return KeboolaApiError(
+            message=(
+                f"Merge request {merge_request_id} is already being merged (state in_merge); "
+                "no second merge was started. Wait and check `kbagent merge-request detail` "
+                "until it is merged (or back to approved if the merge failed). Running "
+                "`merge` again is harmless: once the merge landed it answers "
+                "status already_merged."
             ),
-        }
+            status_code=409,
+            error_code=ErrorCode.MR_NOT_READY_TO_MERGE,
+            retryable=True,
+            details={
+                **exc.details,
+                "merge_running": True,
+                "state": "in_merge",
+                "derived_state": derive_state(mr),
+            },
+        )
 
     def _remap_merge_conflict(self, exc: KeboolaApiError) -> None:
         """Raise the RFC's dedicated error for a known merge 409; return for others.

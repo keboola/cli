@@ -1134,43 +1134,40 @@ class TestMerge:
         assert "branch reset" in result.output and "sync branch-unlink" in result.output
 
     @staticmethod
-    def _in_merge() -> dict[str, Any]:
-        return {
-            **_merged(),
-            "job": None,
-            "status": "already_in_merge",
-            "state": "in_merge",
-            "derived_state": "in_merge",
-            "allowed_actions": ["update"],
-            "message": "Merge request 7 is already being merged; no second merge was started.",
-        }
+    def _merge_running() -> KeboolaApiError:
+        return KeboolaApiError(
+            message="Merge request 7 is already being merged (state in_merge); no second merge was started.",
+            status_code=409,
+            error_code=ErrorCode.MR_NOT_READY_TO_MERGE,
+            retryable=True,
+            details={"merge_running": True, "state": "in_merge", "derived_state": "in_merge"},
+        )
 
-    def test_already_in_merge_json_is_exit_0(self, tmp_path, service) -> None:
-        # DMD-2246: a not-ready 409 while the merge runs is reported, not refused.
-        service.merge.return_value = self._in_merge()
+    def test_merge_running_json_keeps_exit_1_and_carries_the_state(self, tmp_path, service) -> None:
+        # DMD-2246: a running merge is reported as such, but exit 0 still means merged.
+        service.merge.side_effect = self._merge_running()
         result = _run(
             ["--json", "merge-request", "merge", "--project", ALIAS, "--merge-request-id", "7"],
             _store(tmp_path),
             service,
         )
-        assert result.exit_code == 0, result.output
-        data = _json(result)["data"]
-        assert data["status"] == "already_in_merge"
-        assert data["state"] == "in_merge"
-        assert data["job"] is None
+        assert result.exit_code == 1
+        error = _json(result)["error"]
+        assert error["code"] == ErrorCode.MR_NOT_READY_TO_MERGE
+        assert error["retryable"] is True
+        assert error["details"]["merge_running"] is True
+        assert error["details"]["state"] == "in_merge"
 
-    def test_already_in_merge_human_is_not_reported_as_success(self, tmp_path, service) -> None:
-        service.merge.return_value = self._in_merge()
+    def test_merge_running_human_says_it_is_running(self, tmp_path, service) -> None:
+        service.merge.side_effect = self._merge_running()
         result = _run(
             ["merge-request", "merge", "--project", ALIAS, "--merge-request-id", "7", "--yes"],
             _store(tmp_path),
             service,
         )
-        assert result.exit_code == 0, result.output
-        assert "Merging:" in result.output
+        assert result.exit_code == 1
+        assert "already being merged" in result.output
         assert "Success:" not in result.output
-        assert "merge-request detail" in result.output
-        assert "now shows as merged" not in result.output
 
     def test_warning_text_with_markup_does_not_crash(self, tmp_path, service) -> None:
         service.merge.return_value = {

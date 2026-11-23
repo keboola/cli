@@ -640,12 +640,13 @@ class TestMerge:
             _svc(store, factory).merge(ALIAS, 7)
         assert exc_info.value.error_code == ErrorCode.MR_NOT_READY_TO_MERGE
 
-    def test_not_ready_while_the_merge_runs_reports_already_in_merge(
+    def test_not_ready_while_the_merge_runs_says_the_merge_is_running(
         self, store, client_factory, monkeypatch
     ) -> None:
-        """A merge that started (lost response, or a concurrent call) is not a
-        refusal: the result says it is running, and no local cleanup runs
-        because the merge can still fail and keep the source branch."""
+        """A merge that started (lost response, a concurrent call, the auto-merge
+        scheduler) is reported as running, not as blocked. It stays the retryable
+        MR_NOT_READY_TO_MERGE (exit 1): exit 0 means merged, and the running merge
+        can still fail -- so no local cleanup runs either (DMD-2246)."""
         factory, mock = client_factory
         mock.merge_requests.get.side_effect = [
             _wire_mr(7, "approved", branch_from=123),
@@ -658,12 +659,15 @@ class TestMerge:
             unlinked.append,
         )
         store.set_project_branch(ALIAS, 123)
-        result = _svc(store, factory).merge(ALIAS, 7)
-        assert result["status"] == "already_in_merge"
-        assert result["state"] == "in_merge"
-        assert result["derived_state"] == "in_merge"
-        assert result["job"] is None
-        assert result["was_active"] is True
+        with pytest.raises(KeboolaApiError) as exc_info:
+            _svc(store, factory).merge(ALIAS, 7)
+        exc = exc_info.value
+        assert exc.error_code == ErrorCode.MR_NOT_READY_TO_MERGE
+        assert exc.retryable is True
+        assert "already being merged" in exc.message
+        assert exc.details["merge_running"] is True
+        assert exc.details["state"] == "in_merge"
+        assert exc.details["derived_state"] == "in_merge"
         mock.merge_requests.merge.assert_called_once()
         assert store.get_project(ALIAS).active_branch_id == 123
         assert unlinked == []

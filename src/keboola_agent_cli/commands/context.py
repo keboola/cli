@@ -1331,7 +1331,8 @@ explicit Storage config version, never the empty shell the create writes.
   on a project without the feature; MR_MERGE_CONFLICT / MR_NOT_READY_TO_MERGE from merge;
   a scoped token 403s on everything but list. Every result may carry warnings[].
   A merge repeated after an earlier merge already landed answers status "already_merged", exit 0;
-  repeated while that merge still runs, it answers status "already_in_merge", exit 0.
+  repeated while that merge still runs, it stays MR_NOT_READY_TO_MERGE (exit 1) with
+  details.merge_running true -- wait and check `merge-request detail`.
 """,
     "notification": """\
 #### Notification Subscriptions (Flow Notifications Tab)
