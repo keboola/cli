@@ -182,17 +182,24 @@ class TestClusteringService:
             self._run(tmp_path, client, clear=True)
         client.update_table_definition.assert_called_once()
 
-    def test_dry_run_reads_once_and_never_puts(self, tmp_path: Path) -> None:
-        client = _client(["x"])
+    @pytest.mark.parametrize(
+        ("before", "is_alias", "would_change"),
+        [(["x"], False, True), (["a"], False, False), (["a"], True, True)],
+        ids=["changed", "equal", "alias"],
+    )
+    def test_dry_run_reads_once_and_never_puts(
+        self, tmp_path: Path, before: list[str], is_alias: bool, would_change: bool
+    ) -> None:
+        client = _client(before, is_alias=is_alias)
         result = self._run(tmp_path, client, fields=["a"], dry_run=True)
         assert result == {
             "dry_run": True,
             "project_alias": "test",
             "table_id": TABLE,
             "branch_id": None,
-            "clustering_before": ["x"],
+            "clustering_before": before,
             "clustering": ["a"],
-            "would_change": True,
+            "would_change": would_change,
         }
         client.get_table_detail.assert_called_once()
         client.update_table_definition.assert_not_called()
