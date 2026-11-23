@@ -6,11 +6,7 @@ file-size budget (CONTRIBUTING.md > "File-size budgets").
 
 from typing import Any
 
-from ..constants import (
-    BIGQUERY_CLUSTERING_MAX_FIELDS,
-    CLUSTERING_UPDATE_NOT_ALLOWED_CODE,
-    STORAGE_JOB_MAX_WAIT,
-)
+from ..constants import CLUSTERING_UPDATE_NOT_ALLOWED_CODE, STORAGE_JOB_MAX_WAIT
 from ..effective_branch import resolve_branch
 from ..errors import ErrorCode, KeboolaApiError
 from ._storage_jobs import resolve_wait_timeout, with_job_timeout_hint
@@ -39,16 +35,6 @@ def validate_clustering_request(fields: list[str] | None, clear: bool) -> list[s
         return None
     if not fields:
         raise _invalid("Pass --clustering-field COL (repeatable) or --clear.")
-    if any(not field.strip() for field in fields):
-        raise _invalid("--clustering-field must not be blank.")
-    duplicates = sorted({field for field in fields if fields.count(field) > 1})
-    if duplicates:
-        raise _invalid(f"--clustering-field names a column twice: {', '.join(duplicates)}.")
-    if len(fields) > BIGQUERY_CLUSTERING_MAX_FIELDS:
-        raise _invalid(
-            f"--clustering-field takes at most {BIGQUERY_CLUSTERING_MAX_FIELDS} columns, "
-            f"got {len(fields)}."
-        )
     return list(fields)
 
 

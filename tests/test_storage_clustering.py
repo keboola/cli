@@ -226,15 +226,6 @@ class TestClusteringService:
     def test_rejects_neither_fields_nor_clear(self, tmp_path: Path) -> None:
         self._assert_rejected(tmp_path, "--clustering-field COL")
 
-    def test_rejects_more_than_max_fields(self, tmp_path: Path) -> None:
-        self._assert_rejected(tmp_path, "at most 4", fields=["a", "b", "c", "d", "e"])
-
-    def test_rejects_duplicate_field(self, tmp_path: Path) -> None:
-        self._assert_rejected(tmp_path, "twice", fields=["a", "a"])
-
-    def test_rejects_blank_field(self, tmp_path: Path) -> None:
-        self._assert_rejected(tmp_path, "blank", fields=["a", " "])
-
     def test_clustering_422_becomes_invalid_argument_with_api_error_code(
         self, tmp_path: Path
     ) -> None:
