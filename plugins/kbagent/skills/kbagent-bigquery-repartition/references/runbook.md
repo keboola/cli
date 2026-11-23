@@ -107,6 +107,44 @@ pass on a copy that lacks rows.
 
 When the operator cannot read the policies, refuse the table.
 
+### BigQuery-native objects
+
+The swap is a rename of two physical tables. Three more kinds of BigQuery
+objects are outside Storage, and kbagent can neither read nor write them:
+table IAM bindings, search indexes and the streaming buffer. The operator
+reads them with `bq`:
+
+```bash
+bq --project_id=GCP_PROJECT get-iam-policy --format=prettyjson DATASET.T
+bq --project_id=GCP_PROJECT query --use_legacy_sql=false 'SELECT index_name, index_status, ddl FROM DATASET.INFORMATION_SCHEMA.SEARCH_INDEXES WHERE table_name = "T"'
+bq --project_id=GCP_PROJECT show --format=prettyjson DATASET.T
+```
+
+Record each object together with what is needed to create it again:
+
+- **Table IAM bindings**: the policy JSON. An empty `bindings` list means
+  there is nothing to carry.
+- **Search indexes**: the `CREATE SEARCH INDEX` statement of each index.
+  Check that each statement is complete: the index name, the indexed columns
+  or `ALL COLUMNS`, and every option of the existing index. When a statement
+  cannot be reconstructed completely, refuse the table.
+- **Streaming buffer**: the key `streamingBuffer` in the output of the last
+  command. Present means that a streaming writer wrote recently (section 3).
+- **Policy tags per column**: from the output of the last command. This
+  filter prints the tags of every column, with the tags of fields nested in
+  a RECORD column counted to that column:
+
+  ```bash
+  bq --project_id=GCP_PROJECT show --format=prettyjson DATASET.T \
+    | jq '[.schema.fields[] | {name, tags: ([.. | objects | .policyTags? | select(. != null) | .names[]] | sort)}]'
+  ```
+
+  Record the result. It is the reference for the copy (sections 4c and 5)
+  and for the table after the swap (section 6). The policy-tag rules of the
+  next subsection read it.
+
+When the operator cannot read these objects, refuse the table.
+
 ### Sharing, features, writers, readers, aliases
 
 ```bash
@@ -122,8 +160,8 @@ kbagent --json storage tables --project ALIAS
   bucket is the source.
 - **Policy tags.** Look for the project feature `bigquery-policy-tags` in
   `features` of the project info. When any column carries a policy tag in
-  BigQuery (the `bq show` output below) and the feature is missing, refuse
-  the table. The second condition of tag
+  BigQuery (the policy tags per column recorded in "BigQuery-native objects"
+  above) and the feature is missing, refuse the table. The second condition of tag
   propagation is the backend capability `policyTagsEnabled`. kbagent cannot
   read it: it is in the Manage API and a project token does not reach it.
   When any column carries a policy tag, have a person with Manage API access
@@ -167,43 +205,6 @@ Replace it in every query of this runbook:
 For a STRING column run the profile query of section 4a first.
 
 A cluster-only table skips this query.
-
-### BigQuery-native objects
-
-The swap is a rename of two physical tables. Three more kinds of BigQuery
-objects are outside Storage, and kbagent can neither read nor write them:
-table IAM bindings, search indexes and the streaming buffer. The operator
-reads them with `bq`:
-
-```bash
-bq --project_id=GCP_PROJECT get-iam-policy --format=prettyjson DATASET.T
-bq --project_id=GCP_PROJECT query --use_legacy_sql=false 'SELECT index_name, index_status, ddl FROM DATASET.INFORMATION_SCHEMA.SEARCH_INDEXES WHERE table_name = "T"'
-bq --project_id=GCP_PROJECT show --format=prettyjson DATASET.T
-```
-
-Record each object together with what is needed to create it again:
-
-- **Table IAM bindings**: the policy JSON. An empty `bindings` list means
-  there is nothing to carry.
-- **Search indexes**: the `CREATE SEARCH INDEX` statement of each index.
-  Check that each statement is complete: the index name, the indexed columns
-  or `ALL COLUMNS`, and every option of the existing index. When a statement
-  cannot be reconstructed completely, refuse the table.
-- **Streaming buffer**: the key `streamingBuffer` in the output of the last
-  command. Present means that a streaming writer wrote recently (section 3).
-- **Policy tags per column**: from the output of the last command. This
-  filter prints the tags of every column, with the tags of fields nested in
-  a RECORD column counted to that column:
-
-  ```bash
-  bq --project_id=GCP_PROJECT show --format=prettyjson DATASET.T \
-    | jq '[.schema.fields[] | {name, tags: ([.. | objects | .policyTags? | select(. != null) | .names[]] | sort)}]'
-  ```
-
-  Record the result. It is the reference for the copy (sections 4c and 5)
-  and for the table after the swap (section 6).
-
-When the operator cannot read these objects, refuse the table.
 
 ### Refuse rules
 
