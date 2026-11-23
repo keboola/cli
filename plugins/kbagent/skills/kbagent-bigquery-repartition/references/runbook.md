@@ -179,9 +179,33 @@ kbagent --json storage tables --project ALIAS
   point at `B.T`. Record them. Aliases in other projects exist only through
   linked buckets, which the sharing edges show.
 
-### Partition values
+### Refuse rules
 
-Create a helper workspace and load the table as a view:
+Refuse the table, and change nothing, when one of these holds:
+
+- The table is an alias.
+- `definition.requirePartitionFilter` is true.
+- The table has at least one row access policy. Tables with row access
+  policies are not converted in this version.
+- A column carries a policy tag in BigQuery and the project has no
+  `bigquery-policy-tags` feature.
+- A column carries a policy tag in BigQuery and the backend capability
+  `policyTagsEnabled` is false or could not be read (section 1).
+- The BigQuery-native objects are unknown, because nobody could read them.
+- The recorded statement of a search index is incomplete.
+- The operator cannot apply the recorded IAM bindings to the copy.
+- The copy was created without a policy tag that the source has (section 4c).
+- No partition column and no clustering column is confirmed.
+- `data_size_bytes` is over 5 TiB and the owner has not decided on the ranged
+  transformation. Stop and hand the table to the owner.
+
+Nothing above this line created anything in the project, so a table that is
+refused here leaves nothing behind.
+
+### Partition values (after the refuse rules pass)
+
+Run this subsection only when no refuse rule above holds. It creates the
+helper workspace, the first object of this run in the project:
 
 ```bash
 kbagent --json workspace create --project ALIAS --name repartition-T
@@ -204,27 +228,15 @@ Replace it in every query of this runbook:
 
 For a STRING column run the profile query of section 4a first.
 
-A cluster-only table skips this query.
+A cluster-only table skips the query, but it still creates the workspace and
+loads the view: sections 3 and 5 count rows through it.
 
-### Refuse rules
+From here on the workspace `WS_ID` exists. Every stop before the copy
+(section 2, section 4a) ends with its deletion:
 
-Refuse the table, and change nothing, when one of these holds:
-
-- The table is an alias.
-- `definition.requirePartitionFilter` is true.
-- The table has at least one row access policy. Tables with row access
-  policies are not converted in this version.
-- A column carries a policy tag in BigQuery and the project has no
-  `bigquery-policy-tags` feature.
-- A column carries a policy tag in BigQuery and the backend capability
-  `policyTagsEnabled` is false or could not be read (section 1).
-- The BigQuery-native objects are unknown, because nobody could read them.
-- The recorded statement of a search index is incomplete.
-- The operator cannot apply the recorded IAM bindings to the copy.
-- The copy was created without a policy tag that the source has (section 4c).
-- No partition column and no clustering column is confirmed.
-- `data_size_bytes` is over 5 TiB and the owner has not decided on the ranged
-  transformation. Stop and hand the table to the owner.
+```bash
+kbagent --json workspace delete --project ALIAS --workspace-id WS_ID --yes
+```
 
 ### Preflight record
 
@@ -268,6 +280,9 @@ Use the `days` and `months` values of section 1.
 | At most 4,000 days | DAY | `--time-partitioning-type DAY` |
 | More than 4,000 days | MONTH | `--time-partitioning-type MONTH` |
 | More than 4,000 months | Stop. Ask the owner. | |
+
+On that stop, delete the helper workspace (the `workspace delete` command of
+section 1). No other object exists yet.
 
 BigQuery rejects a job that modifies more than 4,000 partitions. The limit is
 per job. So it binds the copy, and it also binds the output-mapping load of
@@ -345,7 +360,8 @@ kbagent --json workspace query --project ALIAS --workspace-id WS_ID --sql "SELEC
 ```
 
 When `bad_values` is above 0: stop and report the sample values of the second
-query to the owner. No table is created.
+query to the owner. No table is created. Delete the helper workspace (the
+`workspace delete` command of section 1).
 
 #### 4b. Create the empty typed table with the layout
 
